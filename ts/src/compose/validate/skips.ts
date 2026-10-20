@@ -19,21 +19,36 @@
  * skippable nodes here; the cycle check reports the cycle.
  *
  * `nullSkippedOutputs` gives a flow output that reads only nodes that may all be skipped the
- * explicit null default, so it returns null instead of leaving END unreachable. Python's
- * `check_skipped_arithmetic` (arithmetic over a value that may be null from a skip) is not ported
- * here yet.
+ * explicit null default, so it returns null instead of leaving END unreachable.
+ * `checkSkippedArithmetic` rejects arithmetic over a value that may be null because its producers
+ * were skipped while the reading node (or END) still runs.
  *
- * Knows about: compiled edges, flow outputs, binding producers, and expression templates.
+ * Knows about: compiled edges, flow outputs, node wiring, binding producers, and expression trees.
  * Never imports: the runtime.
  */
 
 import { type Edge, FlowOutput } from "../../compile/model.ts";
 import { current } from "../../defaults.ts";
-import type { OriginRef, SourceRange } from "../../diagnostics.ts";
-import { bindingCoSkips } from "../../expr/index.ts";
-import { mapSourceStrings } from "../../nodes/contracts.ts";
-import { bindingProducers } from "../edges/producers.ts";
-import { directReferencePath } from "../helpers/output_contracts.ts";
+import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import { bindingCoSkips, ExpressionError, exprRefs, parseCondition, scanTemplate } from "../../expr/index.ts";
+import { type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
+import { Span } from "../../expr/template.ts";
+import {
+  asBinding,
+  Binding,
+  bindingSource,
+  iterSourceStrings,
+  mapSourceStrings,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
+import { bindingProducers, refProducer } from "../edges/producers.ts";
+import { LoadDiagnostics } from "../helpers/errors.ts";
+import { directReferenceParts, directReferencePath } from "../helpers/output_contracts.ts";
+import { type BuildResult, siteKey } from "../nodes/base.ts";
+import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
+
+// The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus.
+const ARITHMETIC: ReadonlySet<string> = new Set(["sum", "product", "power", "neg"]);
 
 /** One searched CASE's authored `when:`: its case index, text, origin and range. */
 export type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];
@@ -317,4 +332,313 @@ export function nullSkippedOutputs(flowOutputs: readonly FlowOutput[], model: Sk
   return flowOutputs.map(
     (output) => new FlowOutput(output.name, mapSourceStrings(output.binding, nullDefault)),
   );
+}
+
+/**
+ * Reject arithmetic over a value that may be null because CASE routing skipped it.
+ *
+ * An operand of `+ - * / % **` or unary `-` is null from a skip when it is a reference to a node's
+ * output, or a `|` / `:-` group of them, and every producer of one of its null alternatives is
+ * skipped. That is an error when some routing skips them while the binding's node still runs; a
+ * flow output's END always runs. Any other operand (a call, a nested operator, a literal) is never
+ * null from a skip here. Each string nested in a value template is checked on its own and located
+ * at its own site. A searched CASE's authored `when:` is checked the same way with the CASE as the
+ * reader, since a reference under `:-`, `|` or `:?` there does not skip the CASE with its producer.
+ *
+ * @param flowWiring Each node's `param -> source` wiring, a CASE's `on:` and `when:` sources
+ *   included.
+ * @param flowOutputs The flow level's outputs, after `nullSkippedOutputs`.
+ * @param model The skip model of the same level.
+ * @param buildResults The level's built nodes keyed by id, for the binding site names and fallback
+ *   ranges.
+ * @param options.valueMode Whether the flow has a single `output:` value, named `output` in errors
+ *   (default `false`).
+ * @param options.outputsRange The authored `output:` range, the fallback location of an output
+ *   error.
+ * @param options.resolveOrigin Resolves a binding's registered origin to its source frame, the
+ *   preferred location.
+ * @param options.diagnostics Factory for located load errors.
+ * @param options.searchedWhens Each searched CASE's id mapped to one `[case index, authored when,
+ *   origin, range]` per case: the origin is the preferred location, the range the fallback. A
+ *   `when:` is checked like a binding, without following `and`/`or`: arithmetic behind a null guard
+ *   is reported too.
+ * @throws LoadError at the first such binding or `when:`, naming it, the operand and its producers,
+ *   and asking for a `:-` default.
+ */
+export function checkSkippedArithmetic(
+  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
+  flowOutputs: readonly FlowOutput[],
+  model: SkipModel,
+  buildResults: ReadonlyMap<string, BuildResult>,
+  options: {
+    valueMode?: boolean;
+    outputsRange?: SourceRange | null;
+    resolveOrigin?: ResolveOrigin | null;
+    diagnostics?: LoadDiagnostics | null;
+    searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
+  } = {},
+): void {
+  if (!model.hasCases) return;
+  const { valueMode = false, outputsRange = null, resolveOrigin = null, searchedWhens = null } = options;
+  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const known = model.nodes;
+  for (const [nodeId, wiring] of flowWiring) {
+    const result = buildResults.get(nodeId) ?? null;
+    const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
+    for (const [param, binding] of wiring) {
+      const found = skippedOperand(binding, model, nodeId, known);
+      if (found === null) continue;
+      const [site, operand, producers] = found;
+      let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
+      let fallback: SourceRange | null = null;
+      if (result !== null) {
+        let label: string;
+        let own: SourceRange | undefined;
+        if (reserved.has(param)) {
+          // A reserved key (`over`, `until`) is a kind field, not an input.
+          label = result.node.reservedKeyLabel(param);
+          own = result.fieldRanges.get(siteKey("field", param));
+        } else {
+          label = result.node.wiringRefLabel(param);
+          own = result.fieldRanges.get(siteKey("input", param));
+        }
+        fallback = own ?? result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+        // A synthetic param's label may already end in a colon (`on:`); the message adds one.
+        where = result.siteName(nodeId, label.replace(/:+$/, ""));
+      }
+      throw locatedError(
+        `${where}: ${arithmeticMessage(site, operand, producers)}`,
+        site,
+        fallback,
+        resolveOrigin,
+        diagnostics,
+      );
+    }
+  }
+  for (const [nodeId, whens] of searchedWhens ?? new Map<string, readonly SearchedWhen[]>()) {
+    for (const [index, when, origin, whenRange] of whens) {
+      if (typeof when !== "string") continue;
+      let tree: ExprNode;
+      try {
+        tree = parseCondition(when);
+      } catch (error) {
+        // The CASE build reports a malformed condition.
+        if (error instanceof ExpressionError) continue;
+        throw error;
+      }
+      const found = skippedOperandIn(tree, model, nodeId, known);
+      if (found === null) continue;
+      throw locatedError(
+        `node ${reprText(nodeId)} cases[${index}].when: ${arithmeticText(when.trim(), ...found)}`,
+        new Binding(when, { origin }),
+        whenRange,
+        resolveOrigin,
+        diagnostics,
+      );
+    }
+  }
+  for (const output of flowOutputs) {
+    const found = skippedOperand(output.binding, model, null, known);
+    if (found === null) continue;
+    const [site, operand, producers] = found;
+    const label = valueMode ? "output" : `output ${reprText(output.name)}`;
+    throw locatedError(
+      `${label}: ${arithmeticMessage(site, operand, producers)}`,
+      site,
+      outputsRange,
+      resolveOrigin,
+      diagnostics,
+    );
+  }
+}
+
+/**
+ * Return each template string of `binding` as a binding located at its own site.
+ *
+ * A string nested in a value template takes its registered origin, else the outer binding's.
+ */
+function stringSites(binding: unknown): Binding[] {
+  const outer = asBinding(binding);
+  return [...iterSourceStrings(outer)].map(([path, text]) => {
+    const origin = outer.source instanceof ValueTemplate ? outer.source.originAt(path) : null;
+    return new Binding(text, { origin: origin ?? outer.origin });
+  });
+}
+
+/** An arithmetic operand that may be null from a skip, and the producers whose skip makes it null. */
+type SkippedOperand = [operand: ExprNode, producers: string[]];
+
+/**
+ * Return the first arithmetic operand of `binding` that may be null from a skip.
+ *
+ * @param binding A wiring or output binding; each of its template strings is scanned.
+ * @param model The level's skip model.
+ * @param consumer The node that evaluates the binding, or `null` for END.
+ * @param known The level's node ids.
+ * @returns The string that does the arithmetic (as a binding located at its own site), the
+ *   operand, and the producers whose skip makes it null (in source order), or `null` when no
+ *   operand may be null while `consumer` runs.
+ */
+function skippedOperand(
+  binding: unknown,
+  model: SkipModel,
+  consumer: string | null,
+  known: ReadonlySet<string>,
+): [site: Binding, ...SkippedOperand] | null {
+  for (const site of stringSites(binding)) {
+    let segments;
+    try {
+      segments = scanTemplate(site.source as string);
+    } catch (error) {
+      // Reference validation reports a malformed source.
+      if (error instanceof ExpressionError) continue;
+      throw error;
+    }
+    for (const segment of segments) {
+      if (!(segment instanceof Span)) continue;
+      const found = skippedOperandIn(segment.tree, model, consumer, known);
+      if (found !== null) return [site, ...found];
+    }
+  }
+  return null;
+}
+
+/**
+ * Return the first arithmetic operand of a parsed expression that may be null from a skip.
+ *
+ * @param expression A parsed expression.
+ * @param model The level's skip model.
+ * @param consumer The node that evaluates the expression, or `null` for END.
+ * @param known The level's node ids.
+ * @returns The operand and the producers whose skip makes it null (in source order), or `null`
+ *   when no operand may be null while `consumer` runs.
+ */
+function skippedOperandIn(
+  expression: ExprNode,
+  model: SkipModel,
+  consumer: string | null,
+  known: ReadonlySet<string>,
+): SkippedOperand | null {
+  // A lone token has no operator.
+  if (!(expression instanceof Tree)) return null;
+  for (const tree of iterSubtreesTopdown(expression)) {
+    if (!ARITHMETIC.has(tree.data)) continue;
+    for (const operand of tree.children) {
+      for (const group of nullGroups(operand, known)) {
+        if (group.size > 0 && model.maySkipWhileRunning(group, consumer)) {
+          const producers = new Set(exprRefs(operand).map(refProducer));
+          return [operand, [...producers].filter((producer) => producer !== null && group.has(producer)) as string[]];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Return the producer sets whose joint skip makes `operand` null.
+ *
+ * @param operand One parsed operand of an arithmetic tree.
+ * @param known The level's node ids; a reference to anything else (an input, `item`, `system`) is
+ *   never skipped.
+ * @returns The operand is null when every producer of one set is skipped. A `null` literal gives
+ *   one empty set (always null); an operand that is never null from a skip gives no sets.
+ */
+function nullGroups(operand: ExprNode, known: ReadonlySet<string>): Set<string>[] {
+  if (operand instanceof Token) return operand.type === "NULL" ? [new Set()] : [];
+  if (operand.data === "refcall") {
+    const parts = directReferenceParts(operand);
+    return parts !== null ? referenceGroups(parts.join("."), known) : [];
+  }
+  if (operand.data === "coalesce" || operand.data === "default_expr") {
+    // Null only when every alternative is null: one set from each, unioned.
+    let combined: Set<string>[] = [new Set()];
+    for (const child of operand.children) {
+      const groups = nullGroups(child, known);
+      // Keep the first of equal sets, in order, as Python's `dict.fromkeys` over frozensets does.
+      const unique = new Map<string, Set<string>>();
+      for (const a of combined) {
+        for (const b of groups) {
+          const union = new Set([...a, ...b]);
+          const key = JSON.stringify([...union].sort());
+          if (!unique.has(key)) unique.set(key, union);
+        }
+      }
+      combined = [...unique.values()];
+    }
+    return combined;
+  }
+  return [];
+}
+
+/**
+ * Return `[{producer}]` for a reference to a level node's output, else `[]`.
+ *
+ * @param path A dotted reference path.
+ * @param known The level's node ids.
+ * @returns The one producer set that makes the reference null when skipped, or none.
+ */
+function referenceGroups(path: string, known: ReadonlySet<string>): Set<string>[] {
+  const producer = refProducer(path);
+  return producer !== null && known.has(producer) ? [new Set([producer])] : [];
+}
+
+/**
+ * Return the error text for arithmetic on an operand that may be null from a skip.
+ *
+ * @param binding The binding whose source does the arithmetic.
+ * @param operand The operand that may be null.
+ * @param producers The nodes whose skip makes it null.
+ * @returns The message, without the binding's name.
+ */
+function arithmeticMessage(binding: unknown, operand: ExprNode, producers: readonly string[]): string {
+  return arithmeticText(String(bindingSource(binding)), operand, producers);
+}
+
+/**
+ * Return the error text for arithmetic in `source` on an operand that may be null.
+ *
+ * @param source The authored text that does the arithmetic, shown as written.
+ * @param operand The operand that may be null.
+ * @param producers The nodes whose skip makes it null.
+ * @returns The message, without the reader's name.
+ */
+function arithmeticText(source: string, operand: ExprNode, producers: readonly string[]): string {
+  const text = operandText(operand);
+  const hint = defaultHint(operand);
+  const quoted = producers.map(reprText);
+  const who =
+    quoted.length === 1
+      ? `node ${quoted[0]} is`
+      : `nodes ${quoted.slice(0, -1).join(", ")} and ${quoted.at(-1)} are`;
+  return `${source} does arithmetic on ${text}, which is null when ${who} skipped; give it a default with :-, e.g. ${hint}`;
+}
+
+/**
+ * Return the operand with a `:- <default>` placeholder, replacing a trailing `:- null`.
+ *
+ * @param operand The operand that may be null.
+ * @returns Parenthesized text such as `(order.output.qty :- <default>)`.
+ */
+function defaultHint(operand: ExprNode): string {
+  const last = operand instanceof Tree ? operand.children.at(-1) : undefined;
+  if (operand instanceof Tree && operand.data === "default_expr" && last instanceof Token && last.type === "NULL") {
+    const kept = operand.children.slice(0, -1).map(operandText);
+    return "(" + [...kept, "<default>"].join(" :- ") + ")";
+  }
+  return `(${operandText(operand)} :- <default>)`;
+}
+
+/**
+ * Return source text for an operand that may be null: a reference or a `|`/`:-` group.
+ *
+ * @param operand A reference, a wrapped reference, `null`, or a coalesce or default of them.
+ * @returns The operand's text; a group is parenthesized.
+ */
+function operandText(operand: ExprNode): string {
+  if (operand instanceof Token) return String(operand);
+  const parts = directReferenceParts(operand);
+  if (parts !== null) return parts.join(".");
+  const joiner = operand.data === "coalesce" ? " | " : " :- ";
+  return "(" + operand.children.map(operandText).join(joiner) + ")";
 }

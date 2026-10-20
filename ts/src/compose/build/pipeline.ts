@@ -143,7 +143,7 @@ import {
 import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
-import { nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
+import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
 // returns the bare resolved value, so the name only labels the carrier.
@@ -2310,8 +2310,19 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const valueMode = outputsSection !== null && !isRecord(outputsSection);
   // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default. A
   // searched `when:` is checked as authored: its wiring holds only its `__rN` reads.
-  // T3-20: each searched case's `[index, when, origin, range]` per authored case.
-  const searchedWhens: ReadonlyMap<string, readonly SearchedWhen[]> = new Map();
+  const searchedWhens = new Map<string, SearchedWhen[]>();
+  for (const [nodeId, desc] of descriptors) {
+    if (!(desc instanceof CaseDescriptor) || desc.on !== null) continue;
+    searchedWhens.set(
+      nodeId,
+      desc.cases.map((case_, index) => [
+        index,
+        case_["when"] ?? null,
+        desc.whenOrigins[index] ?? null,
+        desc.whenRanges[index] ?? null,
+      ]),
+    );
+  }
   checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
     valueMode,
     outputsRange,
@@ -2420,9 +2431,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  validateReferences (1).
-//   T3-20  validateNodeAsserts, checkSkippedArithmetic (1).
+//   T3-20  validateNodeAsserts (1).
 //          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
-//          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 
@@ -2484,18 +2494,3 @@ function lowerFlowAsserts(
 ): LoweredAsserts {
   return new LoweredAsserts();
 }
-
-/** Python's `compose.validate.skips.check_skipped_arithmetic`; not ported yet. */
-function checkSkippedArithmetic(
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  flowOutputs: readonly FlowOutput[],
-  model: SkipModel,
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: {
-    valueMode?: boolean;
-    outputsRange?: SourceRange | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-    searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
-  } = {},
-): void {}

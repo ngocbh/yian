@@ -1472,6 +1472,21 @@ export function sameMemorySnapshotEnvelope(a: MemorySnapshotEnvelope, b: MemoryS
   return a.memory === b.memory && sameJson(a.snapshot, b.snapshot);
 }
 
+/**
+ * Whether two specs have the same key, type, config, owners and eligibility, by value and type:
+ * Python's dataclass equality, with configs compared as `sameMemorySnapshotEnvelope` compares
+ * snapshots and owners item by item with `DeclSite.compare`.
+ */
+export function sameMemorySpec(a: MemorySpec, b: MemorySpec): boolean {
+  return (
+    a.key === b.key &&
+    a.type === b.type &&
+    sameJson(a.config, b.config) &&
+    sameItems(a.owners, b.owners, (x, y) => DeclSite.compare(x, y) === 0) &&
+    a.conversationEligible === b.conversationEligible
+  );
+}
+
 /** Sanitized durable failure from one memory operation. Frozen. */
 export class MemoryOperationFailure {
   readonly stage: string;

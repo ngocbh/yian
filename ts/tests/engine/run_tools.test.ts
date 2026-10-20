@@ -52,6 +52,7 @@ import { evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 /** A tool that returns a fixed reply. */
 const PING = new FunctionTool({
@@ -75,16 +76,6 @@ class CapsProbe extends Node {
 /** The same probe with the tools trait. */
 class ToolsProbe extends CapsProbe {
   override readonly needsTools = true;
-}
-
-/** Return the value `promise` rejects with, or fail when it resolves. */
-async function rejected(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a rejection");
 }
 
 test("only nodes that declare needsTools receive the toolset", async () => {

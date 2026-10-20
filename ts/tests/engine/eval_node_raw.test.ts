@@ -15,7 +15,9 @@
  * node's `forward`; the body's `ValueError` is a `RangeError`, and the invalid return gets the
  * ordinary non-NodeResult message (TS has no generator to name).
  *
- * Changed: `test_raw_stream_callback_failure_closes_the_node_generator_before_returning` and
+ * Changed: the shared `drive` evaluates the node in a one-node `CompiledFlow` wired from a
+ * `FuncNode`'s `reads`, as Python's stub flow derives it.
+ * `test_raw_stream_callback_failure_closes_the_node_generator_before_returning` and
  * `test_raw_stream_cleanup_failure_does_not_replace_callback_failure`: a sink throws inside the
  * node, so there is no generator to close. In their place: the node's (async) `finally` has run
  * before `evalNode` settles, and a node that throws its own error from `finally`, or catches the
@@ -34,9 +36,6 @@
  * capability's checks on what the host inbox returns, and a steering fault the node catches still
  * rejecting `evalNode`.
  *
- * Changed: `raw` evaluates the node in a one-node `CompiledFlow` wired from a `FuncNode`'s
- * `reads`, as Python's stub flow derives it.
- *
  * Later (cycle 2b): `test_render_capture_is_opt_in_single_write_and_detached_until_close`,
  * `test_invalid_render_capture_is_a_host_fault`,
  * `test_render_capture_preserves_original_host_exception_and_closes` and
@@ -45,7 +44,6 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { CompiledFlow } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { StreamChunk } from "../../src/events.ts";
 import {
@@ -66,28 +64,12 @@ import { EvaluationEvidence } from "../../src/memory/contracts.ts";
 import {
   EvaluatedOutcome,
   EvaluationFailure,
-  type EvalNodeOptions,
   evalNode,
   requireSteering,
   SteeringCapability,
-  type WorkerOutcome,
 } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { FuncNode, StreamNode } from "./run_state_fixtures.ts";
-
-/** Evaluate `node` in a one-node flow wired from a `FuncNode`'s `reads`. */
-function evaluate(node: Node, options: EvalNodeOptions = {}): Promise<EvaluatedOutcome> {
-  const wiring = node instanceof FuncNode ? node.reads : {};
-  const flow = CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
-    wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
-  });
-  return evalNode(node, flow, new VariablePool(), options);
-}
-
-/** Return the raw outcome of evaluating `node`. */
-async function raw(node: Node, options: EvalNodeOptions = {}): Promise<WorkerOutcome> {
-  return (await evaluate(node, options)).outcome;
-}
+import { drive, FailNode, FuncNode, nodeFlow, rejected, StreamNode } from "./run_state_fixtures.ts";
 
 /** Return one configured result from its body. */
 class ResultNode extends Node {
@@ -101,15 +83,6 @@ class ResultNode extends Node {
 
   override forward(): NodeResult {
     return this.result as NodeResult;
-  }
-}
-
-/** Throw a plain `Error` from its body. */
-class FailNode extends Node {
-  readonly kind = NodeKind.CODE;
-
-  override forward(): NodeResult {
-    throw new Error("boom");
   }
 }
 
@@ -128,23 +101,14 @@ function thrown(run: () => unknown): unknown {
   throw new Error("expected a throw");
 }
 
-/** Return the value `promise` rejects with, or fail when it resolves. */
-async function rejected(promise: unknown): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a rejection");
-}
-
 /** Return a `node.execute` failure for node `work`. */
 function failure(): Failure {
   return new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
 }
 
 test("public evaluation always returns frozen slotted wrapper", async () => {
-  const evaluated = await evaluate(new FuncNode("work", () => "done"));
+  const node = new FuncNode("work", () => "done");
+  const evaluated = await evalNode(node, nodeFlow(node), new VariablePool());
 
   expect(evaluated).toBeInstanceOf(EvaluatedOutcome);
   expect(evaluated).toEqual(new EvaluatedOutcome(new Output("done"), null));
@@ -156,16 +120,16 @@ test("public evaluation always returns frozen slotted wrapper", async () => {
 });
 
 test("raw evaluation returns closed success route and grow values", async () => {
-  expect(await raw(new FuncNode("work", () => "done"))).toEqual(new Output("done"));
-  expect(await raw(new ResultNode("branch", new Route("chosen")))).toEqual(new Route("chosen"));
-  expect(await raw(new Spawner("spawn", new Grow({ value: 1n })))).toEqual(new Grow({ value: 1n }));
+  expect(await drive(new FuncNode("work", () => "done"))).toEqual(new Output("done"));
+  expect(await drive(new ResultNode("branch", new Route("chosen")))).toEqual(new Route("chosen"));
+  expect(await drive(new Spawner("spawn", new Grow({ value: 1n })))).toEqual(new Grow({ value: 1n }));
 });
 
 test("raw failure is frozen slotted and preserves diagnostics", async () => {
   const node = new FuncNode("work", (inputs) => inputs);
   node.params = [new Parameter("required", { required: true })];
 
-  const result = await raw(node);
+  const result = await drive(node);
 
   expect(result).toBeInstanceOf(EvaluationFailure);
   const retained = (result as EvaluationFailure).failure;
@@ -181,8 +145,8 @@ test("raw failure is frozen slotted and preserves diagnostics", async () => {
 });
 
 test("raw node raise and invalid grow are failures not observers", async () => {
-  const raised = await raw(new FailNode("raise"));
-  const invalidGrow = await raw(new ResultNode("leaf", new Grow({})));
+  const raised = await drive(new FailNode("raise"));
+  const invalidGrow = await drive(new ResultNode("leaf", new Grow({})));
 
   expect(raised).toBeInstanceOf(EvaluationFailure);
   const failure = (raised as EvaluationFailure).failure;
@@ -222,7 +186,7 @@ describe("a stop is the node's aborted signal", () => {
     // Binding this parameter would fail, so a rejection proves binding never ran.
     node.params = [new Parameter("required", { required: true })];
 
-    expect(await rejected(raw(node, { signal: controller.signal }))).toBe(reason);
+    expect(await rejected(drive(node, { signal: controller.signal }))).toBe(reason);
     expect(node.ran).toBe(false);
   });
 
@@ -262,7 +226,7 @@ describe("a stop is the node's aborted signal", () => {
       const controller = new AbortController();
       const reason = new Error("stopped");
       const gate = Promise.withResolvers<void>();
-      const evaluation = raw(new Gated("work", gate.promise, settle), { signal: controller.signal });
+      const evaluation = drive(new Gated("work", gate.promise, settle), { signal: controller.signal });
 
       controller.abort(reason);
       gate.resolve();
@@ -275,7 +239,7 @@ describe("a stop is the node's aborted signal", () => {
     // The engine discards it; the evaluator only reports what the node did.
     const controller = new AbortController();
     const gate = Promise.withResolvers<void>();
-    const evaluation = raw(new GatedNode("work", gate.promise, () => new Output("late")), {
+    const evaluation = drive(new GatedNode("work", gate.promise, () => new Output("late")), {
       signal: controller.signal,
     });
 
@@ -316,7 +280,7 @@ describe("streaming", () => {
   test("raw streaming uses only the injected transient callback", async () => {
     const chunks: StreamChunk[] = [];
 
-    const result = await raw(new StreamNode("agent", ["a", "b"]), { emitStream: (chunk) => chunks.push(chunk) });
+    const result = await drive(new StreamNode("agent", ["a", "b"]), { emitStream: (chunk) => chunks.push(chunk) });
 
     expect(result).toEqual(new Output({ output: "ab" }));
     expect(chunks.map((chunk) => chunk.chunk)).toEqual(["a", "b"]);
@@ -342,8 +306,8 @@ describe("streaming", () => {
     const chunks: StreamChunk[] = [];
     const invalidChunks: StreamChunk[] = [];
 
-    const bodyFailure = await raw(body, { emitStream: (chunk) => chunks.push(chunk) });
-    const resultFailure = await raw(invalid, { emitStream: (chunk) => invalidChunks.push(chunk) });
+    const bodyFailure = await drive(body, { emitStream: (chunk) => chunks.push(chunk) });
+    const resultFailure = await drive(invalid, { emitStream: (chunk) => invalidChunks.push(chunk) });
 
     expect(chunks.map((chunk) => chunk.chunk)).toEqual(["first"]);
     expect(bodyFailure).toBeInstanceOf(EvaluationFailure);
@@ -364,7 +328,7 @@ describe("streaming", () => {
   test("raw stream callback failure propagates unchanged", async () => {
     const expected = new Error("callback failed");
 
-    expect(await rejected(raw(new StreamNode("agent", ["a"]), { emitStream: reject(expected) }))).toBe(expected);
+    expect(await rejected(drive(new StreamNode("agent", ["a"]), { emitStream: reject(expected) }))).toBe(expected);
   });
 
   test("the node's finally has run before evalNode settles", async () => {
@@ -391,7 +355,7 @@ describe("streaming", () => {
     }
     const expected = new Error("callback failed");
 
-    expect(await rejected(raw(new ResourceStreamNode("resource"), { emitStream: reject(expected) }))).toBe(expected);
+    expect(await rejected(drive(new ResourceStreamNode("resource"), { emitStream: reject(expected) }))).toBe(expected);
     expect([sent, closed]).toEqual([["first"], ["resource"]]);
   });
 
@@ -441,7 +405,7 @@ describe("streaming", () => {
       }
       const expected = new Error("callback failed");
 
-      expect(await rejected(raw(new CleanupNode("resource"), { emitStream: reject(expected) }))).toBe(expected);
+      expect(await rejected(drive(new CleanupNode("resource"), { emitStream: reject(expected) }))).toBe(expected);
     });
   }
 
@@ -466,7 +430,7 @@ describe("streaming", () => {
         }
       }
       const expected = new Error("callback failed");
-      const evaluation = raw(new CatchThenWaitNode("work"), {
+      const evaluation = drive(new CatchThenWaitNode("work"), {
         emitStream: reject(expected),
         signal: controller.signal,
       });
@@ -662,7 +626,7 @@ describe("the steering capability", () => {
       },
     };
 
-    expect(await rejected(raw(new SteeredNode("work"), { steering }))).toBe(expected);
+    expect(await rejected(drive(new SteeredNode("work"), { steering }))).toBe(expected);
   });
 
   test("a capability fault from the host passes through", async () => {

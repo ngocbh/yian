@@ -13,7 +13,7 @@ import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../sr
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
-import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { Node, type NodeCaps, NodeKind, type NodeResult, Output, Route } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
@@ -26,6 +26,7 @@ import {
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
+import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { type RunEvent, StreamChunk } from "../../src/events.ts";
 import {
   decodePool,
@@ -79,6 +80,57 @@ export class FuncNode extends Node {
 
   override forward(inputs: Record<string, unknown>): NodeResult {
     return new Output(this.fn(inputs));
+  }
+}
+
+/** A `FuncNode` that appends its id to `log` when it runs and returns `{output}`. */
+export class RecordNode extends FuncNode {
+  constructor(
+    nodeId: string,
+    log: string[],
+    output: unknown = "",
+    options: ConstructorParameters<typeof FuncNode>[2] = {},
+  ) {
+    super(
+      nodeId,
+      () => {
+        log.push(nodeId);
+        return { output };
+      },
+      options,
+    );
+  }
+}
+
+/** Throws a plain `Error` with `message` from its body. */
+export class FailNode extends Node {
+  readonly kind = NodeKind.CODE;
+  /** The thrown error's message. */
+  readonly message: string;
+
+  constructor(nodeId: string, message = "boom", options: ConstructorParameters<typeof Node>[1] = {}) {
+    super(nodeId, options);
+    this.message = message;
+  }
+
+  override forward(): NodeResult {
+    throw new Error(this.message);
+  }
+}
+
+/** A CASE fake that routes to one handle. */
+export class BranchNode extends Node {
+  readonly kind = NodeKind.CASE;
+  /** The chosen handle (which downstream edge to take). */
+  readonly handle: string;
+
+  constructor(nodeId: string, handle: string, options: ConstructorParameters<typeof Node>[1] = {}) {
+    super(nodeId, options);
+    this.handle = handle;
+  }
+
+  override forward(): NodeResult {
+    return new Route(this.handle);
   }
 }
 
@@ -245,6 +297,41 @@ export function startData(
 /** The flow wiring the nodes declare through `FuncNode.reads`; another node declares none. */
 function deriveWiring(nodes: ReadonlyMap<string, Node>): Record<string, Readonly<Record<string, unknown>>> {
   return Object.fromEntries([...nodes].map(([id, node]) => [id, node instanceof FuncNode ? node.reads : {}]));
+}
+
+/** Return a flow holding only `node`, wired from `wiring` (by default its `FuncNode.reads`). */
+export function nodeFlow(
+  node: Node,
+  wiring: Readonly<Record<string, unknown>> = deriveWiring(new Map([[node.id, node]]))[node.id]!,
+): CompiledFlow {
+  return CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
+    wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
+  });
+}
+
+/**
+ * Evaluate `node` through `evalNode` and return its raw outcome (Python's `_fakes.drive`); the
+ * other options go to `evalNode`.
+ *
+ * @param options.pool The pool the sources read; a fresh one by default.
+ * @param options.flow The flow whose wiring holds the sources; `nodeFlow(node)` by default.
+ */
+export async function drive(
+  node: Node,
+  options: { pool?: VariablePool; flow?: CompiledFlow | null } & EvalNodeOptions = {},
+): Promise<WorkerOutcome> {
+  const { pool = new VariablePool(), flow = nodeFlow(node), ...rest } = options;
+  return (await evalNode(node, flow, pool, rest)).outcome;
+}
+
+/** Return the value `promise` rejects with, or fail when it resolves. */
+export async function rejected(promise: unknown): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a rejection");
 }
 
 /** The text references of `source`, or none for a literal. */

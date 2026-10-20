@@ -9,7 +9,7 @@
  * `test_assertion_evaluates_expression_and_reports_display`,
  * `test_assertion_display_is_not_evaluated_when_expression_holds`,
  * `test_duplicate_assertions_retain_first_occurrence_origin`, `test_wrapper_delegates_for_route_kind`
- * (with a local `BranchNode` fake), `test_unparseable_pre_assert_raises_its_parse_error_before_forward`,
+ * (with the shared `BranchNode` fake), `test_unparseable_pre_assert_raises_its_parse_error_before_forward`,
  * `test_unparseable_post_assert_raises_before_forward_runs` and
  * `test_assert_evaluation_error_still_fails_the_assert`. `test_validate_assertions_names_the_given_path`
  * is in `base_node.test.ts`.
@@ -30,12 +30,15 @@
  * `run`, and `test_wrapper_delegates_to_real_code_node_forward`'s check that `CodeNode` doesn't
  * override `run`.
  *
- * Later (T4-6 / T4-9 / T4-10): `test_runtime_does_not_drive_backward`,
- * `test_eval_node_no_longer_has_first_failing_assert`,
- * `test_eval_node_does_not_fire_when_run_bypasses_firing` and
- * `test_eval_node_fires_via_wrapper_positive_control` (T4-6); the forward half of
- * `test_wrapper_delegates_to_real_code_node_forward` (T4-9); the forward half of
- * `test_wrapper_delegates_for_grow_kind` (T4-10).
+ * Ported (adapted), through the shared `drive`: `test_runtime_does_not_drive_backward`,
+ * `test_eval_node_does_not_fire_when_run_bypasses_firing` (the bypassing `run` is async) and
+ * `test_eval_node_fires_via_wrapper_positive_control` (the control simply doesn't override `run`).
+ *
+ * Not ported: `test_eval_node_no_longer_has_first_failing_assert`: it checks that a Python module
+ * attribute is gone, which TS never had.
+ *
+ * Later (T4-9 / T4-10): the forward half of `test_wrapper_delegates_to_real_code_node_forward`
+ * (T4-9); the forward half of `test_wrapper_delegates_for_grow_kind` (T4-10).
  */
 
 import { expect, test } from "bun:test";
@@ -62,7 +65,9 @@ import { BindingError } from "../../src/nodes/binding.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { BranchNode, drive } from "./run_state_fixtures.ts";
 
 /**
  * A node that implements `forward` (not `run`), so the base template is under test. `forward`
@@ -81,21 +86,6 @@ class ImplNode extends Node {
   override forward(): NodeResult {
     this.ran = true;
     return new Output(this.value);
-  }
-}
-
-/** A CASE-like fake whose body routes to one handle. */
-class BranchNode extends Node {
-  readonly kind = NodeKind.CASE;
-  handle: string;
-
-  constructor(nodeId: string, handle: string) {
-    super(nodeId);
-    this.handle = handle;
-  }
-
-  override forward(): NodeResult {
-    return new Route(this.handle);
   }
 }
 
@@ -471,4 +461,45 @@ test("wrapper delegates to real code node forward (CodeNode inherits run)", () =
 test("wrapper delegates for grow kind (CallNode inherits run)", () => {
   const node = new CallNode("r", { flowId: "c", child: {}, childInputs: [] });
   expect(node.run).toBe(Node.prototype.run);
+});
+
+// evalNode doesn't check asserts itself: the `run` template does. evalNode calls `run` (not
+// `forward`), so a node whose `run` bypasses the template returns its Output even with a failing
+// post-assert.
+
+test("runtime does not drive backward", async () => {
+  // Forward execution remains the runtime's only node-body call.
+  class BackwardTrapNode extends ImplNode {
+    override backward(): BackwardResult {
+      throw new Error("backward must remain dormant");
+    }
+  }
+
+  expect(await drive(new BackwardTrapNode("n", "ok"))).toEqual(new Output("ok"));
+});
+
+/** A node whose `run` returns its Output directly, never checking its asserts. */
+class BypassRunNode extends ImplNode {
+  override async run(): Promise<NodeResult> {
+    return new Output(this.value);
+  }
+}
+
+test("eval node does not fire when run bypasses firing", async () => {
+  const node = new BypassRunNode("n", "v");
+  // It would fail if anything checked it.
+  node.postAsserts = [new Assertion("output == 'never'", "output must equal never")];
+
+  expect(await drive(node)).toEqual(new Output("v"));
+});
+
+test("eval node fires via wrapper positive control", async () => {
+  // The same node with the inherited template, which does check the failing post-assert.
+  const node = new ImplNode("n", "v");
+  node.postAsserts = [new Assertion("output == 'never'", "output must equal never")];
+
+  const result = await drive(node);
+
+  expect(result).toBeInstanceOf(EvaluationFailure);
+  expect((result as EvaluationFailure).failure.message).toContain("post-assert");
 });

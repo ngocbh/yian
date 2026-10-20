@@ -12,8 +12,6 @@
  * `test_emit_event_must_be_callable`.
  *
  * Changed: every node also receives `signal`, so the capability names the probe sees include it.
- * The probe reads nothing, so it is evaluated with no flow (empty wiring), where Python derives an
- * empty stub flow.
  *
  * TS-only: a sink that throws a `CapabilityFault` rejects `evalNode` with that fault's original,
  * not with a fault wrapping the fault.
@@ -23,8 +21,7 @@ import { expect, test } from "bun:test";
 
 import { StreamChunk } from "../../src/events.ts";
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
+import { drive, rejected } from "./run_state_fixtures.ts";
 
 /** Record the received capability names and publish through whichever sinks exist. */
 class Probe extends Node {
@@ -44,28 +41,13 @@ class LiveProbe extends Probe {
   override readonly needsLiveEvents = true;
 }
 
-/** Evaluate `node` with `sinks` and return its raw outcome. */
-async function evaluate(node: Node, sinks: EvalNodeOptions = {}): Promise<WorkerOutcome> {
-  return (await evalNode(node, null, new VariablePool(), sinks)).outcome;
-}
-
-/** Return the value `promise` rejects with, or fail when it resolves. */
-async function rejected(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a rejection");
-}
-
 test("node without trait receives no sinks", async () => {
   const node = new Probe("probe");
   const chunks: unknown[] = [];
   const events: unknown[] = [];
 
   expect(
-    await evaluate(node, { emitStream: (chunk) => chunks.push(chunk), emitEvent: (event) => events.push(event) }),
+    await drive(node, { emitStream: (chunk) => chunks.push(chunk), emitEvent: (event) => events.push(event) }),
   ).toEqual(new Output("done"));
   expect([node.seen, chunks, events]).toEqual([["signal"], [], []]);
 });
@@ -81,7 +63,7 @@ for (const [stream, event, expected] of [
     const chunks: unknown[] = [];
     const events: unknown[] = [];
 
-    await evaluate(node, {
+    await drive(node, {
       emitStream: stream ? (chunk) => chunks.push(chunk) : null,
       emitEvent: event ? (item) => events.push(item) : null,
     });
@@ -98,7 +80,7 @@ for (const sink of ["emitStream", "emitEvent"] as const) {
     const expected = new HostBroken("host");
 
     const error = await rejected(
-      evaluate(new LiveProbe("probe"), {
+      drive(new LiveProbe("probe"), {
         [sink]: () => {
           throw expected;
         },
@@ -112,7 +94,7 @@ for (const sink of ["emitStream", "emitEvent"] as const) {
     const original = new Error("inner");
 
     const error = await rejected(
-      evaluate(new LiveProbe("probe"), {
+      drive(new LiveProbe("probe"), {
         [sink]: () => {
           throw new CapabilityFault(original);
         },
@@ -124,7 +106,7 @@ for (const sink of ["emitStream", "emitEvent"] as const) {
 }
 
 test("emit event must be callable", async () => {
-  expect(await rejected(evaluate(new LiveProbe("probe"), { emitEvent: "not callable" as never }))).toEqual(
+  expect(await rejected(drive(new LiveProbe("probe"), { emitEvent: "not callable" as never }))).toEqual(
     new TypeError("emit_event must be callable or null"),
   );
 });

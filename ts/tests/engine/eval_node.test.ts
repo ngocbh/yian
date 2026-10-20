@@ -45,8 +45,8 @@
  * Not ported: `test_malformed_result_context_is_an_ir_fault`: a template string can't fail on a
  * malformed `kind`.
  *
- * Changed: `drive` evaluates the node in a one-node `CompiledFlow` whose wiring is a `FuncNode`'s
- * `reads` or the given sources, as Python's stub flow derives it. Python's `RuntimeError` is a
+ * Changed: the shared `drive` evaluates the node in a one-node `CompiledFlow` (`nodeFlow`) whose
+ * wiring is a `FuncNode`'s `reads` or the given sources, as Python's stub flow derives it. Python's `RuntimeError` is a
  * plain `Error` (cause type `Error`) and its `ValueError` a `RangeError`. The non-NodeResult
  * message names the JS type (`Object`). In `test_binding_carrier_unwraps_exactly_one_layer` the
  * inner carrier isn't a yian value, so binding refuses it (`binding.evaluate`) where Python passes
@@ -57,7 +57,8 @@
  *
  * TS-only: `test_map_over_not_a_list_message_is_byte_identical` also checks the error's `origin`
  * (the carrier's, else `null`); `evalNode`'s argument checks; a node that records steps and whose
- * reserved key fails to bind after an earlier start recorded steps rejects with a `RangeError`.
+ * reserved key fails to bind after an earlier start recorded steps rejects with a `RangeError`,
+ * while a node that doesn't read its steps gets the ordinary binding failure.
  *
  * Later (T4-9): `test_case_predicate_failure_selects_the_active_ordered_origin` and
  * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
@@ -69,7 +70,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { CompiledFlow, START_ID } from "../../src/compile/model.ts";
+import { START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ConversationInvocation } from "../../src/memory/contracts.ts";
 import {
@@ -98,31 +99,11 @@ import {
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
-import {
-  type EvalNodeOptions,
-  EvaluationFailure,
-  evalNode,
-  type WorkerOutcome,
-} from "../../src/runtime/eval_node.ts";
+import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
-import { FuncNode } from "./run_state_fixtures.ts";
-
-/**
- * Evaluate `node` in a one-node flow wired from `wiring` (a `FuncNode`'s `reads` by default) and
- * return its raw outcome.
- */
-async function drive(
-  node: Node,
-  options: { pool?: VariablePool; wiring?: Readonly<Record<string, unknown>> } & EvalNodeOptions = {},
-): Promise<WorkerOutcome> {
-  const { pool = new VariablePool(), wiring = node instanceof FuncNode ? node.reads : {}, ...rest } = options;
-  const flow = CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
-    wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
-  });
-  return (await evalNode(node, flow, pool, rest)).outcome;
-}
+import { drive, FuncNode, nodeFlow, rejected } from "./run_state_fixtures.ts";
 
 /** Return the failure `drive` resolves to, or fail when it resolves to anything else. */
 async function driveFailure(
@@ -132,16 +113,6 @@ async function driveFailure(
   const outcome = await drive(node, options);
   expect(outcome).toBeInstanceOf(EvaluationFailure);
   return (outcome as EvaluationFailure).failure;
-}
-
-/** Return the value `promise` rejects with, or fail when it resolves. */
-async function rejected(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a rejection");
 }
 
 /** Return one configured result from its body. */
@@ -355,7 +326,7 @@ for (const [label, make, field, value] of [
     const node: Node = make();
     const origin = new OriginRef(`${node.id}:${field}`);
 
-    const failure = await driveFailure(node, { wiring: { [field]: new Binding(value, { origin }) } });
+    const failure = await driveFailure(node, { flow: nodeFlow(node, { [field]: new Binding(value, { origin }) }) });
 
     expect(failure.code).toBe("contract.input");
     expect(failure.trace).toEqual([origin]);
@@ -367,7 +338,8 @@ test("map over not a list message is byte identical through the evaluator", asyn
   pool.set(START_ID, { bad: "notalist" });
   const rawSource = "${input.bad}";
   for (const source of [rawSource, new Binding(rawSource, { origin: new OriginRef("map-over") })]) {
-    const failure = await driveFailure(new MapNode("m", { flowId: "f" }), { pool, wiring: { over: source } });
+    const node = new MapNode("m", { flowId: "f" });
+    const failure = await driveFailure(node, { pool, flow: nodeFlow(node, { over: source }) });
 
     expect(failure.message).toBe("MAP node 'm': `over` (${input.bad}) did not resolve to a list");
   }
@@ -375,7 +347,7 @@ test("map over not a list message is byte identical through the evaluator", asyn
 
 /** Reserve key `k`, whose binding always fails, and record steps. */
 class StepsReservedNode extends ResultNode {
-  override readonly needsSteps = true;
+  override readonly needsSteps: boolean = true;
 
   override bindReserved(): Record<string, unknown> {
     throw new BindingError("node 'n' reserved key failed", { failureCode: "contract.input" });
@@ -401,6 +373,18 @@ test("a reserved binding failure with no prior steps stays a node failure", asyn
   for (const steps of [null, new NodeSteps(1, [], () => {})]) {
     expect((await driveFailure(node, { steps })).code).toBe("contract.input");
   }
+});
+
+test("a reserved binding failure of a node that doesn't read its steps stays a node failure", async () => {
+  // Only a node reading its steps saw the earlier start's resolution.
+  class NoStepsReservedNode extends StepsReservedNode {
+    override readonly needsSteps = false;
+  }
+  const steps = new NodeSteps(2, [{ step: 1n }], () => {});
+
+  expect((await driveFailure(new NoStepsReservedNode("n", new Output("unused")), { steps })).code).toBe(
+    "contract.input",
+  );
 });
 
 describe("evalNode checks its arguments", () => {
@@ -514,7 +498,7 @@ test("post assert isolated from node input mutation", async () => {
   const node = new MutatingNode("n");
   node.postAsserts = [new Assertion("x == 1", "x == 1")];
 
-  expect(await drive(node, { pool, wiring: { x: "${input.x}" } })).toEqual(new Output("done"));
+  expect(await drive(node, { pool, flow: nodeFlow(node, { x: "${input.x}" }) })).toEqual(new Output("done"));
 });
 
 test("wrapper assertion failure uses assertion stage and origin", async () => {
@@ -734,7 +718,9 @@ class NoForwardNode extends Node {
 
 test("missing node implementation is a setup fault", async () => {
   // The base placeholder body is malformed executable setup.
-  expect(await rejected(drive(new NoForwardNode("n")))).toEqual(new Error("node 'n' (NoForwardNode) defines no forward"));
+  expect(await rejected(drive(new NoForwardNode("n")))).toEqual(
+    new Error("node 'n' (NoForwardNode) defines no forward"),
+  );
 });
 
 test("malformed assertion carrier is an ir fault", async () => {
@@ -772,7 +758,7 @@ test("map deferred item binding keeps input contract stage", async () => {
   ];
 
   const failure = await driveFailure(node, {
-    wiring: { x: new Binding("${item}", { origin: new OriginRef("map:x:binding") }) },
+    flow: nodeFlow(node, { x: new Binding("${item}", { origin: new OriginRef("map:x:binding") }) }),
   });
 
   expect(failure.code).toBe("contract.input");
@@ -786,7 +772,7 @@ test("map deferred expression keeps binding stage", async () => {
   node.params = [new Parameter("x")];
 
   const failure = await driveFailure(node, {
-    wiring: { x: new Binding('${item.missing :? "x is required"}', { origin: bindingOrigin }) },
+    flow: nodeFlow(node, { x: new Binding('${item.missing :? "x is required"}', { origin: bindingOrigin }) }),
   });
 
   expect(failure.code).toBe("binding.evaluate");
@@ -805,7 +791,7 @@ test("map deferred unexpected binder fault escapes", async () => {
   const node = new PerItemNode("m", [item]);
   node.params = [new Parameter("x")];
 
-  expect(await rejected(drive(node, { wiring: { x: "${item}" } }))).toBe(expected);
+  expect(await rejected(drive(node, { flow: nodeFlow(node, { x: "${item}" }) }))).toBe(expected);
 });
 
 test("per item wrapper default keeps binding stage", async () => {
@@ -821,7 +807,7 @@ test("per item wrapper default keeps binding stage", async () => {
     }),
   ];
 
-  const failure = await driveFailure(node, { wiring: { over: [] } });
+  const failure = await driveFailure(node, { flow: nodeFlow(node, { over: [] }) });
 
   expect(failure.code).toBe("binding.evaluate");
   expect(failure.trace).toEqual([defaultOrigin]);

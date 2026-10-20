@@ -21,6 +21,7 @@ import { expect, test } from "bun:test";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 /** Record the capabilities supplied to one direct evaluation. */
 class CapNode extends Node {
@@ -42,16 +43,6 @@ class NeverRunsNode extends Node {
     this.ran = true;
     return new Output("unexpected");
   }
-}
-
-/** Return the value `promise` rejects with, or fail when it resolves. */
-async function rejected(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a rejection");
 }
 
 test("every node gets the given signal as caps.signal", async () => {

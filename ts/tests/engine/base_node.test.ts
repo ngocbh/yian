@@ -11,21 +11,23 @@
  * the assertion parse), the stage markers' `original`, `cause` and message (a thrown value with no
  * text is named by its type), and `NodeAssertFailed`'s defaults.
  *
- * Changed: Python's `vars(node)` is `Object.hasOwn`, and `hasattr` is the `in` operator.
+ * Ported (adapted), through the shared `drive`: `test_result_node_returns_output`,
+ * `test_streaming_node_forwards_chunks_and_returns_output` (the fake streams through
+ * `caps.emitStream`), `test_raising_node_returns_evaluation_failure` (cause type `Error` for
+ * Python's `RuntimeError`), `test_policy_exception_returns_typed_evaluation_failure` (the `Policy`
+ * error sets its `name`, which is the cause type), `test_branch_node_returns_route_handle` and
+ * `test_node_does_not_write_pool`.
  *
- * Later (T4-x): the six `drive` tests (`test_result_node_returns_output`,
- * `test_streaming_node_forwards_chunks_and_returns_output`,
- * `test_raising_node_returns_evaluation_failure`,
- * `test_policy_exception_returns_typed_evaluation_failure`, `test_branch_node_returns_route_handle`,
- * `test_node_does_not_write_pool`).
+ * Changed: Python's `vars(node)` is `Object.hasOwn`, and `hasattr` is the `in` operator.
  *
  * Not ported: `test_node_rejects_removed_output_type_constructor_keyword`: TS rejects an unknown
  * option when it type-checks the call.
  */
 
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
+import { StreamChunk } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import {
   AssertionStageError,
@@ -39,10 +41,14 @@ import {
   NodeKind,
   Output,
   parseNamedCondition,
+  Route,
 } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Assertion, ContractOrigins, type OutputContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { BranchNode, drive, FailNode, FuncNode as FakeFuncNode, StreamNode } from "./run_state_fixtures.ts";
 
 /** A minimal concrete node; the base constructor is the subject. */
 class FuncNode extends Node {
@@ -266,4 +272,61 @@ test("NodeAssertFailed defaults its failure code and keeps its assertion and cau
   expect(failed.assertion).toBe(assertion);
   expect(failed.failureCode).toBe("condition.evaluate");
   expect(failed.cause).toBe(cause);
+});
+
+describe("evaluation through drive", () => {
+  /** Named so the boundary yields a failure with cause type `Policy`. */
+  class Policy extends Error {
+    override name = "Policy";
+  }
+
+  /** Throws a `Policy` error from its body. */
+  class ReturnsFailedNode extends Node {
+    readonly kind = NodeKind.CODE;
+
+    override forward(): Output {
+      throw new Policy("declined");
+    }
+  }
+
+  test("result node returns output", async () => {
+    expect(await drive(new FakeFuncNode("n", () => ({ output: "ok" })))).toEqual(new Output({ output: "ok" }));
+  });
+
+  test("streaming node forwards chunks and returns output", async () => {
+    const chunks: StreamChunk[] = [];
+
+    const result = await drive(new StreamNode("n", ["a", "b", "c"]), { emitStream: (chunk) => chunks.push(chunk) });
+
+    expect(chunks.map((chunk) => chunk.chunk)).toEqual(["a", "b", "c"]);
+    expect(chunks.every((chunk) => chunk instanceof StreamChunk)).toBe(true);
+    expect(result).toEqual(new Output({ output: "abc" }));
+  });
+
+  test("raising node returns evaluation failure", async () => {
+    const result = await drive(new FailNode("n", "kaboom"));
+
+    expect(result).toBeInstanceOf(EvaluationFailure);
+    const { failure } = result as EvaluationFailure;
+    expect([failure.message, failure.causeType]).toEqual(["kaboom", "Error"]);
+  });
+
+  test("policy exception returns typed evaluation failure", async () => {
+    const result = await drive(new ReturnsFailedNode("n"));
+
+    expect(result).toBeInstanceOf(EvaluationFailure);
+    const { failure } = result as EvaluationFailure;
+    expect([failure.message, failure.causeType]).toEqual(["declined", "Policy"]);
+  });
+
+  test("branch node returns route handle", async () => {
+    expect(await drive(new BranchNode("n", "case_a"))).toEqual(new Route("case_a"));
+  });
+
+  test("node does not write pool", async () => {
+    const pool = new VariablePool();
+
+    expect(await drive(new FakeFuncNode("n", () => ({ output: "x" })), { pool })).toEqual(new Output({ output: "x" }));
+    expect(pool.get("n")).toBeNull();
+  });
 });

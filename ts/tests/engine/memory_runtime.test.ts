@@ -17,8 +17,11 @@
  * `test_context_ignores_uncontributed_session_capabilities`,
  * `test_transcript_admission_requires_invocation_before_opening_source`,
  * `test_stop_during_recall_prevents_transcript_source_acquisition`,
- * `test_context_admits_a_transcript_only_from_an_eligible_memory` and
- * `test_context_rejects_a_second_transcript_for_one_agent`, with the `_Session`, `_Memory`,
+ * `test_context_admits_a_transcript_only_from_an_eligible_memory`,
+ * `test_context_rejects_a_second_transcript_for_one_agent`,
+ * `test_propose_learning_returns_one_proposal_per_key_in_table_order`,
+ * `test_propose_learning_attributes_a_failure_to_its_key` and
+ * `test_commit_learning_commits_on_the_named_key_session`, with the `_Session`, `_Memory`,
  * `_table`, `_origins`, `_open`, `_scope`, `_context` and `_recall_sections` (`recallSections`)
  * helpers.
  *
@@ -35,7 +38,11 @@
  * context validation test tries four non-signal options (`undefined`, `{}`, `{ signal: null }`, a
  * fake signal) where Python tries one `check_stopped=None`, and checks nothing was recalled; the
  * recall context is the very `RecallContext` (`toBe`, where Python uses `==`); an invalid-content
- * error's `cause` is a `TypeError` (Python checks no cause).
+ * error's `cause` is a `TypeError` (Python checks no cause). `proposeLearning` and `commitLearning`
+ * return promises; the proposals are also checked frozen; the proposal failure's whole
+ * `MemoryOperationFailure` and its `cause` (the backend's error) are checked; the missing
+ * `frame_ref` is a missing `frameRef` property; the commit receives the record's own frozen batch
+ * (`toBe`); the local fake's `commit` returns its `commitValue`, as Python's does.
  *
  * TS-only: a plain-object table item; origins as a plain object, with a numeric key, or with a key
  * emptied after construction (`OriginRef`'s own `RangeError`); each registry name message (a
@@ -52,7 +59,17 @@
  * `MemoryContextOpener`; an async `recall` is awaited; `openTurn` receives the same signal and a
  * `ConversationRequest` with the scope's path, the invocation and the compatibility; an `openTurn`
  * rejection rejects `openContext` with it unchanged; a number from `recall` is invalid content; an
- * already-aborted signal with text-only memories still recalls, then rejects with the reason.
+ * already-aborted signal with text-only memories still recalls, then rejects with the reason;
+ * `proposeLearning` and `commitLearning` refuse on a closed runtime; a `Set` of contexts and a
+ * plain object shaped like a `LearnContext` are refused before any learner; a learn result of
+ * `{}`, two mutations with one id, or a non-mutation item is `memory.invalid_result`; a
+ * `MemoryOperationError` whose `code` was redefined to a number is `memory.unexpected`; a learn
+ * throwing a plain `Error`, a `RangeError` or a `CapabilityFault` rejects with that very error and
+ * no later key learns; a `MemoryOperationError` whose `cause` is an `AbortError` `DOMException` or
+ * a `CapabilityFault` is still a `LearningProposalError` (no host control is unwrapped); a commit
+ * returning `null` succeeds, one returning `"ok"` is `memory.invalid_result`, and a
+ * `MemoryOperationError` (also one with a `CapabilityFault` cause) returns its failure; a plain
+ * object request is refused before any commit; async `learn` and `commit` are awaited.
  */
 
 import { expect, test } from "bun:test";
@@ -64,13 +81,14 @@ import {
   type ConversationTurn,
   DeclSite,
   type JsonObject,
-  type LearnContext,
+  LearnContext,
   type Memory,
   MemoryContent,
   MemoryContextRequest,
-  type MemoryMutation,
+  MemoryMutation,
   type MemorySession,
   MemoryOperationError,
+  MemoryOperationFailure,
   MemoryRecallError,
   MemoryScope,
   MemorySetupError,
@@ -79,8 +97,11 @@ import {
   RecallContext,
   type TranscriptSource,
 } from "../../src/memory/contracts.ts";
+import { CapabilityFault } from "../../src/nodes/base.ts";
+import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import type { MemoryContextOpener } from "../../src/runtime/eval_node.ts";
-import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
+import { MemoryCommitRequestedRecord } from "../../src/runtime/log.ts";
+import { LearningProposalError, MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 
 type Events = unknown[][];
 type ErrorClass = new (...args: never[]) => Error;
@@ -91,7 +112,7 @@ class FakeSession implements MemorySession {
   readonly events: Events;
   value: string | MemoryContent | Error;
   learnValue: readonly MemoryMutation[] | Error | null;
-  commitValue: Error | null;
+  commitValue: unknown;
   storedSnapshot: JsonObject;
   closeError: Error | null;
   readonly calls: RecallContext[] = [];
@@ -103,7 +124,7 @@ class FakeSession implements MemorySession {
     options: {
       value?: string | MemoryContent | Error;
       learnValue?: readonly MemoryMutation[] | Error | null;
-      commitValue?: Error | null;
+      commitValue?: unknown;
       snapshot?: JsonObject | null;
       closeError?: Error | null;
     } = {},
@@ -130,15 +151,19 @@ class FakeSession implements MemorySession {
     return this.value;
   }
 
-  learn(context: LearnContext): readonly MemoryMutation[] {
+  // The interface's return type, so a test may swap in an async learn.
+  learn(context: LearnContext): readonly MemoryMutation[] | Promise<readonly MemoryMutation[]> {
     this.learnCalls.push(context);
     if (this.learnValue instanceof Error) throw this.learnValue;
     return this.learnValue ?? [];
   }
 
-  commit(commitId: string, mutations: readonly MemoryMutation[]): void {
+  // The interface's return type, so a test may swap in an async commit.
+  commit(commitId: string, mutations: readonly MemoryMutation[]): void | Promise<void> {
     this.events.push(["commit", this.name, commitId, mutations]);
-    if (this.commitValue !== null) throw this.commitValue;
+    if (this.commitValue instanceof Error) throw this.commitValue;
+    // A test may return a malformed result on purpose.
+    return this.commitValue as void;
   }
 
   close(): void {
@@ -161,7 +186,7 @@ class FakeMemory implements Memory {
     options: {
       value?: string | MemoryContent | Error;
       learnValue?: readonly MemoryMutation[] | Error | null;
-      commitValue?: Error | null;
+      commitValue?: unknown;
       sessionSnapshot?: JsonObject | null;
       openError?: Error | null;
       closeError?: Error | null;
@@ -1261,4 +1286,280 @@ test("an already-aborted signal still recalls text-only memories, then rejects w
   expect(policies.get("beta")!.session.calls).toHaveLength(1);
   expect(policies.get("alpha")!.session.calls).toHaveLength(1);
   await runtime.close();
+});
+
+/** Return one learning context per table key, in table order. */
+function learnContexts(): LearnContext[] {
+  return [new LearnContext("run", "alpha", []), new LearnContext("run", "beta", [])];
+}
+
+test("propose learning returns one proposal per key in table order", async () => {
+  const mutation = new MemoryMutation("m1", { add: 1n });
+  const alpha = new FakeMemory("alpha", [], { learnValue: [mutation] });
+  const beta = new FakeMemory("beta", []);
+  const runtime = await open(new Map([["alpha", alpha], ["beta", beta]]));
+  const contexts = [new LearnContext("run", "alpha", []), new LearnContext("run", "beta", [], ["good"])];
+  try {
+    const proposals = await runtime.proposeLearning(contexts);
+    expect(proposals).toEqual([new MemoryProposal("alpha", [mutation]), new MemoryProposal("beta", [])]);
+    expect(Object.isFrozen(proposals)).toBe(true);
+    expect(alpha.session.learnCalls.map((context) => context.memory)).toEqual(["alpha"]);
+    expect(beta.session.learnCalls[0]!.feedback).toEqual(["good"]);
+    const coverage = "learning contexts must cover the complete recorded memory table in order";
+    await expectError(() => runtime.proposeLearning([...contexts].reverse()), RangeError, coverage);
+    await expectError(() => runtime.proposeLearning(contexts.slice(0, 1)), RangeError, coverage);
+    await expectError(
+      () => runtime.proposeLearning([contexts[0]!, new LearnContext("other", "beta", [])]),
+      RangeError,
+      "learning contexts must belong to one run",
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("propose learning attributes a failure to its key", async () => {
+  const failure = new MemoryOperationError("learn", "beta.down", "store down", false);
+  const runtime = await open(
+    new Map([
+      ["alpha", new FakeMemory("alpha", [])],
+      ["beta", new FakeMemory("beta", [], { learnValue: failure })],
+    ]),
+  );
+  try {
+    const error = (await expectError(
+      () => runtime.proposeLearning(learnContexts()),
+      LearningProposalError,
+      "store down",
+    )) as LearningProposalError;
+    expect(error.memory).toBe("beta");
+    expect(error.failure.code).toBe("beta.down");
+    expect(error.failure).toEqual(new MemoryOperationFailure("learn", "beta.down", "store down", false));
+    expect(error.cause).toBe(failure);
+    expect("frameRef" in error).toBe(false);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("commit learning commits on the named key session", async () => {
+  const events: Events = [];
+  const runtime = await open(pair(events));
+  const mutation = new MemoryMutation("m1", { add: 1n });
+  try {
+    const request = new MemoryCommitRequestedRecord("beta", "commit-1", [mutation], 1);
+    expect(await runtime.commitLearning(request)).toBeNull();
+    expect(events.at(-1)).toEqual(["commit", "beta", "commit-1", [mutation]]);
+    expect(events.at(-1)![3]).toBe(request.mutations);
+    await expectError(
+      () => runtime.commitLearning(new MemoryCommitRequestedRecord("gamma", "commit-2", [], 1)),
+      RangeError,
+      "backward commit requires an enabled memory and attempt",
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a closed runtime refuses to propose or commit", async () => {
+  const runtime = await open(pair([]));
+  await runtime.close();
+  await expectError(() => runtime.proposeLearning(learnContexts()), Error, "memory runtime is closed");
+  await expectError(
+    () => runtime.commitLearning(new MemoryCommitRequestedRecord("beta", "commit-1", [], 1)),
+    Error,
+    "memory runtime is closed",
+  );
+});
+
+test("learning contexts must be an array of exact LearnContext values", async () => {
+  const events: Events = [];
+  const memory = pair(events);
+  const runtime = await open(memory);
+  const [alpha, beta] = learnContexts() as [LearnContext, LearnContext];
+  const message = "learning contexts must be an array of exact LearnContext values";
+  try {
+    await expectError(() => runtime.proposeLearning(new Set([alpha, beta]) as never), TypeError, message);
+    const shaped = { runId: "run", memory: "beta", episodes: [], feedback: [] };
+    await expectError(() => runtime.proposeLearning([alpha, shaped as never]), TypeError, message);
+    for (const backend of memory.values()) expect((backend as FakeMemory).session.learnCalls).toEqual([]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("an invalid learn result is a memory.invalid_result proposal failure", async () => {
+  const invalid = new MemoryOperationFailure(
+    "learn",
+    "memory.invalid_result",
+    "memory learn returned an invalid result",
+    false,
+  );
+  const results: unknown[] = [
+    {},
+    [new MemoryMutation("same", 1n), new MemoryMutation("same", 2n)],
+    [new MemoryMutation("m1", 1n), { mutationId: "m2", payload: 2n }],
+  ];
+  for (const result of results) {
+    const alpha = new FakeMemory("alpha", [], { learnValue: result as never });
+    const runtime = await open(new Map([["alpha", alpha], ["beta", new FakeMemory("beta", [])]]));
+    try {
+      const error = (await expectError(
+        () => runtime.proposeLearning(learnContexts()),
+        LearningProposalError,
+        "memory learn returned an invalid result",
+      )) as LearningProposalError;
+      expect(error.memory).toBe("alpha");
+      expect(error.failure).toEqual(invalid);
+    } finally {
+      await runtime.close();
+    }
+  }
+});
+
+test("an operation error with an invalid field is a memory.unexpected proposal failure", async () => {
+  const failure = new MemoryOperationError("learn", "alpha.down", "store down", false);
+  Object.defineProperty(failure, "code", { value: 5 });
+  const runtime = await open(
+    new Map([
+      ["alpha", new FakeMemory("alpha", [], { learnValue: failure })],
+      ["beta", new FakeMemory("beta", [])],
+    ]),
+  );
+  try {
+    const error = (await expectError(
+      () => runtime.proposeLearning(learnContexts()),
+      LearningProposalError,
+      "memory learn raised an unexpected error",
+    )) as LearningProposalError;
+    expect(error.memory).toBe("alpha");
+    expect(error.failure).toEqual(
+      new MemoryOperationFailure("learn", "memory.unexpected", "memory learn raised an unexpected error", false),
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("any other learn error escapes unchanged", async () => {
+  for (const thrown of [new Error("bug"), new RangeError("bad"), new CapabilityFault(new Error("host"))]) {
+    const beta = new FakeMemory("beta", []);
+    const runtime = await open(
+      new Map([
+        ["alpha", new FakeMemory("alpha", [], { learnValue: thrown })],
+        ["beta", beta],
+      ]),
+    );
+    try {
+      let caught: unknown;
+      await runtime.proposeLearning(learnContexts()).catch((error: unknown) => {
+        caught = error;
+      });
+      expect(caught).toBe(thrown);
+      expect(beta.session.learnCalls).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
+  }
+});
+
+test("an operation error stays a proposal failure whatever its cause", async () => {
+  for (const cause of [new DOMException("stop", "AbortError"), new CapabilityFault(new Error("host"))]) {
+    const failure = new MemoryOperationError("learn", "alpha.down", "store down", true);
+    Object.assign(failure, { cause });
+    const runtime = await open(
+      new Map([
+        ["alpha", new FakeMemory("alpha", [], { learnValue: failure })],
+        ["beta", new FakeMemory("beta", [])],
+      ]),
+    );
+    try {
+      const error = (await expectError(
+        () => runtime.proposeLearning(learnContexts()),
+        LearningProposalError,
+        "store down",
+      )) as LearningProposalError;
+      expect(error.failure).toEqual(new MemoryOperationFailure("learn", "alpha.down", "store down", true));
+    } finally {
+      await runtime.close();
+    }
+  }
+});
+
+test("commit learning maps its result and operation errors", async () => {
+  const request = new MemoryCommitRequestedRecord("alpha", "commit-1", [], 1);
+  const failure = new MemoryOperationError("commit", "alpha.down", "store down", true);
+  const wrapped = new MemoryOperationError("commit", "alpha.wrapped", "wrapped", false);
+  Object.assign(wrapped, { cause: new CapabilityFault(new Error("host")) });
+  const rows: [unknown, MemoryOperationFailure | null][] = [
+    [null, null],
+    [
+      "ok",
+      new MemoryOperationFailure("commit", "memory.invalid_result", "memory commit returned an invalid result", false),
+    ],
+    [failure, new MemoryOperationFailure("commit", "alpha.down", "store down", true)],
+    [wrapped, new MemoryOperationFailure("commit", "alpha.wrapped", "wrapped", false)],
+  ];
+  for (const [commitValue, expected] of rows) {
+    const runtime = await open(
+      new Map([
+        ["alpha", new FakeMemory("alpha", [], { commitValue })],
+        ["beta", new FakeMemory("beta", [])],
+      ]),
+    );
+    try {
+      expect(await runtime.commitLearning(request)).toEqual(expected);
+    } finally {
+      await runtime.close();
+    }
+  }
+});
+
+test("commit learning requires an exact MemoryCommitRequestedRecord", async () => {
+  const events: Events = [];
+  const runtime = await open(pair(events));
+  try {
+    const shaped = { memory: "beta", commitId: "commit-1", mutations: [], attemptId: 1 };
+    await expectError(
+      () => runtime.commitLearning(shaped as never),
+      TypeError,
+      "backward commit requires an exact MemoryCommitRequestedRecord",
+    );
+    expect(events.filter((event) => event[0] === "commit")).toEqual([]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("async learn and commit are awaited", async () => {
+  const policies = named();
+  const runtime = await open(policies);
+  const mutation = new MemoryMutation("m1", 1n);
+  const order: string[] = [];
+  policies.get("alpha")!.session.learn = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    order.push("alpha learned");
+    return [mutation];
+  };
+  policies.get("beta")!.session.learn = async () => {
+    order.push("beta learned");
+    return [];
+  };
+  policies.get("alpha")!.session.commit = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    order.push("alpha committed");
+  };
+  try {
+    const proposals = await runtime.proposeLearning(learnContexts());
+    expect(proposals).toEqual([new MemoryProposal("alpha", [mutation]), new MemoryProposal("beta", [])]);
+    expect(order).toEqual(["alpha learned", "beta learned"]);
+    expect(await runtime.commitLearning(new MemoryCommitRequestedRecord("alpha", "c1", [mutation], 1))).toBeNull();
+    expect(order).toEqual(["alpha learned", "beta learned", "alpha committed"]);
+    policies.get("alpha")!.session.commit = async () => "ok" as never;
+    expect((await runtime.commitLearning(new MemoryCommitRequestedRecord("alpha", "c2", [], 1)))?.code).toBe(
+      "memory.invalid_result",
+    );
+  } finally {
+    await runtime.close();
+  }
 });

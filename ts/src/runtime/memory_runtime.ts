@@ -16,11 +16,14 @@ import {
   ConversationRequest,
   isMemory,
   type JsonObject,
+  LearnContext,
   type Memory,
   MemoryContent,
   MemoryContext,
   MemoryContextRequest,
+  type MemoryMutation,
   MemoryOperationError,
+  MemoryOperationFailure,
   MemoryRecallError,
   MemoryScope,
   MemorySection,
@@ -33,6 +36,8 @@ import {
 } from "../memory/contracts.ts";
 import { isExactly, sameItems } from "../nodes/contracts.ts";
 import { isList } from "../typesys/values.ts";
+import { MemoryProposal } from "./contracts.ts";
+import { MemoryCommitRequestedRecord } from "./log.ts";
 
 /** Return one exact non-empty well-formed registry identity. */
 function requireName(value: unknown, name: string): string {
@@ -122,6 +127,51 @@ function validateSession(value: unknown, key: string, origin: OriginRef | null):
     }
   }
   return value as MemorySession;
+}
+
+/** @internal A known per-key proposal failure before any commit request. */
+export class LearningProposalError extends Error {
+  override name = "LearningProposalError";
+  /** The memory key whose proposal failed. */
+  readonly memory: string;
+  /** The sanitized failure; its message is this error's message. */
+  readonly failure: MemoryOperationFailure;
+
+  constructor(memory: string, failure: MemoryOperationFailure, options?: ErrorOptions) {
+    super(failure.message, options);
+    this.memory = memory;
+    this.failure = failure;
+  }
+}
+
+/** Copy one typed backend failure, or sanitize an error whose fields were changed to invalid ones. */
+function operationFailure(operation: string, error: MemoryOperationError): MemoryOperationFailure {
+  try {
+    return new MemoryOperationFailure(error.stage, error.code, error.message, error.retryable);
+  } catch (failure) {
+    if (!(failure instanceof TypeError || failure instanceof RangeError)) throw failure;
+    return unexpectedOperationFailure(operation);
+  }
+}
+
+/** Return one stable final failure without leaking an unexpected error. */
+function unexpectedOperationFailure(operation: string): MemoryOperationFailure {
+  return new MemoryOperationFailure(
+    operation,
+    "memory.unexpected",
+    `memory ${operation} raised an unexpected error`,
+    false,
+  );
+}
+
+/** Return one stable final failure for a malformed memory return value. */
+function invalidResultFailure(operation: string): MemoryOperationFailure {
+  return new MemoryOperationFailure(
+    operation,
+    "memory.invalid_result",
+    `memory ${operation} returned an invalid result`,
+    false,
+  );
 }
 
 // Local copy of memory/session.ts's addNote.
@@ -328,6 +378,82 @@ export class MemoryRuntime {
       { signal },
     );
     return new MemoryContext({ sections, transcript: turn });
+  }
+
+  /**
+   * Stage every key's proposal without writing records or memory.
+   *
+   * Each learner receives the very context passed in; a context is frozen, so it needs no copy.
+   *
+   * @param contexts - One context per recorded key, in table order, including empty batches.
+   * @returns The validated mutations in table order, as a frozen array.
+   * @throws Error when the runtime is closed.
+   * @throws TypeError when `contexts` isn't an array of exact `LearnContext` values.
+   * @throws RangeError when the contexts don't cover the table in order or belong to several runs.
+   * @throws LearningProposalError when a learner throws a `MemoryOperationError`, whatever its
+   *   `cause`, or returns an invalid proposal; any other learner error propagates unchanged.
+   */
+  async proposeLearning(contexts: readonly LearnContext[]): Promise<readonly MemoryProposal[]> {
+    if (this.closed) throw new Error("memory runtime is closed");
+    if (!isList(contexts) || !contexts.every((context) => isExactly(context, LearnContext))) {
+      throw new TypeError("learning contexts must be an array of exact LearnContext values");
+    }
+    const keys = this.memories.map((spec) => spec.key);
+    if (!sameItems(contexts.map((context) => context.memory), keys)) {
+      throw new RangeError("learning contexts must cover the complete recorded memory table in order");
+    }
+    if (new Set(contexts.map((context) => context.runId)).size > 1) {
+      throw new RangeError("learning contexts must belong to one run");
+    }
+
+    const proposals: MemoryProposal[] = [];
+    for (const context of contexts) {
+      const key = context.memory;
+      let raw: unknown;
+      try {
+        raw = await this.sessions.get(key)!.learn(context);
+      } catch (error) {
+        if (!(error instanceof MemoryOperationError)) throw error;
+        throw new LearningProposalError(key, operationFailure("learn", error), { cause: error });
+      }
+      try {
+        if (!isList(raw)) throw new TypeError("memory learn() must return an array");
+        proposals.push(new MemoryProposal(key, raw as readonly MemoryMutation[]));
+      } catch (error) {
+        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+        throw new LearningProposalError(key, invalidResultFailure("learn"), { cause: error });
+      }
+    }
+    return Object.freeze(proposals);
+  }
+
+  /**
+   * Perform one already accepted backward request without writing its observation.
+   *
+   * @param request - The accepted attempt-aware request, with its memory key, stable id and
+   *   ordered batch.
+   * @returns A known backend or return-contract failure, or `null` on success.
+   * @throws Error when the runtime is closed.
+   * @throws TypeError when `request` isn't exactly a `MemoryCommitRequestedRecord`.
+   * @throws RangeError when the request names a key that wasn't opened.
+   * @throws any commit error other than a `MemoryOperationError`, unchanged.
+   */
+  async commitLearning(request: MemoryCommitRequestedRecord): Promise<MemoryOperationFailure | null> {
+    if (this.closed) throw new Error("memory runtime is closed");
+    if (!isExactly(request, MemoryCommitRequestedRecord)) {
+      throw new TypeError("backward commit requires an exact MemoryCommitRequestedRecord");
+    }
+    if (!this.sessions.has(request.memory)) {
+      throw new RangeError("backward commit requires an enabled memory and attempt");
+    }
+    let result: unknown;
+    try {
+      result = await this.sessions.get(request.memory)!.commit(request.commitId, request.mutations);
+    } catch (error) {
+      if (!(error instanceof MemoryOperationError)) throw error;
+      return operationFailure("commit", error);
+    }
+    return result === undefined || result === null ? null : invalidResultFailure("commit");
   }
 
   /**

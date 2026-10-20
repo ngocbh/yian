@@ -32,8 +32,9 @@
  * `test_episode_rejects_nonphysical_execution_sequences`,
  * `test_learn_context_requires_episodes_of_its_run`, the episode and context rows of
  * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
- * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree` and
- * `test_learn_context_equal_feedback`; plus JavaScript's own values (a `"__proto__"` key, a
+ * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree`,
+ * `test_learn_context_equal_feedback` and `test_propose_learning_shares_canonical_feedback` (as "the
+ * learner receives the exact `LearnContext`"); plus JavaScript's own values (a `"__proto__"` key, a
  * null-prototype object, a repeated subtree, an array hole), the value nesting limit, and the
  * depth-first order of the first error. 100 000-level arrays and objects are copied through a
  * snapshot envelope, a mutation and learn feedback (compared as log JSON text, since Bun's
@@ -63,7 +64,11 @@
  * `false, true, -1, 1.5, "1", 1n` (`1.0` is `1` in JS), each with its class and message.
  * `test_freeze_shares_a_repeated_subtree` checks the read feedback (`feedback[0].a` is
  * `feedback[0].b`), since the stored snapshot is what `feedback` returns. Python's dataclass `==`
- * of two contexts is `toEqual`; `copy.deepcopy` is `structuredClone`.
+ * of two contexts is `toEqual`; `copy.deepcopy` is `structuredClone`. `proposeLearning` doesn't
+ * rebuild a context, so the canonical-feedback test checks that the learner receives the very
+ * context and its very `feedback` (`toBe`, where Python checks the private canonical feedback is
+ * shared); its rebuilt non-canonical scalar row has no counterpart (a frozen context can't be
+ * forged).
  *
  * Changed: the JSON tests build a custom-type `MemoryDecl`, as Python's `_decl` does. The non-exact
  * rows are JavaScript's (a `Map`, a `Date`, an own symbol key, a class instance, an array subclass
@@ -112,10 +117,9 @@
  * (a frozen TS carrier can't be forged, so a context keeps its checked episodes by reference);
  * `test_episode_rejects_integer_subclass_execution_sequence` (no integer subclasses in JS);
  * `test_propose_learning_parity_on_deleted_slots` (`object.__delattr__` and
- * `LearnContext._revalidated`, which TS doesn't need).
- *
- * Left for later: `test_propose_learning_rebuild_of_forged_feedback` and
- * `test_propose_learning_shares_canonical_feedback`, with the memory runtime.
+ * `LearnContext._revalidated`, which TS doesn't need) and
+ * `test_propose_learning_rebuild_of_forged_feedback` (`object.__setattr__` on a frozen context; a
+ * TS context is frozen by its constructor, so none holds forged feedback).
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -148,6 +152,7 @@ import {
   type MemorySession,
   MemorySetupError,
   MemorySnapshotEnvelope,
+  MemorySpec,
   ModelTextInteraction,
   ModelValueInteraction,
   PolicyCommitOutcome,
@@ -165,7 +170,9 @@ import {
 import * as memoryPackage from "../../src/memory/index.ts";
 import * as runtimeContracts from "../../src/runtime/contracts.ts";
 import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { logJson } from "../../src/typesys/json.ts";
+import { FakeMemory } from "./memory_fakes.ts";
 import { importStatements } from "./source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
@@ -1203,6 +1210,25 @@ test("learn contexts over aliased and copied feedback are equal", () => {
   expect(aliased.feedback).toEqual(copied.feedback);
   expect(copied.feedback).toEqual(feedback);
   expect(aliased).toEqual(copied);
+});
+
+// test_propose_learning_shares_canonical_feedback
+test("the learner receives the exact LearnContext", async () => {
+  const memory = new FakeMemory();
+  const runtime = await MemoryRuntime.open({
+    memories: [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])], false)],
+    origins: new Map([["notes", null]]),
+    memory: new Map([["notes", memory]]),
+  });
+  const context = new LearnContext("run", "notes", [], [{ b: [1n, "x", null, 1.5, true], a: {} }]);
+  try {
+    await runtime.proposeLearning([context]);
+  } finally {
+    await runtime.close();
+  }
+  expect(memory.learnContexts).toHaveLength(1);
+  expect(memory.learnContexts[0]).toBe(context);
+  expect(memory.learnContexts[0]!.feedback).toBe(context.feedback);
 });
 
 class SubSection extends MemorySection {}

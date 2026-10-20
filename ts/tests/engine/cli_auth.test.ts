@@ -1603,13 +1603,22 @@ describe("modelAnswers", () => {
     try {
       const fake = fakeChatModel();
       const other = `Another warning ${Math.random()}`;
+      const received: string[] = [];
       fake.build = async (config, options) => {
+        const onWarning = (message: string) => {
+          received.push(message);
+          options.onWarning!(message);
+        };
         // The real factory, for its warning text; the build sends nothing.
-        await chatModelFromConfig(config, options);
-        options.onWarning!(other);
+        await chatModelFromConfig(config, { ...options, onWarning });
+        onWarning(other);
       };
       const deps = { chatModel: fake.chatModel };
       expect(await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never)).toBeNull();
+      expect(received).toEqual([
+        "Model 'claude-x' is not in the known model list for provider 'anthropic'. Continuing anyway.",
+        other,
+      ]);
       expect(emitted.mock.calls as unknown[][]).toEqual([[other, "RuntimeWarning"]]);
     } finally {
       emitted.mockRestore();

@@ -179,8 +179,8 @@ async function ask(message: string, option: string, ctx: SetupContext): Promise<
  *
  * @param provider Provider name shown in the prompt.
  * @param variable Environment variable checked first.
- * @param options.optional The provider can run without a key; off a terminal or with an empty
- *   answer, no key is returned.
+ * @param optional The provider can run without a key; off a terminal or with an empty answer, no
+ *   key is returned.
  * @returns The key, or `null` when an optional key is not given.
  * @throws {AuthError} A required key is missing, or the prompt is cancelled.
  */
@@ -642,15 +642,18 @@ export async function modelAnswers(
       await collect(chat.stream(new Request({ messages: [prompt] }), { signal }));
     });
   } catch (error) {
+    // A stopped call throws the signal's reason: the stop's is a cancel, rethrown; the deadline's
+    // is `timedOut`, reported below like any failure.
     if (stop.aborted) throw error;
     // callCredentials also lists a set token variable (AZURE_OPENAI_AD_TOKEN, ANTHROPIC_AUTH_TOKEN),
     // though a call given a key doesn't send it. A keyless check sends no saved or ambient key, so
     // none is looked up.
     const sent = { provider, api_key: key, headers: { ...headers } };
     const secrets = key === null ? Object.values(headers) : callCredentials(sent, { env: io.env });
-    // A stopped call throws the signal's reason, so a passed deadline shows as `timedOut`.
     const message = error instanceof Error ? error.message : String(error);
-    const text = redactKeys(message, secrets).split(/\s+/).filter(Boolean).join(" ").slice(0, 200);
+    const folded = redactKeys(message, secrets).split(/\s+/).filter(Boolean).join(" ");
+    // Cut by code points, as Python's `text[:200]` cuts characters, so no surrogate pair splits.
+    const text = Array.from(folded).slice(0, 200).join("");
     return error instanceof Error ? `${error.name}: ${text}` : text;
   }
   return null;

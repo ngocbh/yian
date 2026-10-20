@@ -13,7 +13,9 @@
  * `test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_model` and
  * `test_store_failure_during_commit_is_not_retryable`.
  *
- * TS-only: `bigint` budgets, a `0n` budget and the constructor's messages; a frozen snapshot; a
+ * TS-only: `bigint` budgets, a `0n` budget and the constructor's messages; a `bigint` budget above
+ * 2^53 − 1 is refused (budgets are numbers); a bad `YIAN_PROFILE_MAX_CHARS` is read only for an
+ * unset budget; an array subclass is not a mutation array; a frozen snapshot; a
  * snapshot whose `version` is the `number` 1 is refused; an async host store (methods returning
  * promises) works throughout; a store `read` throwing a plain `Error` escapes unchanged from both
  * open paths, and one throwing a system error is `profile.store_unavailable` (retryable); recall
@@ -52,7 +54,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BUILTIN, type Env, install } from "../../src/defaults.ts";
+import { BUILTIN, DefaultsError, type Env, forget, install } from "../../src/defaults.ts";
 import {
   isMemory,
   type JsonObject,
@@ -63,7 +65,7 @@ import {
 import { ProfileMemory, type ProfileSession } from "../../src/memory/profile.ts";
 import { FileMarkdownStore, InMemoryMarkdownStore, markdownVersion } from "../../src/memory/storage/markdown.ts";
 
-// Cloned snapshots are edited freely.
+// Rows pass values the signatures refuse, to reach the runtime checks.
 type Mutable = any;
 
 let home: string;
@@ -165,10 +167,12 @@ function systemError(message: string): Error {
 test("test_constructor_validates_store_config_and_budgets", () => {
   const store = new FileMarkdownStore(join(home, "ada.md"));
   for (const bad of [{}, null, { read() {}, write: "x" }]) {
-    expect(() => new ProfileMemory(bad as Mutable)).toThrow(new TypeError("store must provide read() and write()"));
+    expect(() => new ProfileMemory(bad as Mutable, { env: baseEnv() })).toThrow(
+      new TypeError("store must provide read() and write()"),
+    );
   }
   for (const bad of ["ollama", ["ollama"]]) {
-    expect(() => new ProfileMemory(store, { llmConfig: bad as Mutable })).toThrow(
+    expect(() => new ProfileMemory(store, { env: baseEnv(), llmConfig: bad as Mutable })).toThrow(
       new TypeError("llm_config must be a record or null"),
     );
   }
@@ -189,6 +193,22 @@ test("test_constructor_validates_store_config_and_budgets", () => {
   expect([memory.maxChars, memory.inputBudgetChars]).toEqual([32_000, 24_000]);
   const big = new ProfileMemory(store, { env: baseEnv(), maxChars: 10n, inputBudgetChars: 20n, llmConfig: null });
   expect([big.maxChars, big.inputBudgetChars]).toEqual([10, 20]);
+});
+
+test("a bad defaults variable is read only for an unset budget", () => {
+  const store = new FileMarkdownStore(join(home, "ada.md"));
+  const variable = "YIAN_PROFILE_MAX_CHARS";
+  const saved = process.env[variable];
+  process.env[variable] = "0";
+  forget();
+  try {
+    const memory = new ProfileMemory(store, { env: baseEnv(), maxChars: 10, inputBudgetChars: 20 });
+    expect([memory.maxChars, memory.inputBudgetChars]).toEqual([10, 20]);
+    expect(() => new ProfileMemory(store, { env: baseEnv(), inputBudgetChars: 20 })).toThrow(DefaultsError);
+  } finally {
+    if (saved === undefined) delete process.env[variable];
+    else process.env[variable] = saved;
+  }
 });
 
 test("test_host_read_and_write_use_the_store_without_a_budget", async () => {
@@ -389,6 +409,9 @@ test("test_store_failure_during_commit_is_not_retryable", async () => {
   });
 });
 
+/** An array subclass, which is not a plain mutation array. */
+class Batch extends Array {}
+
 test("commit's batch messages", async () => {
   const memory = await newMemory();
   await withRun(memory, async (session) => {
@@ -398,6 +421,7 @@ test("commit's batch messages", async () => {
       ["", [], "commit needs an id and a mutation array"],
       ["commit-1", mutation, "commit needs an id and a mutation array"],
       ["commit-1", [{ ...mutation }], "commit needs an id and a mutation array"],
+      ["commit-1", Batch.from([mutation]), "commit needs an id and a mutation array"],
       ["commit-1", [mutation, mutation], "profile commits take at most one document mutation"],
       ["commit-1", [new MemoryMutation("m", ["x"])], "profile commits take at most one document mutation"],
       ["commit-1", [new MemoryMutation("m", { text: "x" })], "profile commits take at most one document mutation"],
@@ -476,6 +500,9 @@ test("a failed commit then a good one in the same session; bigint feedback write
     const fresh = [documentMutation((await memory.read())[1], "# Ada\nBoth.\n", { feedback: [2n] })];
     const results = await Promise.allSettled([session.commit("commit-1", stale), session.commit("commit-2", fresh)]);
     expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
+    const reason = (results[0] as PromiseRejectedResult).reason;
+    expect(reason).toBeInstanceOf(MemoryOperationError);
+    expect([reason.code, reason.retryable]).toEqual(["profile.version_mismatch", true]);
   });
   expect((await memory.read())[0]).toBe("# Ada\nBoth.\n");
   const line = writeLog().at(-1)!;

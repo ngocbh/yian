@@ -18,7 +18,7 @@ import type { RetryInfo } from "../llm/executor.ts";
 import { type HostConnection, popHostCredentials } from "../llm_clients/config.ts";
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
 import type { JsonObject as StoreObject } from "../typesys/json.ts";
-import { fromHost } from "../typesys/values.ts";
+import { fromHost, isList, isRecord } from "../typesys/values.ts";
 import {
   type JsonObject,
   type LearnContext,
@@ -87,13 +87,6 @@ function readError(stage: string, cause: unknown): MemoryOperationError {
   throw cause;
 }
 
-/** Whether `value` is a plain record: an object whose prototype is `Object.prototype` or `null`. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
 // Local copy of memory/contracts.ts's isExactly, which that module keeps private.
 /** Whether `value` is an instance of exactly `cls`, not of a subclass. */
 function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
@@ -101,12 +94,11 @@ function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T)
 }
 
 /**
- * Return a budget, or the default when it is unset, as a `number`.
+ * Return a budget as a `number`.
  *
  * @throws RangeError when it isn't a positive safe-integer `number` or `bigint`.
  */
-function budget(value: unknown, fallback: number, name: string): number {
-  if (value === undefined || value === null) return fallback;
+function budget(value: unknown, name: string): number {
   const integer = typeof value === "bigint" || (typeof value === "number" && Number.isSafeInteger(value));
   if (!integer || value <= 0 || value > Number.MAX_SAFE_INTEGER) {
     throw new RangeError(`${name} must be a positive integer`);
@@ -156,6 +148,8 @@ export class ProfileMemory implements Memory {
    * @param options.onRetry Called before the learner's model call is retried; unset publishes
    *   nothing.
    * @throws TypeError when `store` lacks `read`/`write` or `llmConfig` isn't a record.
+   * @throws DefaultsError when a budget is unset and a `YIAN_` variable holds a value it doesn't
+   *   accept.
    * @throws RangeError when a budget isn't a positive integer, or the connection entries of
    *   `llmConfig` are invalid (see `popHostCredentials`).
    */
@@ -176,9 +170,11 @@ export class ProfileMemory implements Memory {
     }
     const llmConfig = options.llmConfig ?? null;
     if (llmConfig !== null && !isRecord(llmConfig)) throw new TypeError("llm_config must be a record or null");
-    const defaults = current();
-    this.maxChars = budget(options.maxChars, defaults.profileMaxChars, "max_chars");
-    this.inputBudgetChars = budget(options.inputBudgetChars, defaults.profileInputBudgetChars, "input_budget_chars");
+    // Defaults are read only for unset budgets, both resolved before either is checked, as Python does.
+    const maxChars = options.maxChars ?? current().profileMaxChars;
+    const inputBudgetChars = options.inputBudgetChars ?? current().profileInputBudgetChars;
+    this.maxChars = budget(maxChars, "max_chars");
+    this.inputBudgetChars = budget(inputBudgetChars, "input_budget_chars");
     this.store = store;
     this.llmConfig = fromHost(llmConfig ?? {}, "llm_config") as Record<string, unknown>;
     this.host = popHostCredentials(this.llmConfig);
@@ -251,8 +247,8 @@ export class ProfileMemory implements Memory {
   async openRun(options: { snapshot?: JsonObject | null } = {}): Promise<ProfileSession> {
     this.ensureOpen("open_run");
     const snapshot = options.snapshot ?? null;
+    let document: readonly [string, string];
     if (snapshot === null) {
-      let document: readonly [string, string];
       try {
         document = await this.store.read(null);
       } catch (cause) {
@@ -273,17 +269,17 @@ export class ProfileMemory implements Memory {
       }
       const recorded = snapshot.profile_version;
       if (typeof recorded !== "string") throw new RangeError("profile_version must be a string");
-      const [text, version] = await this.store.read(recorded);
-      if (version !== recorded || sha256(text) !== snapshot.text_sha256) {
+      document = await this.store.read(recorded);
+      if (document[1] !== recorded || sha256(document[0]) !== snapshot.text_sha256) {
         throw new RangeError("stored text differs from the recorded version");
       }
-      return new ProfileSession(this, text, version);
     } catch (cause) {
       if (!(cause instanceof TypeError || cause instanceof RangeError || isSystemError(cause))) throw cause;
       throw error("open_run", "profile.snapshot_unavailable", "recorded profile version cannot be restored", {
         cause,
       });
     }
+    return new ProfileSession(this, document[0], document[1]);
   }
 }
 
@@ -365,7 +361,9 @@ export class ProfileSession implements MemorySession {
    *   backend is closed. Other store errors pass through unchanged.
    */
   commit(commitId: string, mutations: readonly MemoryMutation[]): Promise<void> {
-    const run = this.queue.catch(() => {}).then(() => this.commitNow(commitId, mutations));
+    // Copied now, so a caller editing its array while earlier commits run can't change this batch.
+    const batch = isList(mutations) ? [...mutations] : mutations;
+    const run = this.queue.catch(() => {}).then(() => this.commitNow(commitId, batch));
     this.queue = run;
     return run;
   }
@@ -376,7 +374,7 @@ export class ProfileSession implements MemorySession {
     if (
       typeof commitId !== "string" ||
       !commitId ||
-      !Array.isArray(mutations) ||
+      !isList(mutations) ||
       !mutations.every((mutation) => isExactly(mutation, MemoryMutation))
     ) {
       throw error("commit", "profile.invalid_batch", "commit needs an id and a mutation array");

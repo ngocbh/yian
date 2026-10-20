@@ -1630,15 +1630,17 @@ memory = build_memories(
 ```
 
 Changed (TS yian): `new ReflectiveMemory({ llmConfig, maxItems, recallLimit, storage,
-createParent, env, createModel, onRetry })` takes an options object.
+createParent, env, createModel, onRetry })` takes an options object. `env` is where
+the learner's model defaults and credentials are read (default `processEnv`).
 `createModel(config)` builds the learner's model from the pinned config (default
 `chatModelFromConfig`), and `onRetry` sees each transport retry. `recall` and `learn`
-are async. The learner calls the model once through `callWithRetries`, so only
-transport errors retry, under `YIAN_MODEL_RETRIES`. yian checks the reply itself
-(exactly `actions`); an invalid reply fails `reflective.contract` without a retry,
-and a model without native structured output fails `reflective.structured_output`.
-The reflection prompt shows its materials in the text form (JS numbers, `Infinity`,
-JS key order). Messages keep Python's wording, with `null` for `None`.
+are async. The learner makes one structured call through `callWithRetries`, so only
+transport errors retry, under the process's `YIAN_MODEL_RETRIES`. yian checks the
+reply itself (exactly `actions`); an invalid reply fails `reflective.contract` without
+a retry, and a model without native structured output fails
+`reflective.structured_output`. The reflection prompt shows its materials in the text
+form (`1.0` is `1`, bare `Infinity`, JS key order). Messages keep Python's wording,
+with `null` for `None`.
 
 ### Profile memory
 

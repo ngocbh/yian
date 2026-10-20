@@ -762,6 +762,7 @@ test("fifo turn covers stream drain and shape check", async () => {
   } finally {
     await runtime.close();
   }
+});
 
 /**
  * Return an opener whose turn records how it closed and whether the signal the opener received

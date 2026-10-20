@@ -80,7 +80,7 @@ export interface AuthDeps {
   /** The clock deadlines run on; defaults to `realScheduler`. */
   scheduler?: Scheduler;
   /** Where `auth` listens for SIGINT (and SIGTERM, for the JSON device sign-in); defaults to `process`. */
-  signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
+  signals?: Pick<EventEmitter, "on" | "off">;
 }
 
 /** The real OpenAI authentication service, the default of `AuthDeps.openAIAuth`. */
@@ -628,18 +628,23 @@ export async function modelAnswers(
   const timedOut = new TimeoutError("The model didn't reply within 30 seconds");
   try {
     await withDeadline(30_000, timedOut, deps.scheduler ?? realScheduler, async (deadline) => {
-      const signal = AbortSignal.any([stop, deadline]);
-      const chat = await (deps.chatModel ?? chatModelFromConfig)(config, {
-        env: io.env,
-        snapshot: new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: {} }),
-        signal,
-        onWarning: (message) => {
-          // The reply decides whether the model is usable, not yian's catalog.
-          if (!/^Model .* is not in the known model list/s.test(message)) warnOnce(WARNED, message);
-        },
-      });
-      const prompt = new Message({ role: "user", parts: [new TextPart("Reply with OK.")] });
-      await collect(chat.stream(new Request({ messages: [prompt] }), { signal }));
+      try {
+        const signal = AbortSignal.any([stop, deadline]);
+        const chat = await (deps.chatModel ?? chatModelFromConfig)(config, {
+          env: io.env,
+          snapshot: new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: {} }),
+          signal,
+          onWarning: (message) => {
+            // The reply decides whether the model is usable, not yian's catalog.
+            if (!/^Model .* is not in the known model list/s.test(message)) warnOnce(WARNED, message);
+          },
+        });
+        const prompt = new Message({ role: "user", parts: [new TextPart("Reply with OK.")] });
+        await collect(chat.stream(new Request({ messages: [prompt] }), { signal }));
+      } catch (error) {
+        // Whatever a call cut short by the deadline rejects with, the deadline is the cause.
+        throw deadline.aborted && !stop.aborted ? timedOut : error;
+      }
     });
   } catch (error) {
     // A stopped call throws the signal's reason: the stop's is a cancel, rethrown; the deadline's
@@ -747,7 +752,7 @@ async function setupProvider(
 function onStopSignals(
   names: readonly NodeJS.Signals[],
   controller: AbortController,
-  target: Pick<NodeJS.EventEmitter, "on" | "off">,
+  target: Pick<EventEmitter, "on" | "off">,
 ): () => void {
   const off = () => {
     for (const name of names) target.off(name, stop);
@@ -823,12 +828,13 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
   const stop = new AbortController();
   // Only the JSON device sign-in handles SIGTERM, as Python's did; every form takes Ctrl-C.
   const names: NodeJS.Signals[] = json && device ? ["SIGTERM", "SIGINT"] : ["SIGINT"];
-  const off = onStopSignals(names, stop, deps.signals ?? process);
   const authFile = (o["auth-file"] as string | undefined) ?? null;
   const open = (path: string | null) => new AuthStore(path, { env: io.env, signal: stop.signal });
   const terminal =
     deps.terminal !== undefined ? deps.terminal : io.stdin.isTTY === true ? new Terminal({ input: io.stdin }) : null;
   const ctx: SetupContext = { io, deps, terminal, signal: stop.signal };
+  // Installed right before the `try` whose `finally` removes them.
+  const off = onStopSignals(names, stop, deps.signals ?? process);
   try {
     if (provider === undefined) {
       const { method, login, model, apiKeyEnv, endpoint, organization, project } = options;

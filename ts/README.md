@@ -647,7 +647,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `--memory-root` and `--memory-storage` (`parseMemoryStorage`, `buildCliMemories`).
 - `src/cli/auth.ts` holds `yian auth` (list, setup through `Terminal` prompts, `--default`,
   `--remove`, whole-file removal, device sign-in as JSON lines), `yian models`, `yian providers`
-  and `yian config check`. Its handlers take an optional `AuthDeps` (the OpenAI service, the
+  and `yian config check`. `auth` and `models` take an optional `AuthDeps` (the OpenAI service, the
   listing, the model factory, the terminal, the browser opener, the signal source and the
   scheduler), which tests replace with fakes. Ctrl-C stops `yian auth` (SIGTERM too for the JSON
   device form); deadlines run on the scheduler, never on `AbortSignal.timeout`.

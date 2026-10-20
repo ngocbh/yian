@@ -246,6 +246,7 @@ describe("configCheck", () => {
     ["a list", "[1]"],
     ["NaN", "NaN"],
     ["a BOM before the object", "\uFEFF{}"],
+    ["an object with a repeated key", '{"provider": "openai", "provider": "xai"}'],
     ["bytes that aren't UTF-8", new Uint8Array([0x7b, 0xff, 0x7d])],
   ])("refuses stdin that is %s", async (_, stdin) => {
     const io = fakeIo({ stdin });

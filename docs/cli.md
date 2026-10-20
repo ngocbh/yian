@@ -758,8 +758,9 @@ Without `--json`, it prints `ok`, or one `FIELD: MESSAGE` line per error on stde
 (just `MESSAGE` when there is no field).
 
 Changed (TS yian): stdin must be UTF-8. Bytes that aren't UTF-8, even inside a JSON
-string, and a number too large for a float, such as `1e400`, are usage errors (exit 2).
-Python checked such a layer instead (`1e400` read as infinity, a field error).
+string, a number too large for a float, such as `1e400`, and an object that repeats a
+key are usage errors (exit 2). Python checked such a layer instead (`1e400` read as
+infinity, a field error; a repeated key kept its last value).
 
 ### Listing providers
 

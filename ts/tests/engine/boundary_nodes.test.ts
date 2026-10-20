@@ -5,7 +5,8 @@
  * nodes exist and that edges carry real adjacency, never that the strings are absent.
  *
  * Ported: `test_loader_synthesizes_start_and_end_nodes`,
- * `test_inputs_read_mints_producer_edge_from_start` and `test_input_reader_is_not_also_a_bare_root`.
+ * `test_inputs_read_mints_producer_edge_from_start` and
+ * `test_input_reader_is_not_also_a_bare_root`.
  *
  * Changed: the flow assembles through `assembleText`, where Python calls `load_flow`; its CODE
  * reference is TS's (`./fixtures/compose_codefns.ts:echo_x`).
@@ -18,7 +19,7 @@
 
 import { expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { assembleText } from "../compose/declarations.ts";
 
@@ -46,10 +47,11 @@ test("the loader synthesizes START and END nodes", () => {
   expect(flow.startId).toBe(START_ID);
   expect(flow.terminalId).toBe(END_ID);
   // Ordinary edges to and from the real boundary nodes (n -> END_ID is a real adjacency).
-  const pairs = new Set(flow.edges.map((edge) => `${edge.from} ${edge.to}`));
-  expect(pairs.has(`${START_ID} n`) && pairs.has(`n ${END_ID}`)).toBe(true);
+  const pairs = flow.edges.map((edge) => `${edge.from} ${edge.to}`);
+  expect(pairs).toContain(`${START_ID} n`);
+  expect(pairs).toContain(`n ${END_ID}`);
   // The n -> END_ID edge carries the output's input group (a real data edge).
-  expect(flow.edges.some((edge) => edge.from === "n" && edge.to === END_ID && edge.inputGroup !== null)).toBe(true);
+  expect(flow.edges).toContainEqual(new Edge(`n->${END_ID}#0`, "n", END_ID, { inputGroup: "result" }));
 });
 
 test("an input read mints a producer edge from START", () => {

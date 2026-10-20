@@ -16,8 +16,8 @@
  * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`). TS-only conductor rows: a
  * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
- * `uses:` alias check and the value-entry reader raise through `assemble`, and one happy path over
- * stand-in nodes (its data and boundary edges), and END's binding labels. Later (T3-17): the
+ * `uses:` alias check and the value-entry reader raise through `assemble`, one happy path over
+ * stand-in nodes (its data and boundary edges) and END's binding labels. Later (T3-17): the
  * value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter and
  * binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged), once
  * `isValueEntry` is real.
@@ -28,8 +28,9 @@
  * `test_seed05_*`, `test_seed06_*`, `test_seed18_*`, `test_terminal_edge_ids_unique`,
  * `test_assembled_edges_have_start_and_end` and `test_boundary_end_record_flag_picks_the_mode`.
  * Python's `_all_edges`, `_end_edges` and `_bare_roots` are local helpers over the seed cases
- * (`load-agent/seed_01_structured_agent`, `load-case/seed_02_case`, `load-map-call/seed_05_call_map`,
- * `load-case/seed_06_case_on`, `load-core/seed_18_research_pipeline`); they call
+ * (`load-agent/seed_01_structured_agent`, `load-case/seed_02_case`,
+ * `load-map-call/seed_05_call_map`, `load-case/seed_06_case_on`,
+ * `load-core/seed_18_research_pipeline`); they call
  * `synthesizeBoundaryGraph` over the parsed nodes, so seed 05's MAP child needn't resolve.
  * `test_seed02_branch_target_has_control_edge` reads the edges of seed 02's built `gate`, where
  * Python's `_all_edges` also infers the data edges, which hold no control edge. Python's
@@ -976,6 +977,11 @@ function bareRoots(nodeIds: ReadonlySet<string>, edges: readonly Edge[]): Set<st
   );
 }
 
+/** Return the END node `synthesizeBoundaryGraph` builds for `outputs` over one body node `x`. */
+function endOf(outputs: FlowOutput[], record: boolean): EndNode {
+  return synthesizeBoundaryGraph([], outputs, new Set(["x"]), [], null, { record })[0].get(END_ID) as EndNode;
+}
+
 const SEED_01 = "load-agent/seed_01_structured_agent";
 const SEED_02 = "load-case/seed_02_case";
 const SEED_05 = "load-map-call/seed_05_call_map";
@@ -987,18 +993,18 @@ const SEED_18 = "load-core/seed_18_research_pipeline";
 
 test("seed 01's score is an input producer, not a bare root", () => {
   const { nodeIds, edges } = allEdges(SEED_01);
-  // `score` reads `${input.topic}`: a START_ID->score data edge (inputGroup set), no bare root edge.
-  expect(edges.some((edge) => edge.from === START_ID && edge.to === "score" && edge.inputGroup !== null)).toBe(true);
-  expect(bareRoots(nodeIds, edges).has("score")).toBe(false);
+  // `score` reads `${input.topic}`: a START_ID->score data edge in group `topic`, no bare root
+  // edge (seed 01 has no bare root at all).
+  expect(edges).toContainEqual(new Edge(`${START_ID}->score#0`, START_ID, "score", { inputGroup: "topic" }));
+  expect(bareRoots(nodeIds, edges)).toEqual(new Set());
 });
 
 test("seed 02's case targets are not bare roots", () => {
   // positive/cautious are control-gated branch targets (gate->positive/cautious); neither is a bare
-  // root, though both also read `${input.topic}` (a START_ID data edge).
+  // root, though both also read `${input.topic}` (a START_ID data edge). Nor is gate (it has the
+  // score->gate data edge), so seed 02 has no bare root at all.
   const { nodeIds, edges } = allEdges(SEED_02);
-  const roots = bareRoots(nodeIds, edges);
-  expect(roots.has("positive") || roots.has("cautious")).toBe(false);
-  expect(roots.has("gate")).toBe(false); // gate has the score->gate data edge
+  expect(bareRoots(nodeIds, edges)).toEqual(new Set());
 });
 
 test("seed 02's branch target has a control edge", () => {
@@ -1012,19 +1018,17 @@ test("seed 02's branch target has a control edge", () => {
 });
 
 test("seed 06's notes are not bare roots", () => {
+  // pro_note, con_note and choppy_note are case branch targets; seed 06 has no bare root at all.
   const { nodeIds, edges } = allEdges(SEED_06);
-  const roots = bareRoots(nodeIds, edges);
-  for (const note of ["pro_note", "con_note", "choppy_note"]) expect(roots.has(note)).toBe(false);
+  expect(bareRoots(nodeIds, edges)).toEqual(new Set());
 });
 
 // Terminals from the flow `output:` bindings.
 
-/** Return the producers of seed `id`'s END edges, checking each edge ends at END. */
+/** Return the producers of seed `id`'s END edges. */
 function terminalProducers(id: string): Set<string> {
   const { nodeIds, edges, outputs } = allEdges(id);
-  const ends = endEdges(outputs, nodeIds, edges);
-  for (const edge of ends) expect(edge.to).toBe(END_ID);
-  return new Set(ends.map((edge) => edge.from));
+  return new Set(endEdges(outputs, nodeIds, edges).map((edge) => edge.from));
 }
 
 test("seed 01's multi-output terminals", () => {
@@ -1067,9 +1071,6 @@ test("the assembled edges have START and END", () => {
 
 test("the boundary's record flag picks END's mode", () => {
   const one = [new FlowOutput("order", "${x.output}")];
-  const endOf = (outputs: FlowOutput[], record: boolean) =>
-    synthesizeBoundaryGraph([], outputs, new Set(["x"]), [], null, { record })[0].get(END_ID) as EndNode;
-
   expect(endOf(one, true).returnsRecord).toBe(true);
   expect(endOf(one, false).returnsRecord).toBe(false);
   expect(endOf([], false).returnsRecord).toBe(false);
@@ -1079,9 +1080,6 @@ test("the boundary's record flag picks END's mode", () => {
 
 test("END's binding labels name a record field by its quoted name, a single output as the flow output", () => {
   // TS-only: Python checks the labels only through a binding failure at run time.
-  const endOf = (outputs: FlowOutput[], record: boolean) =>
-    synthesizeBoundaryGraph([], outputs, new Set(["x"]), [], null, { record })[0].get(END_ID) as EndNode;
-
   expect(endOf([new FlowOutput("it's", "${x.output}")], true).bindingLabels).toStrictEqual(
     new Map([["it's", `flow output "it's"`]]),
   );

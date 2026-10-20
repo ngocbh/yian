@@ -44,10 +44,10 @@ import type { LoweredAsserts } from "../validate/asserts.ts";
  * `lowered` is the flow's `asserts:` lowered into node-local `LoweredAsserts`. When given, its PRE
  * (boundary) asserts are stamped on START's ordinary `postAsserts` (they read `${output.X}`,
  * START's bound output), its POST asserts on END (`end.postAsserts`), and each synthesized END
- * input becomes an extra `Parameter` on END plus a wiring entry and a producer edge, so a cross-node
- * post assert's `${producer.output}` dependency is structural (a real END input) and survives child
- * cloning. `null` leaves the boundary nodes assert-free (a def or in-memory flow with no flow-level
- * asserts).
+ * input becomes an extra `Parameter` on END plus a wiring entry and a producer edge, so a
+ * cross-node post assert's `${producer.output}` dependency is structural (a real END input) and
+ * survives child cloning. `null` leaves the boundary nodes assert-free (a def or in-memory flow
+ * with no flow-level asserts).
  *
  * @param inputParameters The flow's input signature, START's params.
  * @param outputs The flow's outputs.
@@ -107,6 +107,7 @@ export function synthesizeBoundaryGraph(
     }
   };
   for (const output of outputs) addEndEdges(output.name, output.binding);
+  const endWiring = new Map<string, unknown>(outputs.map((output) => [output.name, output.binding]));
 
   // Stamp the lowered flow-level asserts onto the boundary nodes (a node's assert slots are
   // mutable; `validateNodeAsserts` sets them the same way).
@@ -126,8 +127,13 @@ export function synthesizeBoundaryGraph(
     // The same per-producer counter as the output edges, so a producer feeding both an output and
     // a synth input never mints a colliding edge id. An `${input.X}` synth co-skips (a required
     // START->END edge; START always runs); a `${pid.output:-null}` synth doesn't, so END waits for
-    // the producer to settle, binding null if it was skipped.
-    for (const [synthName, source] of lowered.synthWiring) addEndEdges(synthName, source);
+    // the producer to settle, binding null if it was skipped. Each synth source is also an END
+    // wiring entry, so binding finds a source per synth param. A synth name never collides with an
+    // output name (it is `__assert_`-prefixed; authors can't write `__` ids).
+    for (const [synthName, source] of lowered.synthWiring) {
+      endWiring.set(synthName, source);
+      addEndEdges(synthName, source);
+    }
   }
 
   // START_ID root edges over the full set (body and END_ID producer edges): a body node with no
@@ -139,15 +145,11 @@ export function synthesizeBoundaryGraph(
     .map((nodeId) => new Edge(`${START_ID}->${nodeId}`, START_ID, nodeId));
   if (!hasIncoming.has(END_ID)) rootEdges.push(new Edge(`${START_ID}->${END_ID}`, START_ID, END_ID));
 
-  // START_ID wiring: input names to `${input.X}` sources. At runtime the engine primes START's
-  // record with the run arguments and narrows this compiled wiring to the passed keys (an omitted
-  // input then binds absent, so START's wrapper fills its declared default). This compiled entry
-  // is what a direct driver or hand-seeded test reads.
-  const endWiring = new Map<string, unknown>(outputs.map((output) => [output.name, output.binding]));
-  // Each synthesized END param's source, so binding finds a source per synth param. A synth name
-  // never collides with an output name (it is `__assert_`-prefixed; authors can't write `__` ids).
-  if (lowered !== null) for (const [synthName, source] of lowered.synthWiring) endWiring.set(synthName, source);
   const boundaryWiring = new Map<string, Map<string, unknown>>([
+    // START_ID wiring: input names to `${input.X}` sources. At runtime the engine primes START's
+    // record with the run arguments and narrows this compiled wiring to the passed keys (an
+    // omitted input then binds absent, so START's wrapper fills its declared default). This
+    // compiled entry is what a direct driver or hand-seeded test reads.
     [START_ID, new Map(inputParameters.map((parameter) => [parameter.name, `\${input.${parameter.name}}`]))],
     [END_ID, endWiring],
   ]);
@@ -167,8 +169,8 @@ export function synthesizeBoundaryGraph(
  * @returns The declared contract, or `null` when no output is typed.
  */
 function declaredOutputContract(outputs: readonly FlowOutput[], options: { record: boolean }): OutputContract | null {
-  const declared = new Map(outputs.map((output) => [output.name, output.binding.contract]));
   if (!options.record) return outputs[0]?.binding.contract ?? null;
+  const declared = new Map(outputs.map((output) => [output.name, output.binding.contract]));
   if ([...declared.values()].every((contract) => contract === null)) return null;
   return combineOutputContracts(declared);
 }

@@ -74,8 +74,8 @@
  *   `RangeError`, and each error row checks the exact message (a nested binding is refused as an
  *   unsupported non-JSON value of type `Binding`). Python's `repr(manifest)` is `JSON.stringify`.
  *
- * Later (T3-14…T3-22): the compose/load row `test_reference_validation_checks_a_wrapped_flow_output`;
- * the CALL/LOOP type-check rows
+ * Later (T3-14…T3-22): the compose/load row
+ * `test_reference_validation_checks_a_wrapped_flow_output`; the CALL/LOOP type-check rows
  * (`test_call_type_*` and `test_loop_type_check_*`); inline binding type inference
  * (`test_inline_binding_type_inference_reads_one_carrier_layer`).
  */
@@ -1151,10 +1151,6 @@ test("the boundary reads a wrapped output but preserves it in END's wiring", () 
 
   const [, edges, wiring] = synthesizeBoundaryGraph([], [output], new Set(["producer"]), [], null, { record: false });
 
-  expect(
-    edges.some(
-      (edge) => edge.from === "producer" && edge.to === END_ID && edge.inputGroup === "result" && edge.optional === false,
-    ),
-  ).toBe(true);
+  expect(edges).toContainEqual(new Edge(`producer->${END_ID}#0`, "producer", END_ID, { inputGroup: "result" }));
   expect(wiring.get(END_ID)!.get("result")).toBe(wrapped);
 });

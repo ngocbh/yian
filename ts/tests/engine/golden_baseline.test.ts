@@ -67,7 +67,8 @@ function compiledOf(name: string): CompiledFlow {
 // reads `${input.X}` therefore carries both its control edge and the START_ID data edge (the
 // control veto still skip-floods it). The END_ID producer edges carry the output name.
 const GOLDEN_EDGE_IDS: Record<string, string[]> = {
-  // case: data (score->gate), control (gate->positive/cautious), START_ID input-producer edges, terminals
+  // case: data (score->gate), control (gate->positive/cautious), START_ID input-producer edges,
+  // terminals
   "02-case.yaml": [
     "__start__->cautious#0",
     "__start__->positive#0",

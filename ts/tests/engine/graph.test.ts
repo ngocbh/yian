@@ -162,22 +162,6 @@ test("flow base normalizes wiring with boundary defaults", () => {
   expect(spliced.wiring).toEqual(new Map());
 });
 
-test("a compiled flow is a Flow and keeps its boundary and terminal", () => {
-  const compiled = assembleText(OPTIONAL_EDGE_FLOW).flow.compiled;
-  expect(compiled).toBeInstanceOf(Flow);
-  expect(compiled.startId).toBe(START_ID);
-  expect(compiled.endId).toBe(END_ID);
-  // terminalId resolves to END_ID while the synthesized END node is present, null once absent.
-  expect(compiled.terminalId).toBe(END_ID);
-  compiled.nodes.delete(END_ID);
-  expect(compiled.terminalId).toBeNull();
-});
-
-test("edge optional defaults false and roundtrips", () => {
-  expect(new Edge("a->b#0", "a", "b", { inputGroup: "x" }).optional).toBe(false);
-  expect(new Edge("a->b#0", "a", "b", { inputGroup: "x", optional: true }).optional).toBe(true);
-});
-
 const OPTIONAL_EDGE_FLOW = `
 id: opt
 name: opt
@@ -204,6 +188,22 @@ nodes:
     output: str
 output: \${hard.output}
 `;
+
+test("a compiled flow is a Flow and keeps its boundary and terminal", () => {
+  const compiled = assembleText(OPTIONAL_EDGE_FLOW).flow.compiled;
+  expect(compiled).toBeInstanceOf(Flow);
+  expect(compiled.startId).toBe(START_ID);
+  expect(compiled.endId).toBe(END_ID);
+  // terminalId resolves to END_ID while the synthesized END node is present, null once absent.
+  expect(compiled.terminalId).toBe(END_ID);
+  compiled.nodes.delete(END_ID);
+  expect(compiled.terminalId).toBeNull();
+});
+
+test("edge optional defaults false and roundtrips", () => {
+  expect(new Edge("a->b#0", "a", "b", { inputGroup: "x" }).optional).toBe(false);
+  expect(new Edge("a->b#0", "a", "b", { inputGroup: "x", optional: true }).optional).toBe(true);
+});
 
 /** Return the assembled flow's edges in input group `v`, by consumer. */
 function vEdges(text: string): Map<string, Edge> {
@@ -302,7 +302,7 @@ test("a searched case's unparenthesized default covers the whole condition", () 
   // `:-` binds looser than `and`, so this is `(input.seed > 0 and a.output) :- false`: one escape
   // around the whole condition, whose literal default does not co-skip.
   const edges = aToGateEdges(searchedGate('"input.seed > 0 and a.output :- false"'));
-  expect(edges.length > 0 && edges.every((edge) => edge.optional)).toBe(true);
+  expect(edges.map((edge) => edge.optional)).toEqual([true]);
 });
 
 test("a searched case condition with a nested span shows the rewrite", () => {

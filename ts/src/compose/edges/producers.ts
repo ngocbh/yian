@@ -25,7 +25,7 @@ import { iterSourceStrings } from "../../nodes/contracts.ts";
  *   node ids, so `${item.output}` reads the item's `output` field.
  *
  * Legacy plural heads (`outputs`/`inputs`) are rejected at parse time. Exported for
- * `build/boundary.ts` and `validate/skips.ts`.
+ * `validate/skips.ts`.
  *
  * @param path A reference path, e.g. `a.output.field`.
  * @returns The producer node id, or `null` when the reference has none.

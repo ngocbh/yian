@@ -12,6 +12,8 @@
  * `load-agent/seed_01_structured_agent`, `load-case/seed_02_case`, `load-case/seed_06_case_on` and
  * `load-leaves/seed_10_asserts_arithmetic`, where Python reads the seed files; leaf wiring comes
  * from `build` with the case's typedefs. The CODE reference is TS's (`./m.ts:f`).
+ *
+ * TS-only: a WAIT with no `until` wiring throws a `RangeError` (Python's `KeyError`).
  */
 
 import { expect, test } from "bun:test";
@@ -184,4 +186,13 @@ test("no END edges for a case seed", () => {
     expect(edge.to).not.toBe(END_ID);
     expect(edge.from).not.toBe(END_ID);
   }
+});
+
+test("a WAIT with no until wiring is a compiler bug", () => {
+  // TS-only: Python raises a bare `KeyError` on the missing wiring entry.
+  const descriptors = parseNodes(
+    SourceCursor.virtual({ w: { kind: "wait", until: "${input.at}" } }),
+  ) as Map<string, NodeDescriptor>;
+
+  expect(() => inferDataEdges(descriptors, new Map())).toThrow(new RangeError("WAIT node 'w' has no until wiring"));
 });

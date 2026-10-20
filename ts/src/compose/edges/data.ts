@@ -43,6 +43,7 @@ import { bindingProducers } from "./producers.ts";
  * @param flowWiring Node id to its `{param -> source}` map (WAIT carries its `until`, a MAP its
  *   `over`, under the reserved keys).
  * @returns The data edges, in descriptor then wiring order.
+ * @throws RangeError when a WAIT has no `until` wiring, a compiler bug.
  */
 export function inferDataEdges(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
@@ -72,7 +73,7 @@ export function inferDataEdges(
       // the reserved key; `${input.X}`/`${system.X}` yield no producer edge.
       const until = flowWiring.get(nodeId)?.get("until");
       // `until:` is required and the WAIT build always wires it, so a gap is a compiler bug.
-      if (until === undefined) throw new Error(`WAIT node ${reprText(nodeId)} has no until wiring`);
+      if (until === undefined) throw new RangeError(`WAIT node ${reprText(nodeId)} has no until wiring`);
       emitFor(until, nodeId, "until");
       continue;
     }

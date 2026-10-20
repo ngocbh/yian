@@ -12,8 +12,9 @@
  * Python counts its document loader. `test_omitted_child_input_applies_explicit_null_default`
  * keeps its load half.
  *
- * TS-only: a single-node def's parameter named `inf` is refused at its key, as a compact flow's
- * is; defs built without a source cursor, from their normalized bodies; the awaited CODE check of
+ * TS-only: the synchronous `resolve` refuses a `uses:` alias that wasn't resolved first, without
+ * calling the resolver; a single-node def's parameter named `inf` is refused at its key, as a
+ * compact flow's is; defs built without a source cursor, from their normalized bodies; the awaited CODE check of
  * defs (an uncalled def, a def calling a bad def, written order), whose messages and frames match
  * Python's, which checks CODE while building each def.
  *
@@ -30,7 +31,7 @@
  * `test_omitted_child_input_applies_explicit_null_default`.
  */
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
@@ -43,7 +44,7 @@ import type { CodeNode } from "../../src/nodes/code/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 
-import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
+import { loadConformanceFlow, loadError, loadErrorAsync } from "../compose/declarations.ts";
 
 /** The baked child of `flow`'s CALL node `nodeId`. */
 const childOf = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as CallNode).child as CompiledFlow;
@@ -118,6 +119,14 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
   expect(first).not.toBe(externalChild);
   expect(first.compiled).not.toBe(externalChild.compiled);
   expect(second).toBe(first);
+});
+
+test("the sync resolve refuses a uses: alias that wasn't resolved first", () => {
+  const resolver = mock(() => loadConformanceFlow("id: child\nname: child\nnodes: {}\n"));
+  const scope = new CallableScope({}, new Map(), resolver, { remote: "library/child" });
+  const error = loadError(() => scope.resolve("remote"));
+  expect(error.message).toBe("uses: alias 'remote' was not resolved before assembly");
+  expect(resolver).not.toHaveBeenCalled();
 });
 
 test("several defs share one parse of the parent document", async () => {

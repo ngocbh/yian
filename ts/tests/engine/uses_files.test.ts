@@ -11,8 +11,10 @@
  * YAML error, so only its frames are compared.
  *
  * TS-only: a child file that isn't UTF-8 fails at its alias as `could not resolve`; a CODE node's
- * `baseDir` is `loadFlow`'s option, else the first search path, else the current directory, for
- * the root, its defs and its inline bodies alike, and a child file's own directory.
+ * `baseDir` is `loadFlow`'s option, else the first search path, else the current directory, made
+ * absolute, for the root, its defs and its inline bodies alike, and a child file's own directory;
+ * an importer doesn't check a `uses:` child's CODE again, so a host's cached child whose CODE file
+ * was removed after its load still imports.
  *
  * Later (T4-8): `test_seed_24_runs_via_search_path`, which runs the loaded flow.
  */
@@ -21,7 +23,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fsp from "node:fs/promises";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
@@ -423,4 +425,23 @@ test("a CODE node's baseDir is loadFlow's, else the first search path; a child f
   // With neither, the current directory: an inline body checks without reading a file.
   const inline = await loadFlow("id: q\nname: q\nnodes:\n  a: {kind: code, code: return 1}\n");
   expect((inline.compiled.nodes.get("a") as CodeNode).baseDir).toBe(process.cwd());
+  // A relative one is made absolute at load, so the node doesn't depend on the cwd when it runs.
+  const relativeLoad = await loadFlow(text, { searchPaths: [tmp], baseDir: relative(process.cwd(), CONFORMANCE_DIR) });
+  expect(baseDirs(relativeLoad.compiled)).toEqual([CONFORMANCE_DIR, CONFORMANCE_DIR, CONFORMANCE_DIR, child]);
+});
+
+test("a uses: child loaded earlier isn't checked again by its importer", async () => {
+  // A host caches a loaded child; the file its CODE node names is removed after that load.
+  const lib = join(tmp, "lib");
+  mkdirSync(lib);
+  writeFileSync(join(lib, "h.ts"), "export function fn(inputs: Record<string, unknown>): unknown {\n  return inputs.x;\n}\n");
+  const cached = await loadFlow(
+    "id: child\nname: child\ninput:\n  x: !str\nnodes:\n" +
+      '  a: {kind: code, code: ./h.ts:fn, input: {x: "${input.x}"}}\noutput: {y: "${a.output}"}\n',
+    { baseDir: lib },
+  );
+  rmSync(join(lib, "h.ts"));
+  const parent = flowText("p", { call: "ch", uses: { ch: "child" } });
+  const loaded = await loadFlow(parent, { childResolver: () => cached });
+  expect(childOf(loaded.compiled, "a").flowId).toBe("child");
 });

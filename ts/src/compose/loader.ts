@@ -33,7 +33,8 @@
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `typesys` and `compile`; nothing in the engine imports it back.
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `memory`, `nodes` and `typesys`; nothing
+ * in the engine imports it back.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -59,7 +60,6 @@ import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
 import { isMaxToolIterations } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
-import { CodeNode } from "../nodes/code/node.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { pythonTypeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
@@ -82,7 +82,7 @@ import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
 import { notTextDetail, notTextError, rejectInfinityName } from "./nodes/base.ts";
-import { type CheckedFlow, checkCodeNode, checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
+import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import { flowNodesCursor, isEmptyValue, parseFile, parseSourceDocument } from "./parse/file.ts";
 import { scopeOrigin, SourceCatalog, SourceCatalogBuilder } from "./source/catalog.ts";
@@ -604,7 +604,8 @@ export async function loadFlow(
   current();
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const document = parseSourceDocument(text, sourceLabel);
-  const ownDir = baseDir ?? searchPaths?.[0] ?? process.cwd();
+  // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
+  const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
   const flow = await loadFlowFile(document, childResolver, searchPaths, new LoadCtx(), ownDir);
   // Only the root load sees the fully assembled graph, imports included; children loaded for
   // uses: are checked as part of their importer.
@@ -930,8 +931,9 @@ async function loadFlowFile(
   const code: CodeCheckOptions = {
     diagnostics,
     resolveOrigin: (origin) => scope.catalogBuilder.resolveRegistered(origin),
-    // Shared so the root skips the defs its calls bake in, already checked.
-    seen: new Set(),
+    // Shared so the root skips the defs its calls bake in, already checked. A `uses:` child was
+    // checked in its own load, so its flow starts out seen.
+    seen: new Set(Object.keys(f.uses).map((alias) => scope.resolve(alias).compiled)),
   };
   await scope.checkDefsCode(code);
   await checkFlowCode(staged.compiled, code);
@@ -1239,7 +1241,7 @@ export class CallableScope implements AssemblyScope {
    * reach the limit, and after loading by the `importDepth` the resolved flow carries, so a cached
    * or memoized file is held to the same rule.
    *
-   * @param alias The `uses:` alias.
+   * @param alias A declared `uses:` alias.
    * @returns The alias's rebased child, cached for later calls.
    * @throws LoadError (as a rejection), located at the alias, when its ref is malformed or has a
    *   scheme, no resolver was given, the resolver fails or returns a bad flow, or the import chain
@@ -1248,6 +1250,7 @@ export class CallableScope implements AssemblyScope {
   async resolveAlias(alias: string): Promise<ComposedFlow> {
     const built = this.#built.get(alias);
     if (built !== undefined) return built;
+    if (!Object.hasOwn(this.#uses, alias)) throw new Error(`${reprText(alias)} is not a uses: alias`);
     const authored = this.#uses[alias]!;
     const where = `callable ${reprText(alias)} (uses: ${reprText(authored)})`;
     let loaded: ComposedFlow;
@@ -1321,33 +1324,31 @@ export class CallableScope implements AssemblyScope {
    *
    * A def no node calls isn't reachable from the root graph, so each def is checked here. A def
    * calling another checks the callee inside its own frame, as building it does, so a callee's
-   * failure carries both prefixes and both frames, outer first. A def is checked once.
+   * failure carries both prefixes and both frames, outer first. A def is checked once. A flow
+   * already in `options.seen` is skipped; the loader seeds it with each `uses:` child, which was
+   * checked in its own load.
    *
    * @param options The CODE check options; their `seen` set records each checked flow.
    * @throws LoadError (as a rejection), prefixed `defs entry '<name>': ` and located at the def,
    *   at the first CODE node whose check fails.
    */
   async checkDefsCode(options: CodeCheckOptions): Promise<void> {
-    const seen = options.seen ?? new Set<object>();
     // A callsite's child flow is the built def's own `compiled`, so identity names the def.
     const defNames = new Map<object, string>();
     for (const [name, flow] of this.#built) {
       if (Object.hasOwn(this.#defsSection, name)) defNames.set(flow.compiled, name);
     }
-    const visit = async (flow: CheckedFlow): Promise<void> => {
-      if (seen.has(flow)) return;
-      seen.add(flow);
-      for (const node of flow.nodes.values()) {
-        if (node instanceof CodeNode) await checkCodeNode(node, options);
-        for (const child of node.originChildren()) {
-          const name = defNames.get(child as object);
-          await (name === undefined ? visit(child as CheckedFlow) : checkDef(name));
-        }
-      }
+    const defOptions: CodeCheckOptions = {
+      ...options,
+      seen: options.seen ?? new Set<object>(),
+      child: (flow, visit) => {
+        const name = defNames.get(flow);
+        return name === undefined ? visit(flow) : checkDef(name);
+      },
     };
     const checkDef = async (name: string): Promise<void> => {
       try {
-        await visit(this.#built.get(name)!.compiled);
+        await checkFlowCode(this.#built.get(name)!.compiled, defOptions);
       } catch (error) {
         if (!(error instanceof LoadError)) throw error;
         throw this.#diagnostics.prepend(error, {

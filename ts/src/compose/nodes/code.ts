@@ -175,6 +175,8 @@ export interface CodeCheckOptions {
   resolveOrigin: OriginPresenter | null;
   /** Flows already checked, shared across checks of one load; a fresh set when absent. */
   seen?: Set<object>;
+  /** Checks one child flow of a node; `visit` checks it in place. `visit` when absent. */
+  child?: (flow: CheckedFlow, visit: (flow: CheckedFlow) => Promise<void>) => Promise<void>;
 }
 
 /**
@@ -214,20 +216,21 @@ export interface CheckedFlow {
  * Check every CODE node of a composed flow and of its child flows, in node order.
  *
  * A node's child flows (`originChildren()`) are checked right after it; a flow reached twice is
- * checked once. The loader awaits this once after assembly.
- * A flow in `options.seen` was checked already and is skipped.
+ * checked once. A flow in `options.seen` was checked already and is skipped. Each child flow goes
+ * through `options.child` when given.
  *
  * @throws LoadError at the first CODE node whose check fails.
  */
 export async function checkFlowCode(flow: CheckedFlow, options: CodeCheckOptions): Promise<void> {
   // Keyed by identity: a shared child flow holds the same nodes.
   const seen = options.seen ?? new Set<object>();
+  const visitChild = options.child ?? ((child, visit) => visit(child));
   const visit = async (current: CheckedFlow): Promise<void> => {
     if (seen.has(current)) return;
     seen.add(current);
     for (const node of current.nodes.values()) {
       if (node instanceof CodeNode) await checkCodeNode(node, options);
-      for (const child of node.originChildren()) await visit(child as CheckedFlow);
+      for (const child of node.originChildren()) await visitChild(child as CheckedFlow, visit);
     }
   };
   await visit(flow);

@@ -246,6 +246,23 @@ function selectWidget(options: {
   };
 }
 
+/** A yes/no question: `y` or `n` answers at once (questionary's auto-enter), ENTER answers no. */
+function confirmWidget(label: string): Widget<boolean> {
+  const line = `${style("1;36", "?")} ${style("1", label)} ${style("2", "(y/N)")} `;
+  return {
+    lines: () => [line],
+    cursor: () => ({ row: 0, before: line }),
+    key(key) {
+      if (key.name === "return" || key.name === "enter") return { value: false };
+      if (key.ctrl || key.meta) return undefined;
+      if (key.str === "y" || key.str === "Y") return { value: true };
+      if (key.str === "n" || key.str === "N") return { value: false };
+      return undefined;
+    },
+    done: (outcome) => collapsed("?", label, "value" in outcome ? (outcome.value ? "Yes" : "No") : ""),
+  };
+}
+
 /** One prompt turn: its signal, how it ended without an answer, and the active widget's wakeup. */
 interface Turn {
   signal: AbortSignal | undefined;
@@ -328,6 +345,31 @@ export class Terminal {
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices, initial })));
     return "value" in ended ? choices[ended.value]! : null;
+  }
+
+  /**
+   * Prompt for each declaration not in `supplied` (key presence, `Object.hasOwn`), all in one turn.
+   * Returns the explicit answers (omitted inputs absent, Set null a present null), `{}` without
+   * drawing when nothing is missing, or null when cancelled or the terminal is closed. Throws what
+   * a widget or the output throws.
+   */
+  async promptInputs(
+    decls: readonly Parameter[],
+    supplied: Readonly<Record<string, unknown>>,
+  ): Promise<Record<string, unknown> | null> {
+    const missing = decls.filter((decl) => !Object.hasOwn(supplied, decl.name));
+    if (missing.length === 0) return {};
+    const ended = await this.#runTurn(undefined, async (run) => {
+      const gathered: [string, unknown][] = [];
+      for (const decl of missing) {
+        const value = await promptInput(run, decl);
+        if (value === OMIT) continue;
+        gathered.push([decl.name, value === SET_NULL ? null : value]);
+      }
+      // `fromEntries` defines each key as data, so an input named `__proto__` stays an entry.
+      return Object.fromEntries(gathered);
+    });
+    return "value" in ended ? ended.value : null;
   }
 
   /**
@@ -599,8 +641,8 @@ class StructuredInputError extends RangeError {
  * `null`: an explicit null is its own prompt action.
  *
  * @returns The native JSON array or object.
- * @throws StructuredInputError for invalid JSON, a value nesting too deep, the wrong root shape
- *   or a value the type refuses (`$<path>: <reason>`).
+ * @throws StructuredInputError (a RangeError) for invalid JSON, a value nesting too deep, the wrong
+ *   root shape or a value the type refuses (`$<path>: <reason>`).
  * @throws TypeError when `type` is neither a list nor an object.
  */
 export function parseStructuredInput(raw: string, type: Type, name: string): JsonValue {
@@ -634,4 +676,140 @@ export function parseStructuredInput(raw: string, type: Type, name: string): Jso
     throw new StructuredInputError(`$${path}: ${error.message}`);
   }
   return parsed;
+}
+
+/** The prompt controls: leave the input absent, give it a present null, open its editor. */
+const OMIT = Symbol("omit input");
+const SET_NULL = Symbol("set null");
+const ENTER = Symbol("enter value");
+
+/** One select choice: its title and the value choosing it gives. */
+interface Choice {
+  title: string;
+  value: unknown;
+}
+
+/** Compare two strings by code point, as Python sorts `str`. */
+function compareCodePoints(a: string, b: string): number {
+  // Equal code points take equal code units, so one index walks both strings.
+  let i = 0;
+  while (i < a.length && i < b.length) {
+    const x = a.codePointAt(i)!;
+    const y = b.codePointAt(i)!;
+    if (x !== y) return x - y;
+    i += x > 0xffff ? 2 : 1;
+  }
+  return a.length - b.length;
+}
+
+/** Whether a resolved input contract accepts an explicit null. */
+function acceptsNull(type: Type | undefined): boolean {
+  return type !== undefined && (type.nullable || type.kind === ValueKind.NONE);
+}
+
+/**
+ * The omission/null/enter choices `decl` allows and the safe one to preselect: omission for a
+ * non-required input, else Enter when `withEnter`, else none.
+ */
+function controlChoices(
+  decl: Parameter,
+  type: Type | undefined,
+  withEnter = false,
+): { choices: Choice[]; initial: number | undefined } {
+  const choices: Choice[] = [];
+  let initial: number | undefined;
+  if (!decl.required) {
+    initial = choices.push({ title: decl.hasDefault ? "↩ Use declared default" : "↩ Omit input", value: OMIT }) - 1;
+  }
+  if (acceptsNull(type)) choices.push({ title: "Set null", value: SET_NULL });
+  if (withEnter) {
+    const enter = choices.push({ title: "Enter value", value: ENTER }) - 1;
+    initial ??= enter;
+  }
+  return { choices, initial };
+}
+
+/** Run a select over `choices` (no indicator) and return the chosen one's value. */
+async function choose(run: RunWidget, label: string, choices: readonly Choice[], initial = 0): Promise<unknown> {
+  const index = await run(selectWidget({ label, titles: choices.map((choice) => choice.title), initial }));
+  return choices[index]!.value;
+}
+
+/**
+ * Run the text editor for one open input. A list/object editor validates JSON in place and returns
+ * the native value; a scalar editor returns the raw text, coerced later at the run boundary. An
+ * optional blank answer is `OMIT`.
+ */
+async function promptOpenValue(
+  run: RunWidget,
+  decl: Parameter,
+  type: Type | undefined,
+  label: string,
+): Promise<unknown> {
+  const blankOmits = (text: string): boolean => !decl.required && text.trim() === "";
+  if (type !== undefined && (isListKind(type.kind) || type.kind === ValueKind.OBJECT)) {
+    const value = await run(
+      textWidget({
+        label,
+        instruction: isListKind(type.kind) ? "Enter a JSON array" : "Enter a JSON object",
+        validate: (text) => {
+          if (blankOmits(text)) return undefined;
+          try {
+            parseStructuredInput(text, type, decl.name);
+          } catch (error) {
+            if (error instanceof StructuredInputError) return error.message;
+            throw error;
+          }
+          return undefined;
+        },
+      }),
+    );
+    return blankOmits(value) ? OMIT : parseStructuredInput(value, type, decl.name);
+  }
+  const value = await run(textWidget({ label }));
+  return blankOmits(value) ? OMIT : value;
+}
+
+/**
+ * Ask for one declared input: its value, `OMIT` or `SET_NULL`; a stop throws through `run`. A
+ * required non-nullable bool confirms; other bools and Literals select among the allowed controls
+ * and their values; a null-capable open input first selects omit, null or Enter, and an optional
+ * blank in its editor returns to a fresh palette; other inputs open their editor directly.
+ */
+async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
+  const label = inputLabel(decl);
+  const type = decl.contract?.type;
+
+  if (type?.kind === ValueKind.BOOLEAN) {
+    if (decl.required && !acceptsNull(type)) return run(confirmWidget(label));
+    const { choices, initial } = controlChoices(decl, type);
+    choices.push({ title: "true", value: true }, { title: "false", value: false });
+    return choose(run, label, choices, decl.required ? choices.length - 1 : initial);
+  }
+
+  if (type?.tags !== undefined && type.tags.size > 0) {
+    const nullCapable = acceptsNull(type);
+    const values = Array.from(type.tags)
+      .sort(compareCodePoints)
+      .map((tag) => ({ title: decl.required && !nullCapable ? tag : `Set value: ${tag}`, value: tag }));
+    const { choices, initial } = controlChoices(decl, type);
+    return choose(run, label, [...choices, ...values], decl.required && nullCapable ? choices.length : initial);
+  }
+
+  if (type?.kind === ValueKind.NONE) {
+    const { choices, initial } = controlChoices(decl, type);
+    return choose(run, label, choices, initial);
+  }
+
+  if (acceptsNull(type)) {
+    while (true) {
+      const { choices, initial } = controlChoices(decl, type, true);
+      const action = await choose(run, label, choices, initial);
+      if (action !== ENTER) return action;
+      const value = await promptOpenValue(run, decl, type, label);
+      if (value !== OMIT) return value;
+    }
+  }
+
+  return promptOpenValue(run, decl, type, label);
 }

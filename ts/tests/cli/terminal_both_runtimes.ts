@@ -13,6 +13,8 @@ import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { Terminal, type TerminalOptions } from "../../src/cli/terminal.ts";
+import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 export const UP = "\x1b[A";
 export const DOWN = "\x1b[B";
@@ -699,6 +701,620 @@ async function aThrowingOnActiveStillRestoresTheTerminal(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
+// The `promptInputs` scenarios port the prompt-flow tests of `tests/engine/test_cli_prompt.py`,
+// each named in the comment above its scenario. Not ported: the questionary-internal
+// `test_nullable_open_repeated_palettes_use_fresh_choices` and
+// `test_prompt_controls_are_fresh_for_each_widget` (no widget objects are shared here), and
+// `test_gather_non_tty_*` (the run's prompt gate, not the terminal).
+
+/** One source-free flow input; untyped when `type` is undefined. */
+function decl(
+  name: string,
+  type?: Type,
+  options: { required?: boolean; hasDefault?: boolean; default?: unknown } = {},
+): Parameter {
+  const contract = type === undefined ? null : new ValueContract(type);
+  return new Parameter(name, { contract, coerceStrings: true, ...options });
+}
+
+const STR = Type.scalar(ValueKind.STRING);
+const BOOL = Type.scalar(ValueKind.BOOLEAN);
+const LIST_STR = Type.scalar(ValueKind.LIST_STRING);
+const LIST_ANY = Type.scalar(ValueKind.LIST_ANY);
+
+/** `kind`, nullable. */
+function nullable(kind: ValueKind): Type {
+  return new Type({ kind, nullable: true });
+}
+
+/** A `Literal(...)` of `tags`. */
+function literal(tags: readonly string[], options: { nullable?: boolean } = {}): Type {
+  return new Type({ kind: ValueKind.STRING, tags: new Set(tags), nullable: options.nullable ?? false });
+}
+
+/** A record with a required int `count`. */
+const COUNT_RECORD = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([["count", Type.scalar(ValueKind.INTEGER)]]),
+  required: new Set(["count"]),
+});
+
+/** The active select's choice titles and the marked one, read off the screen. */
+function frame(view: () => Screen): { label: string; titles: string[]; marked: number } {
+  const rows = view().rows;
+  const head = rows.findLastIndex((row) => row.endsWith(" (Use arrow keys)"));
+  assert.ok(head >= 0, `no select on the screen: ${JSON.stringify(rows)}`);
+  const choices = rows.slice(head + 1);
+  return {
+    label: rows[head]!.slice(2, -" (Use arrow keys)".length),
+    titles: choices.map((row) => row.slice(3)),
+    marked: choices.findIndex((row) => row.startsWith(" » ")),
+  };
+}
+
+/** Wait for the active select, move its marker to `title` and press ENTER. */
+async function choose(input: FakeInput, view: () => Screen, title: string): Promise<void> {
+  await tick();
+  const { titles, marked } = frame(view);
+  const target = titles.indexOf(title);
+  assert.ok(target >= 0, `no choice ${title} in ${JSON.stringify(titles)}`);
+  input.write((target > marked ? DOWN : UP).repeat(Math.abs(target - marked)) + ENTER);
+}
+
+/** Wait for the active select and return its frame. */
+async function select(view: () => Screen): Promise<{ label: string; titles: string[]; marked: number }> {
+  await tick();
+  return frame(view);
+}
+
+// test_prompt_preserves_required_false_enum_and_blank_text
+async function aRequiredBoolLiteralAndStringAreAskedInOneTurn(): Promise<void> {
+  const active: boolean[] = [];
+  const { input, output, terminal, view, exitHooks } = setup({ onActive: (on) => active.push(on) });
+  const answer = terminal.promptInputs(
+    [
+      decl("flag", BOOL, { required: true }),
+      decl("mode", literal(["slow", "fast"]), { required: true }),
+      decl("note", STR, { required: true }),
+    ],
+    {},
+  );
+  await tick();
+  assert.deepEqual(view().rows, ["? flag (bool) * (y/N)"]);
+  input.write("n");
+  const mode = await select(view);
+  assert.deepEqual(mode, { label: "mode (Literal(fast, slow)) *", titles: ["fast", "slow"], marked: 0 });
+  await choose(input, view, "slow");
+  input.write(ENTER);
+  assert.deepEqual(await answer, { flag: false, mode: "slow", note: "" });
+  assert.deepEqual(view().rows, ["? flag (bool) * No", "? mode (Literal(fast, slow)) * slow", "? note (str) *"]);
+  assert.deepEqual(active, [true, false]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function aRequiredBoolConfirmsWithYOrNAtOnceAndEnterSaysNo(): Promise<void> {
+  const cases: [string, boolean, string][] = [
+    ["xy", true, "Yes"],
+    ["Y", true, "Yes"],
+    ["n", false, "No"],
+    ["N", false, "No"],
+    [ENTER, false, "No"],
+  ];
+  for (const [keys, expected, shown] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([decl("ok", BOOL, { required: true })], {});
+    await tick();
+    assert.deepEqual(view().rows, ["? ok (bool) * (y/N)"]);
+    input.write(keys);
+    assert.deepEqual(await answer, { ok: expected }, keys);
+    assert.deepEqual(view().rows, [`? ok (bool) * ${shown}`]);
+  }
+}
+
+// test_structured_prompt_retries_nested_failure_and_returns_native_value
+async function aListEditorShowsTheErrorUnderItAndStaysOpen(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const rows = new Type({ kind: ValueKind.LIST_OBJECT, element: COUNT_RECORD });
+  const answer = terminal.promptInputs([decl("rows", rows, { required: true })], {});
+  const head = '? rows (list({"count":int})) * Enter a JSON array';
+  input.write('[{"count": "bad"}]' + ENTER);
+  await tick();
+  assert.deepEqual(view().rows, [
+    `${head} [{"count": "bad"}]`,
+    '$[0]["count"]: "bad" does not match declared type int',
+  ]);
+  input.write(LEFT);
+  await tick();
+  assert.deepEqual(view().rows, [`${head} [{"count": "bad"}]`]);
+  input.write(CTRL_E + CTRL_U + '[{"count": 2}]' + ENTER);
+  assert.deepEqual(await answer, { rows: [{ count: 2n }] });
+  assert.deepEqual(view().rows, ['? rows (list({"count":int})) * [{"count": 2}]']);
+}
+
+// test_object_prompt_returns_native_value_and_json_instruction
+async function anObjectEditorReturnsTheNativeObject(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("profile", COUNT_RECORD, { required: true })], {});
+  await tick();
+  assert.deepEqual(view().rows, ['? profile ({"count":int}) * Enter a JSON object']);
+  input.write('{"count": 2}' + ENTER);
+  assert.deepEqual(await answer, { profile: { count: 2n } });
+}
+
+// test_optional_structured_whitespace_is_validated_then_omitted,
+// test_nonnullable_defaulted_open_blank_stays_direct_omission
+async function anOptionalOrDefaultedDirectEditorOmitsOnABlank(): Promise<void> {
+  const decls = [
+    decl("items", LIST_STR),
+    decl("value", STR, { hasDefault: true, default: "fallback" }),
+    decl("list", LIST_ANY, { hasDefault: true, default: [1n] }),
+  ];
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs(decls, {});
+  input.write("   " + ENTER + "   " + ENTER + "   " + ENTER);
+  assert.deepEqual(await answer, {});
+  assert.equal(view().rows.length, 3);
+}
+
+// test_required_structured_whitespace_is_rejected_then_retried
+async function aRequiredListEditorRefusesABlank(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("items", LIST_STR, { required: true })], {});
+  input.write("   " + ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(1), ["Invalid JSON at line 1, column 4: Expecting value"]);
+  input.write(CTRL_U + "[]" + ENTER);
+  assert.deepEqual(await answer, { items: [] });
+}
+
+// test_structured_prompt_cancellation_bypasses_validation
+async function ctrlCInAListEditorReturnsNull(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.promptInputs(
+    [decl("items", LIST_STR, { required: true }), decl("later", STR, { required: true })],
+    {},
+  );
+  input.write("[" + CTRL_C);
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["interrupt"]);
+  assert.ok(!output.text.includes("later"));
+  assertRestored(input, output, exitHooks);
+}
+
+// test_nullable_structured_enter_rejects_textual_null_then_returns_native
+async function aNullableListOrObjectEditorRefusesATextualNull(): Promise<void> {
+  const cases: [Type, string, unknown, string][] = [
+    [nullable(ValueKind.LIST_ANY), "[null]", [null], "array"],
+    [nullable(ValueKind.OBJECT), '{"value": null}', { value: null }, "object"],
+  ];
+  for (const [type, raw, expected, shape] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([decl("items", type, { required: true })], {});
+    const palette = await select(view);
+    assert.deepEqual(palette.titles, ["Set null", "Enter value"]);
+    assert.equal(palette.titles[palette.marked], "Enter value");
+    input.write(ENTER + "null" + ENTER);
+    await tick();
+    assert.ok(view().rows.at(-2)!.endsWith(`Enter a JSON ${shape} null`), view().rows.at(-2));
+    assert.equal(view().rows.at(-1), `Expected a JSON ${shape}`);
+    input.write(CTRL_U + raw + ENTER);
+    assert.deepEqual(await answer, { items: expected });
+  }
+}
+
+// test_nullable_open_scalar_enter_preserves_literal_null
+async function theTextNullInANullableStringEditorStaysAString(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("note", nullable(ValueKind.STRING))], {});
+  const palette = await select(view);
+  assert.deepEqual(palette, {
+    label: "note (Optional(str)) [optional]",
+    titles: ["↩ Omit input", "Set null", "Enter value"],
+    marked: 0,
+  });
+  await choose(input, view, "Enter value");
+  input.write("null" + ENTER);
+  assert.deepEqual(await answer, { note: "null" });
+  assert.deepEqual(view().rows, [
+    "? note (Optional(str)) [optional] Enter value",
+    "? note (Optional(str)) [optional] null",
+  ]);
+}
+
+const NULLABLE_OPEN = [nullable(ValueKind.STRING), nullable(ValueKind.LIST_ANY), nullable(ValueKind.OBJECT)];
+
+// test_nullable_open_prompt_cancellation_at_action, test_nullable_open_prompt_cancellation_in_editor
+async function cancellingAtThePaletteOrItsEditorReturnsNull(): Promise<void> {
+  for (const type of NULLABLE_OPEN) {
+    const atPalette = setup();
+    const first = atPalette.terminal.promptInputs([decl("value", type)], {});
+    atPalette.input.write(CTRL_C);
+    assert.equal(await first, null);
+    const inEditor = setup();
+    const second = inEditor.terminal.promptInputs([decl("value", type)], {});
+    await choose(inEditor.input, inEditor.view, "Enter value");
+    await tick();
+    inEditor.input.end();
+    assert.equal(await second, null);
+  }
+}
+
+// test_nullable_open_blank_can_return_to_omit, test_nullable_open_blank_can_return_to_set_null,
+// test_nullable_open_blank_can_reenter_real_value,
+// test_prompt_returns_optional_whitespace_to_palette_then_omits
+async function anOptionalBlankInThePaletteEditorReturnsToAFreshPalette(): Promise<void> {
+  const answers: [Type, string, unknown][] = [
+    [nullable(ValueKind.STRING), "ready", "ready"],
+    [nullable(ValueKind.LIST_ANY), "[1]", [1n]],
+    [nullable(ValueKind.OBJECT), "{}", {}],
+  ];
+  for (const [type, raw, value] of answers) {
+    for (const [then, expected] of [
+      ["↩ Omit input", {}],
+      ["Set null", { value: null }],
+      ["Enter value", { value }],
+    ] as const) {
+      const { input, terminal, view } = setup();
+      const answer = terminal.promptInputs([decl("value", type)], {});
+      await choose(input, view, "Enter value");
+      input.write("   " + ENTER);
+      const palette = await select(view);
+      assert.deepEqual(palette.titles, ["↩ Omit input", "Set null", "Enter value"]);
+      assert.equal(palette.marked, 0);
+      await choose(input, view, then);
+      if (then === "Enter value") input.write(raw + ENTER);
+      assert.deepEqual(await answer, expected);
+    }
+  }
+}
+
+// test_nullable_open_set_null_does_not_open_editor
+async function setNullInThePaletteOpensNoEditor(): Promise<void> {
+  const cases: [Type, boolean][] = [
+    ...NULLABLE_OPEN.map((type): [Type, boolean] => [type, false]),
+    [nullable(ValueKind.STRING), true],
+  ];
+  for (const [type, required] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([decl("value", type, { required })], {});
+    await choose(input, view, "Set null");
+    const gathered = await answer;
+    assert.deepEqual(gathered, { value: null });
+    assert.ok(Object.hasOwn(gathered!, "value"));
+    assert.equal(view().rows.length, 1);
+    assert.ok(view().rows[0]!.endsWith(" Set null"));
+  }
+}
+
+// test_required_nullable_scalar_editor_preserves_blank
+async function aRequiredNullableStringEditorKeepsABlank(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("value", nullable(ValueKind.STRING), { required: true })], {});
+  const palette = await select(view);
+  assert.deepEqual(palette.titles, ["Set null", "Enter value"]);
+  assert.equal(palette.marked, 1);
+  input.write(ENTER + ENTER);
+  assert.deepEqual(await answer, { value: "" });
+}
+
+// test_required_nullable_structured_editor_retries_blank
+async function aRequiredNullableListEditorRefusesABlank(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("value", nullable(ValueKind.LIST_ANY), { required: true })], {});
+  input.write(ENTER + " " + ENTER);
+  await tick();
+  assert.equal(view().rows.at(-1), "Invalid JSON at line 1, column 2: Expecting value");
+  input.write(CTRL_U + "[]" + ENTER);
+  assert.deepEqual(await answer, { value: [] });
+}
+
+/** A required string, an optional date, a defaulted int and a required Literal. */
+function labelDecls(): Parameter[] {
+  return [
+    decl("topic", STR, { required: true }),
+    decl("as_of", nullable(ValueKind.DATE)),
+    decl("window", Type.scalar(ValueKind.INTEGER), { hasDefault: true, default: 30n }),
+    decl("mode", literal(["fast", "slow"]), { required: true }),
+  ];
+}
+
+// test_prompt_labels_carry_marks
+async function promptLabelsCarryTheTypeAndTheMark(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs(labelDecls(), {});
+  input.write("ACME" + ENTER + ENTER + ENTER);
+  await choose(input, view, "fast");
+  assert.deepEqual(await answer, { topic: "ACME", mode: "fast" });
+  assert.deepEqual(view().rows, [
+    "? topic (str) * ACME",
+    "? as_of (Optional(date)) [optional] e.g. 2026-05-21 ↩ Omit input",
+    "? window (int) [default: 30]",
+    "? mode (Literal(fast, slow)) * fast",
+  ]);
+}
+
+// test_prompt_skips_already_supplied, test_gather_treats_present_falsey_values_as_supplied_without_questionary
+async function suppliedInputsAreSkippedAndNothingMissingDrawsNothing(): Promise<void> {
+  const active: boolean[] = [];
+  const { output, terminal } = setup({ onActive: (on) => active.push(on) });
+  const supplied = { topic: "x", as_of: "2026-01-01", window: 5n, mode: "fast" };
+  assert.deepEqual(await terminal.promptInputs(labelDecls(), supplied), {});
+  const falsey = [
+    decl("none", nullable(ValueKind.STRING), { required: true }),
+    decl("false", BOOL, { required: true }),
+    decl("zero", Type.scalar(ValueKind.INTEGER), { required: true }),
+    decl("blank", STR, { required: true }),
+  ];
+  assert.deepEqual(await terminal.promptInputs(falsey, { none: null, false: false, zero: 0n, blank: "" }), {});
+  assert.equal(output.text, "");
+  assert.deepEqual(active, []);
+  // Only the missing input is asked.
+  const { input, terminal: other, view } = setup();
+  const answer = other.promptInputs(labelDecls(), { topic: "x", window: 5n, mode: "fast" });
+  input.write(ENTER);
+  assert.deepEqual(await answer, {});
+  assert.deepEqual(view().rows, ["? as_of (Optional(date)) [optional] e.g. 2026-05-21 ↩ Omit input"]);
+}
+
+// test_prompt_accepting_omission_preserves_start_owned_defaults (the prompt half; START applying
+// the defaults is the run's)
+async function acceptingEveryPreselectionOmitsEachInput(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs(
+    [
+      decl("items", LIST_STR, { hasDefault: true, default: ["a", "b"] }),
+      decl("mode", literal(["z", "a"]), { hasDefault: true, default: "z" }),
+      decl("flag", nullable(ValueKind.BOOLEAN)),
+    ],
+    {},
+  );
+  await tick();
+  assert.ok(view().rows[0]!.startsWith("? items (list(str)) [default: "), view().rows[0]);
+  assert.ok(view().rows[0]!.endsWith(" Enter a JSON array"), view().rows[0]);
+  input.write(ENTER);
+  const mode = await select(view);
+  assert.deepEqual(mode.titles, ["↩ Use declared default", "Set value: a", "Set value: z"]);
+  assert.equal(mode.marked, 0);
+  input.write(ENTER);
+  const flag = await select(view);
+  assert.deepEqual(flag.titles, ["↩ Omit input", "Set null", "true", "false"]);
+  assert.equal(flag.marked, 0);
+  input.write(ENTER);
+  assert.deepEqual(await answer, {});
+}
+
+// test_prompt_collects_false_enum_and_text_overrides
+async function optionalSelectsAndADefaultedStringCollectAnswers(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs(
+    [
+      decl("flag", nullable(ValueKind.BOOLEAN)),
+      decl("mode", literal(["fast", "slow"]), { hasDefault: true, default: "fast" }),
+      decl("note", STR, { hasDefault: true, default: "original" }),
+    ],
+    {},
+  );
+  await choose(input, view, "false");
+  await choose(input, view, "Set value: slow");
+  await tick();
+  assert.deepEqual(view().rows.at(-1), "? note (str) [default: original]");
+  input.write("replacement" + ENTER);
+  assert.deepEqual(await answer, { flag: false, mode: "slow", note: "replacement" });
+}
+
+// test_finite_prompt_set_null_gathers_present_none
+async function setNullInAFiniteSelectGivesAPresentNull(): Promise<void> {
+  const cases: [Type, boolean][] = [
+    [nullable(ValueKind.BOOLEAN), false],
+    [nullable(ValueKind.BOOLEAN), true],
+    [literal(["fast", "null"], { nullable: true }), false],
+    [literal(["fast", "null"], { nullable: true }), true],
+    [Type.scalar(ValueKind.NONE), true],
+    [nullable(ValueKind.NONE), false],
+  ];
+  for (const [type, required] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([decl("value", type, { required })], {});
+    await choose(input, view, "Set null");
+    assert.deepEqual(await answer, { value: null });
+    assert.equal(view().rows.length, 1);
+  }
+}
+
+// test_null_only_prompt_offers_controls_but_no_value_editor
+async function aNullOnlyInputOffersControlsAndNoEditor(): Promise<void> {
+  const cases: [Parameter, string[]][] = [
+    [decl("nothing", Type.scalar(ValueKind.NONE), { required: true }), ["Set null"]],
+    [decl("optional_nothing", nullable(ValueKind.NONE)), ["↩ Omit input", "Set null"]],
+    [
+      decl("default_nothing", nullable(ValueKind.NONE), { hasDefault: true, default: null }),
+      ["↩ Use declared default", "Set null"],
+    ],
+  ];
+  for (const [parameter, titles] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([parameter], {});
+    const palette = await select(view);
+    assert.deepEqual(palette.titles, titles);
+    assert.equal(palette.marked, 0);
+    await choose(input, view, "Set null");
+    assert.deepEqual(await answer, { [parameter.name]: null });
+  }
+}
+
+// test_nullable_finite_prompt_omission_stays_absent
+async function omissionInANullableFiniteSelectLeavesTheKeyAbsent(): Promise<void> {
+  const parameters = [
+    decl("flag", nullable(ValueKind.BOOLEAN), { hasDefault: true, default: true }),
+    decl("mode", literal(["fast", "null"], { nullable: true }), { hasDefault: true, default: "fast" }),
+    decl("nothing", nullable(ValueKind.NONE), { hasDefault: true, default: null }),
+  ];
+  for (const parameter of parameters) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([parameter], {});
+    await choose(input, view, "↩ Use declared default");
+    assert.deepEqual(await answer, {});
+  }
+}
+
+// test_nullable_literal_distinguishes_null_tag_from_set_null
+async function aLiteralTagNamedNullStaysTheString(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs(
+    [decl("mode", literal(["null", "other"], { nullable: true }), { hasDefault: true, default: "other" })],
+    {},
+  );
+  const palette = await select(view);
+  assert.deepEqual(palette.titles, ["↩ Use declared default", "Set null", "Set value: null", "Set value: other"]);
+  await choose(input, view, "Set value: null");
+  assert.deepEqual(await answer, { mode: "null" });
+}
+
+// test_nonnullable_finite_default_does_not_offer_set_null
+async function aNonNullableBoolOrLiteralOffersNoSetNull(): Promise<void> {
+  const cases: [Parameter, string[]][] = [
+    [decl("flag", BOOL, { hasDefault: true, default: true }), ["↩ Use declared default", "true", "false"]],
+    [
+      decl("mode", literal(["fast", "slow"]), { hasDefault: true, default: "fast" }),
+      ["↩ Use declared default", "Set value: fast", "Set value: slow"],
+    ],
+  ];
+  for (const [parameter, titles] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([parameter], {});
+    const palette = await select(view);
+    assert.deepEqual(palette.titles, titles);
+    assert.equal(palette.marked, 0);
+    input.write(ENTER);
+    assert.deepEqual(await answer, {});
+  }
+}
+
+// test_required_null_capable_prompt_preserves_safe_default
+async function aRequiredNullCapableSelectPreselectsASafeChoice(): Promise<void> {
+  const cases: [Parameter, unknown, string][] = [
+    [decl("flag", nullable(ValueKind.BOOLEAN), { required: true }), false, "false"],
+    [decl("mode", literal(["null", "alpha"], { nullable: true }), { required: true }), "alpha", "Set value: alpha"],
+    [decl("nothing", Type.scalar(ValueKind.NONE), { required: true }), null, "Set null"],
+  ];
+  for (const [parameter, expected, title] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([parameter], {});
+    const palette = await select(view);
+    assert.equal(palette.titles[palette.marked], title);
+    input.write(ENTER);
+    assert.deepEqual(await answer, { [parameter.name]: expected });
+  }
+}
+
+// test_prompt_distinguishes_literal_values_from_omission_labels
+async function aLiteralTagThatLooksLikeAControlIsAValue(): Promise<void> {
+  const collision = "↩ Use declared default";
+  const { input, terminal, view } = setup({ columns: 120 });
+  const answer = terminal.promptInputs(
+    [decl("mode", literal([collision, "ordinary"]), { hasDefault: true, default: "ordinary" })],
+    {},
+  );
+  const palette = await select(view);
+  assert.deepEqual(palette.titles, [collision, "Set value: ordinary", `Set value: ${collision}`]);
+  await choose(input, view, `Set value: ${collision}`);
+  assert.deepEqual(await answer, { mode: collision });
+}
+
+async function literalTagsAreSortedByCodePoint(): Promise<void> {
+  const { input, terminal, view } = setup();
+  // UTF-16 order would put the astral U+1F600 (a surrogate pair) before U+FF5E.
+  const answer = terminal.promptInputs([decl("mode", literal(["😀", "～", "b", "a"]), { required: true })], {});
+  const palette = await select(view);
+  assert.deepEqual(palette.titles, ["a", "b", "～", "😀"]);
+  input.write(ENTER);
+  assert.deepEqual(await answer, { mode: "a" });
+}
+
+// test_prompt_distinguishes_cancellation_from_omission
+async function ctrlCInABoolSelectReturnsNull(): Promise<void> {
+  const stops: string[] = [];
+  const { input, terminal } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.promptInputs([decl("flag", nullable(ValueKind.BOOLEAN))], {});
+  input.write(CTRL_C);
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["interrupt"]);
+}
+
+// test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind
+async function explicitNullDefaultsAreOmittedByThePreselection(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs(
+    [
+      decl("maybe", nullable(ValueKind.INTEGER), { hasDefault: true, default: null }),
+      decl("flag", nullable(ValueKind.BOOLEAN), { hasDefault: true, default: null }),
+      decl("mode", literal(["fast", "slow"], { nullable: true }), { hasDefault: true, default: null }),
+    ],
+    {},
+  );
+  input.write(ENTER + ENTER + ENTER);
+  assert.deepEqual(await answer, {});
+  assert.deepEqual(view().rows, [
+    "? maybe (Optional(int)) [default: null] ↩ Use declared default",
+    "? flag (Optional(bool)) [default: null] ↩ Use declared default",
+    "? mode (Optional(Literal(fast, slow))) [default: null] ↩ Use declared default",
+  ]);
+}
+
+// test_any_prompt_uses_the_scalar_text_editor_without_set_null, test_optional_any_prompt_offers_set_null
+async function anAnyInputIsFreeTextThatStaysText(): Promise<void> {
+  for (const required of [true, false]) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([decl("value", Type.scalar(ValueKind.ANY), { required })], {});
+    await tick();
+    assert.deepEqual(view().rows, [`? value (Any) ${required ? "*" : "[optional]"}`]);
+    input.write("3" + ENTER);
+    assert.deepEqual(await answer, { value: "3" });
+  }
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("value", nullable(ValueKind.ANY))], {});
+  const palette = await select(view);
+  assert.deepEqual(palette.titles, ["↩ Omit input", "Set null", "Enter value"]);
+  await choose(input, view, "Set null");
+  assert.deepEqual(await answer, { value: null });
+}
+
+async function anUntypedInputIsFreeText(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.promptInputs([decl("name", undefined, { required: true }), decl("other")], {});
+  input.write(" raw " + ENTER + "  " + ENTER);
+  assert.deepEqual(await answer, { name: " raw " });
+  assert.deepEqual(view().rows, ["? name *  raw", "? other [optional]"]);
+}
+
+async function theEndOfInputInAConfirmReturnsNull(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.promptInputs([decl("ok", BOOL, { required: true })], {});
+  await tick();
+  input.end();
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["eof"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function aClosedTerminalPromptsNothing(): Promise<void> {
+  const { output, terminal } = setup();
+  terminal.close();
+  assert.equal(await terminal.promptInputs([decl("topic", STR, { required: true })], {}), null);
+  assert.equal(output.text, "");
+}
+
+async function aFailingOutputFailsTheCall(): Promise<void> {
+  const { input, output, terminal, exitHooks } = setup({ throwOn: 2 });
+  await assert.rejects(
+    terminal.promptInputs([decl("topic", STR, { required: true })], {}),
+    (error) => error === output.failure,
+  );
+  assertRestored(input, output, exitHooks, false);
+}
+
 /** A spawned child's exit, waited for at most 10 s with its stdin kept open; what it printed. */
 async function runChild(send: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   // No execArgv forwarded: Node 22.18+ strips types by default, and Bun's execArgv isn't safe to pass on.
@@ -791,6 +1407,41 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an input that already ended gives EOF at the first prompt": anInputThatAlreadyEndedGivesEofAtTheFirstPrompt,
   "an input error ends the active prompt as end of input": anInputErrorEndsTheActivePromptAsEndOfInput,
   "a throwing onActive still restores the terminal": aThrowingOnActiveStillRestoresTheTerminal,
+  "a required bool, Literal and string are asked in one turn": aRequiredBoolLiteralAndStringAreAskedInOneTurn,
+  "a required bool confirms with y or n at once and ENTER says no": aRequiredBoolConfirmsWithYOrNAtOnceAndEnterSaysNo,
+  "a list editor shows the error under it and stays open": aListEditorShowsTheErrorUnderItAndStaysOpen,
+  "an object editor returns the native object": anObjectEditorReturnsTheNativeObject,
+  "an optional or defaulted direct editor omits on a blank": anOptionalOrDefaultedDirectEditorOmitsOnABlank,
+  "a required list editor refuses a blank": aRequiredListEditorRefusesABlank,
+  "Ctrl-C in a list editor returns null": ctrlCInAListEditorReturnsNull,
+  "a nullable list or object editor refuses a textual null": aNullableListOrObjectEditorRefusesATextualNull,
+  "the text null in a nullable string editor stays a string": theTextNullInANullableStringEditorStaysAString,
+  "cancelling at the palette or its editor returns null": cancellingAtThePaletteOrItsEditorReturnsNull,
+  "an optional blank in the palette's editor returns to a fresh palette":
+    anOptionalBlankInThePaletteEditorReturnsToAFreshPalette,
+  "Set null in the palette opens no editor": setNullInThePaletteOpensNoEditor,
+  "a required nullable string editor keeps a blank": aRequiredNullableStringEditorKeepsABlank,
+  "a required nullable list editor refuses a blank": aRequiredNullableListEditorRefusesABlank,
+  "prompt labels carry the type and the mark": promptLabelsCarryTheTypeAndTheMark,
+  "supplied inputs are skipped and nothing missing draws nothing":
+    suppliedInputsAreSkippedAndNothingMissingDrawsNothing,
+  "accepting every preselection omits each input": acceptingEveryPreselectionOmitsEachInput,
+  "optional selects and a defaulted string collect answers": optionalSelectsAndADefaultedStringCollectAnswers,
+  "Set null in a finite select gives a present null": setNullInAFiniteSelectGivesAPresentNull,
+  "a null-only input offers controls and no editor": aNullOnlyInputOffersControlsAndNoEditor,
+  "omission in a nullable finite select leaves the key absent": omissionInANullableFiniteSelectLeavesTheKeyAbsent,
+  "a Literal tag named null stays the string": aLiteralTagNamedNullStaysTheString,
+  "a non-nullable bool or Literal offers no Set null": aNonNullableBoolOrLiteralOffersNoSetNull,
+  "a required null-capable select preselects a safe choice": aRequiredNullCapableSelectPreselectsASafeChoice,
+  "a Literal tag that looks like a control is a value": aLiteralTagThatLooksLikeAControlIsAValue,
+  "Literal tags are sorted by code point": literalTagsAreSortedByCodePoint,
+  "Ctrl-C in a bool select returns null": ctrlCInABoolSelectReturnsNull,
+  "explicit null defaults are omitted by the preselection": explicitNullDefaultsAreOmittedByThePreselection,
+  "an Any input is free text that stays text": anAnyInputIsFreeTextThatStaysText,
+  "an untyped input is free text": anUntypedInputIsFreeText,
+  "the end of input in a confirm returns null": theEndOfInputInAConfirmReturnsNull,
+  "a closed terminal prompts nothing": aClosedTerminalPromptsNothing,
+  "a failing output fails the call": aFailingOutputFailsTheCall,
   "a child exits on its own after an answer with stdin open": aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen,
   "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
 };

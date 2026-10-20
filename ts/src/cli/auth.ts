@@ -187,10 +187,9 @@ async function ask(message: string, option: string, ctx: SetupContext): Promise<
 async function apiKey(
   provider: string,
   variable: string,
-  options: { optional?: boolean },
   ctx: SetupContext,
+  { optional = false }: { optional?: boolean } = {},
 ): Promise<string | null> {
-  const optional = options.optional === true;
   const key = ctx.io.env(variable);
   if (key) return key;
   if (ctx.terminal === null) {
@@ -527,7 +526,7 @@ async function setupOpenai(
   } else {
     if (login !== undefined) throw new AuthError("--login applies to subscription authentication");
     // A required key is never null.
-    const key = (await apiKey("openai", apiKeyEnv, {}, ctx))!;
+    const key = (await apiKey("openai", apiKeyEnv, ctx))!;
     const values = await headers(sources, "openai", ctx);
     const apiCredentials = new ApiKeyCredentials(key, values);
     credentials = apiCredentials;
@@ -687,7 +686,7 @@ async function setupProvider(
     // Every provider but ollama has a key variable.
     const variable = apiKeyEnv ?? PROVIDER_API_KEY_ENV[provider]!;
     const optional = OPTIONAL_API_KEY_PROVIDERS.has(provider) && apiKeyEnv === undefined && sources.size === 0;
-    key = await apiKey(provider, variable, { optional }, ctx);
+    key = await apiKey(provider, variable, ctx, { optional });
   }
   const values = await headers(sources, provider, ctx);
   let models: readonly string[] | null = null;

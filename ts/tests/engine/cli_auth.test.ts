@@ -39,8 +39,9 @@
 // the removal documents under `--json`, SIGINT during a removal, no signal listener left behind, and
 // the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule,
 // the OpenAI sign-in picker's SSH initial, OpenAI's hidden key and header prompts and their
-// refusals, a listing with no text model, SIGINT during a picker, `openBrowser`'s opener
-// commands, the reply check's failure text (whitespace folded, cut at 200 characters, a thrown
+// refusals, a listing with no text model, SIGINT during a picker, the stop reaching the OpenAI
+// service, the real terminal built for a TTY stdin, `openBrowser`'s opener commands (resolving only
+// once the opener spawned, a later error not thrown), the reply check's failure text (whitespace folded, cut at 200 characters, a thrown
 // non-`Error`), its 30 s deadline and a stop during it, and in provider setup the model picker, an
 // empty listing, the Azure prompts, an empty or cancelled model name, `ANTHROPIC_API_URL`, and
 // SIGINT during the listing or the reply check.
@@ -570,10 +571,12 @@ function authArgs(provider?: string, options: Record<string, OptionValue> = {}):
 
 /**
  * Python's `Service`: a fake OpenAI authentication service recording each call, and the key,
- * headers and settings each API-key listing is sent. Its browser login opens a fixed URL.
+ * headers and settings each API-key listing is sent. Its browser login opens a fixed URL. Its
+ * factory records the options it is given in `built`.
  */
 function fakeService() {
   const calls: string[] = [];
+  const built: Parameters<NonNullable<AuthDeps["openAIAuth"]>>[0][] = [];
   const settings: Record<string, unknown>[] = [];
   const credentials = () =>
     new OAuthCredentials({
@@ -610,7 +613,11 @@ function fakeService() {
       return ["embedding-test", "gpt-test", "gpt-other"];
     },
   };
-  return { calls, settings, service, openAIAuth: () => service };
+  const openAIAuth: NonNullable<AuthDeps["openAIAuth"]> = (options) => {
+    built.push(options);
+    return service;
+  };
+  return { calls, settings, built, service, openAIAuth };
 }
 
 /**
@@ -1071,7 +1078,7 @@ describe("auth device sign-in as JSON lines", () => {
   function deviceJson() {
     const setup = setupAuth();
     const signals = new EventEmitter();
-    const service = setup.service.openAIAuth();
+    const service = setup.service.service;
     const built: { signal?: AbortSignal }[] = [];
     const deps: AuthDeps = {
       openAIAuth: (options) => {
@@ -1284,6 +1291,9 @@ describe("auth OpenAI setup", () => {
       { kind: "choice", label: "Model:", choices: ["gpt-test", "gpt-other"], initial: "gpt-test" },
     ]);
     expect(fake.signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
+    // The service gets the stop the prompts get.
+    expect(setup.service.built).toHaveLength(1);
+    expect(setup.service.built[0]!.signal).toBe(fake.signals[0]!);
     expect(fake.closed()).toBe(1);
     expect(setup.store.selection()?.model).toBe("gpt-test");
   });
@@ -1337,6 +1347,24 @@ describe("auth OpenAI setup", () => {
       out: "",
       err: "Authentication needs --method when no interactive terminal is available\n",
     });
+    expect(setup.service.calls).toEqual([]);
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  test("a TTY stdin without deps.terminal prompts on a real terminal, which reads EOF as a cancel", async () => {
+    const setup = setupAuth();
+    // Swallowed, so the prompt doesn't draw on the test's terminal; the fake stdin has no raw mode.
+    const drawn = spyOn(process.stderr, "write").mockImplementation(() => true);
+    let result: Awaited<ReturnType<typeof runSetup>>;
+    let draws: number;
+    try {
+      result = await runSetup(setup, {}, { isTTY: true });
+      draws = drawn.mock.calls.length;
+    } finally {
+      drawn.mockRestore();
+    }
+    expect(result).toMatchObject({ code: 1, out: "", err: `${CANCELLED}\n` });
+    expect(draws).toBeGreaterThan(0);
     expect(setup.service.calls).toEqual([]);
     expect(existsSync(setup.path)).toBe(false);
   });
@@ -2156,14 +2184,16 @@ describe("openBrowser", () => {
 
   /**
    * A fake `launch` recording each call and what `out` held then; its child records `unref()` and
-   * emits `event` (with an error for "error") just after the call returns.
+   * emits `event` (with an error for "error") just after the call returns, or nothing for `null`.
    */
-  function fakeLaunch(out: ReturnType<typeof sink>, event: "spawn" | "error") {
+  function fakeLaunch(out: ReturnType<typeof sink>, event: "spawn" | "error" | null) {
     const launched: { command: string; args: readonly string[]; options: object; printed: string }[] = [];
     const child = Object.assign(new EventEmitter(), { unrefs: 0, unref: () => void (child.unrefs += 1) });
     const launch = (command: string, args: readonly string[], options: object) => {
       launched.push({ command, args, options, printed: out.text() });
-      queueMicrotask(() => child.emit(event, ...(event === "error" ? [new Error("spawn ENOENT")] : [])));
+      if (event !== null) {
+        queueMicrotask(() => child.emit(event, ...(event === "error" ? [new Error("spawn ENOENT")] : [])));
+      }
       return child;
     };
     return { launch, launched, child };
@@ -2181,6 +2211,23 @@ describe("openBrowser", () => {
     expect(fake.launched).toEqual([{ command, args, options: { detached: true, stdio: "ignore" }, printed: SHOWN }]);
     expect(fake.child.unrefs).toBe(1);
     expect(out.text()).toBe(SHOWN);
+  });
+
+  test("resolves only once the opener has spawned, and a later error doesn't throw", async () => {
+    const out = sink();
+    const fake = fakeLaunch(out, null);
+    let resolved = false;
+    const opening = openBrowser(URL, out.out, { platform: "linux", launch: fake.launch }).then(() => {
+      resolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fake.launched).toHaveLength(1);
+    expect(resolved).toBe(false);
+    fake.child.emit("spawn");
+    await opening;
+    expect(resolved).toBe(true);
+    // The error listener stays attached, so a late error doesn't end the process.
+    expect(() => fake.child.emit("error", new Error("late"))).not.toThrow();
   });
 
   test("an opener that fails to start still resolves", async () => {

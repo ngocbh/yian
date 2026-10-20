@@ -159,10 +159,15 @@ function lowerSpawnerPostAsserts(
     return [synth, ...rest].join(".");
   };
 
-  for (const assertion of postAsserts) {
-    const lowered = rewriteConditionRefs(assertion.expression, rename);
-    end.postAsserts = [...end.postAsserts, new Assertion(lowered, assertion.display, { origin: assertion.origin })];
-  }
+  end.postAsserts = [
+    ...end.postAsserts,
+    ...postAsserts.map(
+      (assertion) =>
+        new Assertion(rewriteConditionRefs(assertion.expression, rename), assertion.display, {
+          origin: assertion.origin,
+        }),
+    ),
+  ];
 }
 
 /**
@@ -290,7 +295,8 @@ export function cloneChild(
 
   // Seed the child START with the call-args as constants, replacing the provisional
   // `${input.X}` wiring. The spawner bound them before growing, so each value is data: a text's
-  // `$` is escaped to `$$` so START's binder hands it over verbatim.
+  // `$` is escaped to `$$` so START's binder hands it over verbatim (a function replacer, since
+  // a `"$$"` replacement string inserts a single `$`).
   const startNs = ns(callsite, child.startId);
   wiring.set(
     startNs,
@@ -587,7 +593,7 @@ function reject(error: Error): never {
 }
 
 /** Require one record with non-empty keys from a legal spawner seed. */
-function growthRecord(seed: JsonValue | undefined, label: string): JsonObject {
+function growthRecord(seed: JsonValue, label: string): JsonObject {
   if (!isRecord(seed)) reject(new TypeError(`${label} growth seed must be a record`));
   if (Object.keys(seed).some((key) => !key)) {
     reject(new RangeError(`${label} growth seed record keys must be non-empty`));

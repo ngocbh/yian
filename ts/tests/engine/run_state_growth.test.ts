@@ -113,7 +113,6 @@
  *   copies `prune` into a new `Set`.
  * - the `empty-param-tuple` and `param-tuple` rows of
  *   `test_growth_rejects_invalid_fragments_atomically`: a tuple and a list are both a JS array.
- *
  */
 
 import { expect, spyOn, test } from "bun:test";

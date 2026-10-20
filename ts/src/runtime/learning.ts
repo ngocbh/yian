@@ -825,14 +825,10 @@ export class RuntimeBackwardState {
   }
 }
 
-/** The canonical text of `record`, its class included. */
-function recordText(record: RunRecord): string {
-  return encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", 0, record));
-}
-
-/** Whether two records have the same canonical text. */
+/** Whether two records have the same canonical text, the class included. */
 function sameRecord(a: RunRecord, b: RunRecord): boolean {
-  return recordText(a) === recordText(b);
+  const text = (record: RunRecord) => encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", 0, record));
+  return text(a) === text(b);
 }
 
 /**

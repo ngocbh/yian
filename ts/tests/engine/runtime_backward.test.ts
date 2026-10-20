@@ -1084,7 +1084,10 @@ test("a finished history admits a start and keeps the accepted outcome", () => {
   expect(state.policyOutcomes.map((policy) => policy.status)).toEqual(["unrequested", "unrequested"]);
 });
 
-/** A finished attempt 1 and an unfinished attempt 2 with `last` (by default `started(2)`) and `options`. */
+/**
+ * A finished attempt 1 and an unfinished attempt 2 with `last` (by default `started(2)`) and
+ * `options`.
+ */
 function twoAttempts(
   memories: string[] = ["a", "b"],
   last: BackwardStartedRecord = started(2),

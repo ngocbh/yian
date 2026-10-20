@@ -1377,10 +1377,8 @@ function prepareBackwardTransition(state: RunState, record: RunRecord): Prepared
   requireInitializedTerminalBackward(state);
   const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, state.nextSequence, record));
   const envelope = decodeRecord(envelopeJson);
-  const sameClass = Object.getPrototypeOf(envelope.record) === Object.getPrototypeOf(record);
-  if (!sameClass || encodeRecord(envelope) !== envelopeJson) {
-    throw new RangeError("backward record is not in canonical wire form");
-  }
+  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("backward record is not in canonical wire form");
+  // `prepareRecord` routes only the exact backward record classes here.
   const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
   const startId = state.flow.startId;
   const endId = state.flow.endId;
@@ -2066,6 +2064,7 @@ function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransiti
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
   const envelope = decodeRecord(plan.envelopeJson);
+  // The text is the plan's own backward record, and the reducer refuses any other class.
   const expected = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
   if (!isExactly(plan.nextBackwardState, RuntimeBackwardState)) {
     throw new TypeError("backward plan requires an exact next state");

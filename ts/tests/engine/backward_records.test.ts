@@ -73,16 +73,20 @@
  * subclasses).
  *
  * Ported, the run state's backward records, on a local `retainedTerminal()` (Python's
- * `_retained_backward` without `compute_backward`: `learnableStarted` and reducer-direct successes
- * of START, `work` and END):
+ * `_retained_backward` without `compute_backward`: `learnableStarted`, with its `topic` and
+ * memory `keys` options, and reducer-direct successes of START, `work` and END):
  * `test_backward_started_requires_initialized_learned_terminal_authority` (4 rows),
  * `test_backward_prepared_plans_reject_stale_forged_or_mutated_authority_before_append` (6 rows),
  * `test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_append` (9 of 16
  * rows: `initialized`, `started`, `occurrence`, `writer`, `root_start_source`, `root_writer`,
  * `causal_route_source`, `terminal`, `handler`),
  * `test_backward_append_failure_does_not_install_attempt_or_irreversible_request` (the `started`
- * row) and `test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start` (the
- * `ready=False` row).
+ * row), `test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start` (the
+ * `ready=False` row),
+ * `test_failed_backward_computation_has_no_completed_feedback_and_keeps_unrequested_learning`,
+ * `test_failed_computation_finished_rejects_foreign_context_or_fabricated_results` (the `source`,
+ * `node`, `scope` and `run` rows) and
+ * `test_computation_failure_requires_effective_feedback_and_a_driver_failure_code` (3 rows).
  *
  * Changed (run state): each refusal pins its `RangeError` and message where Python accepts
  * `TypeError` or `ValueError`. The gate test's `learn_false` terminal is a non-learnable
@@ -93,13 +97,15 @@
  * `Error`, Python's `OSError`.
  *
  * TS-only (run state): `retainedTerminal()` reaches a succeeded result and a succeeded trace
- * terminal at sequence 7.
+ * terminal at sequence 7; attempt state replaced after preparation (trace and sequence unchanged)
+ * reaches the commit's `prepared backward transition has stale attempt authority`, which prepare
+ * and commit alone can't reach, and the log is unchanged.
  *
  * Not ported (TS types): 7 rows of the post-terminal delta test, as forward_trace's frontier rows:
  * `sequence` (a `float`), `resumed` (`0`), `prune_ids`, `connections` and `boundaries` (tuple
  * subclasses), `consumed_connection` and `boundary_update` (`__eq__` aliases of `None`).
  *
- * Later (T4-7, with `computeBackward`): every test that needs a `BackwardReadyRecord` or the root
+ * Later (T4-7, with `computeBackward`): the tests that need a `BackwardReadyRecord` or the root
  * and attributed results `_retained_backward` computes:
  * `test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization`,
  * `test_backward_attempt_records_prepare_append_then_reduce_without_forward_effects`,
@@ -117,9 +123,14 @@
  * `test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt`,
  * `test_backward_commit_observation_requires_the_current_pending_request`, the `ready`, `request`
  * and `finished` rows of
- * `test_backward_append_failure_does_not_install_attempt_or_irreversible_request`, and the tests
- * from `test_failed_backward_computation_has_no_completed_feedback_and_keeps_unrequested_learning`
- * to `test_disabled_memory_ready_and_finished_reject_fabricated_memory_material` and
+ * `test_backward_append_failure_does_not_install_attempt_or_irreversible_request`, the `feedback`
+ * and `partial_inventory` rows of
+ * `test_failed_computation_finished_rejects_foreign_context_or_fabricated_results`,
+ * `test_successful_finished_requires_ready_and_every_enabled_policy_confirmation`,
+ * `test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory`,
+ * `test_explicit_interruption_keeps_unknown_request_and_ready_attribution_without_resuming`,
+ * `test_interrupted_finished_must_exactly_project_the_prefix`,
+ * `test_disabled_memory_ready_and_finished_reject_fabricated_memory_material` and
  * `test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting`.
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
@@ -134,10 +145,13 @@ import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
 import { type FeedbackValue, SourceRef } from "../../src/expr/lineage.ts";
 import {
+  DeclSite,
   LearningFailure,
   LearningResult,
   MemoryMutation,
   MemoryOperationFailure,
+  MemorySnapshotEnvelope,
+  MemorySpec,
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
@@ -1030,25 +1044,38 @@ test("the post-terminal trace delta validation covers the closed field inventory
 
 // The run state's backward records, on a terminal built through the reducer.
 
-/**
- * Return a learnable state and log after `START -> work -> END` succeeded, `work` reading
- * `${input.topic}` and END's `answer` reading `work` (Python's `_retained_backward`, without
- * `compute_backward`).
- */
-function retainedTerminal(): { state: RunState; log: MemoryRunLog } {
-  const work = new FuncNode("work", (inputs) => inputs.x, { reads: { x: "${input.topic}" } });
-  const owned = graph([work], [[START_ID, "work"]], { outputs: [new FlowOutput("answer", "${work.output}")] });
-  const { state, log } = learnableStarted(owned, { inputs: { topic: "reefs" } });
-  const outcomes: [string, unknown, Record<string, unknown>][] = [
-    [START_ID, { topic: "reefs" }, {}],
-    ["work", "reefs", { x: "reefs" }],
-    [END_ID, "reefs", { answer: "reefs" }],
-  ];
+/** Start and succeed each `[nodeId, value, inputs]` in order, capturing `inputs` as bindings. */
+function succeedEach(state: RunState, log: MemoryRunLog, outcomes: [string, unknown, Record<string, unknown>][]): void {
   for (const [nodeId, value, inputs] of outcomes) {
     commitPrepared(log, state, prepareNodeStarted(state, nodeId));
     const capture = forwardCapture(state.flow.nodes.get(nodeId)!, inputs);
     commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, value, { forwardCapture: capture }));
   }
+}
+
+/**
+ * Return a learnable state and log after `START -> work -> END` succeeded, `work` reading
+ * `${input.topic}` and END's `answer` reading `work`, with a root-owned memory per key in `keys`
+ * (Python's `_retained_backward`, without `compute_backward`).
+ */
+function retainedTerminal(
+  options: { topic?: unknown; keys?: readonly string[] | null } = {},
+): { state: RunState; log: MemoryRunLog } {
+  const { topic = "reefs", keys = null } = options;
+  const work = new FuncNode("work", (inputs) => inputs.x, { reads: { x: "${input.topic}" } });
+  const owned = graph([work], [[START_ID, "work"]], { outputs: [new FlowOutput("answer", "${work.output}")] });
+  const root = new DeclSite([], ["root"]);
+  const { state, log } = learnableStarted(owned, {
+    inputs: { topic },
+    memories: keys === null ? null : keys.map((key) => new MemorySpec(key, key, {}, [root], false)),
+    memoryStacks: keys === null ? null : [],
+    memorySnapshots: keys === null ? null : keys.map((key) => new MemorySnapshotEnvelope(key, {})),
+  });
+  succeedEach(state, log, [
+    [START_ID, { topic }, {}],
+    ["work", topic, { x: topic }],
+    [END_ID, topic, { answer: topic }],
+  ]);
   return { state, log };
 }
 
@@ -1089,14 +1116,10 @@ test.each(["pristine", "nonterminal", "learn_false", "missing_terminal"] as cons
     } else {
       ({ state, log } = learnableStarted(owned()));
       if (gate === "missing_terminal") {
-        for (const [nodeId, value] of [
-          [START_ID, {}],
-          [END_ID, null],
-        ] as const) {
-          commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-          const capture = forwardCapture(state.flow.nodes.get(nodeId)!, {});
-          commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, value, { forwardCapture: capture }));
-        }
+        succeedEach(state, log, [
+          [START_ID, {}, {}],
+          [END_ID, null, {}],
+        ]);
         state.trace!.terminal = null;
       }
       if (gate === "pristine") state = new RunState(owned());
@@ -1232,4 +1255,86 @@ test("an interrupted attempt before Ready requires an explicit finish before a f
   expect(state.backwardState.attempts).toHaveLength(2);
   expect(state.backwardState.ready).toBeNull();
   expect(state.backwardState.outcome!.feedback).toBeNull();
+});
+
+test("a prepared backward plan rejects attempt state replaced after preparation", () => {
+  const { state, log } = retainedTerminal();
+  const prepared = prepareRecord(state, new BackwardStartedRecord(1, "Review."));
+  const plan = prepared._plan as { nextBackwardState: RuntimeBackwardState };
+  const records = log.records();
+  state.backwardState = plan.nextBackwardState;
+  expectError(
+    () => commitPrepared(log, state, prepared),
+    RangeError,
+    "prepared backward transition has stale attempt authority",
+  );
+  expect(log.records()).toEqual(records);
+});
+
+/** The `work` occurrence's failed computation, with `changes` to its attribution. */
+function computationFailure(
+  state: RunState,
+  changes: { scope?: ExecutionScope; runId?: string; nodeId?: string; nodeStartedSeq?: number } = {},
+  options: { nodeId?: string; code?: string; causeType?: string; traceback?: string } = {},
+): BackwardFailure {
+  const { nodeId = "work", code = "backward.execute", ...debug } = options;
+  const occurrence = state.trace!.occurrences.find((item) => item.nodeId === nodeId)!;
+  const context = state.trace!.backwardContext(occurrence.source);
+  return new BackwardFailure("backward", code, "Callback failed.", {
+    scope: context.scope,
+    runId: context.runId,
+    nodeId: context.nodeId,
+    nodeStartedSeq: context.nodeStartedSeq,
+    ...changes,
+    ...debug,
+  });
+}
+
+test("a failed backward computation has no completed feedback and keeps unrequested learning", () => {
+  const { state, log } = retainedTerminal({ keys: ["alpha", "beta"] });
+  acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+  const failure = computationFailure(state, {}, { causeType: "RuntimeError", traceback: "debug trace" });
+  const outcome = new BackwardOutcome("failed", { failure, learning: state.backwardState.outcome!.learning });
+  acceptBackward(state, log, new BackwardFinishedRecord(1, outcome));
+  expect(sameBackwardOutcome(state.backwardState.outcome!, outcome)).toBe(true);
+  expect(state.backwardState.finished!.attributedResults).toEqual([]);
+  expect(outcome.feedback).toBeNull();
+  expect(outcome.learning!.status).toBe("incomplete");
+  expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(["unrequested", "unrequested"]);
+  expect(state.backwardState.canStart).toBe(true);
+});
+
+const INVOCATION = "backward computation failure must match its recorded invocation";
+
+test.each([
+  ["source", { nodeStartedSeq: 9999 }, "backward computation failure requires an accepted occurrence"],
+  ["node", { nodeId: "foreign" }, INVOCATION],
+  ["scope", { scope: new ExecutionScope(["foreign"]) }, INVOCATION],
+  ["run", { runId: "foreign" }, "backward computation failure requires accepted occurrence attribution"],
+] as const)("a failed computation's Finished rejects a foreign context: %s", (_change, changes, message) => {
+  const { state, log } = retainedTerminal();
+  acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
+  const failure = computationFailure(state, changes);
+  const record = new BackwardFinishedRecord(1, new BackwardOutcome("failed", { failure }));
+  const sequence = log.nextSequence;
+  expectError(() => prepareRecord(state, record), RangeError, message);
+  expect(log.nextSequence).toBe(sequence);
+});
+
+test.each<[FeedbackValue, string]>([
+  [null, "backward.execute"],
+  [[null, null], "backward.result"],
+  ["Review.", "backward.unknown"],
+])("a computation failure requires effective feedback and a driver failure code: %j, %s", (feedback, code) => {
+  const { state, log } = retainedTerminal({ topic: [1n, 2n] });
+  acceptBackward(state, log, new BackwardStartedRecord(1, feedback));
+  const failure = computationFailure(state, {}, { nodeId: END_ID, code });
+  const record = new BackwardFinishedRecord(1, new BackwardOutcome("failed", { failure }));
+  const sequence = log.nextSequence;
+  expectError(
+    () => prepareRecord(state, record),
+    RangeError,
+    "backward computation failure requires effective feedback and a driver failure code",
+  );
+  expect(log.nextSequence).toBe(sequence);
 });

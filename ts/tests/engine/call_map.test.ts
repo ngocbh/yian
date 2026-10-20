@@ -5,7 +5,8 @@
  * `test_seed04_call_loads_and_reexports_child_output` and
  * `test_seed05_map_loads_with_list_output_and_parallel`; `test_map_input_named_over_is_reserved`,
  * `test_call_binding_to_undeclared_child_input_is_loud`, `test_map_child_with_no_output_is_loud`
- * and the contract half of `test_call_accepts_proven_null_for_nullable_child_input`.
+ * and `test_call_accepts_proven_null_for_nullable_child_input` (its contract half over a built
+ * node, its acceptance half assembling the flow with `assembleText`, the `echo` def built by hand).
  *
  * Changed: every child is built by hand (`handChild`) where Python loads seed 03 or a def. Seed
  * 03's child takes the seed's two parameters (read from its `input:` text) and returns a record
@@ -26,9 +27,7 @@
  *
  * Later (T3-22): the seed and def loads of the rows above, `test_call_map_without_resolver_is_loud`
  * (the loader's `uses:` error) and `test_flow_without_calls_loads_without_resolver`. Later (T3-18,
- * T3-22): `test_seed04_downstream_dotted_ref_validates_against_child_record`. Later (T3-19): the
- * acceptance half of `test_call_accepts_proven_null_for_nullable_child_input` (the binding type
- * check).
+ * T3-22): `test_seed04_downstream_dotted_ref_validates_against_child_record`.
  */
 
 import { expect, test } from "bun:test";
@@ -260,6 +259,33 @@ test("a call over a nullable child input re-exports the nullable output", () => 
 
   const contract = desc.build(contextWith({ echo })).node.outputContract as ValueContract;
 
+  expect(contract.type.kind).toBe(ValueKind.STRING);
+  expect(contract.type.nullable).toBe(true);
+});
+
+test("a call accepts a proven null for a nullable child input", () => {
+  // The binding check reads a proven null as fitting a nullable input, as the runtime coerces it.
+  const echo = handChild({
+    inputs: parametersFromYaml("input:\n  maybe: !Optional(str)\n", new Map()),
+    output: "${input.maybe}",
+  });
+
+  const { flow } = assembleText(
+    `id: null-to-nullable-call
+name: null_to_nullable_call
+nodes:
+  invoke:
+    kind: call
+    call: echo
+    input:
+      maybe: \${null}
+output: \${invoke.output}
+`,
+    "flow.yaml",
+    { children: { echo } },
+  );
+
+  const contract = flow.compiled.nodes.get("invoke")!.outputContract as ValueContract;
   expect(contract.type.kind).toBe(ValueKind.STRING);
   expect(contract.type.nullable).toBe(true);
 });

@@ -9,11 +9,27 @@
  * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`, each checking the
  * inline body's generated parameters (a record seed's type is canonical, its typedef name gone).
  *
+ * The seed check (the cross-flow binding check on a LOOP seed), through `assembleText`: the load
+ * halves of `test_optional_seed_fills_a_strict_body_input_under_a_while_null_check`,
+ * `test_every_seed_shape_is_narrowed_by_a_while_null_check` (3),
+ * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry` and
+ * `test_nested_null_check_narrows_the_record_above_it`; both loads of
+ * `test_while_null_check_lets_a_seed_record_omit_the_checked_field`;
+ * `test_while_null_check_rejects_a_record_seed_the_zero_iteration_output_cannot_carry` and
+ * `test_while_null_check_rejects_a_null_seed_the_zero_iteration_output_cannot_carry` (each also
+ * pinned as its harvested case at the end, `assembledWith`),
+ * `test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check`, the error load
+ * of `test_partial_loop_seed_check_alone_decides_a_carried_over_field` and the `other="loop"`
+ * error load of `test_while_null_check_keeps_the_case_narrowed_seed`. Each error row pins the
+ * whole message, where Python matches a fragment of some, except the case-narrowed one: its source
+ * type is the CASE narrowing's, so it keeps Python's fragment.
+ *
  * Changed: `whileNonNullPaths` returns the proven paths as distinct field-name lists in path order,
  * where Python returns a `frozenset` of tuples. The declared-types row parses the loop node
  * (`nodesOf`) and builds it over the body built by hand (`handChild`), where Python loads the
- * flow whose def is the body. The inline rows' `fetch_page` def is built by hand too, the scope
- * resolving it by name.
+ * flow whose def is the body. Every other row's defs (`fetch_page`, `step`, `seed`, `body`) are
+ * built by hand too, the scope resolving each by name. The record seed's message writes the value
+ * and the missing fields in the text form (`{"n":0}`, `["next"]`, rule `messages`).
  *
  * TS-only: `nullableAt` on a record field, a path through a union, a missing field or a scalar,
  * and the null type; `loopEntryInputs` relaxing only the parameters under a `while:` path, keeping
@@ -25,37 +41,49 @@
  * `test_null_check_under_or_narrows_nothing`,
  * `test_returned_field_still_keeps_its_carried_type_under_a_while_null_check`,
  * `test_nested_null_check_keeps_the_carried_type_of_the_returned_record`,
- * `test_while_null_check_rejects_a_record_seed_the_zero_iteration_output_cannot_carry`,
- * `test_while_null_check_rejects_a_null_seed_the_zero_iteration_output_cannot_carry`,
- * `test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check`,
  * `test_returned_field_of_the_wrong_type_names_the_declared_input_under_a_while_check`,
  * `test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it`,
- * `test_inline_returned_field_of_the_wrong_type_names_the_seed_type` and
- * `test_inline_body_under_until_reads_the_seed_as_optional`. Later (T4): the run halves of
+ * `test_inline_returned_field_of_the_wrong_type_names_the_seed_type`,
+ * `test_inline_body_under_until_reads_the_seed_as_optional` and the ok load of
+ * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` (with the loop type contract).
+ * Later (T3-20): the `then="loop"` ok load of `test_while_null_check_keeps_the_case_narrowed_seed`
+ * (CASE narrowing). Later (T4): the run halves of
  * `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed`,
- * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check` and
- * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`, and
+ * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check`,
+ * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`,
  * `test_optional_seed_fills_a_strict_body_input_under_a_while_null_check`,
- * `test_optional_seed_pagination_resumes_after_its_first_expansion`,
  * `test_every_seed_shape_is_narrowed_by_a_while_null_check`,
- * `test_while_null_check_keeps_the_case_narrowed_seed` (and T3-19/T3-20),
- * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`,
- * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` (and T3-19),
+ * `test_while_null_check_keeps_the_case_narrowed_seed`,
+ * `test_partial_loop_seed_check_alone_decides_a_carried_over_field`,
  * `test_nested_null_check_narrows_the_record_above_it`,
- * `test_while_null_check_lets_a_seed_record_omit_the_checked_field` (and T3-19) and
- * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry`.
+ * `test_while_null_check_lets_a_seed_record_omit_the_checked_field` and
+ * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry`, and
+ * `test_optional_seed_pagination_resumes_after_its_first_expansion` and
+ * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs, nullableAt, whileNonNullPaths } from "../../src/compose/nodes/loop.ts";
+import { forget } from "../../src/defaults.ts";
 import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, handChild, nodesOf, parametersFromYaml } from "../compose/declarations.ts";
+import {
+  assembledWith,
+  assembleText,
+  type ChildFlows,
+  handChild,
+  loadError,
+  nodesOf,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
+
+afterEach(() => forget());
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -137,6 +165,273 @@ test("body inputs keep their declared types after load", () => {
   expect(canonicalTypeLabel(loopEntryInputs(node)[0]!.contract!.type)).toBe("Optional(str)");
 });
 
+// ---------- what the seed check reads under a while null check ----------
+
+/** The `fetch_page` def: `cursor: str` in, `{cursor: <its get node's output>}` out, `get` typed `get`. */
+function pagesBody(get = "Optional(str)"): ComposedFlow {
+  return handChild({
+    inputs: params("  cursor: !str\n"),
+    producers: { get: new ValueContract(typeFor(get, new Map())) },
+    output: { cursor: "${get.output}" },
+  });
+}
+
+/**
+ * Pagination over the `fetch_page` def (`pagesBody`), `cursor` seeded with `seed` (each of
+ * `carried`'s lines seeding another field), the loop driven by `driver`, the flow taking `inputs`.
+ */
+function page(
+  options: { seed?: string; driver?: string; inputs?: string; carried?: string } = {},
+): string {
+  const {
+    seed = "${input.start}",
+    driver = "while: cursor != null",
+    inputs = "start: !Optional(str)",
+    carried = "",
+  } = options;
+  return `id: pages
+name: pages
+input:
+  ${inputs}
+nodes:
+  pages:
+    kind: loop
+    ${driver}
+    input:
+      cursor: ${seed}${carried}
+    call: fetch_page
+output: \${pages.output}
+`;
+}
+
+/** Assemble `text` with `children` built by hand (default: `fetch_page` as `pagesBody()`). */
+function load(text: string, children: ChildFlows = { fetch_page: pagesBody() }): ComposedFlow {
+  return assembleText(text, "flow.yaml", { children }).flow;
+}
+
+test("an optional seed fills a strict body input under a while null check", () => {
+  expect(load(page()).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test.each<[string, string]>([
+  ["!Optional(str) ${input.start}", "start: !Optional(str)"],
+  ["${input.a :- input.b}", "a: !Optional(str)\n  b: !Optional(str)"],
+  ["null", "start: !Optional(str)"],
+])("every seed shape is narrowed by a while null check: %s", (seed, inputs) => {
+  expect(load(page({ seed, inputs })).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test("a while null check admits a null seed the body output can carry", () => {
+  expect(load(page({ seed: "null" })).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test("a while null check rejects a null seed the zero-iteration output cannot carry", () => {
+  // With zero iterations the loop outputs the null seed as the body's `str` output.
+  const error = loadError(() => load(page({ seed: "null" }), { fetch_page: pagesBody("str") }));
+
+  expect(error.message).toBe(
+    "loop node 'pages': binding 'cursor' — child expects 'str', but the value null does not fit",
+  );
+});
+
+test("a seed of the wrong type names the declared input under a while null check", () => {
+  const error = loadError(() => load(page({ seed: "${input.n}", inputs: "n: !Optional(int)" })));
+
+  expect(error.message).toBe(
+    "loop node 'pages': binding 'cursor' — child expects 'str', source is 'Optional(int)'",
+  );
+});
+
+// A partial loop: the `step` def takes `cursor` but returns only `n`, so `cursor` carries over.
+const PARTIAL = `id: p
+name: p
+input:
+  start: !Optional(str)
+nodes:
+  loop:
+    kind: loop
+    while: n < 2
+    input:
+      cursor: \${input.start}
+      n: 0
+    call: step
+output: \${loop.output}
+`;
+
+test("a partial loop's seed check alone decides a carried-over field", () => {
+  // No `while:` null check on `cursor`, so its `Optional(str)` seed can't fill the `str` input.
+  const step = handChild({
+    inputs: params("  cursor: !str\n  n: !int\n"),
+    producers: { get: new ValueContract(recordType({ n: INT })) },
+    output: "${get.output}",
+  });
+
+  const error = loadError(() => load(PARTIAL, { step }));
+
+  expect(error.message).toBe("loop node 'loop': binding 'cursor' — child expects 'str', source is 'Optional(str)'");
+});
+
+/** The `Page` (`next` optional) and `Strict` (`next` required) records the paging rows read. */
+const PAGES = readTypedefs({ Page: { next: "Optional(str)", n: "int" }, Strict: { next: "str", n: "int" } });
+
+/** The `step` def: a `Strict` page in, its `get` node's `{page: <returned>}` out. */
+function strictStep(returned: string): ComposedFlow {
+  return handChild({
+    inputs: parametersFromYaml("input:\n  page: !Strict\n", PAGES),
+    producers: { get: new ValueContract(recordType({ page: typeFor(returned, PAGES) })) },
+    output: "${get.output}",
+  });
+}
+
+// `page.next != null` proves both `page` and `page.next` not null, so the `seed` def's
+// `Optional(Page)` output fills the `step` def's `Strict` input.
+const NESTED = `id: nl
+name: nl
+typedefs:
+  Page:
+    next: Optional(str)
+    n: int
+  Strict:
+    next: str
+    n: int
+input:
+  start: !Optional(str)
+nodes:
+  first:
+    kind: call
+    call: seed
+    input:
+      s: \${input.start}
+  pages:
+    kind: loop
+    while: page.next != null
+    input:
+      page: \${first.output}
+    call: step
+output: \${pages.output}
+`;
+
+test("a nested null check narrows the record above it", () => {
+  const seed = handChild({
+    inputs: params("  s: !Optional(str)\n"),
+    producers: { mk: new ValueContract(typeFor("Optional(Page)", PAGES)) },
+    output: "${mk.output}",
+  });
+
+  const flow = load(NESTED, { step: strictStep("Optional(Page)"), seed });
+
+  expect(flow.compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+/** A loop over the `step` def whose literal seed `{n: 0}` has no `next`, driven by `driver`. */
+function missingNext(driver: string): string {
+  return `id: mn
+name: mn
+typedefs:
+  Page:
+    next: Optional(str)
+    n: int
+  Strict:
+    next: str
+    n: int
+nodes:
+  pages:
+    kind: loop
+    ${driver}
+    input:
+      page: {n: 0}
+    call: step
+output: \${pages.output}
+`;
+}
+
+test("a while null check lets a seed record omit the checked field", () => {
+  // An absent `next` reads as null, so the `while:` never lets the record into the body.
+  const step = strictStep("Optional(Page)");
+  expect(load(missingNext("while: page.next != null"), { step }).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+
+  // `until:` is checked after the body, so it narrows nothing.
+  const error = loadError(() => load(missingNext("until: page.next == null"), { step }));
+
+  expect(error.message).toBe(
+    "loop node 'pages': binding 'page' — child expects '{\"n\":int,\"next\":str}', " +
+      'but the value {"n":0} does not fit (record missing required fields: ["next"])',
+  );
+});
+
+test("a while null check rejects a record seed the zero-iteration output cannot carry", () => {
+  // With zero iterations the loop outputs `{n: 0}` as the body's `Optional(Strict)` output, whose
+  // `next` is required, so the `while:` can't admit the seed.
+  const error = loadError(() =>
+    load(missingNext("while: page.next != null"), { step: strictStep("Optional(Strict)") }),
+  );
+
+  expect(error.message).toBe(
+    "loop node 'pages': binding 'page' — child expects '{\"n\":int,\"next\":str}', " +
+      'but the value {"n":0} does not fit (record missing required fields: ["next"])',
+  );
+});
+
+// A LOOP routed by a `case` on a `Union(Buy, Hold)` producer: the seed `order` is narrowed to `Buy`
+// only under `when: buy`, and `cursor` only by the `while:`.
+const ROUTED_TYPEDEFS = readTypedefs({
+  Buy: { kind: "Literal(buy)", qty: "int" },
+  Hold: { kind: "Literal(hold)", note: "str" },
+});
+
+/** The routed flow, the CASE sending `when: buy` to `then` and anything else to `other`. */
+function routed(then: string, other: string): string {
+  return `id: p
+name: p
+typedefs:
+  Buy: {kind: 'Literal(buy)', qty: int}
+  Hold: {kind: 'Literal(hold)', note: str}
+input:
+  s: !str
+  start: !Optional(str)
+nodes:
+  d:
+    kind: code
+    input:
+      s: \${input.s}
+    output: Union(Buy, Hold)
+    code: 'return inputs["s"] === "b" ? {kind: "buy", qty: 2n} : {kind: "hold", note: "n"}'
+  route:
+    kind: case
+    on: \${d.output.kind}
+    cases:
+      - when: buy
+        then: ${then}
+    else: ${other}
+  loop:
+    kind: loop
+    while: cursor != null
+    input:
+      order: \${d.output}
+      cursor: \${input.start}
+      k: 0
+    call: body
+  e:
+    kind: code
+    code: return 1n
+output: \${loop.output.k}
+`;
+}
+
+test("a while null check keeps the case-narrowed seed", () => {
+  const body = handChild({
+    inputs: parametersFromYaml("input:\n  order: !Buy\n  cursor: !str\n  k: !int\n", ROUTED_TYPEDEFS),
+    producers: { step: new ValueContract(recordType({ cursor: STR.replace({ nullable: true }), k: INT })) },
+    output: "${step.output}",
+  });
+
+  // Under `else:` the seed is not narrowed to `Buy`. Python matches this fragment; the source type
+  // after it is the CASE narrowing's.
+  const error = loadError(() => load(routed("e", "loop"), { body }));
+
+  expect(error.message).toContain("loop node 'loop': binding 'order' — child expects");
+});
+
 // ---------- inline bodies ----------
 
 /**
@@ -165,6 +460,8 @@ nodes:
 output: \${pages.output}
 `;
 }
+
+
 
 /** The `fetch_page` def: `cursor: str` in, its `get` node's `Optional(str)` out. */
 function fetchPage() {
@@ -433,4 +730,20 @@ test("carriedFieldTypes gives a partly typed record's proven field types", () =>
 test("carriedFieldTypes proves no field of anything else", () => {
   expect(carriedFieldTypes(null)).toEqual(new Map());
   expect(carriedFieldTypes(new ValueContract(STR))).toEqual(new Map());
+});
+
+// ---------- harvested conformance cases ----------
+
+test("assembled: load-types/engine_loop_null_narrowing__while_null_check_rejects_a_null_seed", () => {
+  runCase({
+    id: "load-types/engine_loop_null_narrowing__while_null_check_rejects_a_null_seed",
+    call: assembledWith({ fetch_page: pagesBody("str") }),
+  });
+});
+
+test("assembled: load-types/engine_loop_null_narrowing__while_null_check_rejects_a_record_seed", () => {
+  runCase({
+    id: "load-types/engine_loop_null_narrowing__while_null_check_rejects_a_record_seed",
+    call: assembledWith({ step: strictStep("Optional(Strict)") }),
+  });
 });

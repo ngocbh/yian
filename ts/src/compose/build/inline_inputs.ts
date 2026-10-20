@@ -358,8 +358,7 @@ function inferDirectReference(parts: readonly string[], walk: Walk): Type {
     }
   }
 
-  const provenRoot = requireProvenType(root as Type, walk);
-  return walkRecordType(provenRoot, fields, path, walk);
+  return walkRecordType(requireProvenType(root, walk), fields, path, walk);
 }
 
 /**

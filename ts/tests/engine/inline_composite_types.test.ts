@@ -2,9 +2,9 @@
  * Strict type inference for parameters of generated inline composite flows: a port of
  * `tests/engine/test_inline_composite_types.py`.
  *
- * Ported: every test but `test_non_string_mapping_key_is_rejected` (see Changed), through `inferInlineBindingType`, `requireProvenType`,
- * `canonicalizeInlineType` and `canonicalTypeLabel`. Where Python checks a message fragment, the
- * row pins the whole message.
+ * Ported: every test but `test_non_string_mapping_key_is_rejected` (see Changed), through
+ * `inferInlineBindingType`, `requireProvenType`, `canonicalizeInlineType` and
+ * `canonicalTypeLabel`. Where Python checks a message fragment, the row pins the whole message.
  *
  * TS-only: a typed `Binding` nested in a `ValueTemplate` infers as its declared type (the
  * docstring's rule, which no Python row checks).
@@ -199,7 +199,7 @@ describe("inline input inference", () => {
       { a: 1n, b: "x" },
       { b: "y", a: 2n },
     ]);
-    expect(inferred.kind).toBe(ValueKind.LIST_OBJECT);
+    expect(inferred).toEqual(new Type({ kind: ValueKind.LIST_OBJECT, element: record({ a: INT, b: STR }) }));
     expect([...inferred.element!.fields!.keys()]).toEqual(["a", "b"]);
   });
 
@@ -209,9 +209,13 @@ describe("inline input inference", () => {
       { parentInputTypes: new Map([["x", INT]]) },
     );
 
-    expect(inferred.fields!.get("deep")!.fields!.get("value")).toEqual(INT);
-    expect(inferred.fields!.get("ref")).toEqual(INT);
-    expect(inferred.fields!.get("items")).toEqual(new Type({ kind: ValueKind.LIST_STRING, element: STR }));
+    expect(inferred).toEqual(
+      record({
+        deep: record({ value: INT }),
+        ref: INT,
+        items: new Type({ kind: ValueKind.LIST_STRING, element: STR }),
+      }),
+    );
   });
 
   test("a typed binding nested in a template takes its declared type", () => {
@@ -410,8 +414,7 @@ describe("inline input inference", () => {
 
       const inferred = infer("${input.record.middle.value}", { parentInputTypes: new Map([["record", root]]) });
 
-      expect(inferred.kind).toBe(ValueKind.INTEGER);
-      expect(inferred.nullable).toBe(expectedNullable);
+      expect(inferred).toEqual(new Type({ kind: ValueKind.INTEGER, nullable: expectedNullable }));
       expect(inferred).not.toBe(valueType);
       expect(root).toEqual(makeRoot());
     },

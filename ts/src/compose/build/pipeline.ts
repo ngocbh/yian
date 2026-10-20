@@ -392,11 +392,8 @@ export function registerInlineBodies(
   },
 ): Map<string, NodeDescriptor> {
   const { registrar, buildChild } = options;
-  let { diagnostics = null } = options;
-  if (diagnostics === null) {
-    const firstBody = bodies.values().next().value;
-    diagnostics = LoadDiagnostics.fromCursor(firstBody === undefined ? null : firstBody.nodesCursor);
-  }
+  const diagnostics =
+    options.diagnostics ?? LoadDiagnostics.fromCursor(bodies.values().next().value?.nodesCursor ?? null);
   const associated = new Map(descriptors);
   const registrations: [InlineBody, CallDescriptor | LoopDescriptor, string][] = [];
 

@@ -227,7 +227,7 @@ test("an inline alias projection keeps the shared payload and lightweight source
   expect(sources.length).toBe(aliases + 1);
   for (const source of sources) {
     expect(source).not.toBeNull();
-    expect(Object.values(source!._value as ValueRecord).every((value) => value === null)).toBe(true);
+    expect(source!._value).toEqual({ kind: null, input: null, call: null });
   }
 });
 
@@ -407,8 +407,8 @@ nodes:
   expect((second.value as ValueRecord)["call"]).toBe(bodies.get("second")!.flowId);
   expect(first.rangeOf("call")).toEqual(anchor.rangeOf("nodes")!);
   expect(second.rangeOf("call")).toEqual(anchor.rangeOf("nodes")!);
-  expect(keysOf(first).filter((key) => key === "call")).toEqual(["call"]);
-  expect(keysOf(second).filter((key) => key === "call")).toEqual(["call"]);
+  expect(keysOf(first)).toEqual(["kind", "input", "call"]);
+  expect(keysOf(second)).toEqual(["kind", "input", "call"]);
 
   expect(anchor.value).toEqual(originalAnchorValue);
   expect(mappingSnapshot(anchor)).toEqual(originalAnchorPairs);
@@ -453,7 +453,7 @@ nodes:
   const masked = maskedNodes.child("merged");
   expect(masked.value).toEqual({ kind: "call", call: body.flowId, input: { text: "hello" } });
   expect(masked.rangeOf("call")).toEqual(anchor.rangeOf("nodes")!);
-  expect(keysOf(masked).filter((key) => key === "call")).toEqual(["call"]);
+  expect(keysOf(masked)).toEqual(["kind", "call", "input"]);
   expect(mappingSnapshot(mergedBefore)).toEqual(originalMergedPairs);
   expect(mappingKeys(mergedBefore)).toEqual(originalMergedKeys);
   expect(document.root.value).toEqual(originalDocumentValue);
@@ -561,7 +561,7 @@ output: unused
   const error = loadError(() => assembleText(source));
 
   expect(error.message).toBe("cannot descend through a recursive alias occurrence");
-  expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(3, 8, 7, 1));
 });
 
 test.each([
@@ -650,7 +650,10 @@ const INLINE_CHILD = `nodes:
         output: str
 `;
 
-/** Each malformed body: its kind, the body text, the key its range is at (else the body), the message. */
+/**
+ * Each malformed body: its name, its kind, the body text, the key its range is at (else the body),
+ * and the message.
+ */
 const INLINE_SHAPE_CASES: [string, string, string, string | null, string][] = [
   [
     "both-call-and-nodes",
@@ -811,11 +814,11 @@ test("registerInlineBodies associates CALL, MAP and LOOP bodies and stays lazy",
     expect(owner).toEqual(body.owner);
     expect(label).toBe(expectedLabel);
     expect(rewritten).not.toBe(original);
-    expect(rewritten).toBeInstanceOf(original.constructor as typeof CallDescriptor);
+    expect(rewritten.constructor).toBe(original.constructor);
     expect(withoutChildLabel(rewritten)).toEqual(withoutChildLabel(original));
     expect(rewritten.childLabel).toBe(expectedLabel);
     expect(rewritten.call).toBe(body.flowId);
-    expect(original).toBe(descriptors.get(body.nodeId)! as CallDescriptor);
+    expect(descriptors.get(body.nodeId)).toBe(original);
     expect(original.childLabel).toBeNull();
 
     expect(builder()).toBe(flows.get(body.nodeId)!);

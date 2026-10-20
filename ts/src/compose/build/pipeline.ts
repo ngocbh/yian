@@ -108,8 +108,24 @@ import {
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
 import { validateHumanQuestions } from "../validate/human_questions.ts";
+import { checkReservedSources } from "../validate/reserved_sources.ts";
+import { stampToolInputTypes } from "../validate/tool_inputs.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
+import { builtinFieldErrors, constructorErrors } from "../validate/constructors.ts";
+import {
+  collectConstructorNames,
+  collectIsinstanceNames,
+  expressionTrees,
+  resolveConstructorType,
+  resolveIsinstanceType,
+} from "../helpers/isinstance_types.ts";
+import { nth } from "../helpers/source.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
+import { NodeKind } from "../../nodes/base.ts";
+import { CaseNode } from "../../nodes/case/node.ts";
+import { LoopNode } from "../../nodes/loop/node.ts";
+import { TypeCheckError } from "../../typesys/values.ts";
 // T3-19 imports
 import { ExpressionError } from "../../expr/index.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
@@ -1294,7 +1310,47 @@ function stampInlineCallOrigins(
   }
 }
 
-/** Python's `compose.build.pipeline._fill_type_tables`; not ported yet. */
+/**
+ * Return a site's own range, else its node field's range, else the node's range.
+ *
+ * @param item The site's own range, `null` when it has none.
+ * @param fieldRanges The node's field ranges, keyed like `BuildResult.fieldRanges`.
+ * @param field The node field holding the site, e.g. `"asserts"`.
+ * @param nodeRange The node's range.
+ * @returns The narrowest range available.
+ */
+function siteRange(
+  item: SourceRange | null | undefined,
+  fieldRanges: ReadonlyMap<string, SourceRange>,
+  field: string,
+  nodeRange: SourceRange | null,
+): SourceRange | null {
+  return item ?? fieldRanges.get(siteKey("field", field)) ?? nodeRange;
+}
+
+/** The `isinstance` type names and the constructor names one expression site uses. */
+type TypeNames = [isinstanceNames: string[], constructors: string[]];
+
+/**
+ * Set each node's `types` to the type names its `isinstance` calls and constructors use.
+ *
+ * A node evaluates its wiring sources, its asserts, a CASE's `when:`s and a LOOP's predicate with
+ * its own table. Names resolve against this flow's `registry`; a constructor name must be a
+ * `typedefs:` name.
+ *
+ * @param nodes Every node of the flow, START/END included, keyed by id. Mutated in place.
+ * @param flowWiring Each node's `param -> source` wiring.
+ * @param buildResults The body nodes' build results, for their field ranges and input site names.
+ * @param descriptors The body nodes' descriptors, for their authored asserts and ranges.
+ * @param flowAsserts The flow's authored `asserts:` carriers, aligned with `flowAssertionRanges`.
+ * @param flowAssertionRanges Each flow assert's range.
+ * @param outputsCursor The authored `output:` value; a mapping locates each named output.
+ * @param outputsRange The whole `output:` range, used when an output has no range of its own.
+ * @param registry The flow's `typedefs:` registry.
+ * @param diagnostics The flow document's diagnostic factory, for located errors.
+ * @throws LoadError at the offending site for an unknown type or constructor name, or for
+ *   `isinstance` or a constructor in a reserved wiring key (WAIT `until:`, MAP `over:`).
+ */
 function fillTypeTables(
   nodes: ReadonlyMap<string, Node>,
   flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
@@ -1306,7 +1362,160 @@ function fillTypeTables(
   outputsRange: SourceRange | null,
   registry: TypeRegistry,
   diagnostics: LoadDiagnostics,
-): void {}
+): void {
+  const resolved = new Map<string, Type>();
+
+  /** Resolve `names`, throwing at `range` for an unknown one. */
+  const table = (names: TypeNames, where: string, range: SourceRange | null): Map<string, Type> => {
+    const [isinstanceNames, constructors] = names;
+    for (const name of isinstanceNames) {
+      if (resolved.has(name)) continue;
+      try {
+        resolved.set(name, resolveIsinstanceType(name, registry));
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        throw diagnostics.error(`${where}: ${error.message}`, { range, cause: error });
+      }
+    }
+    for (const name of constructors) {
+      // A typedef name resolves the same for isinstance and constructors.
+      if (resolved.has(name) && registry.has(name)) continue;
+      try {
+        resolved.set(name, resolveConstructorType(name, registry));
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        throw diagnostics.error(`${where}: ${error.message}`, { range, cause: error });
+      }
+    }
+    return new Map([...isinstanceNames, ...constructors].map((name) => [name, resolved.get(name)!]));
+  };
+
+  /** One flow output's authored range, else the whole `output:` range. */
+  const outputRange = (name: string): SourceRange | null => {
+    try {
+      if (outputsCursor !== null && outputsCursor.has(name)) return outputsCursor.child(name).range;
+    } catch (error) {
+      // A bare `output:` value has no named children.
+      if (!(error instanceof SourceAccessError)) throw error;
+    }
+    return outputsRange;
+  };
+
+  /**
+   * Resolve `names` as `table` does, then reject a constructor call in `source` that can never
+   * succeed whatever the references hold, or a field read on a builtin's result its type can't
+   * have.
+   *
+   * Only for condition sites: `validateReferences` already checked every binding's constructor
+   * calls and builtin field reads, with the references typed. Python's `condition` flag is dropped:
+   * every caller parses its source as a condition.
+   */
+  const checked = (names: TypeNames, source: unknown, where: string, range: SourceRange | null): Map<string, Type> => {
+    const resolvedNames = table(names, where, range);
+    let trees: ExprNode[];
+    try {
+      trees = expressionTrees(source, { condition: true });
+    } catch (error) {
+      // An earlier pass reports a source that won't parse.
+      if (error instanceof ExpressionError) return resolvedNames;
+      throw error;
+    }
+    for (const tree of trees) {
+      const problems = names[1].length > 0 ? constructorErrors(tree, registry) : [];
+      problems.push(...builtinFieldErrors(tree));
+      if (problems.length > 0) throw diagnostics.error(`${where}: ${problems[0]}`, { range });
+    }
+    return resolvedNames;
+  };
+
+  /** The `isinstance` and constructor names `source` uses; earlier passes report a source that won't parse. */
+  const namesIn = (source: unknown, { condition = false }: { condition?: boolean } = {}): TypeNames => {
+    try {
+      return [collectIsinstanceNames(source, { condition }), collectConstructorNames(source, { condition })];
+    } catch (error) {
+      if (error instanceof ExpressionError) return [[], []];
+      throw error;
+    }
+  };
+
+  // Authored flow asserts first, so an unknown name is located at its own assert. The lowered
+  // START/END asserts below use the same names.
+  flowAsserts.forEach((assertion, index) => {
+    const where = `flow assert ${reprText(assertion.display)}`;
+    const names = namesIn(assertion.expression, { condition: true });
+    checked(names, assertion.expression, where, flowAssertionRanges[index] ?? null);
+  });
+
+  for (const [nodeId, node] of nodes) {
+    const result = buildResults.get(nodeId);
+    const desc = descriptors.get(nodeId);
+    const fieldRanges = result?.fieldRanges ?? new Map<string, SourceRange>();
+    const nodeRange = result?.nodeRange ?? null;
+    const types = new Map<string, Type>();
+    const reserved = node.reservedWiringKeys();
+    for (const [param, source] of flowWiring.get(nodeId) ?? []) {
+      let where: string;
+      let range: SourceRange | null;
+      if (node.kind === NodeKind.END) {
+        // END's wiring carries the flow outputs.
+        where = node.bindingLabels.get(param) ?? `flow output ${reprText(param)}`;
+        range = outputRange(param);
+      } else {
+        // A synthesized param's label may end in ':' (`on:`); the message adds one.
+        const label = node.wiringRefLabel(param);
+        const site = label.endsWith(":") ? label.slice(0, -1) : label;
+        where = result !== undefined ? result.siteName(nodeId, site) : `node ${reprText(nodeId)} ${site}`;
+        const key = reserved.has(param) ? siteKey("field", param) : siteKey("input", param);
+        range = siteRange(fieldRanges.get(key), fieldRanges, "inputs", nodeRange);
+      }
+      const names = namesIn(source);
+      if (reserved.has(param) && (names[0].length > 0 || names[1].length > 0)) {
+        const used = names[0].length > 0 ? "isinstance" : `${names[1][0]}(...)`;
+        throw diagnostics.error(
+          `node ${reprText(nodeId)}: ${used} is not supported in a ${node.kind} node's ${param}:`,
+          { range },
+        );
+      }
+      for (const [name, typ] of table(names, where, range)) types.set(name, typ);
+    }
+    // Not every descriptor has `asserts` (MAP and WAIT don't), and a stand-in's may be null.
+    const authored =
+      (desc !== undefined && "asserts" in desc ? (desc.asserts as readonly string[] | null) : null) ?? [];
+    const assertRanges = desc?.assertRanges ?? [];
+    authored.forEach((expression, index) => {
+      const where = `node ${reprText(nodeId)} assert ${reprText(expression)}`;
+      const range = siteRange(nth(assertRanges, index), fieldRanges, "asserts", nodeRange);
+      const names = namesIn(expression, { condition: true });
+      for (const [name, typ] of checked(names, expression, where, range)) types.set(name, typ);
+    });
+    if (node.kind === NodeKind.START || node.kind === NodeKind.END) {
+      // START/END evaluate the lowered flow asserts, whose names were located above.
+      for (const assertion of [...node.preAsserts, ...node.postAsserts]) {
+        const names = namesIn(assertion.expression, { condition: true });
+        for (const [name, typ] of table(names, `flow assert ${reprText(assertion.display)}`, null)) {
+          types.set(name, typ);
+        }
+      }
+    }
+    if (node instanceof CaseNode) {
+      const whenRanges = desc instanceof CaseDescriptor ? desc.whenRanges : [];
+      node.cases.forEach((branch, index) => {
+        const where = `case node ${reprText(nodeId)} cases[${index}].when`;
+        const range = siteRange(nth(whenRanges, index), fieldRanges, "cases", nodeRange);
+        const names = namesIn(branch.when, { condition: true });
+        for (const [name, typ] of checked(names, branch.when, where, range)) types.set(name, typ);
+      });
+    }
+    if (node instanceof LoopNode && typeof node.predicate === "string") {
+      const keyword = node.predicateKind;
+      const where = `loop node ${reprText(nodeId)} ${keyword}`;
+      const range = siteRange(null, fieldRanges, keyword, nodeRange);
+      const names = namesIn(node.predicate, { condition: true });
+      for (const [name, typ] of checked(names, node.predicate, where, range)) types.set(name, typ);
+    }
+    node.types = types;
+  }
+}
 
 /**
  * Return the ids of the cases that produce a value.
@@ -2187,8 +2396,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
-//          fillTypeTables (2, with _site_range).
+//   T3-18  validateReferences (1).
 //   T3-19  checkCallMapTypes, checkLoopTypeContract (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
@@ -2207,15 +2415,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts
 
-/** Python's `compose.validate.tool_inputs.stamp_tool_input_types`; not ported yet. */
-function stampToolInputTypes(
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
-): void {}
-
 /** Python's `compose.validate.references.validate_references`; not ported yet. */
 function validateReferences(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -2228,21 +2427,6 @@ function validateReferences(
     outputsRange?: SourceRange | null;
     narrowing?: Narrowing | null;
     localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
-    registry?: TypeRegistry | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.reserved_sources.check_reserved_sources`; not ported yet. */
-function checkReservedSources(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  options: {
-    narrowing?: Narrowing | null;
-    typeFn?: TypeFn | null;
     registry?: TypeRegistry | null;
     resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;

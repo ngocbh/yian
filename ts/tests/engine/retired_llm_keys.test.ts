@@ -1,12 +1,16 @@
 /**
  * Mirrors `tests/engine/test_retired_llm_keys.py`: the first three tests, the node site of
  * `test_a_retired_key_in_yaml_is_a_load_error` (the root flow assembled as the loader assembles
- * it), and the harvested case `engine_retired_llm_keys__temperature_on_a_node` (likewise).
- * Later (T3-22): its flow and def sites. The cascade, run and resume tests go with their modules.
+ * it), `test_a_retired_key_in_a_host_layer_fails_the_cascade` (over `resolveLlmCascade`), and the
+ * harvested case `engine_retired_llm_keys__temperature_on_a_node` (assembled likewise).
+ * Later (T3-22): the flow and def sites of the load-error test. Later (T4-8): the run and resume
+ * tests go with `runFlow`.
  */
 
 import { expect, test } from "bun:test";
 
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { LLMConfig, retiredKeyError } from "../../src/llm_clients/config.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
 import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
@@ -76,6 +80,25 @@ test.each(Object.keys(RETIRED))("a retired key in yaml is a load error: node %s"
   const { message } = loadError(() => assembleText(nodeSource(key)));
   expect(message).toContain("node 'agent': llm_config:");
   expectMigration(message, key);
+});
+
+const FLOW = `id: plain
+name: plain
+nodes:
+  agent: {kind: agent, prompt: hi}
+output: \${agent.output}
+`;
+
+test.each(Object.keys(RETIRED))("a retired key in a host layer fails the cascade %s", async (key) => {
+  const flow = (await loadFlow(FLOW)).compiled;
+  let caught: unknown;
+  try {
+    resolveLlmCascade(flow, { [key]: RETIRED[key]![0] }, { defaults: { provider: "vllm", model: "served-model" } });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(RangeError);
+  expectMigration((caught as RangeError).message, key);
 });
 
 test.each(["load-agent/engine_retired_llm_keys__temperature_on_a_node"])("case %s", (id) =>

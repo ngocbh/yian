@@ -597,8 +597,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   call-time helpers (`knownCallTimeProviders`, `callTimeSelection`, `inFlightLlmConfigs`, ...)
   and `bindHostCredentials`. Each callsite's child flow is a fresh `copyGraph` copy, and a node's
   config is replaced with a new record (`copyValue` for deep copies), never changed in place, since
-  a copied flow's nodes share their records with the original. The effective and call-time maps
-  are records (they go into the run log); label, subject and provider maps are `Map`s.
+  a copied flow's nodes share their records with the original. The maps that go into or come from
+  the run log (effective, call-time, in-flight) are records; the label, subject, provider and
+  base-URL lookups are `Map`s.
 - A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
   is Python's (a record would list index-like keys first and could collide with `__proto__`).
 - `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). Each call uses

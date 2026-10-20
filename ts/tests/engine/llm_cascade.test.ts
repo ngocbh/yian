@@ -9,14 +9,16 @@
  * replay where Python also patches `connection_snapshot` to fail (an ES module export a Bun test
  * can't replace).
  *
- * TS-only: `bindHostCredentials` on a copied flow leaves the original's `llmConfig` unchanged.
+ * TS-only: `bindHostCredentials` on a copied flow leaves the original's `llmConfig` unchanged; a
+ * NaN run input is a `RangeError` naming the field and the input (Python's `ValueError` reads
+ * `input 't': non-finite number nan is not a yian value`).
  *
  * Later (T4-8): `test_effective_map_resolves_environment_defaults_once` (it runs the flow).
  */
 
 import { expect, test } from "bun:test";
 
-import { applyEffectiveLlmMap, bindHostCredentials, resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { applyEffectiveLlmMap, bindHostCredentials, resolveLlmCascade, resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { type CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { mergeLlmConfig } from "../../src/llm_clients/config.ts";
@@ -453,7 +455,7 @@ output: \${a.output}
   expect(effective["a"]!["qwen-cn"]).toEqual({ enable_thinking: true, top_k: 4n, seed: 7n });
 });
 
-test("TS-only: bindHostCredentials on a copied flow leaves the original's llmConfig unchanged", async () => {
+test("bindHostCredentials on a copied flow leaves the original's llmConfig unchanged", async () => {
   const flow = await compiled(PATH_FLOW);
   const effective = cascade(flow, { provider: "openai" });
   for (const config of Object.values(effective)) config[HOST_KEY_MARKER] = true;
@@ -469,4 +471,22 @@ test("TS-only: bindHostCredentials on a copied flow leaves the original's llmCon
     expect(JSON.stringify(agentAt(flow, path).llmConfig)).not.toContain("secret");
   }
   expect(agentAt(flow, "invoke/inner").llmConfig).toEqual(before!);
+});
+
+test("a NaN run input names the field and the input", async () => {
+  const flow = await compiled(`
+id: f
+name: f
+input:
+  t: !float 1.0
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {provider: openai, model: m, openai: {temperature: '\${input.t}'}}
+output: \${chat.output}
+`);
+  const error = thrown(() => resolveRunLlm(flow, {}, { defaults: {}, runInputs: { t: Number.NaN } }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("node 'chat' llm_config.openai.temperature: input 't': NaN is not a yian value");
 });

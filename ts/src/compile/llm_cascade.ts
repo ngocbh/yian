@@ -51,7 +51,7 @@ import { AgentNode } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
 import { BindingError, bindParams, copyValue } from "../nodes/binding.ts";
 import { Binding, type Parameter, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { isRecord, type Type, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
+import { isRecord, type Type, TypeCheckError, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
 import { setField, writeAsText } from "../typesys/values.ts";
 import { copyGraph, type Flow } from "./model.ts";
 
@@ -249,15 +249,17 @@ class RunInputs {
     if (!present && parameter.required) {
       throw new RangeError(`${where}: input ${reprText(name)} is required and was not given`);
     }
-    const pool = new VariablePool(this.startId);
-    pool.set(this.startId, present ? { [name]: this.supplied.get(name) } : {});
     const wiring = new Map<string, unknown>(present ? [[name, `\${input.${name}}`]] : []);
     let record: ValueRecord;
     try {
+      // The pool checks values as they go in, where Python's binding checks them.
+      const pool = new VariablePool(this.startId);
+      pool.set(this.startId, present ? { [name]: this.supplied.get(name) } : {});
       record = bindParams([parameter], wiring, pool);
     } catch (error) {
-      if (!(error instanceof BindingError)) throw error;
-      throw new RangeError(`${where}: ${error.message}`);
+      if (error instanceof BindingError) throw new RangeError(`${where}: ${error.message}`);
+      if (error instanceof TypeCheckError) throw new RangeError(`${where}: input ${reprText(name)}: ${error.message}`);
+      throw error;
     }
     return Object.hasOwn(record, name) ? record[name] : null;
   }

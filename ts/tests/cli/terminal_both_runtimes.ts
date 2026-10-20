@@ -1365,7 +1365,8 @@ async function aFailingOutputFailsTheCall(): Promise<void> {
 // of `src/yian/cli/run.py` (`tests/engine/test_cli_questions_render.py`, `tests/cli/test_run.py`'s
 // `test_prompt_request_offers_model_options_as_a_choice`) and the broker checks of
 // `tests/cli/test_terminal_broker.py` and `tests/cli/test_terminal_controller.py` named above
-// each scenario.
+// each scenario. `test_ask_user_secret_reaches_the_prompt_request` is deliberately not ported:
+// `AskUserRequest` has no `secret`.
 
 /** An `ask_user` request: `fields` over the absent ones (null). */
 function request(fields: Partial<AskUserRequest>): AskUserRequest {
@@ -1655,7 +1656,11 @@ async function aPlainAskIsATextPrompt(): Promise<void> {
   answer = terminal.askUser(request({ nodeId: "ask/name" }), toolContext());
   input.write("Ann" + ENTER);
   assert.equal(await answer, "Ann");
-  assert.deepEqual(view().rows, ["? Name?", "? input for ask/name Ann"]);
+  // Python's `None` reads `null` in TS.
+  answer = terminal.askUser(request({}), toolContext());
+  input.write(ENTER);
+  assert.equal(await answer, "");
+  assert.deepEqual(view().rows, ["? Name?", "? input for ask/name Ann", "? input for null"]);
 }
 
 // test_stop_event_wakes_active_prompt_and_discards_its_late_answer,
@@ -1814,13 +1819,21 @@ async function theEndOfInputOutranksTheAbortItCausesAndRefusesQueuedCalls(): Pro
 
 async function closeEndsAnActiveAskUserAndRefusesLaterOnes(): Promise<void> {
   const { input, output, terminal, exitHooks } = setup();
+  const controller = new AbortController();
+  const reason = new Error("stopped");
   const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext()));
+  const queued = thrown(terminal.askUser(request({ question: "Queued?" }), toolContext()));
+  const queuedAborted = thrown(terminal.askUser(request({ question: "Aborted?" }), toolContext(controller.signal)));
   await tick();
   terminal.close();
+  // Aborted after the close, so the closed terminal refuses it and the reason is what it throws.
+  controller.abort(reason);
   assertStopped(await answer, "closed");
+  assertStopped(await queued, "closed");
+  assert.equal(await queuedAborted, reason);
   assertRestored(input, output, exitHooks);
+  assert.ok(!output.text.includes("Queued") && !output.text.includes("Aborted"));
   const drawn = output.text;
-  const reason = new Error("stopped");
   const aborted = toolContext(AbortSignal.abort(reason));
   assert.equal(await thrown(terminal.askUser(request({ question: "Later?" }), aborted)), reason);
   assertStopped(await thrown(terminal.askUser(request({ question: "Later?" }), toolContext())), "closed");

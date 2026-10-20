@@ -124,6 +124,18 @@ function isWide(code: number): boolean {
   );
 }
 
+/** The columns one character takes: 2 for a wide one, else 1. */
+function charCells(char: string): number {
+  return isWide(char.codePointAt(0)!) ? 2 : 1;
+}
+
+/** The columns `text` takes on a terminal, ANSI sequences not counted. */
+function cells(text: string): number {
+  let width = 0;
+  for (const char of text.replace(ANSI, "")) width += charCells(char);
+  return width;
+}
+
 /**
  * Lay `line` out on a `columns`-wide terminal as the terminal wraps it: a character that doesn't
  * fit in the rest of a row (a wide one in the last column) starts the next row. Returns the rows
@@ -134,7 +146,7 @@ function layout(line: string, columns: number, at: number): { rows: number; curs
   let col = 0;
   let cursor: { row: number; col: number } | undefined;
   for (const [i, char] of Array.from(line.replace(ANSI, "")).entries()) {
-    const width = isWide(char.codePointAt(0)!) ? 2 : 1;
+    const width = charCells(char);
     if (col + width > columns) {
       row++;
       col = 0;
@@ -147,9 +159,15 @@ function layout(line: string, columns: number, at: number): { rows: number; curs
   return { rows: row + 1, cursor: cursor ?? { row, col: Math.min(col, columns - 1) } };
 }
 
+/** A prompt's head `? <label>`, with the dim `hint` after it when given. */
+function promptHead(mark: string, label: string, hint?: string): string {
+  const head = `${style("1;36", mark)} ${style("1", label)}`;
+  return hint ? `${head} ${style("2", hint)}` : head;
+}
+
 /** The collapsed line `? <label> <answer>`, with nothing after the label when `answer` is empty. */
 function collapsed(mark: string, label: string, answer: string): string {
-  const head = `${style("1;36", mark)} ${style("1", label)}`;
+  const head = promptHead(mark, label);
   return answer === "" ? head : `${head} ${style("36", answer)}`;
 }
 
@@ -173,10 +191,7 @@ function textWidget(options: {
   let error: string | undefined;
   const shown = (part: readonly string[]): string =>
     options.mask ? "*".repeat(part.length) : part.map((char) => (char === "\n" ? "⏎" : char)).join("");
-  const head = (): string => {
-    const instruction = options.instruction ? ` ${style("2", options.instruction)}` : "";
-    return `${style("1;36", mark)} ${style("1", options.label)}${instruction} `;
-  };
+  const head = (): string => `${promptHead(mark, options.label, options.instruction)} `;
   const insert = (text: string): void => {
     const added = Array.from(text);
     chars.splice(pos, 0, ...added);
@@ -222,9 +237,7 @@ function selectWidget(options: {
   titles: readonly string[];
   initial?: number;
   indicator?: boolean;
-  mark?: string;
 }): Widget<number> {
-  const mark = options.mark ?? "?";
   const count = options.titles.length;
   let index = options.initial ?? 0;
   const row = (title: string, i: number): string => {
@@ -233,7 +246,7 @@ function selectWidget(options: {
   };
   return {
     lines: () => [
-      `${style("1;36", mark)} ${style("1", options.label)} ${style("2", "(Use arrow keys)")}`,
+      promptHead("?", options.label, "(Use arrow keys)"),
       ...options.titles.map(row),
     ],
     cursor: () => null,
@@ -246,7 +259,7 @@ function selectWidget(options: {
       else if (key.name === "down" || key.name === "j") index = (index + 1) % count;
       return undefined;
     },
-    done: (outcome) => collapsed(mark, options.label, "value" in outcome ? options.titles[outcome.value]! : ""),
+    done: (outcome) => collapsed("?", options.label, "value" in outcome ? options.titles[outcome.value]! : ""),
   };
 }
 
@@ -255,7 +268,7 @@ function selectWidget(options: {
  * paste never answers it, as in questionary, where pasted text goes to a hidden buffer.
  */
 function confirmWidget(label: string): Widget<boolean> {
-  const line = `${style("1;36", "?")} ${style("1", label)} ${style("2", "(y/N)")} `;
+  const line = `${promptHead("?", label, "(y/N)")} `;
   return {
     lines: () => [line],
     cursor: () => ({ row: 0, before: line }),
@@ -295,10 +308,7 @@ function checkboxWidget(options: { label: string; titles: readonly string[] }): 
   };
   return {
     lines: () => [
-      `${style("1;36", "?")} ${style("1", options.label)} ${style(
-        "2",
-        "(Use arrow keys to move, <space> to select, <a> to toggle, <i> to invert)",
-      )}`,
+      promptHead("?", options.label, "(Use arrow keys to move, <space> to select, <a> to toggle, <i> to invert)"),
       ...options.titles.map(row),
     ],
     cursor: () => null,
@@ -313,11 +323,8 @@ function checkboxWidget(options: { label: string; titles: readonly string[] }): 
       if (key.name === "space") {
         if (!selected.delete(index)) selected.add(index);
       } else if (key.str === "a") {
-        const all = selected.size === count;
-        for (let i = 0; i < count; i++) {
-          if (all) selected.delete(i);
-          else selected.add(i);
-        }
+        if (selected.size === count) selected.clear();
+        else for (let i = 0; i < count; i++) selected.add(i);
       } else if (key.str === "i") {
         for (let i = 0; i < count; i++) if (!selected.delete(i)) selected.add(i);
       } else if (key.name === "up" || key.name === "k") index = (index - 1 + count) % count;
@@ -447,6 +454,7 @@ export class Terminal {
    * @throws TerminalStopped `"interrupt"` for Ctrl-C, `"eof"` for the end of input (even when the
    *   signal then aborted), `"closed"` when the terminal is closed.
    */
+  // A field, so a host can pass `terminal.askUser` unbound as the `ask_user` handler.
   readonly askUser = async (request: AskUserRequest, ctx: ToolContext): Promise<unknown> => {
     const signal = ctx.signal;
     const ended = await this.#runTurn(signal, (run) => promptRequest(run, this.#output, request));
@@ -917,13 +925,6 @@ interface Question {
 
 const OTHER = "✎ Other (write your own)";
 
-/** The columns `text` takes on a terminal, ANSI sequences not counted. */
-function cells(text: string): number {
-  let width = 0;
-  for (const char of text.replace(ANSI, "")) width += isWide(char.codePointAt(0)!) ? 2 : 1;
-  return width;
-}
-
 /**
  * Write the box that opens a question set: who needs the input (`title`), the prompt when there is
  * one, and how many questions follow. Rich's `Panel` look, with no wrapping.
@@ -936,10 +937,11 @@ function writePanel(output: Output, title: string, prompt: string, count: number
     style("2", `${count} ${count === 1 ? "question" : "questions"} to answer.`),
   ];
   const head = " human input ";
-  const inner = Math.max(cells(head), ...body.map(cells)) + 2;
-  const left = Math.floor((inner - cells(head)) / 2);
+  const headWidth = cells(head);
+  const inner = Math.max(headWidth, ...body.map(cells)) + 2;
+  const left = Math.floor((inner - headWidth) / 2);
   const lines = [
-    style("36", `╭${"─".repeat(left)}${head}${"─".repeat(inner - cells(head) - left)}╮`),
+    style("36", `╭${"─".repeat(left)}${head}${"─".repeat(inner - headWidth - left)}╮`),
     ...body.map((line) => `${style("36", "│")} ${line}${" ".repeat(inner - 2 - cells(line))} ${style("36", "│")}`),
     style("36", `╰${"─".repeat(inner)}╯`),
   ];
@@ -958,7 +960,7 @@ function writeRule(output: Output, index: number, total: number, header: string)
  * and an Other row (a checkbox for `multi_select`), answering the bare labels. Other asks for the
  * text that takes its place.
  */
-async function askQuestion(run: RunWidget, question: Question): Promise<unknown> {
+async function askQuestion(run: RunWidget, question: Omit<Question, "header">): Promise<unknown> {
   const options = question.options ?? [];
   if (options.length === 0) return run(textWidget({ label: question.question }));
   const titles = options.map((option) =>
@@ -986,21 +988,16 @@ async function promptRequest(run: RunWidget, output: Output, request: AskUserReq
   const questions = (request.questions ?? []) as Question[];
   if (questions.length > 0) {
     writePanel(output, request.title || request.nodeId || "this step", request.question, questions.length);
-    const record: Record<string, unknown> = {};
+    const answers: [string, unknown][] = [];
     for (const [i, question] of questions.entries()) {
       writeRule(output, i + 1, questions.length, question.header);
-      const value = await askQuestion(run, question);
-      // Defined, not assigned, so a header `__proto__` is an own key.
-      Object.defineProperty(record, question.header, { value, enumerable: true, writable: true, configurable: true });
+      answers.push([question.header, await askQuestion(run, question)]);
     }
-    return record;
+    // `fromEntries` defines each key as data, so a header `__proto__` stays an entry.
+    return Object.fromEntries(answers);
   }
   if (request.options && request.options.length > 0) {
-    return askQuestion(run, {
-      question: request.question,
-      header: "",
-      options: request.options.map((label) => ({ label })),
-    });
+    return askQuestion(run, { question: request.question, options: request.options.map((label) => ({ label })) });
   }
   return run(textWidget({ label: request.question || `input for ${request.nodeId}` }));
 }

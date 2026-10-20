@@ -354,8 +354,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   and unreachable storage a Node system error. The document, kept versions and write log are
   byte-compatible with Python's, pinned by `conformance/fixtures/markdown_store.json`, which
   Python yian wrote. The `.<name>.lock` file is a SQLite lock that Python's `flock` doesn't see.
-- The built-in backends that use the storage (session, episodic, reflective, profile) are not
-  ported yet.
+- `src/memory/episodic.ts` holds `EpisodicMemory`, with optional SQLite storage opened at the
+  first operation. Changed: the constructor takes an options object (`maxEpisodes`,
+  `recallLimit`, `storage`, `createParent`) whose limits are integral `number`s or `bigint`s;
+  snapshots are deep-frozen; `recall` is async and awaits `rewriteQuery`, which may return a
+  promise; recall text and entry ids use yian's canonical JSON (`logJson`); an episode holding
+  `±Infinity` fails `learn` as `episodic.invalid_context`; there is no `with` form (call `close()`
+  in `finally`) and no fork check.
+- The session, reflective and profile backends are not ported yet.
 
 ## Runtime
 

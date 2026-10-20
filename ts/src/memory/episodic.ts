@@ -36,8 +36,9 @@ import {
   ToolResultInteraction,
   type VisibleInteraction,
 } from "./contracts.ts";
-import { checkStoragePath, type SQLiteStorage } from "./storage/sqlite.ts";
+import { checkStoragePath, SQLiteStorage } from "./storage/sqlite.ts";
 
+const POLICY_NAME = "episodic";
 const SNAPSHOT_FORMAT = "yian.episodic_memory";
 const SNAPSHOT_VERSION = 2n;
 
@@ -104,6 +105,29 @@ function operationError(
   const error = new MemoryOperationError(stage, code, message, false);
   if ("cause" in options) error.cause = options.cause;
   return error;
+}
+
+/**
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
+ * `add_note`). A failure, such as a frozen error, a non-array `notes` or a primitive, loses the
+ * note, as Python swallows a failing `add_note`.
+ */
+function addNote(error: unknown, text: () => string): void {
+  try {
+    if (typeof error !== "object" || error === null) return;
+    const target = error as { notes?: unknown };
+    const note = text();
+    if (!Object.hasOwn(target, "notes")) target.notes = [];
+    if (Array.isArray(target.notes)) target.notes.push(note);
+  } catch {}
+}
+
+/** Python's `type(value).__name__`: the constructor's name, else a string `name`, else `Error`. */
+function typeName(value: unknown): string {
+  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
+  if (typeof constructorName === "string" && constructorName) return constructorName;
+  const name = (value as { name?: unknown } | null | undefined)?.name;
+  return typeof name === "string" ? name : "Error";
 }
 
 /**
@@ -455,6 +479,61 @@ function parseSnapshot(value: unknown): [string, number, number, State] {
   }
 }
 
+/** One decoded private storage inventory: the snapshot, the commit tombstones and the flags. */
+type Inventory = [
+  snapshot: [string, number, number, State],
+  appliedCommits: ReadonlyMap<string, string>,
+  everOpened: boolean,
+  everReset: boolean,
+  everCommitted: boolean,
+];
+
+/**
+ * Validate complete private storage state before adopting any of it.
+ *
+ * @throws MemoryOperationError `episodic.invalid_storage` for any defect.
+ */
+function parseInventory(value: unknown): Inventory {
+  try {
+    const data = copyObject(value, "inventory");
+    if (!hasFields(data, ["applied_commits", "ever_committed", "ever_opened", "ever_reset", "snapshot", "version"])) {
+      throw new RangeError("invalid inventory fields");
+    }
+    if (data.version !== 1n) throw new RangeError("unsupported inventory version");
+    const snapshot = parseSnapshot(data.snapshot);
+    const [, epoch, revision, state] = snapshot;
+    const opened = data.ever_opened;
+    const reset = data.ever_reset;
+    const committed = data.ever_committed;
+    if (typeof opened !== "boolean" || typeof reset !== "boolean" || typeof committed !== "boolean") {
+      throw new RangeError("invalid inventory flags");
+    }
+    const commits = new Map<string, string>();
+    for (const [commitId, digest] of Object.entries(copyObject(data.applied_commits, "applied_commits"))) {
+      jsonString(commitId, "commit_id", true);
+      if (!/^[0-9a-f]{64}$/.test(jsonString(digest, "digest", true))) throw new RangeError("invalid commit digest");
+      commits.set(commitId, digest as string);
+    }
+    const episodes = state.episodes.length > 0;
+    if (
+      (!opened && (episodes || revision !== 0 || committed || commits.size > 0)) ||
+      (!committed && (revision !== 0 || commits.size > 0)) ||
+      (reset && epoch === 0) ||
+      (!opened && !reset && epoch !== 0) ||
+      (committed && revision === 0 && !reset)
+    ) {
+      throw new RangeError("inconsistent inventory flags");
+    }
+    return [snapshot, commits, opened, reset, committed];
+  } catch (error) {
+    // Python's `raise ... from None`: the stored defect isn't chained.
+    if (!(error instanceof TypeError || error instanceof RangeError || error instanceof MemoryOperationError)) {
+      throw error;
+    }
+    throw operationError("storage", "episodic.invalid_storage", "stored episodic state is invalid");
+  }
+}
+
 /**
  * Retain bounded canonical episodes, optionally in a local SQLite file.
  *
@@ -528,12 +607,52 @@ export class EpisodicMemory implements Memory {
   }
 
   /**
-   * Enter one operation, independently of run-handle lifetime (Python's `_operation()` entry).
+   * Open and load durable state once. On failure the storage is closed and forgotten, so a later
+   * operation retries the open, and the primary failure is rethrown unchanged.
    *
-   * @throws MemoryOperationError `episodic.closed` after `close()`.
+   * @throws MemoryOperationError The file can't be opened, read or initialized;
+   *   `episodic.invalid_storage` for invalid stored state; `episodic.config_conflict` when a
+   *   configured limit differs from the stored one.
+   */
+  private openStorage(): void {
+    if (this.storage !== null || this.storagePath === null) return;
+    this.storage = new SQLiteStorage(this.storagePath, POLICY_NAME, { createParent: this.createParent });
+    try {
+      const saved = this.storage.load();
+      if (saved === null) {
+        this.saveState(snapshotJson(this.namespace, this.epoch, this.revision, this.state));
+      } else {
+        const [snapshot, commits, opened, reset, committed] = parseInventory(saved);
+        resolveLimits(this.requested, snapshot[3].limits, "storage");
+        [this.namespace, this.epoch, this.revision, this.state] = snapshot;
+        this.appliedCommits = commits;
+        this.everOpened = opened;
+        this.everReset = reset;
+        this.everCommitted = committed;
+      }
+    } catch (primary) {
+      try {
+        this.storage.close();
+      } catch (cleanup) {
+        addNote(primary, () => `EpisodicMemory cleanup failed: ${typeName(cleanup)}`);
+      }
+      // Forget the failed handle so a later operation may retry the open.
+      this.storage = null;
+      throw primary;
+    }
+  }
+
+  /**
+   * Enter one operation, independently of run-handle lifetime (Python's `_operation()` entry):
+   * open storage at the first operation and reject an unusable handle.
+   *
+   * @throws MemoryOperationError `episodic.closed` after `close()`; the storage can't be opened, or
+   *   is closed or poisoned.
    */
   private begin(): void {
     if (this.closed) throw operationError("session", "episodic.closed", "memory backend is closed");
+    this.openStorage();
+    this.storage?.ensureOpen();
     this.activeOperations += 1;
   }
 
@@ -563,6 +682,7 @@ export class EpisodicMemory implements Memory {
       ever_reset: changes.everReset ?? this.everReset,
       ever_committed: changes.everCommitted ?? this.everCommitted,
     };
+    parseInventory(inventory);
     this.storage.save(inventory);
   }
 
@@ -663,7 +783,7 @@ export class EpisodicMemory implements Memory {
    * method.
    *
    * @throws TypeError when `context` isn't exactly a `RecallContext`.
-   * @throws MemoryOperationError `episodic.closed` after `close()`.
+   * @throws MemoryOperationError `episodic.closed` after `close()`; durable state can't be opened.
    */
   rewriteQuery(context: RecallContext): string | Promise<string> {
     return this.operation(() => {

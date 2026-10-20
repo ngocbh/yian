@@ -136,7 +136,7 @@ export class Narrowing {
    *   first read is guarded and a later one isn't; otherwise `null`, and the param keeps the site
    *   of its first read.
    */
-  paramSite(nodeId: string, param: string): readonly [string, SourceRange | null] | null {
+  paramSite(nodeId: string, param: string): readonly [label: string, range: SourceRange | null] | null {
     return this.paramSites.get(nodeId)?.get(param) ?? null;
   }
 

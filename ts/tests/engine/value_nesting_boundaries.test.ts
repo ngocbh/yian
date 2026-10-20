@@ -25,26 +25,46 @@
  * TS's nesting error has no path into the output (see `structured_retry.test.ts`), so the exhausted
  * failure keeps the node origin, as the without-retries rows check.
  *
+ * Ported the same way, the AGENT tool loop's argument checks: the `session=False` rows of
+ * `test_tool_arguments_over_the_limit_fail_the_agent_before_any_call` and
+ * `test_tool_arguments_over_the_limit_in_a_later_call_stop_every_call`, and the run half of
+ * `test_tool_arguments_at_the_limit_run_and_are_learned_from`. A parsed `ToolCallPart` refuses
+ * arguments past the limit, so an over-deep call is unparsed (`arguments: null` with its
+ * `rawArguments`, or `ToolCallDelta`s the assembler leaves unparsed), as a provider's reply gives
+ * it; the loop parses and checks it the same way. From `test_agent_nonfinite_replies.py`, their
+ * depth analogs: `test_a_nonfinite_argument_in_a_later_call_stops_every_call_of_the_reply` (a
+ * too-deep later call, streamed: no tool runs) and `test_live_events_show_the_model_call_but_no_tool_call`
+ * (model brackets, no tool brackets). The non-finite rows of `test_agent_nonfinite_replies.py`
+ * are Not ported: plain JSON arguments can't hold `NaN` or `Infinity`.
+ *
+ * TS-only: an over-deep call on a final reply (text and no parsed call) fails it too.
+ *
  * Later (T6-6), session memory: the session rows of the agent tests above,
  * `test_a_native_session_value_at_the_limit_is_stored` and
- * `test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects`.
+ * `test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects`; the learning half
+ * of `test_tool_arguments_at_the_limit_run_and_are_learned_from`.
  *
- * Later: the other 30 tests run flows, tool loops, backward or loads and land with the runner
- * (T4-8, T3-22), the tool loop (T5-11b), AGENT backward (T6-6) and the node kinds.
+ * Later: the other 27 tests run flows, backward or loads and land with the runner (T4-8, T3-22),
+ * AGENT backward (T6-6) and the node kinds.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ModelCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
+import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { drive } from "./run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -188,4 +208,110 @@ test.each(ROWS)("a structured agent over the limit without retries fails (%s, %d
   expect([failure.code, failure.nodeId]).toEqual(["agent.output_invalid", "agent"]);
   expectReplyTooDeep(failure.message, "structured output");
   expect(failure.trace).toEqual([new OriginRef("node")]);
+});
+
+// ---------- the tool loop's argument checks ----------
+
+/** A run with an AGENT `agent` granted a `lookup` tool that records its arguments. */
+function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) => void } = {}) {
+  const calls: unknown[] = [];
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "Look one thing up.",
+    parametersJsonSchema: { type: "object", properties: { x: {}, q: {} } },
+    execute: (args) => {
+      calls.push(args);
+      return "ok";
+    },
+  });
+  const node = new AgentNode("agent", { prompt: "q", llmConfig: NATIVE, tools: ["lookup"] });
+  const outcome = drive(node, {
+    models: { env: () => undefined, createModel: () => model },
+    tools: new ToolSet({ lookup }),
+    emitEvent: options.emitEvent ?? null,
+  });
+  return { outcome, calls };
+}
+
+/** An unparsed `lookup` call whose arguments `{"x": ...}` nest `levels` levels. */
+function deepCall(levels: number, id = "c2"): ToolCallPart {
+  return new ToolCallPart({ id, name: "lookup", arguments: null, rawArguments: `{"x": ${deepText(levels - 1)}}` });
+}
+
+/** A reply holding `parts`. */
+function partsReply(...parts: (TextPart | ToolCallPart)[]): Response {
+  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
+}
+
+/** The failure `outcome` carries; fails the test when it isn't one. */
+function failureOf(outcome: unknown) {
+  expect(outcome).toBeInstanceOf(EvaluationFailure);
+  return (outcome as EvaluationFailure).failure;
+}
+
+test.each([101, 1500])("tool arguments over the limit fail the agent before any call (%d levels)", async (levels) => {
+  const model = new ScriptedModel([partsReply(deepCall(levels))], NATIVE);
+  const { outcome, calls } = toolRun(model);
+
+  const failure = failureOf(await outcome);
+  expect([failure.code, failure.nodeId]).toEqual(["node.execute", "agent"]);
+  expectReplyTooDeep(failure.message, "tool call 'lookup' arguments");
+  expect(calls).toEqual([]);
+  expect(model.requests).toHaveLength(1);
+});
+
+test("tool arguments over the limit in a later call stop every call", async () => {
+  const first = new ToolCallPart({ id: "c1", name: "lookup", arguments: { x: 1.5 } });
+  const { outcome, calls } = toolRun(new ScriptedModel([partsReply(first, deepCall(101))], NATIVE));
+
+  const failure = failureOf(await outcome);
+  expect(failure.code).toBe("node.execute");
+  expect(failure.message).toContain("deeper than 100 levels");
+  expect(calls).toEqual([]);
+});
+
+test("tool arguments at the limit run", async () => {
+  const atLimit = nestRecord(99);
+  const call = new ToolCallPart({ id: "1", name: "lookup", arguments: { q: atLimit } as JsonObject });
+  const { outcome, calls } = toolRun(new ScriptedModel([partsReply(call), partsReply(new TextPart("finished"))], NATIVE));
+
+  expect(await outcome).toEqual(new Output("finished"));
+  expect(calls).toEqual([{ q: atLimit }]);
+});
+
+test("a too-deep later call of a streamed reply stops every call of the reply", async () => {
+  const deep = `{"x": ${deepText(100)}}`;
+  const events = [
+    new ToolCallDelta({ index: 0, id: "c1", name: "lookup", arguments: '{"x": 1.5}' }),
+    new ToolCallDelta({ index: 1, id: "c2", name: "lookup", arguments: deep.slice(0, 50) }),
+    new ToolCallDelta({ index: 1, id: null, name: null, arguments: deep.slice(50) }),
+    new Finish({ reason: "tool_calls" }),
+  ];
+  const { outcome, calls } = toolRun(new ScriptedModel([events], NATIVE));
+
+  const failure = failureOf(await outcome);
+  expect(failure.message).toContain("tool call 'lookup' arguments at x.a");
+  expect(failure.message).toContain("deeper than 100 levels");
+  expect(calls).toEqual([]);
+});
+
+test("live events show the model call but no tool call", async () => {
+  const observed: unknown[] = [];
+  const { outcome } = toolRun(new ScriptedModel([partsReply(deepCall(101))], NATIVE), {
+    emitEvent: (event) => void observed.push(event),
+  });
+
+  failureOf(await outcome);
+  const finished = observed.filter((event) => event instanceof ModelCallFinished);
+  expect(finished.length).toBeGreaterThan(0);
+  expect(finished.every((event) => event.error === null)).toBe(true);
+  expect(observed.some((event) => event instanceof ToolCallStarted)).toBe(false);
+});
+
+test("an over-deep call on a final reply fails it too", async () => {
+  const model = new ScriptedModel([partsReply(new TextPart("the answer"), deepCall(101))], NATIVE);
+  const { outcome, calls } = toolRun(model);
+
+  expectReplyTooDeep(failureOf(await outcome).message, "tool call 'lookup' arguments");
+  expect(calls).toEqual([]);
 });

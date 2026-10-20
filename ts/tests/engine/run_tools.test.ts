@@ -10,6 +10,15 @@
  * Ported (adapted): `test_only_nodes_that_declare_needs_tools_receive_the_toolset`: every node also
  * receives `signal`, and the opted-in node's `tools` is the run's tool set itself.
  *
+ * Ported through `evalNode` with a `ScriptedModel` from `models` where Python patches
+ * `model_from_config`, the AGENT rows: `test_agent_binds_and_calls_granted_per_run_tools`,
+ * `test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant`,
+ * `test_agent_granted_three_groups_sees_the_union_of_their_tools`,
+ * `test_agent_grant_check_sees_expanded_group_names` (the granted list in the text form,
+ * `["a"]`; Python `['a']`) and `test_agent_binds_a_tool_shared_by_overlapping_groups_once`;
+ * `test_agent_with_groups_and_ask_user_asks_the_top_level_handler` through `FlowEngine`. Group
+ * tools are `FunctionTool`s named by their `name`, where Python also takes functions.
+ *
  * TS-only: a node declaring `needsTools` with no run tool set receives a fresh `ToolSet`.
  *
  * Not ported: the registry rows of Python-only entry shapes (a callable or bound-method entry, and
@@ -32,26 +41,23 @@
  * `test_model_cannot_supply_trusted_ask_user_fields`,
  * `test_trusted_ask_user_call_passes_all_fields_to_the_handler` and
  * `test_ask_user_options_are_normalized_leniently`.
- *
- * Later (T5-11b), they run the AGENT tool loop: `test_agent_binds_and_calls_granted_per_run_tools`,
- * `test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant`,
- * `test_agent_granted_three_groups_sees_the_union_of_their_tools`,
- * `test_agent_grant_check_sees_expanded_group_names`,
- * `test_agent_binds_a_tool_shared_by_overlapping_groups_once` and
- * `test_agent_with_groups_and_ask_user_asks_the_top_level_handler`.
  */
 
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { evalNode } from "../../src/runtime/eval_node.ts";
+import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type AskUserHandler, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { engine, graph, rejected } from "./run_state_fixtures.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
+import { engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 /** A tool that returns a fixed reply. */
 const PING = new FunctionTool({
@@ -163,4 +169,135 @@ test("eval node gives human input the run toolset", async () => {
 
   expect(evaluated.outcome).toEqual(new Output("yes"));
   expect(seen.map((request) => request.nodeId)).toEqual(["ask"]);
+});
+
+// ---------- the AGENT tool loop ----------
+
+const CONFIG = { provider: "openai", model: "gpt-5.5" };
+
+/** A tool `name` taking `text`, returning `transform(text)`. */
+function textTool(name: string, transform: (text: string) => string): FunctionTool {
+  return new FunctionTool({
+    name,
+    description: name,
+    parametersJsonSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    execute: (args) => transform(args.text as string),
+  });
+}
+
+const upper = (name = "shout") => textTool(name, (text) => text.toUpperCase());
+/** A tool that echoes its text under `name` (Python's `_named`). */
+const named = (name: string) => textTool(name, (text) => `${name}:${text}`);
+
+/** A model reply calling one tool as `call-1`. */
+function toolCall(name: string, args: JsonObject): Response {
+  const call = new ToolCallPart({ id: "call-1", name, arguments: args });
+  return new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
+}
+
+/** One tool-call reply per call, then a final answer. */
+function replies(...calls: [string, JsonObject][]): Response[] {
+  return [...calls.map(([name, args]) => toolCall(name, args)), textReply("done")];
+}
+
+/** Evaluate an AGENT `agent` granted `grants` over `model` with the run's `tools`; return its outcome. */
+async function runAgentNode(model: ScriptedModel, grants: string[], tools: ToolSet) {
+  const node = new AgentNode("agent", { prompt: "go", llmConfig: CONFIG, tools: grants });
+  return (await evalNode(node, null, new VariablePool(), { tools, models: serving(model) })).outcome;
+}
+
+/** The names of the tools bound in `model`'s first request. */
+function boundNames(model: ScriptedModel): string[] {
+  return model.requests[0]!.tools.map((tool) => tool.name);
+}
+
+/** The tool results' contents in `model`'s last request. */
+function resultContents(model: ScriptedModel): string[] {
+  return model.requests.at(-1)!.messages.flatMap((message) =>
+    message.parts.filter((part) => part instanceof ToolResultPart).map((part) => part.content),
+  );
+}
+
+test("agent binds and calls granted per-run tools", async () => {
+  const model = new ScriptedModel(replies(["shout", { text: "hi" }]), CONFIG);
+  const seen: AskUserRequest[] = [];
+  const tools = new ToolSet({ shout: upper(), ask_user: recordingHandler(seen) });
+
+  const outcome = await runAgentNode(model, ["shout", "ask_user"], tools);
+
+  expect(outcome).toEqual(new Output("done"));
+  expect(boundNames(model)).toEqual(["shout", "ask_user"]);
+  expect(Object.keys(model.requests[0]!.tools[1]!.parameters.properties as object).sort()).toEqual(["options", "question"]);
+  expect(model.requests[1]!.messages.at(-1)!.parts).toEqual([
+    new ToolResultPart({ callId: "call-1", name: "shout", content: "HI" }),
+  ]);
+  expect(seen).toEqual([]);
+});
+
+test("agent cannot call a per-run tool the flow did not grant", async () => {
+  const model = new ScriptedModel([toolCall("shout", { text: "hi" })], CONFIG);
+  const tools = new ToolSet({ shout: upper(), ask_user: () => "yes" });
+
+  const outcome = await runAgentNode(model, ["ask_user"], tools);
+
+  expect(outcome).toBeInstanceOf(EvaluationFailure);
+  expect((outcome as EvaluationFailure).failure.message).toContain("not granted");
+});
+
+test("agent granted three groups sees the union of their tools", async () => {
+  const model = new ScriptedModel(replies(["a", { text: "1" }], ["c", { text: "3" }]), CONFIG);
+  const tools = new ToolSet({
+    toolbox: [named("a")],
+    workspace: [named("b"), named("c")],
+    company: [named("d")],
+    hidden: [named("e")],
+  });
+
+  const outcome = await runAgentNode(model, ["toolbox", "workspace", "company"], tools);
+
+  expect(outcome).toEqual(new Output("done"));
+  expect(boundNames(model)).toEqual(["a", "b", "c", "d"]);
+  expect(resultContents(model)).toEqual(["a:1", "c:3"]);
+});
+
+test.each(["e", "toolbox"])("agent grant check sees expanded group names (%s)", async (name) => {
+  const model = new ScriptedModel([toolCall(name, { text: "x" })], CONFIG);
+  const tools = new ToolSet({ toolbox: [named("a")], hidden: [named("e")] });
+
+  const outcome = await runAgentNode(model, ["toolbox"], tools);
+
+  expect(outcome).toBeInstanceOf(EvaluationFailure);
+  expect((outcome as EvaluationFailure).failure.message).toContain(
+    `requested tool '${name}', but it is not granted; granted tools: ["a"]`,
+  );
+});
+
+test("agent binds a tool shared by overlapping groups once", async () => {
+  const model = new ScriptedModel(replies(["web", { text: "q" }]), CONFIG);
+  const web = named("web");
+  const tools = new ToolSet({ toolbox: [web, named("a")], company: [web, named("b")] });
+
+  const outcome = await runAgentNode(model, ["toolbox", "company", "toolbox"], tools);
+
+  expect(outcome).toEqual(new Output("done"));
+  expect(boundNames(model)).toEqual(["web", "a", "b"]);
+});
+
+test("agent with groups and ask_user asks the top-level handler", async () => {
+  const model = new ScriptedModel(replies(["ask_user", { question: "Which?" }], ["a", { text: "go" }]), CONFIG);
+  const seen: AskUserRequest[] = [];
+  const tools = new ToolSet({ toolbox: [named("a")], ask_user: recordingHandler(seen, "B") });
+  const node = new AgentNode("agent", { prompt: "go", llmConfig: CONFIG, tools: ["toolbox", "ask_user"] });
+  const flow = graph([node], [
+    [START_ID, "agent"],
+    ["agent", END_ID],
+  ]);
+  const built = engine(flow, { tools, models: serving(model) });
+
+  await built.run();
+
+  expect(built.state.pool.get("agent")).toBe("done");
+  expect(boundNames(model)).toEqual(["a", "ask_user"]);
+  expect(seen.map((request) => request.question)).toEqual(["Which?"]);
+  expect(resultContents(model)).toEqual(["B", "a:go"]);
 });

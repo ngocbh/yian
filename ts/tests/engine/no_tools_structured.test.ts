@@ -13,12 +13,14 @@
  * asserts the structured purpose and the value for an `ollama` `ScriptedModel`.
  *
  * TS-only: `systemPromptWithMemory` with no sections returns the base unchanged, and with
- * sections appends Python's text and canonical JSON; a memory transcript, a non-empty tool
- * expansion, a granted skill and a steering inbox are refused before the model is built; a reply
- * with a parsed tool call and no grant fails at a cap of 1 with `ToolIterationLimitError`, else
- * with the ungranted `AgentLoopError`; an unparsed tool call is ignored; a stop during the call wins
- * over its text or tool-call reply, before any tool call is recorded; `ctx.sent()` returns the
- * built `RouteModel`'s route credentials; the prompt is recorded in the evaluation trace.
+ * sections appends Python's text and canonical JSON; a memory transcript and a steering inbox are
+ * refused before the model is built; a granted tool runs in the loop; a grant without a tool set
+ * reads the registry (`new ToolSet()`), so an unregistered grant fails with `resolve`'s
+ * `RangeError` before the model call; a granted skill binds `load_skill`; a reply with a parsed
+ * tool call and no grant fails at a cap of 1 with `ToolIterationLimitError`, else with the
+ * ungranted `AgentLoopError`; an unparsed tool call is ignored; a stop during the call wins over
+ * its text or tool-call reply, before any tool call is recorded; `ctx.sent()` returns the built
+ * `RouteModel`'s route credentials; the prompt is recorded in the evaluation trace.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -28,7 +30,7 @@ import { ModelCallFinished, ModelCallStarted } from "../../src/events.ts";
 import { BearerAuth } from "../../src/llm/auth.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
-import { Message, type Part, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -51,6 +53,8 @@ import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
+import { loadSkillTool } from "../../src/skills/tool.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
@@ -189,14 +193,7 @@ for (const [name, overrides, message] of [
     { memoryContext: new MemoryContext({ transcript: {} as ConversationTurn }) },
     "AGENT memory transcripts are not ported yet (T6-6)",
   ],
-  ["a granted tool", { tools: ["lookup"], toolset: new ToolSet() }, "the AGENT tool loop is not ported yet (T5-11b)"],
-  ["a granted tool without a tool set", { tools: ["lookup"] }, "the AGENT tool loop is not ported yet (T5-11b)"],
-  [
-    "a granted skill",
-    { skills: [new Skill({ name: "review", description: "Review code.", instructions: "" })] },
-    "the AGENT tool loop is not ported yet (T5-11b)",
-  ],
-  ["a steering inbox", { steering }, "the AGENT tool loop is not ported yet (T5-11b)"],
+  ["a steering inbox", { steering }, "AGENT steering is not ported yet (T5-11b)"],
 ] as const) {
   test(`${name} is refused before the model is built`, async () => {
     const ctx = context(new ScriptedModel([]), overrides as Partial<AgentRunContext>);
@@ -208,6 +205,36 @@ for (const [name, overrides, message] of [
 }
 
 const CALL = new ToolCallPart({ id: "c1", name: "lookup", arguments: { q: "x" } });
+
+test("a granted tool runs in the loop", async () => {
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "Look a term up.",
+    parametersJsonSchema: { type: "object", properties: { q: { type: "string" } } },
+    execute: (args) => `found ${args.q}`,
+  });
+  const model = new ScriptedModel([reply(CALL), textReply("done")]);
+  const ctx = context(model, { tools: ["lookup"], toolset: new ToolSet({ lookup }) });
+  expect((await runAgent(ctx)).value).toBe("done");
+  expect(model.requests[1]!.messages.at(-1)!.parts).toEqual([
+    new ToolResultPart({ callId: "c1", name: "lookup", content: "found x" }),
+  ]);
+});
+
+test("a granted tool without a tool set fails as unknown to the registry before the model call", async () => {
+  const model = new ScriptedModel([textReply("unused")]);
+  const error = await rejection(runAgent(context(model, { tools: ["no_such_registered_tool"] })));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toStartWith("unknown tool id 'no_such_registered_tool'; known tools: ");
+  expect(model.requests).toEqual([]);
+});
+
+test("a granted skill binds load_skill", async () => {
+  const model = new ScriptedModel([textReply("done")]);
+  const skills = [new Skill({ name: "review", description: "Review code.", instructions: "" })];
+  expect((await runAgent(context(model, { skills }))).value).toBe("done");
+  expect(model.requests[0]!.tools).toEqual([loadSkillTool()]);
+});
 
 test("a parsed tool call at a cap of 1 fails with ToolIterationLimitError", async () => {
   const model = new ScriptedModel([reply(new TextPart("calling"), CALL, CALL)]);

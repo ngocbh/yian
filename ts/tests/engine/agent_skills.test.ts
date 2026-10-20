@@ -16,8 +16,8 @@
  * Changed: the grant checks are called directly where Python runs the node through `eval_node`;
  * a list of names in a message is written in the text form (`["absent"]`, Python
  * `['absent']`). `test_memory_context_gets_the_system_prompt_without_the_listing`: only its memory
- * half, the opener seeing `DEFAULT_SYSTEM` without the listing; the node then stops, since a skill
- * grant needs the tool loop, so the model-request half is Later (T5-11b).
+ * half, the opener seeing `DEFAULT_SYSTEM` without the listing; the model-request half is
+ * Later (T5-11b).
  *
  * TS-only: `grantedSkills` returns no skills without a grant, and the granted ones sorted by
  * name.
@@ -42,7 +42,7 @@ import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { Skill, SkillError } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../../src/skills/tool.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { drive, serving, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -157,10 +157,8 @@ test("the memory context gets the system prompt without the listing", async () =
     return new MemoryContext();
   };
   const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
-  // A granted skill needs the tool loop, so the node stops after the memory context opens.
-  const models = serving(new ScriptedModel([], CONFIG));
-  const error = await rejected(node.forward({}, { openMemoryContext, skills: SKILLS, models }));
-  expect((error as Error).message).toMatch(/tool loop is not ported yet/);
+  const models = serving(new ScriptedModel([textReply("ok")], CONFIG));
+  expect(await node.forward({}, { openMemoryContext, skills: SKILLS, models })).toEqual(new Output("ok"));
   expect(seen).toEqual([DEFAULT_SYSTEM]);
 });
 

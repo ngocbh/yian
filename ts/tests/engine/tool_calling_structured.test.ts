@@ -3,8 +3,10 @@
  * `tests/engine/test_tool_calling_structured.py`, driving `runAgent` directly with a hand-built
  * `AgentRunContext`.
  *
- * Ported: `test_no_tools_structured_output_skips_discovery_call` (literal, scalar, list and
- * record), `test_no_tools_structured_fallback_uses_one_schema_prompt`,
+ * Ported: `test_tool_calling_final_answer_is_structured` (a tool turn, then the structured call over
+ * the conversation, the final reply included),
+ * `test_no_tools_structured_output_skips_discovery_call` (literal, scalar, list and record),
+ * `test_no_tools_structured_fallback_uses_one_schema_prompt`,
  * `test_no_tools_structured_retry_never_adds_a_discovery_call`,
  * `test_tool_calling_literal_final_answer_is_structured` and
  * `test_tool_calling_declared_bare_str_answer_unchanged` (both grant no tools).
@@ -14,9 +16,7 @@
  * asserts the purposes of the calls made and the requests' tools instead. The native rows use the
  * `openai`/`gpt-5.5` pair (Python: `anthropic`/`claude-sonnet-4-5`); a protocol-less model takes
  * the native `json_schema` plan whatever its provider, so the Ollama row asserts the structured
- * purpose.
- *
- * Later (T5-11b): `test_tool_calling_final_answer_is_structured` (the tool loop).
+ * purpose. The tool is in a `ToolSet` given as `toolset`, where Python patches `TOOL_REGISTRY`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -24,11 +24,13 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ModelCallStarted } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -47,19 +49,19 @@ function textReply(body: string): Response {
 async function run(
   model: ChatModel,
   outputType: Type,
-  options: { prompt?: string } = {},
+  options: { prompt?: string; tools?: string[]; toolset?: ToolSet } = {},
 ): Promise<{ value: unknown; purposes: string[] }> {
   const events: unknown[] = [];
   const ctx: AgentRunContext = {
     nodeId: "n",
     prompt: options.prompt ?? "produce a value",
-    tools: [],
+    tools: options.tools ?? [],
     llmConfig: null,
     outputType,
     retries: 2,
     maxToolIterations: -1,
     memoryContext: new MemoryContext(),
-    toolset: null,
+    toolset: options.toolset ?? null,
     baseSystemPrompt: DEFAULT_SYSTEM,
     skills: [],
     emitEvent: (event) => void events.push(event),
@@ -126,4 +128,49 @@ test("test_tool_calling_declared_bare_str_answer_unchanged", async () => {
   expect(result.value).toBe("plain answer");
   expect(result.purposes).toEqual(["chat"]);
   expect(model.requests[0]!.outputFormat).toBeNull();
+});
+
+const RECORD = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["name", Type.scalar(ValueKind.STRING)],
+    ["score", INT],
+  ]),
+  required: new Set(["name", "score"]),
+});
+
+test("test_tool_calling_final_answer_is_structured", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const value = new FunctionTool({
+    name: "value",
+    description: "Look a topic up.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    execute: (args) => {
+      seen.push(args);
+      return `px:${args.topic}`;
+    },
+  });
+  const call = new ToolCallPart({ id: "1", name: "value", arguments: { topic: "ACME" } });
+  const model = new ScriptedModel(
+    [
+      new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" }),
+      textReply("done"),
+      textReply('{"name": "ACME", "score": 9}'),
+    ],
+    NATIVE,
+  );
+  const result = await run(model, RECORD, { prompt: "hi", tools: ["value"], toolset: new ToolSet({ value }) });
+  // A plain record: the structured final answer.
+  expect(result.value).toEqual({ name: "ACME", score: 9n });
+  expect(result.purposes).toEqual(["chat", "chat", "structured_native"]);
+  // The mid-loop tool still ran.
+  expect(seen).toEqual([{ topic: "ACME" }]);
+  // The structured call reads the conversation, the final reply included.
+  expect(model.requests[2]!.messages.map((message) => [message.role, message.parts])).toEqual([
+    ["system", [new TextPart(DEFAULT_SYSTEM)]],
+    ["user", [new TextPart("hi")]],
+    ["assistant", [call]],
+    ["tool", [new ToolResultPart({ callId: "1", name: "value", content: "px:ACME" })]],
+    ["assistant", [new TextPart("done")]],
+  ]);
 });

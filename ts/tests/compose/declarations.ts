@@ -5,7 +5,7 @@
  * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered, and
  * `fileOf`, which parses its top level; `caseText` and `caseDocument`, which read a conformance
  * case's flow as text or as a parsed document; and the harvested-case harness built on them
- * (`loadError`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
+ * (`loadError`, `loadErrorAsync`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
  * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembledWith`, `assembleText`), which
  * makes the loader's call on a case and compares the result with the case's `expect`; and
  * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
@@ -188,6 +188,17 @@ export function caseDocument(
 export function loadError(run: () => unknown): LoadError {
   try {
     run();
+  } catch (error) {
+    if (error instanceof LoadError) return error;
+    throw error;
+  }
+  throw new Error("expected a LoadError");
+}
+
+/** Return the `LoadError` `promise` rejects with. */
+export async function loadErrorAsync(promise: Promise<unknown>): Promise<LoadError> {
+  try {
+    await promise;
   } catch (error) {
     if (error instanceof LoadError) return error;
     throw error;

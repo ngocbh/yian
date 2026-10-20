@@ -64,7 +64,7 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget, reload } from "../../src/defaults.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "./declarations.ts";
 
 /** A node whose only static child is `child`, counting how often it is asked. */
 class FakeNode {
@@ -426,17 +426,6 @@ function expectRefusedAtAlias(error: LoadError, label: string, text: string, tar
   expect(frame.range.startLine).toBe(lineOf(text, `nxt: ${target}`));
 }
 
-/** Return the `LoadError` `promise` rejects with. */
-async function rejection(promise: Promise<unknown>): Promise<LoadError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof LoadError) return error;
-    throw error;
-  }
-  throw new Error("expected a LoadError");
-}
-
 /** Return a file `x` over an `underX`-file chain, and a 40-file chain ending in `x`. */
 function sharedFileTexts(underX: number): Record<string, string> {
   return {
@@ -488,7 +477,7 @@ describe("chains of uses: files", () => {
     await loadFlow(usesFiles(legal, 50), { searchPaths: [legal] });
 
     const deep = dir("deep");
-    const error = await rejection(loadFlow(usesFiles(deep, 51), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadFlow(usesFiles(deep, 51), { searchPaths: [deep] }));
     // The import is refused before the call check runs on the built chain.
     expect(error.message).toBe(importMessage(51));
     expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(deep, "u49.yaml"), "utf8"), "u50");
@@ -496,7 +485,7 @@ describe("chains of uses: files", () => {
 
   test("a long uses: chain fails at the import past the limit", async () => {
     const text = usesFiles(tmp, 200);
-    const error = await rejection(loadFlow(text, { searchPaths: [tmp] }));
+    const error = await loadErrorAsync(loadFlow(text, { searchPaths: [tmp] }));
 
     expect(error.message).toBe(importMessage(51));
     const frames = error.diagnostic.frames;
@@ -511,7 +500,7 @@ describe("chains of uses: files", () => {
     await loadFlow(usesFiles(legal, 50, false), { searchPaths: [legal] });
 
     const deep = dir("deep");
-    const error = await rejection(loadFlow(usesFiles(deep, 60, false), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadFlow(usesFiles(deep, 60, false), { searchPaths: [deep] }));
     expect(error.message).toBe(importMessage(51));
     expectRefusedAtAlias(error, "u49.yaml", readFileSync(join(deep, "u49.yaml"), "utf8"), "u50");
   });
@@ -521,7 +510,7 @@ describe("chains of uses: files", () => {
     // it, so the chain then reaches x from the cache.
     const deep = dir("deep");
     writeFiles(deep, sharedFileTexts(10));
-    const error = await rejection(loadFlow(importing("root", uses), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadFlow(importing("root", uses), { searchPaths: [deep] }));
     expect(error.message).toContain(IMPORT_51);
 
     const legal = dir("legal");
@@ -535,7 +524,7 @@ describe("chains of uses: files", () => {
     await loadFlow(usesFiles(legal, 5, false), { searchPaths: [legal] });
 
     const deep = dir("deep");
-    const error = await rejection(loadFlow(usesFiles(deep, 6, false), { searchPaths: [deep] }));
+    const error = await loadErrorAsync(loadFlow(usesFiles(deep, 6, false), { searchPaths: [deep] }));
     expect(error.message).toBe(importMessage(6, 5));
     expectRefusedAtAlias(error, "u4.yaml", readFileSync(join(deep, "u4.yaml"), "utf8"), "u5");
   });
@@ -549,7 +538,7 @@ describe("chains of uses: files", () => {
   test("a cross-file cycle longer than the limit reports the depth limit", async () => {
     // The cycle is 51 files deep before it closes, so the author sees the depth error.
     writeFiles(tmp, chainTexts(60, { calls: false, lastImports: "u0" }));
-    const error = await rejection(loadFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] }));
+    const error = await loadErrorAsync(loadFlow(importing("root", { first: "u0" }), { searchPaths: [tmp] }));
     expect(error.message).toBe(importMessage(51));
   });
 });
@@ -557,7 +546,7 @@ describe("chains of uses: files", () => {
 describe("custom resolvers", () => {
   test.each(ORDERS)("the import depth holds through a memoizing resolver (%s)", async (_order, uses) => {
     const root = importing("root", uses);
-    const error = await rejection(loadFlow(root, { childResolver: memoizingResolver(sharedFileTexts(10)) }));
+    const error = await loadErrorAsync(loadFlow(root, { childResolver: memoizingResolver(sharedFileTexts(10)) }));
     expect(error.message).toContain(IMPORT_51);
 
     await loadFlow(root, { childResolver: memoizingResolver(sharedFileTexts(9)) });
@@ -568,7 +557,7 @@ describe("custom resolvers", () => {
     const resolve = (path: string): Promise<ComposedFlow> =>
       loadFlow(texts[path]!, { childResolver: resolve, sourceLabel: `${path}.yaml` });
 
-    const error = await rejection(loadFlow(importing("root", { first: "u0" }), { childResolver: resolve }));
+    const error = await loadErrorAsync(loadFlow(importing("root", { first: "u0" }), { childResolver: resolve }));
     expect(error.message).toBe(importMessage(51));
     expectRefusedAtAlias(error, "u49.yaml", texts["u49"]!, "u50");
   });
@@ -593,7 +582,7 @@ describe("custom resolvers", () => {
     const raising = (): ComposedFlow => {
       throw new Error("boom");
     };
-    const error = await rejection(loadFlow(text, { childResolver: raising }));
+    const error = await loadErrorAsync(loadFlow(text, { childResolver: raising }));
 
     expect(error.message).toBe("callable 'ext' (uses: 'child'): could not resolve: boom");
     const frames = error.diagnostic.frames;
@@ -620,7 +609,7 @@ describe("custom resolvers", () => {
         importDepth: depth as number,
       });
 
-    const error = await rejection(loadFlow(text, { childResolver: resolve }));
+    const error = await loadErrorAsync(loadFlow(text, { childResolver: resolve }));
     expect(error.message).toBe(
       `callable 'ext' (uses: 'child'): resolved flow has import_depth ${shown}; expected a non-negative int`,
     );
@@ -638,7 +627,7 @@ describe("custom resolvers", () => {
   });
 
   test("a rejecting resolver fails at the alias as could not resolve", async () => {
-    const error = await rejection(
+    const error = await loadErrorAsync(
       loadFlow(CALLING_ROOT, { childResolver: () => Promise.reject(new Error("offline")) }),
     );
     expect(error.message).toBe("callable 'ext' (uses: 'child'): could not resolve: offline");

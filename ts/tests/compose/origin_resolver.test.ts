@@ -28,6 +28,8 @@ import { type DiagnosticFrame, OriginRef, type OriginResolver, ResolverTable } f
 import { Node, NodeKind } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 
+import { loadErrorAsync } from "./declarations.ts";
+
 const CHILD = `id: child
 name: child
 nodes:
@@ -96,17 +98,6 @@ function expectExactRoutes(resolver: OriginResolver | null, flow: CompiledFlow):
   for (const origin of reachable.values()) expect(table.has(origin)).toBe(true);
 }
 
-/** Return the `LoadError` `promise` rejects with. */
-async function loadError(promise: Promise<unknown>): Promise<LoadError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof LoadError) return error;
-    throw error;
-  }
-  throw new Error("expected a LoadError");
-}
-
 /** Expect one external-child failure owned by the importing alias site. */
 function expectChildViewUsesFrame(error: LoadError): void {
   expect(error.message).toContain("alias 'child_view'");
@@ -119,7 +110,7 @@ function expectChildViewUsesFrame(error: LoadError): void {
 
 /** Load `ONE_ALIAS_PARENT` with a resolver returning `child`, expecting a `LoadError`. */
 const loadOneAlias = (child: unknown) =>
-  loadError(loadFlow(ONE_ALIAS_PARENT, { childResolver: () => child as ComposedFlow }));
+  loadErrorAsync(loadFlow(ONE_ALIAS_PARENT, { childResolver: () => child as ComposedFlow }));
 
 test("a source-free load has no resolver", async () => {
   const loaded = await loadFlow("id: empty\nname: empty\nnodes: {}\n");

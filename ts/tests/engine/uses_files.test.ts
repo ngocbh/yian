@@ -29,6 +29,8 @@ import { LoadCtx, loadFlow, makeFileResolver } from "../../src/compose/loader.ts
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 
+import { loadErrorAsync } from "../compose/declarations.ts";
+
 const CODE = "./fixtures/compose_codefns.ts:echo";
 
 let tmp: string;
@@ -69,17 +71,6 @@ function write(dir: string, filename: string, flowId: string, options: Parameter
   return path;
 }
 
-/** Return the `LoadError` `promise` rejects with. */
-async function loadError(promise: Promise<unknown>): Promise<LoadError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof LoadError) return error;
-    throw error;
-  }
-  throw new Error("expected a LoadError");
-}
-
 /** Return the distinct opaque origin keys reachable from one compiled flow. */
 function originKeys(flow: CompiledFlow): Set<string> {
   return new Set([...iterFlowOrigins(flow)].map((origin) => origin.key));
@@ -108,11 +99,12 @@ const isDisjoint = (a: Set<string>, b: Set<string>) => [...a].every((key) => !b.
 test("system.paths is inert without searchPaths", async () => {
   // Loaded with no searchPaths, a `system: paths:` stays inert: no file is searched.
   const text = flowText("f", { call: "mom", uses: { mom: "child" }, system: ["../shared"] });
-  expect((await loadError(loadFlow(text))).message).toContain("needs a search path or child_resolver");
+  expect((await loadErrorAsync(loadFlow(text))).message).toContain("needs a search path or child_resolver");
 });
 
 test("no searchPaths and no resolver is loud", async () => {
-  await loadError(loadFlow(flowText("f", { call: "mom", uses: { mom: "child" } })));
+  const error = await loadErrorAsync(loadFlow(flowText("f", { call: "mom", uses: { mom: "child" } })));
+  expect(error.message).toContain("needs a search path or child_resolver");
 });
 
 // ---------- makeFileResolver: relative resolve, version guard, precedence, skip, miss ----------
@@ -140,7 +132,7 @@ test("a version mismatch is loud and located", async () => {
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child@v1" } });
   const text = readFileSync(parent, "utf8");
   const expected = SourceDocument.parse(text).root.child("uses").child("ch").range;
-  const error = await loadError(loadFlow(text, { searchPaths: [tmp] }));
+  const error = await loadErrorAsync(loadFlow(text, { searchPaths: [tmp] }));
   expect(error.message).toBe(
     'uses: ref pinned child@v1 but the resolved file declares version: "v2" ' +
       '(file-per-version: name a file that declares "v1")',
@@ -157,7 +149,7 @@ test("a ref without a version skips the guard", async () => {
 test("a pinned version on an unversioned file is loud", async () => {
   write(tmp, "child", "child");
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child@v1" } });
-  const error = await loadError(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
   expect(error.message).toContain("version: null");
 });
 
@@ -171,7 +163,7 @@ test("conflicting version pins on a diamond are loud", async () => {
     '  a: {kind: call, call: a1, input: {x: "${input.x}"}}\n' +
     '  b: {kind: call, call: a2, input: {x: "${a.output}"}}\n' +
     'output: {y: "${b.output}"}\nuses:\n  a1: m1\n  a2: m2\n';
-  const error = await loadError(loadFlow(text, { searchPaths: [tmp] }));
+  const error = await loadErrorAsync(loadFlow(text, { searchPaths: [tmp] }));
   expect(error.message).toContain("version");
   expect(error.diagnostic.frames.map((frame) => [frame.label, frame.note])).toEqual([
     ["<flow>", "uses alias 'a2'"],
@@ -189,10 +181,33 @@ test("a nested path resolves", async () => {
 
 test("a missing ref is loud", async () => {
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "nope" } });
-  const error = await loadError(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
   expect(error.message).toBe(`flow 'nope' not found on search path ["${tmp}"]`);
   // A local ref has no hub: scheme, so the miss says nothing about a marketplace.
   expect(error.message).not.toContain("marketplace");
+});
+
+test("search path entries are spelled as Python's Path spells them", async () => {
+  const own = join(tmp, "f");
+  mkdirSync(own);
+  const system = ["../shared", "./lib", "x//y/", `${tmp}//abs/./`];
+  const parent = write(own, "p", "p", { call: "ch", uses: { ch: "nope" }, system });
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [`${own}/`] }));
+  expect(error.message).toBe(
+    `flow 'nope' not found on search path ["${own}","${own}/../shared","${own}/lib","${own}/x/y","${tmp}/abs"]`,
+  );
+});
+
+test("a CRLF child reads with universal newlines", async () => {
+  // TS-only: Python's `Path.read_text()` turns `\r\n` and a lone `\r` into `\n`.
+  writeFileSync(join(tmp, "child.yaml"), flowText("child").replaceAll("\n", "\r\n"));
+  const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child" } });
+  expect(await loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] })).toBeDefined();
+
+  writeFileSync(join(tmp, "bad.yaml"), "id: bad\r\nname: bad\rnodes: [\r\n");
+  const badParent = write(tmp, "q", "q", { call: "b", uses: { b: "bad" } });
+  const error = await loadErrorAsync(loadFlow(readFileSync(badParent, "utf8"), { searchPaths: [tmp] }));
+  expect(error.diagnostic.frames.at(-1)!.text).toBe("id: bad\nname: bad\nnodes: [\n");
 });
 
 test("a malformed external child keeps the parent and child sources, read once", async () => {
@@ -206,7 +221,7 @@ test("a malformed external child keeps the parent and child sources, read once",
   const spy = spyOn(fsp, "readFile");
   let error: LoadError;
   try {
-    error = await loadError(loadFlow(parentText, { searchPaths: [tmp], sourceLabel: "p.yaml" }));
+    error = await loadErrorAsync(loadFlow(parentText, { searchPaths: [tmp], sourceLabel: "p.yaml" }));
     expect(spy.mock.calls.map(([path]) => String(path))).toEqual([realpathSync(child)]);
   } finally {
     spy.mockRestore();
@@ -260,7 +275,7 @@ test("a cross-file cycle is refused", async () => {
   // fa calls alias `b` (file fb); fb calls alias `back` (file fa).
   write(tmp, "fa", "fa", { call: "b", uses: { b: "fb" } });
   write(tmp, "fb", "fb", { call: "back", uses: { back: "fa" } });
-  const error = await loadError(loadFlow(readFileSync(join(tmp, "fa.yaml"), "utf8"), { searchPaths: [tmp] }));
+  const error = await loadErrorAsync(loadFlow(readFileSync(join(tmp, "fa.yaml"), "utf8"), { searchPaths: [tmp] }));
   // The root text isn't a loading file, so the cycle closes when fa.yaml imports fb.yaml again.
   expect(error.message).toBe(`flow-reference cycle across files: ${realpathSync(join(tmp, "fb.yaml"))}`);
 });
@@ -362,7 +377,7 @@ test("diamond reuse reads each path once", async () => {
 test("a child file that isn't UTF-8 fails at its alias", async () => {
   writeFileSync(join(tmp, "child.yaml"), new Uint8Array([0x69, 0x64, 0x3a, 0x20, 0xff, 0xfe, 0x0a]));
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child" } });
-  const error = await loadError(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
   expect(error.message).toStartWith("callable 'ch' (uses: 'child'): could not resolve: ");
   expect(error.diagnostic.frames.map((frame) => frame.note)).toEqual(["uses alias 'ch'"]);
 });

@@ -29,7 +29,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import fsp from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, resolve as resolvePath } from "node:path";
 
 import { scopeMemoryDeclarations } from "../compile/memory_layout.ts";
 import type { CompiledFlow } from "../compile/model.ts";
@@ -81,7 +81,8 @@ export type ChildResolver = (path: string, version: string | null) => ComposedFl
 
 const UNLOCATED_DIAGNOSTICS = new LoadDiagnostics();
 
-// The fatal decoder refuses a file that isn't UTF-8; a BOM stays in the text, as Python reads it.
+// The fatal decoder refuses a file that isn't UTF-8; a BOM stays in the text, and the reader
+// turns `\r\n` and a lone `\r` into `\n`, as Python's `Path.read_text()` reads it.
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Return how a message shows a thrown value: an error's message, anything else as text. */
@@ -174,9 +175,18 @@ export class LoadCtx {
 // own store (`run`, never `enterWith`), so concurrent loads keep separate counts.
 const ACTIVE_IMPORTS = new AsyncLocalStorage<number>();
 
+/**
+ * Return `path` spelled as Python's `PurePosixPath` spells it: repeated slashes merged, `.`
+ * segments and a trailing slash dropped, `..` kept.
+ */
+function pathText(path: string): string {
+  const root = path.startsWith("/") ? "/" : "";
+  return root + path.split("/").filter((part) => part !== "" && part !== ".").join("/") || ".";
+}
+
 /** Return a `system.paths` entry: a relative one joined onto the file's own directory. */
 function joinPath(base: string, path: string): string {
-  return isAbsolute(path) ? path : join(base, path);
+  return pathText(isAbsolute(path) ? path : `${base}/${path}`);
 }
 
 /**
@@ -396,8 +406,11 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
       let real: string;
       try {
         real = await fsp.realpath(resolvePath(dir, path + ".yaml"));
-      } catch {
-        continue; // a search directory or file that doesn't exist is skipped
+      } catch (error) {
+        // A search directory or file that doesn't exist is skipped; any other failure is loud.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") continue;
+        throw error;
       }
       const cached = ctx.flows.get(real);
       if (cached !== undefined) {
@@ -410,7 +423,7 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
       ctx.loading.add(real);
       let child: ComposedFlow;
       try {
-        const text = UTF8.decode(await fsp.readFile(real));
+        const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
         child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [dirname(real)], ctx);
       } finally {
         ctx.loading.delete(real);
@@ -619,12 +632,10 @@ async function loadFlowFile(
   if (searchPaths !== null && searchPaths.length > 0) {
     const own = searchPaths[0]!;
     const paths = (f.system["paths"] ?? []) as string[];
-    effective = [...searchPaths, ...paths.map((path) => joinPath(own, path))];
+    effective = [...searchPaths.map(pathText), ...paths.map((path) => joinPath(own, path))];
   }
 
-  let external: ChildResolver | null = null;
-  if (childResolver !== null) external = childResolver;
-  else if (effective.length > 0) external = makeFileResolver(effective, ctx);
+  const external = childResolver ?? (effective.length > 0 ? makeFileResolver(effective, ctx) : null);
 
   const scope = new CallableScope(f.defs, registry, external, f.uses, {
     defsCursor: root.has("defs") ? root.child("defs") : null,

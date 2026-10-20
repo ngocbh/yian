@@ -30,6 +30,12 @@
  * settling after a callback stop is discarded; a callback throw during a node's synchronous start
  * starts no further node. No test leaves an unhandled rejection or an uncaught exception.
  *
+ * TS-only, steps and events after a stop (serial and pooled): after a host stop, a settled step
+ * (`{ settled: true }`) is still appended after the `RunStopped` and a `ToolCallFinished` still
+ * published; another step throws the node signal's reason and appends nothing, and another event or
+ * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended. Pooled only:
+ * after a terminal `RunFailed`, the settled step and the `ToolCallFinished` are refused too.
+ *
  * TS-only, the per-node signals (serial and pooled): over 50 nodes, each node's link to the run
  * signal is removed when it settles, even for nodes that leave listeners on their own signal; the
  * host's signal keeps no listener once `run()` settles, whatever the ending (success, `RunFailed`,
@@ -39,13 +45,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeStarted, NodeSucceeded, RunFailed, type RunEvent, RunSucceeded, StreamChunk } from "../../src/events.ts";
+import {
+  NodeStarted,
+  NodeSucceeded,
+  RunFailed,
+  type RunEvent,
+  RunSucceeded,
+  StreamChunk,
+  ToolCallFinished,
+  ToolCallStarted,
+} from "../../src/events.ts";
 import { MemoryScope } from "../../src/memory/contracts.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import type { OutputContract } from "../../src/nodes/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { evalNode, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
-import { NodeStartedRecord, NodeSucceededRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
+import { NodeStartedRecord, NodeStepRecord, NodeSucceededRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { aborted, engine, FailNode, FuncNode, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
@@ -170,12 +185,13 @@ class MemoryScriptNode extends ScriptNode {
 }
 
 /**
- * Return a node that blocks until its signal aborts, then outputs what `onAbort` returns (by
- * default it rejects with the signal's reason), and a promise that resolves once it blocks.
+ * Return a node that blocks until its signal aborts, then outputs what `onAbort` returns given its
+ * signal and capabilities (by default it rejects with the signal's reason), and a promise that
+ * resolves once it blocks.
  */
 function waiter(
   nodeId: string,
-  onAbort: (signal: AbortSignal) => unknown = (signal) => {
+  onAbort: (signal: AbortSignal, caps: NodeCaps) => unknown = (signal) => {
     throw signal.reason;
   },
 ): { node: ScriptNode; entered: Promise<void> } {
@@ -183,7 +199,7 @@ function waiter(
   const node = new ScriptNode(nodeId, async (caps) => {
     resolve();
     await aborted(caps.signal!).catch(() => {});
-    return await onAbort(caps.signal!);
+    return await onAbort(caps.signal!, caps);
   });
   return { node, entered: promise };
 }
@@ -643,6 +659,124 @@ describe("the pooled drain", () => {
     expect(logged(built, NodeStartedRecord, "second")).toBe(false);
     expect(stops(built)).toEqual([new RunStoppedRecord("callback", "stream callback failed", ["first"])]);
   });
+});
+
+/** A tool call's events, as a TOOL node would emit them. */
+const callFields = { nodeId: "work", exchangeId: "x", callIndex: 0, toolCallId: "call-1", name: "lookup" };
+
+describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
+  test("a settled step and a ToolCallFinished after a host stop are recorded and published after the RunStopped", async () => {
+    const host = new AbortController();
+    const reason = new Error("stop now");
+    const seen: RunEvent[] = [];
+    const { node, entered } = waiter("work", (signal, caps) => {
+      // The call settled while the signal was live; the node reports it after the stop.
+      caps.steps!.record({ call: "call-1" }, { settled: true });
+      caps.emitEvent!(new ToolCallFinished({ ...callFields, result: "ok" }));
+      throw signal.reason;
+    });
+    const built = fanEngine([node], { numWorkers, signal: host.signal, onEvent: (event) => void seen.push(event) });
+
+    const running = built.run();
+    await entered;
+    host.abort(reason);
+
+    expect(await rejected(running)).toBe(reason);
+    const records = built.log.records().map((envelope) => envelope.record);
+    expect(records.slice(-2)).toEqual([
+      new RunStoppedRecord("signal", "stop now", ["work"]),
+      new NodeStepRecord("work", { call: "call-1" }),
+    ]);
+    expect(seen.at(-1)).toEqual(new ToolCallFinished({ ...callFields, result: "ok" }));
+  });
+
+  test("another step and event after a host stop are refused", async () => {
+    const host = new AbortController();
+    const reason = new Error("stop now");
+    const seen: unknown[] = [];
+    const raised: unknown[] = [];
+    const nodeSignals: AbortSignal[] = [];
+    const { node, entered } = waiter("work", (signal, caps) => {
+      nodeSignals.push(signal);
+      try {
+        caps.steps!.record({ call: "call-1" });
+      } catch (error) {
+        raised.push(error);
+      }
+      caps.emitEvent!(new ToolCallStarted(callFields));
+      caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "a" }));
+      throw signal.reason;
+    });
+    const built = fanEngine([node], {
+      numWorkers,
+      signal: host.signal,
+      onEvent: (event) => void seen.push(event),
+      onStream: (chunk) => void seen.push(chunk),
+    });
+
+    const running = built.run();
+    await entered;
+    const before = seen.length;
+    host.abort(reason);
+
+    expect(await rejected(running)).toBe(reason);
+    expect(raised).toEqual([reason]);
+    expect(raised[0]).toBe(nodeSignals[0]!.reason);
+    expect(logged(built, NodeStepRecord, "work")).toBe(false);
+    expect(seen.length).toBe(before);
+    expect(lastRecord(built)).toBeInstanceOf(RunStoppedRecord);
+  });
+
+  test("a kept sink drops what it gets once its evaluation ended", async () => {
+    const seen: unknown[] = [];
+    let keptCaps!: NodeCaps;
+    const keeper = new ScriptNode("keeper", (caps) => {
+      keptCaps = caps;
+      return "kept";
+    });
+    const later = new FuncNode("later", () => {
+      keptCaps.emitEvent!(new ToolCallFinished({ ...callFields, nodeId: "keeper", result: "late" }));
+      keptCaps.emitStream!(new StreamChunk({ nodeId: "keeper", key: "output", chunk: "late" }));
+      return "done";
+    });
+    const flow = graph([keeper, later], [
+      [START_ID, "keeper"],
+      ["keeper", "later"],
+      ["later", END_ID],
+    ]);
+    const built = engine(flow, {
+      numWorkers,
+      onEvent: (event) => void seen.push(event),
+      onStream: (chunk) => void seen.push(chunk),
+    });
+
+    expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
+    expect(seen.filter((item) => item instanceof ToolCallFinished || item instanceof StreamChunk)).toEqual([]);
+  });
+});
+
+test("a settled step and a ToolCallFinished are refused after a terminal result", async () => {
+  const seen: RunEvent[] = [];
+  const raised: unknown[] = [];
+  const blocked = waiter("work", (signal, caps) => {
+    try {
+      caps.steps!.record({ call: "call-1" }, { settled: true });
+    } catch (error) {
+      raised.push(error);
+    }
+    caps.emitEvent!(new ToolCallFinished({ ...callFields, result: "ok" }));
+    throw signal.reason;
+  });
+  const fail = new ScriptNode("fail", async () => {
+    await blocked.entered;
+    throw new Error("boom");
+  });
+  const built = fanEngine([blocked.node, fail], { numWorkers: 2, onEvent: (event) => void seen.push(event) });
+
+  expect((await built.run()).at(-1)).toBeInstanceOf(RunFailed);
+  expect(raised).toEqual([built.signal.reason]);
+  expect(logged(built, NodeStepRecord, "work")).toBe(false);
+  expect(seen.some((event) => event instanceof ToolCallFinished)).toBe(false);
 });
 
 /**

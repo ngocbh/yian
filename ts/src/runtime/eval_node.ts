@@ -142,13 +142,15 @@ export function addNote(error: unknown, text: () => string): void {
 /**
  * Carry a host observer fault out of a node body as a capability fault, so a failing
  * `onStream`/`onEvent` stays a host fault, never a node failure. `onFault` sees each fault before
- * it is thrown.
+ * it is thrown. Once `isClosed()` is true the sink drops what it gets.
  */
 function observerSink<T>(
   sink: (item: T) => unknown,
   onFault: (fault: CapabilityFault) => void,
+  isClosed: () => boolean,
 ): (item: T) => void {
   return (item) => {
+    if (isClosed()) return;
     try {
       sink(item);
     } catch (error) {
@@ -582,9 +584,12 @@ export interface EvalNodeOptions {
   wiringOverride?: JsonObject | null;
   /** The node's own abort signal, given to it as `caps.signal`; a fresh un-aborted one when omitted. */
   signal?: AbortSignal | null;
-  /** The transient stream sink a node declaring `needsLiveEvents` receives. */
+  /**
+   * The transient stream sink a node declaring `needsLiveEvents` receives; closed, dropping what
+   * it gets, once the outcome is decided.
+   */
   emitStream?: NodeCaps["emitStream"] | null;
-  /** The transient model and tool call observer sink a node declaring `needsLiveEvents` receives. */
+  /** The transient model and tool call observer sink, received and closed as `emitStream` is. */
   emitEvent?: NodeCaps["emitEvent"] | null;
   /** Whether to capture visible evidence from a node declaring `needsEvaluationTrace`. */
   captureEvidence?: boolean;
@@ -1003,22 +1008,23 @@ async function evaluateNode(
   }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
+  // Closed with the captures, so a step or event the node's dropped code sends after the outcome
+  // is decided is refused or dropped rather than reaching the run with no evaluation left to fail.
+  let closed = false;
+  const isClosed = (): boolean => closed;
   if (node.needsLiveEvents === true) {
-    if (emitStream !== null) caps.emitStream = observerSink(emitStream, onFault);
-    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault);
+    if (emitStream !== null) caps.emitStream = observerSink(emitStream, onFault, isClosed);
+    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault, isClosed);
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
   if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault, pending);
-  // Closed with the captures, so a step the node's dropped code records after the outcome is
-  // decided is refused rather than committed with no evaluation left to fail.
-  let stepsClosed = false;
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the
     // evaluator keeps it as it keeps the other capabilities' faults.
-    caps.steps = new NodeSteps(steps.starts, steps.prior, (step) => {
-      if (stepsClosed) throw new CapabilityFault(new Error("node steps capability is closed"));
+    caps.steps = new NodeSteps(steps.starts, steps.prior, (step, options) => {
+      if (closed) throw new CapabilityFault(new Error("node steps capability is closed"));
       try {
-        steps.record(step);
+        steps.record(step, options);
       } catch (error) {
         if (error instanceof CapabilityFault) onFault(error);
         throw error;
@@ -1043,7 +1049,7 @@ async function evaluateNode(
     settled = pending.length;
     await Promise.allSettled(batch);
   }
-  stepsClosed = true;
+  closed = true;
   closeCaptures();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever

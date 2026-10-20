@@ -15,7 +15,7 @@
 
 import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
-import { type RunEvent, RunFailed, type StreamChunk } from "../events.ts";
+import { type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
 import { ConversationInvocation, MemoryRecallError } from "../memory/contracts.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
@@ -145,8 +145,10 @@ function isRunLog(log: unknown): log is RunLog {
  * capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
  * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
  * before `record` returns, with no observer, and the capability closes once the evaluation's
- * outcome is decided.
- * Once the run stops, `record` throws the run signal's reason and appends nothing.
+ * outcome is decided, as do the node's event sinks. Once the run stops, `record` throws the node
+ * signal's reason and appends nothing, and the sinks drop what they get, except a settled step
+ * (`{ settled: true }`) and a `ToolCallFinished` while the run has no terminal result: the node
+ * vouches that the call settled while its signal was live (see `NodeSteps.record`).
  *
  * Each node runs under its own signal (its `caps.signal`, also the memory opener's), aborted with
  * the run signal's reason and unlinked from it when the node settles. A host stop (the `signal`
@@ -299,10 +301,9 @@ export class FlowEngine {
         const nodeId = state.ready[0]!;
         const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
         const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
-        const steps = this.#nodeSteps(nodeId);
         this.#publish(started, events);
         signal.throwIfAborted();
-        const evaluated = await this.#evaluate(nodeId, invocation, steps);
+        const evaluated = await this.#evaluate(nodeId, invocation);
         signal.throwIfAborted();
         const settled = this.#commitOutcome(nodeId, evaluated);
         // The commit may have set the result, which the loop condition narrowed to `null`.
@@ -337,11 +338,10 @@ export class FlowEngine {
           const nodeId = state.ready[0]!;
           const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
           const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
-          const steps = this.#nodeSteps(nodeId);
           // The start is durable and published before its worker starts.
           this.#publish(started, events);
           signal.throwIfAborted();
-          const worker = this.#evaluate(nodeId, invocation, steps).then(
+          const worker = this.#evaluate(nodeId, invocation).then(
             (outcome) => completions.push({ nodeId, outcome }),
             (error: unknown) => completions.push({ nodeId, error }),
           );
@@ -373,17 +373,18 @@ export class FlowEngine {
   }
 
   /**
-   * Return the steps of a just-started node declaring `needsSteps`, else `null`. The evaluator
-   * closes them when the evaluation's outcome is decided.
+   * Return the steps of a just-started node declaring `needsSteps`, under its `signal`, else
+   * `null`. The evaluator closes them when the evaluation's outcome is decided.
    */
-  #nodeSteps(nodeId: string): NodeSteps | null {
+  #nodeSteps(nodeId: string, signal: AbortSignal): NodeSteps | null {
     const { state, log } = this;
     if (state.flow.nodes.get(nodeId)!.needsSteps !== true) return null;
     // The recorded steps are frozen; the node gets copies it may change.
     const prior = structuredClone(state.nodeSteps.get(nodeId) ?? []) as ValueRecord[];
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, (step) => {
-      // A stopping run takes no more steps; the stop is control flow, not a host fault.
-      this.#controller.signal.throwIfAborted();
+    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, (step, options) => {
+      // A stopping run takes only a settled call's step, until it has a result; the stop is
+      // control flow, not a host fault.
+      if (signal.aborted && !(options?.settled === true && state.result === null)) throw signal.reason;
       try {
         commitPrepared(log, state, prepareNodeStep(state, nodeId, step));
       } catch (error) {
@@ -465,11 +466,7 @@ export class FlowEngine {
    * Evaluate one started node under its own signal, aborted with the run's reason when the run
    * signal aborts; the run state changes only through its recorded steps.
    */
-  async #evaluate(
-    nodeId: string,
-    invocation: ConversationInvocation,
-    steps: NodeSteps | null,
-  ): Promise<EvaluatedOutcome> {
+  async #evaluate(nodeId: string, invocation: ConversationInvocation): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream } = this;
     const trace = state.trace;
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
@@ -494,16 +491,20 @@ export class FlowEngine {
         tools: this.tools,
         skills: this.skills,
         steering: this.#steering,
-        steps,
+        steps: this.#nodeSteps(nodeId, nodeController.signal),
       });
     } finally {
       runSignal.removeEventListener("abort", relay);
     }
   }
 
-  /** Pass one transient chunk or in-loop event to its callback unless the run is stopping. */
+  /**
+   * Pass one transient chunk or in-loop event to its callback unless the run is stopping; a
+   * stopping run with no result still passes a settled call's `ToolCallFinished`.
+   */
   #emit<T>(callback: (item: T) => unknown, item: T): void {
-    if (!this.#controller.signal.aborted) this.#callHost(callback, item);
+    if (this.#controller.signal.aborted && !(item instanceof ToolCallFinished && this.state.result === null)) return;
+    this.#callHost(callback, item);
   }
 
   /** Pass each post-durable observer to `onEvent`, then add it to the run's events. */

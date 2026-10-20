@@ -18,14 +18,14 @@
  * `replayRecords`): the crash is a throwing `onStream`, a recorded callback stop that rejects the
  * first run.
  * `test_serial_skips_a_step_once_stop_is_set`: the stop is an `onEvent` promise for the node's
- * start that rejects, and `record` throws the run signal's reason, the stop's error.
+ * start that rejects, and `record` throws the node signal's reason, the stop's error.
  *
  * Changed: `ValueError` is `RangeError`; `True` for `starts` is `true`.
  * `test_pooled_workers_never_read_the_step_authority` checks a thread name; in its place `prior` is
  * a snapshot taken at the start: a step the node records doesn't change it.
  * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its
  * step, since `record` is synchronous; in its place, after a sibling's failure aborts the run,
- * `record` throws the run signal's reason and appends nothing.
+ * `record` throws the node signal's reason and appends nothing.
  *
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
  * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
@@ -422,9 +422,11 @@ test("serial skips a step once stop is set", async () => {
 
 test("a sibling failure stops a pooled node's steps", async () => {
   const raised: unknown[] = [];
+  const reasons: unknown[] = [];
   const work = new StepNode("work", async (caps) => {
     // The sibling's failure aborts the run signal.
     await aborted(caps.signal!).catch(() => {});
+    reasons.push(caps.signal!.reason);
     try {
       caps.steps!.record({ event: "started", attempt: 2n });
     } catch (error) {
@@ -443,6 +445,7 @@ test("a sibling failure stops a pooled node's steps", async () => {
   expect(built.state.result).toBeInstanceOf(RunFailed);
   expect((built.state.result as RunFailed).failure.nodeId).toBe("boom");
   expect(raised.length).toBe(1);
+  expect(raised[0]).toBe(reasons[0]);
   expect(raised[0]).toBe(built.signal.reason);
   expect(records(built, "work").some((record) => record instanceof NodeStepRecord)).toBe(false);
 });

@@ -297,9 +297,11 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   const tools = mapping("host.tools", get(host, "tools", {}));
   for (const [name, entry] of Object.entries(tools)) {
     const where = `host.tools.${name}`;
-    const tool = keys(where, entry, new Set(["parameters", "description", "results"]), {
-      required: ["parameters", "results"],
-    });
+    const toolKeys = new Set(["parameters", "description", "concurrency_safe", "results"]);
+    const tool = keys(where, entry, toolKeys, { required: ["parameters", "results"] });
+    if (Object.hasOwn(tool, "concurrency_safe") && typeof tool["concurrency_safe"] !== "boolean") {
+      throw new Error(`\`${where}.concurrency_safe\` must be a boolean`);
+    }
     const results = tool["results"];
     const scripts: [string | null, Value | undefined][] = isMapping(results)
       ? Object.entries(results)

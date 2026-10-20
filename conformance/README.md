@@ -292,7 +292,11 @@ instead. In `codec` mode a bare `{"$record": X}` whose `X` isn't an object (e.g.
 A case can't hold code, so its host is declared under `host`.
 
 - **`tools`**: stub tools by name, each `{parameters: <JSON Schema>, description: <text>,
-  results: <script>}` (`description` optional). A script is a list of entries, taken one per call
+  concurrency_safe: <bool>, results: <script>}` (`description` and `concurrency_safe`
+  optional). With `concurrency_safe: true`, the tool's `isConcurrencySafe` returns true for every
+  call, so an AGENT may run its calls together (see
+  [`docs/api.md`](../docs/api.md#tool-context)). The Python runner ignores it, since one call at
+  a time is a valid schedule. A script is a list of entries, taken one per call
   in order, or a mapping from node id to such a list, taken by the calling node (for tools that
   several nodes call at once). An entry is `{return: <value>}` or `{raise: {class: <name>,
   message: <text>, retry_after: <seconds>}}` (`retry_after` only for `TransientToolError`). The
@@ -371,8 +375,9 @@ A case can't hold code, so its host is declared under `host`.
     taken); not when the call raises;
   - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
     entry's `chunks` list, text or not (a `reply` streams as one chunk);
-  - `{tool_call: i}`: once the node's `i`th tool call has returned or raised, counted as in
-    `expect.tool_calls` (`ask_user` included). Stub tools run one at a time, so this is call order.
+  - `{tool_call: i}`: once the node's `i`th tool call in call order has returned or raised,
+    counted as in `expect.tool_calls` (`ask_user` included). Stub tools return at once, so calls
+    finish in call order.
 
   Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
   scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`

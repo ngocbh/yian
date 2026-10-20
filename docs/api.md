@@ -609,8 +609,18 @@ and reach the tool as fresh host values: an int within ±(2^53−1) arrives as a
 larger one as a `bigint`, and an infinite float as a real `Infinity`, which a tool may also
 return. `isConcurrencySafe(args)` is opt-in, so a tool without it is unsafe. It receives
 what `execute` receives, and a call counts as safe only when it returns exactly
-`true`; a throw or any other result counts as unsafe. Once the AGENT loop is ported,
-consecutive safe calls in one turn may run together.
+`true`; a throw or any other result counts as unsafe.
+
+Changed (TS yian): an AGENT runs one reply's tool calls in groups, where Python runs them one at
+a time. Consecutive safe calls run together; an unsafe call waits for them to finish, then runs
+alone. `load_skill` is safe. `ask_user` isn't, and neither is an MCP tool its server's
+`concurrencySafe` doesn't mark. The calls are checked (grant, then arguments) in call order, and
+no call of a group starts until the group is formed. A call whose check fails fails the node
+after the calls before it ran, as in Python. The model reads the results in call order, whatever
+order the calls finish in, but the `ToolCallFinished` events of a group arrive in finish order.
+The first call that fails aborts its siblings' `ctx.signal`, and the node fails once all of them
+have settled; a `ReportedToolError` is a result, not a failure. On a stop, a call that already
+finished keeps its `ToolCallFinished`, and a call not yet started is skipped.
 
 Changed (TS yian): in place of `function_tool`,
 `tool({ name, description, parameters, output, execute, isConcurrencySafe })` builds a
@@ -765,6 +775,13 @@ reported error that also stops retries is `new ReportedToolError(message, { perm
 true })`, and the wait is `new TransientToolError("rate limited", { retryAfter: 5 })`;
 a bad `retryAfter` throws `TypeError` or `RangeError`. `execute` may return a Promise,
 which is awaited, so no awaitable raises `ToolCheckError`.
+
+Changed (TS yian): the model reads a tool's result in the text form, not Python's `str()`: text
+as it is, `null` for `null`, and a record or list in JSON style (`{"a":1}`; see
+[Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
+`ToolCallFinished.result` in `on_event` holds the same text. A `ReportedToolError` that a tool's
+argument validator throws is read by the model like one the tool raised, as in Python, which
+checks the arguments inside the call.
 
 ### Tool groups
 

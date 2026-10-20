@@ -1,0 +1,237 @@
+# TS-only (D29): Python runs a reply's tool calls one at a time.
+# Two calls of a tool marked concurrency_safe form one group: both start before either finishes.
+# The stub tools return at once, so they finish in call order (call a, then b), and the next
+# request holds their two tool messages in call order.
+kind: run
+python_skip: concurrent tool calls are TS-only (D29)
+flow: |
+  id: groups
+  name: groups
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${writer.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      concurrency_safe: true
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: found:a
+      - return: found:b
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-a
+            name: lookup
+            arguments:
+              topic: a
+          - type: tool_call
+            id: call-b
+            name: lookup
+            arguments:
+              topic: b
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: both found
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: call-a
+              name: lookup
+              arguments:
+                topic: a
+            - type: tool_call
+              id: call-b
+              name: lookup
+              arguments:
+                topic: b
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-a
+              name: lookup
+              content: found:a
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-b
+              name: lookup
+              content: found:b
+          tools:
+          - name: lookup
+            description: Look up a topic.
+            parameters:
+              type: object
+              properties:
+                topic:
+                  type: string
+              required: [topic]
+expect:
+  output:
+    status: succeeded
+    output: both found
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, writer]
+  - - node_succeeded
+    - writer
+    - value: both found
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: both found
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: writer
+  - - ModelCallStarted
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:1>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ToolCallStarted
+    - arguments:
+        topic: a
+      call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      tool_call_id: call-a
+  - - ToolCallStarted
+    - arguments:
+        topic: b
+      call_index: 1
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      tool_call_id: call-b
+  - - ToolCallFinished
+    - call_index: 0
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      result: found:a
+      tool_call_id: call-a
+  - - ToolCallFinished
+    - call_index: 1
+      exchange_id: <id:1>
+      name: lookup
+      node_id: writer
+      result: found:b
+      tool_call_id: call-b
+  - - ModelCallStarted
+    - exchange_id: <id:2>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - ModelCallFinished
+    - exchange_id: <id:2>
+      model: claude-test
+      node_id: writer
+      provider: anthropic
+      purpose: chat
+  - - NodeSucceeded
+    - node_id: writer
+      output: both found
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      output: both found
+  - - RunSucceeded
+    - output: both found
+  stream:
+  - chunk: ''
+    exchange_id: <id:1>
+    final: true
+    key: text
+    node_id: writer
+  - chunk: both found
+    exchange_id: <id:2>
+    final: false
+    key: text
+    node_id: writer
+  - chunk: ''
+    exchange_id: <id:2>
+    final: true
+    key: text
+    node_id: writer
+  tool_calls:
+    lookup:
+    - args:
+        topic: a
+      attempt: 1
+      call_id: r1/writer/<id:1>/0
+      node: writer
+    - args:
+        topic: b
+      attempt: 1
+      call_id: r1/writer/<id:1>/1
+      node: writer

@@ -1690,6 +1690,9 @@ that raises `ReportedToolError` doesn't fail the node: the model reads the error
 message as that call's result and the loop continues. Any other exception from a
 tool fails the node (see [TOOL retries](api.md#tool-retries)).
 
+Changed (TS yian): consecutive calls in one reply whose tools are safe to run together run
+together; results still reach the model in call order (see [Tool context](api.md#tool-context)).
+
 `mode:` was removed. A flow that still sets it fails to load with a message that
 says to delete the line; with `mode: plain` and `tools:`, those tools now run.
 

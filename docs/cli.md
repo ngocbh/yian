@@ -106,6 +106,19 @@ whole file `F`; see [Removing a sign-in](#removing-a-sign-in).
 [Signing in from a program](#signing-in-from-a-program). Any other form with `--json`
 is a usage error.
 
+Changed (TS yian):
+
+- The setup prompts draw on stderr, as the
+  [interactive prompt's note](#the-interactive-prompt) says.
+- Browser sign-in opens the URL with the system opener (`open` on macOS, `xdg-open`
+  elsewhere, `rundll32` on Windows), started without a shell; `$BROWSER` isn't read and
+  there is no text-browser fallback. The URL is printed first and stays usable when no
+  opener starts.
+- The one short request that checks a model has 30 seconds in all, Ollama's included,
+  and a failure names TS error types (`The model didn't answer: ProviderError: ...`)
+  where Python named the SDK's. A timeout reads `TimeoutError: The model didn't reply
+  within 30 seconds`.
+
 A host `api_key` beats a saved login, and a saved login beats the provider's key
 variable, so a saved OpenAI subscription wins over an ambient `OPENAI_API_KEY`.
 `YIAN_DEFAULT_PROVIDER` and `YIAN_DEFAULT_MODEL` beat the saved default provider and
@@ -744,6 +757,10 @@ $ echo '{"provider": "openai", "model": "gpt-5.5", "openai": {"temperature": "ho
 Without `--json`, it prints `ok`, or one `FIELD: MESSAGE` line per error on stderr
 (just `MESSAGE` when there is no field).
 
+Changed (TS yian): stdin must be UTF-8. Bytes that aren't UTF-8, even inside a JSON
+string, and a number too large for a float, such as `1e400`, are usage errors (exit 2);
+Python checked such a layer and reported a field error.
+
 ### Listing providers
 
 `yian providers` lists every supported provider. `methods` are the login kinds
@@ -799,6 +816,14 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter --json
 Without `--json`, it prints one model per line on stdout. For `azure` it prints
 `azure has no model listing` on stderr and exits 0; a failure's message goes to
 stderr.
+
+Changed (TS yian):
+
+- Ctrl-C ends `yian models` by the signal; Python printed `Aborted!` and exited 1.
+- `--timeout` takes Python's number syntax in ASCII digits only. A negative value
+  written as a separate word (`--timeout -1`) is refused as a missing value, and
+  `--timeout=-1` as not above 0; both exit 2. A timeout too large to count in
+  milliseconds is capped, so the listing still runs.
 
 ### Signing in from a program
 

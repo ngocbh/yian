@@ -645,7 +645,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   those are ported. `src/cli/mcp_config.ts` reads `mcpServers` files into unopened MCP servers
   (`userMcpConfig`, `loadMcpConfig`). `src/cli/memory.ts` builds the memory registry from
   `--memory-root` and `--memory-storage` (`parseMemoryStorage`, `buildCliMemories`).
-  `src/cli/auth.ts` is a stub with its final exports.
+- `src/cli/auth.ts` holds `yian auth` (list, setup through `Terminal` prompts, `--default`,
+  `--remove`, whole-file removal, device sign-in as JSON lines), `yian models`, `yian providers`
+  and `yian config check`. Its handlers take an optional `AuthDeps` (the OpenAI service, the
+  listing, the model factory, the terminal, the browser opener, the signal source and the
+  scheduler), which tests replace with fakes. Ctrl-C stops `yian auth` (SIGTERM too for the JSON
+  device form); deadlines run on the scheduler, never on `AbortSignal.timeout`.
 - The conformance runner runs `cli` cases by spawning `src/cli/index.ts` (built: `dist/src/cli/
   index.js`) with a preloaded hook that routes `fetch` to a stub server.
 

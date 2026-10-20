@@ -159,7 +159,9 @@ class Checker {
           ? layer.origin
           : leaf instanceof Binding && leaf.origin !== null
             ? leaf.origin
-            : (layer as ValueTemplate).originAt(path);
+            : layer instanceof ValueTemplate
+              ? layer.originAt(path)
+              : null;
       const frame = this.resolveOrigin !== null && origin !== null ? this.resolveOrigin(origin) : null;
       const fail: Fail = (message) =>
         frame !== null

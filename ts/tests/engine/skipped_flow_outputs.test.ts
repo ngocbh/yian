@@ -50,8 +50,10 @@
  * Changed: CODE bodies are TS; load doesn't run them. The literal output `5` reads as `5n`. The
  * fingerprint row's second half stubs `null_skipped_outputs` in Python's pipeline module to
  * fingerprint the flow without the rewrite; a test can't stub a function another ES module
- * imports, so it puts the authored output source back on a fresh assembly by hand. The MAP `over:` row builds its `child` def by hand. The error rows pin the whole
- * message where Python checks fragments.
+ * imports, so it puts the authored output source back on a fresh assembly by hand (END's edge
+ * keeps the optional stance the rewrite gave it, so only the output source differs). The MAP
+ * `over:` row builds its `child` def by hand. The error rows pin the whole message where Python
+ * checks fragments.
  *
  * Later (T3-22), reading a `defs:` child's own output contract:
  * `test_call_output_of_a_skipped_branch_is_optional`,

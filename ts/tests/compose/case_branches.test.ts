@@ -17,8 +17,9 @@
  * `output:`, tagged or not, is a load error at the `output:` that says to tag the result where it
  * is read.
  *
- * Ported: every row's load half. A row that applies the suggested rewrite and runs it checks here
- * that the rewritten flow assembles: `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
+ * Ported: the load half of every row but the two `test_case_output_over_*_reads_the_taken_branch`
+ * rows (Later (T4), whole). A row that applies the suggested rewrite and runs it checks here that
+ * the rewritten flow assembles: `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_an_else_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_a_suggested_entry_id_skips_ids_already_taken`,
  * `test_the_old_typed_text_is_tagged_with_its_type`, `test_a_lone_reference_is_tagged_with_its_type`,

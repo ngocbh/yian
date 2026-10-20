@@ -15,9 +15,7 @@
  * `test_searched_case_condition_with_a_nested_span_shows_the_rewrite`, the branch gate rows the
  * narrowing and the skipped-arithmetic check decide (the `${a.output + 1}` case of
  * `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
- * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream` and
- * `test_a_guarded_read_inside_a_default_loads`, which checks for now that no ported pass rejects
- * the guarded `when:`; the field read under the guard is T3-18's),
+ * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`),
  * `test_item_head_ref_yields_no_edge_but_producer_ref_does` and
  * `test_binding_coskip_sets_edge_optional_per_stance`.
  *
@@ -40,12 +38,15 @@
  * `yian.compile.__all__`.
  *
  * The harvested `load-core/engine_graph__a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`
- * and `load-core/engine_graph__a_guarded_read_inside_a_default_loads` are pinned at the end.
+ * is pinned at the end, with the `ok` case `load-core/engine_graph__a_guarded_read_inside_a_default_loads`,
+ * which only checks for now that no ported pass rejects its guarded `when:`.
  *
  * Later (T3-18 PR 3), decided by the reference check reading a union field under the gate: the
  * `${d.output.limit}` case of `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
  * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it` (and its harvested case) and
- * `test_a_co_skipping_default_keeps_the_gate_in_the_branch`; until then they load whatever the
+ * `test_a_co_skipping_default_keeps_the_gate_in_the_branch` and
+ * `test_a_guarded_read_inside_a_default_loads` (its `when:` reads a union field under an
+ * `isinstance` guard; no ported pass can reject it yet); until then they load whatever the
  * narrowing gives.
  */
 
@@ -374,10 +375,6 @@ test("a default read of a branch rejects arithmetic on it downstream", () => {
     "node 'hot' input 'v': ${a.output + 1} does arithmetic on a.output, which is null when node 'a' is skipped; " +
       "give it a default with :-, e.g. (a.output :- <default>)",
   );
-});
-
-test("a guarded read inside a default loads", () => {
-  assembleText(branchGate('"isinstance(d.output, Buy) and (d.output.limit :- 0) > 1"', "${input.s}"));
 });
 
 test("a searched case condition with a nested span shows the rewrite", () => {

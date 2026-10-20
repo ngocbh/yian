@@ -35,7 +35,11 @@
  * `test_pruning_retires_a_grown_subtree_once_settled`,
  * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
  * `test_growth_keeps_a_settled_prune_id_that_kept_work_reads`,
- * `test_growth_retires_a_settled_prune_id_the_kept_work_does_not_read`.
+ * `test_growth_retires_a_settled_prune_id_the_kept_work_does_not_read`,
+ * `test_actual_build_grow_splices_call_map_and_loop_with_fifo_and_depth`,
+ * `test_actual_call_growth_allows_an_omitted_optional_defaulted_child_input`,
+ * `test_zero_field_loop_growth_schedules_its_next_driver_after_the_body` and
+ * `test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero`.
  *
  * Python's `_snapshot` is `snapshot` plus `topologySnapshot`: `snapshot` holds the flow by
  * reference, so a growth's topology change needs its own detached copy.
@@ -79,6 +83,11 @@
  *   the index build reads the wiring first (`node '__end__' has invalid wiring`, the site Python's
  *   test reaches too), and with it built before the growth the prune scan does (`surviving node
  *   '__end__' has invalid wiring`).
+ * - the `buildGrow` rows' LOOP seeds hold the iteration as a `bigint` (`[{}, 0n]`), as the
+ *   reducer's canonical seed does.
+ * - `test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero`: the clone's `Grow`
+ *   is written out as its `run` gives it (seed `[{}, 1n]`, pruning body 0 and itself), since LOOP
+ *   `forward` isn't ported.
  * - `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`: it keeps the
  *   after-prepare mutations, the builder call count and the `addSubgraph`/`removeSubgraph` spies;
  *   the guards on `copy.deepcopy`, `canonical_seed`, `expansion_digest` and `NodeExpanded` go,
@@ -105,15 +114,11 @@
  * - the `empty-param-tuple` and `param-tuple` rows of
  *   `test_growth_rejects_invalid_fragments_atomically`: a tuple and a list are both a JS array.
  *
- * Later (T3-22, they need `build_grow`):
- * `test_actual_build_grow_splices_call_map_and_loop_with_fifo_and_depth`,
- * `test_actual_call_growth_allows_an_omitted_optional_defaulted_child_input`,
- * `test_zero_field_loop_growth_schedules_its_next_driver_after_the_body`,
- * `test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero`.
  */
 
 import { expect, spyOn, test } from "bun:test";
 
+import { buildGrow } from "../../src/compile/expand.ts";
 import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import { current } from "../../src/defaults.ts";
@@ -121,6 +126,7 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { NodeExpanded, type RunEvent } from "../../src/events.ts";
 import { Grow, Node, NodeKind } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import {
   Binding,
   ContractOrigins,
@@ -131,6 +137,7 @@ import {
   ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -144,6 +151,7 @@ import {
   type PreparedTransition,
   prepareExpanded,
   prepareNodeStarted,
+  prepareNodeSucceeded,
   prepareRecord,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -169,15 +177,28 @@ class OverlayNode extends Node {
   readonly kind = NodeKind.CODE;
 }
 
-/** Return a real manifestable child flow, as `build_grow` accepts. */
-function canonicalChild(): CompiledFlow {
+/**
+ * Return a real manifestable child flow, as `buildGrow` accepts; with `optionalInput`, its START
+ * declares an optional text input `optional` defaulting to `fallback`.
+ */
+function canonicalChild(options: { optionalInput?: boolean } = {}): CompiledFlow {
+  const parameters = options.optionalInput
+    ? [
+        new Parameter("optional", {
+          contract: new ValueContract(Type.scalar(ValueKind.STRING)),
+          hasDefault: true,
+          default: "fallback",
+          coerceStrings: true,
+        }),
+      ]
+    : [];
   const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: [] })],
+    [START_ID, new StartNode(START_ID, { params: parameters })],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
   return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
     wiring: new Map([
-      [START_ID, new Map()],
+      [START_ID, new Map(options.optionalInput ? [["optional", "${input.optional}"]] : [])],
       [END_ID, new Map()],
     ]),
   });
@@ -637,6 +658,96 @@ test("growth record replay requires the injected builder", () => {
   const record = new NodeExpandedRecord("spawn", {}, [], "a".repeat(64));
 
   expectError(() => prepareRecord(state, record), TypeError, /grow_builder/);
+});
+
+/** The fragment start and end ids of a prepared growth's plan. */
+function fragmentIds(prepared: PreparedTransition): { fragmentStartId: string; fragmentEndId: string } {
+  return (prepared._plan as { delta: { fragmentStartId: string; fragmentEndId: string } }).delta;
+}
+
+test.each(["call", "map", "loop"])("actual buildGrow splices %s with FIFO order and depth", (kind) => {
+  const child = canonicalChild();
+  let spawner: Node;
+  let grow: Grow;
+  let expectedDepth: Record<string, number>;
+  if (kind === "call") {
+    spawner = new CallNode("spawn", { flowId: "child", child });
+    grow = new Grow({});
+    expectedDepth = { "spawn/__end__": 3 };
+  } else if (kind === "map") {
+    spawner = new MapNode("spawn", { flowId: "child", child });
+    grow = new Grow([{}, {}]);
+    expectedDepth = { "spawn/__end__": 3 };
+  } else {
+    spawner = new LoopNode("spawn", {
+      flowId: "child",
+      child,
+      childInputs: [],
+      predicateKind: "times",
+      times: 3,
+      maxIters: 3,
+      originId: "spawn",
+    });
+    grow = new Grow([{}, 0n]);
+    expectedDepth = { "spawn~1": 2 };
+  }
+  spawner.params = [];
+  const { state, log } = initializedSpawner(parentFlow({ spawner, sibling: true }));
+  state.depth.set("spawn", 2);
+  const priorPool = state.pool.toWire();
+
+  const prepared = prepareExpanded(state, "spawn", grow, buildGrow);
+  const observers = commitPrepared(log, state, prepared);
+
+  const record = prepared.record as NodeExpandedRecord;
+  expect(record.spawnerId).toBe("spawn");
+  expect(record.topologyDigest).toBe(expansionDigest(buildGrow(spawner, record.seed)));
+  expect(observers).toEqual(prepared.observers);
+  expect(state.nodeState.get("spawn")).toBe(NodeState.EXPANDED);
+  expect(state.inFlight.has("spawn")).toBe(false);
+  expect(state.edgeState.get("spawn-end")).toBe(NodeState.UNKNOWN);
+  expect(state.ready[0]).toBe("side");
+  expect(state.ready.at(-1)).toBe(fragmentIds(prepared).fragmentStartId);
+  expect(state.pool.toWire()).toEqual(priorPool);
+  expect(state.result).toBeNull();
+  for (const [nodeId, depth] of Object.entries(expectedDepth)) expect(state.depth.get(nodeId)).toBe(depth);
+});
+
+test("actual CALL growth allows an omitted optional defaulted child input", () => {
+  const spawner = new CallNode("spawn", { flowId: "child", child: canonicalChild({ optionalInput: true }) });
+  spawner.params = [];
+  const { state, log } = initializedSpawner(parentFlow({ spawner }));
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), buildGrow));
+
+  const clonedStart = state.flow.nodes.get("spawn/__start__")!;
+  expect(clonedStart.params!.map((param) => param.name)).toEqual(["optional"]);
+  expect(state.flow.wiring.get("spawn/__start__")).toEqual(new Map());
+});
+
+test("a zero-field LOOP growth schedules its next driver after the body", () => {
+  const loop = new LoopNode("spawn", {
+    flowId: "child",
+    child: canonicalChild(),
+    childInputs: [],
+    predicateKind: "times",
+    times: 2,
+    maxIters: 2,
+    originId: "spawn",
+  });
+  loop.params = [];
+  const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
+
+  const expansion = prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow);
+  commitPrepared(log, state, expansion);
+  const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
+
+  commitPrepared(log, state, prepareNodeStarted(state, bodyStart));
+  commitPrepared(log, state, prepareNodeSucceeded(state, bodyStart, {}));
+  commitPrepared(log, state, prepareNodeStarted(state, bodyEnd));
+  commitPrepared(log, state, prepareNodeSucceeded(state, bodyEnd, null));
+
+  expect(state.ready).toEqual(["spawn~1"]);
 });
 
 test.each(["today", "now", "run_id"])("growth accepts the closed system ambient %s", (ambient) => {
@@ -1386,6 +1497,54 @@ test.each([
   expect(error.constructor).toBe(RangeError);
   expect(error.message).toMatch(message);
   expect(error.cause).toBeInstanceOf(ExpressionError);
+});
+
+test("a LOOP clone record uses the actual id, self-prunes and inherits depth zero", () => {
+  const child = canonicalChild();
+  const loop = new LoopNode("spawn", {
+    flowId: "child",
+    child,
+    childInputs: [],
+    predicateKind: "times",
+    times: 3,
+    maxIters: 3,
+    originId: "spawn",
+  });
+  loop.params = [];
+  const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
+  state.depth.set("spawn", 2);
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow));
+  const firstDynamic = [...state.flow.nodes.keys()].filter((nodeId) => !state.initialStaticIds.has(nodeId));
+  expect(firstDynamic).toContain("spawn~1");
+  expect(state.depth.get("spawn~1")).toBe(2);
+  for (const nodeId of firstDynamic) {
+    state.nodeState.set(nodeId, nodeId === "spawn~1" ? NodeState.UNKNOWN : NodeState.TAKEN);
+  }
+  for (const edgeId of state.edgeState.keys()) {
+    if (edgeId !== "start-spawn" && edgeId !== "spawn-end") state.edgeState.set(edgeId, NodeState.TAKEN);
+  }
+  state.ready.length = 0;
+  state.ready.push("spawn~1");
+  commitPrepared(log, state, prepareNodeStarted(state, "spawn~1"));
+
+  // The grow the clone's `run({})` gives: continue with iteration 1, pruning body 0 and itself.
+  const grow = new Grow([{}, 1n], [...[...child.nodes.keys()].map((id) => ns(mapCallsite("spawn", 0), id)), "spawn~1"]);
+  const prepared = prepareExpanded(state, "spawn~1", grow, buildGrow);
+
+  const record = prepared.record as NodeExpandedRecord;
+  expect(record.spawnerId).toBe("spawn~1");
+  expect(record.pruneIds).toContain("spawn~1");
+  const observers = commitPrepared(log, state, prepared);
+
+  expect((observers[0] as NodeExpanded).nodeId).toBe("spawn~1");
+  expect(state.flow.nodes.has("spawn~1")).toBe(false);
+  expect(state.acceptedStarts.has("spawn~1")).toBe(false);
+  expect(state.flow.nodes.has("spawn")).toBe(true);
+  expect(state.nodeState.get("spawn")).toBe(NodeState.EXPANDED);
+  expect(state.flow.nodes.has("spawn~2")).toBe(true);
+  expect(state.depth.get("spawn~2")).toBe(2);
+  expect([...state.flow.nodes.keys()].some((nodeId) => nodeId.startsWith("spawn#0/"))).toBe(false);
 });
 
 test("a growth commit does no builder or graph work after append", () => {

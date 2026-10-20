@@ -100,7 +100,10 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
     defsCursor: document.root.child("defs"),
   });
 
+  const resolve = spyOn(scope, "resolve");
   scope.eagerLoadDefs();
+  expect(resolve.mock.calls).toEqual([["local"]]);
+  resolve.mockRestore();
   const local = scope.resolve("local");
   expect(local.compiled.flowId).toBe("local");
   expect(scope.resolve("local")).toBe(local);

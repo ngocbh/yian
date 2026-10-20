@@ -830,10 +830,10 @@ class PrivateCallable {
  * Compiler-owned callables resolve first, then authored `defs:` and `uses:`. A bare name in
  * neither authored mapping is rejected instead of reaching the external resolver. Private
  * declarations, local defs and external aliases share one memo table. The in-progress set makes
- * recursive private and def construction loud; cross-file recursion is outside this scope and belongs to the selected
- * external resolver. A failed callable construction drops its new private declarations, nested
- * cache entries and source-catalog sites together, so a later retry can't see a stale partial
- * attempt.
+ * recursive private and def construction loud; cross-file recursion is outside this scope and
+ * belongs to the selected external resolver. A failed callable construction drops its new private
+ * declarations, nested cache entries and source-catalog sites together, so a later retry can't
+ * see a stale partial attempt.
  *
  * Aliases resolve asynchronously, through `resolveAlias`, before assembly; the synchronous
  * `resolve` assembly calls only reads them from the memo.

@@ -9,7 +9,7 @@
  * `load-types/compose_typed_bindings_unions__a_union_disjoint_from_the_declared_type_fails` and
  * `…__a_declared_union_accepts_one_member`.
  *
- * Changed: the error row pins the whole message where Python matches its start.
+ * Changed: the error row pins the whole message and its line, where Python matches a fragment.
  *
  * Later (T3-20): the rows CASE and `isinstance` narrowing decide,
  * `test_a_member_over_another_branchs_member_fails_in_that_branch`,

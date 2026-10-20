@@ -38,10 +38,11 @@
  * the scalar before any entry is read. The written-out record rows
  * (`test_a_written_out_object_entry_keeps_its_fields`,
  * `test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader`,
- * `test_a_literal_field_takes_its_literal_type`, the span-free row of
- * `test_a_nested_untagged_mapping_keeps_its_fields`,
- * `test_an_escaped_span_in_an_object_entry_is_text`) check the built node's output contract, the
- * record `literalContract` spells, where Python checks the reader's error;
+ * the span-free row of `test_a_nested_untagged_mapping_keeps_its_fields`) check the built node's
+ * output contract, the record `literalContract` spells, where Python checks the reader's error;
+ * `test_a_literal_field_takes_its_literal_type` and
+ * `test_an_escaped_span_in_an_object_entry_is_text` check the typed reader's error, as Python
+ * does, and also the record `literalContract` spells;
  * `test_an_object_entry_over_an_outside_value_stays_object` and
  * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` (its `call(...)` row with the
  * `g` def built by hand) check that the contract is the tag. The span row of

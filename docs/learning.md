@@ -270,6 +270,13 @@ result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
   `read`, `write`, and its open sessions raise `MemoryOperationError` with code
   `profile.closed`. A registry from `build_memories` closes the profiles it built.
 
+Changed (TS yian): the learner's material is the text form (`1.0` is `1`, bare `Infinity`, JS
+key order), lengths (`max_chars`, `input_budget_chars`) count code points, and blank and
+unchanged checks use JS `trim()` where Python uses `strip()`. Feedback values dedupe by their
+JSON text, so the int `2`, the float `2.0` and `true` stay distinct (Python's `==` merges them).
+Feedback holding `±Infinity` fails `profile.invalid_context` when a proposed mutation would carry
+it.
+
 `FileMarkdownStore(path)` keeps the current document as a plain editable file.
 The file holds the text exactly as written, line endings included, so `\r\n`
 reads back as `\r\n` and the version always hashes the text `read` returns.

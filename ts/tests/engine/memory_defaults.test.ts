@@ -5,8 +5,9 @@
  * `test_session_memory_settings_default_from_the_environment` (the settings are read through the
  * memory's private members, as Python reads `_history_budget_chars`),
  * `test_reflective_limits_default_from_the_environment`,
- * `test_reflection_lesson_material_follows_its_budget` and
- * `test_reflection_episode_material_follows_its_budget`.
+ * `test_reflection_lesson_material_follows_its_budget`,
+ * `test_reflection_episode_material_follows_its_budget` and
+ * `test_profile_memory_budgets_default_from_the_environment`.
  *
  * TS-only: none.
  *
@@ -15,8 +16,6 @@
  *   an environment map standing in for Python's `conftest.py` variables.
  * - The reflection rows' `createModel` returns a `ScriptedModel` answering a no-op, and the prompt
  *   is read off its recorded request, where Python patches `model_from_config`.
- *
- * Later: `test_profile_memory_budgets_default_from_the_environment` (with the profile backend).
  *
  * Not ported: `test_memory_nesting_bound_follows_the_value_nesting_limit` (TS has no memory nesting
  * limit); `test_reflection_limit_material_follows_its_budget` (the `{"max_items": N}` material can't
@@ -40,8 +39,10 @@ import {
   MemoryMutation,
 } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { ProfileMemory } from "../../src/memory/profile.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
+import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 
 let home: string;
 
@@ -175,4 +176,15 @@ test("reflection episode material follows its budget", async () => {
   const episodes = promptParts(prompt())["Episodes: "]!;
   expect(Array.from(episodes).length).toBeLessThanOrEqual(400);
   expect(JSON.parse(episodes).truncated).toBe(true);
+});
+
+test("profile memory budgets default from the environment", () => {
+  setDefaults({ YIAN_PROFILE_MAX_CHARS: "100", YIAN_PROFILE_INPUT_BUDGET_CHARS: "50" });
+  const memory = new ProfileMemory(new FileMarkdownStore(path.join(home, "ada.md")));
+  expect([memory.maxChars, memory.inputBudgetChars]).toEqual([100, 50]);
+  const explicit = new ProfileMemory(new FileMarkdownStore(path.join(home, "bob.md")), {
+    maxChars: 200,
+    inputBudgetChars: 70,
+  });
+  expect([explicit.maxChars, explicit.inputBudgetChars]).toEqual([200, 70]);
 });

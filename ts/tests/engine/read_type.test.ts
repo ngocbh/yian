@@ -11,8 +11,10 @@
  * the loader reads it (a flow input with `readSourceFlowInputs`, a node output with
  * `readValueContract`, a tagged binding with `readTaggedValue`) and found, labelled with
  * `canonicalTypeLabel`, in the expected message; the messages themselves are T3-19's
- * `call_types` and `typed_bindings` and T3-20's `case_exhaustive`. And one `ok` case whose
- * union typedef reads and whose `input:` declarations then read through `readSourceFlowInputs`.
+ * `call_types` and `typed_bindings` (the open-range typed-binding case is pinned with its
+ * message in `typed_bindings_check.test.ts`, the call one with `call_types`'s port) and T3-20's
+ * `case_exhaustive`. And one `ok` case whose union typedef reads and whose `input:` declarations
+ * then read through `readSourceFlowInputs`.
  *
  * Changed: an empty or surrogate field name is refused without a source too, as an unranged
  * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.

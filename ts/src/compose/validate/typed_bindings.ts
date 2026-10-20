@@ -25,6 +25,7 @@
  * binding types rather than reject them. `localInputContracts` returns the proven contracts each
  * node-local name may have, for the passes that field-check what a node reads from its own inputs
  * (prompts).
+ * Not ported yet: `localInputContracts`.
  *
  * Node inputs are checked as soon as producer contracts exist, before the CALL, MAP, and LOOP
  * checks that compare the declared type with a child's parameters; flow outputs are checked once
@@ -41,7 +42,7 @@
 
 import type { FlowOutput } from "../../compile/model.ts";
 import { typeRelation } from "../../compile/validation.ts";
-import { type DiagnosticFrame, type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
 import {
   Binding,
@@ -77,7 +78,7 @@ import {
   type TypeFn,
 } from "../helpers/output_contracts.ts";
 import { namedTypeLabel, pathLabel } from "../helpers/tags.ts";
-import { type BuildResult, siteKey } from "../nodes/base.ts";
+import { type BuildResult, type OriginPresenter, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";
 
 /** The proven contracts a node-local name's value has, and where it is bound from; frozen. */
@@ -99,8 +100,11 @@ export class LocalInput {
   }
 }
 
-/** Resolves a binding's registered origin to its source frame, or `null` when it doesn't resolve. */
-export type ResolveOrigin = (origin: OriginRef) => DiagnosticFrame | null;
+/**
+ * Resolves a binding's registered origin to its source frame, or `null` when it doesn't resolve;
+ * the build context's origin presenter, so the two can't drift.
+ */
+export type ResolveOrigin = OriginPresenter;
 
 /**
  * Reject every typed node input that can never fit its declared type.
@@ -323,7 +327,8 @@ export function itemContract(
  * @param options.typeFn Resolves a constructor name to its type.
  * @param options.registry The flow's typedefs, so the message names a declared record or union by
  *   its typedef.
- * @param options.slot The binding's slot as the message names it (`p`, `p.decision`).
+ * @param options.slot The binding's slot as the message names it (`p`, `p.decision`), for the path
+ *   of a record nested in the value that misses a required field (default `""`).
  * @returns The error message, without the binding's name, or `null` when the binding may fit.
  */
 function bindingError(
@@ -332,7 +337,7 @@ function bindingError(
   flowInputs: ReadonlyMap<string, ValueContract>,
   options: { item?: ValueContract | null; typeFn?: TypeFn | null; registry?: TypeRegistry | null; slot?: string } = {},
 ): string | null {
-  const { item = null, typeFn = null, registry = null } = options;
+  const { item = null, typeFn = null, registry = null, slot = "" } = options;
   if (!(binding instanceof Binding) || binding.contract === null) return null;
   const declared = binding.contract.type;
   const label = namedTypeLabel(declared, registry ?? new Map());
@@ -359,7 +364,21 @@ function bindingError(
       : stringContract(binding.source);
   if (!isExactly(inferred, ValueContract)) return null; // unproven or partial: the runtime check covers it
   if (typeRelation(inferred.type, declared) !== "disjoint") return null;
-  return `declared ${label}, but the value is ${canonicalTypeLabel(inferred.type)}`;
+  const shown =
+    binding.source instanceof ValueTemplate
+      ? templateLabel(binding.source.value, stringContract)
+      : canonicalTypeLabel(inferred.type);
+  let message = `declared ${label}, but the value is ${shown}`;
+  let found: [ValuePath, string[]] | null = null;
+  if (binding.source instanceof ValueTemplate) found = missingInTree(binding.source.value, declared, [], stringContract);
+  found ??= missingInType(inferred.type, declared, []);
+  if (found !== null) {
+    const [path, missing] = found;
+    message += ` (missing required ${missing.map((name) => `\`${name}\``).join(", ")}`;
+    if (path.length > 0) message += ` at \`${pathLabel(slot, path)}\``;
+    message += ")";
+  }
+  return message;
 }
 
 /**
@@ -406,6 +425,126 @@ function hasTemplatePart(node: unknown): boolean {
   return false;
 }
 
+/** Infers one template string's contract. */
+type StringContract = (text: unknown) => OutputContract | null;
+
+/**
+ * Spell a template's value for a message: literals as written, references by type.
+ *
+ * `{qty: 1, decision: {conviction: ${score.output}}}` gives
+ * `{"decision":{"conviction":float},"qty":1}`, with keys in the order type labels use.
+ *
+ * @param node One node of the template tree.
+ * @param stringContract Infers one template string's contract.
+ * @returns The spelling.
+ */
+function templateLabel(node: unknown, stringContract: StringContract): string {
+  if (node instanceof Binding) {
+    if (node.contract !== null) return canonicalTypeLabel(node.contract.type);
+    return templateLabel(node.source, stringContract);
+  }
+  if (isRecord(node)) {
+    const keys = Object.keys(node).sort(compareCodeUnits);
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${templateLabel(node[key], stringContract)}`).join(",")}}`;
+  }
+  if (isList(node)) return `[${node.map((item) => templateLabel(item, stringContract)).join(",")}]`;
+  const literal = literalValue(node);
+  if (literal !== NOT_LITERAL) return shownLiteral(literal);
+  const contract = stringContract(node);
+  if (isExactly(contract, ValueContract)) return canonicalTypeLabel(contract.type);
+  return "object";
+}
+
+/**
+ * Find a record in a template tree that misses required fields of its declared type.
+ *
+ * The walk follows the declared type through record fields and list items, so a record nested at
+ * any depth is named with its path in the value.
+ *
+ * @param node One node of the binding's template tree.
+ * @param declared The type declared for this node.
+ * @param path This node's path in the binding's value.
+ * @param stringContract Infers one template string's contract.
+ * @returns The record's path and the required fields whose absence alone keeps it from fitting, or
+ *   `null` when no record in the tree has that problem.
+ */
+function missingInTree(
+  node: unknown,
+  declared: Type,
+  path: ValuePath,
+  stringContract: StringContract,
+): [ValuePath, string[]] | null {
+  if (node instanceof Binding) {
+    if (node.contract !== null) return null; // a nested typed binding is checked on its own
+    return missingInTree(node.source, declared, path, stringContract);
+  }
+  if (isRecord(node) && declared.fields !== undefined) {
+    const inferred = templateContract(new ValueTemplate(node), stringContract, { exactLiterals: true });
+    if (isExactly(inferred, ValueContract)) {
+      const missing = missingRequiredFields(inferred.type, declared);
+      if (missing.length > 0) return [path, missing];
+    }
+    for (const [key, item] of Object.entries(node)) {
+      const field = declared.fields.get(key);
+      if (field === undefined) continue;
+      const found = missingInTree(item, field, [...path, key], stringContract);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (isList(node) && declared.element !== undefined) {
+    for (const [index, item] of node.entries()) {
+      const found = missingInTree(item, declared.element, [...path, index], stringContract);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (typeof node === "string" && literalValue(node) === NOT_LITERAL) {
+    const inferred = stringContract(node);
+    if (isExactly(inferred, ValueContract)) return missingInType(inferred.type, declared, path);
+  }
+  return null;
+}
+
+/**
+ * Find a record in an inferred type that misses required fields of the declared one.
+ *
+ * The walk follows record fields that both types have and that can never fit.
+ *
+ * @returns The record's path and its missing required fields, or `null` when no record has that
+ *   problem.
+ */
+function missingInType(inferred: Type, declared: Type, path: ValuePath): [ValuePath, string[]] | null {
+  const missing = missingRequiredFields(inferred, declared);
+  if (missing.length > 0) return [path, missing];
+  if (inferred.fields === undefined || declared.fields === undefined) return null;
+  for (const [name, field] of declared.fields) {
+    const foundType = inferred.fields.get(name);
+    if (foundType === undefined || typeRelation(foundType, field) !== "disjoint") continue;
+    const found = missingInType(foundType, field, [...path, name]);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/**
+ * Return the required fields that alone keep an inferred record from fitting.
+ *
+ * @returns The declared record's required fields the inferred record lacks, when the records would
+ *   no longer be disjoint without them; otherwise empty, since another field is the real mismatch.
+ */
+function missingRequiredFields(inferred: Type, declared: Type): string[] {
+  if (inferred.fields === undefined || declared.fields === undefined) return [];
+  const required = declared.required ?? new Set<string>();
+  const missing = [...declared.fields.keys()].filter((name) => required.has(name) && !inferred.fields!.has(name));
+  if (missing.length === 0) return [];
+  const relaxed = declared.replace({
+    fields: new Map([...declared.fields].filter(([name]) => !missing.includes(name))),
+    required: new Set([...required].filter((name) => !missing.includes(name))),
+  });
+  return typeRelation(inferred, relaxed) !== "disjoint" ? missing : [];
+}
+
 /**
  * Return the contract a lone `${item...}` reference reads, else `null`.
  *
@@ -424,7 +563,11 @@ function itemReferenceContract(source: unknown, item: ValueContract | null): Out
 }
 
 /**
- * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`, `[1,"a"]`).
+ * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`).
+ *
+ * Lists and records are written compact (`[1,"a"]`, `{"k":2}`), the text form messages use for
+ * values, where Python's `shown_literal` spaced its separators; like Python's, nothing is
+ * truncated.
  *
  * @param value The literal to render.
  * @returns `writeAsJson`'s text; `valueRepr` for anything it can't write.

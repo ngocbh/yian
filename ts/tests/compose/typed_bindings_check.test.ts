@@ -11,8 +11,11 @@
  * Ported: `test_disjoint_node_input_fails_at_its_line`,
  * `test_disjoint_flow_output_field_fails_at_its_line`, `test_disjoint_single_flow_output_fails`,
  * `test_record_flow_output_field_named_result_keeps_its_name`,
- * `test_embedded_template_is_text_and_disjoint_from_int`, `test_fitting_literals_load` (6), the
- * load half of `test_optional_into_non_optional_loads_and_fails_at_runtime`,
+ * `test_embedded_template_is_text_and_disjoint_from_int`,
+ * `test_record_with_an_extra_required_field_is_disjoint_from_a_smaller_record`,
+ * `test_record_missing_a_required_field_names_the_field`,
+ * `test_missing_field_is_not_named_when_another_field_mismatches`, `test_fitting_literals_load`
+ * (6), the load half of `test_optional_into_non_optional_loads_and_fails_at_runtime`,
  * `test_str_into_literal_loads`, `test_int_into_float_loads`, `test_unproven_sources_load` (3),
  * `test_inline_call_source_that_returns_str_is_disjoint_from_int`,
  * `test_disjoint_binding_into_an_inline_body_fails`, `test_disjoint_loop_seed_fails`,
@@ -40,8 +43,11 @@
  * `test_bad_literal_into_a_call_reports_the_binding_not_the_child` and
  * `test_bad_literal_loop_seed_reports_the_binding_not_the_carried_type`.
  *
- * TS-only: `shownLiteral` rows (compact JSON, ints as digits); and the harvested cases these
- * checks decide (`runCase`, `assembled`), in the "Pinned harvested cases" block at the end.
+ * TS-only: `shownLiteral` rows (compact JSON, ints as digits); a typed binding nested in a value
+ * template, named at its path; and the harvested cases these checks decide (`runCase`,
+ * `assembled`), in the "Pinned harvested cases" block, then those from test files whose mirrors
+ * don't exist yet (`test_constructor_load.py`, `test_nested_template_types.py`,
+ * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
  *
  * Later (T3-22): `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry`
  * prefix comes from the loader's def loading).
@@ -59,6 +65,7 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
+  assembledWith,
   assembleText,
   type CaseRow,
   type ChildFlows,
@@ -189,6 +196,56 @@ test("an embedded template is text and disjoint from int", () => {
   const error = loadErrorOf(text);
 
   expect(error.message).toBe("node 'use' input 'x': declared int, but the value is str");
+});
+
+test("a record with an extra required field is disjoint from a smaller record", () => {
+  const typedefs = "typedefs:\n  Big:\n    a: int\n    b: str\n  Small:\n    a: int\n";
+  const text = flow("!Small ${big.output}", { producers: producer("big", '{a: 1n, b: "x"}', "Big"), typedefs });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe('node \'use\' input \'x\': declared Small, but the value is {"a":int,"b":str}');
+});
+
+const BUY_TYPEDEFS = (conviction: string) =>
+  `typedefs:\n  Buy:\n    action: Literal(buy)\n    conviction: float\n  Conv:\n    conviction: ${conviction}\n`;
+
+test("a record missing a required field names the field", () => {
+  const text = flow("!Buy ${d.output}", {
+    producers: producer("d", "{conviction: 0.5}", "Conv"),
+    typedefs: BUY_TYPEDEFS("float"),
+  });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe(
+    "node 'use' input 'x': declared Buy, but the value is " +
+      '{"conviction":float} (missing required `action`)',
+  );
+});
+
+test("a missing field is not named when another field mismatches", () => {
+  const text = flow("!Buy ${d.output}", {
+    producers: producer("d", '{conviction: "x"}', "Conv"),
+    typedefs: BUY_TYPEDEFS("str"),
+  });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'use' input 'x': declared Buy, but the value is {\"conviction\":str}");
+});
+
+// TS-only: a typed binding nested in a value template is checked at its own path.
+test("a disjoint binding nested in a value template names its path", () => {
+  const text = flow("{a: !int '${note.output}'}", { producers: producer("note", '"hi"', "str") });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'use' input 'x.a': declared int, but the value is str");
+  const line = "      x: {a: !int '${note.output}'}";
+  const number = text.split("\n").indexOf(line) + 1;
+  // The nested binding's own tagged value, `!int '${note.output}'`.
+  expect(lastFrame(error)).toEqual(["flow.yaml", [number, line.indexOf("!") + 1, number, line.length]]);
 });
 
 // ---------- literals ----------
@@ -509,6 +566,32 @@ test.each<CaseRow>([
     "disjoint_binding_into_an_inline_body_fails",
     "an_unproven_source_loads",
     "int_into_float_loads",
+    "a_mismatched_field_hides_the_missing_one",
+    "a_record_with_an_extra_field_is_disjoint",
+    "record_missing_a_required_field_names_the_field",
   ].map((name) => ({ id: `load-types/compose_typed_bindings_check__${name}`, call: assembled })),
   { id: "types/compose_open_range_flows__tagged_binding_disjoint_from_an_open_range", call: assembled },
+])("assemble: $id", runCase);
+
+// ---------- Pinned harvested cases (TS-only placement) ----------
+
+// From `test_constructor_load.py`, `test_nested_template_types.py` and `test_tagged_bindings.py`,
+// whose mirrors don't exist yet; the record and template messages decide them.
+
+test.each<CaseRow>([
+  { id: "load-types/compose_constructor_load__downstream_sees_the_constructed_type", call: assembled },
+  {
+    id: "load-types/compose_nested_template_types__nested_item_read_is_typed_from_the_map_element",
+    call: assembledWith({
+      child: handChild({ inputs: parametersFromYaml("input:\n  v: !object\n", new Map()), output: "${input.v}" }),
+    }),
+  },
+  ...["tagged_template_with_a_disjoint_field_fails", "wrong_literal_value_under_a_tag_fails_at_load"].map((name) => ({
+    id: `load-types/compose_nested_template_types__${name}`,
+    call: assembled,
+  })),
+  ...["list_element_missing_a_field_names_its_path", "nested_record_missing_a_field_names_its_path"].map((name) => ({
+    id: `load-types/compose_tagged_bindings__${name}`,
+    call: assembled,
+  })),
 ])("assemble: $id", runCase);

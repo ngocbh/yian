@@ -137,11 +137,16 @@ export function requireSteering(steering: unknown): Steering | null {
 export class SteeringCapability implements Steering {
   readonly #inbox: Steering;
   readonly #onFault: (fault: CapabilityFault) => void;
+  readonly #pending: Promise<unknown>[];
 
-  /** @param onFault Sees each capability fault before it is thrown or rejected with. */
-  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void = () => {}) {
+  /**
+   * @param onFault Sees each capability fault before it is thrown or rejected with.
+   * @param pending Receives each promise `drain` hands out, for the evaluator to await.
+   */
+  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void, pending: Promise<unknown>[]) {
     this.#inbox = inbox;
     this.#onFault = onFault;
+    this.#pending = pending;
   }
 
   /**
@@ -184,8 +189,10 @@ export class SteeringCapability implements Steering {
         throw this.#fault(error);
       },
     );
-    // A node may drop the promise; its fault must not become an unhandled rejection.
+    // A node may drop the promise: its fault must not become an unhandled rejection, and the
+    // evaluator awaits it so the fault still reaches `onFault` before the evaluation settles.
     checked.catch(() => {});
+    this.#pending.push(checked);
     return checked;
   }
 
@@ -331,7 +338,8 @@ export interface EvalNodeOptions {
  * @returns The outcome, with evidence and captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink, or
- *   steering inbox), whatever the node then returned or threw.
+ *   steering inbox, including a `drain` promise the node dropped), whatever the node then returned
+ *   or threw.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
  *   rejects after it aborted.
  * @throws RangeError when a node reading its steps fails to bind its reserved keys after an earlier
@@ -463,6 +471,9 @@ async function evaluateNode(
   const onFault = (fault: CapabilityFault): void => {
     faults.first ??= fault;
   };
+  // The capability promises handed to the node. A node may settle without awaiting one, so the
+  // evaluator awaits their settlement before it settles, and a late fault is still the first.
+  const pending: Promise<unknown>[] = [];
 
   // Build only the node-owned, trait-gated capabilities. The deferred per-item binder throws the
   // same binder-owned marker from inside the body, and the classification below keeps it.
@@ -489,19 +500,21 @@ async function evaluateNode(
     if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault);
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
-  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault);
+  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault, pending);
   if (steps !== null && node.needsSteps === true) caps.steps = steps;
 
   let result: unknown;
   try {
     result = usesBaseTemplate ? await node.runForEvaluator(record, caps) : await node.run(record, caps);
   } catch (error) {
+    await Promise.allSettled(pending);
     // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
     // the node rejected with.
     if (faults.first !== null) throw faults.first.original;
     if (signal.aborted) throw signal.reason;
     return stageFailure(node, error, usesBaseTemplate);
   }
+  await Promise.allSettled(pending);
   if (faults.first !== null) throw faults.first.original;
   if (!(result instanceof Output || result instanceof Route || result instanceof Grow)) {
     return evaluationFailure(

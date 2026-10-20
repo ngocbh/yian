@@ -33,8 +33,9 @@
  * the abort still resolves.
  *
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
- * capability's checks on what the host inbox returns, and a steering fault the node catches still
- * rejecting `evalNode`.
+ * capability's checks on what the host inbox returns, a steering fault the node catches (thrown or
+ * rejected) or a `drain` promise it drops still rejecting `evalNode`, and the first of two faults
+ * the node catches winning.
  *
  * Later (cycle 2b): `test_render_capture_is_opt_in_single_write_and_detached_until_close`,
  * `test_invalid_render_capture_is_a_host_fault`,
@@ -541,7 +542,7 @@ describe("the steering capability", () => {
     return new SteeringCapability({
       interruptSignal: methods.interruptSignal ?? (() => new AbortController().signal),
       drain: methods.drain ?? (() => []),
-    } as Steering);
+    } as Steering, () => {}, []);
   }
 
   test("passes the node id and returns the host's signal", () => {
@@ -627,6 +628,105 @@ describe("the steering capability", () => {
     };
 
     expect(await rejected(drive(new SteeredNode("work"), { steering }))).toBe(expected);
+  });
+
+  /** A host inbox whose `drain` answers with `answer`. */
+  function inbox(answer: () => unknown): Steering {
+    return { interruptSignal: () => new AbortController().signal, drain: answer as Steering["drain"] };
+  }
+
+  /** A node that runs `body` over its steering, then returns. */
+  class DrainNode extends Node {
+    readonly kind = NodeKind.CODE;
+    override needsSteering = true;
+    override needsLiveEvents = true;
+    readonly body: (caps: NodeCaps, nodeId: string) => Promise<void> | void;
+
+    constructor(nodeId: string, body: (caps: NodeCaps, nodeId: string) => Promise<void> | void) {
+      super(nodeId);
+      this.body = body;
+    }
+
+    override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+      await this.body(caps, this.id);
+      return new Output("returned");
+    }
+  }
+
+  test("a node catching an async drain fault still rejects evalNode with the host's error", async () => {
+    const expected = new Error("inbox failed");
+    const node = new DrainNode("work", async (caps, nodeId) => {
+      try {
+        await caps.steering!.drain(nodeId);
+      } catch {
+        // Swallowed here; evalNode still reports it.
+      }
+    });
+
+    expect(await rejected(drive(node, { steering: inbox(() => Promise.reject(expected)) }))).toBe(expected);
+    expect(await rejected(drive(node, { steering: inbox(async () => [1]) }))).toEqual(
+      new TypeError("steering.drain must return an array of strings"),
+    );
+  });
+
+  test("a drain the node drops and the host rejects after the node returns still rejects evalNode", async () => {
+    const expected = new Error("inbox failed");
+    const host = Promise.withResolvers<string[]>();
+    const unhandled: unknown[] = [];
+    const guard = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", guard);
+    try {
+      const node = new DrainNode("work", (caps, nodeId) => {
+        caps.steering!.drain(nodeId);
+      });
+      let settled = false;
+      const evaluation = drive(node, { steering: inbox(() => host.promise) });
+      evaluation.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+
+      // A macrotask turn: the node has returned, and evalNode waits for the dropped drain.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+      host.reject(expected);
+
+      expect(await rejected(evaluation)).toBe(expected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      process.off("unhandledRejection", guard);
+    }
+    expect(unhandled).toEqual([]);
+  });
+
+  test("of two faults the node catches, the first is thrown", async () => {
+    const first = new Error("sink failed");
+    const node = new DrainNode("work", (caps, nodeId) => {
+      for (const fail of [
+        () => caps.emitStream!(new StreamChunk({ nodeId, key: "output", chunk: "a" })),
+        () => caps.steering!.drain(nodeId),
+      ]) {
+        try {
+          fail();
+        } catch {
+          // Swallowed here; evalNode still reports the first.
+        }
+      }
+    });
+    const steering = inbox(() => {
+      throw new Error("inbox failed");
+    });
+
+    const error = await rejected(
+      drive(node, {
+        steering,
+        emitStream: () => {
+          throw first;
+        },
+      }),
+    );
+
+    expect(error).toBe(first);
   });
 
   test("a capability fault from the host passes through", async () => {

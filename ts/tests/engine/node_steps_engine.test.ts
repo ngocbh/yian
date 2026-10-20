@@ -8,17 +8,28 @@
  *
  * Changed: `ValueError` is `RangeError`; `True` for `starts` is `true`.
  *
- * Later (FlowEngine), they run the engine: `test_steps_are_durable_before_record_returns`,
- * `test_a_node_without_the_trait_receives_no_steps`,
- * `test_resume_sees_the_second_start_and_the_prior_steps`, `test_resume_hands_detached_prior_steps`,
- * `test_pooled_workers_never_read_the_step_authority`,
- * `test_stop_releases_a_pooled_worker_waiting_for_its_step`,
- * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`,
+ * Later (cycle 4c), they run the serial engine: the serial rows of
+ * `test_steps_are_durable_before_record_returns` and `test_a_node_without_the_trait_receives_no_steps`,
  * `test_a_recorder_log_fault_escapes_as_a_host_error`, `test_an_invalid_step_is_a_host_error`,
- * `test_serial_skips_a_step_once_stop_is_set`, `test_a_kept_recorder_is_closed_after_its_evaluation`
- * and `test_pooled_nodes_interleave_their_own_steps`.
+ * `test_a_kept_recorder_is_closed_after_its_evaluation`, `test_resume_hands_detached_prior_steps`,
+ * the live-state half of `test_resume_sees_the_second_start_and_the_prior_steps`, and the
+ * replacement of `test_pooled_workers_never_read_the_step_authority` (`prior` is a snapshot taken at
+ * the start).
+ *
+ * Later (T4-5): the replay half of `test_resume_sees_the_second_start_and_the_prior_steps`.
+ *
+ * Later (cycle 5b), they run the pooled engine: the pooled parameter rows and
+ * `test_pooled_nodes_interleave_their_own_steps`.
+ *
+ * Later (cycle 7c), they need the engine's stop: `test_serial_skips_a_step_once_stop_is_set` and the
+ * replacement of `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step` (after a
+ * sibling failure, `record` throws and appends nothing).
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
+ * `test_pooled_workers_never_read_the_step_authority` and
+ * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: replaced as above.
+ * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step, since
+ * `record` is synchronous; the cycle 7c row covers a step after a stop.
  */
 
 import { expect, test } from "bun:test";

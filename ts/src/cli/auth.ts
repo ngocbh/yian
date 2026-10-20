@@ -184,8 +184,8 @@ async function list(store: AuthStore, io: CliIo): Promise<void> {
       if (selection.project) details.push(`project ${selection.project}`);
       // Header values are secrets; only their names are shown.
       if (selection.headerNames.length > 0) details.push(`headers ${selection.headerNames.join(", ")}`);
-      const isDefault = selection.provider === state.defaultProvider ? " (default)" : "";
-      await io.stdout.write(`  ${selection.provider}: ${details.join(", ")}${isDefault}\n`);
+      const defaultMark = selection.provider === state.defaultProvider ? " (default)" : "";
+      await io.stdout.write(`  ${selection.provider}: ${details.join(", ")}${defaultMark}\n`);
     }
     if (state.defaultProvider === null) await io.stdout.write(`${NO_DEFAULT}\n`);
   }
@@ -363,7 +363,8 @@ function onStopSignals(
  *
  * A failed or cancelled setup leaves the saved logins unchanged.
  *
- * @returns 0, or 1 when the command fails or is cancelled (saved logins stay unchanged).
+ * @returns 0; 1 when the command fails or is cancelled (saved logins stay unchanged); 130 when a
+ *   `--json` command is stopped by a signal.
  * @throws {UsageError} `--json` is given to another form.
  */
 export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}): Promise<number> {
@@ -421,7 +422,8 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
       await list(open(authFile), io);
       return 0;
     }
-    let [name, sources] = checkOptions(provider, options, io);
+    const [checked, sources] = checkOptions(provider, options, io);
+    let name = checked;
     if (json && device) throw new Error("not ported yet");
     const store = open(authFile);
     if (options.remove) {

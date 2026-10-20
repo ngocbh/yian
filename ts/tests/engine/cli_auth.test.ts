@@ -1,14 +1,25 @@
-// Ported from tests/engine/test_cli_auth.py: `test_models_refuses_stdin_that_is_not_text`. Added
-// here, since Python left them to the `cli` conformance cases: `yian providers`, `yian config check`
-// (including `_config_errors`'s rows) and the rest of `yian models` (usage errors, the provider and
-// subscription forms, the deadline). Python's monkeypatched `list_models` and `OpenAIAuth` are
-// `deps` fakes here, so no test reaches a real host.
+// Ported from tests/engine/test_cli_auth.py: `test_models_refuses_stdin_that_is_not_text`,
+// `test_invalid_setup_options_fail_before_external_requests`,
+// `test_option_combinations_fail_before_any_request`, `test_azure_options_are_checked_before_the_store`,
+// `test_connection_settings_are_refused_before_any_request`, `test_unset_header_variable_is_not_echoed`,
+// `test_bare_header_without_a_terminal_names_the_variable_form`,
+// `test_list_shows_saved_logins_without_secrets`, `test_default_switches_without_sign_in`,
+// `test_remove_deletes_one_login`, `test_remove_accepts_an_unsupported_saved_provider`,
+// `test_remove_finds_a_lowercase_saved_name`, `test_env_override_note_agrees_with_the_number_of_variables`
+// and `test_list_shows_connection_settings_by_name_only`.
+// Added here, since Python left them to the `cli` conformance cases or didn't test them: `yian
+// providers`, `yian config check` (including `_config_errors`'s rows), the rest of `yian models`
+// (usage errors, the provider and subscription forms, the deadline), `--default` with `--remove`,
+// `--json` on a form that doesn't take it, whole-file removal and its refusals, "Name a provider" and
+// the removal documents under `--json`, SIGINT during a removal, and no signal listener left behind.
+// Python's monkeypatched `list_models` and `OpenAIAuth` are `deps` fakes here, so no test reaches a
+// real host.
 // The handlers are called directly with the `ParsedArgs` the parser would give, so parsing stays
 // covered by cli_utils.test.ts and the `cli` cases.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -607,9 +618,12 @@ describe("auth option checks", () => {
     ["anthropic", { "api-key-env": "" }, "--api-key-env needs an environment variable name"],
     ["openai", { remove: true, model: "x" }, "--remove does not take --model"],
     ["azure", { default: true, endpoint: azure }, "--default does not take --endpoint"],
-    ["openai", { default: true, remove: true }, "Use either --default or --remove, not both"],
   ])("option combination: %p %j", async (provider, options, message) => {
     await refuses(provider, options, message);
+  });
+
+  test("--default with --remove", async () => {
+    await refuses("openai", { default: true, remove: true }, "Use either --default or --remove, not both");
   });
 
   // Python: test_azure_options_are_checked_before_the_store.
@@ -934,10 +948,19 @@ describe("auth list, default and remove", () => {
     await saveEachKind(setup.store);
     const signals = new EventEmitter();
     const holder = lockFile(`${setup.path}.lock`);
+    // The store's first try at the lock fails busy and goes on to sleep, all in the same turn of the
+    // event loop as this lstat; so once `tried` resolves, the removal is waiting for the lock.
+    const lstat = fs.lstatSync;
+    let tried!: () => void;
+    const trying = new Promise<void>((resolve) => (tried = resolve));
+    const spy = spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
+      if (path === `${setup.path}.lock`) tried();
+      return (lstat as (...args: unknown[]) => unknown)(path, ...rest);
+    }) as typeof fs.lstatSync);
     try {
       const io = fakeIo({ env: setup.env });
       const running = auth(authArgs("anthropic", { remove: true, json }), io.io, { ...setup.deps, signals });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await trying;
       expect(signals.listenerCount("SIGINT")).toBe(1);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       signals.emit("SIGINT");
@@ -945,6 +968,7 @@ describe("auth list, default and remove", () => {
       if (json) expect({ code, out: io.out(), err: io.err() }).toEqual({ code: 130, out: "", err: "" });
       else expect({ code, out: io.out(), err: io.err() }).toEqual({ code: 1, out: "", err: `${CANCELLED}\n` });
     } finally {
+      spy.mockRestore();
       holder.release();
     }
     expect(signals.listenerCount("SIGINT")).toBe(0);

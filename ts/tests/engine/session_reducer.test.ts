@@ -4,7 +4,7 @@
  *
  * Ported: `test_forged_resume_plan_cannot_change_the_retry_frontier` (the forged transition
  * spreads the frozen plan and its delta; the error is the `RangeError` `frontier resume delta
- * disagrees with its record`, and the snapshot is the shared reducer snapshot).
+ * disagrees with its record`, and the state is checked with the shared `snapshot` and `expectUnchanged`).
  *
  * Changed: `test_active_conversation_preparation_is_not_exported`: the module namespace has no
  * `prepareConversationRecord`; Python's `__all__` half has no counterpart.

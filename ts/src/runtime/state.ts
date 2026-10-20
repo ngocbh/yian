@@ -1499,7 +1499,7 @@ function requireAuthorityCoordinates(
       throw new RangeError(`run-state run_id mismatch: prepared ${reprText(prepared.expectedRunId)}, state ${found}`);
     }
   } else if (state.runId !== null) {
-    throw new RangeError("RunStarted requires state.run_id to be None");
+    throw new RangeError("RunStarted requires state.run_id to be null");
   }
 }
 

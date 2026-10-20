@@ -424,8 +424,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   and sequence it expects, and a frozen plan. `commitPrepared(log, state, prepared)` appends the
   record, checks what the log returned, then applies the plan, with no `await` in between, so
   nothing interleaves between the append and the apply. Frontier order: START is ready after
-  `RunStarted`; a success appends its target's successors in outgoing-edge order, each once its
-  join is ready; a resume puts the retried nodes first, in dispatch order, ahead of what was
+  `RunStarted`; a success walks its target's outgoing edges in order and appends each successor
+  when its last edge from the target settles and its join is ready; a resume puts the retried nodes first, in dispatch order, ahead of what was
   ready; a stop changes nothing but the sequence. An output its target's contract refuses throws
   `NodeDataError` (`original` holds the value layer's error), which fails the node, not the run.
   Routes and node failures are not ported yet; growth, the recovery fold (`replayRecords`) and the

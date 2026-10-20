@@ -38,7 +38,7 @@
  * `test_root_feedback_on_a_one_field_record_reaches_its_producer`,
  * `test_an_unquoted_yes_flow_output_name_is_text` and
  * `test_a_literal_flow_output_is_returned_as_written` (T4);
- * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (T3-17, T3-22, T4);
+ * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (T3-22, T4);
  * `test_reading_a_missing_field_of_a_record_child_is_rejected_at_load` (T3-18, T3-22); and
  * `test_a_non_string_output_name_in_a_def_is_a_load_error` (T3-22).
  *

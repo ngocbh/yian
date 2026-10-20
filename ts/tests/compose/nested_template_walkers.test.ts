@@ -8,7 +8,7 @@
  * `test_nested_reference_field_is_checked` (reference checks), `test_nested_isinstance_name_resolves`
  * and `test_unknown_nested_isinstance_name_fails` (type tables; its case is pinned in
  * `isinstance_load.test.ts`).
- * Later (T3-17, T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
+ * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
  * Later (T3-22, T4): `test_map_over_literal_list_without_spans_still_loads` and
  * `test_nested_references_in_a_map_child_run_after_growth` (loads and runs).
  * Later (T3-16 for the loop kind, T3-22, T4):

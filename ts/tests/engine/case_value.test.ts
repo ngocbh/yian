@@ -18,7 +18,9 @@
  * `handChild`), where Python loads and runs; `test_seed_22_case_value_output_expanded` reads seed
  * 22 from the `load-case/seed_22_case_value` case. A rejection row pins the whole message where
  * Python matches a fragment. `test_no_case_fast_path_is_identity` checks the same descriptors in a
- * fresh map, since `expandCaseOutputs` returns a mutable `Map` for its read-only input.
+ * fresh map, since `expandCaseOutputs` returns a mutable `Map` for its read-only input. The load
+ * halves of the `_e2e` rows are named for what they check, and the coalesce-position rejection row
+ * uses a variant of the shared flow (the harvested case holds Python's `cv_bad` flow word for word).
  *
  * TS-only: the harvested `load-case/engine_case_value__case_value_in_a_coalesce_is_rejected` and
  * `load-case/seed_22_case_value`, pinned at the end.

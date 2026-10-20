@@ -22,8 +22,8 @@
  * `parseYamlLiteral`. The private-callee rows check that the scope's resolver is never reached (it
  * throws) instead of monkeypatching `_resolve_child`.
  *
- * Later (T3-17): the `case` half of `test_an_unreadable_keyword_value_is_a_located_load_error`
- * (the case-target desugar).
+ * Later (T3-20): the `case` half of `test_an_unreadable_keyword_value_is_a_located_load_error`
+ * (`case_branches`, which runs before the case-target desugar).
  * Later (T4): `test_quoted_binding_runs_as_text`, `test_quoted_flow_output_runs_as_text` (runs),
  * and the run half of `test_unquoted_directive_holding_a_separator_is_a_call_not_a_typed_binding`.
  *

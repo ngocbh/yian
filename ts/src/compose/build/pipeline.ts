@@ -111,6 +111,7 @@ import { validateHumanQuestions } from "../validate/human_questions.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
+import { checkTypedInputs, checkTypedOutputs } from "../validate/typed_bindings.ts";
 // T3-20 imports
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
@@ -2126,8 +2127,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
 //   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
-//          checkTypedInputs, checkCallMapTypes, checkLoopTypeContract, checkTypedOutputs,
-//          checkLlmConfigSources (1).
+//          checkCallMapTypes, checkLoopTypeContract, checkLlmConfigSources (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //          localInputContracts (1): returns `new Map()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
@@ -2190,21 +2190,6 @@ function checkReservedSources(
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
 
-/** Python's `compose.validate.typed_bindings.check_typed_inputs`; not ported yet. */
-function checkTypedInputs(
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: {
-    narrowing?: Narrowing | null;
-    typeFn?: TypeFn | null;
-    registry?: TypeRegistry | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
 /** Python's `compose.validate.call_types.check_call_map_types`; not ported yet. */
 function checkCallMapTypes(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -2242,21 +2227,6 @@ function localInputContracts(
 ): Map<string, Map<string, LocalInput>> {
   return new Map();
 }
-
-/** Python's `compose.validate.typed_bindings.check_typed_outputs`; not ported yet. */
-function checkTypedOutputs(
-  flowOutputs: readonly FlowOutput[],
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  options: {
-    valueMode?: boolean;
-    outputsRange?: SourceRange | null;
-    typeFn?: TypeFn | null;
-    registry?: TypeRegistry | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
 
 /** Python's `compose.validate.llm_config_sources.check_llm_config_sources`; not ported yet. */
 function checkLlmConfigSources(

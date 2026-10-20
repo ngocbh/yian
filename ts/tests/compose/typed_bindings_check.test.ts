@@ -1,0 +1,514 @@
+/**
+ * Checking typed bindings at load: literals exactly, references by inferred type; a port of
+ * `tests/compose/test_typed_bindings_check.py`, loading each flow with `assembleText` (`assemble`
+ * as the loader calls it) where Python calls `load_flow`.
+ *
+ * A typed binding whose value can never fit its declared type is a load error located at the
+ * binding. A literal value is fully known, so it is checked exactly; a reference or expression is
+ * rejected only when its inferred type is disjoint from the declared one, while a narrower inferred
+ * type loads and is checked at runtime.
+ *
+ * Ported: `test_disjoint_node_input_fails_at_its_line`,
+ * `test_disjoint_flow_output_field_fails_at_its_line`, `test_disjoint_single_flow_output_fails`,
+ * `test_record_flow_output_field_named_result_keeps_its_name`,
+ * `test_embedded_template_is_text_and_disjoint_from_int`, `test_fitting_literals_load` (6), the
+ * load half of `test_optional_into_non_optional_loads_and_fails_at_runtime`,
+ * `test_str_into_literal_loads`, `test_int_into_float_loads`, `test_unproven_sources_load` (3),
+ * `test_inline_call_source_that_returns_str_is_disjoint_from_int`,
+ * `test_disjoint_binding_into_an_inline_body_fails`, `test_disjoint_loop_seed_fails`,
+ * `test_disjoint_reference_into_a_call_reports_the_binding_not_the_child`,
+ * `test_disjoint_item_binding_on_a_named_map_fails_at_its_line`,
+ * `test_disjoint_item_binding_on_an_inline_map_fails`, `test_fitting_item_binding_loads`,
+ * `test_disjoint_item_field_binding_fails` and `test_item_binding_over_an_untyped_list_loads`.
+ *
+ * Changed: a row whose Python flow calls a `defs:` entry gives `assembleText` that child built by
+ * hand (`handChild`: the def's parameters read from its `input:` text, its typed nodes as producers
+ * with their output contracts), since def bodies load in T3-22. The error rows pin the whole
+ * message where Python matches its start, and the last frame's label and range where Python
+ * checks the first frame's line. CODE bodies are written in TS and code refs name
+ * `./fixtures/compose_codefns.ts`, as the harvested cases write them; load doesn't run them.
+ *
+ * Not ported here: the literal rows the tags reader (`readTaggedValue`, tested in `tags.test.ts`)
+ * decides while the binding is split, before this check runs. Pinned in `tags.test.ts` through
+ * their cases: `test_text_literal_for_int_fails_at_its_line`,
+ * `test_number_literal_for_str_suggests_quoting`, `test_true_literal_for_str_explains_yaml_booleans`
+ * and `test_null_literal_for_a_record_output_field_fails_at_its_line`. Decided there with no case:
+ * `test_former_boolean_word_for_bool_names_the_boolean_to_write`,
+ * `test_former_boolean_word_for_a_bool_output_names_the_boolean_to_write`,
+ * `test_former_boolean_word_in_a_list_literal_gets_no_fix`,
+ * `test_escaped_template_is_text_and_does_not_fit_int`,
+ * `test_bad_literal_into_a_call_reports_the_binding_not_the_child` and
+ * `test_bad_literal_loop_seed_reports_the_binding_not_the_carried_type`.
+ *
+ * TS-only: `shownLiteral` rows (compact JSON, ints as digits); and the harvested cases these
+ * checks decide (`runCase`, `assembled`), in the "Pinned harvested cases" block at the end.
+ *
+ * Later (T3-22): `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry`
+ * prefix comes from the loader's def loading).
+ * Later (T4): `test_unquoted_yes_or_no_literal_for_str_is_text` (2),
+ * `test_escaped_template_binds_its_text`, and the run half of
+ * `test_optional_into_non_optional_loads_and_fails_at_runtime`.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+
+import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { shownLiteral } from "../../src/compose/validate/typed_bindings.ts";
+import { forget } from "../../src/defaults.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  type ChildFlows,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
+
+afterEach(() => forget());
+
+const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
+const STR = new ValueContract(Type.scalar(ValueKind.STRING));
+
+/** Return a flow whose `use` node binds `x` as `binding` after `producers`. */
+function flow(binding: string, options: { producers?: string; typedefs?: string } = {}): string {
+  const { producers = "", typedefs = "" } = options;
+  return `
+id: checked
+name: checked
+${typedefs}nodes:
+${producers}  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: ${binding}
+output: \${use.output}
+`;
+}
+
+/** Return a CODE node `nodeId` returning `value`, declaring `output` when given. */
+function producer(nodeId: string, value: string, output: string | null): string {
+  const declared = output !== null ? `    output: ${output}\n` : "";
+  return `  ${nodeId}:\n    kind: code\n    code: |\n      return ${value}\n${declared}`;
+}
+
+/** Load `text` (with `children` built by hand), expecting a load error, and return it. */
+const loadErrorOf = (text: string, children: ChildFlows = {}): LoadError =>
+  loadError(() => assembleText(text, "flow.yaml", { children }));
+
+/** Load `text` with `children` built by hand. */
+const load = (text: string, children: ChildFlows = {}): void => {
+  assembleText(text, "flow.yaml", { children });
+};
+
+/** Return the last frame of a load error as `[label, [startLine, startCol, endLine, endCol]]`. */
+function lastFrame(error: LoadError): [string | null, number[]] {
+  const frame = error.diagnostic.frames.at(-1)!;
+  const range = frame.range;
+  return [frame.label, [range.startLine, range.startCol, range.endLine, range.endCol]];
+}
+
+/** Return `flow.yaml` and the range of the value after `key: ` on `line` of `text`. */
+function valueFrame(text: string, line: string): [string, number[]] {
+  const number = text.split("\n").indexOf(line) + 1;
+  return ["flow.yaml", [number, line.indexOf(": ") + 3, number, line.length + 1]];
+}
+
+// ---------- disjoint references ----------
+
+test("a disjoint node input fails at its line", () => {
+  const text = flow("!int ${note.output}", { producers: producer("note", '"hi"', "str") });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'use' input 'x': declared int, but the value is str");
+  expect(lastFrame(error)).toEqual(valueFrame(text, "      x: !int ${note.output}"));
+});
+
+test("a disjoint flow output field fails at its line", () => {
+  const text = `
+id: checked
+name: checked
+nodes:
+  note:
+    kind: code
+    code: |
+      return "hi"
+    output: str
+output:
+  x: !int \${note.output}
+`;
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("output 'x': declared int, but the value is str");
+  expect(lastFrame(error)).toEqual(valueFrame(text, "  x: !int ${note.output}"));
+});
+
+test("a disjoint single flow output fails", () => {
+  const text = `
+id: checked
+name: checked
+nodes:
+  note:
+    kind: code
+    code: |
+      return "hi"
+    output: str
+output: !int \${note.output}
+`;
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("output: declared int, but the value is str");
+  expect(lastFrame(error)).toEqual(valueFrame(text, "output: !int ${note.output}"));
+});
+
+test("a record flow output field named result keeps its name", () => {
+  const text = `
+id: checked
+name: checked
+nodes:
+  note:
+    kind: code
+    code: |
+      return "hi"
+    output: str
+output:
+  result: !int \${note.output}
+`;
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("output 'result': declared int, but the value is str");
+});
+
+test("an embedded template is text and disjoint from int", () => {
+  const text = flow("!int n=${a.output}", { producers: producer("a", "1", "int") });
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'use' input 'x': declared int, but the value is str");
+});
+
+// ---------- literals ----------
+
+test.each(["!Optional(int) null", "!int 3", "!list(str) []", "!float 3", "!str abc", "!str $${x}"])(
+  "fitting literals load: %s",
+  (binding) => {
+    load(flow(binding));
+  },
+);
+
+// ---------- narrower, opaque, and fitting references ----------
+
+test("an optional into a non-optional loads (the runtime check rejects the null)", () => {
+  load(flow("!int ${maybe.output}", { producers: producer("maybe", "null", "Optional(int)") }));
+});
+
+test("a str into a literal loads", () => {
+  load(
+    flow("!AB ${s.output}", {
+      producers: producer("s", '"a"', "str"),
+      typedefs: "typedefs:\n  AB: Literal(a, b)\n",
+    }),
+  );
+});
+
+test("an int into a float loads", () => {
+  load(flow("!float ${i.output}", { producers: producer("i", "1", "int") }));
+});
+
+test.each([
+  ["!int ${a.output + 1}", producer("a", "1", null)],
+  ["!int ${p.output}", producer("p", "1", null)],
+  ["!str ${system.run_id}", ""],
+])("unproven sources load: %s", (binding, producers) => {
+  load(flow(binding, { producers }));
+});
+
+// ---------- sources from calls, bodies, and loops ----------
+
+const STR_CHILD = `
+defs:
+  shout:
+    input:
+      y: !str
+    nodes:
+      up:
+        kind: code
+        input:
+          y: \${input.y}
+        output: str
+        code: |
+          return inputs["y"].toUpperCase()
+    output: \${up.output}
+`;
+
+/** `shout`, built by hand: takes `y: str` and returns its `up` producer's `str`. */
+const shout = () =>
+  handChild({
+    inputs: parametersFromYaml("input:\n  y: !str\n", new Map()),
+    producers: { up: STR },
+    output: "${up.output}",
+  });
+
+test("an inline call source that returns str is disjoint from int", () => {
+  const text = `
+id: checked
+name: checked
+${STR_CHILD}nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: !int call(shout, y=hi)
+output: \${use.output}
+`;
+  const error = loadErrorOf(text, { shout: shout() });
+
+  expect(error.message).toBe("node 'use' input 'x': declared int, but the value is str");
+  expect(lastFrame(error)).toEqual(valueFrame(text, "      x: !int call(shout, y=hi)"));
+});
+
+test("a disjoint binding into an inline body fails", () => {
+  const text = `
+id: checked
+name: checked
+nodes:
+  note:
+    kind: code
+    output: str
+    code: |
+      return "hi"
+  wrap:
+    kind: call
+    input:
+      n: !int \${note.output}
+    nodes:
+      twice:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: |
+          return inputs["n"] * 2n
+    output: \${twice.output}
+output: \${wrap.output}
+`;
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'wrap' input 'n': declared int, but the value is str");
+  expect(lastFrame(error)).toEqual(valueFrame(text, "      n: !int ${note.output}"));
+});
+
+/** Return a flow whose LOOP seeds `n` as `seed` into `bump`, a body returning `n: int`. */
+function loopFlow(seed: string): string {
+  return `
+id: checked
+name: checked
+defs:
+  bump:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1n
+    output:
+      n: \${step.output}
+nodes:
+  note:
+    kind: code
+    output: str
+    code: |
+      return "hi"
+  loop:
+    kind: loop
+    times: 2
+    input:
+      n: ${seed}
+    call: bump
+output: \${loop.output}
+`;
+}
+
+/** `bump`, built by hand: takes `n: int` and returns `{n: <its step's int>}`. */
+const bump = () =>
+  handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
+    producers: { step: INT },
+    output: { n: "${step.output}" },
+  });
+
+test("a disjoint loop seed fails", () => {
+  const error = loadErrorOf(loopFlow("!int ${note.output}"), { bump: bump() });
+
+  expect(error.message).toBe("node 'loop' input 'n': declared int, but the value is str");
+});
+
+// ---------- the typed binding is reported before downstream checks ----------
+
+/** Return a flow that calls `shout` (taking `y: str`) with `y` bound as `binding`. */
+function callStrChild(binding: string): string {
+  return `
+id: checked
+name: checked
+${STR_CHILD}nodes:
+  a:
+    kind: code
+    output: str
+    code: |
+      return "hi"
+  run:
+    kind: call
+    call: shout
+    input:
+      y: ${binding}
+output: \${run.output}
+`;
+}
+
+test("a disjoint reference into a call reports the binding, not the child", () => {
+  const error = loadErrorOf(callStrChild("!int ${a.output}"), { shout: shout() });
+
+  expect(error.message).toBe("node 'run' input 'y': declared int, but the value is str");
+});
+
+// ---------- MAP item bindings ----------
+
+/** Return a flow that maps the named `child` over `over`, binding `t` as `binding`. */
+function namedMapFlow(
+  binding: string,
+  options: { over: string; paramType: string; typedefs?: string; input?: string },
+): string {
+  const { over, paramType, typedefs = "", input = "words: !list(int)" } = options;
+  return `
+id: checked
+name: checked
+${typedefs}input:
+  ${input}
+defs:
+  child:
+    input:
+      t: ${paramType}
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.t}
+    output: \${echo.output}
+nodes:
+  opaque:
+    kind: code
+    code: |
+      return [1n, 2n]
+  m:
+    kind: map
+    over: ${over}
+    call: child
+    input:
+      t: ${binding}
+output: \${m.output}
+`;
+}
+
+/** `child`, built by hand: takes `t` of `paramType` and returns its untyped `echo`'s output. */
+const child = (paramType: string) =>
+  handChild({
+    inputs: parametersFromYaml(`input:\n  t: ${paramType}\n`, new Map()),
+    producers: { echo: null },
+    output: "${echo.output}",
+  });
+
+test("a disjoint item binding on a named map fails at its line", () => {
+  const text = namedMapFlow("!str ${item}", { over: "${input.words}", paramType: "!str" });
+
+  const error = loadErrorOf(text, { child: child("!str") });
+
+  expect(error.message).toBe("node 'm' input 't': declared str, but the value is int");
+  expect(lastFrame(error)).toEqual(valueFrame(text, "      t: !str ${item}"));
+});
+
+test("a disjoint item binding on an inline map fails", () => {
+  const text = `
+id: checked
+name: checked
+input:
+  words: !list(int)
+nodes:
+  m:
+    kind: map
+    over: \${input.words}
+    input:
+      t: !str \${item}
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.t}
+    output: \${echo.output}
+output: \${m.output}
+`;
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'm' input 't': declared str, but the value is int");
+});
+
+test("a fitting item binding loads", () => {
+  load(namedMapFlow("!int ${item}", { over: "${input.words}", paramType: "!int" }), { child: child("!int") });
+});
+
+test("a disjoint item field binding fails", () => {
+  const text = namedMapFlow("!int ${item.name}", {
+    over: "${input.recs}",
+    paramType: "!int",
+    typedefs: "typedefs:\n  Rec:\n    name: str\n",
+    input: "recs: !list(Rec)",
+  });
+
+  const error = loadErrorOf(text, { child: child("!int") });
+
+  expect(error.message).toBe("node 'm' input 't': declared int, but the value is str");
+});
+
+test("an item binding over an untyped list loads", () => {
+  load(namedMapFlow("!str ${item}", { over: "${opaque.output}", paramType: "!str" }), { child: child("!str") });
+});
+
+// ---------- shownLiteral (TS-only) ----------
+
+describe("shownLiteral writes a literal as compact JSON", () => {
+  test.each<{ value: unknown; shown: string }>([
+    { value: 5n, shown: "5" },
+    { value: 1.5, shown: "1.5" },
+    { value: "a", shown: '"a"' },
+    { value: null, shown: "null" },
+    { value: true, shown: "true" },
+    { value: [1n, "a", { k: 2n }], shown: '[1,"a",{"k":2}]' },
+  ])("$shown", ({ value, shown }) => {
+    expect(shownLiteral(value)).toBe(shown);
+  });
+});
+
+// ---------- Pinned harvested cases ----------
+
+// The open-range case comes from `test_open_range_flows.py`, whose mirror doesn't exist yet.
+
+test.each<CaseRow>([
+  ...[
+    "disjoint_node_input_fails_at_its_line",
+    "disjoint_flow_output_field_fails_at_its_line",
+    "disjoint_single_flow_output_fails",
+    "disjoint_binding_into_an_inline_body_fails",
+    "an_unproven_source_loads",
+    "int_into_float_loads",
+  ].map((name) => ({ id: `load-types/compose_typed_bindings_check__${name}`, call: assembled })),
+  { id: "types/compose_open_range_flows__tagged_binding_disjoint_from_an_open_range", call: assembled },
+])("assemble: $id", runCase);

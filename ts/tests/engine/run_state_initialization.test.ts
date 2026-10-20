@@ -41,6 +41,11 @@
  * check before anything else; a backward plan with a sequence-only trace change and a growth plan
  * reach their commit stubs, so the log stays empty.
  *
+ * TS-only, for the interrupted-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
+ * count or a last stop sequence on the fresh state, and an initialized state refuses a wrong
+ * container, a count that isn't a positive integer by node id, or a stop sequence that isn't an
+ * integer in `[1, nextSequence)`.
+ *
  * Not ported:
  * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema
  *   parameter, since schema 10 is the only one.
@@ -73,6 +78,7 @@ import {
   PreparedTransition,
   prepareExpanded,
   prepareRunStarted,
+  prepareRunStopped,
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -81,6 +87,7 @@ import {
   FailingLog,
   FINGERPRINT,
   flow,
+  initializedAndStarted,
   pool,
   ReturningLog,
   RUN_ID,
@@ -642,4 +649,75 @@ test.each(["backward", "growth"] as const)("a %s plan reaches its commit, not po
   const log = new MemoryRunLog(RUN_ID);
   expectError(() => commitPrepared(log, state, prepared), Error, /^not ported yet \(T4-5\)$/);
   expect(log.nextSequence).toBe(0);
+});
+
+test.each([
+  ["interrupted attempts", (state: RunState) => state.interruptedAttempts.set("work", 1)],
+  [
+    "last stop sequence",
+    (state: RunState): void => {
+      state.lastStopSequence = 1;
+    },
+  ],
+] as const)("prepareRunStarted refuses a state with interrupted-attempt history: %s", (_name, mutate) => {
+  const owned = flow();
+  const state = new RunState(owned);
+  mutate(state);
+
+  expectError(
+    () => prepareRunStarted(state, startData(owned)),
+    RangeError,
+    /^RunStarted requires a pristine RunState at sequence 0$/,
+  );
+});
+
+const COUNTS = /^interrupted attempt counts must be positive integers by node$/;
+const LAST_STOP = /^last stop sequence must be null or an earlier accepted sequence$/;
+
+test.each([
+  [
+    "a plain-object container",
+    (state: RunState): void => {
+      state.interruptedAttempts = {} as never;
+    },
+    /^transition requires initialized reducer containers$/,
+  ],
+  ["a zero count", (state: RunState) => state.interruptedAttempts.set("work", 0), COUNTS],
+  ["a negative count", (state: RunState) => state.interruptedAttempts.set("work", -1), COUNTS],
+  ["a fractional count", (state: RunState) => state.interruptedAttempts.set("work", 1.5), COUNTS],
+  ["a non-string node id", (state: RunState) => state.interruptedAttempts.set(1 as never, 1), COUNTS],
+  [
+    "a zero stop sequence",
+    (state: RunState): void => {
+      state.lastStopSequence = 0;
+    },
+    LAST_STOP,
+  ],
+  [
+    "the next sequence as the stop",
+    (state: RunState): void => {
+      state.lastStopSequence = state.nextSequence;
+    },
+    LAST_STOP,
+  ],
+  [
+    "a fractional stop sequence",
+    (state: RunState): void => {
+      state.lastStopSequence = 1.5;
+    },
+    LAST_STOP,
+  ],
+] as const)("an initialized state refuses broken interrupted-attempt history: %s", (_name, mutate, message) => {
+  const { state } = initializedAndStarted(flow());
+  mutate(state);
+
+  expectError(() => prepareRunStopped(state, "signal", ""), RangeError, message);
+});
+
+test("an initialized state accepts counts by node and an earlier stop sequence", () => {
+  const { state } = initializedAndStarted(flow());
+  state.interruptedAttempts.set("work", 2);
+  state.lastStopSequence = state.nextSequence - 1;
+
+  expect(prepareRunStopped(state, "signal", "").expectedSequence).toBe(state.nextSequence);
 });

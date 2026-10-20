@@ -444,7 +444,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   is ready; a route settles its edges depth first in stored order, skips the heads whose joins are
   dead (following each skipped node's output redirect) and appends the heads that become ready in
   that order; a resume puts the retried nodes first, in dispatch order, ahead of what was ready; a
-  stop changes nothing but the sequence. The first route whose skips reach END derives the
+  stop changes only the sequence and `lastStopSequence`. `interruptedAttempts` counts, per node,
+  the attempts a resume retried that no stop covered, using `lastStopSequence` (the sequence of the
+  last stop since the last resume). The first route whose skips reach END derives the
   `graph.terminal_unreachable` failure (naming the first required END input it skipped); it ends the
   run once nothing is ready or in flight, unless a node failure ends it first; a node failure ends
   the run at once. A bad output, an unknown handle or a bad commit target from a node throws

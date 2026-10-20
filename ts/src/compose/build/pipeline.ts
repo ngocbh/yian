@@ -84,6 +84,7 @@ import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { CallDescriptor } from "../nodes/call.ts";
+import type { ScalarStyle } from "../source/common.ts";
 import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
@@ -811,7 +812,7 @@ function bindingStyle(
   field: string,
   key: string,
   options: { valueEntries: ReadonlySet<string>; diagnostics: LoadDiagnostics },
-): string | null {
+): ScalarStyle | null {
   const { valueEntries, diagnostics } = options;
   try {
     if (!nodesCursor.has(nodeId)) return null;
@@ -844,15 +845,15 @@ function bindingStyle(
  */
 function outputStyle(
   outputsCursor: SourceCursor | null,
-  key: unknown,
+  key: string | null,
   options: { diagnostics: LoadDiagnostics },
-): string | null {
+): ScalarStyle | null {
   const { diagnostics } = options;
   if (outputsCursor === null) return null;
   try {
     if (key === null) return outputsCursor.scalarStyle;
-    if (!outputsCursor.has(key as string)) return null;
-    return outputsCursor.child(key as string).scalarStyle;
+    if (!outputsCursor.has(key)) return null;
+    return outputsCursor.child(key).scalarStyle;
   } catch (error) {
     if (!(error instanceof SourceAccessError)) throw error;
     throw diagnostics.error(error.message, { range: error.range, cause: error });
@@ -1150,8 +1151,10 @@ function stampInlineCallOrigins(
     const origin = origins.get(addressKey)!;
     if (origin === null) continue;
     const wiring = flowWiring.get(callId);
-    for (const [key, source] of wiring ?? []) {
-      if (asBinding(source).origin === null) wiring!.set(key, withOrigin(source, origin));
+    if (wiring !== undefined) {
+      for (const [key, source] of wiring) {
+        if (asBinding(source).origin === null) wiring.set(key, withOrigin(source, origin));
+      }
     }
     const node = nodes.get(callId);
     if (node !== undefined && node.origin === null) node.origin = origin;

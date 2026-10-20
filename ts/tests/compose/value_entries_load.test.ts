@@ -32,8 +32,7 @@
  * record `literalContract` spells, where Python checks the reader's error;
  * `test_an_object_entry_over_an_outside_value_stays_object` and
  * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` (its `call(...)` row with the
- * `g` def built by hand) check that the contract is
- * the tag.
+ * `g` def built by hand) check that the contract is the tag.
  *
  * TS-only: the descriptor refusing node-only fields, a `RangeError` (a compiler bug) where Python
  * raises `ValueError`; and the harvested `load-case/compose_value_entries_load__*` cases this

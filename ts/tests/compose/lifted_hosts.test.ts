@@ -56,7 +56,10 @@ nodes:
     output: int
 output: \${a.output}
 `;
-  expect(loadError(() => assembleText(text)).message).toContain("host");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    "node 'a' (kind=code): field 'host' is not allowed " +
+      "(allowed: asserts, code, depends_on, env, input, kind, node_name, output, runs_after)",
+  );
 });
 
 test("inline calls in a node input record the node as host", () => {
@@ -67,7 +70,7 @@ test("inline calls in a node input record the node as host", () => {
   const [newDescriptors] = desugarInlineCalls(descriptors, null, { nextId: synthIdGen() });
   const synth = synthOf(newDescriptors);
   expect([...synth.keys()].sort()).toEqual(["__call_0", "__call_1"]);
-  expect([...synth.values()].every((desc) => desc.host === "publish")).toBe(true);
+  expect([...synth.values()].map((desc) => desc.host)).toEqual(["publish", "publish"]);
   expect(newDescriptors.get("publish")!.host).toBeNull();
 });
 
@@ -90,7 +93,7 @@ test("inline calls in flow output and asserts have no host", () => {
   });
   const synth = [...synthOf(newDescriptors).values()];
   expect(synth.map((desc) => desc.call).sort()).toEqual(["f", "g"]);
-  expect(synth.every((desc) => desc.host === null)).toBe(true);
+  expect(synth.map((desc) => desc.host)).toEqual([null, null]);
 });
 
 test("value entry has no host", () => {

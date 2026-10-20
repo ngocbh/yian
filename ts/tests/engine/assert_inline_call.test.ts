@@ -72,9 +72,8 @@ function dbl(): ComposedFlow {
 
 test("named call node assert loads", () => {
   const { flow } = assembleText(FLOW, "flow.yaml", { children: { dbl: dbl() } });
-  const nodeIds = [...flow.compiled.nodes.keys()];
-  expect(nodeIds).toContain("dbl_call"); // the assert reads an author-named call node
-  expect(nodeIds.some((nodeId) => nodeId.startsWith("__call_"))).toBe(false); // no synth node minted
+  // The assert reads an author-named call node; no synth node is minted.
+  expect([...flow.compiled.nodes.keys()]).toEqual(["main", "dbl_call", "__start__", "__end__"]);
 });
 
 // ---------- harvested conformance cases ----------

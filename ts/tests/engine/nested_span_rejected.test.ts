@@ -12,8 +12,8 @@
  * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (`assemble`, whose inline-call
  * desugar raises it).
  *
- * Left for later: the binding, case, assert, loop and prompt load tests and the run tests land
- * with compose and `run.ts`.
+ * Left for later: the case, assert, loop and prompt load tests and the run tests land with compose
+ * and `run.ts`.
  */
 
 import { expect, test } from "bun:test";

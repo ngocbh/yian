@@ -153,8 +153,8 @@ export function desugarInlineCalls(
     outputsRange?: SourceRange | null;
     assertionRangeAt?: ((index: number) => SourceRange | null) | null;
     assertionOriginAt?: ((index: number) => OriginRef | null) | null;
-    bindingStyleAt?: ((nodeId: string, field: string, key: string) => string | null) | null;
-    outputStyleAt?: ((key: unknown) => string | null) | null;
+    bindingStyleAt?: ((nodeId: string, field: string, key: string) => ScalarStyle | null) | null;
+    outputStyleAt?: ((key: string | null) => ScalarStyle | null) | null;
     typedOutputs?: ReadonlySet<string | null>;
     nextId?: (() => string) | null;
     typeNames?: ReadonlySet<string>;
@@ -208,7 +208,7 @@ export function desugarInlineCalls(
           site: sites.get(call.id)!,
           callSite: callSites.get(call.id)!,
           hostId: nodeId,
-          range: origins.has(call.id) ? origins.get(call.id)! : desc.range,
+          range: origins.get(call.id)!,
           diagnostics,
         }),
       );
@@ -350,7 +350,7 @@ function desugarDescriptor(
     host: string;
     range: SourceRange | null;
     fieldRanges: ReadonlyMap<string, SourceRange> | null;
-    styleAt: ((field: string, key: string) => string | null) | null;
+    styleAt: ((field: string, key: string) => ScalarStyle | null) | null;
     typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;
   },
@@ -407,21 +407,21 @@ function desugarDescriptor(
  * with `call(` is a located `LoadError`.
  */
 function desugarSource(
-  source: unknown,
+  source: string | ValueTemplate,
   mint: () => string,
   calls: InlineCall[],
   host: string,
   options: {
     range?: SourceRange | null;
-    style?: string | null;
+    style?: ScalarStyle | null;
     quotable?: boolean;
-    typeNames?: ReadonlySet<string>;
+    typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;
   },
 ): unknown {
-  const { range = null, style = null, quotable = true, typeNames = new Set<string>(), diagnostics } = options;
+  const { range = null, style = null, quotable = true, typeNames, diagnostics } = options;
   if (!(source instanceof ValueTemplate)) {
-    return desugarValue(source as string, mint, calls, host, { range, style, quotable, typeNames, diagnostics });
+    return desugarValue(source, mint, calls, host, { range, style, quotable, typeNames, diagnostics });
   }
   for (const [, text] of iterSourceStrings(source)) {
     if (CALL_HEAD.test(text.trim())) {
@@ -457,16 +457,15 @@ function desugarValue(
   host: string,
   options: {
     range?: SourceRange | null;
-    style?: string | null;
+    style?: ScalarStyle | null;
     quotable?: boolean;
     expression?: boolean;
-    typeNames?: ReadonlySet<string>;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
+    typeNames: ReadonlySet<string>;
+    diagnostics: LoadDiagnostics;
+  },
 ): string {
-  const { range = null, style = null, quotable = true, expression = false, typeNames = new Set<string>() } = options;
-  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
-  const quoted = !expression && QUOTED_STYLES.has(style as ScalarStyle | null);
+  const { range = null, style = null, quotable = true, expression = false, typeNames, diagnostics } = options;
+  const quoted = !expression && QUOTED_STYLES.has(style);
   const isCall = CALL_HEAD.test(value.trim());
   if (quoted && isCall && value.includes("${")) {
     throw diagnostics.error(
@@ -642,7 +641,7 @@ function desugarOutputs(
   mint: () => string,
   options: {
     range: SourceRange | null;
-    styleAt: ((key: unknown) => string | null) | null;
+    styleAt: ((key: string | null) => ScalarStyle | null) | null;
     typed: ReadonlySet<string | null>;
     typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;

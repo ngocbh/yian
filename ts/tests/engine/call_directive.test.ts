@@ -36,7 +36,7 @@
 import { afterEach, expect, test } from "bun:test";
 
 import { INLINE_FLOW_PREFIX } from "../../src/compose/desugar/inline_bodies.ts";
-import { ArgumentValueError, desugarInlineCalls } from "../../src/compose/desugar/inline_calls.ts";
+import { ArgumentValueError, desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
 import { CALL_HEAD, matchCallDirective } from "../../src/compose/helpers/directives.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
@@ -49,6 +49,8 @@ import { ExpressionError } from "../../src/expr/expressions.ts";
 import { findParenEnd, InlineCall, splitCallsAware } from "../../src/expr/template.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, handChild, loadError, parametersFromYaml, runCase } from "../compose/declarations.ts";
+
+afterEach(() => forget());
 
 test.each([
   ["call(summarize, messages=${messages})", ["summarize", " messages=${messages}"]],
@@ -151,14 +153,6 @@ test("an InlineCall is frozen and keeps its fields", () => {
 
 // ---------- desugarInlineCalls ----------
 
-afterEach(() => forget());
-
-/** A deterministic synth-id minter (`__call_0`, `__call_1`, …), matching the loader's shape. */
-function ids(): () => string {
-  let counter = 0;
-  return () => `__call_${counter++}`;
-}
-
 /** A minimal CODE descriptor whose `inputs` carry the binding under test. */
 function code(nodeId: string, inputs: Record<string, unknown>): CodeDescriptor {
   return new CodeDescriptor({ id: nodeId, code: "mod:fn", inputs, outputs: "str" });
@@ -182,13 +176,13 @@ const synthIds = (descriptors: ReadonlyMap<string, NodeDescriptor>) =>
 
 /** Desugar `use`'s `topic` binding `value`, expecting a load error, and return it. */
 const topicError = (value: string, options: Parameters<typeof desugarInlineCalls>[2] = {}): LoadError =>
-  loadError(() => desugarInlineCalls(nodes(code("use", { topic: value })), null, { nextId: ids(), ...options }));
+  loadError(() => desugarInlineCalls(nodes(code("use", { topic: value })), null, { nextId: synthIdGen(), ...options }));
 
 test("whole value call directive recognized", () => {
   const [descriptors] = desugarInlineCalls(
     nodes(code("use", { topic: "call(summarize, messages=${messages})" })),
     null,
-    { nextId: ids() },
+    { nextId: synthIdGen() },
   );
   expect(descriptors.get("use")!.inputs["topic"]).toBe("${__call_0.output}");
   const synth = synthOf(descriptors, "__call_0");
@@ -198,28 +192,34 @@ test("whole value call directive recognized", () => {
 });
 
 test("mid value call is literal not directive", () => {
-  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "pre call(x)" })), null, { nextId: ids() });
+  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "pre call(x)" })), null, { nextId: synthIdGen() });
   expect(descriptors.get("use")!.inputs["topic"]).toBe("pre call(x)");
   expect(synthIds(descriptors)).toEqual([]);
 });
 
+const TRAILING_TAIL = "text follows the closing `)`: 'tail'; a call(...) must be the whole value";
+const POSITIONAL = (flowId: string, arg: string) =>
+  `call(${flowId}, ...) passes a positional argument '${arg}'; every argument after the flow id must be a ` +
+  "keyword (name=value)";
+
 test.each([
-  ["call(f) tail", "text follows the closing `)`: 'tail'"],
-  ["call(f, x=1", "`call(` is never closed"],
-  ['call(f, x="a)', "`call(` is never closed"],
-  ["call(f x=1)", "must start with a flow id (a bare name) and a comma, got 'f x=1'"],
-  ["call(f.g)", "must start with a flow id (a bare name) and a comma, got 'f.g'"],
-  ["call()", "must start with a flow id (a bare name) and a comma, got ''"],
-  ["call(f, 30)", "passes a positional argument '30'"],
-  ["call(f, a=1 b=2)", "keyword 'a' value '1 b=2' looks like two keywords"],
-  ["call(f, x=call(g) tail)", "text follows the closing `)`: 'tail'"],
-  ["call(f, x=call(g, 1))", "call(g, ...) passes a positional argument '1'"],
-])("malformed directive %p is a load error with the quote escape", (value, problem) => {
+  ["call(f) tail", TRAILING_TAIL, '`"call(f) tail"`'],
+  ["call(f, x=1", NEVER_CLOSED, '`"call(f, x=1"`'],
+  ['call(f, x="a)', NEVER_CLOSED, "`'call(f, x=\"a)'`"],
+  ["call(f x=1)", notFirst("'f x=1'"), '`"call(f x=1)"`'],
+  ["call(f.g)", notFirst("'f.g'"), '`"call(f.g)"`'],
+  ["call()", notFirst("''"), '`"call()"`'],
+  ["call(f, 30)", POSITIONAL("f", "30"), '`"call(f, 30)"`'],
+  [
+    "call(f, a=1 b=2)",
+    "call(f, ...) keyword 'a' value '1 b=2' looks like two keywords; add the missing comma, or quote the value",
+    '`"call(f, a=1 b=2)"`',
+  ],
+  ["call(f, x=call(g) tail)", TRAILING_TAIL, '`"call(f, x=call(g) tail)"`'],
+  ["call(f, x=call(g, 1))", POSITIONAL("g", "1"), '`"call(f, x=call(g, 1))"`'],
+])("malformed directive %p is a load error with the quote escape", (value, problem, quoted) => {
   // An unquoted value starting with `call(` must be exactly one well-formed directive.
-  const message = topicError(value).message;
-  expect(message.startsWith("use: ")).toBe(true);
-  expect(message).toContain(problem);
-  expect(message).toContain("If you meant the text, quote the whole value:");
+  expect(topicError(value).message).toBe(`use: ${problem}. If you meant the text, quote the whole value: ${quoted}`);
 });
 
 test("quoted directive is text", () => {
@@ -227,7 +227,7 @@ test("quoted directive is text", () => {
   const [descriptors] = desugarInlineCalls(
     nodes(code("use", { topic: "call(f, x=1", note: "call(f, x=1)" })),
     null,
-    { bindingStyleAt: () => "single", nextId: ids() },
+    { bindingStyleAt: () => "single", nextId: synthIdGen() },
   );
   expect(descriptors.get("use")!.inputs).toEqual({ topic: "call(f, x=1", note: "call(f, x=1)" });
   expect(synthIds(descriptors)).toEqual([]);
@@ -246,7 +246,7 @@ test("quoted nested arg is text", () => {
   const [descriptors] = desugarInlineCalls(
     nodes(code("use", { topic: "call(f, x=\"call(g\", y='call(h)')" })),
     null,
-    { nextId: ids() },
+    { nextId: synthIdGen() },
   );
   expect(synthOf(descriptors, "__call_0").inputs).toEqual({ x: "call(g", y: "call(h)" });
 });
@@ -254,10 +254,10 @@ test("quoted nested arg is text", () => {
 test("quoted flow output is text and unquoted is strict", () => {
   const [, outputs] = desugarInlineCalls(new Map(), { a: "call(f", b: "call(g)" }, {
     outputStyleAt: (key) => (key === "a" ? "double" : null),
-    nextId: ids(),
+    nextId: synthIdGen(),
   });
   expect(outputs).toEqual({ a: "call(f", b: "${__call_0.output}" });
-  const error = loadError(() => desugarInlineCalls(new Map(), "call(f", { nextId: ids() }));
+  const error = loadError(() => desugarInlineCalls(new Map(), "call(f", { nextId: synthIdGen() }));
   expect(error.message).toBe(
     'flow outputs: `call(` is never closed (check its parentheses and quotes). If you meant the text, quote ' +
       'the whole value: `"call(f"`',
@@ -267,7 +267,7 @@ test("quoted flow output is text and unquoted is strict", () => {
 test("malformed directive in assert is loud without a quote hint", () => {
   // An assert is an expression; quoting it does not make it text, so no quote hint.
   const error = loadError(() =>
-    desugarInlineCalls(new Map(), null, { assertsSection: ["call(f) tail"], nextId: ids() }),
+    desugarInlineCalls(new Map(), null, { assertsSection: ["call(f) tail"], nextId: synthIdGen() }),
   );
   expect(error.message).toBe("assert: text follows the closing `)`: 'tail'; a call(...) must be the whole value");
 });
@@ -276,14 +276,16 @@ test("bare id with hyphen recognized", () => {
   const [descriptors] = desugarInlineCalls(
     nodes(code("use", { topic: "call(my-flow, topic=${input.t})" })),
     null,
-    { nextId: ids() },
+    { nextId: synthIdGen() },
   );
   expect(descriptors.get("use")!.inputs["topic"]).toBe("${__call_0.output}");
   expect(synthOf(descriptors, "__call_0").call).toBe("my-flow");
 });
 
 test("positional arg after flow id is loud", () => {
-  expect(topicError("call(f, 30)").message).toContain("keyword");
+  expect(topicError("call(f, 30)").message).toBe(
+    `use: ${POSITIONAL("f", "30")}. If you meant the text, quote the whole value: \`"call(f, 30)"\``,
+  );
 });
 
 test("repeated keyword is loud", () => {
@@ -308,7 +310,7 @@ test("directive capturing item is loud", () => {
 
 test("nested directive desugars inner first", () => {
   const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "call(a, x=call(b))" })), null, {
-    nextId: ids(),
+    nextId: synthIdGen(),
   });
   // Inner `b` is minted first (inner-first), then outer `a`.
   const inner = synthOf(descriptors, "__call_0");
@@ -363,13 +365,13 @@ test.each([
     section === "output"
       ? desugarInlineCalls(new Map(), `call(${privateName})`, {
           outputsRange: expectedRange,
-          nextId: ids(),
+          nextId: synthIdGen(),
           diagnostics,
         })
       : desugarInlineCalls(new Map(), null, {
           assertsSection: [`call(${privateName})`],
           assertionRangeAt: () => expectedRange,
-          nextId: ids(),
+          nextId: synthIdGen(),
           diagnostics,
         }),
   );
@@ -382,7 +384,7 @@ test.each([
 
 test.each(["__inline_flow", "x__inline_flow_"])("private callee guard matches only the exact prefix: %p", (callee) => {
   const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: `call(${callee})` })), null, {
-    nextId: ids(),
+    nextId: synthIdGen(),
   });
 
   expect(synthOf(descriptors, "__call_0").call).toBe(callee);
@@ -392,7 +394,7 @@ test("shared minter yields distinct ids across bindings", () => {
   const [descriptors] = desugarInlineCalls(
     nodes(code("a", { topic: "call(f, x=${input.x})" }), code("b", { topic: "call(g, y=${input.y})" })),
     null,
-    { nextId: ids() },
+    { nextId: synthIdGen() },
   );
   expect(synthIds(descriptors)).toEqual(["__call_0", "__call_1"]); // distinct, no collision
 });
@@ -400,19 +402,22 @@ test("shared minter yields distinct ids across bindings", () => {
 test("old form rejected, new form desugars", () => {
   // The old `${flow(args)}` form is a hard-break load error; the `call(...)` form desugars.
   expect(() =>
-    desugarInlineCalls(nodes(code("old", { topic: "${ enrich(topic=input.topic) }" })), null, { nextId: ids() }),
-  ).toThrow("call(");
+    desugarInlineCalls(nodes(code("old", { topic: "${ enrich(topic=input.topic) }" })), null, { nextId: synthIdGen() }),
+  ).toThrow(
+    "old: a flow call 'enrich' inside ${...} is not supported — write it as the whole value with the call(...) " +
+      "directive: call(enrich, ...)",
+  );
   const [descriptors] = desugarInlineCalls(
     nodes(code("new", { topic: "call(summarize, messages=${messages})" })),
     null,
-    { nextId: ids() },
+    { nextId: synthIdGen() },
   );
-  expect(String(descriptors.get("new")!.inputs["topic"]).startsWith("${__call_")).toBe(true);
+  expect(descriptors.get("new")!.inputs["topic"]).toBe("${__call_0.output}");
   expect(synthIds(descriptors).map((callId) => synthOf(descriptors, callId).call)).toEqual(["summarize"]);
 });
 
 test("no arg directive recognized", () => {
-  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "call(now)" })), null, { nextId: ids() });
+  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "call(now)" })), null, { nextId: synthIdGen() });
   expect(descriptors.get("use")!.inputs["topic"]).toBe("${__call_0.output}");
   const synth = synthOf(descriptors, "__call_0");
   expect(synth.call).toBe("now");
@@ -421,7 +426,7 @@ test("no arg directive recognized", () => {
 
 /** Desugar `directive` as a node binding and return its synth call's inputs. */
 function synthInputs(directive: string): Readonly<Record<string, unknown>> {
-  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: directive })), null, { nextId: ids() });
+  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: directive })), null, { nextId: synthIdGen() });
   return synthOf(descriptors, "__call_0").inputs;
 }
 
@@ -550,7 +555,7 @@ test("an unreadable keyword value is a located load error", () => {
     "use: call(g, ...) keyword 'd' value can't be read as YAML (not a valid date: month must be in 1..12); " +
       "quote it to keep it as text",
   );
-  expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(21);
 });
 
 test("an out of range offset keyword value is a located load error", () => {
@@ -573,10 +578,10 @@ test("directive in outputs and asserts is desugared", () => {
   const [descriptors, outputs, asserts] = desugarInlineCalls(
     new Map(),
     { result: "call(summarize, messages=${messages})" },
-    { assertsSection: ["call(score, topic=${input.t})"], nextId: ids() },
+    { assertsSection: ["call(score, topic=${input.t})"], nextId: synthIdGen() },
   );
-  expect((outputs as Record<string, string>)["result"]!.startsWith("${__call_")).toBe(true);
-  expect(asserts[0]!.expression.startsWith("${__call_")).toBe(true);
+  expect(outputs).toEqual({ result: "${__call_0.output}" });
+  expect(asserts[0]!.expression).toBe("${__call_1.output}");
   expect(asserts[0]!.display).toBe("call(score, topic=${input.t})");
   expect(synthIds(descriptors).map((callId) => synthOf(descriptors, callId).call)).toEqual(["summarize", "score"]);
 });
@@ -587,9 +592,9 @@ test("directive rewrite preserves existing assertion presentation", () => {
     origin: new OriginRef("asserts/0"),
   });
 
-  const [, , assertions] = desugarInlineCalls(new Map(), null, { assertsSection: [authored], nextId: ids() });
+  const [, , assertions] = desugarInlineCalls(new Map(), null, { assertsSection: [authored], nextId: synthIdGen() });
 
-  expect(assertions[0]!.expression.startsWith("${__call_")).toBe(true);
+  expect(assertions[0]!.expression).toBe("${__call_0.output}");
   expect(assertions[0]!.display).toBe(authored.display);
   expect(assertions[0]!.origin).toBe(authored.origin);
 });
@@ -598,7 +603,7 @@ test("raw duplicate flow assertions become distinct ordered carriers", () => {
   // The front-end boundary retains occurrence identity even for equal YAML text.
   const text = "input.score > 0";
 
-  const [, , assertions] = desugarInlineCalls(new Map(), null, { assertsSection: [text, text], nextId: ids() });
+  const [, , assertions] = desugarInlineCalls(new Map(), null, { assertsSection: [text, text], nextId: synthIdGen() });
 
   expect(assertions).toEqual([new Assertion(text, text), new Assertion(text, text)]);
   expect(assertions[0]).not.toBe(assertions[1]);
@@ -620,7 +625,7 @@ test.each([
 });
 
 test("flow call in outputs span is loud", () => {
-  expect(() => desugarInlineCalls(new Map(), { result: "${summarize(m=m)}" }, { nextId: ids() })).toThrow(
+  expect(() => desugarInlineCalls(new Map(), { result: "${summarize(m=m)}" }, { nextId: synthIdGen() })).toThrow(
     "flow outputs: a flow call 'summarize' inside ${...} is not supported",
   );
 });
@@ -628,7 +633,7 @@ test("flow call in outputs span is loud", () => {
 test("pure builtin in span still allowed", () => {
   // `upper` is a builtin: a call to it inside `${...}` is NOT a flow call, so it passes through.
   const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "${upper(input.t)}" })), null, {
-    nextId: ids(),
+    nextId: synthIdGen(),
   });
   expect(descriptors.get("use")!.inputs["topic"]).toBe("${upper(input.t)}");
   expect(synthIds(descriptors)).toEqual([]);
@@ -702,12 +707,12 @@ output: \${use.output}
 });
 
 test.each([
-  ["call(f, t=${input.x} == X)", "${input.x} == X"],
-  ["call(f, t=a>=b, u=a<=b, v=a!=b)", "a>=b"],
-  ["call(f, t=a=b)", "a=b"],
-  ["call(f, note=a = b)", "a = b"],
-])("comparison and glued equals in keyword value %p stay text", (value, expected) => {
-  expect(synthInputs(value)[value.includes("t=") ? "t" : "note"]).toBe(expected);
+  ["call(f, t=${input.x} == X)", "t", "${input.x} == X"],
+  ["call(f, t=a>=b, u=a<=b, v=a!=b)", "t", "a>=b"],
+  ["call(f, t=a=b)", "t", "a=b"],
+  ["call(f, note=a = b)", "note", "a = b"],
+])("comparison and glued equals in keyword value %p stay text", (value, key, expected) => {
+  expect(synthInputs(value)[key]).toBe(expected);
 });
 
 test.each([

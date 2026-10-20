@@ -40,6 +40,7 @@ import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import {
@@ -91,6 +92,12 @@ const load = (text: string, children: Record<string, ComposedFlow> = ENRICH) =>
 /** The `[from, to]` pairs of a compiled flow's edges. */
 const edgePairs = (compiled: ReturnType<typeof load>) => compiled.edges.map((edge) => [edge.from, edge.to]);
 
+/** Each call node's id mapped to its callee flow id. */
+const callees = (compiled: ReturnType<typeof load>) =>
+  Object.fromEntries(
+    [...compiled.nodes].flatMap(([nodeId, node]) => (node instanceof CallNode ? [[nodeId, node.flowId]] : [])),
+  );
+
 test("inline call in node input loads", () => {
   const compiled = load(`
 id: ic1
@@ -107,7 +114,7 @@ nodes:
     output: str
 output: \${use.output}
 `);
-  expect(compiled.nodes.has("__call_0")).toBe(true); // the inline call became a synth node
+  expect(callees(compiled)).toEqual({ __call_0: "enrich" }); // the inline call became a synth node
 });
 
 test("inline call in human_input synthesizes and wires the call", () => {
@@ -126,7 +133,7 @@ nodes:
     output: str
 output: \${ask.output}
 `);
-  expect(compiled.nodes.has("__call_0")).toBe(true);
+  expect(callees(compiled)).toEqual({ __call_0: "enrich" });
   expect(edgePairs(compiled)).toContainEqual(["__call_0", "ask"]);
 });
 
@@ -172,7 +179,7 @@ output: \${repeat.output}
 `,
     { seed: def("  n: !int\n", "int"), body: def("  n: !int\n", "Step", readTypedefs({ Step: { n: "int" } })) },
   );
-  expect(compiled.nodes.has("__call_0")).toBe(true);
+  expect(callees(compiled)).toEqual({ __call_0: "seed" });
   expect(edgePairs(compiled)).toContainEqual(["__call_0", "repeat"]);
 });
 
@@ -241,8 +248,7 @@ output: \${use.output}
 `,
     { inner: topic, outer: topic },
   );
-  expect(compiled.nodes.has("__call_0")).toBe(true); // inner (minted first)
-  expect(compiled.nodes.has("__call_1")).toBe(true); // outer
+  expect(callees(compiled)).toEqual({ __call_0: "inner", __call_1: "outer" }); // inner minted first
 });
 
 test("inline call in flow output loads", () => {
@@ -261,7 +267,7 @@ nodes:
     output: str
 output: call(enrich, topic=\${seed.output})
 `);
-  expect(compiled.nodes.has("__call_0")).toBe(true);
+  expect(callees(compiled)).toEqual({ __call_0: "enrich" });
 });
 
 // ---------- guards: `${item}` capture, the reserved synth-id prefix, a malformed call ----------
@@ -283,10 +289,10 @@ nodes:
       topic: call(wrap, t=\${item})
 output: \${each.output}
 `;
-  const message = loadError(() => assembleText(text)).message;
-  expect(message).toContain("item");
-  expect(message).toContain("named `call`");
-  expect(message).toContain("`input:` may read");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    "node 'each': inline call 'wrap' cannot capture ${item} (arg 't') — it desugars to a top-level call node " +
+      "with no map-element scope; use a named `call` node (whose per-element `input:` may read `${item}`)",
+  );
 });
 
 test("user node with the synth prefix is loud", () => {
@@ -325,7 +331,10 @@ nodes:
 output: \${use.output}
 `;
   const error = loadError(() => assembleText(text));
-  expect(error.message).toContain("keyword");
+  expect(error.message).toBe(
+    "use: call(enrich, ...) passes a positional argument '30'; every argument after the flow id must be a " +
+      'keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`',
+  );
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(11);
 });
 
@@ -368,7 +377,10 @@ nodes:
 output: call(enrich, 30)
 `;
   const error = loadError(() => assembleText(text));
-  expect(error.message).toContain("keyword");
+  expect(error.message).toBe(
+    "flow outputs: call(enrich, ...) passes a positional argument '30'; every argument after the flow id must " +
+      'be a keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`',
+  );
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(13);
 });
 
@@ -431,8 +443,7 @@ output:
   ra: \${a.output}
   rb: \${b.output}
 `);
-  expect(compiled.nodes.has("__call_0")).toBe(true); // distinct, no collision
-  expect(compiled.nodes.has("__call_1")).toBe(true);
+  expect(callees(compiled)).toEqual({ __call_0: "enrich", __call_1: "enrich" }); // distinct, no collision
 });
 
 // ---------- harvested conformance cases ----------

@@ -5,13 +5,16 @@
 // `test_bare_header_without_a_terminal_names_the_variable_form`,
 // `test_list_shows_saved_logins_without_secrets`, `test_default_switches_without_sign_in`,
 // `test_remove_deletes_one_login`, `test_remove_accepts_an_unsupported_saved_provider`,
-// `test_remove_finds_a_lowercase_saved_name`, `test_env_override_note_agrees_with_the_number_of_variables`
-// and `test_list_shows_connection_settings_by_name_only`.
+// `test_remove_finds_a_lowercase_saved_name`, `test_env_override_note_agrees_with_the_number_of_variables`,
+// `test_list_shows_connection_settings_by_name_only`,
+// `test_device_json_stopped_before_the_save_exits_130_and_saves_nothing` and
+// `test_device_json_stopped_after_the_rename_is_saved_and_done`.
 // Added here, since Python left them to the `cli` conformance cases or didn't test them: `yian
 // providers`, `yian config check` (including `_config_errors`'s rows), the rest of `yian models`
 // (usage errors, the provider and subscription forms, the deadline), `--default` with `--remove`,
 // `--json` on a form that doesn't take it, whole-file removal and its refusals, "Name a provider" and
-// the removal documents under `--json`, SIGINT during a removal, and no signal listener left behind.
+// the removal documents under `--json`, SIGINT during a removal, no signal listener left behind, and
+// the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule.
 // Python's monkeypatched `list_models` and `OpenAIAuth` are `deps` fakes here, so no test reaches a
 // real host.
 // The handlers are called directly with the `ParsedArgs` the parser would give, so parsing stays
@@ -368,6 +371,9 @@ describe("models --auth-file", () => {
     const openAIAuth: AuthDeps["openAIAuth"] = (options) => {
       built.push(options);
       return {
+        deviceLogin: async () => {
+          throw new Error("yian models never signs in");
+        },
         refresh: async (old: OAuthCredentials) => {
           calls.push(`refresh ${old.accessToken}`);
           return oauth("new-access");
@@ -982,5 +988,151 @@ describe("auth list, default and remove", () => {
     const result = await run(auth, authArgs(), fakeIo({ env: setup.env }), { ...setup.deps, signals });
     expect(result.code).toBe(0);
     expect(signals.listenerCount("SIGINT")).toBe(0);
+  });
+});
+
+describe("auth device sign-in as JSON lines", () => {
+  const DEVICE_JSON = { method: "subscription", login: "device", json: true };
+  const CODE = {
+    format: "yian.cli.v1",
+    event: "code",
+    user_code: "TEST-CODE",
+    verification_uri: "https://example.invalid/device",
+  };
+  const WAITING = { format: "yian.cli.v1", event: "waiting" };
+
+  /**
+   * Python's `device_json`: `setupAuth` with an emitter as the signal source and a service factory
+   * recording the options each service is built with.
+   */
+  function deviceJson() {
+    const setup = setupAuth();
+    const signals = new EventEmitter();
+    const service = setup.service.openAIAuth();
+    const built: { signal?: AbortSignal }[] = [];
+    const deps: AuthDeps = {
+      openAIAuth: (options) => {
+        built.push(options);
+        return service;
+      },
+      signals,
+    };
+    return { ...setup, service, calls: setup.service.calls, signals, built, deps };
+  }
+
+  /** Run `yian auth openai --method subscription --login device --json` with `options`; parse each stdout line. */
+  async function runDevice(setup: ReturnType<typeof deviceJson>, options: Record<string, OptionValue> = {}) {
+    const io = fakeIo({ env: setup.env });
+    const result = await run(auth, authArgs("openai", { ...DEVICE_JSON, ...options }), io, setup.deps);
+    return { ...result, lines: result.out.split("\n").filter(Boolean).map((line) => JSON.parse(line)) };
+  }
+
+  /** How many SIGINT and SIGTERM listeners `signals` has. */
+  const listeners = (signals: EventEmitter) => signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM");
+
+  // Python: test_device_json_stopped_before_the_save_exits_130_and_saves_nothing.
+  test.each(["SIGTERM", "SIGINT"] as const)("%s before the save exits 130 and saves nothing", async (name) => {
+    const setup = deviceJson();
+    const counts: number[] = [];
+    setup.service.subscriptionModels = async () => {
+      counts.push(listeners(setup.signals));
+      setup.signals.emit(name);
+      counts.push(listeners(setup.signals));
+      // No listener takes a second signal, so a process gets its default action and ends.
+      setup.signals.emit(name);
+      return ["gpt-test"];
+    };
+    const result = await runDevice(setup);
+    expect(result).toMatchObject({ code: 130, err: "" });
+    expect(result.lines).toEqual([CODE, WAITING]);
+    expect(existsSync(setup.path)).toBe(false);
+    expect(counts).toEqual([2, 0]);
+    expect(listeners(setup.signals)).toBe(0);
+    expect(setup.built).toHaveLength(1);
+    expect(setup.built[0]!.signal?.aborted).toBe(true);
+  });
+
+  // Python: test_device_json_stopped_after_the_rename_is_saved_and_done.
+  test("SIGTERM after the rename is saved and done", async () => {
+    const setup = deviceJson();
+    const rename = fs.renameSync;
+    let renames = 0;
+    const spy = spyOn(fs, "renameSync").mockImplementation((...args) => {
+      rename(...args);
+      renames += 1;
+      setup.signals.emit("SIGTERM");
+    });
+    let result: Awaited<ReturnType<typeof runDevice>>;
+    try {
+      result = await runDevice(setup);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(renames).toBe(1);
+    expect(result).toMatchObject({ code: 0, err: "" });
+    expect(result.lines).toEqual([
+      CODE,
+      WAITING,
+      { format: "yian.cli.v1", event: "done", models: ["gpt-test", "gpt-other"], model: "gpt-test" },
+    ]);
+    expect(result.out).not.toContain("private-");
+    expect(setup.store.read().defaultProvider).toBe("openai");
+    expect(setup.store.selection()?.model).toBe("gpt-test");
+    expect(setup.calls).toEqual(["device", "subscription_models"]);
+    expect(listeners(setup.signals)).toBe(0);
+    setup.signals.emit("SIGTERM");
+    expect(listeners(setup.signals)).toBe(0);
+  });
+
+  test("a --model the subscription doesn't offer is an error line, and nothing is saved", async () => {
+    const setup = deviceJson();
+    const result = await runDevice(setup, { model: "unavailable" });
+    expect(result).toMatchObject({ code: 1, err: "" });
+    expect(result.lines).toEqual([
+      CODE,
+      WAITING,
+      {
+        format: "yian.cli.v1",
+        event: "error",
+        error: { code: "auth.failed", message: "The selected model is not available for this connection" },
+      },
+    ]);
+    expect(existsSync(setup.path)).toBe(false);
+    expect(listeners(setup.signals)).toBe(0);
+  });
+
+  test("a malformed store is one error line before any service call", async () => {
+    const setup = deviceJson();
+    writeFileSync(setup.path, '{"version": 1, "providers": {}}', { mode: 0o600 });
+    chmodSync(setup.path, 0o600);
+    const before = readFileSync(setup.path);
+    let message = "";
+    try {
+      setup.store.read();
+    } catch (error) {
+      message = (error as AuthError).message;
+    }
+    expect(message).not.toBe("");
+    const result = await runDevice(setup);
+    expect(result).toMatchObject({ code: 1, err: "" });
+    expect(result.lines).toEqual([{ format: "yian.cli.v1", event: "error", error: { code: "auth.failed", message } }]);
+    expect(setup.built).toEqual([]);
+    expect(setup.calls).toEqual([]);
+    expect(readFileSync(setup.path)).toEqual(before);
+  });
+
+  test("the login becomes the default only when the store has none", async () => {
+    const setup = deviceJson();
+    await setup.store.save("anthropic", new ApiKeyCredentials("private-key"), "claude-test");
+    const result = await runDevice(setup, { model: "gpt-other" });
+    expect(result.code).toBe(0);
+    expect(result.lines.at(-1)).toEqual({
+      format: "yian.cli.v1",
+      event: "done",
+      models: ["gpt-test", "gpt-other"],
+      model: "gpt-other",
+    });
+    expect(setup.store.read().defaultProvider).toBe("anthropic");
+    expect(setup.store.selection("openai")?.model).toBe("gpt-other");
   });
 });

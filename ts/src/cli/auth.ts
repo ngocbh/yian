@@ -52,7 +52,7 @@ export interface AuthDeps {
   openAIAuth?: (options: {
     signal?: AbortSignal;
     requestTimeoutMs?: number;
-  }) => Pick<OpenAIAuth, "refresh" | "subscriptionModels">;
+  }) => Pick<OpenAIAuth, "deviceLogin" | "refresh" | "subscriptionModels">;
   /** List a provider's models; defaults to `listModels`. */
   listModels?: typeof listModels;
   /** The clock deadlines run on; defaults to `realScheduler`. */
@@ -307,6 +307,40 @@ async function setupOpenai(..._args: unknown[]): Promise<void> {
   throw new Error("not ported yet");
 }
 
+/**
+ * Sign in to an OpenAI subscription by device code, writing JSON lines, and save the login.
+ *
+ * Writes a `code` line, a `waiting` line, and a `done` line once the login is saved with `model`,
+ * or the subscription's first model; it becomes the default when the store has none. Aborting
+ * `signal` stops the sign-in before the store's rename, rejecting with its reason: nothing is saved
+ * and no further line is written.
+ *
+ * @throws {AuthError} The store is unusable, or sign-in, the listing or the model choice fails.
+ */
+async function signInLines(
+  authFile: string | null,
+  model: string | undefined,
+  io: CliIo,
+  deps: AuthDeps,
+  signal: AbortSignal,
+): Promise<void> {
+  const store = new AuthStore(authFile, { env: io.env, signal });
+  // Reading first also diagnoses an unusable store before any request.
+  const makeDefault = store.read().defaultProvider === null;
+  const service = (deps.openAIAuth ?? ((options) => new OpenAIAuth(options)))({ signal });
+  const credentials = await service.deviceLogin(async (url, code) => {
+    await printJson({ event: "code", user_code: code, verification_uri: url }, io.stdout);
+    await printJson({ event: "waiting" }, io.stdout);
+  });
+  const models = await service.subscriptionModels(credentials);
+  const chosen = model ?? models[0];
+  if (chosen === undefined || !models.includes(chosen)) {
+    throw new AuthError("The selected model is not available for this connection");
+  }
+  await store.save("openai", credentials, chosen, { makeDefault });
+  await printJson({ event: "done", models: [...models], model: chosen }, io.stdout);
+}
+
 /** Read a provider's key, endpoint, and model, check the model, and save the login. Not ported yet. */
 async function setupProvider(..._args: unknown[]): Promise<void> {
   throw new Error("not ported yet");
@@ -424,7 +458,10 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
     }
     const [checked, sources] = checkOptions(provider, options, io);
     let name = checked;
-    if (json && device) throw new Error("not ported yet");
+    if (json && device) {
+      await signInLines(authFile, options.model, io, deps, stop.signal);
+      return 0;
+    }
     const store = open(authFile);
     if (options.remove) {
       const state = store.read();

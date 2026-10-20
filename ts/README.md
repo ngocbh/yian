@@ -447,8 +447,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*` function
   (`prepareRunStarted`, `prepareNodeStarted`, `prepareNodeStep`, `prepareNodeSucceeded`,
   `prepareNodeRouted`, `prepareNodeFailed`, `prepareExpanded`, `prepareRunResumed`,
-  `prepareRunStopped`, `prepareRecord`) validates one transition without mutating the state and returns a frozen
-  `PreparedTransition`: the canonical record, the run id and sequence it expects, and a frozen plan.
+  `prepareRunStopped`, `prepareRecord`) validates one transition without mutating the state and
+  returns a frozen `PreparedTransition`: the canonical record, the run id and sequence it expects, and a frozen plan.
   `commitPrepared(log, state, prepared)` appends the record, checks what the log returned, then
   applies the plan, with no `await` in between, so nothing interleaves between the append and the
   apply. Frontier order: START is ready after `RunStarted`; a success walks its target's outgoing
@@ -466,8 +466,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   A growth (`prepareExpanded`) copies the spawner with `copyGraph`, calls the injected builder with
   the canonical seed, copies the fragment it returns, validates it against the live graph (ids,
   wiring, contracts, edges, reachability, redirects, the node budget, depth) and decides which
-  requested prune ids retire now and which stay deferred until they and their grown subtrees
-  settle; the commit then installs the fragment and retires the pruned nodes in place, after the
+  requested or earlier-deferred prune ids retire now, with their grown subtrees, and which stay live
+  and deferred while they, their grown subtrees or the work that reads them are unsettled; the commit then installs the fragment and retires the pruned nodes in place, after the
   append. A bad seed, fragment or prune from the node throws `GrowthRejected` (`original` holds the
   underlying error), which fails the node; a builder or host fault stays raw. Replaying a
   `NodeExpandedRecord` rebuilds the fragment and requires the recorded digest, and throws the

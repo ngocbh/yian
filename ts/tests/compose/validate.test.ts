@@ -25,8 +25,8 @@
  * (`["a"]`, rule `messages`). The CODE references are TS's
  * (`./fixtures/compose_codefns.ts:pick_pro`).
  *
- * TS-only: the harvested cases from files with no TS mirror, pinned at the end, with their notes
- * and every frame: `load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host`
+ * TS-only: the harvested cases from files with no TS mirror, pinned at the end with `full` (every
+ * frame and the notes): `load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host`
  * (its `defs:` entry built by hand).
  *
  * Later (T3-18): the reference validator's rows (`test_validate_references_diag_has_range`,
@@ -44,7 +44,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { Edge } from "../../src/compile/model.ts";
-import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { rejectCycles } from "../../src/compose/validate/cycles.ts";
 import { forget } from "../../src/defaults.ts";
@@ -53,8 +53,7 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembledWith,
-  assembleText,
-  caseText,
+  type CaseRow,
   fileOf,
   handChild,
   loadError,
@@ -71,9 +70,6 @@ const rangeDiagnostics = () => new LoadDiagnostics("flow.yaml", ("x".repeat(80) 
 /** Return a data edge `from -> to` feeding input group `group`, with id `from->to`. */
 const dataEdge = (from: string, to: string, group: string | null = null) =>
   new Edge(`${from}->${to}`, from, to, { inputGroup: group });
-
-/** Return the frame ranges of `run`'s `LoadError`. */
-const frameRanges = (run: () => unknown) => loadError(run).diagnostic.frames.map((frame) => frame.range);
 
 describe("rejectCycles", () => {
   test("a cycle's diagnostic has a frame per node in authored order", () => {
@@ -187,14 +183,15 @@ describe("rejectCycles", () => {
 
   test("an unlocated host is framed at its synth node", () => {
     const synth = new SourceRange(7, 3, 7, 6);
-    const run = () =>
+    const error = loadError(() =>
       rejectCycles(aliasCycleEdges(), new Set(["g", "c"]), {
         nodeRanges: new Map([["c", synth]]),
         diagnostics: rangeDiagnostics(),
         ...aliasOptions,
-      });
-    expect(loadError(run).message).toBe('flow has a cycle involving ["g"]; flows must be acyclic');
-    expect(frameRanges(run)).toEqual([synth]);
+      }),
+    );
+    expect(error.message).toBe('flow has a cycle involving ["g"]; flows must be acyclic');
+    expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([synth]);
   });
 
   test("an alias keeps the other members", () => {
@@ -367,24 +364,10 @@ const child = () =>
     output: "${x.output}",
   });
 
-const INLINE_CALL_CYCLE = "load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host";
-
-/** Return each frame's range as `[startLine, startCol, endLine, endCol]`. */
-const frameSpans = (error: LoadError) =>
-  error.diagnostic.frames.map(({ range }) => [range.startLine, range.startCol, range.endLine, range.endCol]);
-
-test.each([{ id: INLINE_CALL_CYCLE, call: assembledWith({ child: child() }) }])("assemble: $id", runCase);
-
-test("the inline-call cycle names its host in a note and frames both nodes", () => {
-  const text = caseText(INLINE_CALL_CYCLE).text;
-  const error = loadError(() => assembleText(text, "flow.yaml", { children: { child: child() } }));
-  expect(frameSpans(error)).toEqual([
-    [19, 3, 19, 4],
-    [23, 10, 23, 36],
-  ]);
-  expect(error.diagnostic.notes).toEqual([
-    "__call_0 depends on n (__call_0.input.y)",
-    "__call_0 is generated from node 'n'",
-    "n depends on __call_0 (n.input.a)",
-  ]);
-});
+test.each<CaseRow>([
+  {
+    id: "load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host",
+    call: assembledWith({ child: child() }),
+    full: true,
+  },
+])("assemble: $id", runCase);

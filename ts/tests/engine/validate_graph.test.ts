@@ -91,6 +91,12 @@ describe("cycle detection on the inferred graph", () => {
     const { nodeIds, edges } = build("load-agent/seed_01_structured_agent");
     expect(() => rejectInferredCycles(edges, nodeIds)).not.toThrow();
   });
+
+  test("a CASE seed passes the cycle check", () => {
+    // Control edges don't introduce a cycle.
+    const { nodeIds, edges } = build(SEED02);
+    expect(() => rejectInferredCycles(edges, nodeIds)).not.toThrow();
+  });
 });
 
 /** Resolve a type expression with no typedefs. */
@@ -228,12 +234,6 @@ describe("recursive type compatibility", () => {
   });
 });
 
-test("a CASE seed passes the cycle check", () => {
-  // Control edges don't introduce a cycle.
-  const { nodeIds, edges } = build(SEED02);
-  expect(() => rejectInferredCycles(edges, nodeIds)).not.toThrow();
-});
-
 describe("CASE handle alignment over the desugared cases and control edges", () => {
   test("seed 02's handles align", () => {
     const { edges, nodes } = build(SEED02);
@@ -247,7 +247,7 @@ describe("CASE handle alignment over the desugared cases and control edges", () 
 
   test("a handle with no matching case is rejected", () => {
     const { edges, nodes } = build(SEED02);
-    const stray = new Edge("gate->x#9", "gate", "positive", { sourceHandle: "ghost" });
+    const stray = new Edge("gate->positive#9", "gate", "positive", { sourceHandle: "ghost" });
     const error = loadError(() => checkCaseHandles(nodes, [...edges, stray]));
     expect(error.message).toBe("case node 'gate' has edge handle 'ghost' with no matching case");
   });

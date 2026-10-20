@@ -220,6 +220,8 @@ export interface CaseRow {
   file?: string;
   /** The loader's prefix on the expected message. */
   prefix?: string;
+  /** Compare every frame and the notes too, not only the last frame. */
+  full?: boolean;
 }
 
 /** Read the `input:` declarations at `path` as the loader reads owner `sitePath`'s (the root's: `[]`). */
@@ -361,7 +363,9 @@ export function assembleText(
  * Make `row.call` on its case and compare the result with the case's `expect`: an `ok` case
  * must return; otherwise the call must throw a `LoadError` whose message (after the row's
  * prefix; skipped when the expected diagnostic has none), last frame label and last frame range
- * are the expected diagnostic's.
+ * are the expected diagnostic's. With `row.full`, every frame (label, range and note, in order)
+ * and the notes must be the expected diagnostic's, an omitted `notes` or frame `note` reading as
+ * empty, as the conformance README writes them.
  */
 export function runCase(row: CaseRow): void {
   const { case_, document } = caseDocument(row.id, { file: row.file });
@@ -383,6 +387,8 @@ export interface TextCaseRow {
   prefix?: string;
   /** The TS message, where the case leaves it out but the text is yian's. */
   message?: string;
+  /** Compare every frame and the notes too, as `CaseRow.full` does. */
+  full?: boolean;
 }
 
 /** Make `row.call` on its case's text and compare the result as `runCase` does. */
@@ -398,7 +404,7 @@ export function runTextCase(row: TextCaseRow): void {
 function expectCaseResult(
   case_: Case,
   run: () => unknown,
-  options: { prefix?: string; message?: string },
+  options: { prefix?: string; message?: string; full?: boolean },
 ): void {
   const expected = (case_["expect"] as Case)["load"];
   if (expected === "ok") {
@@ -406,14 +412,25 @@ function expectCaseResult(
     return;
   }
   const error = loadError(run);
-  const frame = error.diagnostic.frames.at(-1)!;
-  const range = frame.range;
   const diagnostic = ((expected as Case)["diagnostics"] as Case[])[0]!;
-  const expectedFrame = (diagnostic["frames"] as Case[]).at(-1)!;
-  expect([frame.label, [range.startLine, range.startCol, range.endLine, range.endCol]]).toEqual([
-    expectedFrame["label"] as string,
-    (expectedFrame["range"] as bigint[]).map(Number),
-  ]);
+  const frames = error.diagnostic.frames.map(({ label, range, note }) => ({
+    label,
+    range: [range.startLine, range.startCol, range.endLine, range.endCol],
+    note,
+  }));
+  const expectedFrames = (diagnostic["frames"] as Case[]).map((frame) => ({
+    label: frame["label"] as string,
+    range: (frame["range"] as bigint[]).map(Number),
+    note: (frame["note"] as string | undefined) ?? null,
+  }));
+  if (options.full) {
+    expect(frames).toEqual(expectedFrames);
+    expect(error.diagnostic.notes).toEqual((diagnostic["notes"] as string[] | undefined) ?? []);
+  } else {
+    const { label, range } = frames.at(-1)!;
+    const last = expectedFrames.at(-1)!;
+    expect([label, range]).toEqual([last.label, last.range]);
+  }
   const message = diagnostic["message"] as string | undefined;
   if (message === undefined) {
     if (options.message !== undefined) expect(error.message).toBe(options.message);

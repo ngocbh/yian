@@ -13,7 +13,7 @@
  * `test_two_self_reading_gates_each_name_only_the_gate` and
  * `test_gate_reading_its_own_composer_keeps_the_id`); the harvested
  * `load-agent/engine_adaptive_composer_errors__*` cases the composer's build or the cycle check
- * raises, pinned at the end, the cycle cases with their notes and every frame.
+ * raises, pinned at the end, the cycle cases with `full` (every frame and the notes).
  *
  * Changed: the flows assemble with `assembleText`, where Python loads them. A text value reads
  * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
@@ -258,29 +258,10 @@ test.each<CaseRow>([
   { id: "load-agent/engine_adaptive_composer_errors__api_key_in_the_composer_llm_config", call: assembled },
   { id: "load-agent/engine_adaptive_composer_errors__unknown_key_in_the_composer_llm_config", call: assembled },
   { id: "load-agent/engine_adaptive_composer_errors__valid_llm_config_loads", call: assembled },
-  { id: "load-agent/engine_adaptive_composer_errors__composer_reader_cycle_keeps_the_id", call: assembled },
-  { id: "load-agent/engine_adaptive_composer_errors__cycle_through_a_gate_names_only_authored_nodes", call: assembled },
+  { id: "load-agent/engine_adaptive_composer_errors__composer_reader_cycle_keeps_the_id", call: assembled, full: true },
+  {
+    id: "load-agent/engine_adaptive_composer_errors__cycle_through_a_gate_names_only_authored_nodes",
+    call: assembled,
+    full: true,
+  },
 ])("assemble: $id", runCase);
-
-test.each([
-  [
-    "composer_reader_cycle_keeps_the_id",
-    [
-      "ask__compose depends on b (ask__compose.input.proj)",
-      GENERATED,
-      "b depends on ask__compose (b.input.a)",
-    ],
-  ],
-  [
-    "cycle_through_a_gate_names_only_authored_nodes",
-    ["ask depends on b (ask.input.proj)", "b depends on ask (b.input.a)"],
-  ],
-])("cycle case %s carries its notes and both frames", (name, notes) => {
-  const text = caseText(`load-agent/engine_adaptive_composer_errors__${name}`).text;
-  const error = loadError(() => assembleText(text));
-  expect(error.diagnostic.frames.map(({ range }) => [range.startLine, range.startCol, range.endLine, range.endCol])).toEqual([
-    [5, 3, 5, 4],
-    [9, 3, 9, 6],
-  ]);
-  expect(error.diagnostic.notes).toEqual(notes);
-});

@@ -96,19 +96,18 @@ export function rejectCycles(
       ([a, ra], [b, rb]) => ra.startLine - rb.startLine || ra.startCol - rb.startCol || compareCodeUnits(a, b),
     );
     const frames = authored.flatMap(([, range]) => diagnostics.frame(range) ?? []);
-    const notes = [
-      ...new Set([...cycleNotes(edges, components, { gateIds: options.gateIds, aliases: alias }), ...synthNotes]),
-    ].sort(compareCodeUnits);
+    const notes = cycleNotes(edges, components, { gateIds: options.gateIds, aliases: alias });
+    for (const note of synthNotes) notes.add(note);
     throw diagnostics.error(`flow has a cycle involving ${writeAsText(named)}; flows must be acyclic`, {
       frames,
-      notes,
+      notes: [...notes].sort(compareCodeUnits),
       cause: error,
     });
   }
 }
 
 /**
- * Return one note per dependency edge within a cyclic component, sorted and de-duplicated.
+ * Return one note per dependency edge within a cyclic component, unsorted; the caller sorts.
  *
  * Each loop-internal edge `from -> to` reads as "`to` consumes `from`": the consumer depends on
  * the producer. An edge connecting two separate cycles is not itself cyclic and is omitted. A
@@ -123,7 +122,7 @@ function cycleNotes(
   edges: readonly Edge[],
   components: readonly ReadonlySet<string>[],
   options: { gateIds?: ReadonlySet<string>; aliases?: ReadonlyMap<string, string> } = {},
-): string[] {
+): Set<string> {
   const gateIds = options.gateIds ?? new Set<string>();
   const alias = options.aliases ?? new Map<string, string>();
   const componentByNode = new Map<string, number>();
@@ -141,9 +140,8 @@ function cycleNotes(
     let via: string;
     if (gateIds.has(e.id) && e.inputGroup) {
       // Only gate ids are split: an authored input key may itself contain a `.`.
-      const dot = e.inputGroup.indexOf(".");
-      const [node, group] = dot < 0 ? [e.inputGroup, ""] : [e.inputGroup.slice(0, dot), e.inputGroup.slice(dot + 1)];
-      via = `gate: ${node}.input.${group}`;
+      const [node, ...rest] = e.inputGroup.split(".");
+      via = `gate: ${node}.input.${rest.join(".")}`;
     } else if (e.inputGroup) {
       via = `${to}.input.${e.inputGroup}`;
     } else {
@@ -151,18 +149,18 @@ function cycleNotes(
     }
     notes.add(`${to} depends on ${from} (${via})`);
   }
-  return [...notes].sort(compareCodeUnits);
+  return notes;
 }
 
 /**
- * Return the graph's cyclic strongly connected components, in a deterministic order.
+ * Return the graph's cyclic strongly connected components, in finish order (no caller depends on
+ * the order).
  *
  * Two iterative depth-first passes implement Kosaraju's algorithm with no recursion. Components
  * with several nodes are cyclic; a singleton is cyclic only when it has a self-edge. Sentinel
  * edges are ignored.
  */
 function cyclicComponents(edges: readonly Edge[], nodeIds: ReadonlySet<string>): Set<string>[] {
-  // Starts are visited sorted and neighbours pushed reverse-sorted, as Python's pass does.
   const adjacency = new Map<string, Set<string>>();
   const reverse = new Map<string, Set<string>>();
   for (const nodeId of nodeIds) {
@@ -178,6 +176,8 @@ function cyclicComponents(edges: readonly Edge[], nodeIds: ReadonlySet<string>):
 
   const visited = new Set<string>();
   const finishOrder: string[] = [];
+  // Starts are visited sorted and neighbours pushed reverse-sorted: the visiting order fixes which
+  // components come out and in what finish order, so results are deterministic and match Python's.
   for (const start of [...nodeIds].sort(compareCodeUnits)) {
     if (visited.has(start)) continue;
     const stack: [string, boolean][] = [[start, false]];

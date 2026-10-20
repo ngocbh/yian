@@ -10,15 +10,14 @@
  * `load-core/seed_e33_input_named_like_field`.
  *
  * `test_e02_cycle_located` assembles conformance case `load-core/seed_e02_cycle` with `assembled`
- * (`assemble` as the loader calls it), pinned with its notes and both frames. Changed: its message
- * writes the node list in the text form (`["a","b"]`, rule `messages`).
+ * (`assemble` as the loader calls it), with `full` (every frame and the notes). Changed: its
+ * message writes the node list in the text form (`["a","b"]`, rule `messages`).
  *
- * Later (T3-22): `test_e01_dangling_ref_located`,
- * `test_e03_unknown_field_located`, `test_negative_fixtures_are_located`,
- * `test_e04_exhaustiveness_mechanism_loud`, `test_e04_else_satisfies_coverage`,
- * `test_e06_cross_flow_type_mismatch_is_loud`, `test_single_node_def_model_kind_is_removed`,
- * the e13, e14, e15, e16, e17, e30, e31 and e32 rows of `test_compile_error_gallery`,
- * `test_inline_code_construction_errors_carry_ranges`,
+ * Later (T3-22): `test_e01_dangling_ref_located`, `test_e03_unknown_field_located`,
+ * `test_negative_fixtures_are_located`, `test_e04_exhaustiveness_mechanism_loud`,
+ * `test_e04_else_satisfies_coverage`, `test_e06_cross_flow_type_mismatch_is_loud`,
+ * `test_single_node_def_model_kind_is_removed`, the e13, e14, e15, e16, e17, e30, e31 and e32 rows
+ * of `test_compile_error_gallery`, `test_inline_code_construction_errors_carry_ranges`,
  * `test_invalid_authored_default_carries_input_range`,
  * `test_bad_input_ref_locates_the_offending_entry`,
  * `test_bad_map_per_element_input_ref_locates_the_offending_entry`,
@@ -40,7 +39,7 @@ import { siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { assembled, assembleText, type CaseRow, caseText, loadError, nodesOf, runCase } from "../compose/declarations.ts";
+import { assembled, type CaseRow, caseText, loadError, nodesOf, runCase } from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -75,15 +74,4 @@ test("input named like a field does not collide", () => {
   expect(fr.get(siteKey("field", "env"))).not.toEqual(fr.get(siteKey("input", "env")));
 });
 
-test.each<CaseRow>([{ id: "load-core/seed_e02_cycle", call: assembled }])("assemble: $id", runCase);
-
-test("e02's cycle is located at every member", () => {
-  // Nodes `a` and `b` begin at lines 12 and 18, in authored source order.
-  const error = loadError(() => assembleText(caseText("load-core/seed_e02_cycle").text));
-  expect(error.message).toBe('flow has a cycle involving ["a","b"]; flows must be acyclic');
-  expect(error.diagnostic.frames.map(({ range }) => [range.startLine, range.startCol, range.endLine, range.endCol])).toEqual([
-    [12, 3, 12, 4],
-    [18, 3, 18, 4],
-  ]);
-  expect(error.diagnostic.notes).toEqual(["a depends on b (a.input.x)", "b depends on a (b.input.x)"]);
-});
+test.each<CaseRow>([{ id: "load-core/seed_e02_cycle", call: assembled, full: true }])("assemble: $id", runCase);

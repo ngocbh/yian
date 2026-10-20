@@ -92,9 +92,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   reference's file, waits for an awaited load step. A CODE node's `baseDir`, the directory its
   reference resolves against, comes from `BuildContext.baseDir` (`null` by default). WAIT keeps an
   `until:` date or datetime as the text written, after checking it parses.
-
-- `src/compose/validate/` holds the graph-stage passes; only the pipeline imports them (and
-  `references.ts` imports `constructors.ts`).
+- `src/compose/validate/` holds the validate phase, the cross-node checks over the assembled flow.
+  Outside it only `src/compose/build/` imports it: the pipeline runs the passes, and `boundary.ts`
+  takes the `LoweredAsserts` type from `asserts.ts`. Inside it, passes import only the shared models
+  `narrowing.ts` and `typed_bindings.ts`.
 
 ## Skills
 

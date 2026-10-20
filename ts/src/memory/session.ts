@@ -50,9 +50,10 @@ import {
   conversationContentDigest,
   conversationViewFromJson,
   conversationViewToJson,
+  invocationFromJson,
   invocationJson,
 } from "./conversation.ts";
-import { checkStoragePath, type SQLiteStorage } from "./storage/sqlite.ts";
+import { checkStoragePath, SQLiteStorage } from "./storage/sqlite.ts";
 import { admissions, prefixDigest, Summary } from "./summary.ts";
 
 const NOTE_FIELDS: readonly string[] = [
@@ -64,6 +65,15 @@ const NOTE_FIELDS: readonly string[] = [
   "text",
 ];
 const SNAPSHOT_FIELDS: readonly string[] = ["conversation", "generation", "namespace", "notes", "version"];
+const INVENTORY_FIELDS: readonly string[] = ["applied_commits", "snapshot", "summaries", "used", "version"];
+const SUMMARY_FIELDS: readonly string[] = [
+  "covered",
+  "digest",
+  "generation",
+  "namespace",
+  "projection_version",
+  "text",
+];
 
 /** One FIFO ticket, and once granted the lease, of an invocation on the instance conversation. */
 interface Lease {
@@ -370,6 +380,85 @@ function summaryJson(summary: Summary): JsonObject {
   };
 }
 
+/** One decoded private storage inventory. */
+type Inventory = [
+  snapshot: JsonObject,
+  view: ConversationView | null,
+  notes: readonly JsonObject[],
+  used: boolean,
+  appliedCommits: ReadonlyMap<string, string>,
+  summaries: ReadonlyMap<string, Summary>,
+];
+
+/**
+ * Prove every saved value, including private cache ownership and lineage.
+ *
+ * @throws MemoryOperationError `session.invalid_storage` (stage `storage`) for any defect;
+ *   `session.unsupported_history` for retired provider-native history.
+ */
+function parseInventory(value: unknown): Inventory {
+  try {
+    const data = wire(value);
+    if (!hasFields(data, INVENTORY_FIELDS)) throw new RangeError("invalid inventory fields");
+    if (data.version !== 1n) throw new RangeError("unsupported inventory version");
+    const [snapshot, view, notes] = parseSnapshot(data.snapshot);
+    const used = data.used;
+    if (typeof used !== "boolean") throw new RangeError("invalid inventory use flag");
+    if (!isObject(data.applied_commits)) throw new TypeError("applied_commits must be an object");
+    const commits = new Map<string, string>();
+    for (const [commitId, digest] of Object.entries(data.applied_commits)) {
+      requireString(commitId, "commit_id");
+      requireString(digest, "digest");
+      if (!/^[0-9a-f]{64}$/.test(digest as string)) throw new RangeError("invalid commit digest");
+      commits.set(commitId, digest as string);
+    }
+    if (!Array.isArray(data.summaries)) throw new RangeError("summaries must be an array");
+    const summaries = new Map<string, Summary>();
+    const turns = view === null ? [] : admissions(view);
+    for (const raw of data.summaries as readonly JsonValue[]) {
+      if (!isObject(raw) || !hasFields(raw, SUMMARY_FIELDS)) throw new RangeError("invalid summary fields");
+      requireString(raw.namespace, "namespace");
+      const generation = jsonCounter(raw.generation, "generation");
+      requireString(raw.projection_version, "projection_version");
+      requireString(raw.digest, "digest");
+      if (!Array.isArray(raw.covered)) throw new RangeError("covered invocations must be an array");
+      const summary = new Summary(
+        raw.namespace as string,
+        Number(generation),
+        raw.projection_version as string,
+        (raw.covered as readonly JsonValue[]).map(invocationFromJson),
+        raw.digest as string,
+        raw.text as string,
+      );
+      const cacheKey = summary.projectionVersion;
+      if (
+        summaries.has(cacheKey) ||
+        view === null ||
+        summary.covered.length >= turns.length ||
+        !summary.matches(view, turns, summary.projectionVersion)
+      ) {
+        throw new RangeError("summary has foreign or invalid raw-prefix evidence");
+      }
+      summaries.set(cacheKey, summary);
+    }
+    if (
+      !used &&
+      (snapshot.generation !== 0n || view !== null || notes.length > 0 || commits.size > 0 || summaries.size > 0)
+    ) {
+      throw new RangeError("unused inventory contains retained work");
+    }
+    return [snapshot, view, notes, used, commits, summaries];
+  } catch (cause) {
+    // Python's `raise ... from None`: the stored defect isn't chained.
+    if (cause instanceof MemoryOperationError) {
+      if (cause.code === "session.unsupported_history") throw cause;
+    } else if (!(cause instanceof TypeError || cause instanceof RangeError)) {
+      throw cause;
+    }
+    throw error("invalid_storage", "stored session state is invalid", { stage: "storage" });
+  }
+}
+
 /**
  * Own one conversation and its notes, optionally in local SQLite.
  *
@@ -449,12 +538,52 @@ export class SessionMemory implements Memory {
   }
 
   /**
-   * Guard a value operation (Python's `_locked()`); cleanup paths don't call it.
+   * Open and load durable state once. On failure the storage is closed and forgotten, so a later
+   * operation retries the open, and the primary failure is rethrown unchanged.
    *
-   * @throws MemoryOperationError `session.closed` after `close()`.
+   * @throws MemoryOperationError The file can't be opened, read or initialized;
+   *   `session.invalid_storage` for invalid stored state; `session.unsupported_history`.
+   */
+  private openStorage(): void {
+    if (this.storage !== null || this.storagePath === null) return;
+    this.storage = new SQLiteStorage(this.storagePath, "session", { createParent: this.createParent });
+    try {
+      const saved = this.storage.load();
+      if (saved === null) {
+        this.saveState(snapshotJson(this.namespace, this.generation, this.view, this.notes));
+      } else {
+        const [pinned, view, notes, used, commits, summaries] = parseInventory(saved);
+        this.namespace = pinned.namespace as string;
+        this.generation = Number(pinned.generation);
+        this.view = view;
+        this.notes = notes;
+        this.used = used;
+        this.appliedCommits = commits;
+        this.summaries = summaries;
+      }
+    } catch (primary) {
+      try {
+        this.storage.close();
+      } catch (cleanup) {
+        secondary(primary, cleanup);
+      }
+      // Forget the failed handle so a later operation may retry the open.
+      this.storage = null;
+      throw primary;
+    }
+  }
+
+  /**
+   * Guard a value operation (Python's `_locked()`): open storage at the first one and reject an
+   * unusable handle. Cleanup paths don't call it.
+   *
+   * @throws MemoryOperationError `session.closed` after `close()`; the storage can't be opened, or
+   *   is closed or poisoned.
    */
   private guard(): void {
     if (this.closed) throw error("closed", "memory backend is closed", { stage: "session" });
+    this.openStorage();
+    this.storage?.ensureOpen();
   }
 
   /** Wake every waiting reservation so it re-checks its ticket. */
@@ -479,13 +608,15 @@ export class SessionMemory implements Memory {
   /** Save a complete validated candidate before publishing it in RAM; nothing without storage. */
   private saveState(snapshot: JsonObject, changes: StateChanges = {}): void {
     if (this.storage === null) return;
-    this.storage.save({
+    const inventory = {
       version: 1n,
       snapshot,
       used: changes.used ?? this.used,
       applied_commits: Object.fromEntries(changes.commits ?? this.appliedCommits),
       summaries: [...(changes.summaries ?? this.summaries).values()].map(summaryJson),
-    });
+    };
+    parseInventory(inventory);
+    this.storage.save(inventory);
   }
 
   /**

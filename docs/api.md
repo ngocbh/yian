@@ -1908,6 +1908,11 @@ the original opening snapshot, even after turns advance live
 history. Without `storage`, the backend writes no files or database. See
 [optional durable memory](#optional-durable-memory) for restart persistence.
 
+Changed (TS yian): `new SessionMemory({ historyBudgetChars, recentTurns, storage,
+createParent })` takes an options object whose settings are integral `number`s or
+`bigint`s; snapshots are deep-frozen rather than detached copies; there is no `with`
+form (call `close()` in `finally`) and no fork check.
+
 ### Conversation ownership and updates
 
 A session memory key holds exactly one conversation, owned by the single AGENT
@@ -1953,7 +1958,11 @@ instruction), recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
 Changed (TS yian): the message format is `yian.message.v1`; TS yian never reads Python memory
-stores.
+stores. `await source.openTurn(request, { signal })` waits for the lease and resolves to the
+admitted turn; an aborted `signal` is the cooperative stop, and a waiter learns of a poisoned
+store at its next wake-up. `request`, `observe` and `view` are synchronous. `turn.close(error?)`
+replaces `__exit__`: it never rethrows `error`, and appends a stop or cleanup failure to
+`error.notes`. `-0` equals `0` in a compatibility descriptor.
 
 ### API history summaries
 
@@ -1988,6 +1997,10 @@ backend's condition lock. Other session memories proceed independently.
 A failed, malformed, empty, or tool-request summary response fails that invocation
 without deleting history or making the normal answer request. Summary work does
 not run backward learning or enter structured-output correction retries.
+
+Changed (TS yian): `await turn.prepareHistory({ projectionVersion, project, summarize })`
+is async and awaits `project` and `summarize`, which may return promises; the budget
+counts code points, as Python's `len()` does.
 
 ### Learned notes
 

@@ -1,6 +1,6 @@
 /**
  * Built-in SQLite backends open storage on first use, never in the constructor: a port of
- * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory`.
+ * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory` and `SessionMemory`.
  *
  * Ported: `test_construction_touches_no_file`, `test_bad_path_shape_fails_at_construction_without_io`,
  * `test_reset_also_opens_storage`, `test_missing_parent_fails_at_first_open_without_create_parent`,
@@ -11,8 +11,6 @@
  * TS-only: none.
  *
  * Changed: none.
- *
- * Later: the `session` parametrization (with `memory/session.ts`).
  *
  * Later (T6-5): the `reflective` parametrization (with the reflective backend).
  *
@@ -29,6 +27,7 @@ import path from "node:path";
 
 import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 
 /** The surface every backend shares. */
@@ -41,6 +40,7 @@ interface Backend {
 /** A backend's name (its closed code's prefix) and its factory over a storage path. */
 const BACKENDS: [string, (file: string, options?: { createParent?: boolean }) => Backend][] = [
   ["episodic", (file, options = {}) => new EpisodicMemory({ storage: file, ...options })],
+  ["session", (file, options = {}) => new SessionMemory({ storage: file, ...options })],
 ];
 
 let dir: string;

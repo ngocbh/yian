@@ -515,6 +515,7 @@ describe("evalNode gives every node the scheduler and the random draw", () => {
       await evalNode(make(seen), null, pool, { scheduler: null, random: null });
       await evalNode(make(seen), null, pool);
 
+      expect(seen).toHaveLength(2);
       for (const caps of seen) {
         expect("scheduler" in caps).toBe(false);
         expect("random" in caps).toBe(false);

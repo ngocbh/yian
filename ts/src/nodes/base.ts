@@ -39,15 +39,15 @@ import {
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
 import type { EvaluationTrace, JsonObject, MemoryContext, MemoryScope } from "../memory/contracts.ts";
-import type { Skill } from "../skills/catalog.ts";
 import type { Scheduler } from "../platform.ts";
+import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
+  fromHost,
   isList,
   isRecord,
   jsTypeName,
-  fromHost,
   setField,
   type Type,
   TypeCheckError,

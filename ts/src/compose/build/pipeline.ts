@@ -1407,7 +1407,8 @@ function fillTypeTables(
    * have.
    *
    * Only for condition sites: `validateReferences` already checked every binding's constructor
-   * calls and builtin field reads, with the references typed.
+   * calls and builtin field reads, with the references typed. Python's `condition` flag is dropped:
+   * every caller parses its source as a condition.
    */
   const checked = (names: TypeNames, source: unknown, where: string, range: SourceRange | null): Map<string, Type> => {
     const resolvedNames = table(names, where, range);

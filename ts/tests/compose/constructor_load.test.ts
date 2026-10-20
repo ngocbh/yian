@@ -22,8 +22,8 @@
  * `engine/inline_calls.test.ts` pins the cases of the binding sites the inline-call desugar raises.
  *
  * TS-only: one row per constructor message the type-table pass reports at a `case when` (a union,
- * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read), which
- * Python checks only at binding sites.
+ * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read); Python
+ * reports them there too, but its tests pin them only at binding sites.
  *
  * Later (T3-18 PR 3): the reference validator's binding and prompt sites and their cases:
  * `test_a_malformed_constructor_call_is_a_load_error` (the `binding` site),

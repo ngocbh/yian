@@ -127,8 +127,9 @@
  * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs`,
  * `test_carried_field_the_body_does_not_read_is_not_checked`,
  * `test_inline_body_reference_seed_fits_its_generated_parameter` and
- * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input`, and
- * `test_loop_seed_reads_the_case_narrowed_type`.
+ * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input`, and the run half of
+ * `test_loop_seed_reads_the_case_narrowed_type`. Later (T3-20): both loads of
+ * `test_loop_seed_reads_the_case_narrowed_type` (CASE narrowing).
  */
 
 import { expect, test } from "bun:test";

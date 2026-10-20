@@ -215,7 +215,7 @@ test.each([
 // ---------- inline bodies ----------
 
 /** The parameters of the inline body of LOOP `nodeId` in `flow`, keyed by name. */
-function startParams(flow: ComposedFlow, nodeId: string): Map<string, Parameter> {
+function bodyInputs(flow: ComposedFlow, nodeId: string): Map<string, Parameter> {
   const node = flow.compiled.nodes.get(nodeId) as LoopNode;
   return new Map(node.childInputs.map((param) => [param.name, param]));
 }
@@ -243,7 +243,7 @@ nodes:
 output: \${loop.output}
 `);
 
-  expect(startParams(flow, "loop").get("r")!.contract!.type).toStrictEqual(typeFor("float", new Map()));
+  expect(bodyInputs(flow, "loop").get("r")!.contract!.type).toStrictEqual(typeFor("float", new Map()));
 });
 
 test("a typed inline loop seed types an opaque producer (loads)", () => {
@@ -274,7 +274,7 @@ nodes:
 output: \${loop.output}
 `);
 
-  const param = startParams(flow, "loop").get("label")!;
+  const param = bodyInputs(flow, "loop").get("label")!;
   expect(param.contract!.type).toStrictEqual(typeFor("Optional(str)", new Map()));
   expect(param.required).toBe(false);
 });

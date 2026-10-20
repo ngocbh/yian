@@ -119,7 +119,6 @@ import {
   resolveIsinstanceType,
 } from "../helpers/isinstance_types.ts";
 import { nth } from "../helpers/source.ts";
-import { ExpressionError } from "../../expr/expressions.ts";
 import { NodeKind } from "../../nodes/base.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";

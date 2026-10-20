@@ -15,8 +15,10 @@
  * `test_reject_cycles_keeps_a_synth_node_read_inside_the_cycle`,
  * `test_reject_cycles_ignores_synth_out_edges_outside_the_component`);
  * `test_check_wiring_parity_moved` and `test_validate_human_questions_diag_has_range`;
- * `test_check_call_map_types_is_owned_by_call_validation` (a direct call over a hand-built
- * `BuildResult`); and the parse rows
+ * `test_check_call_map_types_is_owned_by_call_validation`, `test_check_loop_type_contract_moved`,
+ * `test_check_loop_type_contract_tolerates_a_loop_without_child_inputs` and
+ * `test_type_validators_reject_noncanonical_contract_maps_before_walking` (direct calls over
+ * hand-built `BuildResult`s); and the parse rows
  * `test_node_local_asserts_carry_ranges`, `test_per_input_param_carries_ranges`,
  * `test_input_named_like_field_no_collision` (through `nodesOf`),
  * `test_unknown_top_level_key_lists_authored_names` (through `fileOf`) and
@@ -42,9 +44,6 @@
  * `test_validate_references_diag_case_on_form_locates_at_on_line`,
  * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when`,
  * `test_validate_references_diag_case_then_call_locates_at_then_line`).
- * Later (T3-19): `test_check_loop_type_contract_moved`,
- * `test_check_loop_type_contract_tolerates_a_loop_without_child_inputs` and
- * `test_type_validators_reject_noncanonical_contract_maps_before_walking`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -54,6 +53,7 @@ import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { BuildContext, BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
+import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { rejectCycles } from "../../src/compose/validate/cycles.ts";
 import { validateHumanQuestions } from "../../src/compose/validate/human_questions.ts";
 import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
@@ -62,6 +62,7 @@ import { SourceRange } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -321,6 +322,68 @@ describe("checkCallMapTypes", () => {
     expect(error.message).toContain("child expects");
     expect(error.diagnostic.frames[0]!.range).toEqual(range);
   });
+});
+
+describe("checkLoopTypeContract", () => {
+  /** A LOOP node `lp` over body `body` whose carried record is `{n: int}`. */
+  function intLoop(): LoopNode {
+    const node = new LoopNode("lp", { flowId: "body" });
+    node.outputContract = new ValueContract(
+      new Type({ kind: ValueKind.OBJECT, fields: new Map([["n", Type.scalar(ValueKind.INTEGER)]]) }),
+    );
+    return node;
+  }
+
+  test("the loop type check moved", () => {
+    // test_check_loop_type_contract_moved: a carried field seeded from a source type that
+    // mismatches the body output's same-named field type is loud, anchored on the loop node's
+    // `input:` mapping span, and the frame carries that range.
+    const range = new SourceRange(4, 5, 5, 20);
+    const result = new BuildResult({
+      node: intLoop(),
+      wiring: new Map([["n", "${src.output}"]]),
+      fieldRanges: new Map([[siteKey("field", "inputs"), range]]),
+    });
+    const producers = new Map([["src", new ValueContract(Type.scalar(ValueKind.STRING))]]); // a string seed source
+    const wiring = new Map([["lp", new Map([["n", "${src.output}"]])]]); // carried `n` seeded from it
+
+    const error = loadError(() =>
+      checkLoopTypeContract(new Map([["lp", result]]), producers, new Map(), wiring, {
+        diagnostics: rangeDiagnostics(),
+      }),
+    );
+
+    expect(error.message).toContain("carried field");
+    expect(error.diagnostic.frames[0]!.range).toEqual(range);
+  });
+
+  test("the loop type check tolerates a loop without child inputs", () => {
+    // test_check_loop_type_contract_tolerates_a_loop_without_child_inputs: a bare LoopNode has no
+    // body signature; a seed that matches the body output leaves nothing else to compare.
+    const result = new BuildResult({ node: intLoop(), wiring: new Map([["n", "${src.output}"]]) });
+    const producers = new Map([["src", new ValueContract(Type.scalar(ValueKind.INTEGER))]]);
+
+    checkLoopTypeContract(
+      new Map([["lp", result]]),
+      producers,
+      new Map(),
+      new Map([["lp", new Map([["n", "${src.output}"]])]]),
+      { diagnostics: rangeDiagnostics() },
+    );
+  });
+});
+
+test("the type validators reject noncanonical contract maps before walking", () => {
+  // test_type_validators_reject_noncanonical_contract_maps_before_walking: direct validator calls
+  // enforce the same exact-carrier boundary as the pipeline.
+  const bad = new Map([["unused", Type.scalar(ValueKind.STRING)]]) as unknown as Map<string, ValueContract>;
+
+  expect(() => checkCallMapTypes(new Map(), bad, new Map(), new Map())).toThrow(
+    "output producer contracts must be ValueContract or PartialRecordContract values, got Type for 'unused'",
+  );
+  expect(() => checkLoopTypeContract(new Map(), new Map(), bad, new Map())).toThrow(
+    "flow input contracts must be exact ValueContract values, got Type for 'unused'",
+  );
 });
 
 describe("parse ranges", () => {

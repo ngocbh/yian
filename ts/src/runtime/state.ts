@@ -617,7 +617,7 @@ export class HistoricalLogCursor implements RunLog {
     this.runId = decodeRecord(envelopeJsons[0]!).runId;
   }
 
-  /** The historical envelope the next reducer commit must match. */
+  /** The sequence of the historical envelope the next reducer commit must match. */
   get nextSequence(): number {
     return this.#consumed.length;
   }
@@ -1648,7 +1648,7 @@ export function replayRecords(
 
   const canonical: string[] = [];
   let runId: string | null = null;
-  envelopes.forEach((supplied, expectedSequence) => {
+  for (const [expectedSequence, supplied] of envelopes.entries()) {
     const encoded = encodeRecord(supplied);
     const envelope = decodeRecord(encoded);
     if (envelope.seq !== expectedSequence) {
@@ -1660,7 +1660,7 @@ export function replayRecords(
       throw new RangeError(`replay run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`);
     }
     canonical.push(encoded);
-  });
+  }
 
   const first = decodeRecord(canonical[0]!);
   const start = first.record;

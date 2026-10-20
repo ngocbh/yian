@@ -13,10 +13,11 @@
  *   append past the prefix and the consumed envelopes `records()` and the iterator return.
  *
  * TS-only, the reducer cores of the T4-8 tests below, through `replayRecords`: every prefix of a
- * live log from START's dispatch on replays to the live state after it; an empty prefix, a first
- * record that isn't RunStarted, a first sequence that isn't 0, a sequence gap, a run-id change and
- * a record after the terminal are refused; a route to a handle that matches no edge throws the
- * `RangeError` itself, not the live `NodeDataError`.
+ * live log replays to the live state after it; a replayed RunStarted keeps the recorded defaults
+ * and call-time LLM config; an empty prefix, a first record that isn't RunStarted, a first
+ * sequence that isn't 0, a sequence gap, a run-id change and a record after the terminal are
+ * refused; a route to a handle that matches no edge throws the `RangeError` itself, not the live
+ * `NodeDataError`.
  *
  * Not ported: none.
  *
@@ -36,6 +37,7 @@
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { BUILTIN } from "../../src/defaults.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -50,6 +52,7 @@ import {
   HistoricalLogCursor,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  prepareRunStarted,
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -57,11 +60,11 @@ import {
   commitStartSuccess,
   flow,
   fragmentBuilder,
-  initializedAndStarted,
   reducerSnapshot,
   routeFlow,
   routeInFlight,
   RUN_ID,
+  startData,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message is `message`. */
@@ -77,13 +80,16 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 }
 
 /**
- * Return a terminal live run of `flow()` and its reducer snapshot after each prefix, from the
- * two records `initializedAndStarted` commits on.
+ * Return the log of a terminal live run of `flow()` and its reducer snapshot after each prefix,
+ * from its RunStarted on.
  */
-function linearHistory(): { state: RunState; log: MemoryRunLog; snapshots: Record<string, unknown>[] } {
-  const { state, log } = initializedAndStarted(flow());
+function linearHistory(): { log: MemoryRunLog; snapshots: Record<string, unknown>[] } {
+  const state = new RunState(flow());
+  const log = new MemoryRunLog(RUN_ID);
+  commitPrepared(log, state, prepareRunStarted(state, startData(state.flow)));
   const snapshots = [reducerSnapshot(state)];
   const transitions = [
+    () => commitPrepared(log, state, prepareNodeStarted(state, START_ID)),
     () => commitStartSuccess(state, log),
     () => commitPrepared(log, state, prepareNodeStarted(state, "work")),
     () => commitPrepared(log, state, prepareNodeSucceeded(state, "work", "Ada")),
@@ -95,7 +101,7 @@ function linearHistory(): { state: RunState; log: MemoryRunLog; snapshots: Recor
     snapshots.push(reducerSnapshot(state));
   }
   expect(state.result).not.toBeNull();
-  return { state, log, snapshots };
+  return { log, snapshots };
 }
 
 /** Replay `envelopes` over a fresh state of `flow()`. */
@@ -106,26 +112,33 @@ function replay(envelopes: readonly RecordEnvelope[]): RunState {
 test("every prefix of a live log replays to the live state after that prefix", () => {
   const { log, snapshots } = linearHistory();
   const envelopes = log.records();
-  expect(snapshots).toHaveLength(envelopes.length - 1);
+  expect(snapshots).toHaveLength(envelopes.length);
 
   snapshots.forEach((expected, index) => {
-    const length = index + 2;
+    const length = index + 1;
     const recovered = replay(envelopes.slice(0, length));
     expect(reducerSnapshot(recovered)).toEqual(expected);
     expect(recovered.nextSequence).toBe(length);
   });
 });
 
-test("replay requires a pristine state", () => {
-  const { log } = linearHistory();
-  const state = new RunState(flow());
-  state.ready.push(START_ID);
+test("a replayed RunStarted keeps the recorded defaults and call-time LLM config", () => {
+  const live = new RunState(flow());
+  const log = new MemoryRunLog(RUN_ID);
+  const data = {
+    ...startData(live.flow),
+    defaults: { MAX_TOTAL_NODES: 5000n },
+    callTimeLlm: { selection: {}, agents: { chat: {} } },
+  };
+  commitPrepared(log, live, prepareRunStarted(live, data));
+  expect(live.runDefaults).not.toEqual(BUILTIN);
+  expect(live.callTimeLlm).not.toBeNull();
 
-  expectError(
-    () => replayRecords(state, log.records(), { growBuilder: fragmentBuilder }),
-    RangeError,
-    "RunStarted requires a pristine RunState at sequence 0",
-  );
+  const recovered = replay(log.records());
+
+  expect(recovered.runDefaults).toEqual(live.runDefaults);
+  expect(recovered.callTimeLlm).toEqual(live.callTimeLlm);
+  expect(recovered.nextSequence).toBe(live.nextSequence);
 });
 
 test("the historical cursor matches each envelope's text", () => {
@@ -187,16 +200,25 @@ test("replay refuses a malformed prefix root", () => {
   );
 });
 
-test("replay refuses a record after the terminal and leaves its source unchanged", () => {
+test("replay requires a pristine state", () => {
+  const { log } = linearHistory();
+  const state = new RunState(flow());
+  state.ready.push(START_ID);
+
+  expectError(
+    () => replayRecords(state, log.records(), { growBuilder: fragmentBuilder }),
+    RangeError,
+    "RunStarted requires a pristine RunState at sequence 0",
+  );
+});
+
+test("replay refuses a record after the terminal", () => {
   const { log } = linearHistory();
   const trailing = MemoryRunLog.fromRecords(log.records());
   trailing.append(new NodeStartedRecord(START_ID));
   const envelopes = trailing.records();
 
   expectError(() => replay(envelopes), RangeError, "terminal run state cannot prepare another graph transition");
-
-  expect(trailing.nextSequence).toBe(envelopes.length);
-  expect(trailing.records()).toEqual(envelopes);
 });
 
 test("a replayed route to a handle that matches no edge throws the RangeError itself", () => {

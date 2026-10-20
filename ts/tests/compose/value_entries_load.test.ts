@@ -5,13 +5,20 @@
  *
  * A tagged entry lowers at load to a CODE node with the entry's id and one typed input named
  * after it, so the tag is checked like a typed binding's: a span-free literal is checked while the
- * entry is read and a nested tag checks its own value. A tag never fills in a missing field. A bare
+ * entry is read, a span's inferred type must not be disjoint from the tag, and a nested tag checks
+ * its own value. A tag never fills in a missing field. A bare
  * `!object` over a written-out mapping keeps the record the mapping spells, and an empty key in
  * that record is a load error.
  *
  * Ported: `test_a_value_entry_builds_a_code_node_with_the_entry_id`,
- * `test_a_tag_does_not_fill_in_a_missing_field`, `test_a_nested_tag_is_checked_at_its_own_line`,
- * `test_entry_errors_are_located_at_the_entry`, `test_an_entry_under_a_credential_name_loads`,
+ * `test_named_type_entry_reads_a_float_producer`,
+ * `test_named_type_entry_rejects_a_disjoint_producer_at_the_entry`,
+ * `test_a_tag_does_not_fill_in_a_missing_field`,
+ * `test_a_named_field_read_into_a_disjoint_binding_is_rejected`,
+ * `test_a_nested_tag_is_checked_at_its_own_line`, `test_entry_errors_are_located_at_the_entry`,
+ * `test_a_disjoint_span_names_the_value_entry`,
+ * `test_a_flow_call_of_a_disjoint_type_is_rejected_at_the_entry` (its `f` def built by hand),
+ * `test_a_span_field_takes_its_producer_type`, `test_an_entry_under_a_credential_name_loads`,
  * `test_a_mistyped_literal_under_a_credential_name_gets_the_ordinary_error`,
  * `test_a_nested_binding_loads`, `test_fingerprint_is_stable_and_tracks_the_literal`,
  * `test_an_object_entry_with_an_empty_key_is_rejected`,
@@ -31,33 +38,26 @@
  * the scalar before any entry is read. The written-out record rows
  * (`test_a_written_out_object_entry_keeps_its_fields`,
  * `test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader`,
- * `test_a_literal_field_takes_its_literal_type`, the span-free row of
- * `test_a_nested_untagged_mapping_keeps_its_fields`,
- * `test_an_escaped_span_in_an_object_entry_is_text`) check the built node's output contract, the
- * record `literalContract` spells, where Python checks the reader's error;
+ * the span-free row of `test_a_nested_untagged_mapping_keeps_its_fields`) check the built node's
+ * output contract, the record `literalContract` spells, where Python checks the reader's error;
+ * `test_a_literal_field_takes_its_literal_type` and
+ * `test_an_escaped_span_in_an_object_entry_is_text` check the typed reader's error, as Python
+ * does, and also the record `literalContract` spells;
  * `test_an_object_entry_over_an_outside_value_stays_object` and
  * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` (its `call(...)` row with the
  * `g` def built by hand) check that the contract is the tag. The span row of
- * `test_a_nested_untagged_mapping_keeps_its_fields`, `test_a_nested_tagged_object_is_opaque`,
- * `test_a_span_field_takes_its_producer_type` and `test_a_span_record_rejects_an_unknown_field`
- * check the built entry node's output contract, which the reader types (an untyped producer
- * leaves its field opaque in a partial record).
+ * `test_a_nested_untagged_mapping_keeps_its_fields`, `test_a_nested_tagged_object_is_opaque`
+ * and `test_a_span_record_rejects_an_unknown_field` check the built entry node's output contract,
+ * which the reader types (an untyped producer leaves its field opaque in a partial record).
  *
  * TS-only: the descriptor refusing node-only fields, a `RangeError` (a compiler bug) where Python
  * raises `ValueError`; and the harvested `load-case/compose_value_entries_load__*` cases this
- * reader and the build-cache reader decide (`tags.test.ts` pins the ones `readTaggedValue`
- * decides).
+ * reader, the build-cache reader and the typed-binding check decide (`tags.test.ts` pins the
+ * ones `readTaggedValue` decides).
  *
  * Later (T3-18): the reference checks, which turn a read of a field the record lacks into a load
  * error in the record rows above (the error half of `test_a_span_record_rejects_an_unknown_field`
  * among them).
- * Later (T3-19): the typed bindings: the error half of `test_a_span_field_takes_its_producer_type`,
- * `test_named_type_entry_reads_a_float_producer`,
- * `test_named_type_entry_rejects_a_disjoint_producer_at_the_entry`,
- * `test_a_named_field_read_into_a_disjoint_binding_is_rejected`,
- * `test_a_disjoint_span_names_the_value_entry`,
- * `test_a_flow_call_of_a_disjoint_type_is_rejected_at_the_entry` (its message is the typed-binding
- * check's).
  * Later (T4): the run of `test_an_empty_key_outside_a_written_out_record_loads`.
  */
 
@@ -194,6 +194,22 @@ test("a value entry builds a CODE node with the entry id", () => {
   expect((node as CodeNode).mode).toBe("builtin");
 });
 
+test("a named type entry reads a float producer", () => {
+  load(flow("  x: !Buy\n    action: buy\n    conviction: ${s.output}\n", { head: BUY }));
+});
+
+test("a named type entry rejects a disjoint producer at the entry", () => {
+  const text = flow("  x: !Buy\n    action: buy\n    conviction: ${s.output}\n", { head: BUY }).replace(
+    "output: float",
+    "output: str",
+  );
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("value entry 'x': declared Buy, but the value is " + '{"action":"buy","conviction":str}');
+  expect(errorLine(error)).toBe(lineOf(text, "  x: !Buy"));
+});
+
 test("a tag does not fill in a missing field", () => {
   const text = flow("  x: !Buy {conviction: 1}\n", { head: BUY });
 
@@ -203,6 +219,24 @@ test("a tag does not fill in a missing field", () => {
     "'x': the value is not a valid Buy: record missing required fields: " + '["action"] (at `x.action`)',
   );
   expect(errorLine(error)).toBe(lineOf(text, "  x: !Buy"));
+});
+
+test("a named field read into a disjoint binding is rejected", () => {
+  const text = flow(
+    "  x: !Buy {action: buy, conviction: 1}\n" +
+      "  use:\n" +
+      "    kind: code\n" +
+      "    input:\n" +
+      "      c: !str ${x.output.conviction}\n" +
+      "    code: |\n" +
+      "      return inputs['c']\n",
+    { head: BUY },
+  );
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("node 'use' input 'c': declared str, but the value is float");
+  expect(errorLine(error)).toBe(lineOf(text, "c: !str"));
 });
 
 test("a nested tag is checked at its own line", () => {
@@ -231,6 +265,30 @@ test.each([
 
   expect(error.message).toBe(message);
   expect(errorLine(error)).toBe(lineOf(text, "  x: !"));
+});
+
+test("a disjoint span names the value entry", () => {
+  const text = flow("  x: !str ${s.output}\n");
+
+  const error = loadErrorOf(text);
+
+  expect(error.message).toBe("value entry 'x': declared str, but the value is float");
+  expect(errorLine(error)).toBe(lineOf(text, "  x: !str"));
+});
+
+test("a flow call of a disjoint type is rejected at the entry", () => {
+  // `f` takes text and returns its `up` node's text.
+  const f = handChild({
+    inputs: parametersFromYaml("input:\n  x: !str\n", new Map()),
+    producers: { up: new ValueContract(Type.scalar(ValueKind.STRING)) },
+    output: "${up.output}",
+  });
+  const text = flow("  x: !int call(f, x=${input.t})\n", { head: F_DEF });
+
+  const error = loadError(() => assembleText(text, "flow.yaml", { children: { f } }));
+
+  expect(error.message).toBe("value entry 'x': declared int, but the value is str");
+  expect(errorLine(error)).toBe(lineOf(text, "  x: !int call"));
 });
 
 test("an entry under a credential name loads", () => {
@@ -284,6 +342,19 @@ describe("the record a written-out object keeps", () => {
     expect(canonicalTypeLabel((contract as ValueContract).type.fields!.get("b")!)).toBe(label);
   });
 
+  // Python's `test_a_literal_field_takes_its_literal_type` asserts it through a typed reader.
+  test.each([
+    ["[1, 2]", "list(int)"],
+    ["true", "bool"],
+  ])("a literal field's type reaches a typed reader: %s", (field, label) => {
+    const text = recordFlow(`  r: !object\n    b: ${field}\n`, "!str ${r.output.b}");
+
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe(`node 'use' input 'c': declared str, but the value is ${label}`);
+    expect(errorLine(error)).toBe(lineOf(text, "c: !str"));
+  });
+
   test("a nested untagged mapping keeps its fields", () => {
     const contract = contractOf(recordFlow("  r: !object\n    p: {q: 1}\n", "${r.output.p}"), "r");
 
@@ -294,6 +365,16 @@ describe("the record a written-out object keeps", () => {
     const contract = contractOf(recordFlow('  r: !object {a: "$${input.n}"}\n', "${r.output.a}"), "r");
 
     expect(contract).toStrictEqual(literalContract({ a: "${input.n}" }));
+  });
+
+  // Python's `test_an_escaped_span_in_an_object_entry_is_text` asserts it through a typed reader.
+  test("an escaped span in an object entry is text to a typed reader", () => {
+    const text = recordFlow('  r: !object {a: "$${input.n}"}\n', "!int ${r.output.a}");
+
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe("node 'use' input 'c': declared int, but the value is str");
+    expect(errorLine(error)).toBe(lineOf(text, "c: !int"));
   });
 
   test("an object entry over an outside value stays object", () => {
@@ -358,9 +439,12 @@ describe("the build-cache reader", () => {
   const SPAN_RECORD = "  r: !object\n    a: ${p.output}\n    b: 1\n";
 
   test("a span field takes its producer type", () => {
-    const contract = contractOf(recordFlow(producer("str") + SPAN_RECORD, "!int ${r.output.a}"), "r");
+    const text = recordFlow(producer("str") + SPAN_RECORD, "!int ${r.output.a}");
 
-    expect(labelOf(contract)).toBe('{"a":str,"b":int}');
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe("node 'use' input 'c': declared int, but the value is str");
+    expect(errorLine(error)).toBe(lineOf(text, "c: !int"));
   });
 
   test("a span record from a typed producer keeps its fields", () => {
@@ -491,6 +575,10 @@ describe("harvested cases", () => {
       "a_nested_binding_loads",
       "entries_reading_each_other_are_rejected",
       "an_entry_under_a_credential_name_loads",
+      "a_disjoint_span_names_the_value_entry",
+      "a_named_type_entry_rejects_a_disjoint_producer",
+      "a_span_field_takes_its_producer_type",
+      "a_literal_field_takes_its_literal_type",
       // The inline-call desugar raises it before the `f` callee resolves.
       "a_flow_call_inside_a_span_keeps_its_error",
     ].map((name) => ({ id: `load-case/compose_value_entries_load__${name}`, call: assembled })),

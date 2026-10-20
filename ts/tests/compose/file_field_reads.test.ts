@@ -6,7 +6,9 @@
  * Through `assembleText`:
  * `test_another_field_of_a_file_in_an_inline_body_is_a_located_load_error`, pinning the whole
  * message, and its case
- * `load-core/compose_file_field_reads__another_field_of_a_file_in_an_inline_body`.
+ * `load-core/compose_file_field_reads__another_field_of_a_file_in_an_inline_body`; and the case
+ * `load-core/compose_file_field_reads__the_uri_of_a_file_is_str`, which the typed-binding check
+ * decides.
  *
  * Later: the other load-time checks of `uri`, `mime` and `name` reads (with the loader) and the
  * flow runs (with the runner).
@@ -102,4 +104,5 @@ test.each([
 
 test.each<CaseRow>([
   { id: "load-core/compose_file_field_reads__another_field_of_a_file_in_an_inline_body", call: assembled },
+  { id: "load-core/compose_file_field_reads__the_uri_of_a_file_is_str", call: assembled },
 ])("assemble: $id", runCase);

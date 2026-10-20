@@ -1,20 +1,28 @@
 /**
  * The durable steps a node records: a port of `tests/engine/test_node_steps_engine.py`.
  *
- * Ported: `test_node_steps_checks_its_fields` (`NodeSteps` checks `starts`, `prior` and `record`).
+ * Ported: `test_node_steps_checks_its_fields` (`NodeSteps` checks `starts`, `prior` and `record`),
+ * the serial rows of `test_steps_are_durable_before_record_returns`,
+ * `test_a_node_without_the_trait_receives_no_steps` and
+ * `test_a_kept_recorder_is_closed_after_its_evaluation`.
  *
  * Ported (adapted): `test_eval_node_passes_steps_only_to_opted_in_nodes_and_checks_the_type`: the
- * nodes are evaluated with no flow (empty wiring), and the check's message is pinned.
+ * nodes are evaluated with no flow (empty wiring), the check's message is pinned, and the opted-in
+ * node receives the evaluator's own `NodeSteps` over the same `starts` and `prior`, whose `record`
+ * calls the given one (so a recorder fault is the evaluation's capability fault). The serial rows
+ * of `test_a_recorder_log_fault_escapes_as_a_host_error` (the log's `append` is replaced on the
+ * instance) and `test_an_invalid_step_is_a_host_error` (a `Date` for Python's `object()`, so the
+ * rows are `RangeError`, `RangeError` and `TypeError`). `test_resume_hands_detached_prior_steps`
+ * and the live-state half of `test_resume_sees_the_second_start_and_the_prior_steps`: the crash
+ * is a throwing `onStream`, a host fault that escapes the first run, and the resume is
+ * `prepareRunResumed` on the live state.
  *
  * Changed: `ValueError` is `RangeError`; `True` for `starts` is `true`.
+ * `test_pooled_workers_never_read_the_step_authority` checks a thread name; in its place `prior` is
+ * a snapshot taken at the start: a step the node records doesn't change it.
  *
- * Later (cycle 4c), they run the serial engine: the serial rows of
- * `test_steps_are_durable_before_record_returns` and `test_a_node_without_the_trait_receives_no_steps`,
- * `test_a_recorder_log_fault_escapes_as_a_host_error`, `test_an_invalid_step_is_a_host_error`,
- * `test_a_kept_recorder_is_closed_after_its_evaluation`, `test_resume_hands_detached_prior_steps`,
- * the live-state half of `test_resume_sees_the_second_start_and_the_prior_steps`, and the
- * replacement of `test_pooled_workers_never_read_the_step_authority` (`prior` is a snapshot taken at
- * the start).
+ * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
+ * run, with the fault's original.
  *
  * Later (T4-5): the replay half of `test_resume_sees_the_second_start_and_the_prior_steps`.
  *
@@ -26,7 +34,6 @@
  * sibling failure, `record` throws and appends nothing).
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
- * `test_pooled_workers_never_read_the_step_authority` and
  * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: replaced as above.
  * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step, since
  * `record` is synchronous; the cycle 7c row covers a step after a stop.
@@ -34,15 +41,29 @@
 
 import { expect, test } from "bun:test";
 
-import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { NodeStarted, NodeSucceeded, RunSucceeded, StreamChunk } from "../../src/events.ts";
+import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
+import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
+import {
+  NodeFailedRecord,
+  NodeStartedRecord,
+  NodeStepRecord,
+  NodeSucceededRecord,
+  type RunRecord,
+} from "../../src/runtime/log.ts";
+import { commitPrepared, prepareRunResumed } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
+import { engine, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
 
-/** A node that opts into steps and runs a scripted body over its capabilities. */
+/** A node that opts into steps and runs a scripted body over its capabilities; it may stream. */
 class StepNode extends Node {
   readonly kind = NodeKind.CODE;
   override readonly needsSteps: boolean = true;
+  override readonly needsLiveEvents = true;
   readonly body: (caps: NodeCaps) => NodeResult;
 
   constructor(nodeId: string, body: (caps: NodeCaps) => NodeResult) {
@@ -83,9 +104,279 @@ test("eval node passes steps only to opted in nodes and checks the type", async 
   await evalNode(new PlainNode("b", body), null, pool, { steps });
   await evalNode(new StepNode("c", body), null, pool);
 
-  expect(seen).toEqual([steps, undefined, undefined]);
-  expect(seen[0]).toBe(steps);
+  const given = seen[0] as NodeSteps;
+  expect(given).toBeInstanceOf(NodeSteps);
+  expect([given.starts, given.prior]).toEqual([1, []]);
+  expect(seen.slice(1)).toEqual([undefined, undefined]);
+  const recorded: ValueRecord[] = [];
+  const recording = new NodeSteps(2, [{ attempt: 1n }], (step) => recorded.push(step));
+  await evalNode(new StepNode("e", body), null, pool, { steps: recording });
+  const passed = seen.at(-1) as NodeSteps;
+  expect([passed.starts, passed.prior]).toEqual([2, [{ attempt: 1n }]]);
+  passed.record({ attempt: 2n });
+  expect(recorded).toEqual([{ attempt: 2n }]);
   await expect(evalNode(new StepNode("d", body), null, pool, { steps: { starts: 1 } as never })).rejects.toThrow(
     new TypeError("steps must be a NodeSteps or null"),
   );
+});
+
+test("a node that catches the recorder's fault still rejects evalNode with its original", async () => {
+  const fault = new Error("disk full");
+  const steps = new NodeSteps(1, [], () => {
+    throw new CapabilityFault(fault);
+  });
+  const node = new StepNode("a", (caps) => {
+    try {
+      caps.steps!.record({ event: "started" });
+    } catch {}
+    return new Output("done");
+  });
+  expect(await rejected(evalNode(node, null, new VariablePool(), { steps }))).toBe(fault);
+});
+
+/** Return an engine for `START -> node -> END`; the other options go to the fixture. */
+function single(node: Node, options: Parameters<typeof engine>[1] = {}): FlowEngine {
+  return engine(graph([node], [
+    [START_ID, node.id],
+    [node.id, END_ID],
+  ]), options);
+}
+
+/** Return the records about `nodeId`, in log order. */
+function records(built: FlowEngine, nodeId: string): RunRecord[] {
+  return built.log
+    .records()
+    .map((envelope) => envelope.record)
+    .filter((record) => (record as { nodeId?: string }).nodeId === nodeId);
+}
+
+/** Whether the log holds a record of class `kind`. */
+function logged(built: FlowEngine, kind: abstract new (...args: never[]) => unknown): boolean {
+  return built.log.records().some((envelope) => envelope.record instanceof kind);
+}
+
+test("steps are durable before record returns", async () => {
+  const seen: unknown[] = [];
+  let built!: FlowEngine;
+  const node = new StepNode("work", (caps) => {
+    const steps = caps.steps!;
+    seen.push([steps.constructor, steps.starts, steps.prior]);
+    for (const attempt of [1n, 2n]) {
+      steps.record({ event: "started", attempt });
+      const stepRecords = built.log.records().filter((envelope) => envelope.record instanceof NodeStepRecord);
+      seen.push((stepRecords.at(-1)!.record as NodeStepRecord).step);
+    }
+    return new Output("done");
+  });
+  built = single(node);
+  const events = await built.run();
+
+  expect(seen).toEqual([
+    [NodeSteps, 1, []],
+    { attempt: 1n, event: "started" },
+    { attempt: 2n, event: "started" },
+  ]);
+  const work = records(built, "work");
+  expect(work.slice(0, 3)).toEqual([
+    new NodeStartedRecord("work"),
+    new NodeStepRecord("work", { event: "started", attempt: 1n }),
+    new NodeStepRecord("work", { event: "started", attempt: 2n }),
+  ]);
+  expect(work[3]).toBeInstanceOf(NodeSucceededRecord);
+  expect(work.length).toBe(4);
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  expect(built.state.nodeSteps.has("work")).toBe(false);
+  // A step publishes no observer: the node's observers are its start and its outcome.
+  const workEvents = events.filter((event) => (event as { nodeId?: string }).nodeId === "work");
+  expect(workEvents.map((event) => event.constructor)).toEqual([NodeStarted, NodeSucceeded]);
+});
+
+test("a node without the trait receives no steps", async () => {
+  const seen: boolean[] = [];
+  const built = single(
+    new PlainNode("work", (caps) => {
+      seen.push(caps.steps !== undefined);
+      return new Output("done");
+    }),
+  );
+  await built.run();
+  expect(seen).toEqual([false]);
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+});
+
+test("prior is a snapshot taken at the start", async () => {
+  const seen: unknown[] = [];
+  const built = single(
+    new StepNode("work", (caps) => {
+      const steps = caps.steps!;
+      steps.record({ event: "started" });
+      seen.push(steps.prior);
+      return new Output("done");
+    }),
+  );
+  await built.run();
+  expect(seen).toEqual([[]]);
+  expect(logged(built, NodeStepRecord)).toBe(true);
+});
+
+/**
+ * Return a node whose first start records a failed step and crashes through a throwing
+ * `onStream`, and whose later starts pass `steps` to `later`.
+ */
+function crashingNode(later: (steps: NodeSteps) => NodeResult): StepNode {
+  return new StepNode("work", (caps) => {
+    const steps = caps.steps!;
+    if (steps.starts === 1) {
+      steps.record({ event: "failed", attempt: 1n, nested: { retry_in: 1n } });
+      caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "crash" }));
+    }
+    return later(steps);
+  });
+}
+
+/** The host fault that crashes the first start. */
+const CRASH = new Error("crash");
+
+/** Return an engine for `START -> node -> END` whose `onStream` throws `CRASH`. */
+function crashing(node: StepNode): FlowEngine {
+  return single(node, {
+    onStream: () => {
+      throw CRASH;
+    },
+  });
+}
+
+/** Run `first`, which crashes, then resume its live state serially and return the resumed engine. */
+async function crashAndResume(first: FlowEngine): Promise<FlowEngine> {
+  expect(await rejected(first.run())).toBe(CRASH);
+  const { state, log } = first;
+  expect([...state.inFlight]).toEqual(["work"]);
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  const resumed = new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 });
+  await resumed.run();
+  return resumed;
+}
+
+test("resume sees the second start and the prior steps", async () => {
+  const seen: unknown[] = [];
+  const node = crashingNode((steps) => {
+    seen.push([steps.starts, steps.prior]);
+    return new Output("done");
+  });
+  const resumed = await crashAndResume(crashing(node));
+  const failed = { attempt: 1n, event: "failed", nested: { retry_in: 1n } };
+  expect(seen).toEqual([[2, [failed]]]);
+  expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+  const steps = records(resumed, "work").filter((record) => record instanceof NodeStepRecord);
+  expect(steps.map((record) => (record as NodeStepRecord).step)).toEqual([failed]);
+});
+
+test("resume hands detached prior steps", async () => {
+  const kept: unknown[] = [];
+  let first!: FlowEngine;
+  const node = crashingNode((steps) => {
+    // The node gets copies: changing them must not reach the engine's state.
+    (steps.prior[0]!["nested"] as Record<string, unknown>)["retry_in"] = 99n;
+    kept.push(structuredClone(first.state.nodeSteps.get("work")));
+    return new Output("done");
+  });
+  first = crashing(node);
+  await crashAndResume(first);
+  expect(kept).toEqual([[{ attempt: 1n, event: "failed", nested: { retry_in: 1n } }]]);
+});
+
+test("a recorder log fault escapes as a host error", async () => {
+  const after: string[] = [];
+  const built = single(
+    new StepNode("work", (caps) => {
+      caps.steps!.record({ event: "started", attempt: 2n });
+      after.push("continued");
+      return new Output("done");
+    }),
+  );
+  const fault = new Error("disk full");
+  const append = built.log.append.bind(built.log);
+  built.log.append = (record) => {
+    if (record instanceof NodeStepRecord) throw fault;
+    return append(record);
+  };
+  expect(await rejected(built.run())).toBe(fault);
+  expect(after).toEqual([]);
+  expect(logged(built, NodeFailedRecord)).toBe(false);
+  expect(built.state.result).toBeNull();
+});
+
+test("a node that catches the recorder's log fault still fails the run with it", async () => {
+  const built = single(
+    new StepNode("work", (caps) => {
+      try {
+        caps.steps!.record({ event: "started" });
+      } catch {}
+      return new Output("done");
+    }),
+  );
+  const fault = new Error("disk full");
+  const append = built.log.append.bind(built.log);
+  built.log.append = (record) => {
+    if (record instanceof NodeStepRecord) throw fault;
+    return append(record);
+  };
+  expect(await rejected(built.run())).toBe(fault);
+  expect(logged(built, NodeSucceededRecord)).toBe(true);
+  expect(records(built, "work").map((record) => record.constructor)).toEqual([NodeStartedRecord]);
+  expect(built.state.result).toBeNull();
+});
+
+const invalidSteps: [string, unknown, ErrorConstructor][] = [
+  ["object", { when: new Date(0) }, RangeError],
+  ["nan", { retry_in: NaN }, RangeError],
+  ["list", ["x"], TypeError],
+];
+
+test.each(invalidSteps)("an invalid step is a host error: %s", async (_, step, kind) => {
+  const built = single(
+    new StepNode("work", (caps) => {
+      caps.steps!.record(step as ValueRecord);
+      return new Output("done");
+    }),
+  );
+  expect(await rejected(built.run())).toBeInstanceOf(kind);
+  expect(logged(built, NodeFailedRecord)).toBe(false);
+  expect(logged(built, NodeStepRecord)).toBe(false);
+  expect(built.state.result).toBeNull();
+});
+
+test("a kept recorder is closed after its evaluation", async () => {
+  const kept: NodeSteps[] = [];
+  const late: unknown[] = [];
+  const keeper = new StepNode("keeper", (caps) => {
+    kept.push(caps.steps!);
+    return new Output("kept");
+  });
+  const later = new PlainNode("later", () => {
+    // A later node's evaluation tries the first node's recorder.
+    try {
+      kept[0]!.record({ event: "late" });
+    } catch (error) {
+      late.push(error);
+    }
+    return new Output("done");
+  });
+  const built = engine(graph([keeper, later], [
+    [START_ID, "keeper"],
+    ["keeper", "later"],
+    ["later", END_ID],
+  ]));
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  expect(late.length).toBe(1);
+  expect(late[0]).toBeInstanceOf(CapabilityFault);
+  expect(((late[0] as CapabilityFault).original as Error).message).toBe("node steps capability is closed");
+
+  // After the run, a call fails at once, without touching the log.
+  const size = built.log.nextSequence;
+  expect(() => kept[0]!.record({ event: "late" })).toThrow(CapabilityFault);
+  expect(built.log.nextSequence).toBe(size);
+  expect(logged(built, NodeStepRecord)).toBe(false);
 });

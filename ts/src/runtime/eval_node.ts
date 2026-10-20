@@ -606,7 +606,11 @@ export interface EvalNodeOptions {
   tools?: ToolSet | null;
   /** The run's host inbox, delivered only to a node declaring `needsSteering`. */
   steering?: Steering | null;
-  /** This start's steps from the engine, delivered only to a node declaring `needsSteps`. */
+  /**
+   * This start's steps from the engine, delivered only to a node declaring `needsSteps` as a
+   * `NodeSteps` over the same `starts` and `prior`; a `CapabilityFault` its `record` throws is a
+   * capability fault of this evaluation.
+   */
   steps?: NodeSteps | null;
 }
 
@@ -625,8 +629,8 @@ export interface EvalNodeOptions {
  * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink,
  *   steering inbox, including a `drain` promise the node dropped, a refused or failing render
- *   capture, a repeated memory context open or a failing opener), whatever the node then returned
- *   or threw.
+ *   capture, a repeated memory context open or a failing opener, a `CapabilityFault` from
+ *   `steps.record`), whatever the node then returned or threw.
  * @throws TypeError when a node declaring `needsMemoryContext`, or `needsEvaluationTrace` while
  *   capturing evidence, has a `memoryScope` that isn't exactly a `MemoryScope`; Error when a
  *   memory context node's scope has memories and no opener was injected.
@@ -1004,7 +1008,18 @@ async function evaluateNode(
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
   if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault, pending);
-  if (steps !== null && node.needsSteps === true) caps.steps = steps;
+  if (steps !== null && node.needsSteps === true) {
+    // The engine's recorder throws its faults as capability faults; a node can catch one, so the
+    // evaluator keeps it as it keeps the other capabilities' faults.
+    caps.steps = new NodeSteps(steps.starts, steps.prior, (step) => {
+      try {
+        steps.record(step);
+      } catch (error) {
+        if (error instanceof CapabilityFault) onFault(error);
+        throw error;
+      }
+    });
+  }
 
   let result: unknown;
   let rejection: { error: unknown } | null = null;

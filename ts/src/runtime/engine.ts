@@ -15,11 +15,11 @@ import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { type RunEvent, RunFailed, type StreamChunk } from "../events.ts";
 import { ConversationInvocation } from "../memory/contracts.ts";
-import { Grow, Output, Route, type Steering } from "../nodes/base.ts";
-import { isExactly, type NodeSteps } from "../nodes/contracts.ts";
+import { CapabilityFault, Grow, Output, Route, type Steering } from "../nodes/base.ts";
+import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
-import { jsTypeName } from "../typesys/values.ts";
+import { jsTypeName, type ValueRecord } from "../typesys/values.ts";
 import {
   EvaluatedOutcome,
   EvaluationFailure,
@@ -38,6 +38,7 @@ import {
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
+  prepareNodeStep,
   prepareNodeSucceeded,
   RunState,
 } from "./state.ts";
@@ -80,11 +81,35 @@ function isRunLog(log: unknown): log is RunLog {
 }
 
 /**
+ * One start's node steps: `steps.record` commits through the engine until `close`, after which a
+ * call throws without reaching the log, so a node that keeps its `NodeSteps` can't write later.
+ */
+class StepRecorder {
+  readonly steps: NodeSteps;
+  #closed = false;
+
+  /** @param commit Appends and applies one step, throwing its faults as capability faults. */
+  constructor(starts: number, prior: readonly ValueRecord[], commit: (step: ValueRecord) => void) {
+    this.steps = new NodeSteps(starts, prior, (step) => {
+      if (this.#closed) throw new CapabilityFault(new Error("node steps capability is closed"));
+      commit(step);
+    });
+  }
+
+  /** End the capability; every later call throws. */
+  close(): void {
+    this.#closed = true;
+  }
+}
+
+/**
  * Drive a prepared append-only run frontier without owning its log.
  *
  * `run()` resolves to the observers returned after each record was appended and its reducer plan
  * applied; `onEvent` sees each first. Stream chunks reach only `onStream`. Evidence and binding
- * capture follow the recorded `RunState.learnable`.
+ * capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
+ * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
+ * before `record` returns, with no observer, and its recorder closes when the evaluation ends.
  *
  * A `RunLog`'s `append` must not call back into the run: the engine appends synchronously, so a
  * callback from inside an append would interleave records.
@@ -194,9 +219,10 @@ export class FlowEngine {
         const nodeId = state.ready[0]!;
         const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
         const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
+        const recorder = this.#stepRecorder(nodeId);
         this.#publish(started, events);
         signal.throwIfAborted();
-        const evaluated = await this.#evaluate(nodeId, invocation, null);
+        const evaluated = await this.#evaluate(nodeId, invocation, recorder);
         signal.throwIfAborted();
         const settled = this.#commitOutcome(nodeId, evaluated);
         // The commit may have set the result, which the loop condition narrowed to `null`.
@@ -208,6 +234,22 @@ export class FlowEngine {
       throw error;
     }
     return events;
+  }
+
+  /** Return the steps recorder of a just-started node declaring `needsSteps`, else `null`. */
+  #stepRecorder(nodeId: string): StepRecorder | null {
+    const { state, log } = this;
+    if (state.flow.nodes.get(nodeId)!.needsSteps !== true) return null;
+    // The recorded steps are frozen; the node gets copies it may change.
+    const prior = structuredClone(state.nodeSteps.get(nodeId) ?? []) as ValueRecord[];
+    return new StepRecorder(state.nodeStarts.get(nodeId)!, prior, (step) => {
+      try {
+        commitPrepared(log, state, prepareNodeStep(state, nodeId, step));
+      } catch (error) {
+        // A refused or unrecorded step is a host fault, never the node's failure.
+        throw new CapabilityFault(error);
+      }
+    });
   }
 
   /** Prepare one outcome's record, append it and apply its plan, returning its observers. */
@@ -275,30 +317,37 @@ export class FlowEngine {
     return this.#prepareFailure(nodeId, evaluationFailure(node, code, original, origin).failure, carriers);
   }
 
-  /** Evaluate one started node without changing the run state. */
+  /**
+   * Evaluate one started node; the run state changes only through its recorded steps. `recorder`
+   * closes when the evaluation ends.
+   */
   async #evaluate(
     nodeId: string,
     invocation: ConversationInvocation,
-    steps: NodeSteps | null,
+    recorder: StepRecorder | null,
   ): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream } = this;
     const trace = state.trace;
-    return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
-      wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
-      signal: this.#controller.signal,
-      emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
-      emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
-      captureEvidence: state.learnable,
-      captureBindings: state.learnable,
-      effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
-      sourceResolver: trace === null ? null : (path) => trace.resolve(path),
-      memoryContextOpener: this.memoryContextOpener,
-      memoryInvocation: invocation,
-      tools: this.tools,
-      skills: this.skills,
-      steering: this.steering,
-      steps,
-    });
+    try {
+      return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
+        wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
+        signal: this.#controller.signal,
+        emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
+        emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
+        captureEvidence: state.learnable,
+        captureBindings: state.learnable,
+        effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
+        sourceResolver: trace === null ? null : (path) => trace.resolve(path),
+        memoryContextOpener: this.memoryContextOpener,
+        memoryInvocation: invocation,
+        tools: this.tools,
+        skills: this.skills,
+        steering: this.steering,
+        steps: recorder?.steps ?? null,
+      });
+    } finally {
+      recorder?.close();
+    }
   }
 
   /** Pass one transient chunk or in-loop event to its callback unless the run is stopping. */

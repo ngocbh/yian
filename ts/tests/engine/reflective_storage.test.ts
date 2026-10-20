@@ -95,6 +95,8 @@ type Action = Record<string, unknown>;
 const NOOP: Action[] = [{ action: "noop" }];
 
 let dir: string;
+/** The test's current learner; every backend's `createModel` delegates to it. */
+let learner: ReturnType<typeof installModel>;
 
 beforeEach(() => {
   install(BUILTIN);
@@ -132,7 +134,6 @@ function reply(actions: readonly Action[]): Response {
 function installModel(replies: readonly Response[]) {
   const queue = [...replies];
   const configs: Record<string, unknown>[] = [];
-  const models: ScriptedModel[] = [];
   const createModel = (config: Readonly<Record<string, unknown>>): ScriptedModel => {
     configs.push(structuredClone(config) as Record<string, unknown>);
     const next = queue.shift();
@@ -140,21 +141,13 @@ function installModel(replies: readonly Response[]) {
       provider: String(config.provider),
       model: String(config.model),
     });
-    models.push(model);
     return model;
   };
   return {
     createModel,
     configs,
-    /** Every request the models received, in order. */
-    get requests(): Request[] {
-      return models.flatMap((model) => model.requests);
-    },
   };
 }
-
-/** The test's current learner; every backend's `createModel` delegates to it. */
-let learner: ReturnType<typeof installModel>;
 
 /** Python's `_memory`: a backend over `CONFIG`, `baseEnv()` and the current learner. */
 function newMemory(
@@ -728,6 +721,11 @@ console.log("ok");
 `;
 }
 
+/** This process's environment without `YIAN_*` keys, so a child reads no ambient yian settings. */
+function childEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("YIAN_")));
+}
+
 test("actual process restart restores learned lessons", async () => {
   const file = path.join(dir, "memory.sqlite");
   const script = childScript(
@@ -748,7 +746,11 @@ try {
 }
 `,
   );
-  const result = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 20_000 });
+  const result = spawnSync(process.execPath, ["-e", script], {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: childEnv(),
+  });
   expect(result.stderr).toBe("");
   expect(result.stdout).toBe("ok\n");
   expect(result.status).toBe(0);
@@ -781,10 +783,15 @@ test.each([
     });
     let memory!: ReflectiveMemory;
     let opened!: ReflectiveSession;
+    let closeError: unknown = null;
     const callback = async () => {
       if (reentrant) {
         opened.close();
-        expect(failure(() => memory.close()).code).toBe("reflective.busy");
+        try {
+          memory.close();
+        } catch (error) {
+          closeError = error;
+        }
       } else {
         entered();
         await released;
@@ -821,7 +828,9 @@ test.each([
       (error: unknown) => error,
     );
     if (!reentrant) {
-      await enteredPromise;
+      // An operation that settles before its callback waits reports its error, not a timeout.
+      const early = await Promise.race([enteredPromise.then(() => null), work.then((error) => ({ error }))]);
+      if (early) throw new Error("the operation settled before its callback waited", { cause: early.error });
       try {
         // This must finish while the model callback is still waiting.
         opened.close();
@@ -832,6 +841,10 @@ test.each([
       }
     }
     const error = await work;
+    if (reentrant) {
+      expect(closeError).toBeInstanceOf(MemoryOperationError);
+      expect((closeError as MemoryOperationError).code).toBe("reflective.busy");
+    }
     if (phase === "query") {
       expect(error).toBeNull();
     } else {
@@ -867,6 +880,7 @@ test.each([false, true])("structured result inspection preserves error translati
     expect(String(caught)).not.toContain("private inspection failure");
   } else {
     expect((caught.cause as object).constructor).toBe(TypeError);
+    expect((caught.cause as Error).message).toBe("the reflector model must provide stream()");
   }
 });
 
@@ -943,7 +957,11 @@ try {
 }
 `,
       );
-      const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8", timeout: 20_000 });
+      const result = spawnSync(NODE!, ["--input-type=module", "-e", script], {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: childEnv(),
+      });
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe("ok\n");
       expect(result.status).toBe(0);

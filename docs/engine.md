@@ -249,6 +249,11 @@ the in-flight nodes in dispatch order; it changes no frontier, start count or st
 resume after a stop retries those nodes first. Like every frontier record, it is refused once the
 run has a terminal result.
 
+Changed (TS yian): the reducer counts, per node, the attempts a resume retried that no stop
+covered; a stop covers every attempt started before it. The counts are history: they stay after
+the node's outcome and after a prune. `inspectRun` and the `NodeAttemptResumed` event will report
+them once those are ported.
+
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
 evidence is separate. There is no separate forward terminal record: success is derived

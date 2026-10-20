@@ -151,16 +151,48 @@
  *
  * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
  *
- * Later (T4-6, with the engine): `test_accepted_backward_inventories_and_layout_replay_without_recapturing`,
- * `test_static_capture_host_fault_does_not_append_a_node_outcome`,
- * `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`,
- * `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data`,
- * `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`,
- * `test_trace_source_is_the_actual_commit_as_producer`,
- * `test_failed_binding_and_rejected_outcomes_retain_canonical_failures`,
- * `test_pooled_lookup_keeps_value_and_producer_identity_together`,
- * `test_trace_memory_scope_is_detached_and_replayed_without_evidence`,
- * `test_learn_false_omits_backward_capture`,
+ * Ported, through the engine (`engine` with `learnable`):
+ * `test_static_capture_host_fault_does_not_append_a_node_outcome` (the node's
+ * `captureBackwardContext` replaced on the instance), `test_trace_source_is_the_actual_commit_as_producer`
+ * (the handler at the producer's source, called, is the producer's own `backward`),
+ * `test_failed_binding_and_rejected_outcomes_retain_canonical_failures` (5 rows; the grow row's
+ * seed is a `Set`), `test_learn_false_omits_backward_capture`,
+ * `test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced`,
+ * `test_capture_canonicalizes_supported_binding_objects` (an array for Python's tuple),
+ * `test_learning_retains_opaque_calls_with_arguments` (4 rows; `collect_args` as in the codec row)
+ * and the `output`, `route` (a `BranchNode` choosing the else handle, for Python's empty CASE) and
+ * `failure` rows of `test_trace_replay_matches_live_accepted_prefixes` (a node body called during
+ * replay throws; Python's handler identity check is dropped, since a TS bound handler can't name
+ * its node).
+ *
+ * Ported (adapted), through the engine:
+ * - `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data` (2 rows): a
+ *   local `needsRenderCapture` node for Python's AGENT, the run recording its effective model
+ *   configuration; the capture fails reading a record whose getter throws, for Python's patched
+ *   `canonical_seed`, and the append row replaces the log's `append` on the instance.
+ * - `test_pooled_lookup_keeps_value_and_producer_identity_together`: a TS binding is synchronous,
+ *   so no commit can land between two reads of one binding; instead `consumer` binds while `peer`
+ *   is in flight and `late` after `peer` committed, each read's value and producer agreeing.
+ * - `test_discarded_pooled_outcomes_are_not_trace_occurrences`, its engine half: the sibling is a
+ *   `BlockingNode` drained by the failure; its `computeBackward` half is Later (T4-7).
+ * - `test_trace_memory_scope_is_detached_and_replayed_without_evidence`: a `MemoryScope` is frozen
+ *   by its constructor, so the occurrence may hold the node's scope itself; replacing the node's
+ *   scope afterward doesn't change it, and the replay keeps it.
+ * - `test_learning_retains_noncanonical_partial_temporary_comparisons`: its `partial-value` row
+ *   without the lone-surrogate field, the file standing in for Python's `object()`; result types
+ *   are TS type names (`record`, `file`).
+ *
+ * Changed: `test_learning_retains_valid_results_of_noncanonical_unicode_temporaries` (5 rows):
+ * text holding a lone surrogate is not a yian value, so the template function's result fails the
+ * binding; each row pins that it fails alike with and without learning.
+ *
+ * Not ported (TS values): the `partial-key` row of
+ * `test_learning_retains_noncanonical_partial_temporary_comparisons` (a lone-surrogate key is not
+ * a yian value).
+ *
+ * Later (T4-9), with a loaded CODE node: `test_accepted_backward_inventories_and_layout_replay_without_recapturing`.
+ *
+ * Later (T4-10), through CALL, MAP and LOOP growth:
  * `test_nested_growth_preserves_authored_paths_and_local_driver_zero`,
  * `test_missing_seed_selector_is_an_accepted_growth_failure`,
  * `test_growth_recipe_tampering_fails_replay_before_apply`,
@@ -171,23 +203,24 @@
  * `test_call_seed_routes_survive_materialized_values`,
  * `test_null_materialized_seed_keeps_its_selected_source`,
  * `test_map_seed_routes_preserve_equal_item_positions`,
- * `test_loop_carried_routes_survive_live_pruning`, `test_trace_replay_matches_live_accepted_prefixes`,
- * `test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced`,
- * `test_capture_canonicalizes_supported_binding_objects`,
- * `test_learning_retains_opaque_calls_with_arguments`,
- * `test_learning_retains_valid_results_of_noncanonical_unicode_temporaries` and
- * `test_learning_retains_noncanonical_partial_temporary_comparisons`.
+ * `test_loop_carried_routes_survive_live_pruning` and the `call`, `map`, `loop`, `nested-call` and
+ * `nested-map` rows of `test_trace_replay_matches_live_accepted_prefixes`.
  *
- * Later (T4-7, with `computeBackward`): `test_discarded_pooled_outcomes_are_not_trace_occurrences`
- * and `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing`.
+ * Later (T5-11a), through AGENT:
+ * `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution` and
+ * `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`.
+ *
+ * Later (T4-7, with `computeBackward`): the backward half of
+ * `test_discarded_pooled_outcomes_are_not_trace_occurrences` and
+ * `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing`.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
-import { type CompiledFlow, copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
+import { type CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
-import type { RunFailed } from "../../src/events.ts";
+import { NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import {
   type FeedbackValue,
@@ -199,9 +232,23 @@ import {
 } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
 import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
+import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
-import { BackwardContext, BackwardResult, Grow, Node, NodeKind, retainFailure } from "../../src/nodes/base.ts";
-import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, SeedConnection } from "../../src/nodes/contracts.ts";
+import {
+  BackwardContext,
+  BackwardResult,
+  ELSE_HANDLE,
+  Grow,
+  Node,
+  type NodeCaps,
+  NodeKind,
+  type NodeResult,
+  Output,
+  Route,
+  retainFailure,
+} from "../../src/nodes/base.ts";
+import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
+import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   canonicalSeed,
@@ -256,8 +303,12 @@ import {
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
 import {
+  BlockingNode,
+  BranchNode,
   commitStartSuccess,
+  engine,
   expectUnchanged,
+  FailNode,
   flow,
   forwardCapture,
   fragmentBuilder,
@@ -265,6 +316,7 @@ import {
   graph,
   initializedAndStarted,
   learnableStarted,
+  rejected,
   replayTraceSnapshot,
   RUN_ID,
   snapshot,
@@ -2876,4 +2928,439 @@ test.each(["node", "sequence"] as const)("a frontier trace start's identity is e
     RangeError,
     "frontier trace start disagrees with its canonical record",
   );
+});
+
+// The engine rows: captures and trace entries a run through `FlowEngine` accepts.
+
+/** Return a learnable engine for `START -> node -> END`; the other options go to the fixture. */
+function learnableSingle(node: Node, options: Parameters<typeof engine>[1] = {}): FlowEngine {
+  return engine(graph([node], [
+    [START_ID, node.id],
+    [node.id, END_ID],
+  ]), { learnable: true, ...options });
+}
+
+/** Return the accepted occurrences of `built`'s trace by node id. */
+function occurrencesById(built: FlowEngine): Map<string, TraceOccurrence> {
+  return new Map(built.state.trace!.occurrences.map((item) => [item.nodeId, item]));
+}
+
+/** Return the accepted success of `nodeId` in `built`'s log. */
+function successEnvelope(built: FlowEngine, nodeId: string): RecordEnvelope {
+  return built.log
+    .records()
+    .find((envelope) => envelope.record instanceof NodeSucceededRecord && envelope.record.nodeId === nodeId)!;
+}
+
+/** Return a record route's children by name. */
+function routesByName(route: ValueRoute): Map<string, ValueRoute> {
+  return new Map(route.names.map((name, index) => [name, route.children[index]!]));
+}
+
+test("a static capture host fault does not append a node outcome", async () => {
+  const expected = new RangeError("capture failed");
+  const node = new FuncNode("work", () => "body must not run");
+  node.captureBackwardContext = () => {
+    throw expected;
+  };
+  const built = learnableSingle(node);
+
+  expect(await rejected(built.run())).toBe(expected);
+  expect(built.log.records().at(-1)!.record).toEqual(new NodeStartedRecord("work"));
+  expect(built.state.trace!.occurrences.every((item) => item.nodeId !== "work")).toBe(true);
+  expect(built.state.pool.getValue("work")).toBeNull();
+});
+
+/** Publishes `rendered` through its render capture, then records the run and returns its prompt. */
+class RenderNode extends Node {
+  readonly kind = NodeKind.CODE;
+  override readonly needsRenderCapture = true;
+  readonly rendered: Readonly<Record<string, unknown>>;
+  /** The prompts the node ran with, in order. */
+  readonly runs: string[] = [];
+
+  constructor(nodeId: string, rendered: Readonly<Record<string, unknown>>) {
+    super(nodeId);
+    this.rendered = rendered;
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    caps.captureRender!(this.rendered);
+    this.runs.push("actual prompt");
+    return new Output("actual prompt");
+  }
+}
+
+test.each(["capture", "append"] as const)(
+  "agent render capture host and append failures do not install worker data: %s",
+  async (failureAt) => {
+    const expected = new Error("capture or append unavailable");
+    // A capture that fails reading its record stands in for Python's failing `canonical_seed`.
+    const rendered =
+      failureAt === "capture"
+        ? {
+            get rendered_prompt(): string {
+              throw expected;
+            },
+          }
+        : { rendered_prompt: "actual prompt" };
+    const node = new RenderNode("writer", rendered);
+    const built = learnableSingle(node, { effectiveLlmByStaticPath: { writer: { provider: "test", model: "test" } } });
+    if (failureAt === "append") {
+      const append = built.log.append.bind(built.log);
+      built.log.append = (record) => {
+        if (record instanceof NodeSucceededRecord && record.nodeId === "writer") {
+          expect(record.forwardCapture!.nodeData!.rendered_prompt).toBe("actual prompt");
+          throw expected;
+        }
+        return append(record);
+      };
+    }
+
+    expect(await rejected(built.run())).toBe(expected);
+    expect(node.runs).toEqual(failureAt === "capture" ? [] : ["actual prompt"]);
+    expect(built.log.records().at(-1)!.record).toEqual(new NodeStartedRecord("writer"));
+    const trace = built.state.trace!;
+    expect(trace.occurrences.every((item) => item.nodeId !== "writer")).toBe(true);
+    expect(trace.currentWriters.has("writer")).toBe(false);
+    expect(built.state.pool.getValue("writer")).toBeNull();
+  },
+);
+
+test("the trace source is the actual commit-as producer", async () => {
+  /** Commits its value to `target`. */
+  class Redirect extends TraceNode {
+    override forward(): NodeResult {
+      return new Output({ value: null }, { commitAs: "target" });
+    }
+  }
+  const producer = new Redirect("physical");
+  const consumer = new FuncNode("read", (inputs) => inputs, { reads: { x: "${target.output.value}" } });
+  const built = engine(
+    graph([producer, new FuncNode("target", () => null), consumer], [
+      [START_ID, "physical"],
+      ["target", "read"],
+      ["read", END_ID],
+    ]),
+    { learnable: true },
+  );
+
+  await built.run();
+
+  const trace = built.state.trace!;
+  const occurrences = occurrencesById(built);
+  const physical = occurrences.get("physical")!;
+  const entry = trace.currentWriters.get("target")!;
+  expect(entry.source).toEqual(physical.source);
+  expect(entry.source!.executionSeq).toBeLessThan(physical.outcomeSeq);
+  expect(trace.lookupSource(entry.source!)).toEqual({ value: null });
+  const consumerCapture = (occurrences.get("read")!.record as NodeSucceededRecord).forwardCapture!;
+  expect(consumerCapture.boundInputs).toEqual({ x: null });
+  expect(consumerCapture.route.children[0]!.source).toEqual(
+    new SourceRef(RUN_ID, physical.source.executionSeq, ["value"]),
+  );
+  // The handler at the producer's source is the producer's own backward.
+  const handler = trace.backwardHandlers.get(sourceKey(physical.source))!;
+  const context = trace.backwardContext(physical.source);
+  handler(context, ["Review."]);
+  expect(producer.calls).toEqual([[context, ["Review."]]]);
+});
+
+test.each(["binding", "body", "output", "route", "grow"] as const)(
+  "failed binding and rejected outcomes retain canonical failures: %s",
+  async (stage) => {
+    /** Fails at `stage`. */
+    class Failing extends Node {
+      readonly kind = NodeKind.CALL;
+      override readonly isSpawner = true;
+      override readonly growDepthDelta = 1;
+
+      override forward(): NodeResult {
+        if (stage === "body") throw new Error("body failed");
+        if (stage === "output") return new Output(1n, { commitAs: "absent" });
+        if (stage === "route") return new Route("absent");
+        return new Grow(new Set([1n]));
+      }
+    }
+    const node = new Failing("work");
+    node.params = [new Parameter("x")];
+    const wiring = { work: { x: stage === "binding" ? "${input.x:?missing}" : 1n } };
+    const built = engine(graph([node], [
+      [START_ID, "work"],
+      ["work", END_ID],
+    ], { wiring }), { learnable: true, growBuilder: () => null as never });
+
+    await built.run();
+
+    const accepted = built.state.trace!.occurrences.at(-1)!;
+    expect(accepted.nodeId).toBe("work");
+    const record = accepted.record as NodeFailedRecord;
+    expect(record.failure).toEqual((built.state.result as RunFailed).failure);
+    expect(record.forwardCapture!.boundInputs).toEqual(stage === "binding" ? null : { x: 1n });
+  },
+);
+
+test("a pooled lookup keeps value and producer identity together", async () => {
+  // `peer` starts first and commits only after `consumer` did, so `consumer` binds while `peer` is
+  // in flight and `late` binds after it committed.
+  const consumerDone = Promise.withResolvers<void>();
+  const peer = new BlockingNode("peer", consumerDone.promise.then(() => ({ value: 7n, null: null })));
+  const consumer = new FuncNode("consumer", (inputs) => inputs, { reads: { before: "${peer.output.value | 0}" } });
+  const late = new FuncNode("late", (inputs) => inputs, {
+    reads: { after: "${peer.output.value | 0}", null: "${peer.output.null}", missing: "${peer.output.missing}" },
+  });
+  const built = engine(
+    graph([peer, consumer, late], [
+      [START_ID, "peer"],
+      [START_ID, "consumer"],
+      ["peer", "late"],
+      ["consumer", END_ID],
+      ["late", END_ID],
+    ]),
+    {
+      learnable: true,
+      numWorkers: 2,
+      onEvent: (event) => {
+        if (event instanceof NodeSucceeded && event.nodeId === "consumer") consumerDone.resolve();
+      },
+    },
+  );
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  const occurrences = occurrencesById(built);
+  const producer = occurrences.get("peer")!;
+  const read = occurrences.get("consumer")!;
+  expect(producer.source.executionSeq).toBeLessThan(read.source.executionSeq);
+  expect(read.outcomeSeq).toBeLessThan(producer.outcomeSeq);
+  const early = (read.record as NodeSucceededRecord).forwardCapture!;
+  expect(early.boundInputs).toEqual({ before: 0n });
+  expect(routesByName(early.route).get("before")!.children[0]!.kind).toBe("literal");
+  const after = (occurrences.get("late")!.record as NodeSucceededRecord).forwardCapture!;
+  expect(after.boundInputs).toEqual({ after: 7n, null: null, missing: null });
+  const routes = routesByName(after.route);
+  expect(routes.get("after")!.children[0]!.source).toEqual(
+    new SourceRef(RUN_ID, producer.source.executionSeq, ["value"]),
+  );
+  expect(routes.get("null")!.source).toEqual(new SourceRef(RUN_ID, producer.source.executionSeq, ["null"]));
+  expect(routes.get("missing")!.kind).toBe("literal");
+});
+
+test("discarded pooled outcomes are not trace occurrences", async () => {
+  // Both start in one fill, so `slow` is in flight when `bad` fails the run.
+  const slow = new BlockingNode("slow", new Promise(() => {}));
+  const built = engine(
+    graph([slow, new FailNode("bad", "failed")], [
+      [START_ID, "slow"],
+      [START_ID, "bad"],
+      ["slow", END_ID],
+      ["bad", END_ID],
+    ]),
+    { learnable: true, numWorkers: 2 },
+  );
+
+  await built.run();
+
+  expect(slow.released).toBe(true);
+  expect(built.state.result).toBeInstanceOf(RunFailed);
+  const trace = built.state.trace!;
+  expect(trace.started.has("slow")).toBe(true);
+  expect(trace.occurrences.map((item) => item.nodeId)).toEqual([START_ID, "bad"]);
+  expect(trace.currentWriters.has("slow")).toBe(false);
+  expect(trace.backwardHandlers.has(sourceKey(new SourceRef(RUN_ID, trace.started.get("slow")!)))).toBe(false);
+});
+
+test("the trace memory scope is detached and replayed without evidence", async () => {
+  const scope = new MemoryScope(["code"], { memories: ["memory"] });
+  const node = new FuncNode("code", () => ({ items: [1n] }));
+  node.memoryScope = scope;
+  const built = engine(graph([node], [[START_ID, "code"]], { outputs: [new FlowOutput("value", "${code.output}")] }), {
+    learnable: true,
+    memories: [new MemorySpec("memory", "memory", {}, [new DeclSite([], ["root"])], false)],
+    memoryStacks: [new MemoryStack(["code"], ["memory"])],
+    memorySnapshots: [new MemorySnapshotEnvelope("memory", {})],
+  });
+  const original = copyGraph(built.state.flow);
+
+  await built.run();
+
+  const occurrence = built.state.trace!.occurrences.find((item) => item.nodeId === "code")!;
+  expect((occurrence.record as NodeSucceededRecord).evidence).toBeNull();
+  expect(occurrence.memoryScope).toEqual(scope);
+  const payload = (parseJson(occurrence.recordJson, "codec") as Record<string, object>).payload!;
+  expect(Object.hasOwn(payload, "memory_scope")).toBe(false);
+  built.state.flow.nodes.get("code")!.memoryScope = null;
+  expect(occurrence.memoryScope).toEqual(scope);
+  const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: fragmentBuilder });
+  expect(replay.trace!.occurrence(occurrence.source).memoryScope).toEqual(scope);
+});
+
+test("learn false omits backward capture", async () => {
+  const built = engine(graph([], [[START_ID, END_ID]]), { learnable: false });
+
+  await built.run();
+
+  expect(built.state.trace).toBeNull();
+  expect([...built.state.flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
+  for (const envelope of built.log.records()) {
+    if (envelope.record instanceof NodeSucceededRecord) expect(envelope.record.forwardCapture).toBeNull();
+  }
+});
+
+test("a retry clears the unfinished start identity and the primed input is replaced", async () => {
+  const node = new FuncNode("read", (inputs) => inputs, { reads: { x: "${input.x}" } });
+  const built = learnableSingle(node, { inputs: { x: 2n } });
+  const { state, log } = built;
+  expect(state.trace!.resolve("input.x").source).toEqual(new SourceRef(RUN_ID, 0, ["x"]));
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  const abandoned = state.trace!.started.get(START_ID)!;
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  expect(state.trace!.started.size).toBe(0);
+
+  await built.run();
+
+  const trace = state.trace!;
+  const start = trace.occurrences.find((item) => item.nodeId === START_ID)!;
+  expect(start.source.executionSeq).not.toBe(abandoned);
+  expect(trace.backwardHandlers.has(sourceKey(new SourceRef(RUN_ID, abandoned)))).toBe(false);
+  expect((start.record as NodeSucceededRecord).forwardCapture!.route.children[0]!.source).toEqual(
+    new SourceRef(RUN_ID, 0, ["x"]),
+  );
+  expect(trace.resolve("input.x").source).toEqual(new SourceRef(RUN_ID, start.source.executionSeq, ["x"]));
+});
+
+test("the capture canonicalizes supported binding objects", async () => {
+  const raw = { values: [1n, 2n], file: new FileRef({ uri: "file:///tmp/example.txt" }) };
+  const built = learnableSingle(new FuncNode("work", () => "done", { reads: raw }));
+
+  await built.run();
+
+  const record = occurrencesById(built).get("work")!.record as NodeSucceededRecord;
+  expect(record.forwardCapture!.boundInputs).toEqual(canonicalSeed(raw)[1] as Record<string, unknown>);
+});
+
+test.each(OPAQUE_ARGUMENTS)("learning retains opaque calls with arguments: %s", async (args, names, bound, result) => {
+  const calls: Value[][] = [];
+  const delivered: unknown[] = [];
+  standIn(
+    "collect_args",
+    (...values) => {
+      calls.push(values);
+      return (values as bigint[]).reduce((sum, item) => sum + item, 0n);
+    },
+    [
+      { name: "first", default: 0 },
+      { name: "second", default: 0 },
+      { name: "value", default: 0 },
+    ],
+  );
+  const node = new FuncNode(
+    "work",
+    (inputs) => {
+      delivered.push(inputs);
+      return inputs;
+    },
+    { reads: { x: "${collect_args(" + args + ")}" } },
+  );
+  const built = learnableSingle(node);
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  const capture = (occurrencesById(built).get("work")!.record as NodeSucceededRecord).forwardCapture!;
+  expect(delivered).toEqual([{ x: result }]);
+  expect(capture.boundInputs).toEqual({ x: result });
+  expect(capture.route.children[0]!.names).toEqual(names);
+  expect(calls).toEqual([bound]);
+});
+
+test.each<[string, unknown, string]>([
+  ["string", "\ud800", "result"],
+  ["list", ["kept", "\ud800"], "result at [1]"],
+  ["record-value", { kept: 1n, lost: "\ud800" }, "result at lost"],
+  ["record-key", { "\ud800": 1n }, "result"],
+  ["nested-key", { kept: 1n, lost: { "\ud800": 1n } }, "result at lost"],
+])("noncanonical unicode temporaries fail the binding alike with and without learning: %s", async (_, temporary, at) => {
+  standIn("bad_text", () => temporary);
+  const failures: unknown[] = [];
+  for (const learnable of [false, true]) {
+    const node = new FuncNode("work", (inputs) => inputs, { reads: { x: "${bad_text() == bad_text()}" } });
+    const built = engine(graph([node], [
+      [START_ID, "work"],
+      ["work", END_ID],
+    ]), { learnable });
+    await built.run();
+    const { code, message } = (built.state.result as RunFailed).failure;
+    failures.push([code, message]);
+  }
+  const expected = [
+    "binding.evaluate",
+    `expression function 'bad_text' failed: ${at}: text holding a lone surrogate is not a yian value`,
+  ];
+  expect(failures).toEqual([expected, expected]);
+});
+
+test("learning retains noncanonical partial temporary comparisons", async () => {
+  const calls: null[] = [];
+  standIn("partial_text", () => {
+    calls.push(null);
+    return { safe: [1n], lost: new FileRef({ uri: "file:///tmp/x" }) };
+  });
+  const built = learnableSingle(new FuncNode("work", (inputs) => inputs, { reads: { x: "${partial_text() != null}" } }));
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  const envelope = successEnvelope(built, "work");
+  expect(decodeRecord(encodeRecord(envelope))).toEqual(envelope);
+  const capture = (envelope.record as NodeSucceededRecord).forwardCapture!;
+  expect(capture.boundInputs).toEqual({ x: true });
+  const opaque = capture.route.children[0]!.children[0]!;
+  expect(opaque.kind).toBe("opaque");
+  expect(opaque.resultType).toBe("record");
+  const fields = routesByName(opaque.snapshot!);
+  expect(parseJson(fields.get("safe")!.valueJson!, "codec")).toEqual([1n]);
+  expect(fields.get("lost")!.resultType).toBe("file");
+  const routed = routeFeedback(capture.route, "Explain.", () => null);
+  expect(routed.contributions).toEqual([]);
+  expect(routed.stopped).toHaveLength(1);
+  expect(routed.stopped[0]!.context.at(-1)!.result).toBeNull();
+  expect(calls).toEqual([null]);
+});
+
+test.each(["output", "route", "failure"] as const)("trace replay matches live accepted prefixes: %s", async (kind) => {
+  let replaying = false;
+  const work = (): unknown => {
+    if (replaying) throw new Error("replay evaluated a node body");
+    if (kind === "failure") throw new Error("failed body");
+    return { x: 1n };
+  };
+  const flow =
+    kind === "route"
+      ? graph([new BranchNode("choice", ELSE_HANDLE)], [
+          [START_ID, "choice"],
+          ["choice", END_ID, ELSE_HANDLE],
+        ])
+      : graph([new FuncNode("work", work)], [
+          [START_ID, "work"],
+          ["work", END_ID],
+        ]);
+  // The trace after each accepted record, keyed by the log length it follows.
+  const snapshots = new Map<number, Record<string, unknown>>();
+  const observe = (): void => {
+    snapshots.set(built.state.nextSequence, replayTraceSnapshot(built.state.trace!));
+  };
+  const built = engine(flow, { learnable: true, onEvent: observe });
+  const original = copyGraph(built.state.flow);
+  observe();
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(kind === "failure" ? RunFailed : RunSucceeded);
+  replaying = true;
+  const records = built.log.records();
+  for (const [length, expected] of [...snapshots].sort(([a], [b]) => a - b)) {
+    expect(replayTraceSnapshot(replayed(copyGraph(original), records.slice(0, length)).trace!)).toEqual(expected);
+  }
 });

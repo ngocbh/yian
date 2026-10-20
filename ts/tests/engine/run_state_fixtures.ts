@@ -505,14 +505,23 @@ export const noGrowth: GrowBuilder = () => {
  * Return a direct engine over a fresh in-memory authority for `flow` (Python's
  * `_graph_builder._engine`): `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
  * is ready. The pool primes START with `inputs`, START's wiring reads each as
- * `${input.<name>}`, and the run records no agent configuration. A learnable flow gets its
- * execution layout first. The other options go to `FlowEngine`.
+ * `${input.<name>}`, and the run records `effectiveLlmByStaticPath` (none by default) and the
+ * memory configuration given. A learnable flow gets its execution layout first. The other options
+ * go to `FlowEngine`.
  */
 export function engine(
   flow: CompiledFlow,
-  options: { inputs?: Readonly<Record<string, unknown>>; learnable?: boolean } & Partial<FlowEngineOptions> = {},
+  options: {
+    inputs?: Readonly<Record<string, unknown>>;
+    learnable?: boolean;
+    effectiveLlmByStaticPath?: RunStartData["effectiveLlmByStaticPath"];
+    memories?: readonly MemorySpec[] | null;
+    memoryStacks?: readonly MemoryStack[] | null;
+    memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
+  } & Partial<FlowEngineOptions> = {},
 ): FlowEngine {
-  const { inputs = {}, learnable = false, numWorkers = 0, growBuilder = noGrowth, ...rest } = options;
+  const { inputs = {}, learnable = false, numWorkers = 0, growBuilder = noGrowth, ...more } = options;
+  const { effectiveLlmByStaticPath = {}, memories = null, memoryStacks = null, memorySnapshots = null, ...rest } = more;
   if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
@@ -524,9 +533,12 @@ export function engine(
     flowFingerprint: FINGERPRINT,
     initialPool,
     startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
-    effectiveLlmByStaticPath: {},
+    effectiveLlmByStaticPath,
     numWorkers,
     learnable,
+    memories,
+    memoryStacks,
+    memorySnapshots,
   });
   commitPrepared(log, state, prepared);
   return new FlowEngine(state, log, { growBuilder, numWorkers, ...rest });

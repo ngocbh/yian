@@ -19,7 +19,23 @@
  * (`test_proof_rejects_an_unproven_list_and_accepts_list_of_optional_any`) through
  * `requireProvenType`.
  *
- * Later: the flow loading tests.
+ * It also ports the flow loading tests the typed-binding and cross-flow binding checks decide,
+ * through `assembleText`: `test_tagging_an_any_output_as_a_union_with_a_file_member_loads`,
+ * `test_any_into_a_child_str_input_suggests_a_tag_or_isinstance`,
+ * `test_the_any_hint_names_the_typedef_of_a_child_record_input`,
+ * `test_optional_any_into_a_child_any_input_is_a_plain_nullability_error`,
+ * `test_any_into_a_child_input_that_requires_a_file_gets_no_hint`,
+ * `test_a_tagged_any_binding_into_a_child_str_input_loads`,
+ * `test_an_untyped_source_into_a_child_any_input_is_left_to_runtime`,
+ * `test_a_map_over_a_list_of_any_into_a_child_str_input_suggests_a_tag`,
+ * `test_a_map_over_a_list_of_any_into_a_child_any_input_loads`,
+ * `test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance` (and its case
+ * `load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance`) and
+ * `test_a_tagged_loop_seed_over_an_any_output_loads`. The `child` and `bump` defs are built by
+ * hand (`handChild`), since def bodies load in T3-22; the error rows pin the whole message where
+ * Python matches fragments, and CODE bodies are TS.
+ *
+ * Later (T3-20): `test_an_assert_reading_a_field_of_an_any_output_loads` (node asserts).
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,
@@ -28,10 +44,11 @@
  * `test_any_reports_the_first_bad_part_in_order` uses a second non-JSON part for the int key.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import { typeRelation, typesCompatible } from "../../src/compile/validation.ts";
 import { requireProvenType } from "../../src/compose/build/inline_inputs.ts";
+import { forget } from "../../src/defaults.ts";
 import { outputContractFieldError, ValueContract } from "../../src/nodes/contracts.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -52,7 +69,14 @@ import {
   type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { loadError } from "../compose/declarations.ts";
+import {
+  assembledWith,
+  assembleText,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 const ANY = Type.scalar(ValueKind.ANY);
 const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
@@ -655,6 +679,169 @@ describe("requiresFile and hasFile", () => {
     );
     expect(requiresFile(optionalField)).toBe(false);
     expect(requiresFile(ANY)).toBe(false);
+  });
+});
+
+describe("loading flows that wire Any", () => {
+  afterEach(() => forget());
+
+  /** The typedefs the parent flow declares and the `child` def's input may name. */
+  const CALL_TYPEDEFS = readTypedefs({ Rec: { a: "int" }, F: { f: "file" } });
+
+  /**
+   * A flow whose `c` node calls `child`, taking `t: !<childType>`, with `binding`; its producer
+   * `step` is typed `stepOutput` (untyped when `null`), and `c` maps over `${step.output}` with
+   * `over`.
+   */
+  function callFlow(
+    childType: string,
+    binding: string,
+    options: { stepOutput?: string | null; over?: boolean } = {},
+  ): string {
+    const { stepOutput = "Any", over = false } = options;
+    const output = stepOutput === null ? "" : `    output: ${stepOutput}\n`;
+    const node = over ? "    kind: map\n    over: ${step.output}\n" : "    kind: call\n";
+    return (
+      "id: p\nname: p\n" +
+      "typedefs:\n  Rec:\n    a: int\n  F:\n    f: file\n" +
+      "defs:\n  child:\n" +
+      `    input:\n      t: !${childType}\n` +
+      "    nodes:\n      n:\n        kind: code\n        input:\n          t: ${input.t}\n" +
+      "        output: str\n        code: return JSON.stringify(inputs['t'])\n" +
+      "    output: ${n.output}\n" +
+      `nodes:\n  step:\n    kind: code\n${output}    code: return 'hello'\n` +
+      `  c:\n${node}    call: child\n    input:\n      t: ${binding}\n` +
+      "output: ${c.output}\n"
+    );
+  }
+
+  /** Assemble `text` with the `child` def built by hand: input `t: !<childType>`, one `n: str` producer. */
+  function load(text: string, childType: string): void {
+    const child = handChild({
+      inputs: parametersFromYaml(`input:\n  t: !${childType}\n`, CALL_TYPEDEFS),
+      producers: { n: new ValueContract(Type.scalar(ValueKind.STRING)) },
+      output: "${n.output}",
+    });
+    assembleText(text, "flow.yaml", { children: { child } });
+  }
+
+  /** The message of the load error assembling `callFlow(childType, binding, options)` raises. */
+  const message = (childType: string, binding: string, options: { stepOutput?: string | null; over?: boolean } = {}) =>
+    loadError(() => load(callFlow(childType, binding, options), childType)).message;
+
+  test("tagging an Any output as a union with a file member loads", () => {
+    assembleText(
+      "id: p\nname: p\n" +
+        "typedefs:\n  F:\n    f: file\n  N:\n    n: int\n  U: Union(F, N)\n" +
+        "nodes:\n" +
+        "  step:\n    kind: code\n    output: Any\n    code: \"return {n: 1n}\"\n" +
+        "  use:\n    kind: code\n    input:\n      x: !U ${step.output}\n" +
+        "    output: str\n    code: return 'ok'\n" +
+        "output: ${use.output}\n",
+    );
+  });
+
+  test("Any into a child str input suggests a tag or isinstance", () => {
+    expect(message("str", "${step.output}")).toBe(
+      "call node 'c': binding 't' — child expects 'str', source is 'Any'; " +
+        "tag the slot (`t: !str ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
+    );
+  });
+
+  test("the Any hint names the typedef of a child record input", () => {
+    expect(message("Rec", "${step.output}")).toBe(
+      "call node 'c': binding 't' — child expects '{\"a\":int}', source is 'Any'; " +
+        "tag the slot (`t: !Rec ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
+    );
+  });
+
+  test("optional Any into a child Any input is a plain nullability error", () => {
+    expect(message("Any", "${step.output}", { stepOutput: "Optional(Any)" })).toBe(
+      "call node 'c': binding 't' — child expects 'Any', source is 'Optional(Any)'",
+    );
+  });
+
+  test("Any into a child input that requires a file gets no hint", () => {
+    expect(message("F", "${step.output}")).toBe(
+      "call node 'c': binding 't' — child expects '{\"f\":file}', source is 'Any'",
+    );
+  });
+
+  test("a tagged Any binding into a child str input loads", () => {
+    load(callFlow("str", "!str ${step.output}"), "str");
+  });
+
+  test("an untyped source into a child Any input is left to runtime", () => {
+    load(callFlow("Any", "${step.output}", { stepOutput: null }), "Any");
+  });
+
+  test("a map over a list of Any into a child str input suggests a tag", () => {
+    expect(message("str", "${item}", { stepOutput: "list(Any)", over: true })).toBe(
+      "call node 'c': binding 't' — child expects 'str', source is 'Any'; " +
+        "tag the slot (`t: !str ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
+    );
+  });
+
+  test("a map over a list of Any into a child Any input loads", () => {
+    load(callFlow("Any", "${item}", { stepOutput: "list(Any)", over: true }), "Any");
+  });
+
+  const ANY_INTO_LOOP = `id: p
+name: p
+defs:
+  bump:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: return inputs["n"] + 1n
+    output:
+      n: \${step.output}
+nodes:
+  seed:
+    kind: code
+    output: Any
+    code: return 1n
+  loop:
+    kind: loop
+    times: 2
+    input:
+      n: SEED
+    call: bump
+output: \${loop.output}
+`;
+
+  /** The `bump` def built by hand: input `n: !int`, one `step: int` producer, returned as `n`. */
+  const BUMP = handChild({
+    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
+    producers: { step: new ValueContract(Type.scalar(ValueKind.INTEGER)) },
+    output: { n: "${step.output}" },
+  });
+
+  /** Assemble the loop flow with `seed` as its `n:` seed. */
+  const loadLoop = (seed: string) =>
+    assembleText(ANY_INTO_LOOP.replace("SEED", seed), "flow.yaml", { children: { bump: BUMP } });
+
+  test("Any into a loop carried int suggests a tag or isinstance", () => {
+    expect(loadError(() => loadLoop("${seed.output}")).message).toBe(
+      "loop node 'loop': binding 'n' — child expects 'int', source is 'Any'; " +
+        "tag the slot (`n: !int ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
+    );
+  });
+
+  test("a tagged loop seed over an Any output loads", () => {
+    loadLoop("!int ${seed.output}");
+  });
+
+  test("assembledWith: load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance", () => {
+    runCase({
+      id: "load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance",
+      call: assembledWith({ bump: BUMP }),
+    });
   });
 });
 

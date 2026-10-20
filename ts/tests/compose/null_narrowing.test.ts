@@ -18,7 +18,10 @@
  * `::test_an_isinstance_check_is_still_reported_after_a_null_check`,
  * `::test_a_null_check_the_checks_before_it_prove_null_is_reported`,
  * `::test_a_check_a_null_check_before_it_makes_dead_is_reported` and
- * `::test_a_null_check_the_routing_proves_null_is_reported`.
+ * `::test_a_null_check_the_routing_proves_null_is_reported`. Through `assembleText`:
+ * `::test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`, its `need` def built by
+ * hand (`handChild`, since def bodies load in T3-22), pinning the whole message where Python
+ * matches a fragment.
  *
  * Changed: facts and environments compare with `toStrictEqual`, which also compares classes;
  * `Members` takes an array. `declaredImpossible` and `neverValue` are exported for these tests
@@ -26,7 +29,10 @@
  * cases sit in `narrowing_core.test.ts`'s table, except
  * `compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field`, whose error the
  * CASE build raises: it is pinned at the end (`assemble`), for
- * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`.
+ * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`; and
+ * `compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input`, whose error the
+ * cross-flow binding check raises: it is pinned at the end (`assembledWith`, the `need` def built
+ * by hand).
  *
  * Later (T3-20): `test_a_non_null_field_is_present_in_every_record_around_it`,
  * `test_a_nullable_field_leaves_the_records_around_it_alone` and
@@ -37,7 +43,6 @@
  * `test_a_null_check_case_under_a_branch_that_rules_out_every_member_is_reported`,
  * `test_a_narrowed_optional_field_fills_a_required_input`,
  * `test_a_narrowed_field_makes_its_parent_non_null`,
- * `test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`,
  * `test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive` and
  * `test_a_field_of_an_unchecked_optional_parent_may_still_be_null`.
  */
@@ -75,7 +80,15 @@ import { readType } from "../../src/compose/helpers/types.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembledWith,
+  assembleText,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 const REGISTRY = readTypedefs({
   A: { kind: "Literal(a)", n: "int" },
@@ -345,6 +358,43 @@ test("a null check the routing proves null is reported", () => {
   expect(impossible("x == null", new Map([["x", new Members([], true)]]))).toEqual([]);
 });
 
+// ---------- typed CALL arguments ----------
+
+/** A flow whose searched CASE passes `${input.a.b}` to a def `need` taking `!str` when `when`. */
+const nestedFlow = (when: string) =>
+  "id: p\nname: p\n" +
+  "typedefs:\n  A: {b: Optional(str)}\n" +
+  "input:\n  a: !A\n" +
+  "nodes:\n" +
+  "  route:\n    kind: case\n    cases:\n" +
+  `      - when: "${when}"\n` +
+  "        then: call(need, v=${input.a.b})\n" +
+  "    else: e\n" +
+  "  e:\n    kind: code\n    code: return 1\n" +
+  "output: ${route.output}\n" +
+  "defs:\n  need:\n" +
+  "    input:\n      v: !str\n" +
+  "    nodes:\n      p:\n        kind: code\n" +
+  "        input:\n          o: ${input.v}\n        code: return 1\n" +
+  "    output: ${p.output}\n";
+
+/** The `need` def built by hand: input `v: !str`, an untyped `p`, returned. */
+const NEED = handChild({
+  inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),
+  producers: { p: null },
+  output: "${p.output}",
+});
+
+test("an unnarrowed optional field still cannot fill a required input", () => {
+  const error = loadError(() =>
+    assembleText(nestedFlow("input.a.b == null"), "flow.yaml", { children: { need: NEED } }),
+  );
+
+  expect(error.message).toBe(
+    "node 'route' cases[0].then call(need) argument 'v' — child expects 'str', source is 'Optional(str)'",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
 test("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field", () => {
@@ -352,5 +402,12 @@ test("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_e
   runCase({
     id: "load-types/compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field",
     call: assembled,
+  });
+});
+
+test("assembledWith: load-types/compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input", () => {
+  runCase({
+    id: "load-types/compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input",
+    call: assembledWith({ need: NEED }),
   });
 });

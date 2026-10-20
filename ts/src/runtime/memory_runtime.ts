@@ -16,10 +16,12 @@ import {
   isMemory,
   type JsonObject,
   type Memory,
+  MemoryOperationError,
   type MemorySession,
   MemorySetupError,
   MemorySnapshotEnvelope,
   MemorySpec,
+  sameMemorySnapshotEnvelope,
 } from "../memory/contracts.ts";
 import { isExactly, sameItems } from "../nodes/contracts.ts";
 import { isList } from "../typesys/values.ts";
@@ -104,6 +106,71 @@ function validateSnapshots(snapshots: unknown, keys: readonly string[]): Map<str
   return restored;
 }
 
+/** Require the narrow callable session surface without reading its snapshot. */
+function validateSession(value: unknown, key: string, origin: OriginRef | null): MemorySession {
+  for (const method of ["recall", "learn", "commit", "close"] as const) {
+    if (typeof (value as Partial<MemorySession> | null | undefined)?.[method] !== "function") {
+      throw new MemorySetupError(`memory ${reprText(key)} returned an invalid run session`, { origin });
+    }
+  }
+  return value as MemorySession;
+}
+
+// Local copy of memory/session.ts's addNote.
+/**
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
+ * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
+ * `text`, loses the note, as Python swallows a failing `add_note`.
+ */
+function addNote(error: unknown, text: () => string): void {
+  try {
+    if (typeof error !== "object" || error === null) return;
+    const target = error as { notes?: unknown };
+    const note = text();
+    if (!Object.hasOwn(target, "notes")) target.notes = [];
+    if (Array.isArray(target.notes)) target.notes.push(note);
+  } catch {}
+}
+
+// Local copy of memory/session.ts's typeName.
+/** Python's `type(value).__name__`: the constructor's name, else a string `name`, else `Error`. */
+function typeName(value: unknown): string {
+  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
+  if (typeof constructorName === "string" && constructorName) return constructorName;
+  const name = (value as { name?: unknown } | null | undefined)?.name;
+  return typeof name === "string" ? name : "Error";
+}
+
+/**
+ * Close `sessions` in reverse key order, each once, while preserving an initiating failure.
+ *
+ * With `primary`, every close failure is noted on `primary.error` and the promise resolves.
+ * Without one, the first failure is kept, later ones are noted on it, and it is thrown after every
+ * session was closed.
+ */
+async function closeSessions(
+  sessions: ReadonlyMap<string, MemorySession>,
+  primary: { error: unknown } | null,
+): Promise<void> {
+  let first: { error: unknown } | null = null;
+  for (const key of [...sessions.keys()].reverse()) {
+    try {
+      await sessions.get(key)!.close();
+    } catch (error) {
+      const target = primary ?? first;
+      if (target === null) {
+        first = { error };
+        continue;
+      }
+      addNote(target.error, () => {
+        const message = error instanceof Error ? error.message : String(error);
+        return `memory ${reprText(key)} session close also raised ${typeName(error)}: ${message}`;
+      });
+    }
+  }
+  if (primary === null && first !== null) throw first.error;
+}
+
 /** One opened set of per-key sessions shared by execution and learning. */
 export class MemoryRuntime {
   /** The frozen recorded memory table for this run. */
@@ -112,6 +179,7 @@ export class MemoryRuntime {
   readonly snapshots: readonly MemorySnapshotEnvelope[];
   private readonly origins: ReadonlyMap<string, OriginRef | null>;
   private readonly sessions: ReadonlyMap<string, MemorySession>;
+  #closing: Promise<void> | null = null;
 
   /** @internal Use `MemoryRuntime.open`, which validates and opens the sessions. */
   constructor(options: {
@@ -126,6 +194,38 @@ export class MemoryRuntime {
     this.snapshots = options.snapshots;
   }
 
+  /** @internal Whether `close()` has started. */
+  get closed(): boolean {
+    return this.#closing !== null;
+  }
+
+  /**
+   * Close every opened session in reverse key order exactly once.
+   *
+   * A later call, even while the first is still closing, waits for the first to finish and then
+   * resolves; it never rejects and adds no notes (Python's returns at once).
+   *
+   * @throws the first session close failure, after every session was closed; later failures are
+   *   noted on it.
+   */
+  close(): Promise<void> {
+    return this.closePreserving(null);
+  }
+
+  /**
+   * @internal Close keeping `primary.error` as the initiating failure (Python's
+   * `_close_preserving`): every close failure is noted on it instead of thrown. `null` is `close()`.
+   * A later call waits for the first close, never rejects and adds no notes.
+   */
+  closePreserving(primary: { error: unknown } | null): Promise<void> {
+    if (this.#closing !== null) return this.#closing.then(() => undefined, () => undefined);
+    // Mark the runtime closing before any session's close runs, so a reentrant close is a no-op.
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.#closing = promise;
+    resolve(closeSessions(this.sessions, primary));
+    return promise;
+  }
+
   /**
    * Validate and open one session per recorded memory key.
    *
@@ -134,7 +234,10 @@ export class MemoryRuntime {
    * empty table opens nothing.
    *
    * @throws TypeError or RangeError for a malformed table, origins, registry or snapshots.
-   * @throws MemorySetupError when the host supplied no backend for a key.
+   * @throws MemorySetupError when the host supplied no backend for a key, a backend fails to open
+   *   or returns an invalid session, a session fails to export or exports an invalid snapshot, or a
+   *   restored session does not reproduce its recorded snapshot; every session opened so far is
+   *   closed first.
    */
   static async open(options: {
     memories: readonly MemorySpec[];
@@ -153,6 +256,64 @@ export class MemoryRuntime {
         });
       }
     }
-    throw new Error("not implemented");
+    // Copy the caller's arrays before the first await, so later edits to them change nothing.
+    const memories = Object.freeze([...options.memories]);
+    const recorded = options.snapshots == null ? null : [...options.snapshots];
+
+    const opened = new Map<string, MemorySession>();
+    const captured: MemorySnapshotEnvelope[] = [];
+    try {
+      for (const key of keys) {
+        const origin = origins.get(key)!;
+        try {
+          const session: unknown = await registry.get(key)!.openRun({ snapshot: restore.get(key) ?? null });
+          // Register anything closable first, so a session failing the surface check is still closed.
+          if (typeof (session as { close?: unknown } | null | undefined)?.close === "function") {
+            opened.set(key, session as MemorySession);
+          }
+          opened.set(key, validateSession(session, key, origin));
+        } catch (error) {
+          if (!(error instanceof MemoryOperationError)) throw error;
+          throw new MemorySetupError(`memory ${reprText(key)} could not open its run session: ${error.message}`, {
+            origin,
+            cause: error,
+          });
+        }
+      }
+
+      for (const key of keys) {
+        const origin = origins.get(key)!;
+        try {
+          captured.push(new MemorySnapshotEnvelope(key, opened.get(key)!.snapshot));
+        } catch (error) {
+          if (error instanceof MemoryOperationError) {
+            throw new MemorySetupError(`memory ${reprText(key)} could not export its run snapshot: ${error.message}`, {
+              origin,
+              cause: error,
+            });
+          }
+          if (error instanceof TypeError || error instanceof RangeError) {
+            throw new MemorySetupError(`memory ${reprText(key)} exported an invalid run snapshot`, {
+              origin,
+              cause: error,
+            });
+          }
+          throw error;
+        }
+      }
+      if (recorded !== null) {
+        const index = recorded.findIndex((envelope, i) => !sameMemorySnapshotEnvelope(envelope, captured[i]!));
+        if (index >= 0) {
+          throw new MemorySetupError("restored memory session did not reproduce its recorded snapshot", {
+            origin: origins.get(keys[index]!)!,
+          });
+        }
+      }
+    } catch (error) {
+      await closeSessions(opened, { error });
+      throw error;
+    }
+
+    return new MemoryRuntime({ memories, origins, sessions: opened, snapshots: Object.freeze(captured) });
   }
 }

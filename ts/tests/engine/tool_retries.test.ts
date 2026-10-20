@@ -16,14 +16,16 @@
  * TOOL `call` -> END in place of `run_flow`, reading the events and the log's `node_step` records:
  * `test_retries_zero_fails_as_before_and_records_no_step`,
  * `test_two_failures_then_success_records_each_attempt` (serial and two workers; Python's third
- * row, the run's default worker count, has no engine counterpart),
+ * row, the run's default worker count, has no engine counterpart and is dropped),
  * `test_jitter_draws_from_half_to_the_full_delay`,
  * `test_backoff_stops_at_the_cap`, `test_retry_after_replaces_the_backoff_up_to_the_cap` (the
- * draw throws, so none is taken), `test_an_output_contract_failure_is_not_retried` and
- * `test_a_stop_during_the_backoff_wait_stops_the_run` (the scheduler's `sleep` aborts the host's
- * controller, then delegates, so the sleep rejects at once; `run()` rejects with the host's reason,
- * the steps are exactly one `failed`, and no `NodeFailed` is emitted). TS-only through the engine:
- * a `Date` result fails `contract.output`, and an invalid argument fails `node.execute` with no call.
+ * draw throws, so none is taken), `test_an_output_contract_failure_is_not_retried`,
+ * `test_exhausted_retries_list_every_attempt` (its `run_flow` half: the failure's code, cause type
+ * and message) and `test_a_stop_during_the_backoff_wait_stops_the_run` (serial and two workers,
+ * Python's third row, the default worker count, dropped as above; the scheduler's `sleep` aborts
+ * the host's controller, then delegates, so the sleep rejects at once; `run()` rejects with the
+ * host's reason, the steps are exactly one `failed`, and no `NodeFailed` is emitted). TS-only
+ * through the engine: a `Date` result fails `contract.output`.
  *
  * Ported (adapted), each through `node.run` with recorded steps in place of `run_flow`:
  * `test_permanent_error_on_the_first_attempt_fails_unchanged` (the error is the same object),
@@ -38,9 +40,10 @@
  *
  * Changed: the `1.0` row is `1.5`, since `1.0` is the integer `1` in JS; a negative count
  * throws `RangeError` where Python raises `ValueError`; each row checks the whole message, not
- * just `'call'`. `test_an_invalid_argument_is_not_retried` passes a value whose type doesn't fit
- * the schema, which `validate` refuses with `TypeCheckError` (Python's is pydantic's
- * `ValidationError` for `gt=0`); `test_an_unknown_argument_is_not_retried` rejects with
+ * just `'call'`. `test_an_invalid_argument_is_not_retried` runs through the engine and passes a
+ * value whose type doesn't fit the schema: the failure is `node.execute` with cause type
+ * `TypeCheckError` (Python's is pydantic's `ValidationError` for `gt=0`), and nothing is called;
+ * `test_an_unknown_argument_is_not_retried` rejects with
  * `RangeError` where Python raises `ValueError`. `test_an_awaitable_from_a_function_tool_is_not_retried`
  * is "an execute returning a rejected promise is retried like any error": TS awaits every result.
  *
@@ -48,7 +51,10 @@
  * the node's kind, title and traits read on an instance (`needsTools`, `needsSteps`). `backoff`
  * directly: the doubling and the jitter's upper half, the cap, `retryAfter` taking no draw, and a
  * zero base giving 0, never `NaN`. `ToolAttemptsFailed` is an `Error` named `ToolAttemptsFailed`
- * with its `cause`. A `ToolCheckError` from the tool is not retried. A tool throwing a
+ * with its `cause`. `backoff` ignores a `retryAfter` that isn't a finite number of seconds, at
+ * least 0, that throws, or that sits on an unbranded error. The direct invalid-argument row:
+ * `validate`'s `TypeCheckError` rejects `node.run` before any call. A `ToolCheckError` from
+ * the tool is not retried, also when branded transient too (check wins). A tool throwing a
  * `CapabilityFault` is called once and records nothing (Python's `_CapabilityFault` shares the
  * host stop's `except`). A thrown non-`Error` records its `jsTypeName` and text, and propagates,
  * or becomes the `cause`, unwrapped. A result is taken in as a yian value (`5` is `5n`), and one
@@ -282,7 +288,6 @@ test("a TOOL node's kind, title and traits", () => {
   expect(node.needsSteps).toBe(true);
 });
 
-
 test("the backoff doubles from the base and draws from its upper half", () => {
   const error = new TimeoutError("a");
   expect([1, 2, 3].map((failure) => backoff(failure, error, () => 1))).toEqual([1, 2, 4]);
@@ -299,6 +304,25 @@ test("the backoff stops at the cap", async () => {
 test("retryAfter replaces the backoff up to the cap and takes no draw", () => {
   expect(backoff(1, new TransientToolError("busy", { retryAfter: 7 }), noDraw)).toBe(7);
   expect(backoff(1, new TransientToolError("busy", { retryAfter: 100 }), noDraw)).toBe(30);
+});
+
+test("a retryAfter that isn't a finite number of seconds, or on an unbranded error, gets the backoff", () => {
+  const transient = (retryAfter: unknown) => ({ [TOOL_ERROR]: ["transient"], retryAfter });
+  const throwing = {
+    [TOOL_ERROR]: ["transient"],
+    get retryAfter(): number {
+      throw new Error("no retryAfter");
+    },
+  };
+  const rows: unknown[] = [
+    transient(-1),
+    transient(Number.NaN),
+    transient(Number.POSITIVE_INFINITY),
+    transient("5"),
+    throwing,
+    { retryAfter: 7 },
+  ];
+  for (const error of rows) expect(backoff(1, error, () => 1)).toBe(1);
 });
 
 test("a huge failure count gets the cap", () => {
@@ -410,6 +434,21 @@ test("a ToolCheckError is not retried", async () => {
   expect(error).toBe(check);
   expect(flaky.seen).toHaveLength(1);
   expect(sleeps).toEqual([]);
+});
+
+test("a check error also branded transient is not retried", async () => {
+  class TransientCheck extends ToolCheckError {
+    override readonly [TOOL_ERROR]: readonly ToolErrorKind[] = Object.freeze(["check", "transient"]);
+  }
+  const check = new TransientCheck("bad result");
+  const flaky = new FlakyTool([check]);
+
+  const { error, sleeps, recorded } = await runDirect(flaky.tool, { retries: 2 });
+
+  expect(error).toBe(check);
+  expect(flaky.seen).toHaveLength(1);
+  expect(sleeps).toEqual([]);
+  expect(recorded).toEqual([]);
 });
 
 test("an invalid argument is not retried", async () => {
@@ -664,6 +703,20 @@ for (const [retryAfter, waited] of [
     expect(sleeps).toEqual([waited * 1000]);
   });
 }
+
+test("exhausted retries list every attempt, through the engine", async () => {
+  const flaky = new FlakyTool([new TimeoutError("a"), new TimeoutError("b")]);
+
+  const { events } = await runEngine(new ToolNode("call", { toolId: "flaky", retries: 1 }), flaky.tool);
+
+  const failure = runFailure(events);
+  expect(failure.code).toBe("node.execute");
+  expect(failure.causeType).toBe("ToolAttemptsFailed");
+  expect(failure.message).toBe(
+    "tool 'flaky' failed after 2 attempts: attempt 1: TimeoutError: a; attempt 2: TimeoutError: b",
+  );
+  expect(flaky.seen).toHaveLength(2);
+});
 
 test("an output contract failure is not retried", async () => {
   const flaky = new FlakyTool([], "bad");

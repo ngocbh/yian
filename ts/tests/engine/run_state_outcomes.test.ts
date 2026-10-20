@@ -2,7 +2,17 @@
  * Transactional node-outcome tests for the run-state reducer: a port of
  * `tests/engine/test_run_state_outcomes.py`.
  *
- * Ported: `test_success_commits_canonical_value_before_fifo_successors`,
+ * Ported: `test_route_derives_skip_closure_without_skip_record`,
+ * `test_route_takes_every_edge_matching_else_or_named_handle` (2 rows),
+ * `test_route_preserves_dfs_observers_and_existing_fifo_readiness`,
+ * `test_route_rejects_a_previously_settled_outgoing_edge` (2 rows),
+ * `test_route_append_failure_leaves_every_state_coordinate_unchanged`,
+ * `test_route_delta_preserves_all_reducer_container_identities`,
+ * `test_competing_route_plans_reject_the_second_sequence_before_append`,
+ * `test_route_observers_are_fresh_and_isolated_from_prepared_mutation`,
+ * `test_route_record_replay_reconstructs_identical_state`,
+ * `test_route_skip_flood_is_iterative_for_a_deep_chain`,
+ * `test_success_commits_canonical_value_before_fifo_successors`,
  * `test_success_replay_revalidates_partial_record_contract`,
  * `test_success_preserves_sibling_flight_and_appends_new_readiness_fifo`,
  * `test_success_resolves_redirect_precedence_and_preserves_target_disposition` (2 rows),
@@ -34,6 +44,17 @@
  * pins `state.ready` after it.
  *
  * Changed:
+ * - `test_route_rejects_unknown_router_frontier_or_handle` (3 rows): two tests, the router and
+ *   frontier rows (`RangeError`) and the handle row (`NodeDataError`).
+ * - `test_route_requires_exact_nonempty_strings` (2 rows): two tests, the node id (`RangeError`,
+ *   `TypeError`) and the handle (`NodeDataError` over each); the non-string rows pass `1` by cast.
+ * - `test_route_rejects_malformed_source_handle_as_a_host_invariant` (3 rows): the `Edge`
+ *   constructor doesn't check its fields, so each row builds the malformed edge with it (`7` and
+ *   `false` by cast) and puts it in the public `flow.outgoingEdges` list and `flow.edges`.
+ * - `test_route_commit_uses_only_materialized_delta_after_append`: only the instance patches,
+ *   throwing `flow.incoming` and `flow.outgoing` before the commit.
+ * - `test_route_derives_skip_closure_without_skip_record`: assigning a delta field is a
+ *   `TypeError`.
  * - `test_success_validates_ordinary_target_against_output_contract_type`: a `float` slot keeps
  *   the int `3n` an int (the value layer's rule), so the test also shows a text output refused
  *   against the target's `float` contract.
@@ -61,27 +82,16 @@
  * Not ported (no allocation probe): `test_route_reducer_allocation_is_independent_of_wide_ready_queue`,
  * `test_success_reducer_allocation_is_independent_of_total_run_size`.
  *
- * Not ported (ESM): the module patches of `test_success_commit_uses_only_the_prevalidated_delta`
+ * Not ported (ESM): the module patches of `test_route_commit_uses_only_materialized_delta_after_append`
+ * (`_prepare_route_delta`, `_scan_join`, `_settle_join_edge`, `_classify_join`, and `NodeRouted`
+ * and `NodeSkipped` after the append), of `test_success_commit_uses_only_the_prevalidated_delta`
  * (`_validate_success_value`, `_prepare_success_delta`, `canonical_typed`, `encode_pool`,
  * `decode_pool`) and of `test_terminal_commit_performs_no_materialization_after_append`
  * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`).
  *
- * Later (T4-4 PR 2), routes and failures: `test_route_derives_skip_closure_without_skip_record`,
- * `test_route_takes_every_edge_matching_else_or_named_handle`,
- * `test_route_preserves_dfs_observers_and_existing_fifo_readiness`,
+ * Later (T4-4 PR 2), routes and failures:
  * `test_route_skip_join_matches_control_data_ordering_and_wait_semantics`,
- * `test_route_rejects_unknown_router_frontier_or_handle`,
- * `test_route_rejects_a_previously_settled_outgoing_edge`,
- * `test_route_rejects_malformed_source_handle_as_a_host_invariant`,
- * `test_route_requires_exact_nonempty_strings`,
- * `test_route_append_failure_leaves_every_state_coordinate_unchanged`,
- * `test_route_delta_preserves_all_reducer_container_identities`,
- * `test_competing_route_plans_reject_the_second_sequence_before_append`,
- * `test_route_observers_are_fresh_and_isolated_from_prepared_mutation`,
- * `test_route_record_replay_reconstructs_identical_state`,
- * `test_route_commit_uses_only_materialized_delta_after_append`,
- * `test_route_scans_each_touched_head_incoming_adjacency_once`,
- * `test_route_skip_flood_is_iterative_for_a_deep_chain`, `test_late_sibling_failure_wins`,
+ * `test_route_scans_each_touched_head_incoming_adjacency_once`, `test_late_sibling_failure_wins`,
  * `test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record`,
  * `test_route_latches_causal_terminal_failure_until_sibling_quiescence`,
  * `test_causal_route_canonicalizes_origin_subclass_for_wire`,
@@ -111,14 +121,16 @@
 import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeSucceeded, RunSucceeded } from "../../src/events.ts";
-import type { Node } from "../../src/nodes/base.ts";
+import { NodeRouted, NodeSkipped, NodeSucceeded, type RunEvent, RunSucceeded } from "../../src/events.ts";
+import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
+  encodePool,
   MemoryRunLog,
+  NodeRoutedRecord,
   NodeStartedRecord,
   NodeSucceededRecord,
   type RecordEnvelope,
@@ -129,6 +141,7 @@ import {
   commitPrepared,
   NodeDataError,
   type PreparedTransition,
+  prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
@@ -145,6 +158,8 @@ import {
   reducerSnapshot,
   replayOutcomeLog,
   roots,
+  routeFlow,
+  routeInFlight,
   RUN_ID,
   snapshot,
 } from "./run_state_fixtures.ts";
@@ -974,4 +989,285 @@ test("a terminal commit does no materialization after append (success)", () => {
   ]);
   expect(state.result).toStrictEqual(new RunSucceeded({ output: { value: [1n, 2n] } }));
   expect(state.ready).toEqual([]);
+});
+
+/** Return `prepared`'s plan narrowed to a route plan; throw unless it is one. */
+function routePlan(prepared: PreparedTransition) {
+  const plan = prepared._plan;
+  if (plan.kind !== "route") throw new Error(`expected a route plan, found ${plan.kind}`);
+  return plan;
+}
+
+/** Return the route and skip observers of one route. */
+function routed(nodeId: string, handle: string, ...skipped: string[]): RunEvent[] {
+  return [new NodeRouted({ nodeId, handle }), ...skipped.map((id) => new NodeSkipped({ nodeId: id }))];
+}
+
+test("a route derives its skip closure without a skip record", () => {
+  const { state, log } = routeInFlight();
+  const before = snapshot(state);
+
+  const prepared = prepareNodeRouted(state, "router", "yes");
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(4);
+  expect(prepared.record).toStrictEqual(new NodeRoutedRecord("router", "yes"));
+  expect(prepared.observers).toStrictEqual(routed("router", "yes", "dead-parent", "dead-child"));
+  const delta = routePlan(prepared).delta;
+  expect(delta.edgeUpdates).toEqual([
+    ["route-dead", NodeState.SKIPPED],
+    ["dead-child", NodeState.SKIPPED],
+    ["route-chosen", NodeState.TAKEN],
+  ]);
+  expect(() => {
+    (delta as { edgeUpdates: unknown }).edgeUpdates = [];
+  }).toThrow(TypeError);
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual(prepared.observers);
+  expect(state.nodeState.get("router")).toBe(NodeState.TAKEN);
+  expect(state.nodeState.get("dead-parent")).toBe(NodeState.SKIPPED);
+  expect(state.nodeState.get("dead-child")).toBe(NodeState.SKIPPED);
+  expect(state.nodeState.get("chosen")).toBe(NodeState.UNKNOWN);
+  expect(state.ready).toEqual(["chosen"]);
+  expect([...state.inFlight]).toEqual([]);
+  expect(log.records().map((envelope) => envelope.record.constructor)).toEqual([
+    RunStartedRecord,
+    NodeStartedRecord,
+    NodeSucceededRecord,
+    NodeStartedRecord,
+    NodeRoutedRecord,
+  ]);
+});
+
+test.each([
+  [ELSE_HANDLE, ELSE_HANDLE],
+  ["go", "go"],
+])("a route takes every edge matching the else or a named handle: %s", (selected, matching) => {
+  const flow = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["router", func("router")],
+      ["left", func("left")],
+      ["right", func("right")],
+      ["dead", func("dead")],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [
+      new Edge("start-router", START_ID, "router"),
+      new Edge("match-left", "router", "left", { sourceHandle: matching }),
+      new Edge("match-right", "router", "right", { sourceHandle: matching }),
+      new Edge("other", "router", "dead", { sourceHandle: "other" }),
+    ],
+  );
+  const { state, log } = routeInFlight(flow);
+
+  commitPrepared(log, state, prepareNodeRouted(state, "router", selected));
+
+  expect(state.edgeState.get("match-left")).toBe(NodeState.TAKEN);
+  expect(state.edgeState.get("match-right")).toBe(NodeState.TAKEN);
+  expect(state.edgeState.get("other")).toBe(NodeState.SKIPPED);
+  expect(state.nodeState.get("dead")).toBe(NodeState.SKIPPED);
+  expect(state.ready).toEqual(["left", "right"]);
+});
+
+test("a route keeps DFS observers and the existing FIFO readiness", () => {
+  const ids = ["router", "existing", "dead-a", "ready-a", "chosen", "dead-b", "ready-b"];
+  const flow = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ...ids.map((id) => [id, func(id)] as const),
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [
+      new Edge("start-router", START_ID, "router"),
+      new Edge("start-existing", START_ID, "existing"),
+      new Edge("route-a", "router", "dead-a", { sourceHandle: "no-a" }),
+      new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
+      new Edge("route-b", "router", "dead-b", { sourceHandle: "no-b" }),
+      new Edge("a-ready", "dead-a", "ready-a", { optional: true }),
+      new Edge("b-ready", "dead-b", "ready-b", { optional: true }),
+    ],
+  );
+  const { state, log } = routeInFlight(flow);
+
+  const observers = commitPrepared(log, state, prepareNodeRouted(state, "router", "yes"));
+
+  expect(observers).toStrictEqual(routed("router", "yes", "dead-a", "dead-b"));
+  expect(state.ready).toEqual(["existing", "ready-a", "chosen", "ready-b"]);
+});
+
+test.each([
+  ["missing", "yes", "NodeRouted node 'missing' does not exist in the flow"],
+  ["chosen", "yes", "NodeRouted node 'chosen' is not in-flight"],
+] as const)("a route refuses an unknown router or frontier: %s", (nodeId, handle, message) => {
+  const { state, log } = routeInFlight();
+  const before = snapshot(state);
+
+  expectError(() => prepareNodeRouted(state, nodeId, handle), RangeError, message);
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(4);
+});
+
+test("a route refuses an unknown handle as node data", () => {
+  const { state, log } = routeInFlight();
+  const before = snapshot(state);
+
+  expectNodeData(
+    () => prepareNodeRouted(state, "router", "missing"),
+    RangeError,
+    "NodeRouted handle 'missing' matches no outgoing edge of 'router'",
+  );
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(4);
+});
+
+test.each([NodeState.TAKEN, NodeState.SKIPPED])("a route refuses a previously settled outgoing edge: %s", (settled) => {
+  const { state, log } = routeInFlight();
+  state.edgeState.set("route-dead", settled);
+  const before = snapshot(state);
+
+  expectError(() => prepareNodeRouted(state, "router", "yes"), RangeError, "route edge 'route-dead' must be UNKNOWN");
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(4);
+});
+
+test.each<[unknown, new (...args: never[]) => Error, string]>([
+  ["", RangeError, "route edge 'route-chosen' source_handle must be non-empty"],
+  [7, TypeError, "route edge 'route-chosen' source_handle must be a string or null"],
+  [false, TypeError, "route edge 'route-chosen' source_handle must be a string or null"],
+])("a route refuses a malformed source handle as a host invariant: %p", (sourceHandle, cls, message) => {
+  const { state, log } = routeInFlight();
+  const outgoing = state.flow.outgoingEdges.get("router")!;
+  const selected = outgoing.find((edge) => edge.sourceHandle === "yes")!;
+  // The Edge constructor doesn't check its fields, so a malformed handle reaches the reducer.
+  const malformed = new Edge(selected.id, selected.from, selected.to, { sourceHandle: sourceHandle as string });
+  outgoing[outgoing.indexOf(selected)] = malformed;
+  state.flow.edges[state.flow.edges.indexOf(selected)] = malformed;
+  const before = snapshot(state);
+
+  expectError(() => prepareNodeRouted(state, "router", "yes"), cls, message);
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(4);
+});
+
+test("a route requires an exact non-empty node id", () => {
+  const { state } = routeInFlight();
+
+  expectError(() => prepareNodeRouted(state, "", "yes"), RangeError, "node_id must be non-empty");
+  expectError(() => prepareNodeRouted(state, 1 as unknown as string, "yes"), TypeError, "node_id must be a string");
+});
+
+test("a route requires an exact non-empty handle, as node data", () => {
+  const { state } = routeInFlight();
+
+  expectNodeData(() => prepareNodeRouted(state, "router", ""), RangeError, "handle must be non-empty");
+  expectNodeData(() => prepareNodeRouted(state, "router", 1 as unknown as string), TypeError, "handle must be a string");
+});
+
+test("a route append failure leaves every state coordinate unchanged", () => {
+  const { state, log: prior } = routeInFlight();
+  const prepared = prepareNodeRouted(state, "router", "yes");
+  const before = snapshot(state);
+  const log = new FailingLog(RUN_ID, prior.records());
+
+  expectError(() => commitPrepared(log, state, prepared), Error, "disk full");
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test("a route delta keeps every reducer container's identity", () => {
+  const { state, log } = routeInFlight();
+  const before = roots(state);
+
+  commitPrepared(log, state, prepareNodeRouted(state, "router", "yes"));
+
+  roots(state).forEach((root, index) => expect(root).toBe(before[index]));
+  expect(state.ready).toEqual(["chosen"]);
+});
+
+test("competing route plans refuse the second sequence before append", () => {
+  const { state, log } = routeInFlight();
+  const first = prepareNodeRouted(state, "router", "yes");
+  const second = prepareNodeRouted(state, "router", "yes");
+
+  commitPrepared(log, state, first);
+  const sequence = log.nextSequence;
+  expectError(() => commitPrepared(log, state, second), RangeError, "run-state sequence mismatch: prepared 4, state 5");
+
+  expect(log.nextSequence).toBe(sequence);
+  expect(state.ready).toEqual(["chosen"]);
+});
+
+test("route observers are fresh and isolated from a prepared mutation", () => {
+  const { state, log } = routeInFlight();
+  const prepared = prepareNodeRouted(state, "router", "yes");
+  (prepared.observers[0] as { handle: string }).handle = "mutated";
+  (prepared.observers[1] as { nodeId: string }).nodeId = "mutated";
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual(routed("router", "yes", "dead-parent", "dead-child"));
+  expect(state.ready).toEqual(["chosen"]);
+});
+
+test("a route record replay reconstructs an identical state", () => {
+  const live = routeInFlight();
+  commitPrepared(live.log, live.state, prepareNodeRouted(live.state, "router", "yes"));
+
+  const replay = replayOutcomeLog(routeFlow(), live.log);
+
+  expect(reducerSnapshot(replay.state)).toEqual(reducerSnapshot(live.state));
+  expect(replay.log.records()).toEqual(live.log.records());
+  expect(replay.state.ready).toEqual(["chosen"]);
+});
+
+test("a route commit uses only the materialized delta after append", () => {
+  const { state, log: prior } = routeInFlight();
+  const prepared = prepareNodeRouted(state, "router", "yes");
+  const poolBefore = encodePool(state.pool);
+  const unexpected = (): never => {
+    throw new Error("route commit repeated preparation work");
+  };
+  state.flow.incoming = unexpected;
+  state.flow.outgoing = unexpected;
+
+  const observers = commitPrepared(prior, state, prepared);
+
+  expect(observers).toStrictEqual(routed("router", "yes", "dead-parent", "dead-child"));
+  expect(encodePool(state.pool)).toEqual(poolBefore);
+  expect(state.ready).toEqual(["chosen"]);
+});
+
+test("a route skip flood is iterative for a deep chain", () => {
+  const depth = 1500;
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["router", func("router")],
+    ["chosen", func("chosen")],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  for (let index = 0; index < depth; index++) nodes.set(`dead-${index}`, func(`dead-${index}`));
+  const edges = [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("route-dead", "router", "dead-0", { sourceHandle: "no" }),
+    new Edge("route-live", "router", "chosen", { sourceHandle: "yes" }),
+  ];
+  for (let index = 0; index < depth - 1; index++) {
+    edges.push(new Edge(`dead-edge-${index}`, `dead-${index}`, `dead-${index + 1}`));
+  }
+  const { state, log } = routeInFlight(CompiledFlow.fromParts(nodes, edges));
+
+  const observers = commitPrepared(log, state, prepareNodeRouted(state, "router", "yes"));
+
+  expect(observers.length).toBe(depth + 1);
+  expect(observers[1]).toStrictEqual(new NodeSkipped({ nodeId: "dead-0" }));
+  expect(observers.at(-1)).toStrictEqual(new NodeSkipped({ nodeId: `dead-${depth - 1}` }));
+  expect(state.ready).toEqual(["chosen"]);
 });

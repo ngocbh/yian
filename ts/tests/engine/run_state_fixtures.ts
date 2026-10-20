@@ -13,6 +13,7 @@ import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/comp
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
@@ -104,6 +105,54 @@ export function fanoutFlow(): CompiledFlow {
     new Edge("start-first", START_ID, "first"),
     new Edge("start-second", START_ID, "second"),
   ]);
+}
+
+/** Return a route whose unselected `no` sibling has a two-node skip chain and `yes` leads to `chosen`. */
+export function routeFlow(): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ...["router", "chosen", "dead-parent", "dead-child"].map(
+      (id) => [id, new FuncNode(id, (inputs) => inputs)] as const,
+    ),
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  return CompiledFlow.fromParts(nodes, [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("route-dead", "router", "dead-parent", { sourceHandle: "no" }),
+    new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
+    new Edge("dead-child", "dead-parent", "dead-child"),
+  ]);
+}
+
+/** The id of `callRedirectFlow`'s child END. */
+export const CHILD_END = "call/__end__";
+
+/**
+ * Return a CALL-shaped graph: the router's `child` branch reaches the child END, which redirects
+ * its output to the logical parent `call`, whose value END requires. With `fallback`, a START
+ * successor `fallback` also feeds END's `result` group.
+ */
+export function callRedirectFlow(options: { fallback?: boolean } = {}): CompiledFlow {
+  const childEnd = EndNode.value(CHILD_END, { outputName: null });
+  childEnd.commitAs = "call";
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["router", new FuncNode("router", (inputs) => inputs)],
+    [CHILD_END, childEnd],
+    ["call", new CallNode("call", { flowId: "child" })],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  const edges = [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("router-child-end", "router", CHILD_END, { sourceHandle: "child" }),
+    new Edge("call-end", "call", END_ID, { inputGroup: "result" }),
+  ];
+  if (options.fallback) {
+    nodes.set("fallback", new FuncNode("fallback", (inputs) => inputs));
+    edges.splice(1, 0, new Edge("start-fallback", START_ID, "fallback"));
+    edges.push(new Edge("fallback-end", "fallback", END_ID, { inputGroup: "result" }));
+  }
+  return CompiledFlow.fromParts(nodes, edges);
 }
 
 /** Return the complete pool a fresh run of `flow` records under `runId`. */
@@ -381,6 +430,25 @@ export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: 
         : null,
     }),
   );
+}
+
+/**
+ * Return a state and log of `flow` (by default `routeFlow()`) with START succeeded and its
+ * `router` in flight.
+ */
+export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(flow);
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, "router"));
+  return { state, log };
+}
+
+/** Return a state and log of `flow` with START succeeded as `{seed: true}` and `router` in flight. */
+export function routerInFlight(flow: CompiledFlow): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(flow);
+  commitStartSuccess(state, log, { seed: true });
+  commitPrepared(log, state, prepareNodeStarted(state, "router"));
+  return { state, log };
 }
 
 /**

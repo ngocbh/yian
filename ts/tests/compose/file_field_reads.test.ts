@@ -13,8 +13,8 @@
  * `load-core/compose_file_field_reads__the_uri_of_a_file_is_str`, which the typed-binding check
  * decides.
  *
- * Later: the other load-time checks of `uri`, `mime` and `name` reads (with the loader) and the
- * flow runs (with the runner).
+ * Later (T3-22): the other load-time checks of `uri`, `mime` and `name` reads (with the loader).
+ * Later (T4): the flow runs.
  */
 
 import { expect, test } from "bun:test";

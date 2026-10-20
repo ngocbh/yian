@@ -11,7 +11,7 @@
  * its `input:` text, its typed node as a producer with its output contract), since def bodies load
  * in T3-22. CODE bodies are TS; load doesn't run them.
  *
- * Not ported here, decided by already-ported modules (the manifest and fingerprint, the tags
+ * Not ported (not T3-19 rows), decided by already-ported modules (the manifest and fingerprint, the tags
  * reader, inline calls): `test_a_node_env_literal_under_a_credential_name_loads` (4),
  * `test_a_flow_env_literal_under_a_credential_name_loads`, the compact-flow param of
  * `test_a_def_env_literal_under_a_credential_name_loads`,

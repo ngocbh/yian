@@ -36,7 +36,8 @@
  * hand (`handChild`), since def bodies load in T3-22; the error rows pin the whole message where
  * Python matches fragments, and CODE bodies are TS.
  *
- * Later (T3-20): `test_an_assert_reading_a_field_of_an_any_output_loads` (node asserts).
+ * Later (T3-20): `test_an_assert_reading_a_field_of_an_any_output_loads` and its case
+ * `load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads` (node asserts).
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,

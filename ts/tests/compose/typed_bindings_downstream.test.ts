@@ -19,7 +19,7 @@
  * load in T3-22. The error rows pin the whole message, where Python matches a fragment. CODE
  * bodies are TS; load doesn't run them.
  *
- * Not ported here, decided by T3-17's inline inputs (their run halves are T4's):
+ * Not ported (decided by T3-17's inline inputs, not T3-19 rows; the run halves of the others are T4's):
  * `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
  * `test_typed_inline_binding_types_an_empty_list`,
  * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load` (its case is pinned in

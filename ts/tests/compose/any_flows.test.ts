@@ -28,7 +28,7 @@
  * `Binding` declared `Any`), since def bodies load in T3-22. Rows asserting one fragment pin the
  * whole message. CODE bodies are TS; load doesn't run them.
  *
- * Not ported here: `test_a_typed_any_literal_loads_and_runs` (4) and
+ * Not ported (not T3-19 rows): `test_a_typed_any_literal_loads_and_runs` (4) and
  * `test_a_null_any_literal_is_a_load_error`, decided by the tags reader (the null row's case is
  * pinned in `tags.test.ts`); `test_a_list_of_any_into_an_untagged_inline_body_parameter_runs` (2),
  * decided by T3-17's inline inputs; their run halves are T4's.
@@ -107,7 +107,7 @@ const child = (inputType: string) =>
     output: "${n.output}",
   });
 
-/** A CALL node `nodeId` calling `call` with `x: <binding>`. */
+/** A CALL node `nodeId` calling `callee` with `x: <binding>`. */
 const call = (binding: string, nodeId = "c", callee = "child") =>
   `  ${nodeId}:\n    kind: call\n    call: ${callee}\n    input:\n      x: ${binding}\n`;
 

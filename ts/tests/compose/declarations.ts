@@ -12,7 +12,8 @@
  * where a case's `defs:` entry would be loaded, for the rows that read a child's signature or
  * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`). The harness
  * scope registers and resolves inline body children itself; the loader's callable scope, with
- * its collision and recursion checks, is T3-22's.
+ * its collision and recursion checks, is T3-22's. The harness reads the flow's `llm_config:` as
+ * the loader reads a value layer; the loader's checks of a plain record layer are T3-22's.
  */
 
 import { readFileSync } from "node:fs";
@@ -26,19 +27,21 @@ import { assemble, type CallableScope, ComposedFlow } from "../../src/compose/bu
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { boundaryFieldRanges } from "../../src/compose/helpers/source.ts";
 import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/helpers/types.ts";
+import { checkLlmConfigValue, readLlmConfig } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
-import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { SourceAccessError, type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { reload } from "../../src/defaults.ts";
 import { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Binding, type OutputContract, type Parameter } from "../../src/nodes/contracts.ts";
+import { Binding, type OutputContract, type Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
+import { isRecord } from "../../src/typesys/values.ts";
 import { type Case, prepare, readCase } from "../conformance.ts";
 import { withKinds } from "./stand_ins.ts";
 
@@ -288,15 +291,58 @@ function scopeOf(builder: SourceCatalogBuilder, fallback: CallableScope["resolve
 }
 
 /**
+ * Read the root's `llm_config:` (`authored`, as `parseFile` read it) as the loader reads a flow
+ * layer: a layer holding values is read through its tags and checked (`readLlmConfig`,
+ * `checkLlmConfigValue`); a plain record is returned as is (the loader's `LLMConfig`, host-only
+ * and not-text checks are T3-22's); an absent or untagged `null` layer is `{}`.
+ *
+ * @throws LoadError when the layer is malformed or is not a mapping.
+ */
+function readAuthoredLlmConfig(
+  root: SourceCursor,
+  authored: unknown,
+  registry: TypeRegistry,
+  builder: SourceCatalogBuilder,
+  diagnostics: LoadDiagnostics,
+): Readonly<Record<string, unknown>> | ValueTemplate | Binding {
+  if (!root.has("llm_config")) return {};
+  const cursor = root.child("llm_config");
+  // `llm_config: !T` with nothing after the tag reads as null; the reader rejects it.
+  if (authored === null && cursor.tag === null) return {};
+  let read: ReturnType<typeof readLlmConfig>;
+  try {
+    read = readLlmConfig(cursor, registry, {
+      prefix: "flow: llm_config",
+      sitePath: ["root", "llm_config"],
+      catalogBuilder: builder,
+      diagnostics,
+    });
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+  const [layer, ranges] = read;
+  const range = root.rangeOf("llm_config");
+  if (layer instanceof ValueTemplate || layer instanceof Binding) {
+    return checkLlmConfigValue(layer, "flow: llm_config", range, diagnostics, ranges, { allowInherit: false })[0];
+  }
+  if (!isRecord(layer)) throw diagnostics.error("flow: llm_config must be a mapping", { range });
+  return layer;
+}
+
+/**
  * Assemble the root flow of `document` as the loader calls `assemble` on it, with a scope whose
  * catalog is `builder`, which registers and resolves inline body children, and which resolves
- * any other callable through `resolve` (default: none resolves); the loader's `uses:` aliases,
- * flow `llm_config:` and root memories are left out.
+ * any other callable through `resolve` (default: none resolves). The flow's `llm_config:` is read
+ * by `readAuthoredLlmConfig`; the loader's `uses:` aliases and root memories are left out.
+ *
+ * @param diagnostics The case's factory for located load errors.
  */
 function assembleRoot(
   document: SourceDocument,
   registry: TypeRegistry,
   builder: SourceCatalogBuilder,
+  diagnostics: LoadDiagnostics,
   resolve: CallableScope["resolve"] = resolveFrom(),
 ): ComposedFlow {
   const file = parseFile(document);
@@ -319,6 +365,7 @@ function assembleRoot(
     name: file.name,
     description: file.description,
     flowEnv: file.env,
+    flowLlmConfig: readAuthoredLlmConfig(root, file.llmConfig, registry, builder, diagnostics),
     boundaryFieldRanges: boundaryFieldRanges(root),
     assertsCursor: childOf("asserts", true),
     outputsCursor: childOf("output", true),
@@ -327,8 +374,8 @@ function assembleRoot(
 }
 
 /** Assemble the case's root flow as the loader calls `assemble` on it. */
-export const assembled: CaseCall = (document, registry, _diagnostics, builder) =>
-  assembleRoot(document, registry, builder);
+export const assembled: CaseCall = (document, registry, diagnostics, builder) =>
+  assembleRoot(document, registry, builder, diagnostics);
 
 /**
  * Assemble the case's root flow as `assembled` does, with a scope that resolves a callable named
@@ -336,8 +383,8 @@ export const assembled: CaseCall = (document, registry, _diagnostics, builder) =
  */
 export const assembledWith =
   (children: ChildFlows): CaseCall =>
-  (document, registry, _diagnostics, builder) =>
-    assembleRoot(document, registry, builder, resolveFrom(children));
+  (document, registry, diagnostics, builder) =>
+    assembleRoot(document, registry, builder, diagnostics, resolveFrom(children));
 
 /**
  * Assemble flow `text`'s root as `assembled` does, returning the flow and the catalog builder
@@ -354,7 +401,13 @@ export function assembleText(
   const document = parseSourceDocument(text, label);
   const builder = new SourceCatalogBuilder();
   return {
-    flow: assembleRoot(document, caseRegistry(document), builder, resolveFrom(options.children)),
+    flow: assembleRoot(
+      document,
+      caseRegistry(document),
+      builder,
+      LoadDiagnostics.fromDocument(document),
+      resolveFrom(options.children),
+    ),
     builder,
   };
 }

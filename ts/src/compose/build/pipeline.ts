@@ -111,7 +111,15 @@ import { validateHumanQuestions } from "../validate/human_questions.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
-import { checkTypedInputs, checkTypedOutputs, localInputContracts } from "../validate/typed_bindings.ts";
+import { ExpressionError } from "../../expr/expressions.ts";
+import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
+import { AgentNode } from "../../nodes/agent/node.ts";
+import {
+  checkTypedInputs,
+  checkTypedOutputs,
+  inferBindingType,
+  localInputContracts,
+} from "../validate/typed_bindings.ts";
 // T3-20 imports
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
@@ -850,7 +858,29 @@ function splitTypedLlmConfig(
   return split;
 }
 
-/** Python's `compose.build.pipeline._attach_llm_config_wiring`; not ported yet. */
+/**
+ * Wire each AGENT's `llm_config` values as its reserved `__llm_config` input.
+ *
+ * Each value in an agent's own layer, and in the flow's layer, gets its static type, read over the
+ * flow's contracts as written (no CASE narrowing applies to a config). An agent gets the key when
+ * a value in its own layer, or one in the flow's layer that its own layer doesn't always
+ * override, can reach its config. A higher value overrides only when its type can't be null. The
+ * key carries both layers whole (`splitLayers`), so edges, reference checks, skips and child
+ * re-namespacing treat the values as any other binding, and a dropped value adds no edge.
+ *
+ * The agent's runtime binding errors about the key name its `llm_config` field (an adaptive
+ * composer's, the gate's `adaptive_questions.llm_config`).
+ *
+ * @param buildResults Built nodes keyed by final descriptor id.
+ * @param flowWiring Mutable binding maps keyed by node id.
+ * @param flowLlmConfig The flow's authored `llm_config:` layer: a record, a `ValueTemplate` or a
+ *   `Binding`.
+ * @param producers Node output contracts by producer id.
+ * @param flowInputs Flow input contracts by name.
+ * @param options.typeFn Resolves a constructor name to its type for inference.
+ * @returns The static type of each value in the flow's layer by its field path; `null` when it is
+ *   not proven.
+ */
 function attachLlmConfigWiring(
   buildResults: ReadonlyMap<string, BuildResult>,
   flowWiring: ReadonlyMap<string, Map<string, unknown>>,
@@ -859,7 +889,39 @@ function attachLlmConfigWiring(
   flowInputs: ReadonlyMap<string, ValueContract>,
   options: { typeFn?: TypeFn | null } = {},
 ): (readonly [ValuePath, Type | null])[] {
-  return [];
+  const { typeFn = null } = options;
+  for (const [nodeId, result] of buildResults) {
+    const node = result.node;
+    if (!(node instanceof AgentNode)) continue;
+    node.llmValueTypes = llmValueTypes(node.ownLlmConfig, producers, flowInputs, typeFn);
+    const carried = splitLayers(node.ownLlmConfig, flowLlmConfig, node.llmInherit, node.llmNullable());
+    if (carried !== null) {
+      flowWiring.get(nodeId)!.set(LLM_CONFIG_KEY, carried);
+      node.wiresLlmConfig = true;
+      node.bindingLabels = new Map([
+        ...node.bindingLabels,
+        [LLM_CONFIG_KEY, result.siteName(nodeId, node.reservedKeyLabel(LLM_CONFIG_KEY))],
+      ]);
+    }
+  }
+  return llmValueTypes(flowLlmConfig, producers, flowInputs, typeFn);
+}
+
+/** Return the static type of each value in an `llm_config` layer, by field path. */
+function llmValueTypes(
+  layer: unknown,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  typeFn: TypeFn | null,
+): (readonly [ValuePath, Type | null])[] {
+  return valueLeaves(layer).map(([path, leaf]) => {
+    try {
+      return [path, inferBindingType(leaf, producers, flowInputs, { typeFn })] as const;
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      return [path, null] as const; // the reference pass reports it, located
+    }
+  });
 }
 
 /**
@@ -2126,8 +2188,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //
 //   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
-//   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
-//          checkCallMapTypes, checkLoopTypeContract, checkLlmConfigSources (1).
+//   T3-19  checkCallMapTypes, checkLoopTypeContract, checkLlmConfigSources (1).
 //          inlineLoops (3, `ReadonlySet<string>`): `new Set()`.
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.

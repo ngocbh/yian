@@ -11,7 +11,10 @@
  * Ported (adapted): `test_classify_reference_inline_reject` and
  * `test_wrapped_line_selector_uses_exact_whole_then_node_fallback` (its `True` line is `true`);
  * `test_inline_stdlib_import_in_body_works_in_process` (a dynamic `import("node:path")`);
- * `test_inline_exception_selects_deepest_owned_code_line` (JS `1 / 0` doesn't throw, so the lambda
+ * `test_reference_mode_still_dispatches_in_process` and
+ * `test_reference_failure_uses_code_then_node_fallback` (`./compose_codefns.ts:echo` and `:boom`
+ * with `baseDir` the repository's `conformance/fixtures`, and an inline `throw` for the source-free
+ * node); `test_inline_exception_selects_deepest_owned_code_line` (JS `1 / 0` doesn't throw, so the lambda
  * and comprehension forms become a throwing arrow and a `map` callback; lines are 1-based).
  *
  * Changed: a reference is a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn`
@@ -33,16 +36,16 @@
  * the built-in identity runs on the bound record; the runtime's function header is 2 lines; through
  * the evaluator and the engine, a success commits its int, a throwing body fails `node.execute`
  * with `Error: boom` and `causeType` `CodeError` at the line origin, a no-value body fails at the
- * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin.
+ * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin; a
+ * reference returning an int commits an int; a reference returning `undefined` rejects with the
+ * no-value error; a missing export rejects with a `TypeError`, not a `CodeError`; a module that
+ * throws while loading rejects with a `CodeError`; a `../` reference resolves against `baseDir`.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
  * `test_structurally_equal_foreign_code_cannot_impersonate_owned_code` (Python code objects);
  * `test_dynamic_same_filename_code_falls_back_to_owned_call_site` (Python `compile` and `exec`);
  * `test_reference_failure_does_not_inspect_origin_truthiness` (Python `__bool__`).
- *
- * Later (T4-9): `test_reference_failure_uses_code_then_node_fallback` and
- * `test_reference_mode_still_dispatches_in_process`.
  *
  * Later (T4-9), adapted: `test_syntax_error_rejected_at_construction`; the syntax check moves to
  * the awaited load step.
@@ -51,7 +54,11 @@
  * (they need `loadFlow` and `runFlow`).
  */
 
-import { expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
@@ -196,6 +203,85 @@ test("inline return is checked by intake", async () => {
   expect((error as Error).message).toBe("output at bad: Date is not a yian value");
   expect(node.exceptionCode(error)).toBe("contract.output");
   expect(node.exceptionOrigin(error)).toBe(contractOrigin);
+});
+
+// --- reference mode --- //
+
+/** The repository's conformance fixtures, where `compose_codefns.ts` lives. */
+const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+
+/** A temporary directory of helper modules the reference rows load. */
+let helpers: string;
+
+beforeAll(() => {
+  helpers = mkdtempSync(join(tmpdir(), "yian-code-"));
+  writeFileSync(join(helpers, "nothing.mjs"), "export function nothing(inputs) {}\n");
+  writeFileSync(join(helpers, "broken.mjs"), 'throw new RangeError("cannot load")\n');
+});
+
+afterAll(() => {
+  rmSync(helpers, { recursive: true, force: true });
+});
+
+test("reference mode dispatches in process", async () => {
+  const node = new CodeNode("r", { code: "./compose_codefns.ts:echo", baseDir: FIXTURES });
+
+  expect(node.mode).toBe("reference");
+  expect(await node.run({ topic: "hi" })).toEqual(new Output("hi"));
+});
+
+test("reference failure uses code then node fallback", async () => {
+  const codeOrigin = new OriginRef("code:reference");
+  const reference = new CodeNode("reference", { code: "./compose_codefns.ts:boom", baseDir: FIXTURES, codeOrigin });
+  reference.origin = new OriginRef("node:reference");
+  const withoutCodeOrigin = new CodeNode("reference-fallback", {
+    code: "./compose_codefns.ts:boom",
+    baseDir: FIXTURES,
+  });
+  withoutCodeOrigin.origin = new OriginRef("node:reference-fallback");
+  const sourceFree = new CodeNode("inline", { code: 'throw new Error("boom")\nreturn 0' });
+
+  expect(await failureOrigin(reference)).toBe(codeOrigin);
+  expect(await failureOrigin(withoutCodeOrigin)).toBe(withoutCodeOrigin.origin);
+  expect(await failureOrigin(sourceFree)).toBeNull();
+});
+
+test("a reference returning an int commits an int", async () => {
+  // `double` takes and returns ints as numbers.
+  const node = new CodeNode("d", { code: "./compose_codefns.ts:double", baseDir: FIXTURES });
+
+  expect(await node.run({ n: 21n })).toEqual(new Output(42n));
+});
+
+test("a reference returning undefined rejects with the no-value error", async () => {
+  const error = await rejected(new CodeNode("u", { code: "./nothing.mjs:nothing", baseDir: helpers }).run({}));
+
+  expect((error as Error).constructor).toBe(Error);
+  expect((error as Error).message).toBe("CODE body returned no value; return null for no value");
+});
+
+test("a missing export rejects with a TypeError, not a CodeError", async () => {
+  const error = await rejected(new CodeNode("m", { code: "./compose_codefns.ts:nope", baseDir: FIXTURES }).run({}));
+
+  expect((error as Error).constructor).toBe(TypeError);
+  expect((error as Error).message).toBe("'./compose_codefns.ts' exports no function 'nope'");
+});
+
+test("a module that throws while loading rejects with a CodeError", async () => {
+  const error = await rejected(new CodeNode("b", { code: "./broken.mjs:run", baseDir: helpers }).run({}));
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("RangeError: cannot load");
+  expect((error as CodeError).original).toBeInstanceOf(RangeError);
+});
+
+test("a ../ reference resolves against baseDir", async () => {
+  const node = new CodeNode("p", {
+    code: "../fixtures/compose_codefns.ts:echo",
+    baseDir: join(FIXTURES, "..", "cases"),
+  });
+
+  expect(await node.run({ topic: "up" })).toEqual(new Output("up"));
 });
 
 // --- through the evaluator and the engine --- //

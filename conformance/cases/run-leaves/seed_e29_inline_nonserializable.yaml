@@ -48,7 +48,7 @@ expect:
     status: failed
     failure:
       code: contract.output
-      message: "Date is not a yian value"
+      message: "output at handle: Date is not a yian value"
       node: bad
       # The declared type `object` on line 14.
       frames: [{label: flow.yaml, range: [14, 13, 14, 19]}]
@@ -61,7 +61,7 @@ expect:
       - bad
       - failure:
           code: contract.output
-          message: "Date is not a yian value"
+          message: "output at handle: Date is not a yian value"
           node: bad
           frames: [{label: flow.yaml, range: [14, 13, 14, 19]}]
 python_expect:

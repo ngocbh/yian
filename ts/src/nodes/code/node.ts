@@ -17,12 +17,15 @@
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
  * return the node's one output value. Nothing is compiled or imported at construction.
  *
- * An inline body is stripped of its types and built as a strict async function of `inputs` each
- * time the node runs. `inputs` is a frozen host copy of the record (ints as `number`s, big ones as
- * `bigint`s) behind a proxy that throws on an undeclared name. What the body throws rejects as a
- * `CodeError` reading `<name>: <message>`, located at the authored line of its first body frame
- * when it has one; a body returning `undefined` fails; its result goes through host intake, and a
- * value intake refuses fails `contract.output`. The built-in identity returns its field as bound.
+ * A reference's module is imported when the node runs (`import()` caches it) and its named export
+ * must be a function. An inline body is stripped of its types and built as a strict async function
+ * of `inputs` each time the node runs. Both are called the same way: `inputs` is a frozen host copy
+ * of the record (ints as `number`s, big ones as `bigint`s) behind a proxy that throws on an
+ * undeclared name. What the code throws (a reference's module while it loads included) rejects as
+ * a `CodeError` reading `<name>: <message>`; an inline body's is located at the authored line of
+ * its first body frame when it has one, a reference's at the whole `code:` value. A result of
+ * `undefined` fails; a result goes through host intake, and a value intake refuses fails
+ * `contract.output`. The built-in identity returns its field as bound.
  *
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
  * there is no injection vector into the code itself, and running it in-process is the same
@@ -32,6 +35,9 @@
  * Knows about:   nodes/base, nodes/contracts, diagnostics, typesys, platform and `node:*`.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
+
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { type FailureCode, OriginRef, reprText } from "../../diagnostics.ts";
 import { stripTypes } from "../../platform.ts";
@@ -136,8 +142,8 @@ export function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknow
   }
 }
 
-/** An inline body: an async function of the `inputs` record. */
-type CodeBody = (inputs: Readonly<Record<string, unknown>>) => Promise<unknown>;
+/** An inline body or a referenced function: a function of the `inputs` record. */
+type CodeBody = (inputs: Readonly<Record<string, unknown>>) => unknown;
 
 // The constructor isn't a global; every async function's `constructor` is it.
 const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => CodeBody;
@@ -166,6 +172,28 @@ function headerLineCount(): number {
 async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
   const js = await stripTypes(body);
   return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
+}
+
+/**
+ * Import a `./file.ts:fn` reference's module, resolved against `baseDir` (the current directory
+ * when `null`), and return its export `fn`.
+ *
+ * @throws CodeError when the module throws while it loads (or can't be imported).
+ * @throws TypeError when the module has no function export by that name.
+ */
+async function importReference(reference: string, baseDir: string | null): Promise<CodeBody> {
+  const colon = reference.lastIndexOf(":");
+  const path = reference.slice(0, colon);
+  const name = reference.slice(colon + 1);
+  let module: Record<string, unknown>;
+  try {
+    module = await import(pathToFileURL(resolve(baseDir ?? process.cwd(), path)).href);
+  } catch (error) {
+    throw new CodeError(error);
+  }
+  const fn = module[name];
+  if (typeof fn !== "function") throw new TypeError(`${reprText(path)} exports no function ${reprText(name)}`);
+  return fn as CodeBody;
 }
 
 /** Return the 1-based body line of the first `yian-code:<nodeId>` frame in `error`'s stack, else `null`. */
@@ -238,8 +266,9 @@ function codeErrorMessage(original: unknown): string {
  *
  * The one `code:` field is classified by shape at construction, and the mode is stored: text with
  * `classifyCodeSource`, a built-in form as `"builtin"`. A tagged value entry lowers to the built-in
- * identity form. The node never touches the pool: its body returns `new Output(value)`. An inline
- * body runs in-process, built afresh on each run, and a built-in reads the bound record directly.
+ * identity form. The node never touches the pool: its body returns `new Output(value)`. A
+ * reference's function and an inline body run in-process with one calling convention (an inline
+ * body built afresh on each run), and a built-in reads the bound record directly.
  */
 export class CodeNode extends Node {
   readonly kind = NodeKind.CODE;
@@ -324,14 +353,16 @@ export class CodeNode extends Node {
   /**
    * Return the most precise authored origin for one body error.
    *
-   * A built-in's is the node's. A result host intake refuses is located in the output contract.
-   * Otherwise the first `yian-code:<id>` frame of what the code threw selects the authored line,
-   * falling back to the whole `code:` origin, then the node's (a thrown non-`Error` has no stack,
-   * and a native error thrown after an `await` has no body frame on Bun).
+   * A built-in's is the node's. A result host intake refuses is located in the output contract. A
+   * reference's is the whole `code:` origin, else the node's. Otherwise the first `yian-code:<id>`
+   * frame of what the code threw selects the authored line, falling back to the whole `code:`
+   * origin, then the node's (a thrown non-`Error` has no stack, and a native error thrown after an
+   * `await` has no body frame on Bun).
    */
   override exceptionOrigin(error: unknown): OriginRef | null {
     if (this.mode === "builtin") return super.exceptionOrigin(error);
     if (error instanceof TypeCheckError) return outputContractOrigin(this.outputContract, error.path);
+    if (this.mode === "reference") return this.codeOrigin ?? super.exceptionOrigin(error);
     const line = error instanceof CodeError ? bodyLine(error.original, this.id) : null;
     return selectInlineCodeOrigin(line, {
       codeOrigin: this.codeOrigin,
@@ -343,16 +374,18 @@ export class CodeNode extends Node {
   /**
    * Run the code on the bound input record and return its one value.
    *
-   * The built-in identity returns the record's field as bound. An inline body gets `inputs`, a
-   * frozen host copy (ints as `number`s, big ones as `bigint`s) behind a proxy that throws on an
-   * undeclared name; what it throws rejects as a `CodeError`, and its result goes through host
-   * intake (a top-level `return inputs` returns the record).
+   * The built-in identity returns the record's field as bound. A reference's function or an
+   * inline body gets `inputs`, a frozen host copy (ints as `number`s, big ones as `bigint`s)
+   * behind a proxy that throws on an undeclared name; what it throws rejects as a `CodeError`, and
+   * its result goes through host intake (a top-level `return inputs` returns the record).
    *
    * @throws ReferenceError when the built-in's field isn't in the record.
+   * @throws CodeError when a reference's module throws while it loads.
+   * @throws TypeError when a reference's module has no function export by that name.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
-   * @throws CodeError when the body throws.
-   * @throws Error when a body returns `undefined`.
+   * @throws CodeError when the body or the referenced function throws.
+   * @throws Error when the code returns `undefined`.
    * @throws TypeCheckError when host intake refuses the result.
    */
   override async forward(inputs: Record<string, unknown>): Promise<Output> {
@@ -361,10 +394,8 @@ export class CodeNode extends Node {
       if (!Object.hasOwn(inputs, code.field)) throw undeclaredInput(code.field);
       return new Output(inputs[code.field]);
     }
-    if (this.mode === "reference") {
-      throw new Error(`node ${reprText(this.id)} (CodeNode) forward is not ported yet (T4-9)`);
-    }
-    const body = await compileBody(this.id, code);
+    const body =
+      this.mode === "reference" ? await importReference(code, this.baseDir) : await compileBody(this.id, code);
     const record = Object.freeze(toHost(inputs as Value) as Record<string, unknown>);
     const proxy = inputsProxy(record);
     let result: unknown;

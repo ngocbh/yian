@@ -75,6 +75,11 @@ test("skill description cap", () => {
   expect(prompt).toEndWith("- a: abcd…");
 });
 
+test("question option caps", () => {
+  install({ ...BUILTIN, maxQuestionOptions: 2, maxQuestionOptionChars: 5 });
+  expect(normalizeOptions(["abcdefg", "b", "c"])).toEqual(["abcd…", "b"]);
+});
+
 test("question count cap", () => {
   const questions = ["a", "b"].map((header) => ({ question: "Which?", header }));
   expect(parseQuestions(questions)).toHaveLength(2);
@@ -82,11 +87,6 @@ test("question count cap", () => {
   expect(parseQuestions(questions.slice(0, 1))).toHaveLength(1);
   expect(() => parseQuestions(questions)).toThrow(QuestionSpecError);
   expect(() => parseQuestions(questions)).toThrow("expected 1..1 questions, got 2");
-});
-
-test("question option caps", () => {
-  install({ ...BUILTIN, maxQuestionOptions: 2, maxQuestionOptionChars: 5 });
-  expect(normalizeOptions(["abcdefg", "b", "c"])).toEqual(["abcd…", "b"]);
 });
 
 test("auth store cap", () => {

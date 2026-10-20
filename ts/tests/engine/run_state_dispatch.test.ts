@@ -62,7 +62,7 @@
  * TS-only (interrupted-attempt counts, which Python doesn't keep): each resume counts every retried
  * start no stop covered; a stop covers the starts before it but not a later one, and two stops
  * cover everything before the second; a count survives the node's outcome; a resume clears the
- * last stop; replaying the live log rebuilds the counts and the last stop.
+ * last stop; `replayRecords` over the live log rebuilds the counts and the last stop.
  *
  * Not ported (ESM): the module patches of `test_frontier_commit_uses_only_the_prevalidated_delta`
  * (`_validate_node_started`, `_validate_run_resumed`, `encode_pool`, `decode_pool`).
@@ -102,6 +102,7 @@ import {
   prepareRunResumed,
   prepareRunStarted,
   prepareRunStopped,
+  replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
@@ -112,10 +113,10 @@ import {
   FailingLog,
   fanoutFlow,
   FINGERPRINT,
+  fragmentBuilder,
   FuncNode,
   initializedAndStarted,
   reducerSnapshot,
-  replayOutcomeLog,
   ReturningLog,
   roots,
   RUN_ID,
@@ -984,7 +985,7 @@ test("a resume clears the last stop, so an earlier segment's stop doesn't cover 
   expect(state.ready).toEqual(["first"]);
 });
 
-test("replaying the live log rebuilds the interrupted-attempt counts and the last stop", () => {
+test("replayRecords rebuilds the interrupted-attempt counts and the last stop of a live log", () => {
   const { state, log } = initializedAndStarted(fanoutFlow());
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
@@ -1004,7 +1005,7 @@ test("replaying the live log rebuilds the interrupted-attempt counts and the las
   expect(state.lastStopSequence).toBe(10);
   expect(state.ready).toEqual(["second"]);
 
-  const replayed = replayOutcomeLog(fanoutFlow(), log).state;
+  const replayed = replayRecords(new RunState(fanoutFlow()), log.records(), { growBuilder: fragmentBuilder });
 
   expect(reducerSnapshot(replayed)).toEqual(reducerSnapshot(state));
 });

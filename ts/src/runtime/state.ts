@@ -598,6 +598,66 @@ export class PreparedTransition {
 }
 
 /**
+ * @internal The read-only historical authority presented to the live commit reducer.
+ *
+ * The cursor owns canonical envelope texts. Its `append` advances only when the reducer's exact
+ * next envelope matches that text; it never writes to or closes the log the prefix came from.
+ */
+export class HistoricalLogCursor implements RunLog {
+  /** The sole historical run id this cursor accepts. */
+  readonly runId: string;
+  /** Always `null`: the cursor borrows already-read authority. */
+  readonly path = null;
+  readonly #envelopeJsons: readonly string[];
+  readonly #consumed: RecordEnvelope[] = [];
+
+  /** Adopt one validated non-empty canonical prefix at sequence zero. */
+  constructor(envelopeJsons: readonly string[]) {
+    this.#envelopeJsons = envelopeJsons;
+    this.runId = decodeRecord(envelopeJsons[0]!).runId;
+  }
+
+  /** The historical envelope the next reducer commit must match. */
+  get nextSequence(): number {
+    return this.#consumed.length;
+  }
+
+  /** Iterate the envelopes consumed so far. */
+  [Symbol.iterator](): Iterator<RecordEnvelope> {
+    return this.records()[Symbol.iterator]();
+  }
+
+  /** Return the envelopes consumed so far, as a fresh frozen array. */
+  records(): readonly RecordEnvelope[] {
+    return Object.freeze([...this.#consumed]);
+  }
+
+  /**
+   * Match and consume one historical envelope without writing it again.
+   *
+   * @throws RangeError when the prefix is exhausted, or `record` isn't the next historical record.
+   */
+  append(record: RunRecord): RecordEnvelope {
+    const sequence = this.nextSequence;
+    if (sequence >= this.#envelopeJsons.length) {
+      throw new RangeError("replay attempted to append beyond the historical prefix");
+    }
+    const expected = this.#envelopeJsons[sequence]!;
+    const envelope = decodeRecord(expected);
+    const candidate = encodeRecord(new RecordEnvelope(envelope.schema, this.runId, sequence, record));
+    if (candidate !== expected) throw new RangeError("prepared transition does not match the historical run record");
+    this.#consumed.push(envelope);
+    return envelope;
+  }
+
+  /** Do nothing: the cursor owns no resource. */
+  close(): void {}
+
+  /** Do nothing: the cursor owns no resource. */
+  [Symbol.dispose](): void {}
+}
+
+/**
  * Prepare canonical initialization without mutating `state`.
  *
  * @param state A pristine state whose private graph holds its synthesized START node.
@@ -1557,18 +1617,88 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
 }
 
 /**
- * Silently fold one complete historical prefix through the live reducer path and return `state`.
+ * Silently fold one complete historical prefix through the live reducer path.
  *
- * `state` is pristine around the graph that authored the run; `envelopes` is a non-empty
- * sequence-zero prefix starting with `RunStarted`; `options.growBuilder` rebuilds and verifies
- * growth. Not ported yet: it always throws.
+ * Every envelope is canonicalized and checked for one contiguous run before any transition is
+ * reduced. `commitPrepared` then receives a read-only cursor, so replay runs the same apply
+ * functions as live dispatch without appending to historical authority or exposing observers.
+ *
+ * @param state A pristine state around the graph that authored the run.
+ * @param envelopes A non-empty sequence-zero historical prefix beginning with `RunStarted`.
+ * @param options.growBuilder The injected builder that rebuilds and verifies growth.
+ * @returns `state`, after every historical record has been applied.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws RangeError when the state isn't pristine, the prefix is empty, not contiguous, not one
+ *   run, doesn't start with `RunStarted`, or a record isn't the exact next transition; a node-data
+ *   rejection throws its original error.
  */
 export function replayRecords(
   state: RunState,
   envelopes: readonly RecordEnvelope[],
   options: { growBuilder: GrowBuilder },
 ): RunState {
-  throw new Error("not ported yet (T4-5)");
+  if (!isExactly(state, RunState)) throw new TypeError("replayRecords expects a RunState");
+  if (!Array.isArray(envelopes) || !envelopes.every((envelope) => envelope instanceof RecordEnvelope)) {
+    throw new TypeError("replay envelopes must be an array of RecordEnvelope values");
+  }
+  const growBuilder = options.growBuilder;
+  if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
+  requirePristine(state);
+  if (envelopes.length === 0) throw new RangeError("cannot replay an empty run-record prefix");
+
+  const canonical: string[] = [];
+  let runId: string | null = null;
+  envelopes.forEach((supplied, expectedSequence) => {
+    const encoded = encodeRecord(supplied);
+    const envelope = decodeRecord(encoded);
+    if (envelope.seq !== expectedSequence) {
+      throw new RangeError(`replay sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
+    }
+    if (runId === null) {
+      runId = envelope.runId;
+    } else if (envelope.runId !== runId) {
+      throw new RangeError(`replay run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`);
+    }
+    canonical.push(encoded);
+  });
+
+  const first = decodeRecord(canonical[0]!);
+  const start = first.record;
+  if (!(start instanceof RunStartedRecord)) throw new RangeError("the first historical run record must be RunStarted");
+  const cursor = new HistoricalLogCursor(canonical);
+  const prepared = prepareRunStarted(state, {
+    runId: first.runId,
+    flowFingerprint: start.flowFingerprint,
+    initialPool: decodePool(start.initialPool),
+    startWiringOverride: start.startWiringOverride,
+    effectiveLlmByStaticPath: start.effectiveLlmByStaticPath,
+    numWorkers: start.numWorkers,
+    memorySnapshots: start.memorySnapshots,
+    learnable: start.learnable,
+    memories: start.memories,
+    memoryStacks: start.memoryStacks,
+    defaults: start.defaults,
+    callTimeLlm: start.callTimeLlm,
+  });
+  commitPrepared(cursor, state, prepared);
+
+  for (const encoded of canonical.slice(1)) {
+    const envelope = decodeRecord(encoded);
+    let next: PreparedTransition;
+    try {
+      next = prepareRecord(state, envelope.record, { growBuilder });
+    } catch (error) {
+      // Python's node-data marker is itself a ValueError; replay reports the original.
+      if (error instanceof NodeDataError) throw error.original;
+      throw error;
+    }
+    commitPrepared(cursor, state, next);
+  }
+
+  if (cursor.nextSequence !== canonical.length) {
+    throw new RangeError("replay did not consume the complete historical prefix");
+  }
+  return state;
 }
 
 /** Validate, append and install one initialization transition. */

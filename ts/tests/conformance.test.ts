@@ -31,10 +31,12 @@ import {
   raised,
   readCase,
   results,
+  runCli,
   same,
   setUp,
 } from "./conformance.ts";
 import type { Case, CaseContext, Kind, KindRunner } from "./conformance.ts";
+import { lintSchema, loadSchema, validate } from "./schema.ts";
 
 const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));
 
@@ -956,5 +958,319 @@ describe("main", () => {
       "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
         "[--diagnostic-code CODE]",
     ]);
+  });
+});
+
+describe("runCli", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Return a new temporary directory, removed after the test. */
+  function temp(): string {
+    const dir = mkdtempSync(join(tmpdir(), "conformance-cli-"));
+    made.push(dir);
+    return dir;
+  }
+
+  /** Run the `cli` case file `text` with the ES module `script` as the command. */
+  async function cli(text: string, script: string): Promise<void> {
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(temp(), "none"));
+    made.push(ctx.dir);
+    const entry = join(temp(), "yian.mjs");
+    writeFileSync(entry, script);
+    await runCli(case_, ctx, { entry });
+  }
+
+  const q = JSON.stringify;
+  const SPAWN = 30_000;
+  const USERCODE = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+  /** A script writing `out` to stdout and `err` to stderr, then exiting `code`. */
+  const PRINT = (out: string, err = "", code = 0) =>
+    `process.stdout.write(${q(out)});\nprocess.stderr.write(${q(err)});\n` +
+    `process.exitCode = ${code};\n`;
+  /** A script posting the JSON text `body` to the usercode URL and printing the answer. */
+  const POST = (body: string, headers: Record<string, string> = {}) =>
+    `{\n  const answer = await fetch(${q(USERCODE)}, {method: "POST", headers: ${q(headers)}, ` +
+    `body: ${q(body)}});\n  console.log(answer.status, await answer.text());\n}\n`;
+  /** A case posting to the usercode URL with `request` keys added, answered 200. */
+  const EXCHANGE = (request = "") =>
+    `{request: {method: POST, url: ${q(USERCODE)}${request}}, response: {status: 200}}`;
+  /** A script that writes `ready`, then exits 130 after writing `bye` on SIGINT or SIGTERM. */
+  const WAIT =
+    'const bye = () => { process.stdout.write("bye\\n"); process.exit(130); };\n' +
+    'process.on("SIGINT", bye);\nprocess.on("SIGTERM", bye);\n' +
+    'process.stdout.write("ready\\n");\nsetInterval(() => {}, 1000);\n';
+
+  test(
+    "compares exit, stdout and stderr, the case directory written <tmp>",
+    async () => {
+      const script =
+        'process.stdout.write(`${process.cwd()}  \\n${process.env.HOME} x \\n`);\n' +
+        'process.stderr.write("e\\n");\n';
+      await cli(
+        `kind: cli\nexpect: {exit: 0, stdout: ${q("<tmp>\n<tmp>/home x\n")}, stderr: "e\\n"}\n`,
+        script,
+      );
+      await expect(cli("kind: cli\nexpect: {exit: 0}\n", PRINT("o\n", "e\n", 3))).rejects.toThrow(
+        "exit 3, expected 0\n--- stdout\no\n--- stderr\ne\n",
+      );
+      const stdout = cli('kind: cli\nexpect: {exit: 0, stdout: "p\\n"}\n', PRINT("o\n"));
+      await expect(stdout).rejects.toThrow("stdout differs\n--- actual\no\n--- expected\np\n");
+      const stderr = cli('kind: cli\nexpect: {exit: 0, stderr: ""}\n', PRINT("", "e\n"));
+      await expect(stderr).rejects.toThrow("stderr differs");
+    },
+    SPAWN,
+  );
+
+  test(
+    "gives the command only PATH, HOME, COLUMNS and `env`, and `stdin`",
+    async () => {
+      const keys = "console.log(Object.keys(process.env).sort().join(' '), process.env.COLUMNS);\n";
+      await cli(
+        `kind: cli\nenv: {A: "1"}\nexpect: {exit: 0, stdout: "A COLUMNS HOME PATH 1000\\n"}\n`,
+        keys,
+      );
+      const echo = 'let text = "";\nfor await (const chunk of process.stdin) text += chunk;\n' +
+        "process.stdout.write(`[${text}]`);\n";
+      await cli('kind: cli\nstdin: "hi\\n"\nexpect: {exit: 0, stdout: "[hi\\n]"}\n', echo);
+      await cli('kind: cli\nexpect: {exit: 0, stdout: "[]"}\n', echo);
+    },
+    SPAWN,
+  );
+
+  test(
+    "checks `json` against cli.schema.json, then compares it in codec form",
+    async () => {
+      const error = { format: "yian.cli.v1", error: { code: "auth.failed", message: "m" } };
+      await cli(
+        "kind: cli\nexpect: {exit: 0, json: {format: yian.cli.v1, error: {code: auth.failed}}}\n",
+        PRINT(`${q(error)}\n`),
+      );
+      const models = { format: "yian.cli.v1", models: ["a"] };
+      const differs = cli(
+        "kind: cli\nexpect: {exit: 0, json: {format: yian.cli.v1, models: [b]}}\n",
+        PRINT(`${q(models)}\n`),
+      );
+      await expect(differs).rejects.toThrow("json differs");
+      const bare = "kind: cli\nexpect: {exit: 0, json: {models: [a]}}\n";
+      const unformatted = cli(bare, PRINT('{"models": ["a"]}\n'));
+      await expect(unformatted).rejects.toThrow(
+        "stdout doesn't match conformance/schema/cli.schema.json\n",
+      );
+      await expect(unformatted).rejects.toThrow("$: missing format");
+      const broken = cli("kind: cli\nexpect: {exit: 0, json: {}}\n", PRINT("{nope\n"));
+      await expect(broken).rejects.toThrow("stdout is not a JSON document (");
+    },
+    SPAWN,
+  );
+
+  test(
+    "reads `json_lines` one document per non-blank line",
+    async () => {
+      const lines =
+        '{"format": "yian.cli.v1", "event": "waiting"}\n\n' +
+        '{"format": "yian.cli.v1", "event": "code", "user_code": "A", "verification_uri": "u"}\n';
+      const expected =
+        "[{format: yian.cli.v1, event: waiting}, " +
+        "{format: yian.cli.v1, event: code, user_code: A, verification_uri: u}]";
+      await cli(`kind: cli\nexpect: {exit: 0, json_lines: ${expected}}\n`, PRINT(lines));
+      const bad = PRINT('{"format": "yian.cli.v1", "event": "nope"}\n');
+      await expect(cli("kind: cli\nexpect: {exit: 0, json_lines: []}\n", bad)).rejects.toThrow(
+        "stdout doesn't match conformance/schema/cli.schema.json",
+      );
+    },
+    SPAWN,
+  );
+
+  test(
+    "compares `exists`: a dangling symlink exists, a path under a file doesn't",
+    async () => {
+      const script =
+        'import { symlinkSync, writeFileSync } from "node:fs";\n' +
+        'writeFileSync("b", "");\nsymlinkSync("nowhere", "c");\n';
+      const exists = "{a: true, b: true, c: true, d: false, a/e: false}";
+      await cli(`kind: cli\nfiles: {a: x}\nexpect: {exit: 0, exists: ${exists}}\n`, script);
+      await expect(
+        cli("kind: cli\nexpect: {exit: 0, exists: {b: false, d: true}}\n", script),
+      ).rejects.toThrow("exists differs");
+    },
+    SPAWN,
+  );
+
+  test.each(["SIGINT", "SIGTERM"])(
+    "sends %s once `after` appears and compares the command's own exit",
+    async (name) => {
+      const expected = 'expect: {exit: 130, stdout: "ready\\nbye\\n"}';
+      await cli(`kind: cli\nsignal: {name: ${name}, after: ready}\n${expected}\n`, WAIT);
+    },
+    SPAWN,
+  );
+
+  test(
+    "fails a signal case whose command exits before `after`, or dies from the signal",
+    async () => {
+      const early = cli(
+        "kind: cli\nsignal: {name: SIGINT, after: ready}\nexpect: {exit: 130}\n",
+        PRINT("nope\n"),
+      );
+      await expect(early).rejects.toThrow(
+        'the command exited before "ready" appeared\n--- stdout\nnope\n--- stderr\n',
+      );
+      const dies = 'process.stdout.write("ready\\n");\nsetInterval(() => {}, 1000);\n';
+      await expect(
+        cli("kind: cli\nsignal: {name: SIGTERM, after: ready}\nexpect: {exit: 130}\n", dies),
+      ).rejects.toThrow("died from signal 15");
+    },
+    SPAWN,
+  );
+
+  test(
+    "answers a matching request from the stub",
+    async () => {
+      const listing =
+        '{request: {method: GET, url: "https://gateway.example/v1/models?a=1", ' +
+        'headers: {Authorization: "Bearer <key:1>"}}, ' +
+        "response: {status: 201, json: {data: [1, 2.0]}}}";
+      const form =
+        '{request: {method: POST, url: "https://auth.example/token", ' +
+        'form: {code: c, empty: ""}}, response: {status: 400}}';
+      const script =
+        `${POST('{"client_id": "x"}')}` +
+        'const list = await fetch("https://gateway.example/v1/models?a=1", ' +
+        '{headers: {authorization: "Bearer sk-conformance-1"}});\n' +
+        "console.log(list.status, list.headers.get('content-type'), await list.text());\n" +
+        'const token = await fetch("https://auth.example/token", {method: "POST", ' +
+        'body: new URLSearchParams({empty: "", code: "c"})});\n' +
+        "console.log(token.status, JSON.stringify(await token.text()));\n";
+      // Written as Python's `json.dumps` writes it: a float keeps its fraction.
+      const stdout = '200 {"user_code": "A"}\n201 application/json {"data": [1, 2.0]}\n400 ""\n';
+      await cli(
+        `kind: cli\nhttp: [{request: {method: POST, url: ${q(USERCODE)}, json: {client_id: x}}, ` +
+          `response: {status: 200, json: {user_code: A}}}, ${listing}, ${form}]\n` +
+          `expect: {exit: 0, stdout: ${q(stdout)}}\n`,
+        script,
+      );
+    },
+    SPAWN,
+  );
+
+  test(
+    "fails an exchange that is never requested",
+    async () => {
+      const unrequested = cli(`kind: cli\nhttp: [${EXCHANGE()}]\nexpect: {exit: 0}\n`, PRINT(""));
+      await expect(unrequested).rejects.toThrow("`http[0]` was never requested");
+    },
+    SPAWN,
+  );
+
+  test.each([
+    ["method", EXCHANGE().replace("POST", "GET"), `expected GET ${USERCODE}`],
+    [
+      "header",
+      EXCHANGE(', headers: {Authorization: "Bearer <key:1>"}'),
+      'header Authorization: expected "Bearer <key:1>", got null',
+    ],
+    [
+      "json",
+      EXCHANGE(", json: {client_id: x}"),
+      'body: expected json {"client_id": "x"}, got "{\\"client_id\\": \\"y\\"}"',
+    ],
+    ["form", EXCHANGE(", form: {client_id: x}"), 'body: expected form {"client_id": "x"}'],
+  ])(
+    "fails a request whose %s doesn't match, naming the difference",
+    async (_, exchange, difference) => {
+      const case_ = `kind: cli\nhttp: [${exchange}]\nexpect: {exit: 0}\n`;
+      const failure = cli(case_, POST('{"client_id": "y"}'));
+      const request = `POST ${USERCODE} doesn't match \`http[0]\``;
+      await expect(failure).rejects.toThrow(`${request}: ${difference}`);
+      await expect(failure).rejects.not.toThrow("sk-conformance-1");
+    },
+    SPAWN,
+  );
+
+  test(
+    "fails a request with no exchange left, `http` absent or used up",
+    async () => {
+      const unlisted = `POST ${USERCODE}: \`http\` has no exchange left for it`;
+      await expect(cli("kind: cli\nexpect: {exit: 0}\n", POST("{}"))).rejects.toThrow(unlisted);
+      await expect(
+        cli(`kind: cli\nhttp: [${EXCHANGE()}]\nexpect: {exit: 0}\n`, POST("{}") + POST("{}")),
+      ).rejects.toThrow(unlisted);
+    },
+    SPAWN,
+  );
+
+  test(
+    "lets a `repeat` exchange answer any number of requests",
+    async () => {
+      const exchange = `{${EXCHANGE().slice(1, -1)}, repeat: true}`;
+      const repeat = `kind: cli\nhttp: [${exchange}]\nexpect: {exit: 0}\n`;
+      await cli(repeat, PRINT(""));
+      await cli(repeat, POST("{}").repeat(3));
+    },
+    SPAWN,
+  );
+
+  test(
+    "fails a filled secret in stdout, stderr or a run log",
+    async () => {
+      const env = 'kind: cli\nenv: {K: "<key:1>"}\nexpect: {exit: 0}\n';
+      await expect(cli(env, "console.log(process.env.K);\n")).rejects.toThrow(
+        "secret sk-conformance-1 appears in stdout",
+      );
+      const log =
+        'import { writeFileSync } from "node:fs";\nwriteFileSync("run.jsonl", process.env.K);\n';
+      await expect(cli(env, log)).rejects.toThrow("secret sk-conformance-1 appears in run.jsonl");
+      // Only a secret the case filled counts.
+      await cli('kind: cli\nexpect: {exit: 0}\n', 'console.log("sk-conformance-1");\n');
+    },
+    SPAWN,
+  );
+});
+
+describe("schema.ts", () => {
+  const ROOT = {};
+
+  test("validates allOf, if and then", () => {
+    const schema = {
+      allOf: [{ required: ["a"] }, { required: ["b"] }],
+      if: { properties: { a: { const: 1 } }, required: ["a"] },
+      then: { required: ["c"] },
+    };
+    expect(validate(ROOT, schema, { a: 2, b: 1 })).toEqual([]);
+    expect(validate(ROOT, schema, { b: 1 })).toEqual(["$: missing a"]);
+    expect(validate(ROOT, schema, { a: 1, b: 1 })).toEqual(["$: missing c"]);
+    expect(validate(ROOT, schema, { a: 1, b: 1, c: 1 })).toEqual([]);
+    // `if` without `then` constrains nothing.
+    expect(validate(ROOT, { if: { required: ["a"] } }, {})).toEqual([]);
+  });
+
+  test("validates minItems, maxItems and minLength", () => {
+    const schema = { minItems: 1, maxItems: 2, items: { minLength: 2 } };
+    expect(validate(ROOT, schema, ["ab", "🙂🙂"])).toEqual([]);
+    expect(validate(ROOT, schema, [])).toEqual(["$: fewer than 1 items"]);
+    expect(validate(ROOT, schema, ["ab", "ab", "ab"])).toEqual(["$: more than 2 items"]);
+    expect(validate(ROOT, schema, ["🙂"])).toEqual(["$[0]: shorter than 2 characters"]);
+  });
+
+  test("lints allOf, if, then and the length bounds", () => {
+    expect(lintSchema(ROOT, { allOf: [{ x: 1 }], if: { y: 1 }, then: { z: 1 } })).toEqual([
+      "$.allOf[0].x: unknown keyword",
+      "$.if.y: unknown keyword",
+      "$.then.z: unknown keyword",
+    ]);
+    expect(lintSchema(ROOT, { minItems: -1, maxItems: 1.5, minLength: "1", if: {} })).toEqual([
+      "$.minItems: not a non-negative integer",
+      "$.maxItems: not a non-negative integer",
+      "$.minLength: not a non-negative integer",
+    ]);
+  });
+
+  test("lintSchema of cli.schema.json is clean", () => {
+    const schema = loadSchema("cli.schema.json");
+    expect(lintSchema(schema, schema)).toEqual([]);
   });
 });

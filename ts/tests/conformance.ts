@@ -7,9 +7,11 @@
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
  */
 
+import { spawn } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -19,7 +21,10 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { constants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -48,6 +53,8 @@ import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
 import { buildValueAs, FileRef, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
+import { validate } from "./schema.ts";
+import type { Schema } from "./schema.ts";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;
@@ -759,7 +766,7 @@ export const KINDS: Partial<Record<Kind, KindRunner>> = {
   value: runValue,
   defaults: runDefaults,
   // fingerprint: not run yet
-  // cli: not run yet
+  cli: runCli,
   json: runJson,
 };
 
@@ -1075,6 +1082,434 @@ async function runDefaults(case_: Case, ctx: CaseContext): Promise<void> {
 // ---- fingerprint ----
 
 // ---- cli ----
+
+/**
+ * The `yian` entry: `../src/cli/index` beside this file, `.ts` from source and `.js` when
+ * built.
+ */
+const CLI_ENTRY = fileURLToPath(
+  new URL(`../src/cli/index.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url),
+);
+// Read from the repository, not beside this file, so the built runner finds it too.
+const CLI_SCHEMA = JSON.parse(
+  readFileSync(join(findRoot(), "conformance", "schema", "cli.schema.json"), "utf8"),
+) as Schema;
+const FILLED = /sk-conformance-[0-9]+/g;
+
+/**
+ * Return `value`, a case's plain JSON, as JSON text with Python's spacing, floats with a
+ * fraction.
+ */
+function jsonText(value: Value): string {
+  if (typeof value === "number") {
+    const text = String(value);
+    return /^-?[0-9]+$/.test(text) ? `${text}.0` : text;
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) return `[${value.map(jsonText).join(", ")}]`;
+  if (isMapping(value)) {
+    const pairs = Object.entries(value).map(
+      ([key, item]) => `${JSON.stringify(key)}: ${jsonText(item)}`,
+    );
+    return `{${pairs.join(", ")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Return what differs between a request and the `request` of an `http` exchange, `expected`, or
+ * `undefined` when it matches.
+ */
+function mismatch(
+  expected: Case,
+  method: string,
+  url: string,
+  headers: IncomingHttpHeaders,
+  body: Buffer,
+): string | undefined {
+  if (method !== expected["method"] || url !== expected["url"]) {
+    return `expected ${str(expected["method"])} ${str(expected["url"])}`;
+  }
+  for (const [name, value] of Object.entries(get(expected, "headers", {}) as Case)) {
+    // Node gives header names in lower case.
+    const got = headers[name.toLowerCase()];
+    if (got !== value) return `header ${name}: expected ${spell(value)}, got ${spell(got ?? null)}`;
+  }
+  const key = ["json", "form"].find((name) => Object.hasOwn(expected, name));
+  if (key === undefined) return undefined;
+  const text = body.toString("utf8");
+  try {
+    const got =
+      key === "json" ? parseJson(text, "plain") : Object.fromEntries(new URLSearchParams(text));
+    if (same(got, expected[key])) return undefined;
+  } catch {
+    // A body that doesn't read is a mismatch.
+  }
+  const sent = JSON.stringify(text.slice(0, 500));
+  return `body: expected ${key} ${jsonText(expected[key]!)}, got ${sent}`;
+}
+
+/**
+ * A stub HTTP server on 127.0.0.1 for the exchanges `http`, answered in order. Each request names
+ * the URL it was meant for in an `x-conformance-url` header. One that doesn't match the next
+ * exchange, or an error in a handler, is recorded as a problem.
+ */
+class Stub {
+  readonly url: string;
+  readonly #http: Case[];
+  readonly #server: Server;
+  #taken = 0;
+  readonly #problems: string[] = [];
+  readonly #open = new Set<Promise<void>>();
+  // Each ends a `delay` early.
+  readonly #wakers = new Set<() => void>();
+  #stopped = false;
+
+  private constructor(http: Case[], server: Server) {
+    this.#http = http;
+    this.#server = server;
+    this.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  }
+
+  /** Start serving `http`. */
+  static async start(http: Case[]): Promise<Stub> {
+    // A connection the command left half-open can't keep `close` waiting for its handler.
+    const server = createServer({ requestTimeout: 10_000, connectionsCheckingInterval: 1_000 });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const stub = new Stub(http, server);
+    server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+      const handled = stub.#answer(request, response).finally(() => stub.#open.delete(handled));
+      stub.#open.add(handled);
+    });
+    return stub;
+  }
+
+  /** Check the request against the next exchange, then answer it. */
+  async #answer(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      const header = request.headers["x-conformance-url"];
+      const url = typeof header === "string" ? header : (request.url ?? "");
+      const method = request.method ?? "";
+      let index = this.#taken;
+      if (index === this.#http.length && this.#http.at(-1)?.["repeat"] === true) index -= 1;
+      let answer: Case = { status: 500n };
+      const exchange = this.#http[index];
+      if (exchange === undefined) {
+        this.#problems.push(`${method} ${url}: \`http\` has no exchange left for it`);
+      } else {
+        const expected = exchange["request"] as Case;
+        const difference = mismatch(expected, method, url, request.headers, Buffer.concat(chunks));
+        if (difference === undefined) {
+          this.#taken = index + 1;
+          answer = exchange["response"] as Case;
+        } else {
+          this.#problems.push(`${method} ${url} doesn't match \`http[${index}]\`: ${difference}`);
+        }
+      }
+      await this.#delay(Number(get(answer, "delay", 0n)) * 1000);
+      const hasJson = Object.hasOwn(answer, "json");
+      const data = hasJson ? jsonText(answer["json"]!) : "";
+      response.writeHead(Number(answer["status"]), {
+        ...(hasJson ? { "content-type": "application/json" } : {}),
+        "content-length": Buffer.byteLength(data),
+      });
+      response.end(data);
+    } catch (error) {
+      // A connection the command dropped is not a problem of the case.
+      const code = (error as { code?: unknown }).code;
+      if (code !== "ECONNRESET" && code !== "EPIPE") {
+        const problem = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        this.#problems.push(problem);
+      }
+    }
+  }
+
+  /** Wait `ms` milliseconds, or less once `close` is called. */
+  #delay(ms: number): Promise<void> {
+    if (this.#stopped || ms <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const wake = () => {
+        clearTimeout(timer);
+        this.#wakers.delete(wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      this.#wakers.add(wake);
+    });
+  }
+
+  /**
+   * Stop serving once every handler finishes; return the problems, then each exchange without
+   * `repeat` that was never requested, with filled secrets written `<key:N>`.
+   */
+  async close(): Promise<string[]> {
+    this.#stopped = true;
+    // Usually lets a request that arrived just before the command exited reach its handler.
+    await new Promise((resolve) => setImmediate(resolve));
+    for (const wake of [...this.#wakers]) wake();
+    while (this.#open.size > 0) await Promise.all(this.#open);
+    await new Promise((resolve) => {
+      this.#server.close(resolve);
+      this.#server.closeAllConnections();
+    });
+    const unrequested = this.#http
+      .map((exchange, index) => [exchange, index] as const)
+      .filter(([exchange, index]) => index >= this.#taken && exchange["repeat"] !== true)
+      .map(([, index]) => `\`http[${index}]\` was never requested`);
+    return [...this.#problems, ...unrequested].map((problem) =>
+      problem.replace(FILLED, (filled) => `<key:${filled.slice("sk-conformance-".length)}>`),
+    );
+  }
+}
+
+/**
+ * Return the ES module the command imports first: it sends every `fetch` to the stub at `stub`,
+ * with the URL it was meant for in an `x-conformance-url` header.
+ */
+function routeHook(stub: string): string {
+  // `safeFetch` reads `globalThis.fetch` per call; the stub's URL is written in, not passed in
+  // the environment, which stays exactly the case's.
+  return `const send = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const request = new Request(input, init);
+  const headers = new Headers(request.headers);
+  headers.set("x-conformance-url", request.url);
+  const body = ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer();
+  return send(${JSON.stringify(stub)}, {
+    method: request.method, headers, body, signal: request.signal, redirect: request.redirect,
+  });
+};
+`;
+}
+
+/** What a command run gave: its exit code or the signal that ended it, and its output. */
+interface Ran {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  out: string;
+  err: string;
+}
+
+/**
+ * Run this runtime with `args` in `cwd`, `stdin` written to it; with `signal`, send it the
+ * signal `signal.name` once `signal.after` is in its stdout or stderr. Fails the case when it
+ * exits before `after` appears, `after` doesn't appear within 60 seconds, or it doesn't exit
+ * within 120 seconds.
+ */
+async function runCommand(
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+  stdin: string,
+  signal: Case | undefined,
+): Promise<Ran> {
+  // The child's own signal listeners replace any disposition it inherits, so yian's handlers
+  // work even when this process was started with SIGINT ignored.
+  const child = spawn(process.execPath, args, { cwd, env, stdio: "pipe" });
+  const ran: Ran = { code: null, signal: null, out: "", err: "" };
+  child.stdout.setEncoding("utf8").on("data", (text: string) => {
+    ran.out += text;
+  });
+  child.stderr.setEncoding("utf8").on("data", (text: string) => {
+    ran.err += text;
+  });
+  let finished = false;
+  let failed: Error | undefined;
+  // Node still emits `close` after a spawn error.
+  child.on("error", (error) => {
+    failed = error;
+  });
+  const closed = new Promise<void>((resolve) => {
+    child.on("close", (code, killedBy) => {
+      [ran.code, ran.signal, finished] = [code, killedBy, true];
+      resolve();
+    });
+  });
+  const exited = new Promise<void>((resolve) => {
+    child.on("exit", () => resolve());
+    child.on("error", () => resolve());
+  });
+  const check = () => {
+    if (failed !== undefined) throw new CaseFailure(`the command failed to run: ${failed.message}`);
+  };
+  // A command can exit, or stop reading, before taking all of its stdin.
+  child.stdin.on("error", () => {});
+  child.stdin.end(stdin);
+  const streams = () => `--- stdout\n${ran.out}--- stderr\n${ran.err}`;
+  try {
+    let after = "";
+    if (signal !== undefined) {
+      const name = signal["name"] as NodeJS.Signals;
+      const wanted = signal["after"] as string;
+      after = ` after ${name}`;
+      const deadline = Date.now() + 60_000;
+      while (!ran.out.includes(wanted) && !ran.err.includes(wanted)) {
+        check();
+        if (finished) {
+          const before = `the command exited before ${JSON.stringify(wanted)} appeared`;
+          throw new CaseFailure(`${before}\n${streams()}`);
+        }
+        if (Date.now() > deadline) {
+          throw new CaseFailure(`${JSON.stringify(wanted)} didn't appear within 60 seconds`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      child.kill(name);
+    }
+    const limit = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 120_000);
+      void closed.then(() => clearTimeout(timer));
+    });
+    await Promise.race([closed, limit]);
+    check();
+    if (!finished) {
+      throw new CaseFailure(`the command didn't exit within 120 seconds${after}\n${streams()}`);
+    }
+    return ran;
+  } finally {
+    // Ends a command the case gave up on, and waits for it, as Python's `process.wait()`, so the
+    // stub and the hook outlive it.
+    if (!finished) {
+      child.kill("SIGKILL");
+      await exited;
+    }
+  }
+}
+
+/** Throw a `CaseFailure` when a secret the case filled appears in a text of `texts`, by where. */
+function checkSecrets(case_: Case, texts: Record<string, string>): void {
+  const filled = [...SECRET_KEYS].map((key) => get(case_, key) ?? null);
+  const secrets = new Set(spell(filled).match(FILLED) ?? []);
+  const leaks = Object.entries(texts).flatMap(([where, text]) =>
+    [...new Set(text.match(FILLED) ?? [])]
+      .filter((secret) => secrets.has(secret))
+      .sort()
+      .map((secret) => `secret ${secret} appears in ${where}`),
+  );
+  if (leaks.length > 0) throw new CaseFailure(leaks.join("\n"));
+}
+
+/**
+ * Return the document `text`, a JSON text the command wrote, in codec form, after checking it as
+ * parsed against `cli.schema.json`; throw a `CaseFailure` showing `stdout` when it fails.
+ */
+function cliDocument(text: string, stdout: string): Value {
+  let parsed: unknown;
+  try {
+    parsed = parseJson(text, "plain");
+  } catch (error) {
+    const reason = (error as Error).message;
+    throw new CaseFailure(`stdout is not a JSON document (${reason})\n--- stdout\n${stdout}`);
+  }
+  // Checked as parsed: the schema describes the JSON, not the codec's values.
+  if (validate(CLI_SCHEMA, CLI_SCHEMA, parsed).length > 0) {
+    // The root is an `anyOf` of the documents, so each one's problems are listed.
+    const reasons = (CLI_SCHEMA["anyOf"] as Schema[])
+      .flatMap((branch) => validate(CLI_SCHEMA, branch, parsed))
+      .map((problem) => `  ${problem}\n`)
+      .join("");
+    throw new CaseFailure(
+      `stdout doesn't match conformance/schema/cli.schema.json\n${reasons}--- stdout\n${stdout}`,
+    );
+  }
+  return parseJson(text, "codec") as Value;
+}
+
+/**
+ * Whether `path` exists, a dangling symlink included; false on any system error, as Python's
+ * `os.path.lexists`.
+ */
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === undefined) throw error;
+    return false;
+  }
+}
+
+/**
+ * Run a `cli` case: run the command `entry` with `args` in the case directory, its `fetch` routed
+ * to a stub serving `http`, and compare its exit code, output, documents and the paths that exist.
+ */
+export async function runCli(
+  case_: Case,
+  ctx: CaseContext,
+  { entry = CLI_ENTRY }: { entry?: string } = {},
+): Promise<void> {
+  const home = join(ctx.dir, "home");
+  mkdirSync(home);
+  const env = { PATH: process.env["PATH"] ?? "", HOME: home, COLUMNS: "1000", ...ctx.env };
+  // Outside the case directory, so it is neither in `exists` nor scanned for secrets.
+  const hookDir = mkdtempSync(join(tmpdir(), "yian-conformance-hook-"));
+  let stub: Stub | undefined;
+  let ran: Ran;
+  let problems: string[] = [];
+  try {
+    stub = await Stub.start(get(case_, "http", []) as Case[]);
+    const hook = join(hookDir, "route.mjs");
+    writeFileSync(hook, routeHook(stub.url));
+    // Bun reads `--import` as `--preload`; `--no-install` keeps it from installing packages, and
+    // `--no-env-file` from loading a `.env` in the case directory into the exact environment.
+    const runtime = process.versions.bun !== undefined ? ["--no-install", "--no-env-file"] : [];
+    const args = [...runtime, "--import", hook, entry, ...(get(case_, "args", []) as string[])];
+    const stdin = get(case_, "stdin", "") as string;
+    ran = await runCommand(args, ctx.dir, env, stdin, get(case_, "signal") as Case | undefined);
+  } finally {
+    try {
+      if (stub !== undefined) problems = await stub.close();
+    } finally {
+      rmSync(hookDir, { recursive: true, force: true });
+    }
+  }
+  // Longest first: the real path can hold the given one (`/private/var` on macOS).
+  const paths = [...new Set([ctx.dir, realpathSync(ctx.dir)])].sort((a, b) => b.length - a.length);
+  const normal = (text: string) =>
+    paths
+      .reduce((result, path) => result.replaceAll(path, "<tmp>"), text)
+      .replace(/ +$/gm, "");
+  const stdout = normal(ran.out);
+  const stderr = normal(ran.err);
+  const streams = `--- stdout\n${stdout}--- stderr\n${stderr}`;
+  if (problems.length > 0) throw new CaseFailure(`${problems.join("\n")}\n${streams}`);
+  const logs = (readdirSync(ctx.dir, { recursive: true, encoding: "utf8" }) as string[])
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => [name, readFileSync(join(ctx.dir, name), "utf8")] as const);
+  checkSecrets(case_, { stdout, stderr, ...Object.fromEntries(logs) });
+  const expect = case_["expect"] as Case;
+  if (ran.signal !== null) {
+    throw new CaseFailure(`died from signal ${constants.signals[ran.signal]}\n${streams}`);
+  }
+  if (!same(BigInt(ran.code ?? 0), expect["exit"])) {
+    throw new CaseFailure(`exit ${ran.code}, expected ${spell(expect["exit"])}\n${streams}`);
+  }
+  for (const [name, text] of [["stdout", stdout], ["stderr", stderr]] as const) {
+    if (Object.hasOwn(expect, name) && text !== expect[name]) {
+      const expected = str(expect[name]);
+      throw new CaseFailure(`${name} differs\n--- actual\n${text}--- expected\n${expected}`);
+    }
+  }
+  if (Object.hasOwn(expect, "json")) {
+    compare("json", cliDocument(stdout, stdout), expect["json"], { optionalMessage: true });
+  }
+  if (Object.hasOwn(expect, "json_lines")) {
+    const lines = stdout.split("\n").filter((line) => line.trim() !== "");
+    const documents = lines.map((line) => cliDocument(line, stdout));
+    compare("json_lines", documents, expect["json_lines"], { optionalMessage: true });
+  }
+  if (Object.hasOwn(expect, "exists")) {
+    const exists = Object.fromEntries(
+      Object.keys(expect["exists"] as Case).map((path) => [
+        path,
+        lexists(join(ctx.dir, path)),
+      ]),
+    );
+    compare("exists", exists, expect["exists"]);
+  }
+}
 
 // ---- json ----
 

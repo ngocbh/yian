@@ -604,6 +604,20 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   aborted (`askUser`), or returns null.
 - It reads keys with raw-mode `node:readline` and has no dependency: it imports only `node:`
   modules and yian's own.
+- `src/cli/index.ts` is the `yian` entry: one command table (specs as data, handlers imported
+  when their command runs), the `YIAN_<NAME>` defaults check, usage errors (exit 2, nothing on
+  stdout), and an exit that waits for the last write (Bun cuts piped output short otherwise).
+- `src/cli/utils.ts` holds the argument parser (`parseCommand` over `node:util` `parseArgs`, with
+  Click's path checks and messages), `CliIo` (the streams and `Env` a command gets; tests pass
+  fakes), `CommandEnv` (a prompted key is recorded there, never in `process.env`), `printJson`
+  (one `yian.cli.v1` document; ints must be `bigint`, a `number` is written as a float), and the
+  key prompts `ensureEnvKey`, `ensureApiKey`, `confirmOllamaEndpoint`.
+- `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, the
+  diagnostic boxes, the banner, progress on stderr and `stopOnSignals` (SIGINT, SIGTERM and SIGHUP
+  stop a run; exit 130). `run`, `check` and `status` stop at the loader and run inspection until
+  those are ported. `src/cli/{auth,memory,mcp_config}.ts` are stubs with their final exports.
+- The conformance runner runs `cli` cases by spawning `src/cli/index.ts` (built: `dist/src/cli/
+  index.js`) with a preloaded hook that routes `fetch` to a stub server.
 
 ## Commands
 

@@ -13,7 +13,7 @@
  */
 
 import type { OriginRef, SourceRange } from "../../diagnostics.ts";
-import { CodeNode, validateCodeOrigins } from "../../nodes/code/node.ts";
+import { type BuiltinCode, CodeNode, validateCodeOrigins } from "../../nodes/code/node.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
@@ -28,7 +28,8 @@ import {
 
 /** The fields `CodeDescriptor`'s constructor takes: the common ones and the CODE's own. */
 export interface CodeDescriptorFields extends NodeDescriptorFields {
-  code: string;
+  /** Text, or the built-in form only a value entry's reader passes. */
+  code: string | BuiltinCode;
   asserts?: readonly string[] | null;
   codeOrigin?: OriginRef | null;
   codeLineOrigins?: readonly OriginRef[];
@@ -48,8 +49,11 @@ export class CodeDescriptor extends NodeDescriptor {
   static override readonly required = this.require("code");
   static override readonly bindingFields: readonly string[] = ["inputs"];
 
-  /** The `code:` field: a reference or an inline body. */
-  readonly code: string;
+  /**
+   * The `code:` field: a reference or an inline body, or the built-in identity a value entry
+   * lowers to (an authored `code:` is always text).
+   */
+  readonly code: string | BuiltinCode;
   /** The node asserts. */
   readonly asserts: readonly string[];
   /** The authored identity of the whole `code:` scalar, or `null`. */

@@ -78,6 +78,7 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
@@ -1713,8 +1714,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          readValueEntry (1): throws.
-//          isValueEntry (1): returns `false`.
 //          splitTypedOutputs (2, with _check_output_names, _reject_non_json_literals and
 //            _raise_if_non_json_literal): returns `[outputsSection, new Map()]`.
 //          synthIdGen (1): returns a minter that throws.
@@ -1752,8 +1751,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
 /** Python's `compose.desugar.inline_bodies.InlineBody`; not ported yet. */
 type InlineBody = unknown;
-/** Python's `compose.desugar.value_entries.ValueEntryDescriptor`; not ported yet. */
-type ValueEntryDescriptor = NodeDescriptor;
 
 /** Python's `compose.desugar.inline_bodies.extract_inline_bodies`; not ported yet. */
 function extractInlineBodies(
@@ -1761,25 +1758,6 @@ function extractInlineBodies(
   options: { owner: readonly string[] },
 ): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
   return [nodesCursor, new Map()];
-}
-
-/** Python's `compose.desugar.value_entries.read_value_entry`; not ported yet. */
-function readValueEntry(
-  nodeId: string,
-  cursor: SourceCursor,
-  options: {
-    registry: TypeRegistry;
-    owner: readonly string[];
-    catalogBuilder: SourceCatalogBuilder;
-    diagnostics: LoadDiagnostics;
-  },
-): ValueEntryDescriptor {
-  throw new Error("read_value_entry is not ported yet (T3-17)");
-}
-
-/** Python's `isinstance(descriptor, compose.desugar.value_entries.ValueEntryDescriptor)`; not ported yet. */
-function isValueEntry(descriptor: NodeDescriptor): boolean {
-  return false;
 }
 
 /** Python's `compose.desugar.inline_calls._synth_id_gen`; not ported yet. */

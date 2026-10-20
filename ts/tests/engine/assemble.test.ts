@@ -17,10 +17,10 @@
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`). TS-only conductor rows: a
  * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
  * `uses:` alias check and the value-entry reader raise through `assemble`, one happy path over
- * stand-in nodes (its data and boundary edges) and END's binding labels. Later (T3-17): the
- * value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter and
- * binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged), once
- * `isValueEntry` is real.
+ * stand-in nodes (its data and boundary edges), END's binding labels, and a value entry loaded
+ * as a built-in identity CODE node. The value-entry rows of `stampNodeWiringOrigins` (a value
+ * entry's input owns its parameter and binding at the entry itself) and `splitTypedInputs` (a
+ * value entry is returned unchanged).
  * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).
  *
  * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
@@ -55,6 +55,7 @@ import {
   stampNodeWiringOrigins,
 } from "../../src/compose/build/pipeline.ts";
 import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
+import { readValueEntry } from "../../src/compose/desugar/value_entries.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
@@ -75,6 +76,7 @@ import {
   SourceRange,
 } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -260,6 +262,26 @@ function parsed(
   return { document, nodesCursor, descriptors };
 }
 
+/** Parse flow `text`'s `nodes:` as `parsed` does, reading each tagged entry as a value entry. */
+function parsedWithValues(text: string): {
+  document: SourceDocument;
+  nodesCursor: SourceCursor;
+  descriptors: Map<string, NodeDescriptor>;
+} {
+  const document = parseSourceDocument(text, "flow.yaml");
+  const nodesCursor = flowNodesCursor(document, parseFile(document).nodes);
+  const options = {
+    registry: caseRegistry(document),
+    owner: ["root"],
+    catalogBuilder: new SourceCatalogBuilder(),
+    diagnostics: LoadDiagnostics.fromDocument(document),
+  };
+  const descriptors = withKinds([StandInCode], () =>
+    parseNodes(nodesCursor, { readValue: (nodeId, cursor) => readValueEntry(nodeId, cursor, options) }),
+  );
+  return { document, nodesCursor, descriptors };
+}
+
 /** Split `descriptors`' typed inputs as `assemble` does, under owner `["root"]`. */
 function split(
   document: SourceDocument,
@@ -412,6 +434,28 @@ output: \${a.output}
     expect(wiring.get("qty")).toBe("${a.output}");
     expect([...nodes.values()].map((node) => node.params![0]!.origin)).toEqual([null, null]);
   });
+
+  test("a value entry's input owns its parameter and binding at the entry itself", () => {
+    const { document, nodesCursor, descriptors } = parsedWithValues(
+      "id: f\nname: f\nnodes:\n  v: !int 5\noutput: ${v.output}\n",
+    );
+    const node = new StartNode("v", { params: [new Parameter("v")] });
+    const wiring = new Map<string, unknown>([["v", 5n]]);
+    const builder = new SourceCatalogBuilder();
+
+    stampNodeWiringOrigins(descriptors, nodesCursor, new Map([["v", node]]), new Map([["v", wiring]]), {
+      owner: ["root"],
+      catalogBuilder: builder,
+      diagnostics: LoadDiagnostics.fromDocument(document),
+    });
+
+    const entry = cursorAt(document, ["nodes", "v"]);
+    const binding = wiring.get("v") as Binding;
+    expect(binding).toBeInstanceOf(Binding);
+    expect(binding.source).toBe(5n);
+    expect(resolvedRange(builder, binding.origin)).toEqual(entry.range!);
+    expect(resolvedRange(builder, node.params![0]!.origin)).toEqual(entry.keyRange!);
+  });
 });
 
 describe("splitTypedInputs", () => {
@@ -476,6 +520,16 @@ output: \${use.output}
     const use = split(document, nodesCursor, descriptors).get("use")!;
     expect(use.inputs["cfg"]).toBeInstanceOf(ValueTemplate);
     expect(use.inputTypes.size).toBe(0);
+  });
+
+  test("a value entry, already read through its tag, is returned unchanged", () => {
+    const { document, nodesCursor, descriptors } = parsedWithValues(
+      "id: f\nname: f\nnodes:\n  v: !int 5\noutput: ${v.output}\n",
+    );
+    const builder = new SourceCatalogBuilder();
+
+    expect(split(document, nodesCursor, descriptors, builder).get("v")).toBe(descriptors.get("v")!);
+    expect(builder.consumedTags.size).toBe(0);
   });
 
   /** Parse a case's flow and split its typed inputs as `assemble` does. */
@@ -843,10 +897,15 @@ describe("assemble", () => {
     expect(scope.resolved).toEqual([]);
   });
 
-  test("a value entry reaches the value-entry reader", () => {
-    const error = thrown(() => assembleText("id: f\nname: f\nnodes:\n  v: !int 5\noutput: null\n"));
-    expect(error.constructor).toBe(Error);
-    expect(error.message).toBe("read_value_entry is not ported yet (T3-17)");
+  test("a value entry loads as a built-in identity CODE node with its typed input", () => {
+    const flow = assembleText("id: f\nname: f\nnodes:\n  v: !int 5\noutput: null\n");
+    const node = flow.compiled.nodes.get("v") as CodeNode;
+    expect(node).toBeInstanceOf(CodeNode);
+    expect(node.code).toStrictEqual({ builtin: "identity", field: "v" });
+    expect(node.params!.map((parameter) => parameter.name)).toEqual(["v"]);
+    const binding = flow.compiled.wiring.get("v")!.get("v")!;
+    expect(binding.source).toBe(5n);
+    expect(binding.contract!.type.kind).toBe(ValueKind.INTEGER);
   });
 
   test("a value entry's nesting is checked before the value-entry reader runs", () => {

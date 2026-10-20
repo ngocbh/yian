@@ -1436,6 +1436,10 @@ the entry, holds the value, and the code returns it. It is not a new node kind. 
 appears in traces, failures, and the run log like any node, and is recorded and replayed
 like one. The value is part of the flow's fingerprint.
 
+Changed (TS yian): the CODE node runs a built-in identity operation,
+`{builtin: identity, field: <id>}`, not generated code; the run log and the fingerprint
+record that form.
+
 It runs like any node:
 
 - When a `case` routes to it, it runs only on that branch.

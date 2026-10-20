@@ -313,11 +313,12 @@ function expectIndexMatchesRebuild(state: RunState): void {
   } finally {
     state.growthIndex = kept;
   }
-  const asSets = (map: ReadonlyMap<string, ReadonlySet<string>>) =>
-    Object.fromEntries([...map].filter(([, ids]) => ids.size > 0).map(([key, ids]) => [key, [...ids].sort()]));
+  const asSets = (entries: Iterable<readonly [string, ReadonlySet<string>]>) =>
+    Object.fromEntries([...entries].map(([key, ids]) => [key, [...ids].sort()]));
   expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
   expect(asSets(kept.referrers)).toEqual(asSets(fresh.referrers));
-  expect(asSets(kept.grown)).toEqual(asSets(fresh.grown));
+  // The kept index leaves an empty entry for an owner whose grown nodes all moved or retired.
+  expect(asSets([...kept.grown].filter(([, ids]) => ids.size > 0))).toEqual(asSets(fresh.grown));
 
   const outgoing = new Map<string, Edge[]>();
   const incoming = new Map<string, Edge[]>();
@@ -1411,20 +1412,27 @@ test("growth rejects a template dependency on a pruned node", () => {
 });
 
 test("an unsettled reader keeps a settled prune id it reads only through a template", () => {
-  const { state, log } = initializedSpawner();
-  const oldId = installSettledOverlay(state)[0]!;
-  const reader = new OverlayNode("reader");
-  state.flow.addSubgraph(
-    new Map([[reader.id, reader]]),
-    [],
-    new Map([[reader.id, new Map([["value", new Binding(new ValueTemplate({ seen: `saw \${${oldId}.output}` }))]])]]),
-  );
-  state.nodeState.set(reader.id, NodeState.UNKNOWN);
+  const setup = () => {
+    const { state, log } = initializedSpawner();
+    const oldId = installSettledOverlay(state)[0]!;
+    const reader = new OverlayNode("reader");
+    state.flow.addSubgraph(
+      new Map([[reader.id, reader]]),
+      [],
+      new Map([[reader.id, new Map([["value", new Binding(new ValueTemplate({ seen: `saw \${${oldId}.output}` }))]])]]),
+    );
+    state.nodeState.set(reader.id, NodeState.UNKNOWN);
+    return { state, log, oldId, readerId: reader.id };
+  };
+  const { state, log, oldId, readerId } = setup();
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, [oldId, reader.id]), fragmentBuilder));
+  const prepared = prepareExpanded(state, "spawn", new Grow({}, [oldId, readerId]), fragmentBuilder);
+  const observers = commitPrepared(log, state, prepared);
 
   expect(state.flow.nodes.has(oldId)).toBe(true);
-  expect([...state.deferredPrune].sort()).toEqual([oldId, reader.id].sort());
+  expect([...state.deferredPrune].sort()).toEqual([oldId, readerId].sort());
+  expectIndexMatchesRebuild(state);
+  assertReplaysEqual(state, prepared, observers, setup);
 });
 
 test.each([

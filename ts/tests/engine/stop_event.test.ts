@@ -36,13 +36,21 @@
  * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended. Pooled only:
  * after a terminal `RunFailed`, the settled step and the `ToolCallFinished` are refused too.
  *
+ * TS-only, a poisoned log (serial and pooled, a `JsonlRunLog` whose sync fails): a failing append
+ * during an outcome, or during a step the node catches before a host abort, ends the run as a host
+ * error with the log's error and no `RunStopped`; a failing rollback rejects with the
+ * `AggregateError`; a step refused before any write leaves the log accepting appends.
+ *
  * TS-only, the per-node signals (serial and pooled): over 50 nodes, each node's link to the run
  * signal is removed when it settles, even for nodes that leave listeners on their own signal; the
  * host's signal keeps no listener once `run()` settles, whatever the ending (success, `RunFailed`,
  * a host stop, a host fault, an already-aborted signal).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import {
@@ -60,7 +68,13 @@ import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../sr
 import type { OutputContract } from "../../src/nodes/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { evalNode, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
-import { NodeStartedRecord, NodeStepRecord, NodeSucceededRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
+import {
+  JsonlRunLog,
+  NodeStartedRecord,
+  NodeStepRecord,
+  NodeSucceededRecord,
+  RunStoppedRecord,
+} from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { aborted, engine, FailNode, FuncNode, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
@@ -850,4 +864,98 @@ describe.each(MODES)("per-node signals (%s)", (_, numWorkers) => {
       expect(spy.live.size).toBe(0);
     },
   );
+});
+
+describe.each(MODES)("a poisoned log (%s)", (_, numWorkers) => {
+  let dir: string;
+  let log: JsonlRunLog | null = null;
+  /** Whether the log's next sync fails; `"always"` fails the rollback's sync too. */
+  let failSync: "once" | "always" | null = null;
+  const failure = new Error("fsync failed");
+  let fsyncSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "yian-stop-"));
+    failSync = null;
+    const real = fs.fsyncSync;
+    fsyncSpy = spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      if (failSync === null) return real(fd);
+      if (failSync === "once") failSync = null;
+      throw failure;
+    });
+  });
+
+  afterEach(() => {
+    fsyncSpy.mockRestore();
+    log?.close();
+    log = null;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Return an engine over `fan(...nodes)` whose log is a `JsonlRunLog` holding the fixture's start. */
+  function jsonlEngine(nodes: readonly Node[], options: Partial<FlowEngineOptions> = {}): FlowEngine {
+    const built = fanEngine(nodes, { numWorkers });
+    log = JsonlRunLog.create(path.join(dir, "run.jsonl"), built.log.runId);
+    for (const envelope of built.log.records()) log.append(envelope.record);
+    return new FlowEngine(built.state, log, { growBuilder: noGrowth, numWorkers, ...options });
+  }
+
+  test("a failing append during an outcome ends the run as a host error with no RunStopped", async () => {
+    const node = new FuncNode("work", () => {
+      failSync = "once";
+      return "done";
+    });
+    const built = jsonlEngine([node]);
+
+    expect(await rejected(built.run())).toBe(failure);
+    expect(stops(built)).toEqual([]);
+    expect(logged(built, NodeSucceededRecord, "work")).toBe(false);
+    expect(built.state.result).toBeNull();
+    expect(() => built.log.append(new NodeStartedRecord("late"))).toThrow(/refuses appends after a failed append/);
+  });
+
+  test("a failing append during a step the node catches, then a host abort: no RunStopped", async () => {
+    const host = new AbortController();
+    const node = new ScriptNode("work", (caps) => {
+      failSync = "once";
+      try {
+        caps.steps!.record({ call: "call-1" });
+      } catch {}
+      host.abort(new Error("stop now"));
+      return "done";
+    });
+    const built = jsonlEngine([node], { signal: host.signal });
+
+    expect(await rejected(built.run())).toBe(failure);
+    expect(stops(built)).toEqual([]);
+    expect(logged(built, NodeStepRecord, "work")).toBe(false);
+    expect(built.signal.reason).toBe(failure);
+  });
+
+  test("an append whose rollback also fails rejects with the AggregateError", async () => {
+    const node = new FuncNode("work", () => {
+      failSync = "always";
+      return "done";
+    });
+    const built = jsonlEngine([node]);
+
+    const error = (await rejected(built.run())) as AggregateError;
+    failSync = null;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors).toEqual([failure, failure]);
+    expect(stops(built)).toEqual([]);
+  });
+
+  test("a record refused before any write doesn't poison the log", async () => {
+    const node = new ScriptNode("work", (caps) => {
+      caps.steps!.record({ when: new Date() } as never);
+      return "done";
+    });
+    const built = jsonlEngine([node]);
+
+    expect(await rejected(built.run())).toBeInstanceOf(RangeError);
+    expect(stops(built)).toEqual([]);
+    const sequence = built.log.nextSequence;
+    expect(built.log.append(new NodeStartedRecord("late")).seq).toBe(sequence);
+  });
 });

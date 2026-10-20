@@ -1,0 +1,129 @@
+/**
+ * Typed bindings over unions of records: a port of `tests/compose/test_typed_bindings_unions.py`,
+ * loading each flow with `assembleText` (`assemble` as the loader calls it) where Python calls
+ * `load_flow`.
+ *
+ * Ported: `test_a_member_over_the_union_loads`, `test_a_declared_union_accepts_one_member`,
+ * `test_a_union_disjoint_from_the_declared_type_fails` and `test_each_branch_may_name_its_own_member`
+ * (it loads with or without narrowing); the harvested cases
+ * `load-types/compose_typed_bindings_unions__a_union_disjoint_from_the_declared_type_fails` and
+ * `…__a_declared_union_accepts_one_member`.
+ *
+ * Changed: the error row pins the whole message where Python matches its start.
+ *
+ * Later (T3-20): the rows CASE and `isinstance` narrowing decide,
+ * `test_a_member_over_another_branchs_member_fails_in_that_branch`,
+ * `test_the_else_branch_reads_the_unlisted_members` and
+ * `test_an_isinstance_branch_narrows_the_typed_binding_too`, and their cases
+ * `load-types/compose_typed_bindings_unions__a_member_over_another_branchs_member_fails`,
+ * `…__the_else_branch_reads_the_unlisted_members` and
+ * `…__an_isinstance_branch_narrows_the_typed_binding`.
+ * Later (T3-22): `test_a_flow_output_narrows_to_a_member_and_a_call_parent_sees_it` (the def's
+ * own output check and its output contract come from def loading).
+ */
+
+import { afterEach, expect, test } from "bun:test";
+
+import { forget } from "../../src/defaults.ts";
+import type { Binding } from "../../src/nodes/contracts.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
+import { canonicalTypeLabel, typeEquals } from "../../src/typesys/values.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+
+afterEach(() => forget());
+
+const TYPEDEFS =
+  "typedefs:\n" +
+  "  Buy: {action: 'Literal(buy)', qty: int}\n" +
+  "  Sell: {action: 'Literal(sell)', qty: int, price: float}\n" +
+  "  Hold: {action: 'Literal(hold)', note: str}\n" +
+  "  Decision: Union(Buy, Sell, Hold)\n" +
+  "  BuyOrSell: Union(Buy, Sell)\n";
+
+const REGISTRY = readTypedefs({
+  Buy: { action: "Literal(buy)", qty: "int" },
+  Sell: { action: "Literal(sell)", qty: "int", price: "float" },
+  Hold: { action: "Literal(hold)", note: "str" },
+  Decision: "Union(Buy, Sell, Hold)",
+  BuyOrSell: "Union(Buy, Sell)",
+});
+
+/** Return the label load errors give the type `text` names. */
+const label = (text: string): string => canonicalTypeLabel(typeFor(text, REGISTRY));
+
+/** Return a flow whose `decide` node returns its input as a `Decision`, then `nodes`. */
+function flow(nodes: string): string {
+  return (
+    "id: unions\nname: unions\n" +
+    TYPEDEFS +
+    "input:\n  decision: !object\n" +
+    "nodes:\n" +
+    "  decide:\n" +
+    "    kind: code\n" +
+    "    input:\n      decision: ${input.decision}\n" +
+    "    code: return inputs['decision']\n" +
+    "    output: Decision\n" +
+    nodes +
+    "output: ${decide.output.action}\n"
+  );
+}
+
+/** Return a CODE node with the one input line `binding` and extra top-level keys. */
+function consumer(nodeId: string, binding: string, extra: Record<string, string> = {}): string {
+  let text = `  ${nodeId}:\n    kind: code\n`;
+  for (const [key, value] of Object.entries(extra)) {
+    text += `    ${key}: ${value}\n`;
+  }
+  return text + `    input:\n      ${binding}\n    code: return 1\n`;
+}
+
+/** An `on:` CASE over the decision's tag routing buy, sell, and the rest. */
+const ROUTE =
+  "  route:\n    kind: case\n    on: ${decide.output.action}\n    cases:\n" +
+  "      - when: buy\n        then: on_buy\n" +
+  "      - when: sell\n        then: on_sell\n" +
+  "    else: on_hold\n";
+
+test("a member over the union loads", () => {
+  const { flow: loaded } = assembleText(flow(consumer("use", "buy: !Buy ${decide.output}")));
+
+  const binding = loaded.compiled.wiring.get("use")!.get("buy") as Binding;
+  expect(typeEquals(binding.contract!.type, typeFor("Buy", REGISTRY))).toBe(true);
+});
+
+test("a declared union accepts one member", () => {
+  assembleText(
+    flow(consumer("b", "buy: !Buy ${decide.output}") + consumer("use", "d: !Decision ${b.output}", { output: "Buy" })),
+  );
+});
+
+test("a union disjoint from the declared type fails", () => {
+  const text = flow(consumer("use", "n: !int ${decide.output}"));
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.message).toBe(`node 'use' input 'n': declared int, but the value is ${label("Decision")}`);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(
+    text.split("\n").findIndex((line) => line.includes("n: !int")) + 1,
+  );
+});
+
+test("each branch may name its own member", () => {
+  assembleText(
+    flow(
+      ROUTE +
+        consumer("on_buy", "buy: !Buy ${decide.output}") +
+        consumer("on_sell", "sell: !Sell ${decide.output}") +
+        consumer("on_hold", "hold: !Hold ${decide.output}"),
+    ),
+  );
+});
+
+// ---------- Pinned harvested cases ----------
+
+test.each<CaseRow>(
+  ["a_union_disjoint_from_the_declared_type_fails", "a_declared_union_accepts_one_member"].map((name) => ({
+    id: `load-types/compose_typed_bindings_unions__${name}`,
+    call: assembled,
+  })),
+)("assemble: $id", runCase);

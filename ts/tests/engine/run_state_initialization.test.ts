@@ -43,8 +43,8 @@
  *
  * TS-only, for the interrupted-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
  * count or a last stop sequence on the fresh state, and an initialized state refuses a wrong
- * container, a count that isn't a positive integer by node id, or a stop sequence outside
- * `[1, nextSequence)`.
+ * container, a count that isn't a positive integer by node id, or a stop sequence that isn't an
+ * integer in `[1, nextSequence)`.
  *
  * Not ported:
  * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema

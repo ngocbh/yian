@@ -109,7 +109,8 @@
  * in both is accepted (D34); a long int in a declared and in an opaque field of a partial-record
  * output is accepted (the flip of `test_long_int_boundaries.py::
  * test_a_long_int_in_a_partial_record_output_names_the_limit`, since a `bigint` has no digit
- * limit); a whole float output stays a float.
+ * limit); a whole float output stays a float; a skipped END input with no group name derives
+ * `terminal output null skipped`, live and on replay.
  *
  * Not ported (no allocation probe): `test_route_reducer_allocation_is_independent_of_wide_ready_queue`,
  * `test_success_reducer_allocation_is_independent_of_total_run_size`.
@@ -1977,4 +1978,29 @@ test("a failure commit uses only the materialized data after append", () => {
   expect(observers).toStrictEqual([new NodeFailed({ failure }), new RunFailed({ failure })]);
   expect(state.result).toStrictEqual(new RunFailed({ failure }));
   expect(state.ready).toEqual(["queued"]);
+});
+
+/** Return a route whose `no` branch feeds END through one data edge with no input group. */
+function unnamedEndInputFlow(): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["router", new FuncNode("router", () => null)],
+    ["yes", new FuncNode("yes", (inputs) => inputs)],
+    ["no", new FuncNode("no", (inputs) => inputs)],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  return CompiledFlow.fromParts(nodes, [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("router-yes", "router", "yes", { sourceHandle: "yes" }),
+    new Edge("router-no", "router", "no", { sourceHandle: "no" }),
+    new Edge("no-end", "no", END_ID),
+  ]);
+}
+
+test("a skipped END input with no group name derives a failure naming null, and replays", () => {
+  const live = routeInFlight(unnamedEndInputFlow());
+  commitPrepared(live.log, live.state, prepareNodeRouted(live.state, "router", "yes"));
+  expect(live.state.terminalUnreachableFailure?.message).toBe("terminal output null skipped");
+  const replay = replayOutcomeLog(unnamedEndInputFlow(), live.log);
+  expect(replay.state.terminalUnreachableFailure?.message).toBe("terminal output null skipped");
 });

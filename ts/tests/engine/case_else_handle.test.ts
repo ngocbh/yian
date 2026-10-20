@@ -15,7 +15,7 @@
  * re-checks the handle there; Python's rewrite assigns the origin in place and checks the handle
  * only in `validate_execution_setup`. No path reaches a rewrite with such a `Case`.
  *
- * Later (compose, RunState and the run boundary):
+ * Later (`loadFlow`, and `runFlow`/`resumeFlow` in T4-8):
  * `test_a_then_target_named_default_runs_only_on_its_own_branch`,
  * `test_a_then_target_named_default_does_not_run_on_no_match_without_else`,
  * `test_an_on_case_target_named_default_runs_only_on_its_own_branch`,

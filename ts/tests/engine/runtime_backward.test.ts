@@ -54,7 +54,9 @@
  * Later (T4-7, with `computeBackward`): the `compute_backward` half of
  * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` and the file's other 24
  * tests, from `test_diamond_calls_shared_producer_once_with_two_ordered_messages` to
- * `test_loop_passthrough_field_routes_feedback_to_its_seed`.
+ * `test_loop_passthrough_field_routes_feedback_to_its_seed` (among them
+ * `test_terminal_trace_latches_causal_route_and_later_failure_wins`, which also needs
+ * `replayRecords` (T4-5) and the engine (T4-6)).
  */
 
 import { expect, test } from "bun:test";

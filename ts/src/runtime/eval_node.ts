@@ -60,6 +60,7 @@ import {
   type SourceResolver,
 } from "../nodes/binding.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
+import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import type { JsonValue } from "../typesys/json.ts";
@@ -603,6 +604,10 @@ export interface EvalNodeOptions {
   wiringOverride?: JsonObject | null;
   /** The node's own abort signal, given to it as `caps.signal`; a fresh un-aborted one when omitted. */
   signal?: AbortSignal | null;
+  /** The clock and cancellable sleep node waits run on; every node gets it as `caps.scheduler`. */
+  scheduler?: Scheduler | null;
+  /** A draw in [0, 1) for backoff jitter; every node gets it as `caps.random`. */
+  random?: (() => number) | null;
   /**
    * The transient stream sink a node declaring `needsLiveEvents` receives; closed, dropping what
    * it gets, once the outcome is decided.
@@ -699,6 +704,8 @@ export async function evalNode(
     steering = null,
     steps = null,
     onFault = null,
+    scheduler = null,
+    random = null,
   } = options;
   requireSteering(steering);
   if (typeof captureEvidence !== "boolean") throw new TypeError("capture_evidence must be a bool");
@@ -733,6 +740,13 @@ export async function evalNode(
   if (options.signal != null && !(options.signal instanceof AbortSignal)) {
     throw new TypeError("signal must be an AbortSignal or null");
   }
+  if (
+    scheduler !== null &&
+    (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
+  ) {
+    throw new TypeError("scheduler must be a Scheduler or null");
+  }
+  if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const trace = newEvaluationTrace(node, captureEvidence);
@@ -827,6 +841,8 @@ export async function evalNode(
     outcome = await evaluateNode(node, flow, pool, {
       wiringOverride,
       signal,
+      scheduler,
+      random,
       collector,
       captureInputs: captureBindings ? captureInputs : null,
       captureRender: captureBindings && node.needsRenderCapture === true ? captureRender : null,
@@ -859,6 +875,8 @@ async function evaluateNode(
   context: {
     wiringOverride: JsonObject | null;
     signal: AbortSignal;
+    scheduler: Scheduler | null;
+    random: (() => number) | null;
     /** Retains the bound values and routes, when capturing bindings. */
     collector: BindingCollector | null;
     /** Receives the completed input record before the body runs, when capturing bindings. */
@@ -887,7 +905,7 @@ async function evaluateNode(
   const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
     context;
   const { memoryScope, memoryContextOpener, memoryInvocation } = context;
-  const { emitStream, emitEvent, skills, tools, steering, steps } = context;
+  const { emitStream, emitEvent, skills, tools, steering, steps, scheduler, random } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
@@ -987,9 +1005,12 @@ async function evaluateNode(
     pending,
   });
 
-  // Build only the node-owned, trait-gated capabilities. The deferred per-item binder throws the
-  // same binder-owned marker from inside the body, and the classification below keeps it.
+  // Every node gets its signal and the given scheduler and random draw; the rest are node-owned and
+  // trait-gated. The deferred per-item binder throws the same binder-owned marker from inside the
+  // body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
+  if (scheduler !== null) caps.scheduler = scheduler;
+  if (random !== null) caps.random = random;
   if (node.bindsPerItem) {
     const params = node.params ?? [];
     caps.bindItem = (element, index) => {

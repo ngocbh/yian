@@ -9,7 +9,11 @@
  * refusing every constructor when given no table, `checkNamedPrompt`'s prefix and `cause`,
  * `validatePrompts` being a no-op on the base, `validateExecutionSetup` (a missing `forward`, then
  * the assertion parse), the stage markers' `original`, `cause` and message (a thrown value with no
- * text is named by its type), and `NodeAssertFailed`'s defaults.
+ * text is named by its type), `NodeAssertFailed`'s defaults, `hostOutput` (a host value taken in as
+ * a yian value, or a `HostOutputError` at the refused path), and the base `exceptionCode` and
+ * `exceptionOrigin` giving a `HostOutputError` `contract.output` at the output contract's origin
+ * for its path while any other error, a plain `TypeCheckError` too, stays `node.execute` at the
+ * node's origin.
  *
  * Ported (adapted), through the shared `drive`: `test_result_node_returns_output`,
  * `test_streaming_node_forwards_chunks_and_returns_output` (the fake streams through
@@ -35,6 +39,8 @@ import {
   CapabilityFault,
   checkNamedPrompt,
   DeferredBindingFault,
+  HostOutputError,
+  hostOutput,
   Node,
   NodeAssertFailed,
   NodeBodyError,
@@ -44,10 +50,16 @@ import {
   Route,
 } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
-import { Assertion, ContractOrigins, type OutputContract, ValueContract } from "../../src/nodes/contracts.ts";
+import {
+  Assertion,
+  ContractOrigins,
+  type OutputContract,
+  outputContractOrigin,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { BranchNode, drive, FailNode, FuncNode as FakeFuncNode, StreamNode } from "./run_state_fixtures.ts";
 
 /** A minimal concrete node; the base constructor is the subject. */
@@ -272,6 +284,63 @@ test("NodeAssertFailed defaults its failure code and keeps its assertion and cau
   expect(failed.assertion).toBe(assertion);
   expect(failed.failureCode).toBe("condition.evaluate");
   expect(failed.cause).toBe(cause);
+});
+
+test("hostOutput takes a host value in as a yian value", () => {
+  expect(hostOutput(5)).toBe(5n);
+  expect(hostOutput({ a: [1, 2.5] })).toEqual({ a: [1n, 2.5] });
+});
+
+test("hostOutput refuses a host value that isn't a yian value", () => {
+  let error: unknown;
+  try {
+    hostOutput({ a: new Date(0) });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(HostOutputError);
+  expect(error).toBeInstanceOf(TypeCheckError);
+  const refused = error as HostOutputError;
+  expect(refused.name).toBe("TypeCheckError");
+  expect(refused.message).toBe("output at a: Date is not a yian value");
+  expect(refused.path).toEqual(["a"]);
+  expect(refused.cause).toBeInstanceOf(TypeCheckError);
+});
+
+describe("a host output error is a contract.output failure", () => {
+  const nodeOrigin = new OriginRef("node");
+  const fieldOrigin = new OriginRef("node/output/a");
+  const contract = new ValueContract(
+    Type.scalar(ValueKind.OBJECT),
+    new ContractOrigins({ default: new OriginRef("node/output"), entries: [[["a"], fieldOrigin]] }),
+  );
+  const refused = new HostOutputError("output at a: Date is not a yian value", { path: ["a"] });
+
+  test("the code is contract.output, else node.execute", () => {
+    const node = new FuncNode("n", { origin: nodeOrigin });
+
+    expect(node.exceptionCode(refused)).toBe("contract.output");
+    expect(node.exceptionCode(new Error("boom"))).toBe("node.execute");
+  });
+
+  test("the origin is the output contract's at the error path, else the node's", () => {
+    const typed = new FuncNode("n", { origin: nodeOrigin, outputContract: contract });
+    const untyped = new FuncNode("n", { origin: nodeOrigin });
+
+    expect(typed.exceptionOrigin(refused)).toBe(outputContractOrigin(contract, ["a"]));
+    expect(typed.exceptionOrigin(refused)).toBe(fieldOrigin);
+    expect(untyped.exceptionOrigin(refused)).toBeNull();
+    expect(typed.exceptionOrigin(new Error("boom"))).toBe(nodeOrigin);
+  });
+
+  test("a plain TypeCheckError stays a node.execute failure at the node", () => {
+    const node = new FuncNode("n", { origin: nodeOrigin, outputContract: contract });
+    const mistyped = new TypeCheckError("argument at a: expected int", { path: ["a"] });
+
+    expect(node.exceptionCode(mistyped)).toBe("node.execute");
+    expect(node.exceptionOrigin(mistyped)).toBe(nodeOrigin);
+  });
 });
 
 describe("evaluation through drive", () => {

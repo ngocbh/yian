@@ -6,16 +6,17 @@
  * `Output | Route | Grow` (`NodeResult`). A kind supplies its body as `forward(inputs, caps)`,
  * which returns a result or a promise of one. The node never receives the pool: the engine's
  * evaluator binds its inputs (the read boundary) and hands it a record. Narrow effects enter
- * through one capabilities object, `caps`: the node's own abort `signal`, plus what its traits
- * ask for (`bindItem` for MAP, `steps` for a node that records durable steps). Failure is not a
- * variant: a failing node rejects, and the evaluator turns an expected rejection into a
+ * through one capabilities object, `caps`: the node's own abort `signal` and, when the host gives
+ * them, the `scheduler` its waits run on and the `random` draw for backoff jitter, plus what its
+ * traits ask for (`bindItem` for MAP, `steps` for a node that records durable steps). Failure is
+ * not a variant: a failing node rejects, and the evaluator turns an expected rejection into a
  * canonical failure retained by the accepted failure record.
  *
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, events, expr, memory contracts, skills, tools, typesys, nodes/binding,
- *                nodes/contracts.
+ * Knows about:   diagnostics, events, expr, memory contracts, platform (the `Scheduler` type),
+ *                skills, tools, typesys, nodes/binding, nodes/contracts.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -39,14 +40,17 @@ import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
 import type { EvaluationTrace, JsonObject, MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
+import type { Scheduler } from "../platform.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
   isList,
   isRecord,
   jsTypeName,
+  fromHost,
   setField,
   type Type,
+  TypeCheckError,
   type Value,
   type ValueRecord,
   writeAsJson,
@@ -62,6 +66,7 @@ import {
   type NodeSteps,
   type OriginMapper,
   type OutputContract,
+  outputContractOrigin,
   Parameter,
   PartialRecordContract,
   rewriteOriginCarrier,
@@ -726,6 +731,26 @@ export interface Steering {
   drain(nodeId: string): readonly string[] | Promise<readonly string[]>;
 }
 
+/**
+ * A host value given as a node's output (a tool's result, a human's answer) that isn't a yian
+ * value; the node's failure is `contract.output`.
+ */
+export class HostOutputError extends TypeCheckError {}
+
+/**
+ * Take a host value given as a node's output in as a yian value.
+ *
+ * @throws HostOutputError when the value isn't a yian value, at the refused path.
+ */
+export function hostOutput(value: unknown): Value {
+  try {
+    return fromHost(value, "output");
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new HostOutputError(error.message, { path: error.path, cause: error });
+  }
+}
+
 /** A stage marker for an assertion failure of the base run template. Used by the evaluator. */
 export class AssertionStageError extends Error {
   override name = "AssertionStageError";
@@ -741,11 +766,16 @@ export class AssertionStageError extends Error {
 
 /**
  * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
- * every node its own `signal`, plus only what the node's traits ask for.
+ * every node its own `signal`, and the `scheduler` and `random` the host gave it, plus only what
+ * the node's traits ask for.
  */
 export interface NodeCaps {
   /** The node's own abort signal; a node that blocks cooperatively stops when it aborts. */
   readonly signal?: AbortSignal;
+  /** The clock and cancellable sleep the node's waits run on; `realScheduler` when absent. */
+  readonly scheduler?: Scheduler;
+  /** A draw in [0, 1) for backoff jitter; `Math.random` when absent. */
+  readonly random?: () => number;
   /** Binds one element's input record; supplied to a node that binds per item (MAP). */
   readonly bindItem?: (element: Value, index: number) => ValueRecord;
   /** The node's durable steps; supplied to a node that records them (`needsSteps`). */
@@ -1074,19 +1104,23 @@ export abstract class Node {
   }
 
   /**
-   * Return the authored operation origin for one node-body error. The base returns the node's
-   * `origin` (`null` for a source-free node); a kind with finer source-neutral mapping overrides
-   * this.
+   * Return the authored operation origin for one node-body error. The base returns the output
+   * contract's origin at the error's path for a `HostOutputError` and the node's `origin` (`null`
+   * for a source-free node) otherwise; a kind with finer source-neutral mapping overrides this and
+   * falls back to `super` for a `HostOutputError`.
    */
   exceptionOrigin(error: unknown): OriginRef | null {
+    if (error instanceof HostOutputError) return outputContractOrigin(this.outputContract, error.path);
     return this.origin;
   }
 
   /**
-   * Return the failure code for one node-body error. The base returns `node.execute`; a kind
-   * with a finer source-neutral classification overrides this.
+   * Return the failure code for one node-body error. The base returns `contract.output` for a
+   * `HostOutputError` and `node.execute` otherwise; a kind with a finer source-neutral
+   * classification overrides this and falls back to `super` for a `HostOutputError`.
    */
   exceptionCode(error: unknown): FailureCode {
+    if (error instanceof HostOutputError) return "contract.output";
     return "node.execute";
   }
 

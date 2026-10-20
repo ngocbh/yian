@@ -75,7 +75,12 @@ import {
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
-import { RuntimeBackwardState } from "./learning.ts";
+import {
+  type BackwardRecord,
+  reduceBackwardRecord,
+  RuntimeBackwardState,
+  sameRuntimeBackwardState,
+} from "./learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -1367,12 +1372,32 @@ function prepareGrowthTransition(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [growthObserver(canonical)]);
 }
 
-/**
- * Prepare one backward or memory-commit record against the accepted terminal. Not ported yet:
- * it always throws.
- */
+/** Validate all backward data and prepare its detached state before append. */
 function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
-  throw new Error("not ported yet (T4-5)");
+  requireInitializedTerminalBackward(state);
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const sameClass = Object.getPrototypeOf(envelope.record) === Object.getPrototypeOf(record);
+  if (!sameClass || encodeRecord(envelope) !== envelopeJson) {
+    throw new RangeError("backward record is not in canonical wire form");
+  }
+  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: BackwardPlan = Object.freeze({
+    kind: "backward",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope),
+    originatingBackwardState: state.backwardState,
+    nextBackwardState,
+  });
+  return new PreparedTransition(envelope.record, envelope.runId, envelope.seq, plan, []);
 }
 
 /** Every plan kind `commitPrepared` dispatches. */
@@ -2029,9 +2054,31 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
   }
 }
 
-/** Append and apply one post-terminal backward record. Not ported yet: it always throws. */
+/** Verify the complete prepared authority, append, then replace the attempt state. */
 function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
-  throw new Error("not ported yet (T4-5)");
+  const plan = prepared._plan;
+  if (plan.kind !== "backward") throw new TypeError("backward commit requires its exact plan");
+  requirePreparedOrigin(state, plan);
+  if (state.backwardState !== plan.originatingBackwardState) {
+    throw new RangeError("prepared backward transition has stale attempt authority");
+  }
+  requireInitializedTerminalBackward(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  const envelope = decodeRecord(plan.envelopeJson);
+  const expected = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
+  if (!isExactly(plan.nextBackwardState, RuntimeBackwardState)) {
+    throw new TypeError("backward plan requires an exact next state");
+  }
+  // The reducer just validated `expected`, and only `expected` is kept, so equality is enough;
+  // checking all history here would cost O(N) per record.
+  if (!sameRuntimeBackwardState(expected, plan.nextBackwardState)) {
+    throw new RangeError("backward plan state disagrees with its canonical record");
+  }
+  appendAndVerify(log, prepared);
+  state.backwardState = expected;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return [];
 }
 
 /** Require the exact state, adopted flow and boundary nodes of the preparation. */
@@ -2205,6 +2252,17 @@ function requireInitialized(state: RunState): void {
 function requireInitializedNonterminal(state: RunState): void {
   requireInitialized(state);
   if (state.result !== null) throw new RangeError("terminal run state cannot prepare another graph transition");
+}
+
+/** Require the accepted retained terminal, independently from memory declarations. */
+function requireInitializedTerminalBackward(state: RunState): void {
+  requireInitialized(state);
+  if (!(state.result instanceof RunSucceeded || state.result instanceof RunFailed)) {
+    throw new RangeError("backward records require an accepted terminal result");
+  }
+  if (state.learnable !== true || state.trace === null || state.trace.terminal === null) {
+    throw new RangeError("backward records require recorded learning and terminal trace authority");
+  }
 }
 
 /** Require the identity roots of canonical RunStarted decoding. */

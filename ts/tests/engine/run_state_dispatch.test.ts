@@ -55,9 +55,10 @@
  * its record is refused; nothing in flight records no ids; a terminal state refuses it; after a
  * stop, a step and a resume still commit and the resume puts the stopped nodes first; an in-flight
  * node missing from the flow or not `UNKNOWN` is refused. Also: a frontier plan holding an outcome
- * record is refused; `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to its
- * stub even on a pristine state, and an expansion with a builder to the growth reducer, which
- * checks the record's spawner before anything else.
+ * record is refused; `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to the
+ * backward reducer (whose terminal check, not the graph check, refuses it on a nonterminal state),
+ * and an expansion with a builder to the growth reducer, which checks the record's spawner before
+ * anything else.
  *
  * TS-only (interrupted-attempt counts, which Python doesn't keep): each resume counts every retried
  * start no stop covered; a stop covers the starts before it but not a later one, and two stops
@@ -530,10 +531,14 @@ test("prepareRecord refuses a RunStartedRecord", () => {
   );
 });
 
-test("prepareRecord hands a backward record to the backward reducer, even on a pristine state", () => {
-  const pristine = new RunState(dispatchFlow());
+test("prepareRecord hands a backward record to the backward reducer, which requires a terminal", () => {
+  const { state } = initialized();
 
-  expectError(() => prepareRecord(pristine, new BackwardStartedRecord(1, null)), Error, "not ported yet (T4-5)");
+  expectError(
+    () => prepareRecord(state, new BackwardStartedRecord(1, null)),
+    RangeError,
+    "backward records require an accepted terminal result",
+  );
 });
 
 test("prepareRecord hands an expansion with a builder to the growth reducer", () => {

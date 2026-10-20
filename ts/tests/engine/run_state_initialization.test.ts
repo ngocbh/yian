@@ -41,8 +41,9 @@
  * envelopes that aren't an array of `RecordEnvelope`s and a builder that isn't a function before
  * it checks that the state is pristine, and that before it refuses an empty prefix; a hand-built
  * backward plan with no trace change is refused by the post-terminal trace check before anything
- * else, and one with a sequence-only trace change reaches its commit stub; a hand-built growth plan
- * holding a RunStarted record fails the growth commit's record check. The log stays empty.
+ * else, and one with a sequence-only trace change reaches its commit, whose initialized-state check
+ * refuses the pristine state; a hand-built growth plan holding a RunStarted record fails the growth
+ * commit's record check. The log stays empty.
  *
  * TS-only, for the interrupted-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
  * count or a last stop sequence on the fresh state, and an initialized state refuses a wrong
@@ -689,10 +690,10 @@ test("a backward plan needs a sequence-only trace change before anything else", 
   expect(log.nextSequence).toBe(0);
 });
 
-test("a backward plan reaches its commit, not ported yet", () => {
+test("a backward plan reaches its commit, which requires an initialized state", () => {
   const [state, prepared] = handBuilt("backward", new TraceDelta(null, 0));
   const log = new MemoryRunLog(RUN_ID);
-  expectError(() => commitPrepared(log, state, prepared), Error, /^not ported yet \(T4-5\)$/);
+  expectError(() => commitPrepared(log, state, prepared), RangeError, /^run state is not initialized$/);
   expect(log.nextSequence).toBe(0);
 });
 

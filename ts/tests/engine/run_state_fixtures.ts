@@ -1,6 +1,7 @@
 /**
- * Builders shared by the run-state tests (Python's `_fakes.py`, `_graph_builder.py` and the
- * helpers `test_run_state_initialization.py` and `test_run_state_growth.py` lend to other files).
+ * Builders shared by the run-state tests (Python's `_fakes.py`, `_backward_fakes.py`,
+ * `_graph_builder.py` and the helpers `test_run_state_initialization.py`,
+ * `test_run_state_growth.py` and `test_runtime_memory_learning.py` lend to other files).
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here.
@@ -11,14 +12,24 @@ import { expect } from "bun:test";
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
-import { ValueRoute } from "../../src/expr/lineage.ts";
+import { type FeedbackValue, ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
-import { Node, type NodeCaps, NodeKind, type NodeResult, Output, Route } from "../../src/nodes/base.ts";
+import {
+  type BackwardContext,
+  type BackwardResult,
+  Node,
+  type NodeCaps,
+  NodeKind,
+  type NodeResult,
+  Output,
+  Route,
+} from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
-  type MemoryScope,
+  type LearnContext,
+  MemoryScope,
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
@@ -81,6 +92,44 @@ export class FuncNode extends Node {
 
   override forward(inputs: Record<string, unknown>): NodeResult {
     return new Output(this.fn(inputs));
+  }
+}
+
+/** A node's backward callback: its context and feedback copies to its result. */
+export type BackwardCallback = (
+  context: BackwardContext,
+  feedback: readonly FeedbackValue[],
+) => BackwardResult | Promise<BackwardResult>;
+
+/**
+ * A `FuncNode` whose backward records each invocation's `[context, feedback]` in `calls`, then
+ * returns what `callback` returns. `callback` is read at call time, so a test can replace it on
+ * the instance after the forward run.
+ */
+export class RecordingBackwardNode extends FuncNode {
+  /** The backward callback. */
+  callback: BackwardCallback;
+  /** Every backward invocation's context and feedback, in call order. */
+  readonly calls: [BackwardContext, readonly FeedbackValue[]][];
+
+  constructor(
+    nodeId: string,
+    fn: (inputs: Record<string, unknown>) => unknown,
+    backward: BackwardCallback,
+    options: { calls?: [BackwardContext, readonly FeedbackValue[]][] } & ConstructorParameters<typeof FuncNode>[2] = {},
+  ) {
+    const { calls = [], ...rest } = options;
+    super(nodeId, fn, rest);
+    this.callback = backward;
+    this.calls = calls;
+  }
+
+  override backward(
+    context: BackwardContext,
+    feedback: readonly FeedbackValue[],
+  ): BackwardResult | Promise<BackwardResult> {
+    this.calls.push([context, feedback]);
+    return this.callback(context, feedback);
   }
 }
 
@@ -551,6 +600,45 @@ export function engine(
   });
   commitPrepared(log, state, prepared);
   return new FlowEngine(state, log, { growBuilder, numWorkers, ...rest });
+}
+
+/** The memory key and policy type `ownerEngine` records. */
+export const POLICY = "reflective";
+
+/**
+ * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY` (Python's
+ * `test_runtime_memory_learning._owner_engine`), with the recorded table and stacks. Every node
+ * gets `new MemoryScope([id], { memories: [POLICY] })`, the table is one root-owned spec, the stacks
+ * are `stacks(...scopes)` and each snapshot is `{}`. It stands in for T3-22's
+ * `resolveMemoryLayout` on graphs without children. Unlike Python's, it leaves `flow.flowId` and
+ * `flow.memories` at their defaults (`null`, `[]`), which the runtime never reads.
+ *
+ * Python's `_owner_engine`, run on the flat flow `START -> a -> b -> END`, prints the same layout:
+ * table `(MemorySpec(key='reflective', type='reflective', owners=(DeclSite(scope=(),
+ * owner=('root',), node=None),), conversation_eligible=False),)`; stacks `(('__end__',),
+ * ('__start__',), ('a',), ('b',))`, each with `memories=('reflective',)`; every node's scope
+ * `MemoryScope(static_path=(<id>,), memories=('reflective',), occurrence_path=())`; snapshots
+ * `(MemorySnapshotEnvelope(memory='reflective'),)` with state `{}`.
+ */
+export function ownerEngine(
+  flow: CompiledFlow,
+  options: { inputs?: Readonly<Record<string, unknown>> } & Partial<FlowEngineOptions> = {},
+): { engine: FlowEngine; memories: MemorySpec[]; stacks: MemoryStack[] } {
+  const scopes = [...flow.nodes.keys()].map((id) => {
+    const scope = new MemoryScope([id], { memories: [POLICY] });
+    flow.nodes.get(id)!.memoryScope = scope;
+    return scope;
+  });
+  const memories = [new MemorySpec(POLICY, POLICY, {}, [new DeclSite([], ["root"])], false)];
+  const memoryStacks = stacks(...scopes);
+  const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
+  const built = engine(flow, { ...options, learnable: true, memories, memoryStacks, memorySnapshots });
+  return { engine: built, memories, stacks: memoryStacks };
+}
+
+/** Return `context`'s feedback entries as records. */
+export function feedbackEntries(context: LearnContext): readonly Readonly<Record<string, unknown>>[] {
+  return context.feedback as readonly Readonly<Record<string, unknown>>[];
 }
 
 /**

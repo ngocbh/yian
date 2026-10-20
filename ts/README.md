@@ -525,6 +525,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Changed: a session's `commit` may resolve to `undefined` or `null`.
 - Changed: a restored snapshot must equal the recorded one by value and type (`1` and `1.0` differ,
   where Python's `==` treats them equal).
+- `src/runtime/backward.ts` holds `computeBackward(trace, rootFeedback, { cache })`: one reverse
+  walk over the accepted occurrences that gathers each occurrence's messages, calls its retained
+  backward handler once (awaited; it may return a promise), validates the whole result before
+  routing input feedback, and returns the root projection with every occurrence's attributed result
+  (unreached ones uninvoked); a handler's throw is a `backward.execute` `BackwardComputeError` and a
+  refused result `backward.result`, while trace faults escape unattributed.
+- Changed: a handler's throw is `backward.execute` whatever it is (a `CapabilityFault` included; no
+  host-control unwrapping).
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

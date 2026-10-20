@@ -12,7 +12,9 @@
  * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`; through `assembleText`, the
  * load halves of `test_flow_result_follows_the_output_shape` (the END's mode and names),
  * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
- * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type).
+ * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type); and, on the
+ * engine fixtures' `graph`, `engine` and `RecordingBackwardNode`,
+ * `test_root_feedback_on_a_one_field_record_reaches_its_producer`.
  *
  * Changed: Python's three rows above check only the run output, so the TS load halves check the
  * END's mode and names, or the driver's output type, instead. The child-signature rows build the
@@ -39,7 +41,6 @@
  * `test_inline_call_body_with_a_one_field_output_returns_the_record`,
  * `test_loop_body_with_a_one_field_record_output_runs` and
  * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
- * `test_root_feedback_on_a_one_field_record_reaches_its_producer`,
  * `test_an_unquoted_yes_flow_output_name_is_text` and
  * `test_a_literal_flow_output_is_returned_as_written` (T4);
  * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (T3-22, T4);
@@ -52,13 +53,16 @@
 
 import { expect, test } from "bun:test";
 
-import { END_ID } from "../../src/compile/model.ts";
+import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { BackwardResult } from "../../src/nodes/base.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
-import type { EndNode } from "../../src/nodes/end/node.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { computeBackward } from "../../src/runtime/backward.ts";
+import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -69,6 +73,7 @@ import {
   loadError,
   runCase,
 } from "../compose/declarations.ts";
+import { engine, graph, RecordingBackwardNode } from "./run_state_fixtures.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -368,6 +373,32 @@ output: \${lp.output}
 `);
 
   expect((flow.compiled.nodes.get("lp")!.outputContract as ValueContract).type).toEqual(record({ count: INT }));
+});
+
+// ---------- backward ----------
+
+test("root feedback on a one-field record reaches its producer", async () => {
+  const producer = new RecordingBackwardNode(
+    "producer",
+    (inputs) => inputs.x,
+    (_context, feedback) => new BackwardResult({ inputFeedback: { x: feedback } }),
+    { reads: { x: "${input.topic}" } },
+  );
+  const end = EndNode.record(END_ID, { outputNames: ["order"] });
+  const flow = graph([producer, end], [[START_ID, "producer"]], {
+    outputs: [new FlowOutput("order", "${producer.output}")],
+  });
+  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: true });
+  await built.run();
+  expect(built.state.trace).not.toBeNull();
+
+  const feedback = { order: "Review the order." };
+  const [root, results] = await computeBackward(built.state.trace!, feedback);
+  validateAttributedBackward(built.state.trace!, feedback, root, results);
+
+  expect(producer.calls).toHaveLength(1);
+  expect(producer.calls[0]![1]).toEqual(["Review the order."]);
+  expect(root.inputFeedback).toEqual({ topic: ["Review the order."] });
 });
 
 // ---------- harvested conformance cases ----------

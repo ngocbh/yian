@@ -4,8 +4,9 @@
  *
  * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values`,
  * `test_raw_node_raise_and_invalid_grow_are_failures_not_observers` (cause type `Error` for
- * Python's `RuntimeError`), `test_raw_streaming_uses_only_the_injected_transient_callback` and
- * `test_raw_stream_callback_failure_propagates_unchanged`.
+ * Python's `RuntimeError`), `test_raw_streaming_uses_only_the_injected_transient_callback`,
+ * `test_raw_stream_callback_failure_propagates_unchanged` and
+ * `test_render_capture_is_opt_in_single_write_and_detached_until_close`.
  *
  * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and
  * `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`: the field names are the own
@@ -15,7 +16,13 @@
  * node's `forward`; the body's `ValueError` is a `RangeError`, and the invalid return gets the
  * ordinary non-NodeResult message (TS has no generator to name).
  *
- * Changed: the shared `drive` evaluates the node in a one-node `CompiledFlow` wired from a
+ * Changed: `test_invalid_render_capture_is_a_host_fault` publishes NaN for Python's infinity,
+ * which is a value here. `test_render_capture_preserves_original_host_exception_and_closes`
+ * monkeypatches `canonical_seed`; in its place a payload with a throwing getter rejects `evalNode`
+ * with the getter's error, and the capture closes.
+ * `test_scoped_render_capture_requires_recorded_model_map_entry` uses a local scoped node that
+ * publishes its render before its model call, for Python's AGENT.
+ * The shared `drive` evaluates the node in a one-node `CompiledFlow` wired from a
  * `FuncNode`'s `reads`, as Python's stub flow derives it.
  * `test_raw_stream_callback_failure_closes_the_node_generator_before_returning` and
  * `test_raw_stream_cleanup_failure_does_not_replace_callback_failure`: a sink throws inside the
@@ -34,13 +41,11 @@
  *
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
  * capability's checks on what the host inbox returns, a steering fault the node catches (thrown or
- * rejected) or a `drain` promise it drops still rejecting `evalNode`, and the first of two faults
- * the node catches winning.
+ * rejected) or a `drain` promise it drops still rejecting `evalNode`, the first of two faults
+ * the node catches winning, and a render capture fault the node catches still rejecting
+ * `evalNode`.
  *
- * Later (cycle 2b): `test_render_capture_is_opt_in_single_write_and_detached_until_close`,
- * `test_invalid_render_capture_is_a_host_fault`,
- * `test_render_capture_preserves_original_host_exception_and_closes` and
- * `test_scoped_render_capture_requires_recorded_model_map_entry`.
+ * Later (T5-11a): `test_scoped_render_capture_requires_recorded_model_map_entry` through AGENT.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -59,7 +64,7 @@ import {
   type Steering,
 } from "../../src/nodes/base.ts";
 import { BindingCollector } from "../../src/nodes/binding.ts";
-import { Parameter } from "../../src/nodes/contracts.ts";
+import { ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { BackwardCapture } from "../../src/runtime/contracts.ts";
 import { EvaluationEvidence } from "../../src/memory/contracts.ts";
 import {
@@ -124,6 +129,149 @@ test("raw evaluation returns closed success route and grow values", async () => 
   expect(await drive(new FuncNode("work", () => "done"))).toEqual(new Output("done"));
   expect(await drive(new ResultNode("branch", new Route("chosen")))).toEqual(new Route("chosen"));
   expect(await drive(new Spawner("spawn", new Grow({ value: 1n })))).toEqual(new Grow({ value: 1n }));
+});
+
+describe("render capture", () => {
+  type CaptureRender = NonNullable<NodeCaps["captureRender"]>;
+
+  /** A node opting into render capture: its body publishes `publish`'s records. */
+  class Capturing extends Node {
+    readonly kind = NodeKind.CODE;
+    override readonly needsRenderCapture = true;
+    readonly publish: (captureRender: CaptureRender) => void;
+    readonly retained: CaptureRender[] = [];
+
+    constructor(publish: (captureRender: CaptureRender) => void) {
+      super("custom");
+      this.publish = publish;
+    }
+
+    override captureBackwardContext(): Record<string, unknown> {
+      return { static: "recorded" };
+    }
+
+    override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+      if (caps.captureRender !== undefined) {
+        this.retained.push(caps.captureRender);
+        this.publish(caps.captureRender);
+      }
+      return new Output("done");
+    }
+  }
+
+  /** Return the plain error a closed capture throws. */
+  function closedError(captureRender: CaptureRender): unknown {
+    const error = thrown(() => captureRender({}));
+    expect(error).not.toBeInstanceOf(CapabilityFault);
+    expect((error as Error).message).toMatch(/closed/);
+    return error;
+  }
+
+  test("render capture is opt-in, single-write and detached until close", async () => {
+    const supplied = { local: { items: [1n] as unknown[] } };
+    const node = new Capturing((captureRender) => {
+      captureRender(supplied);
+      supplied.local.items.push(2n);
+    });
+    expect((await evalNode(node, null, new VariablePool())).backwardCapture).toBeNull();
+    expect(node.retained).toEqual([]);
+    const evaluated = await evalNode(node, null, new VariablePool(), { captureBindings: true });
+    expect(evaluated.outcome).toEqual(new Output("done"));
+    expect(evaluated.backwardCapture!.nodeData).toEqual({
+      static: "recorded",
+      local: { items: [1n] },
+      effective_llm_config: null,
+    });
+    closedError(node.retained[0]!);
+    expect(evaluated.backwardCapture!.nodeData["local"]).toEqual({ items: [1n] });
+  });
+
+  const invalidPublications: [string, RegExp, ErrorConstructor][] = [
+    ["duplicate", /already recorded/, Error],
+    ["reserved", /recorded runtime authority/, RangeError],
+    ["static", /replace static/, RangeError],
+    ["NaN", /NaN/, RangeError],
+  ];
+
+  test.each(invalidPublications)("invalid render capture is a host fault: %s", async (publication, match, kind) => {
+    const node = new Capturing((captureRender) => {
+      if (publication === "duplicate") {
+        captureRender({ first: 1n });
+        captureRender({ second: 2n });
+      } else if (publication === "reserved") {
+        captureRender({ effective_llm_config: { model: "invented" } });
+      } else if (publication === "static") {
+        captureRender({ static: "changed" });
+      } else {
+        captureRender({ variables: { nested: [NaN] } });
+      }
+    });
+    const error = await rejected(evalNode(node, null, new VariablePool(), { captureBindings: true }));
+    expect(error).toBeInstanceOf(kind);
+    expect(error).not.toBeInstanceOf(CapabilityFault);
+    expect((error as Error).message).toMatch(match);
+    closedError(node.retained[0]!);
+  });
+
+  test("a payload whose canonicalization throws keeps the host's error and the capture closes", async () => {
+    const expected = new Error("capture allocation failed");
+    const payload = {};
+    Object.defineProperty(payload, "dynamic", {
+      enumerable: true,
+      get() {
+        throw expected;
+      },
+    });
+    const node = new Capturing((captureRender) => captureRender(payload));
+    expect(await rejected(evalNode(node, null, new VariablePool(), { captureBindings: true }))).toBe(expected);
+    closedError(node.retained[0]!);
+  });
+
+  test("a node catching a render capture fault still rejects evalNode with it", async () => {
+    const node = new Capturing((captureRender) => {
+      try {
+        captureRender({ static: "changed" });
+      } catch {}
+    });
+    const error = await rejected(evalNode(node, null, new VariablePool(), { captureBindings: true }));
+    expect((error as Error).message).toMatch(/replace static/);
+  });
+
+  test("scoped render capture requires the recorded model map entry", async () => {
+    const calls: string[] = [];
+
+    /** A scoped node publishing its render before its model call. */
+    class Scoped extends Node {
+      readonly kind = NodeKind.AGENT;
+      override readonly needsRenderCapture = true;
+
+      override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+        caps.captureRender?.({ prompt: "hello" });
+        calls.push("hello");
+        return new Output("hello");
+      }
+    }
+
+    const node = new Scoped("a/runtime/id");
+    node.executionScope = new ExecutionScope(["authored", "agent"]);
+    const error = await rejected(
+      evalNode(node, null, new VariablePool(), { captureBindings: true, effectiveLlmByStaticPath: {} }),
+    );
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toMatch(/missing static path 'authored\/agent'/);
+    expect(calls).toEqual([]);
+    const config = { provider: "openai", model: "recorded", openai: { temperature: 0.5 } };
+    const evaluated = await evalNode(node, null, new VariablePool(), {
+      captureBindings: true,
+      effectiveLlmByStaticPath: { "authored/agent": config },
+    });
+    config.model = "later mutation";
+    const recorded = evaluated.backwardCapture!.nodeData["effective_llm_config"] as Record<string, unknown>;
+    expect(recorded["model"]).toBe("recorded");
+    const ordinary = await evalNode(node, null, new VariablePool(), { effectiveLlmByStaticPath: {} });
+    expect(ordinary.outcome).toEqual(evaluated.outcome);
+    expect(ordinary.backwardCapture).toBeNull();
+  });
 });
 
 test("raw failure is frozen slotted and preserves diagnostics", async () => {

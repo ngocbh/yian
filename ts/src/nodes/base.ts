@@ -37,7 +37,7 @@ import {
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
-import type { MemoryScope } from "../memory/contracts.ts";
+import type { EvaluationTrace, MemoryScope } from "../memory/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -758,6 +758,11 @@ export interface NodeCaps {
   readonly emitStream?: (chunk: StreamChunk) => void;
   /** The transient model and tool call observer sink; supplied with `needsLiveEvents`. */
   readonly emitEvent?: (event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished) => void;
+  /**
+   * The invocation's write-only evidence sink; supplied to a node that declares
+   * `needsEvaluationTrace` while evidence capture is on.
+   */
+  readonly evaluationTrace?: EvaluationTrace;
   /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
   readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */

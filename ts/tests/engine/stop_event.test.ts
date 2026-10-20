@@ -42,8 +42,10 @@
  *
  * TS-only, a poisoned log (serial and pooled, a `JsonlRunLog` whose sync fails): a failing append
  * during an outcome, or during a step the node catches before a host abort, ends the run as a host
- * error with the log's error and no `RunStopped`; a failing rollback rejects with the
- * `AggregateError`; a step refused before reaching the log leaves the log accepting appends.
+ * error with the log's error and no `RunStopped`; a log refusing the `RunStopped` of a host abort
+ * leaves a note on the host's reason, which `run()` still rejects with; a failing rollback rejects
+ * with the `AggregateError`; a step refused before reaching the log leaves the log accepting
+ * appends.
  *
  * TS-only, nested runs (serial and pooled): a node running a child `FlowEngine` with
  * `signal: caps.signal` stops the child when the parent stops, and the child records its own
@@ -1078,6 +1080,24 @@ describe.each(MODES)("a poisoned log (%s)", (_, numWorkers) => {
     expect(stops(built)).toEqual([]);
     expect(logged(built, NodeStepRecord, "work")).toBe(false);
     expect(built.signal.reason).toBe(failure);
+  });
+
+  test("a refused RunStopped is a note on the host's reason, and the run rejects with the reason", async () => {
+    const host = new AbortController();
+    const reason: Error & { notes?: string[] } = new Error("stop now");
+    const { node, entered } = waiter("work");
+    const built = jsonlEngine([node], { signal: host.signal });
+
+    const running = built.run();
+    await entered;
+    failSync = "once";
+    host.abort(reason);
+
+    expect(await rejected(running)).toBe(reason);
+    expect(reason.notes).toEqual(["RunStopped was not recorded: fsync failed"]);
+    expect(stops(built)).toEqual([]);
+    expect(built.signal.reason).toBe(reason);
+    expect(() => built.log.append(new NodeStartedRecord("late"))).toThrow(/refuses appends after a failed append/);
   });
 
   test("an append whose rollback also fails rejects with the AggregateError", async () => {

@@ -1683,8 +1683,7 @@ errors map by kind: a Node system error is `profile.store_unavailable`, a `Range
 (default `processEnv`). `createModel(config)` gets the resolved config with the host
 credentials (default `chatModelFromConfig`), and `onRetry` sees each transport retry. The
 learner makes one plain call through `callWithRetries`, so only transport errors retry; a reply
-without `<profile>` tags fails `profile.contract` without a retry. A `MarkdownVersionMismatch`
-on commit is `profile.version_mismatch`.
+without `<profile>` tags fails `profile.contract` without a retry.
 
 ### Optional durable memory
 

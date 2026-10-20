@@ -131,19 +131,15 @@ export function parseReply(response: Response, currentText: string, maxChars: nu
   return text ? `${text}\n` : "";
 }
 
-/** Whether `value` is a JSON object (Python's `dict`), not an array or a scalar. */
-function isObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** One key of a feedback record, `null` when absent (Python's `entry.get`). */
-function entryGet(entry: JsonObject, key: string): JsonValue {
-  return Object.hasOwn(entry, key) ? entry[key]! : null;
+function entryGet(entry: Readonly<Record<string, unknown>>, key: string): JsonValue {
+  // Feedback records hold JSON values; `isRecord` narrows them only to yian records.
+  return Object.hasOwn(entry, key) ? (entry[key] as JsonValue) : null;
 }
 
 /** The `value` of one feedback entry: a record's `value`, else the entry itself. */
 function feedbackValue(entry: JsonValue): JsonValue {
-  return isObject(entry) ? entryGet(entry, "value") : entry;
+  return isRecord(entry) ? entryGet(entry, "value") : entry;
 }
 
 /** Whether `value` holds a non-finite number at any depth. */
@@ -216,8 +212,8 @@ export class ProfileMemory implements Memory {
    * @throws TypeError when `store` lacks `read`/`write` or `llmConfig` isn't a record.
    * @throws DefaultsError when a budget is unset and a `YIAN_` variable holds a value it doesn't
    *   accept.
-   * @throws RangeError when a budget isn't a positive integer, or the connection entries of
-   *   `llmConfig` are invalid (see `popHostCredentials`).
+   * @throws RangeError when a budget isn't a positive integer, the connection entries of
+   *   `llmConfig` are invalid (see `popHostCredentials`), or an `llmConfig` entry isn't a yian value.
    */
   constructor(
     store: MarkdownStore,
@@ -519,7 +515,7 @@ export class ProfileSession implements MemorySession {
    */
   private material(context: LearnContext, currentText: string, currentVersion: string): string {
     const feedback = context.feedback.map((entry): JsonValue =>
-      isObject(entry)
+      isRecord(entry)
         ? {
             channel: entryGet(entry, "channel"),
             owner_static_path: entryGet(entry, "owner_static_path"),
@@ -528,7 +524,7 @@ export class ProfileSession implements MemorySession {
           }
         : { value: entry },
     );
-    const budget = this.memory.inputBudgetChars;
+    const limit = this.memory.inputBudgetChars;
     const agentEpisodes = context.episodes.filter((episode) => episode.baseSystemPrompt !== null);
     const kept: JsonValue[] = [];
     let used = 0;
@@ -543,9 +539,9 @@ export class ProfileSession implements MemorySession {
         status: episode.status,
       };
       const whole = writeAsJson(item as Value);
-      const encoded = kept.length === 0 ? boundedJsonMaterial(item, budget) : whole;
+      const encoded = kept.length === 0 ? boundedJsonMaterial(item, limit) : whole;
       const length = codePoints(encoded);
-      if (kept.length > 0 && used + length > budget) break;
+      if (kept.length > 0 && used + length > limit) break;
       used += length;
       // A trimmed summary holds only strings, booleans and small ints, so JSON.parse reads it exactly.
       kept.push(encoded === whole ? item : (JSON.parse(encoded) as JsonObject));
@@ -565,7 +561,8 @@ export class ProfileSession implements MemorySession {
   /**
    * Write the proposed document with compare-and-set; never call a model. Commits of one session
    * run one at a time, and a failed commit doesn't fail later ones. A repeated `commitId` with the
-   * same batch is a no-op.
+   * same batch is a no-op. A commit runs after earlier ones settle; closing the session before it
+   * starts fails it with `profile.session_closed`, so await `commit` before `close`.
    *
    * @param mutations Empty, or the one document mutation this session proposed.
    * @throws MemoryOperationError `profile.version_mismatch` (retryable; nothing was written) when

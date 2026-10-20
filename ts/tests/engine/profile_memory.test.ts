@@ -33,8 +33,10 @@
  * messages; two concurrent commits of one id write once; a failed commit (version mismatch) then a
  * good one in the same session, whose `2n` feedback is written as Python's int `2`; the reply
  * parser's messages; feedback holding `Infinity` is `profile.invalid_context` after the model call;
- * with `YIAN_TEST_NODE` set to a Node binary, the built backend opens a document Bun seeded, learns
- * with a scripted model and commits under Node, and Bun reads the new document and its write log.
+ * `onRetry` sees a retried `ProviderError`; a commit id whose write failed commits once the store
+ * is back; with `YIAN_TEST_NODE` set to a Node binary, the built backend opens a document Bun
+ * seeded, learns with a scripted model and commits under Node, and Bun reads the new document and
+ * its write log.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
@@ -76,6 +78,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { BUILTIN, DefaultsError, type Env, forget, install } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import type { RetryInfo } from "../../src/llm/executor.ts";
 import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ApiKeyCredentials } from "../../src/llm_clients/auth/common.ts";
@@ -661,6 +665,7 @@ test("test_store_failure_during_commit_is_not_retryable", async () => {
       ],
       [new RangeError("document is not valid UTF-8"), "profile.store_invalid", "profile store rejected the document"],
     ];
+    const write = store.write;
     for (const [thrown, code, message] of rows) {
       store.write = async () => {
         throw thrown;
@@ -669,7 +674,14 @@ test("test_store_failure_during_commit_is_not_retryable", async () => {
       expect([error.code, error.retryable, error.message]).toEqual([code, false, message]);
       expect(error.cause).toBe(thrown);
     }
+    // A failed write records nothing, so the same id commits once the store is back.
+    store.write = write;
+    const before = writeLog().length;
+    await session.commit("commit-profile.store_unavailable", batch);
+    await session.commit("commit-profile.store_unavailable", batch);
+    expect(writeLog().length).toBe(before + 1);
   });
+  expect((await memory.read())[0]).toBe("# Ada\nNew.\n");
 });
 
 test("test_learner_errors_chain_a_cause_without_the_key", async () => {
@@ -895,6 +907,20 @@ test("feedback holding Infinity is profile.invalid_context after the model call"
   ]);
   expect(error.cause).toBeInstanceOf(RangeError);
   expect(model.requests.length).toBe(1);
+});
+
+test("onRetry sees a retried provider error", async () => {
+  const retried = new ProviderError("rate_limit", "slow down", { retryAfter: 0.001 });
+  const retries: RetryInfo[] = [];
+  const memory = await newMemory("# Ada\n", {
+    createModel: () => new ScriptedModel([retried, textReply("<profile># Ada\nBrief.</profile>")], CONFIG),
+    onRetry: (retry) => {
+      retries.push(retry);
+    },
+  });
+  const batch = await withRun(memory, (session) => session.learn(learnContext([], feedbackOf("Be brief."))));
+  expect(batch.length).toBe(1);
+  expect(retries.map((retry) => [retry.attempt, retry.error])).toEqual([[1, retried]]);
 });
 
 /** The `ts/` directory. */

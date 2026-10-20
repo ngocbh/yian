@@ -190,14 +190,14 @@ const upper = (name = "shout") => textTool(name, (text) => text.toUpperCase());
 const named = (name: string) => textTool(name, (text) => `${name}:${text}`);
 
 /** A model reply calling one tool as `call-1`. */
-function toolCall(name: string, args: JsonObject): Response {
+function toolCallReply(name: string, args: JsonObject): Response {
   const call = new ToolCallPart({ id: "call-1", name, arguments: args });
   return new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
 }
 
 /** One tool-call reply per call, then a final answer. */
 function replies(...calls: [string, JsonObject][]): Response[] {
-  return [...calls.map(([name, args]) => toolCall(name, args)), textReply("done")];
+  return [...calls.map(([name, args]) => toolCallReply(name, args)), textReply("done")];
 }
 
 /** Evaluate an AGENT `agent` granted `grants` over `model` with the run's `tools`; return its outcome. */
@@ -235,7 +235,7 @@ test("agent binds and calls granted per-run tools", async () => {
 });
 
 test("agent cannot call a per-run tool the flow did not grant", async () => {
-  const model = new ScriptedModel([toolCall("shout", { text: "hi" })], CONFIG);
+  const model = new ScriptedModel([toolCallReply("shout", { text: "hi" })], CONFIG);
   const tools = new ToolSet({ shout: upper(), ask_user: () => "yes" });
 
   const outcome = await runAgentNode(model, ["ask_user"], tools);
@@ -261,7 +261,7 @@ test("agent granted three groups sees the union of their tools", async () => {
 });
 
 test.each(["e", "toolbox"])("agent grant check sees expanded group names (%s)", async (name) => {
-  const model = new ScriptedModel([toolCall(name, { text: "x" })], CONFIG);
+  const model = new ScriptedModel([toolCallReply(name, { text: "x" })], CONFIG);
   const tools = new ToolSet({ toolbox: [named("a")], hidden: [named("e")] });
 
   const outcome = await runAgentNode(model, ["toolbox"], tools);

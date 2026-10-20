@@ -35,7 +35,7 @@
  * depth analogs: `test_a_nonfinite_argument_in_a_later_call_stops_every_call_of_the_reply` (a
  * too-deep later call, streamed: no tool runs) and `test_live_events_show_the_model_call_but_no_tool_call`
  * (model brackets, no tool brackets). The non-finite rows of `test_agent_nonfinite_replies.py`
- * are Not ported: plain JSON arguments can't hold `NaN` or `Infinity`.
+ * are Not ported: plain JSON replies and arguments can't hold `NaN` or `Infinity`.
  *
  * TS-only: an over-deep call on a final reply (text and no parsed call) fails it too.
  *
@@ -303,7 +303,7 @@ test("live events show the model call but no tool call", async () => {
 
   failureOf(await outcome);
   const finished = observed.filter((event) => event instanceof ModelCallFinished);
-  expect(finished.length).toBeGreaterThan(0);
+  expect(finished).toHaveLength(1);
   expect(finished.every((event) => event.error === null)).toBe(true);
   expect(observed.some((event) => event instanceof ToolCallStarted)).toBe(false);
 });

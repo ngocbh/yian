@@ -35,6 +35,7 @@ import { type ChatModel, TextDelta } from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
 import type { Request, Response } from "../../llm/messages.ts";
 import { isAuthFailure } from "../../llm_clients/auth/common.ts";
+import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
 import { copyValue } from "../binding.ts";
@@ -179,13 +180,13 @@ export interface ToolCallIdentity {
   readonly callIndex: number;
   readonly toolCallId: string;
   readonly name: string;
-  readonly arguments: unknown;
+  readonly arguments: JsonObject;
 }
 
 /** Return a copy of a call's arguments for its started event; `null` when they can't be copied. */
-function shown(args: unknown): unknown {
+function shown(args: JsonObject): Value | null {
   try {
-    return copyValue(args as Value);
+    return copyValue(args);
   } catch {
     return null;
   }

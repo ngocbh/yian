@@ -24,6 +24,9 @@
  * tool and representation rows of `test_a_stop_raised_while_observing_a_failure_wins` and
  * `test_a_stop_failing_a_call_yields_to_an_observed_stop_only_if_derived`.
  *
+ * TS-only: a stop that cuts a tool's argument check short (its validator aborts the stop, then
+ * throws) is the node's rejection, with no tool brackets and no recorded tool call.
+ *
  * Not ported: `test_a_stop_wins_over_a_malformed_native_carrier` (TS has no LangChain structured
  * carrier).
  */
@@ -31,12 +34,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { ModelCallFinished, ModelCallStarted } from "../../src/events.ts";
+import { ModelCallFinished, ModelCallStarted, ToolCallStarted } from "../../src/events.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import type { EvaluationTrace, VisibleInteraction } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
+import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, rejected } from "./run_state_fixtures.ts";
 
@@ -119,4 +125,54 @@ test("a host callback fault escapes a pending stop", async () => {
   const reply = new Response({ message: new Message({ role: "assistant", parts: [new TextPart("fine")] }), finishReason: "stop" });
   const model = new ScriptedModel([reply], CONFIG);
   expect(await rejected(evaluate(model, { signal: stop.signal, emitEvent }))).toBe(fault);
+});
+
+/** A reply calling `lookup` with no arguments as `call-1`. */
+function lookupCall(): Response {
+  const call = new ToolCallPart({ id: "call-1", name: "lookup", arguments: {} });
+  return new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
+}
+
+/** A tool set holding `lookup`, which takes no arguments and runs `execute`. */
+function lookupTools(execute: FunctionTool["execute"], parametersValidator: StandardSchemaV1 | null = null): ToolSet {
+  const parametersJsonSchema = { type: "object", properties: {} };
+  return new ToolSet({
+    lookup: new FunctionTool({ name: "lookup", description: "Look it up.", parametersJsonSchema, execute, parametersValidator }),
+  });
+}
+
+test("a stop cutting a tool's argument check short is the stop", async () => {
+  const stop = new AbortController();
+  const validator: StandardSchemaV1 = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () => {
+        stop.abort(new Error("stopped"));
+        throw new Error("checker boom");
+      },
+    },
+  };
+  const ran: unknown[] = [];
+  const events: unknown[] = [];
+  const interactions: VisibleInteraction[] = [];
+  const evaluationTrace: EvaluationTrace = {
+    recordPrompt: () => {},
+    recordInteraction: (interaction) => void interactions.push(interaction),
+  };
+  const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG, tools: ["lookup"] });
+  const run = node.forward(
+    {},
+    {
+      models: { env: () => undefined, createModel: () => new ScriptedModel([lookupCall()], CONFIG) },
+      tools: lookupTools((args) => ran.push(args), validator),
+      signal: stop.signal,
+      emitEvent: (event) => void events.push(event),
+      evaluationTrace,
+    },
+  );
+  expect(await rejected(run)).toBe(stop.signal.reason);
+  expect(ran).toEqual([]);
+  expect(events.some((event) => event instanceof ToolCallStarted)).toBe(false);
+  expect(interactions).toEqual([]);
 });

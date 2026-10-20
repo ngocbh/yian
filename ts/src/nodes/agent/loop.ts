@@ -7,11 +7,10 @@
  * An optional memory-owned turn retains actual exchanges. Restored provider context never drives
  * tool dispatch, and its synthetic missing-result repairs are not saved.
  *
- * Here: the tool loop runs a reply's calls one at a time, in call order; steering is not ported
- * yet, and memory transcripts are T6-6's.
+ * Here: the tool loop runs a reply's calls one at a time, in call order; steering and memory
+ * transcripts are not ported yet.
  *
- * Knows about:   diagnostics, llm, memory contracts, nodes/base, skills, tools, typesys, peer
- *                AGENT modules.
+ * Knows about:   diagnostics, llm, nodes/base, skills, tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -19,7 +18,6 @@ import { reprText } from "../../diagnostics.ts";
 import { type ChatModel, parseArguments } from "../../llm/events.ts";
 import { RouteModel } from "../../llm/executor.ts";
 import { Message, Request, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../llm/messages.ts";
-import { type EvaluationTrace, ToolCallInteraction } from "../../memory/contracts.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
 import { ToolSet } from "../../tools/registry.ts";
@@ -29,7 +27,7 @@ import { AgentLoopError, type AgentRunContext, checkStopped, ToolIterationLimitE
 import { callModel, liveSinks, markModelFailure, newExchangeId, observeToolCall } from "./live.ts";
 import { reportedText, systemPromptWithMemory, toolText } from "./memory.ts";
 import { generateStructured, typeToSchema, userMessage } from "./structured.ts";
-import { recordModelText, recordToolResult, textOf } from "./text.ts";
+import { recordModelText, recordToolCall, recordToolResult, textOf } from "./text.ts";
 
 /**
  * Run one AGENT invocation.
@@ -91,7 +89,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
   const skills = new Map(ctx.skills.map((skill) => [skill.name, skill]));
   if (skills.size > 0) bound.push(loadSkillTool());
-  checkStopped(ctx);
   let iterations = 0;
 
   while (true) {
@@ -183,20 +180,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   }
 }
 
-/** Record an encodable requested tool call without affecting the loop. */
-function recordToolCall(trace: EvaluationTrace | undefined, name: string, args: unknown): void {
-  if (trace === undefined) return;
-  let interaction: ToolCallInteraction;
-  try {
-    interaction = new ToolCallInteraction(name, args);
-  } catch (error) {
-    // Evidence stays observational for malformed arguments.
-    if (error instanceof TypeError || error instanceof RangeError) return;
-    throw error;
-  }
-  trace.recordInteraction(interaction);
-}
-
 /**
  * Throw `TypeCheckError` if a tool call's arguments nest too deep.
  *
@@ -207,8 +190,9 @@ function recordToolCall(trace: EvaluationTrace | undefined, name: string, args: 
 function rejectInvalidArguments(reply: Message): void {
   for (const part of reply.parts) {
     if (!(part instanceof ToolCallPart)) continue;
-    // `ToolCallPart` already refuses parsed arguments past the limit; this matters if it changed.
-    const [args] = part.arguments !== null ? [part.arguments] : parseArguments(part.rawArguments!, { anyDepth: true });
+    // `ToolCallPart` already refuses parsed arguments past the limit; checking them again matters
+    // only if the depth limit changed after the part was built.
+    const args = part.arguments ?? parseArguments(part.rawArguments!, { anyDepth: true })[0];
     if (args !== null) rejectDeepNesting(args, `tool call ${reprText(part.name)} arguments`);
   }
 }

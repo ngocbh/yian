@@ -45,25 +45,26 @@
  *
  * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
- * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`, `recordModelValue`
- * and `recordToolResult` (an interaction recorded, a carrier construction error ignored, a `null`
- * trace does nothing); `toolText` of a string, a record, a list, `null`, `Infinity`, a big int and
- * a `Date` (a `TypeCheckError` naming the tool's result); `reportedText` (the message, else the
- * error's `name`); the `SKIPPED_TOOL_RESULT` and `SKIPPED_TOOL_ERROR` texts; the `DEFAULT_SYSTEM` text and the loop errors' names; `isTextOutput`;
- * `isMaxToolIterations`; the default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given
- * as `llmConfig`; `backward` not ported yet; the load-time hooks
- * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
- * `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`, `validatePrompts`,
- * `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a shallow copy;
- * `needsModels`; each `provider.*` code through the node (a `ProviderError` of the kind
- * `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call with
- * invalid arguments gets `ToolCallStarted` then `ToolCallFinished{error: "RangeError"}` before the
- * node fails, an ungranted call gets no brackets, the request carries the bound `ToolSpec`s in
+ * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`,
+ * `recordModelValue`, `recordToolCall` and `recordToolResult` (an interaction recorded, a carrier
+ * construction error ignored, a `null` trace does nothing); `toolText` of a string, a record, a
+ * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
+ * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
+ * its `typeof`); the `SKIPPED_TOOL_RESULT` and `SKIPPED_TOOL_ERROR` texts; the `DEFAULT_SYSTEM`
+ * text and the loop errors' names; `isTextOutput`; `isMaxToolIterations`; the default
+ * `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward` not
+ * ported yet; the load-time hooks (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`,
+ * `llmNullable`, `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`,
+ * `validatePrompts`, `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a
+ * shallow copy; `needsModels`; each `provider.*` code through the node (a `ProviderError` of the
+ * kind `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call
+ * with invalid arguments gets `ToolCallStarted` then `ToolCallFinished{error: "RangeError"}` before
+ * the node fails, an ungranted call gets no brackets, the request carries the bound `ToolSpec`s in
  * grant order (`load_skill` last when skills are granted) with no `toolChoice` and
  * `parallelToolCalls: null`, a call's id is `<run>/<node>/<exchange>/<index>` on a run-bound tool
  * set and a fresh id on an unbound one, with the node and `attempt: 1` in its `ToolContext`, and a
- * tool result `fromHost` refuses fails the node after the call ran; a call-time agent records
- * a copy of its bound config and calls the model with the host key joined, and a bound config that
+ * tool result `fromHost` refuses fails the node after the call ran; a call-time agent records a
+ * copy of its bound config and calls the model with the host key joined, and a bound config that
  * differs from the recorded one is a host fault before any model is built; a reply calling a tool
  * at a cap of one model turn fails with `agent.max_tool_iterations`; without `models` the node
  * builds through `defaultModelAccess` (an unknown provider's `ValidationError`, no network); a
@@ -113,6 +114,7 @@ import {
   type EvaluationTrace,
   ModelTextInteraction,
   ModelValueInteraction,
+  ToolCallInteraction,
   ToolResultInteraction,
   type VisibleInteraction,
 } from "../../src/memory/contracts.ts";
@@ -122,7 +124,13 @@ import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
 import { reportedText, SKIPPED_TOOL_RESULT, toolText } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
-import { recordModelText, recordModelValue, recordToolResult, textOf } from "../../src/nodes/agent/text.ts";
+import {
+  recordModelText,
+  recordModelValue,
+  recordToolCall,
+  recordToolResult,
+  textOf,
+} from "../../src/nodes/agent/text.ts";
 import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -130,7 +138,7 @@ import { type EvalNodeOptions, EvaluationFailure } from "../../src/runtime/eval_
 import { Skill } from "../../src/skills/catalog.ts";
 import { loadSkillTool } from "../../src/skills/tool.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
-import { ReportedToolError } from "../../src/tools/errors.ts";
+import { ReportedToolError, TOOL_ERROR } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
@@ -191,23 +199,30 @@ function trace() {
   return { sink, interactions };
 }
 
-test("recordModelText and recordToolResult record their interactions", () => {
+test("recordModelText, recordToolCall and recordToolResult record their interactions", () => {
   const { sink, interactions } = trace();
   recordModelText(sink, "answer");
+  recordToolCall(sink, "lookup", { q: "x" });
   recordToolResult(sink, "lookup", "found");
-  expect(interactions).toEqual([new ModelTextInteraction("answer"), new ToolResultInteraction("lookup", "found")]);
+  expect(interactions).toEqual([
+    new ModelTextInteraction("answer"),
+    new ToolCallInteraction("lookup", { q: "x" }),
+    new ToolResultInteraction("lookup", "found"),
+  ]);
 });
 
-test("recordModelText and recordToolResult ignore a carrier construction error", () => {
+test("recordModelText, recordToolCall and recordToolResult ignore a carrier construction error", () => {
   const { sink, interactions } = trace();
   recordModelText(sink, "\ud800");
+  recordToolCall(sink, "lookup", { q: Number.NaN });
   recordToolResult(sink, "", "found");
   recordToolResult(sink, "lookup", 3 as unknown as string);
   expect(interactions).toEqual([]);
 });
 
-test("recordModelText and recordToolResult do nothing without a trace", () => {
+test("recordModelText, recordToolCall and recordToolResult do nothing without a trace", () => {
   expect(recordModelText(null, "answer")).toBeUndefined();
+  expect(recordToolCall(undefined, "lookup", {})).toBeUndefined();
   expect(recordToolResult(undefined, "lookup", "found")).toBeUndefined();
 });
 
@@ -236,6 +251,9 @@ test("reportedText gives the message, else the error's name", () => {
     override name = "NotFound";
   }
   expect(reportedText("x", new NotFound(""))).toBe("NotFound");
+  // A tool error is classified by its brand, so a branded plain object reaches the non-`Error` branch.
+  const branded = { [TOOL_ERROR]: ["reported"], toString: () => "branded" };
+  expect([reportedText("x", branded), reportedText("x", { ...branded, toString: () => "" })]).toEqual(["branded", "object"]);
 });
 
 test("the skipped tool texts keep Python's wording", () => {
@@ -834,13 +852,13 @@ describe("forward", () => {
   function fakeTool(
     name: string,
     execute: (args: Record<string, unknown>, ctx: ToolContext) => unknown,
-    properties: Record<string, unknown> = {},
+    properties: JsonObject = {},
     seen: Record<string, unknown>[] = [],
   ): FunctionTool {
     return new FunctionTool({
       name,
       description: `The ${name} tool.`,
-      parametersJsonSchema: { type: "object", properties: properties as never },
+      parametersJsonSchema: { type: "object", properties },
       execute: (args, ctx) => {
         seen.push(args);
         return execute(args, ctx);
@@ -853,7 +871,7 @@ describe("forward", () => {
     return new AgentNode("n", { prompt: "hi", llmConfig: NATIVE, tools });
   }
 
-  const NOOP_REPLIES = (count: number) => Array.from({ length: count }, (_, i) => toolReply(toolCall("noop", {}, String(i))));
+  const noopReplies = (count: number) => Array.from({ length: count }, (_, i) => toolReply(toolCall("noop", {}, String(i))));
 
   test("tool loop round trip", async () => {
     const seen: Record<string, unknown>[] = [];
@@ -945,7 +963,7 @@ describe("forward", () => {
     const noop = fakeTool("noop", () => "ok");
     const node = toolAgent(["noop"]);
     node.env = { max_tool_iterations: 5n };
-    const model = new ScriptedModel(NOOP_REPLIES(5), NATIVE);
+    const model = new ScriptedModel(noopReplies(5), NATIVE);
     const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
     expect([failure.code, failure.causeType]).toEqual(["agent.max_tool_iterations", "ToolIterationLimitError"]);
     expect(failure.message).toBe(
@@ -957,7 +975,7 @@ describe("forward", () => {
     // The default is the -1 no-cap sentinel: many tool turns, then an answer, still finish.
     expect(current().agentMaxToolIterations).toBe(-1);
     const noop = fakeTool("noop", () => "ok");
-    const model = new ScriptedModel([...NOOP_REPLIES(150), reply("done")], NATIVE);
+    const model = new ScriptedModel([...noopReplies(150), reply("done")], NATIVE);
     const outcome = await evaluate(toolAgent(["noop"]), model, { tools: new ToolSet({ noop }) });
     expect((outcome as Output).value).toBe("done");
     expect(model.requests).toHaveLength(151);
@@ -967,7 +985,7 @@ describe("forward", () => {
     const noop = fakeTool("noop", () => "ok");
     const node = toolAgent(["noop"]);
     node.env = { max_tool_iterations: 2n };
-    const model = new ScriptedModel(NOOP_REPLIES(2), NATIVE);
+    const model = new ScriptedModel(noopReplies(2), NATIVE);
     const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
     expect(failure.code).toBe("agent.max_tool_iterations");
     expect(failure.message).toContain("(2)");
@@ -979,7 +997,7 @@ describe("forward", () => {
     const noop = fakeTool("noop", () => "ok", {}, seen);
     const node = toolAgent(["noop"]);
     node.env = { max_tool_iterations: 2n };
-    const model = new ScriptedModel(NOOP_REPLIES(2), NATIVE);
+    const model = new ScriptedModel(noopReplies(2), NATIVE);
     const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
     expect(failure.code).toBe("agent.max_tool_iterations");
     expect(failure.message).toContain("not run");

@@ -41,10 +41,15 @@
  * context, and a synthetic source-free trace with run id `""` fails the root fallback's context
  * with `context === null`.
  *
- * Later (T4-6, with the engine): `test_terminal_trace_keeps_actual_root_writer_until_quiescence`,
- * `test_root_inventory_is_retained_without_running_capture_or_defaults`,
+ * Ported, after rewrite (the start is built with `prepareRunStarted` on the shared
+ * `learnableStarted`, not the engine; the trace compares through the shared `traceSnapshot`):
+ * `test_root_inventory_is_retained_without_running_capture_or_defaults` (START's params are
+ * replaced with an empty array, which is readonly, where Python clears the list),
  * `test_terminal_trace_append_rejection_leaves_all_indexes_unchanged` and
- * `test_causal_route_trace_latch_is_installed_only_after_append`.
+ * `test_causal_route_trace_latch_is_installed_only_after_append` (the log's `append` patched on
+ * the instance, its error an `Error`, Python's `OSError`).
+ *
+ * Later (T4-6, with the engine): `test_terminal_trace_keeps_actual_root_writer_until_quiescence`.
  *
  * Later (T4-7, with `computeBackward`): the `compute_backward` half of
  * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` and the file's other 24
@@ -72,7 +77,8 @@ import {
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
 import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
-import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
+import { ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import {
   AttributedBackwardResult,
   BackwardAttribution,
@@ -116,12 +122,27 @@ import {
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  type PreparedTransition,
+  prepareNodeRouted,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+} from "../../src/runtime/state.ts";
 import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
+import {
+  commitStartSuccess,
+  forwardCapture,
+  graph,
+  learnableStarted,
+  terminalSkipRouteFlow,
+  traceSnapshot,
+} from "./run_state_fixtures.ts";
 
-/** The two error classes the refusals throw. */
-type ErrorClass = typeof TypeError | typeof RangeError;
+/** The error classes the refusals throw; a failing log's append throws an `Error`. */
+type ErrorClass = typeof TypeError | typeof RangeError | typeof Error;
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: ErrorClass, message: string): void {
@@ -156,6 +177,81 @@ test("an explicitly synthetic source-free failure keeps the direct root text", (
     RangeError,
     "backward root result must match the accepted START and source-zero projection",
   );
+});
+
+// The run-state reducer's trace, on `learnableStarted`.
+
+test("the root inventory is retained without running a capture or defaults", () => {
+  const start = new StartNode(START_ID, { params: [new Parameter("topic", { hasDefault: true, default: [1n] })] });
+  start.captureBackwardContext = () => {
+    throw new Error("initialization captured an invocation");
+  };
+  const { state } = learnableStarted(graph([start], [[START_ID, END_ID]]));
+  const trace = state.trace!;
+
+  expect(trace.rootInputNames).toEqual(["topic"]);
+  expect(trace.rootStartSource).toBeNull();
+  expect(trace.lookupSource([...trace.sources.values()][0]!.source!)).toEqual({});
+  start.params = [];
+  expect(trace.rootInputNames).toEqual(["topic"]);
+});
+
+test("a terminal trace append rejection leaves every index unchanged", () => {
+  const { state, log } = learnableStarted(graph([], [[START_ID, END_ID]]));
+  let prepared: PreparedTransition | null = null;
+  for (const [nodeId, value] of [
+    [START_ID, {}],
+    [END_ID, null],
+  ] as const) {
+    commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+    prepared = prepareNodeSucceeded(state, nodeId, value, {
+      forwardCapture: forwardCapture(state.flow.nodes.get(nodeId)!, {}),
+    });
+    if (nodeId === START_ID) commitPrepared(log, state, prepared);
+  }
+  const before = traceSnapshot(state.trace!);
+  const append = log.append;
+
+  log.append = () => {
+    throw new Error("reject terminal");
+  };
+  expectError(() => commitPrepared(log, state, prepared!), Error, "reject terminal");
+  expect(traceSnapshot(state.trace!)).toEqual(before);
+
+  log.append = append;
+  commitPrepared(log, state, prepared!);
+  expect(state.trace!.terminal!.succeeded).toBe(true);
+});
+
+test("a causal route's trace latch is installed only after append", () => {
+  const { state, log } = learnableStarted(terminalSkipRouteFlow({ sibling: true }));
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitStartSuccess(state, log, {});
+  for (const nodeId of ["router", "unrelated"]) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+  const prepared = prepareNodeRouted(state, "router", "go", {
+    forwardCapture: forwardCapture(state.flow.nodes.get("router")!, {}),
+  });
+  const before = traceSnapshot(state.trace!);
+  const append = log.append;
+
+  log.append = () => {
+    throw new Error("reject causal route");
+  };
+  expectError(() => commitPrepared(log, state, prepared), Error, "reject causal route");
+  expect(traceSnapshot(state.trace!)).toEqual(before);
+
+  log.append = append;
+  commitPrepared(log, state, prepared);
+  expect(state.trace!.terminal).toBeNull();
+  const causal = state.trace!.occurrences.at(-1)!.source;
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, "unrelated", "done", {
+      forwardCapture: forwardCapture(state.flow.nodes.get("unrelated")!, {}),
+    }),
+  );
+  expect(state.trace!.terminal!.source).toEqual(causal);
 });
 
 // TS-only: the chain fixture.

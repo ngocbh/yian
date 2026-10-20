@@ -10,8 +10,8 @@
  * `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`,
  * `test_learning_rejects_a_scope_without_a_recorded_stack`,
  * `test_empty_enabled_table_retains_scope_free_evidence_without_episodes`,
- * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success` row
- * of `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`.
+ * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success` and
+ * `route` rows of `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`.
  *
  * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
  * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
@@ -41,9 +41,6 @@
  * `Failure` and revalidates the failure's fields;
  * `episodeOutcome` projects a success's canonical value and a failed record's failure JSON, and
  * refuses a record of another class and a forged success without a canonical typed value.
- *
- * Later (T4-4 PR 2), routes: the `route` row of
- * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`.
  *
  * Later (T4-5): `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack`
  * (it replays through `replayRecords`) and the `growth` row of
@@ -88,7 +85,7 @@ import {
   NodeSucceededRecord,
 } from "../../src/runtime/log.ts";
 import * as learning from "../../src/runtime/learning.ts";
-import { commitPrepared, prepareNodeSucceeded } from "../../src/runtime/state.ts";
+import { commitPrepared, prepareNodeRouted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
 import { type OutcomeRecord, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
 import { FuncNode, forwardCapture, stacks, startTraceNode } from "./run_state_fixtures.ts";
 
@@ -361,20 +358,24 @@ test("owner contexts are the only episode projection", () => {
 
 // The run-state reducer's learning authority, on `startTraceNode`.
 
-test("an engine episode uses the physical start sequence: success", () => {
+test.each(["success", "route"] as const)("an engine episode uses the physical start sequence: %s", (kind) => {
   const node = new TraceNode("agent");
   node.memoryScope = scope(node.id);
-  const { state, log } = startTraceNode(node, { keys: node.memoryScope.memories, learnable: true });
+  const { state, log } = startTraceNode(node, {
+    keys: node.memoryScope.memories,
+    learnable: true,
+    routeHandle: kind === "route" ? "go" : undefined,
+  });
   const physicalSequence = state.trace!.started.get(node.id);
   const outcomeSequence = state.nextSequence;
+  const carriers = { evidence: evidence(node.memoryScope), forwardCapture: forwardCapture(node, { question: "q" }) };
 
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, node.id, { answer: 7n }, {
-      evidence: evidence(node.memoryScope),
-      forwardCapture: forwardCapture(node, { question: "q" }),
-    }),
+    kind === "success"
+      ? prepareNodeSucceeded(state, node.id, { answer: 7n }, carriers)
+      : prepareNodeRouted(state, node.id, "go", carriers),
   );
 
   expect(physicalSequence).not.toBe(outcomeSequence);

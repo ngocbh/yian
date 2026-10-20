@@ -512,18 +512,24 @@ export function stacks(...scopes: readonly MemoryScope[]): MemoryStack[] {
     .map((scope) => new MemoryStack(scope.staticPath, scope.memories));
 }
 
+/** The options of `newState` and `startTraceNode`. */
+interface TraceNodeOptions {
+  keys: readonly string[] | null;
+  learnable: boolean;
+  routeHandle?: string;
+  stacks?: readonly MemoryStack[];
+}
+
 /**
  * Return a state of `START -> node -> END` after its committed RunStarted, with START ready, and
  * its log. `keys: null` disables memory; otherwise the table holds `keys`, each snapshot is
- * `{epoch: 4}`, and the stacks default to the node's own scope (none without one).
+ * `{epoch: 4}`, and the stacks default to the node's own scope (none without one). `routeHandle`
+ * is the handle of the edge into END.
  */
-function newState(
-  node: Node,
-  options: { keys: readonly string[] | null; learnable: boolean; stacks?: readonly MemoryStack[] },
-): { state: RunState; log: MemoryRunLog } {
+function newState(node: Node, options: TraceNodeOptions): { state: RunState; log: MemoryRunLog } {
   const built = graph([node], [
     [START_ID, node.id],
-    [node.id, END_ID],
+    [node.id, END_ID, options.routeHandle],
   ]);
   const state = new RunState(built);
   const initialPool = new VariablePool(built.startId);
@@ -561,10 +567,7 @@ function newState(
  * Return a state of `START -> node -> END` (as `newState` builds it) with START succeeded and
  * `node` the sole in-flight node, and its log.
  */
-export function startTraceNode(
-  node: Node,
-  options: { keys: readonly string[] | null; learnable: boolean; stacks?: readonly MemoryStack[] },
-): { state: RunState; log: MemoryRunLog } {
+export function startTraceNode(node: Node, options: TraceNodeOptions): { state: RunState; log: MemoryRunLog } {
   const { state, log } = newState(node, options);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitStartSuccess(state, log, {});

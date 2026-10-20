@@ -368,6 +368,15 @@ Each pooled node runs in a separate copy of the host's context variables, so
 host effects retain their cancellation context and node-local context changes
 do not leak into the dispatcher or later worker calls.
 
+Changed (TS yian): workers are async evaluations, not threads: at most `num_workers` are in
+flight, each starts only after its `NodeStarted` record is durable and published, and each
+settles into a FIFO completion queue (it never rejects) that the dispatcher reads one entry at a
+time, so outcomes commit in settle order. Steps commit inline from the node, since a step is
+appended and applied before `record` returns in both modes. On a `RunFailed` the dispatcher
+aborts the run signal, publishes the failure, then waits for every running worker and discards
+what they produce; any other error aborts the run signal, waits for every worker, and ends the
+run with the first error.
+
 ## The core node interface
 
 | The engine sees | Meaning |

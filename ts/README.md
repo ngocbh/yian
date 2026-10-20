@@ -496,7 +496,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   has a result, and resolves to those observers. A node failure is a result; any other error aborts
   the run signal and rejects `run()`, as does a promise a callback returns that rejects before the
   result. A `needsSteps` node's `record` appends and applies each step before it returns. Serial mode
-  (`numWorkers: 0`) only for now; pooled mode follows.
+  (`numWorkers: 0`) awaits each node inline; pooled mode keeps at most `numWorkers` evaluations in
+  flight and commits their outcomes in settle order from a FIFO completion queue (a worker never
+  rejects); a `RunFailed` is published before the remaining workers are awaited.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

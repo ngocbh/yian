@@ -251,8 +251,9 @@ run has a terminal result.
 
 Changed (TS yian): the reducer counts, per node, the attempts a resume retried that no stop
 covered; a stop covers every attempt started before it. The counts are history: they stay after
-the node's outcome and after a prune. `inspectRun` and the `NodeAttemptResumed` event will report
-them once those are ported.
+the node's outcome and after a prune. `resumedAttemptEvents` in `ts/src/runtime/engine.ts` builds
+the `NodeAttemptResumed` event per retried node that a resume will publish, and `inspectRun` will
+report the counts, once `resumeFlow` and `inspectRun` are ported.
 
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
@@ -377,6 +378,28 @@ go from the node straight to `onStream`/`onEvent` rather than through the dispat
 aborts the run signal, publishes the failure, then waits for every running worker and discards
 what they produce; any other error aborts the run signal, waits for every worker, and ends the
 run with the first error.
+
+Changed (TS yian): a run stops through an `AbortController` tree. `FlowEngine` takes the host's
+`signal`; each node gets its own child signal as `caps.signal`, linked to the run signal by one
+`{ once: true }` listener removed when the node settles, so listeners a node leaves behind die
+with it. Once the run signal is aborted (the host's signal, a failing host callback, a
+run-ending node failure, a host fault) nothing more starts, a step throws the node signal's
+reason and appends nothing, every outcome that settles afterwards is discarded, and every
+running node is awaited before `run()` settles; `run()` then rejects with the error that started
+the stop (the host's `signal.reason`, the callback's error), never a sibling's, while a node
+failure stays the run's `RunFailed`. A host stop and a host callback that throws or rejects
+(`onEvent`, `onStream`, steering) append one `RunStoppedRecord` (`signal` or `callback`) when
+the stop is requested, listing the nodes in flight, before anything winds down; other host
+faults append none, so their attempts count as interrupted on resume, and nothing is appended
+after a terminal result or a second time in one segment. Inside an AGENT turn a tool call that
+had already settled when the stop arrived still records its step (`record(step, { settled: true
+})`) and publishes its `ToolCallFinished`, as long as the run has no terminal result; other
+events after a stop are dropped. Each node's evaluation runs in a fresh `AsyncResource` created
+by the dispatcher, so it starts in the `AsyncLocalStorage` context of the `run()` call and a
+store a node sets stays in that node's async chain; callbacks the dispatcher calls (`onEvent`
+for durable observers) run in the dispatcher's context. A nested run started from a node with
+`signal: caps.signal` stops when its parent stops, and a child's failure doesn't stop the
+parent. A `RunLog`'s `append` must not call back into the run.
 
 ## The core node interface
 

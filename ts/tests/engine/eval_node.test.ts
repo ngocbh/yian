@@ -405,6 +405,7 @@ describe("evalNode checks its arguments", () => {
     ["tools", { tools: new Map() }, new TypeError("tools must be a ToolSet or null")],
     ["skills", { skills: { s: {} } }, new TypeError("skills must be a map or null")],
     ["steps", { steps: { starts: 1, prior: [], record() {} } }, new TypeError("steps must be a NodeSteps or null")],
+    ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
     [
       "memory_invocation",
       { memoryInvocation: { runId: "r", startSequence: 1 } },
@@ -440,6 +441,7 @@ describe("evalNode checks its arguments", () => {
       effectiveLlmByStaticPath: {},
       signal: new AbortController().signal,
       steering: { interruptSignal: () => new AbortController().signal, drain: () => [] },
+      onFault: () => {},
     };
 
     expect((await evalNode(node, null, pool, options)).outcome).toEqual(new Output("unused"));

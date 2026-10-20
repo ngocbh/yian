@@ -503,7 +503,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   result. A `needsSteps` node's `record` appends and applies each step before it returns. Serial mode
   (`numWorkers: 0`) awaits each node inline; pooled mode keeps at most `numWorkers` evaluations in
   flight and commits their outcomes in settle order from a FIFO completion queue (a worker never
-  rejects); a `RunFailed` is published before the remaining workers are awaited.
+  rejects); a `RunFailed` is published before the remaining workers are awaited. The `signal` option
+  is the host's stop: each node gets a child signal as `caps.signal`; a host stop or a failing host
+  callback records one `RunStoppedRecord` when requested, then nothing starts, later outcomes are
+  discarded, every running node is awaited, and `run()` rejects with the initiating error. Each
+  evaluation runs in a fresh `AsyncResource`, so `AsyncLocalStorage` stores set inside a node stay in
+  it. `resumedAttemptEvents(state, record)` builds the `NodeAttemptResumed` events a resume publishes
+  after `RunResumed`.
 - `src/runtime/memory_runtime.ts` holds `MemoryRuntime`: `open` validates the table, origins,
   registry and snapshots, opens one session per key in key order and captures the snapshots;
   `openContext(scope, request, { signal })` recalls each scope key outer to local, keeps non-empty

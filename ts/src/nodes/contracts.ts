@@ -1156,10 +1156,16 @@ export class NodeSteps {
   /**
    * Appends one step durably and returns once the engine has applied it. Call it from the node's
    * own evaluation, one call at a time, before the node returns; after the evaluation ends it
-   * throws. An error from it does not prove the step was not recorded: a stop can land
+   * throws. Once the run stops it throws the node signal's reason and appends nothing, except a
+   * step passed with `{ settled: true }` while the run has no terminal result.
+   *
+   * The engine can't see whether a call settled before the stop, so this is the node's
+   * obligation: pass `settled: true`, and emit `ToolCallFinished` after a stop, only for a call
+   * whose effect settled while the node's signal was live, recorded synchronously in that call's
+   * `.then`. An error from `record` does not prove the step was not recorded: a stop can land
    * mid-commit.
    */
-  readonly record: (step: ValueRecord) => void;
+  readonly record: (step: ValueRecord, options?: { settled?: boolean }) => void;
 
   /**
    * Check the field types and that the current start is counted; `prior` is copied.
@@ -1168,7 +1174,11 @@ export class NodeSteps {
    *   records, or `record` isn't a function.
    * @throws RangeError when `starts` is less than 1.
    */
-  constructor(starts: number, prior: readonly ValueRecord[], record: (step: ValueRecord) => void) {
+  constructor(
+    starts: number,
+    prior: readonly ValueRecord[],
+    record: (step: ValueRecord, options?: { settled?: boolean }) => void,
+  ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
     if (!Array.isArray(prior) || !prior.every((step: unknown) => isRecord(step))) {

@@ -124,11 +124,12 @@ function capabilityFault(error: unknown): CapabilityFault {
 }
 
 /**
- * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
- * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
- * `text`, is ignored. Local copy of `memory/session.ts`'s `addNote`.
+ * @internal Append the note `text()` to `error`'s own `notes` array, creating it when absent
+ * (Python's `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a
+ * throwing `text`, is ignored. Local copy of `memory/session.ts`'s `addNote`; the engine notes a
+ * refused stop record with it.
  */
-function addNote(error: unknown, text: () => string): void {
+export function addNote(error: unknown, text: () => string): void {
   try {
     if (typeof error !== "object" || error === null) return;
     const target = error as { notes?: unknown };
@@ -141,13 +142,15 @@ function addNote(error: unknown, text: () => string): void {
 /**
  * Carry a host observer fault out of a node body as a capability fault, so a failing
  * `onStream`/`onEvent` stays a host fault, never a node failure. `onFault` sees each fault before
- * it is thrown.
+ * it is thrown. Once `isClosed()` is true the sink drops what it gets.
  */
 function observerSink<T>(
   sink: (item: T) => unknown,
   onFault: (fault: CapabilityFault) => void,
+  isClosed: () => boolean,
 ): (item: T) => void {
   return (item) => {
+    if (isClosed()) return;
     try {
       sink(item);
     } catch (error) {
@@ -181,24 +184,34 @@ export class SteeringCapability implements Steering {
   readonly #inbox: Steering;
   readonly #onFault: (fault: CapabilityFault) => void;
   readonly #pending: Promise<unknown>[];
+  readonly #isClosed: () => boolean;
 
   /**
    * @param onFault Sees each capability fault before it is thrown or rejected with.
    * @param pending Receives each promise `drain` hands out, for the evaluator to await.
+   * @param isClosed Whether the evaluation ended; once it has, each method throws without calling
+   *   the inbox or `onFault`.
    */
-  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void, pending: Promise<unknown>[]) {
+  constructor(
+    inbox: Steering,
+    onFault: (fault: CapabilityFault) => void,
+    pending: Promise<unknown>[],
+    isClosed: () => boolean,
+  ) {
     this.#inbox = inbox;
     this.#onFault = onFault;
     this.#pending = pending;
+    this.#isClosed = isClosed;
   }
 
   /**
    * Return the host's interrupt signal for `nodeId`.
    *
    * @throws CapabilityFault carrying the host's error, or a `TypeError` when the answer isn't an
-   *   `AbortSignal`.
+   *   `AbortSignal`, or an `Error` once the evaluation ended.
    */
   interruptSignal(nodeId: string): AbortSignal {
+    this.#refuseClosed();
     let signal: unknown;
     try {
       signal = this.#inbox.interruptSignal(nodeId);
@@ -216,9 +229,10 @@ export class SteeringCapability implements Steering {
    * the host answers with a promise.
    *
    * @throws CapabilityFault (or rejects with one) carrying the host's error, or a `TypeError` when
-   *   the answer isn't an array of strings.
+   *   the answer isn't an array of strings, or an `Error` once the evaluation ended.
    */
   drain(nodeId: string): readonly string[] | Promise<readonly string[]> {
+    this.#refuseClosed();
     let messages: unknown;
     try {
       messages = this.#inbox.drain(nodeId);
@@ -245,6 +259,14 @@ export class SteeringCapability implements Steering {
       throw this.#fault(new TypeError("steering.drain must return an array of strings"));
     }
     return [...(messages as string[])];
+  }
+
+  /**
+   * Refuse a call once the evaluation ended: code a node left running must not reach the host's
+   * inbox, whose fault would end a run that has already settled or stop a later node's run.
+   */
+  #refuseClosed(): void {
+    if (this.#isClosed()) throw new CapabilityFault(new Error("steering capability is closed"));
   }
 
   /** Return `error` as a capability fault after reporting it. */
@@ -581,9 +603,12 @@ export interface EvalNodeOptions {
   wiringOverride?: JsonObject | null;
   /** The node's own abort signal, given to it as `caps.signal`; a fresh un-aborted one when omitted. */
   signal?: AbortSignal | null;
-  /** The transient stream sink a node declaring `needsLiveEvents` receives. */
+  /**
+   * The transient stream sink a node declaring `needsLiveEvents` receives; closed, dropping what
+   * it gets, once the outcome is decided.
+   */
   emitStream?: NodeCaps["emitStream"] | null;
-  /** The transient model and tool call observer sink a node declaring `needsLiveEvents` receives. */
+  /** The transient model and tool call observer sink, received and closed as `emitStream` is. */
   emitEvent?: NodeCaps["emitEvent"] | null;
   /** Whether to capture visible evidence from a node declaring `needsEvaluationTrace`. */
   captureEvidence?: boolean;
@@ -612,6 +637,11 @@ export interface EvalNodeOptions {
    * capability fault of this evaluation. The node's `record` closes when the outcome is decided.
    */
   steps?: NodeSteps | null;
+  /**
+   * Sees the original error of the evaluation's first capability fault when it is raised, before
+   * the node settles, so a host can end its run even when the node catches the fault.
+   */
+  onFault?: ((original: unknown) => void) | null;
 }
 
 /**
@@ -668,6 +698,7 @@ export async function evalNode(
     tools = null,
     steering = null,
     steps = null,
+    onFault = null,
   } = options;
   requireSteering(steering);
   if (typeof captureEvidence !== "boolean") throw new TypeError("capture_evidence must be a bool");
@@ -687,6 +718,7 @@ export async function evalNode(
   if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
   if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
   if (steps !== null && !isExactly(steps, NodeSteps)) throw new TypeError("steps must be a NodeSteps or null");
+  if (onFault !== null && typeof onFault !== "function") throw new TypeError("on_fault must be callable or null");
   if (memoryInvocation !== null && !isExactly(memoryInvocation, ConversationInvocation)) {
     throw new TypeError("memory_invocation must be a ConversationInvocation or null");
   }
@@ -810,6 +842,7 @@ export async function evalNode(
       tools,
       steering,
       steps,
+      onFault,
     });
   } finally {
     // The escape paths (a binder fault, a failing input capture) never reach the evaluator's close.
@@ -847,6 +880,8 @@ async function evaluateNode(
     tools: ToolSet | null;
     steering: Steering | null;
     steps: NodeSteps | null;
+    /** Sees the original of the first capability fault when it is raised. */
+    onFault: ((original: unknown) => void) | null;
   },
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
@@ -935,7 +970,9 @@ async function evaluateNode(
   // evaluator keeps it to throw when the node settles.
   const faults: { first: CapabilityFault | null } = { first: null };
   const onFault = (fault: CapabilityFault): void => {
-    faults.first ??= fault;
+    if (faults.first !== null) return;
+    faults.first = fault;
+    context.onFault?.(fault.original);
   };
   // The capability promises handed to the node. A node may settle without awaiting one, so the
   // evaluator awaits their settlement before it settles, and a late fault is still the first.
@@ -1002,22 +1039,26 @@ async function evaluateNode(
   }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
+  // Closed with the captures, so a step, event or steering call the node's dropped code makes after
+  // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
+  // left to fail.
+  let closed = false;
+  const isClosed = (): boolean => closed;
   if (node.needsLiveEvents === true) {
-    if (emitStream !== null) caps.emitStream = observerSink(emitStream, onFault);
-    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault);
+    if (emitStream !== null) caps.emitStream = observerSink(emitStream, onFault, isClosed);
+    if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault, isClosed);
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
-  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault, pending);
-  // Closed with the captures, so a step the node's dropped code records after the outcome is
-  // decided is refused rather than committed with no evaluation left to fail.
-  let stepsClosed = false;
+  if (steering !== null && node.needsSteering === true) {
+    caps.steering = new SteeringCapability(steering, onFault, pending, isClosed);
+  }
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the
     // evaluator keeps it as it keeps the other capabilities' faults.
-    caps.steps = new NodeSteps(steps.starts, steps.prior, (step) => {
-      if (stepsClosed) throw new CapabilityFault(new Error("node steps capability is closed"));
+    caps.steps = new NodeSteps(steps.starts, steps.prior, (step, options) => {
+      if (closed) throw new CapabilityFault(new Error("node steps capability is closed"));
       try {
-        steps.record(step);
+        steps.record(step, options);
       } catch (error) {
         if (error instanceof CapabilityFault) onFault(error);
         throw error;
@@ -1042,7 +1083,7 @@ async function evaluateNode(
     settled = pending.length;
     await Promise.allSettled(batch);
   }
-  stepsClosed = true;
+  closed = true;
   closeCaptures();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever

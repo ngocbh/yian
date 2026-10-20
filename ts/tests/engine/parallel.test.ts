@@ -8,22 +8,30 @@
  * `test_terminal_skipped_fails_under_workers`, `test_failure_under_workers`,
  * `test_end_output_under_workers` and `test_no_declared_outputs_yields_none_under_workers`.
  *
+ * Changed: `test_workers_inherit_host_context_without_leaking_node_changes` uses an
+ * `AsyncLocalStorage` for the `ContextVar`, serial as well as pooled (every evaluation runs in its
+ * own async resource): a store set around `run()` is seen by every node and by `onEvent`, and an
+ * `enterWith` in a node, in its synchronous part or after an `await`, reaches neither the
+ * dispatcher, a sibling nor a later node.
+ *
  * Ported (adapted): `test_pooled_late_sibling_publishes_persisted_causal_terminal_failure`: `slow`
  * blocks on a promise `onEvent` resolves once `a` succeeded, and `onEvent` checks the state where
  * Python checked it while iterating the run. `test_fan_out_actually_overlaps`: overlap is shown
  * with promises, not timing: each branch blocks until all four have entered.
  *
- * TS-only: nothing ready and nothing in flight before a terminal result is nonterminal quiescence.
- *
- * Later (AsyncLocalStorage isolation): `test_workers_inherit_host_context_without_leaking_node_changes`.
+ * TS-only: nothing ready and nothing in flight before a terminal result is nonterminal quiescence;
+ * a store `onEvent` sets for a durable observer reaches later nodes (serial and pooled); a run of
+ * 10,000 ready leaves succeeds and runs every node once, serial (in ready order) and with 8
+ * workers.
  */
 
 import { expect, test } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { Failure } from "../../src/diagnostics.ts";
 import { NodeRouted, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
-import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
+import { ELSE_HANDLE, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
@@ -38,6 +46,88 @@ import {
   RecordNode,
   rejected,
 } from "./run_state_fixtures.ts";
+
+/** Runs an async body and outputs its value. */
+class AsyncNode extends Node {
+  readonly kind = NodeKind.CODE;
+  readonly body: () => Promise<unknown>;
+
+  constructor(nodeId: string, body: () => Promise<unknown>) {
+    super(nodeId);
+    this.body = body;
+  }
+
+  override async forward(): Promise<NodeResult> {
+    return new Output(await this.body());
+  }
+}
+
+test.each([0, 2])("workers inherit host context without leaking node changes (%i workers)", async (numWorkers) => {
+  const context = new AsyncLocalStorage<string>();
+  const seen: string[] = [];
+  const see = (where: string): void => void seen.push(`${where}: ${context.getStore() ?? "missing"}`);
+  // Released once `a` has changed its store twice, so `b` looks again after both changes.
+  const changed = Promise.withResolvers<void>();
+  const a = new AsyncNode("a", async () => {
+    see("a");
+    context.enterWith("a-sync");
+    await null;
+    see("a after await");
+    context.enterWith("a-async");
+    changed.resolve();
+    return "done";
+  });
+  const b = new AsyncNode("b", async () => {
+    see("b");
+    await changed.promise;
+    see("b after a changed");
+    return "done";
+  });
+  const c = new AsyncNode("c", async () => {
+    see("c");
+    return "done";
+  });
+  const flow = graph([a, b, c], [
+    [START_ID, "a"],
+    [START_ID, "b"],
+    ["a", "c"],
+    ["b", "c"],
+    ["c", END_ID],
+  ]);
+  const onEvent = (event: object): void => see(`onEvent ${event.constructor.name}`);
+  const built = engine(flow, { numWorkers, onEvent });
+
+  const events = await context.run("host", async () => {
+    const result = await built.run();
+    see("after run");
+    return result;
+  });
+
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+  expect(seen.filter((line) => !line.endsWith(": host"))).toEqual(["a after await: a-sync"]);
+  expect(seen.filter((line) => line.startsWith("onEvent")).length).toBe(events.length);
+  expect(seen).toContain("b after a changed: host");
+  expect(seen).toContain("c: host");
+  expect(seen.at(-1)).toBe("after run: host");
+});
+
+test.each([0, 2])("a store onEvent sets for a durable observer reaches later nodes (%i workers)", async (numWorkers) => {
+  const context = new AsyncLocalStorage<string>();
+  const seen: (string | undefined)[] = [];
+  const flow = graph([new FuncNode("a", () => "done"), new FuncNode("b", () => seen.push(context.getStore()))], [
+    [START_ID, "a"],
+    ["a", "b"],
+    ["b", END_ID],
+  ]);
+  // The dispatcher calls onEvent for a durable observer, so the store lands in its context.
+  const onEvent = (event: object): void => {
+    if (event instanceof NodeSucceeded && event.nodeId === "a") context.enterWith("observer");
+  };
+
+  await context.run("host", () => engine(flow, { numWorkers, onEvent }).run());
+
+  expect(seen).toEqual(["observer"]);
+});
 
 test("linear is deterministic under workers", async () => {
   const log: string[] = [];
@@ -242,4 +332,19 @@ test("nothing ready and nothing in flight before a terminal result is nontermina
   expect(error).toEqual(new Error("FlowEngine reached nonterminal quiescence"));
   expect(built.signal.aborted).toBe(true);
   expect(built.log.nextSequence).toBe(1);
+});
+
+test.each([0, 8])("10,000 ready leaves each run once (%i workers)", async (numWorkers) => {
+  // Leaves with no join: a 10,000-wide join at END makes the reducer's join check, not dispatch,
+  // the cost. END reads only START and its edge comes last, so it is ready last.
+  const ids = Array.from({ length: 10_000 }, (_, index) => `n${index}`);
+  const ran: string[] = [];
+  const nodes = ids.map((id) => new RecordNode(id, ran));
+  const flow = graph(nodes, [...ids.map((id) => [START_ID, id] as [string, string]), [START_ID, END_ID]]);
+
+  const events = await engine(flow, { numWorkers }).run();
+
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+  if (numWorkers === 0) expect(ran).toEqual(ids);
+  else expect([...ran].sort()).toEqual([...ids].sort());
 });

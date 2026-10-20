@@ -42,7 +42,8 @@
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
  * capability's checks on what the host inbox returns, a steering fault the node catches (thrown or
  * rejected) or a `drain` promise it drops still rejecting `evalNode`, the first of two faults
- * the node catches winning, a render capture fault the node catches still rejecting `evalNode`,
+ * the node catches winning (and the only one `onFault` sees, when it is raised), a render capture
+ * fault the node catches still rejecting `evalNode`,
  * and a render write by the node's dropped code, landing while the evaluator waits on a steering
  * `drain`, rejecting it.
  *
@@ -722,7 +723,7 @@ describe("the steering capability", () => {
     return new SteeringCapability({
       interruptSignal: methods.interruptSignal ?? (() => new AbortController().signal),
       drain: methods.drain ?? (() => []),
-    } as Steering, () => {}, []);
+    } as Steering, () => {}, [], () => false);
   }
 
   test("passes the node id and returns the host's signal", () => {
@@ -907,6 +908,34 @@ describe("the steering capability", () => {
     );
 
     expect(error).toBe(first);
+  });
+
+  test("onFault sees the first fault's original once, when it is raised", async () => {
+    const first = new Error("sink failed");
+    const seen: unknown[] = [];
+    const node = new DrainNode("work", (caps, nodeId) => {
+      for (const fail of [
+        () => caps.emitStream!(new StreamChunk({ nodeId, key: "output", chunk: "a" })),
+        () => caps.steering!.drain(nodeId),
+      ]) {
+        try {
+          fail();
+        } catch {}
+      }
+      // Seen before the node settles.
+      seen.push("returned");
+    });
+    const steering = inbox(() => {
+      throw new Error("inbox failed");
+    });
+    const emitStream = (): void => {
+      throw first;
+    };
+
+    expect(await rejected(drive(node, { steering, emitStream, onFault: (original) => void seen.push(original) }))).toBe(
+      first,
+    );
+    expect(seen).toEqual([first, "returned"]);
   });
 
   test("a capability fault from the host passes through", async () => {

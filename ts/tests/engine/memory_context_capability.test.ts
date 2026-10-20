@@ -57,10 +57,11 @@
  * (both shapes): the primary stop is the host's signal, aborted by the node after it opened its
  * turn; the turn closes with the signal's reason while the node's own signal (the one the opener
  * received, not the run's) is aborted, and the cleanup note lands on the reason. The
- * `host_stop=True` cells of
- * `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`: a
- * throwing `onStream` stops the run, so the turn closes with the callback's error, which carries
- * the one cleanup note, after the node's signal aborted with it.
+ * `(host_stop=True, real_backend=False)` and `(host_stop=True, real_backend=True)` cells of
+ * `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator` (serial
+ * and two workers): a throwing `onStream` stops the run, so the turn closes with the callback's
+ * error, which carries the one cleanup note, after the node's signal aborted with it; the real
+ * backend uses the `failClose` spy.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -847,4 +848,32 @@ test.each([0, 2])("a callback stop retains conversation cleanup notes (numWorker
     "Memory context cleanup failed: RangeError: conversation close failed",
   ]);
   expect(built.log.records().at(-1)!.record).toEqual(new RunStoppedRecord("callback", "callback stop", ["work"]));
+});
+
+test.each([0, 2])("a callback stop retains conversation cleanup notes: real backend (numWorkers %p)", async (numWorkers) => {
+  const error: Error & { notes?: string[] } = new Error("callback stop");
+  const node = new Consumer(async (open, caps) => {
+    await open("system", "prompt", {});
+    caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "one" }));
+    return new Output(7n);
+  });
+  const memory = new SessionMemory();
+  const runtime = await openSessionRuntime(memory);
+  const spy = failClose(new RangeError("conversation close failed"));
+  try {
+    const built = single(node, {
+      numWorkers,
+      onStream: () => {
+        throw error;
+      },
+      memoryContextOpener: contextOpener(runtime),
+    });
+
+    expect(await rejected(built.run())).toBe(error);
+    expect((error.notes ?? []).filter((note) => note.includes("conversation close failed")).length).toBe(1);
+    expect(built.log.records().at(-1)!.record).toEqual(new RunStoppedRecord("callback", "callback stop", ["work"]));
+  } finally {
+    spy.mockRestore();
+    await runtime.close();
+  }
 });

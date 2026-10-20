@@ -1088,7 +1088,11 @@ test("a model that can't stream is a structured output failure", async () => {
       throw getterFailure;
     },
   };
-  for (const model of [{ provider: "ollama", model: "qwen" }, throwing]) {
+  const rows: [unknown, Error][] = [
+    [{ provider: "ollama", model: "qwen" }, new TypeError("the reflector model must provide stream()")],
+    [throwing, getterFailure],
+  ];
+  for (const [model, cause] of rows) {
     const memory = newMemory({ llmConfig: OLLAMA, createModel: () => model as unknown as ChatModel });
     const error = await withRun(memory, (session) => rejection(session.learn(context())));
     expect([error.code, error.message, error.retryable]).toEqual([
@@ -1096,11 +1100,7 @@ test("a model that can't stream is a structured output failure", async () => {
       "reflector does not support the required structured output",
       false,
     ]);
-    if (model === throwing) {
-      expect(error.cause).toBe(getterFailure);
-    } else {
-      expect(error.cause).toEqual(new TypeError("the reflector model must provide stream()"));
-    }
+    expect(error.cause).toEqual(cause);
   }
 });
 
@@ -1275,10 +1275,10 @@ test("session reflects under the memory key", async () => {
   });
   const [notes, other, prompt] = await withRun(memory, async (session) => {
     expect("openFrame" in session).toBe(false);
-    const notes = await session.learn(new LearnContext("run-1", "notes", [noted]));
-    const other = await session.learn(new LearnContext("run-1", "other", [noted]));
-    session.commit("one", notes);
-    return [notes, other, promptOf(model.requests.at(-1)!)] as const;
+    const notesBatch = await session.learn(new LearnContext("run-1", "notes", [noted]));
+    const otherBatch = await session.learn(new LearnContext("run-1", "other", [noted]));
+    session.commit("one", notesBatch);
+    return [notesBatch, otherBatch, promptOf(model.requests.at(-1)!)] as const;
   });
   expect(prompt.split("\n")[0]).toBe("Memory: other");
   expect(prompt).not.toContain("Frame:");

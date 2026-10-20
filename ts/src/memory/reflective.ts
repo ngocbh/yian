@@ -639,7 +639,7 @@ export class ReflectiveMemory implements Memory {
   private readonly llmConfig: JsonObject;
   private readonly env: Env;
   private readonly createModel: CreateModel;
-  private readonly onRetry: OnRetry | null;
+  private readonly onRetry: OnRetry | undefined;
   private storage: SQLiteStorage | null = null;
   private readonly storagePath: string | null;
   private readonly createParent: boolean;
@@ -732,7 +732,7 @@ export class ReflectiveMemory implements Memory {
     const env = options.env ?? processEnv;
     this.env = env;
     this.createModel = options.createModel ?? ((config) => chatModelFromConfig(config, { env }));
-    this.onRetry = options.onRetry ?? null;
+    this.onRetry = options.onRetry ?? undefined;
   }
 
   /**
@@ -1275,10 +1275,9 @@ export class ReflectiveSession implements MemorySession {
    */
   private validateActions(context: LearnContext, actions: readonly ReflectionAction[]): MemoryMutation[] {
     const contract = (message: string) => operationError("learn", "reflective.contract", message);
-    const noops = actions.filter((action) => action.action === "noop");
-    if (noops.length > 0 && actions.length !== 1) throw contract("a no-op action must be the only action");
-    if (noops.length > 0) {
-      if (noops[0]!.lessonId !== null || noops[0]!.text !== null) {
+    if (actions.some((action) => action.action === "noop")) {
+      if (actions.length !== 1) throw contract("a no-op action must be the only action");
+      if (actions[0]!.lessonId !== null || actions[0]!.text !== null) {
         throw contract("a no-op action cannot carry an id or text");
       }
       return [];
@@ -1290,11 +1289,11 @@ export class ReflectiveSession implements MemorySession {
     const proposals: MemoryMutation[] = [];
     const source = sourceJson(context.runId);
     for (const [index, { action, lessonId, text }] of actions.entries()) {
-      if (typeof lessonId !== "string" || !lessonId) throw contract("lesson ids must be non-empty strings");
+      if (!lessonId) throw contract("lesson ids must be non-empty strings");
       if (touched.has(lessonId)) throw contract("actions cannot target one lesson more than once");
       touched.add(lessonId);
       if (action === "add" || action === "revise") {
-        if (typeof text !== "string" || !text.trim()) throw contract("add and revise actions require non-blank text");
+        if (!text?.trim()) throw contract("add and revise actions require non-blank text");
       } else if (text !== null) {
         throw contract("remove actions cannot carry text");
       }
@@ -1362,7 +1361,10 @@ export class ReflectiveSession implements MemorySession {
         let sent: readonly string[] = [];
         try {
           if (model instanceof RouteModel) sent = model.route.auth.credentials();
-        } catch {}
+        } catch {
+          // Read at scrub time, so a token resolved during the call is included; a failing read
+          // leaves `sent` empty rather than replacing the error being mapped.
+        }
         return scrubCallCredentials(error, callConfig, { env, sent });
       };
       const unsupported = (error: unknown) =>
@@ -1377,10 +1379,6 @@ export class ReflectiveSession implements MemorySession {
       try {
         // A throwing `stream` getter counts as no stream, as Python's `invoke()` check.
         if (typeof model.stream !== "function") throw new TypeError("the reflector model must provide stream()");
-      } catch (error) {
-        throw unsupported(error);
-      }
-      try {
         plan = planStructured(structuredTarget(model), REFLECTION_SCHEMA as SchemaObject);
       } catch (error) {
         throw unsupported(error);
@@ -1392,7 +1390,7 @@ export class ReflectiveSession implements MemorySession {
       const request = plan.apply(new Request({ messages: [system, user] }));
       let response: Response;
       try {
-        response = await callWithRetries(model, request, { onRetry: memory["onRetry"] ?? undefined });
+        response = await callWithRetries(model, request, { onRetry: memory["onRetry"] });
       } catch (error) {
         throw operationError("learn", "reflective.provider", "reflector invocation failed", {
           retryable: true,

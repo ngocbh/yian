@@ -2,12 +2,8 @@
  * A child flow's agents may not inherit an `llm_config` value read only when a flow runs: a port
  * of `tests/compose/test_llm_config_values_inherit.py`.
  *
- * Ported: every row that only loads.
- *
- * Later (T3-22): `test_the_cascade_check_names_a_composer_by_its_gate`,
- * `test_a_flow_built_around_compose_hits_the_cascade_check` and
- * `test_a_root_input_value_or_a_literal_passes_the_cascade_check` (they call
- * `resolve_llm_cascade` and `resolve_run_llm`).
+ * Ported: every row. Changed: the cascade checks throw a `RangeError` where Python raises
+ * `ValueError`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -15,8 +11,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { resolveLlmCascade, resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { ValueTemplate } from "../../src/nodes/contracts.ts";
 
 import { loadErrorAsync } from "./declarations.ts";
 
@@ -107,6 +105,27 @@ test("a composer in a child flow is named by its gate", async () => {
   expect(message).toStartWith("flow llm_config.model: node 'ask' adaptive_questions.llm_config in 'c' would inherit ");
   expect(message).not.toContain("__compose");
   expect(message).toContain(FIX);
+});
+
+/** Return the message of the `RangeError` `run` throws, failing the test on any other outcome. */
+function rangeError(run: () => unknown): string {
+  try {
+    run();
+  } catch (caught) {
+    expect(caught).toBeInstanceOf(RangeError);
+    return (caught as RangeError).message;
+  }
+  throw new Error("expected a RangeError");
+}
+
+const CASCADE_DEFAULTS = { provider: "openai", model: "gpt-x" };
+
+test("the cascade check names a composer by its gate", async () => {
+  const flow = (await loadFlow(COMPOSER_IN_CHILD.replace("'${pick.output}'", "m1"))).compiled;
+  flow.flowLlmConfig = new ValueTemplate({ model: "${pick.output}" });
+  const message = rangeError(() => resolveLlmCascade(flow, {}, { defaults: CASCADE_DEFAULTS }));
+  expect(message).toStartWith("node 'ask' adaptive_questions.llm_config in 'c' would inherit llm_config.model ");
+  expect(message).not.toContain("__compose");
 });
 
 test("a child agent that sets the field loads", async () => {
@@ -251,6 +270,22 @@ output: \${repeat.output}
   const message = (await error(text)).diagnostic.message;
   expect(message).toStartWith("flow llm_config.model: ");
   expect(message).toContain("agent 'repeat/a'");
+});
+
+test("a flow built around compose hits the cascade check", async () => {
+  const flow = (await loadFlow(defCall({ rootModel: "m0" }))).compiled;
+  flow.flowLlmConfig = new ValueTemplate({ model: "${pick.output}" });
+  const message = rangeError(() => resolveLlmCascade(flow, {}, { defaults: CASCADE_DEFAULTS }));
+  expect(message).toMatch(/node 'c\/a' would inherit llm_config\.model/);
+  expect(message).toContain(FIX);
+});
+
+test("a root input value or a literal passes the cascade check", async () => {
+  const flow = (await loadFlow(defCall({ rootModel: "m0" }))).compiled;
+  expect(resolveLlmCascade(flow, {}, { defaults: CASCADE_DEFAULTS })["c/a"]!["model"]).toBe("m0");
+  flow.flowLlmConfig = new ValueTemplate({ model: "${input.m}" });
+  const run = resolveRunLlm(flow, {}, { defaults: CASCADE_DEFAULTS, runInputs: { m: "gpt-y" } });
+  expect(run.effective["c/a"]!["model"]).toBe("gpt-y");
 });
 
 const TYPED_CHILD = `id: f

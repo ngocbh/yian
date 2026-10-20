@@ -1,10 +1,9 @@
-/**
- * Mirrors `tests/test_llm_config_layers.py`; the comparison with `resolve_llm_cascade` waits for
- * `compile/llm_cascade.ts`.
- */
+/** Mirrors `tests/test_llm_config_layers.py`. */
 
 import { describe, expect, test } from "bun:test";
 
+import { resolveLlmCascade } from "../src/compile/llm_cascade.ts";
+import { loadFlow } from "../src/compose/loader.ts";
 import { HOST_KEY_MARKER, missingModelMessage } from "../src/llm_clients/connection.ts";
 import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../src/llm_clients/layers.ts";
 
@@ -105,12 +104,22 @@ test.each([
   expect(rangeError(() => resolve({ provider: "openai", model: "m", [field]: value }))).toContain(message);
 });
 
-test("the result never aliases its inputs", () => {
+test("the result matches the cascade and never aliases its inputs", async () => {
+  const text = `
+id: f
+name: f
+llm_config: {provider: openai, openai: {temperature: 0.3}}
+nodes:
+  chat: {kind: agent, prompt: hi, llm_config: {openai: {max_output_tokens: 5}}}
+output: \${chat.output}
+`;
+  const flow = (await loadFlow(text)).compiled;
+  const expected = resolveLlmCascade(flow, {}, { defaults: DEFAULTS, providerModels: { openai: "gpt-saved" } })["chat"];
   const authored = { provider: "openai", openai: { temperature: 0.3, max_output_tokens: 5n } };
 
   const config = resolve(authored, { providerModels: { openai: "gpt-saved" } });
 
-  expect(config).toEqual({ provider: "openai", model: "gpt-saved", openai: { temperature: 0.3, max_output_tokens: 5n } });
+  expect(config).toEqual(expected!);
   (config["openai"] as Record<string, unknown>)["temperature"] = 9;
   expect(authored.openai.temperature).toBe(0.3);
 });

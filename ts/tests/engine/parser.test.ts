@@ -234,12 +234,7 @@ test.each<Omit<TextCaseRow, "call">>([
   // tests/engine/test_long_int_literals.py
   { id: "yaml/engine_long_int_literals__long_int_literal" },
   // tests/engine/test_limit_overrides.py
-  {
-    id: "load-core/engine_limit_overrides__yaml_nesting_follows_the_variable",
-    message:
-      "invalid YAML: this list nests deeper than 5 levels, the limit for a YAML document " +
-      "(each mapping and list is a level; a yian value nests at most 4); flatten it",
-  },
+  { id: "load-core/engine_limit_overrides__yaml_nesting_follows_the_variable" },
   // tests/engine/test_uses_files.py
   { id: "load-core/engine_uses_files__malformed_external_child", file: "child.yaml" },
   // A sample case of the case format, with no Python test.

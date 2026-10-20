@@ -591,9 +591,15 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `MemoryScope` (`resolveMemoryLayout`) and stamps them all or nothing (`applyMemoryLayout`).
 - `src/compile/expand.ts` holds the pure growth builders: `cloneChild` and `buildGrow`, which
   turn a CALL, MAP or LOOP seed into a `Flow` fragment.
-- `src/compile/llm_cascade.ts` holds the load-time half of the `llm_config` cascade, the check
-  for a value a child flow's agent would inherit (`findInheritedLlmValue`); run-time resolution
-  is not ported yet.
+- `src/compile/llm_cascade.ts` holds the `llm_config` cascade: the load-time check for a value a
+  child flow's agent would inherit (`findInheritedLlmValue`), run-start resolution
+  (`resolveLlmCascade`, `resolveRunLlm`), replay of a recorded map (`applyEffectiveLlmMap`), the
+  call-time helpers (`knownCallTimeProviders`, `callTimeSelection`, `inFlightLlmConfigs`, ...)
+  and `bindHostCredentials`. Each callsite's child flow is a fresh `copyGraph` copy, and a node's
+  config is replaced with a new record (`copyValue` for deep copies), never changed in place, since
+  a copied flow's nodes share their records with the original. The maps that go into or come from
+  the run log (effective, call-time, in-flight) are records; the label, subject, provider and
+  base-URL lookups are `Map`s.
 - A `Flow`'s `nodes` and `wiring` are `Map`s: they keep insertion order, so node and wiring order
   is Python's (a record would list index-like keys first and could collide with `__proto__`).
 - `copyGraph` is the one graph copier (Python's `copy.deepcopy` of a flow or node). Each call uses

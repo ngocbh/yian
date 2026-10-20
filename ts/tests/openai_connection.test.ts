@@ -6,8 +6,8 @@
  * is `llm/structured.test.ts`'s); `test_saved_api_key_and_preflight_ignore_incidental_environment`
  * and `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight
  * goes with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
- * `connectionCredentials` twin. Elsewhere: the runs go with `runFlow`, the cascade with
- * `compile/llm_cascade.ts`.
+ * `connectionCredentials` twin. The two cascade tests are ported over `resolveLlmCascade`.
+ * Later (T4-8): the runs go with `runFlow`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -16,6 +16,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
+import { resolveLlmCascade } from "../src/compile/llm_cascade.ts";
+import { loadFlow } from "../src/compose/loader.ts";
 import type { Env } from "../src/defaults.ts";
 import { collect } from "../src/llm/events.ts";
 import { Message, Request, TextPart } from "../src/llm/messages.ts";
@@ -168,6 +170,27 @@ test("saved selection wins incidental key and is nonsecret", async () => {
 test("authored model wins saved default", async () => {
   await subscription();
   expect(resolveModelConfig({ model: "explicit" }, { env })["model"]).toBe("explicit");
+});
+
+test("provider only cascade uses that providers saved model", async () => {
+  await authStore().save("anthropic", new ApiKeyCredentials("key"), "saved-anthropic");
+  const snap = connectionSnapshot({ env });
+  const flow = await loadFlow(
+    "id: test\nname: test\n" +
+      "nodes:\n  a: {kind: agent, prompt: hi, llm_config: {provider: anthropic}}\noutput: ${a.output}\n",
+  );
+  const effective = resolveLlmCascade(flow.compiled, {}, { defaults: snap.defaults, providerModels: snap.providerModels });
+  expect(effective["a"]!["model"]).toBe("saved-anthropic");
+});
+
+test("authored model still inherits across provider fields", async () => {
+  const snap = connectionSnapshot({ env });
+  const flow = await loadFlow(
+    "id: test\nname: test\nllm_config: {model: authored}\n" +
+      "nodes:\n  a: {kind: agent, prompt: hi, llm_config: {provider: anthropic}}\noutput: ${a.output}\n",
+  );
+  const effective = resolveLlmCascade(flow.compiled, {}, { defaults: snap.defaults, providerModels: snap.providerModels });
+  expect(effective["a"]!["model"]).toBe("authored");
 });
 
 test("snapshot does not follow reconnect", async () => {

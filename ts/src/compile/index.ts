@@ -15,12 +15,13 @@
  * `model.ts` owns the graph, its growth-metadata check and `copyGraph`, `origins.ts` the origin
  * traversal and rewrites, `execution_layout.ts` the static execution scopes, `memory_layout.ts`
  * the static memory key table and scopes, `expand.ts` the growth builders and `buildGrow`,
- * `validation.ts` the cycle, path and type checks, and `manifest.ts` the manifests, fingerprints
- * and expansion digests. This index re-exports Python's `__all__` and nothing else; callers of
- * any other name import the module that defines it. The LLM configuration map is not ported yet.
+ * `validation.ts` the cycle, path and type checks, `manifest.ts` the manifests, fingerprints
+ * and expansion digests, and `llm_cascade.ts` the static-path LLM configuration map (run-start
+ * resolution, replay, host credentials). This index re-exports Python's `__all__` and nothing
+ * else; callers of any other name import the module that defines it.
  *
  * Knows about: diagnostics, expr, nodes (with the LLM-client config the AGENT node reads), memory
- * contracts and typesys.
+ * contracts, typesys, and LLM configuration validation, merge and connection selection.
  * Never imports: compose, runtime, the package-root run boundary, the CLI, or provider SDKs.
  */
 

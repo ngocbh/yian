@@ -483,10 +483,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the
   memory carriers' in `memory/contracts.ts`, `sameSourceEntry` in `runtime/trace.ts`,
-  `sameRuntimeBackwardState` in `runtime/learning.ts`). Every
-  `same*` takes non-null values; compare a nullable pair with `sameOptional(a, b, same)` from
-  `nodes/contracts.ts`. `memory/contracts.ts` writes its null checks inline, since it imports
-  only `diagnostics` and `defaults`. A `BackwardFailure`'s cause compares by value, never `===`.
+  `sameRuntimeBackwardState` in `runtime/learning.ts`). Every `same*` takes non-null values; compare
+  a nullable pair with `sameOptional(a, b, same)` from `nodes/contracts.ts`. `memory/contracts.ts`
+  writes its null checks inline, since it imports only `diagnostics` and `defaults`. A
+  `BackwardFailure`'s cause compares by value, never `===`.
 
 ## Compile
 

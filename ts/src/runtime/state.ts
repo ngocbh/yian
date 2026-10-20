@@ -1711,7 +1711,8 @@ export function replayRecords(
     try {
       next = prepareRecord(state, envelope.record, { growBuilder });
     } catch (error) {
-      // Python's node-data marker is itself a ValueError; replay reports the original.
+      // Python's node-data marker subclasses the original error's class, so a corrupt log reads
+      // as that error there; replay reports the original here too.
       if (error instanceof NodeDataError) throw error.original;
       throw error;
     }

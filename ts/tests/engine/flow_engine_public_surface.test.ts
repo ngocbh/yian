@@ -11,22 +11,54 @@
  * `test_mismatched_durable_worker_count_is_rejected_before_execution`; each names its `RangeError`
  * and full message, where Python matches a part of its `ValueError`.
  *
+ * Ported (adapted): `test_static_run_yields_only_new_post_durable_observers`: `run()` resolves to
+ * the observers, which `onEvent` saw first, each after its record was appended.
+ * `test_stream_chunks_are_callback_only_and_never_durable`: the fixture `StreamNode` streams through
+ * `caps.emitStream` and returns `{output: "hello"}`; its chunks carry no `final` flag.
+ * `test_engine_borrows_and_never_closes_the_run_log` counts the fixture log's `close` calls.
+ *
  * TS-only: the constructor's other checks, the run's tool set bound to the run id and signal, a
- * terminal state returning no events, unfinished starts refused, and a second `run()` refused.
+ * terminal state returning no events, unfinished starts refused, a second `run()` refused, an
+ * `onEvent` promise that rejects before the terminal result rejecting `run()` with its error, and
+ * one that rejects after it being ignored, with nothing rejecting unhandled.
+ *
+ * Later (T4-10, T4-5): `test_direct_engine_executes_real_dynamic_combinators` (CALL, MAP and LOOP
+ * growth). Later (T5-11a): `test_direct_agent_uses_its_node_owned_model_factory`. Later (T4-8):
+ * `test_flow_engine_is_not_exported_from_the_package_root`.
  *
  * Not ported: `test_constructor_is_exactly_the_recorded_state_log_surface` (`inspect` and type
  * hints; TS type-checks the options) and `test_checkpoint_era_engine_methods_are_absent` (TS never
  * had them).
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import { CompiledFlow, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import {
+  NodeStarted,
+  NodeSucceeded,
+  type RunEvent,
+  RunStarted,
+  RunSucceeded,
+  StreamChunk,
+} from "../../src/events.ts";
+import { Node, type NodeCaps, NodeKind, type NodeResult } from "../../src/nodes/base.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { MemoryRunLog, NodeStartedRecord } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareNodeFailed, prepareNodeStarted, RunState } from "../../src/runtime/state.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { engine, FuncNode, graph, nodeFailure, noGrowth, RUN_ID, rejected } from "./run_state_fixtures.ts";
+import {
+  engine,
+  FuncNode,
+  graph,
+  nodeFailure,
+  noGrowth,
+  RUN_ID,
+  rejected,
+  StreamNode,
+} from "./run_state_fixtures.ts";
 
 /** The invocations of the action flow's node. */
 const probe: string[] = [];
@@ -157,4 +189,142 @@ test("unfinished starts must be requeued before execution", async () => {
   );
   expect(probe).toEqual([]);
   expect(log.nextSequence).toBe(2);
+});
+
+/** Return `START -> twice -> END`, where `twice` doubles the input `x`. */
+function staticFlow(): CompiledFlow {
+  const twice = new FuncNode("twice", (inputs) => (inputs["n"] as bigint) * 2n, { reads: { n: "${input.x}" } });
+  return graph([twice], [
+    [START_ID, "twice"],
+    ["twice", END_ID],
+  ], { outputs: [new FlowOutput("output", "${twice.output}")] });
+}
+
+test("static run yields only new post durable observers", async () => {
+  const callbacks: [RunEvent, number][] = [];
+  const onEvent = (event: RunEvent): void => {
+    callbacks.push([event, built.log.nextSequence]);
+  };
+  const built = engine(staticFlow(), { inputs: { x: 4n }, onEvent });
+  const events = await built.run();
+
+  expect(callbacks.map(([event]) => event)).toEqual([...events]);
+  callbacks.forEach(([event], index) => expect(event).toBe(events[index]!));
+  expect(events.some((event) => event instanceof RunStarted)).toBe(false);
+  expect(events.map((event) => event.constructor)).toEqual([
+    NodeStarted,
+    NodeSucceeded,
+    NodeStarted,
+    NodeSucceeded,
+    NodeStarted,
+    NodeSucceeded,
+    RunSucceeded,
+  ]);
+  // Each node's observers follow its record: the start's is the second record, its outcome's the third.
+  expect(callbacks.slice(0, 2).map(([, sequence]) => sequence)).toEqual([2, 3]);
+  expect((events.at(-1) as RunSucceeded).output).toBe(8n);
+  expect(built.state.result).toEqual(events.at(-1) as RunSucceeded);
+});
+
+test("stream chunks are callback only and never durable", async () => {
+  const stream = new StreamNode("stream", ["hel", "lo"]);
+  const flow = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["stream", stream],
+      [END_ID, EndNode.value(END_ID, { outputName: "output" })],
+    ]),
+    [
+      new Edge("start-stream", START_ID, "stream", { optional: true, ordering: true }),
+      new Edge("stream-end", "stream", END_ID, { inputGroup: "output" }),
+    ],
+    {
+      wiring: new Map([
+        [START_ID, new Map()],
+        ["stream", new Map()],
+        [END_ID, new Map([["output", "${stream.output.output}"]])],
+      ]),
+    },
+  );
+  const chunks: StreamChunk[] = [];
+  const built = engine(flow, { onStream: (chunk) => chunks.push(chunk) });
+  const events = await built.run();
+
+  expect(chunks).toEqual([
+    new StreamChunk({ nodeId: "stream", key: "output", chunk: "hel" }),
+    new StreamChunk({ nodeId: "stream", key: "output", chunk: "lo" }),
+  ]);
+  expect(events.some((event) => event instanceof StreamChunk)).toBe(false);
+  expect(built.log.records().some((envelope) => envelope.record instanceof StreamChunk)).toBe(false);
+  expect(built.log.nextSequence).toBe(7);
+  expect(built.state.result).toEqual(events.at(-1) as RunSucceeded);
+  expect(events.at(-1)).toEqual(new RunSucceeded({ output: "hello" }));
+});
+
+test("engine borrows and never closes the run log", async () => {
+  const built = engine(staticFlow(), { inputs: { x: 3n } });
+  let closes = 0;
+  const close = built.log.close.bind(built.log);
+  built.log.close = () => {
+    closes += 1;
+    close();
+  };
+  await built.run();
+  expect(closes).toBe(0);
+  built.log.close();
+  expect(closes).toBe(1);
+});
+
+const unhandled: unknown[] = [];
+const collect = (reason: unknown): void => {
+  unhandled.push(reason);
+};
+beforeEach(() => {
+  unhandled.length = 0;
+  process.on("unhandledRejection", collect);
+});
+afterEach(() => {
+  process.off("unhandledRejection", collect);
+});
+
+/** A node that waits until its signal aborts, then rejects with the reason. */
+class WaitNode extends Node {
+  readonly kind = NodeKind.CODE;
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+    return new Promise((_resolve, reject) => {
+      caps.signal!.addEventListener("abort", () => reject(caps.signal!.reason), { once: true });
+    });
+  }
+}
+
+test("an onEvent promise that rejects before the terminal result rejects run with its error", async () => {
+  const error = new Error("host listener failed");
+  const flow = graph([new WaitNode("work")], [
+    [START_ID, "work"],
+    ["work", END_ID],
+  ]);
+  const onEvent = (event: RunEvent): Promise<void> | undefined =>
+    event instanceof NodeStarted && event.nodeId === "work" ? Promise.reject(error) : undefined;
+  const built = engine(flow, { onEvent });
+
+  expect(await rejected(built.run())).toBe(error);
+  expect(built.signal.aborted).toBe(true);
+  expect(built.signal.reason).toBe(error);
+  expect(built.state.result).toBeNull();
+  const work = built.log.records().filter((envelope) => (envelope.record as { nodeId?: string }).nodeId === "work");
+  expect(work.map((envelope) => envelope.record.constructor)).toEqual([NodeStartedRecord]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(unhandled).toEqual([]);
+});
+
+test("an onEvent promise that rejects after the terminal result is ignored", async () => {
+  const onEvent = (event: RunEvent): Promise<void> | undefined =>
+    event instanceof RunSucceeded ? Promise.reject(new Error("late")) : undefined;
+  const built = engine(staticFlow(), { inputs: { x: 1n }, onEvent });
+
+  expect((await built.run()).at(-1)).toEqual(new RunSucceeded({ output: 2n }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(built.signal.aborted).toBe(false);
+  expect(unhandled).toEqual([]);
 });

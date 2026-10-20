@@ -2,23 +2,46 @@
  * Append-only flow execution over one prepared run-state/log authority.
  *
  * `FlowEngine` is the sole ready-frontier consumer and state writer. Serial mode evaluates
- * durably started nodes inline. Every observer it returns follows its record's append and reducer
- * application. Stream chunks are transient callback-only messages and never enter the log.
+ * durably started nodes inline, and every `prepare* -> commitPrepared` runs with no `await`
+ * between. Every observer it returns follows its record's append and reducer application. Stream
+ * chunks are transient callback-only messages and never enter the log.
  *
  * Knows about:   compile/model, diagnostics, events, memory contracts, nodes, runtime eval_node,
  *                log, state and trace, skills, tools.
  * Never imports: the run boundary, compose, or the CLI.
  */
 
-import { reprText } from "../diagnostics.ts";
-import type { RunEvent, StreamChunk } from "../events.ts";
-import type { Steering } from "../nodes/base.ts";
-import { isExactly } from "../nodes/contracts.ts";
+import { GrowthRejected } from "../compile/model.ts";
+import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
+import { type RunEvent, RunFailed, type StreamChunk } from "../events.ts";
+import { ConversationInvocation } from "../memory/contracts.ts";
+import { Grow, Output, Route, type Steering } from "../nodes/base.ts";
+import { isExactly, type NodeSteps } from "../nodes/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
-import { type MemoryContextOpener, requireSteering } from "./eval_node.ts";
-import type { RunLog } from "./log.ts";
-import { type GrowBuilder, RunState } from "./state.ts";
+import { jsTypeName } from "../typesys/values.ts";
+import {
+  EvaluatedOutcome,
+  EvaluationFailure,
+  evalNode,
+  evaluationFailure,
+  type MemoryContextOpener,
+  requireSteering,
+} from "./eval_node.ts";
+import type { OutcomeCarriers, RunLog } from "./log.ts";
+import {
+  commitPrepared,
+  type GrowBuilder,
+  NodeDataError,
+  type PreparedTransition,
+  prepareExpanded,
+  prepareNodeFailed,
+  prepareNodeRouted,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  RunState,
+} from "./state.ts";
+import { captureBindings } from "./trace.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -83,6 +106,7 @@ export class FlowEngine {
   /** The run's stop; single-use, so `run()` runs once. */
   readonly #controller = new AbortController();
   #ran = false;
+  #settled = false;
 
   /**
    * Borrow a prepared state and log and configure one drive.
@@ -130,20 +154,175 @@ export class FlowEngine {
   /**
    * Drive newly ready work to a terminal result.
    *
+   * A node failure is a result: `run()` resolves with its `RunFailed`. Any other error aborts the
+   * run signal and rejects `run()`.
+   *
    * @returns The new post-durable observers, in order; none when the state is already terminal.
-   * @throws Error (as a rejection) on a second call.
+   * @throws Error (as a rejection) on a second call, when nothing is ready and nothing is in
+   *   flight before a terminal result, or for a pooled engine (`numWorkers` above zero), which is
+   *   not ported yet.
    * @throws RangeError when the state is uninitialized, its run id, sequence or worker count
    *   differs from the log's or the engine's, or it has unfinished starts.
+   * @throws The error of a host fault: a throwing `onEvent`, a callback's rejected promise, a log
+   *   or reducer refusal, or a fault `evalNode` rejects with.
    */
   async run(): Promise<readonly RunEvent[]> {
     if (this.#ran) throw new Error("FlowEngine.run() was already called");
     this.#ran = true;
-    this.#validateAuthority();
-    if (this.state.result !== null) return [];
-    if (this.state.inFlight.size > 0) {
-      throw new RangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
+    try {
+      this.#validateAuthority();
+      if (this.state.result !== null) return [];
+      if (this.state.inFlight.size > 0) {
+        throw new RangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
+      }
+      if (this.numWorkers > 0) throw new Error("FlowEngine pooled execution is not ported yet");
+      return await this.#runSerial();
+    } finally {
+      this.#settled = true;
     }
-    throw new Error("FlowEngine execution is not ported yet");
+  }
+
+  /** Execute each durably started node inline. */
+  async #runSerial(): Promise<readonly RunEvent[]> {
+    const { state, log } = this;
+    const signal = this.#controller.signal;
+    const events: RunEvent[] = [];
+    try {
+      while (state.result === null) {
+        signal.throwIfAborted();
+        if (state.ready.length === 0) throw new Error("FlowEngine reached nonterminal quiescence");
+        const nodeId = state.ready[0]!;
+        const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+        const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
+        this.#publish(started, events);
+        signal.throwIfAborted();
+        const evaluated = await this.#evaluate(nodeId, invocation, null);
+        signal.throwIfAborted();
+        const settled = this.#commitOutcome(nodeId, evaluated);
+        // The commit may have set the result, which the loop condition narrowed to `null`.
+        if ((state.result as RunState["result"]) instanceof RunFailed) this.#controller.abort();
+        this.#publish(settled, events);
+      }
+    } catch (error) {
+      this.#controller.abort(error);
+      throw error;
+    }
+    return events;
+  }
+
+  /** Prepare one outcome's record, append it and apply its plan, returning its observers. */
+  #commitOutcome(nodeId: string, evaluated: EvaluatedOutcome): readonly RunEvent[] {
+    if (!isExactly(evaluated, EvaluatedOutcome)) throw new TypeError("FlowEngine outcome must be an EvaluatedOutcome");
+    const { state } = this;
+    const { outcome } = evaluated;
+    const carriers: OutcomeCarriers = {
+      evidence: evaluated.evidence,
+      // A learnable state evaluated with binding capture on, so both captures are present.
+      forwardCapture: state.learnable ? captureBindings(evaluated.bindings!, evaluated.backwardCapture!) : null,
+    };
+    let prepared: PreparedTransition;
+    if (outcome instanceof EvaluationFailure) {
+      prepared = this.#prepareFailure(nodeId, outcome.failure, carriers);
+    } else if (outcome instanceof Output) {
+      try {
+        prepared = prepareNodeSucceeded(state, nodeId, outcome.value, { commitAs: outcome.commitAs, ...carriers });
+      } catch (error) {
+        if (!(error instanceof NodeDataError)) throw error;
+        prepared = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers);
+      }
+    } else if (outcome instanceof Route) {
+      try {
+        prepared = prepareNodeRouted(state, nodeId, outcome.handle, carriers);
+      } catch (error) {
+        if (!(error instanceof NodeDataError)) throw error;
+        prepared = this.#prepareContractFailure(nodeId, "contract.route", error.original, error.origin, carriers);
+      }
+    } else if (outcome instanceof Grow) {
+      try {
+        prepared = prepareExpanded(state, nodeId, outcome, this.growBuilder, carriers);
+      } catch (error) {
+        if (!(error instanceof GrowthRejected)) throw error;
+        prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);
+      }
+    } else {
+      throw new TypeError(`raw evaluator returned an unsupported outcome ${jsTypeName(outcome)}`);
+    }
+    return commitPrepared(this.log, state, prepared);
+  }
+
+  /**
+   * Prepare one canonical failure of `nodeId`.
+   *
+   * @throws Error when the failure names another node.
+   */
+  #prepareFailure(nodeId: string, failure: Failure, carriers: OutcomeCarriers): PreparedTransition {
+    if (failure.nodeId !== nodeId) {
+      const found = failure.nodeId === null ? "null" : reprText(failure.nodeId);
+      throw new Error(`raw evaluation failure node identity mismatch: expected ${reprText(nodeId)}, found ${found}`);
+    }
+    return prepareNodeFailed(this.state, failure, carriers);
+  }
+
+  /** Prepare the failure of one outcome the reducer's contract refused. */
+  #prepareContractFailure(
+    nodeId: string,
+    code: FailureCode,
+    original: unknown,
+    origin: OriginRef | null,
+    carriers: OutcomeCarriers,
+  ): PreparedTransition {
+    const node = this.state.flow.nodes.get(nodeId)!;
+    return this.#prepareFailure(nodeId, evaluationFailure(node, code, original, origin).failure, carriers);
+  }
+
+  /** Evaluate one started node without changing the run state. */
+  async #evaluate(
+    nodeId: string,
+    invocation: ConversationInvocation,
+    steps: NodeSteps | null,
+  ): Promise<EvaluatedOutcome> {
+    const { state, onEvent, onStream } = this;
+    const trace = state.trace;
+    return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
+      wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
+      signal: this.#controller.signal,
+      emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
+      emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
+      captureEvidence: state.learnable,
+      captureBindings: state.learnable,
+      effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
+      sourceResolver: trace === null ? null : (path) => trace.resolve(path),
+      memoryContextOpener: this.memoryContextOpener,
+      memoryInvocation: invocation,
+      tools: this.tools,
+      skills: this.skills,
+      steering: this.steering,
+      steps,
+    });
+  }
+
+  /** Pass one transient chunk or in-loop event to its callback unless the run is stopping. */
+  #emit<T>(callback: (item: T) => unknown, item: T): void {
+    if (!this.#controller.signal.aborted) this.#callHost(callback, item);
+  }
+
+  /** Pass each post-durable observer to `onEvent`, then add it to the run's events. */
+  #publish(observers: readonly RunEvent[], events: RunEvent[]): void {
+    for (const observer of observers) {
+      if (this.onEvent !== null) this.#callHost(this.onEvent, observer);
+      events.push(observer);
+    }
+  }
+
+  /** Call one host callback; a promise it returns that rejects ends the run with that error. */
+  #callHost<T>(callback: (item: T) => unknown, item: T): void {
+    const returned = callback(item);
+    if (returned instanceof Promise) {
+      returned.then(undefined, (error: unknown) => {
+        // Nothing is left to stop once the run has a result or `run()` settled.
+        if (!this.#settled && this.state.result === null) this.#controller.abort(error);
+      });
+    }
   }
 
   /** Refuse a mismatched identity, sequence or worker authority before execution. */

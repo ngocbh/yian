@@ -705,7 +705,7 @@ export function prepareNodeSucceeded(
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
   const commitAs: unknown = options.commitAs ?? null;
   if (commitAs !== null && typeof commitAs !== "string") {
-    throw new NodeDataError(new TypeError("commit_as must be a string or None"));
+    throw new NodeDataError(new TypeError("commit_as must be a string or null"));
   }
   if (commitAs === "") throw new NodeDataError(new RangeError("commit_as must be non-empty when supplied"));
   requireInitializedNonterminal(state);
@@ -1589,7 +1589,7 @@ function requireInitialized(state: RunState): void {
   }
   const failure = state.terminalUnreachableFailure;
   if (failure !== null) {
-    if (!isExactly(failure, Failure)) throw new TypeError("terminal-unreachable latch must be a Failure or None");
+    if (!isExactly(failure, Failure)) throw new TypeError("terminal-unreachable latch must be a Failure or null");
     if (failure.code !== "graph.terminal_unreachable") {
       throw new RangeError("terminal-unreachable latch has the wrong failure code");
     }
@@ -1792,7 +1792,7 @@ function validateNodeEvidence(state: RunState, nodeId: string, evidence: Evaluat
     throw new RangeError(`eligible node ${reprText(nodeId)} requires evaluation evidence while learning`);
   }
   if (!isExactly(evidence, EvaluationEvidence)) {
-    throw new TypeError("node evidence must be an EvaluationEvidence or None");
+    throw new TypeError("node evidence must be an EvaluationEvidence or null");
   }
   if (!sameOptional(evidence.scope, scope, sameMemoryScope)) {
     throw new RangeError(`node ${reprText(nodeId)} evidence scope does not match its compiled scope`);

@@ -48,10 +48,10 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
+import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import type { TypeFn } from "../helpers/output_contracts.ts";
+import { resolveOutputBindingContract, type TypeFn } from "../helpers/output_contracts.ts";
 import {
   oldFormSuggestion,
   oldTypedText,
@@ -81,18 +81,29 @@ import { HumanInputDescriptor } from "../nodes/human_input.ts";
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
 import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
+import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
+import { bindingProducers } from "../edges/producers.ts";
 import { CallDescriptor } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
+import { LoopDescriptor } from "../nodes/loop.ts";
+import { MapDescriptor } from "../nodes/map.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
 import { synthesizeBoundaryGraph } from "./boundary.ts";
+import {
+  canonicalizeInlineType,
+  explicitTypeHint,
+  inferInlineBindingType,
+  type ItemType,
+  type ProducerType,
+} from "./inline_inputs.ts";
 // T3-18 imports
 // T3-19 imports
 // T3-20 imports
@@ -362,17 +373,66 @@ export interface CallableScope extends PrivateRegistrar {
   resolve(flowId: string, version?: string | null): ComposedFlow;
 }
 
-/** Python's `compose.build.pipeline._register_inline_bodies`; not ported yet. */
-function registerInlineBodies(
+/**
+ * Associate retained inline bodies with descriptors and register lazy builders.
+ *
+ * Every association is validated before the registrar is touched. The returned map replaces only
+ * matching frozen descriptors with copies carrying an author-facing child label; the input
+ * descriptors remain unchanged. Child construction stays lazy until the registrar invokes a
+ * captured zero-argument builder.
+ *
+ * @param descriptors The final node descriptors by id.
+ * @param bodies The retained inline bodies by node id.
+ * @param options.registrar Where each body's lazy builder is registered.
+ * @param options.diagnostics Factory for located load errors (default: from the first body's
+ *   `nodes:` cursor).
+ * @param options.buildChild Builds one body's child flow under its labelled descriptor.
+ * @returns A new descriptor map with each inline composite labelled.
+ * @throws LoadError when a body has no descriptor, its descriptor is not a CALL, MAP or LOOP, or
+ *   the descriptor does not call the body's private id.
+ */
+export function registerInlineBodies(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   bodies: ReadonlyMap<string, InlineBody>,
   options: {
     registrar: PrivateRegistrar;
     diagnostics?: LoadDiagnostics | null;
-    buildChild: (body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow;
+    buildChild: (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor) => ComposedFlow;
   },
 ): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
+  const { registrar, buildChild } = options;
+  const diagnostics =
+    options.diagnostics ?? LoadDiagnostics.fromCursor(bodies.values().next().value?.nodesCursor ?? null);
+  const associated = new Map(descriptors);
+  const registrations: [InlineBody, CallDescriptor | LoopDescriptor, string][] = [];
+
+  for (const body of bodies.values()) {
+    const label = `inline body of node ${reprText(body.nodeId)}`;
+    const descriptor = descriptors.get(body.nodeId);
+    if (descriptor === undefined) {
+      throw diagnostics.error(`${label}: no matching composite node descriptor`, { range: body.nodesCursor.range });
+    }
+    if (!(descriptor instanceof CallDescriptor || descriptor instanceof LoopDescriptor)) {
+      throw diagnostics.error(`${label}: final node descriptor is not CALL, MAP, or LOOP`, {
+        range: body.nodesCursor.range,
+      });
+    }
+    if (descriptor.call !== body.flowId) {
+      throw diagnostics.error(`${label}: final node descriptor does not target its retained inline body`, {
+        range: body.nodesCursor.range,
+      });
+    }
+
+    const labelledDescriptor = descriptor.replace({ childLabel: label });
+    associated.set(body.nodeId, labelledDescriptor);
+    registrations.push([body, labelledDescriptor, label]);
+  }
+
+  for (const [body, labelledDescriptor, label] of registrations) {
+    registrar.registerPrivate(body.flowId, body.owner, label, () => buildChild(body, labelledDescriptor));
+  }
+
+  return associated;
 }
 
 /**
@@ -1615,17 +1675,124 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
-  // The inline-child and binding-contract readers read it lazily once ported; it is set just
+  // The inline-child builder and the binding-contract reader read it lazily; it is set just
   // before the build.
   let descriptorCache: DescriptorBuildCache | null = null;
 
-  // T3-17: assembles one retained body lazily in this file's callable scope.
-  const buildInlineChild = (body: InlineBody, descriptor: NodeDescriptor): ComposedFlow => {
-    throw new Error("build_inline_child is not ported yet (T3-17)");
+  /** Assemble one retained body lazily in this file's callable scope. */
+  const buildInlineChild = (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor): ComposedFlow => {
+    /** Resolve one parent producer through this assembly's build cache. */
+    const producerType: ProducerType = (producerId, bindingLabel, bindingRange) => {
+      const unavailableType = (): LoadError =>
+        diagnostics.error(
+          `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
+            `producer ${reprText(producerId)} has no available static type; ` +
+            explicitTypeHint(bindingLabel),
+          { range: bindingRange },
+        );
+
+      if (!descriptors.has(producerId)) throw unavailableType();
+
+      const cache = descriptorCache;
+      if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
+      const outputContract = cache.buildOne(producerId, bindingLabel, bindingRange).node.outputContract;
+      if (outputContract === null) throw unavailableType();
+      if (!isExactly(outputContract, ValueContract) && !isExactly(outputContract, PartialRecordContract)) {
+        throw new TypeError(
+          "output producer contracts must be ValueContract or PartialRecordContract values, " +
+            `got ${jsTypeName(outputContract)} for ${reprText(producerId)}`,
+        );
+      }
+      return outputContract;
+    };
+
+    let itemType: ItemType | null = null;
+    if (descriptor instanceof MapDescriptor) {
+      let cachedItemType: Type | null = null;
+
+      /** Prove the MAP element type once, only when an item walk requests it. */
+      itemType = (bindingLabel, bindingRange) => {
+        if (cachedItemType !== null) return cachedItemType;
+
+        const overType = inferInlineBindingType(descriptor.over, {
+          parentInputTypes: flowInputTypes,
+          producerType,
+          typeFn: constructorType,
+          bindingLabel,
+          bindingRange,
+          diagnostics,
+        });
+        if (!isListKind(overType.kind) || overType.element === undefined) {
+          throw diagnostics.error(
+            `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
+              "MAP `over:` must have a proven list element type; " +
+              explicitTypeHint(bindingLabel),
+            { range: bindingRange },
+          );
+        }
+        cachedItemType = overType.element;
+        return cachedItemType;
+      };
+    }
+
+    const childInputs: Parameter[] = [];
+    for (const [key, value] of Object.entries(descriptor.inputs)) {
+      const bindingLabel = `${descriptor.id}.input.${key}`;
+      const bindingRange = body.inputRanges.get(key) ?? null;
+      const declared = descriptor.inputTypes.get(key);
+      // A typed binding states the parameter's type, and the binder checks the value against it at
+      // runtime, so its value need not be inferable.
+      const parameterType =
+        declared !== undefined
+          ? declared.type
+          : inferInlineBindingType(value, {
+              parentInputTypes: flowInputTypes,
+              producerType,
+              typeFn: constructorType,
+              itemType,
+              bindingLabel,
+              bindingRange,
+              diagnostics,
+            });
+      const canonical = canonicalizeInlineType(parameterType);
+      childInputs.push(
+        new Parameter(key, {
+          contract: new ValueContract(canonical),
+          required: !canonical.nullable,
+          coerceStrings: true,
+        }),
+      );
+    }
+
+    return assemble({
+      inputParameters: childInputs,
+      nodesCursor: body.nodesCursor,
+      outputsSection: body.output,
+      assertsSection: [],
+      registry,
+      scope,
+      owner: body.owner,
+      flowLlmConfig: {},
+      flowEnv: {},
+      boundaryFieldRanges: new Map(body.inputRanges),
+      outputsRange: body.outputRange,
+      outputsCursor: body.outputCursor,
+      flowId: body.flowId,
+    });
   };
 
-  // T3-17: resolves one parent binding's contract, building referenced producers on demand.
-  const readBindingContract: BindingContractReader | null = null;
+  /** Resolve one parent binding's contract, building referenced producers on demand. */
+  const readBindingContract: BindingContractReader = (bindingLabel, binding, bindingRange) => {
+    const cache = descriptorCache;
+    if (cache === null) throw new Error("descriptor cache was not initialized before binding contract resolution");
+    const producers = new Map<string, OutputContract>();
+    for (const producerId of new Set(bindingProducers(binding))) {
+      if (!descriptors.has(producerId)) continue;
+      const contract = cache.buildOne(producerId, bindingLabel, bindingRange).node.outputContract;
+      if (contract !== null) producers.set(producerId, contract);
+    }
+    return resolveOutputBindingContract(binding, producers, flowInputContracts, { typeFn: constructorType });
+  };
 
   descriptors = registerInlineBodies(descriptors, inlineBodies, {
     registrar: scope,
@@ -1951,11 +2118,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
-//            throws.
-//          readBindingContract (3, `BindingContractReader | null`): `null`.
-//          registerInlineBodies (2): returns the descriptors.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
 //          fillTypeTables (2, with _site_range).
@@ -1976,17 +2138,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 
 // T3-17: compose/desugar/*.ts, compose/edges/*.ts, compose/build/{boundary,inline_inputs}.ts
-
-/** Python's `compose.desugar.inline_bodies.InlineBody`; not ported yet. */
-type InlineBody = unknown;
-
-/** Python's `compose.desugar.inline_bodies.extract_inline_bodies`; not ported yet. */
-function extractInlineBodies(
-  nodesCursor: SourceCursor,
-  options: { owner: readonly string[] },
-): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
-  return [nodesCursor, new Map()];
-}
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts

@@ -40,7 +40,7 @@
  * `test_source_attachment_does_not_preempt_malformed_case_validation` (`case_branches`; its
  * `[{when: 1}]` row is the harvested `a_case_with_no_branch_has_no_value`, pinned). Later (T3-22,
  * T4):
- * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T3-17, T4):
+ * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T4):
  * `test_inline_definition_case_failure_keeps_child_predicate_origin`. Later (T3-22):
  * `test_external_alias_rebases_case_and_generated_binding_origins`,
  * `test_generated_child_clone_preserves_case_predicate_origins`,

@@ -15,7 +15,9 @@
  * tag carrying `[`, `]` or `,`, a flow-style tag cut at its `,`, a `%XX` escape kept raw in a
  * tag, and `!Any` on a date and on a null; and the harvested-case tables, which make the
  * loader's calls on the slots of the conformance cases these functions decide, comparing the
- * message and the last frame.
+ * message and the last frame (and, through `assembled`,
+ * `load-types/compose_tag_positions__tags_in_an_inline_body_slot_load`, whose inline body's slots
+ * only the child's assembly reads).
  *
  * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats every
  * digit); ints are unbounded in TS, so the message always shows the tag. And
@@ -52,7 +54,7 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { type CaseCall, type CaseRow, cursorAt, loadError, runCase } from "./declarations.ts";
+import { assembled, type CaseCall, type CaseRow, cursorAt, loadError, runCase } from "./declarations.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -875,4 +877,10 @@ describe("harvested cases", () => {
       call: unread({ ledger: [[["nodes", "n", "input", "qty"]]] }),
     },
   ])("rejectUnreadTags: $id", runCase);
+
+  // The inline body's slots are read by its child's assembly.
+  test.each<CaseRow>([{ id: "load-types/compose_tag_positions__tags_in_an_inline_body_slot_load", call: assembled }])(
+    "assemble: $id",
+    runCase,
+  );
 });

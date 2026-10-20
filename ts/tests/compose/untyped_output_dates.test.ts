@@ -20,13 +20,13 @@
  * `test_a_nested_or_core_tagged_non_finite_number_is_a_load_error`, whose `!!omap [{a: .nan}]` row
  * is refused as `!!omap`, and `test_a_non_finite_number_as_the_whole_output_is_a_load_error`), and
  * `!float .nan`, which Python refuses at run (the load half of
- * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`).
+ * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`). So do the inline CALL, MAP and LOOP
+ * rows of `test_untagged_date_in_a_body_output_is_a_load_error`: the date in the child's output
+ * binding is text.
  *
  * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
  * `any_tag_on_a_date` is pinned in `tags.test.ts`.
  *
- * Later (T3-17): the inline-body rows of `test_untagged_date_in_a_body_output_is_a_load_error`
- * (inline CALL, MAP and LOOP bodies) and the case `date_in_an_inline_call_output`.
  * Later (T3-22): the `defs:` body rows of `test_untagged_date_in_a_body_output_is_a_load_error`,
  * `test_a_body_output_date_is_located_at_the_value` and
  * `test_a_non_finite_number_in_a_body_output_is_a_load_error`.
@@ -37,8 +37,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
+import type { LoopNode } from "../../src/nodes/loop/node.ts";
+import type { MapNode } from "../../src/nodes/map/node.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase, runTextCase } from "./declarations.ts";
 
 afterEach(() => forget());
@@ -106,6 +110,70 @@ describe("dates", () => {
     ["as_of: ${b.output}-2026-01-01", "${b.output}-2026-01-01"],
   ])("a quoted or tagged date loads: %j", (output, expected) => {
     expect(outputSources(flow(`${output}\nh: \${b.output}`))["as_of"]).toBe(expected);
+  });
+});
+
+describe("inline body outputs", () => {
+  const inlineCall = `id: p
+name: p
+nodes:
+  c:
+    kind: call
+    nodes:
+      b:
+        kind: code
+        code: return 1
+    output:
+      d: 2026-01-01
+      h: \${b.output}
+output: \${c.output}
+`;
+  const inlineMap = `id: p
+name: p
+nodes:
+  m:
+    kind: map
+    over: [1, 2]
+    nodes:
+      b:
+        kind: code
+        code: return 1
+    output:
+      d: 2026-01-01
+      h: \${b.output}
+output: \${m.output}
+`;
+  const inlineLoop = `id: p
+name: p
+nodes:
+  l:
+    kind: loop
+    times: 1
+    input:
+      n: 0
+      d: !Any "x"
+    nodes:
+      b:
+        kind: code
+        input:
+          n: \${input.n}
+        code: return inputs['n'] + 1n
+    output:
+      n: \${b.output}
+      d: 2026-01-01
+output: \${l.output}
+`;
+
+  test.each([
+    ["inline-call", inlineCall, "c", { d: "2026-01-01", h: "${b.output}" }],
+    ["inline-map", inlineMap, "m", { d: "2026-01-01", h: "${b.output}" }],
+    ["inline-loop", inlineLoop, "l", { n: "${b.output}", d: "2026-01-01" }],
+  ])("an unquoted date in an inline body's untyped output is text: %s", (_name, text, nodeId, expected) => {
+    const child = (load(text).compiled.nodes.get(nodeId) as CallNode | MapNode | LoopNode).child as CompiledFlow;
+
+    expect(Object.fromEntries(child.outputs.map((output) => [output.name, output.binding.source]))).toStrictEqual(
+      expected,
+    );
   });
 });
 
@@ -178,6 +246,7 @@ describe("harvested cases", () => {
     [
       "an_aliased_date_names_the_output_field",
       "core_timestamp_tag_on_quoted_text",
+      "date_in_an_inline_call_output",
       "date_in_an_output_field",
       "date_tag_on_quoted_text_loads",
       "datetime_in_an_output_field",

@@ -376,6 +376,7 @@ test.each<CaseRow>([
   { id: "load-agent/compose_agent_mode_removed__builtin_tools_is_rejected_at_the_tools_line", call: assembled },
   // tests/compose/test_agent_output_nesting.py
   { id: "load-agent/compose_agent_output_nesting__a_written_out_record_past_the_limit", call: assembled },
+  { id: "load-agent/compose_agent_output_nesting__an_agent_in_an_inline_map_body", call: assembled },
   { id: "load-agent/compose_agent_output_nesting__the_limit_follows_the_variable", call: assembled },
   // tests/compose/test_agent_skills_yaml.py
   { id: "load-agent/compose_agent_skills_yaml__invalid_skill_name", call: assembled },

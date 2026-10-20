@@ -14,7 +14,9 @@
  * `test_compact_root_code_origins_retain_the_projected_authored_scalar` and
  * `test_nonliteral_code_carries_only_whole_scalar_fallback` assemble the root flow with
  * `assembleText`, where Python loads it, and resolve through the scope's catalog builder in place
- * of `loaded.origin_resolver`. The origin half of
+ * of `loaded.origin_resolver`; so does
+ * `test_inline_child_code_origins_include_the_enclosing_node_path`, reading the CODE node of the
+ * CALL's baked child. The origin half of
  * `test_formatting_moves_resolved_ranges_without_changing_semantic_keys` is ported.
  *
  * TS-only: the node keeps a frozen copy of the line origins it is given, and a rewrite assigns a
@@ -28,8 +30,7 @@
  * `test_flat_def_code_origins_retain_the_projected_authored_scalar`,
  * `test_external_alias_rebases_every_code_origin_without_mutating_child`,
  * `test_generated_child_clone_preserves_code_origins_for_original_resolver` and the fingerprint
- * half of `test_formatting_moves_resolved_ranges_without_changing_semantic_keys`. Later (T3-17,
- * T3-16): `test_inline_child_code_origins_include_the_enclosing_node_path`.
+ * half of `test_formatting_moves_resolved_ranges_without_changing_semantic_keys`.
  *
  * Later (T4-9): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
  */
@@ -44,6 +45,7 @@ import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import type { Node } from "../../src/nodes/base.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -253,6 +255,40 @@ test("code origins are noncanonical manifest and fingerprint metadata", () => {
   expect(rewrittenNode.codeLineOrigins).not.toEqual(originalNode.codeLineOrigins);
   expect(flowManifest(rewritten)).toEqual(flowManifest(original));
   expect(flowFingerprint(rewritten)).toBe(flowFingerprint(original));
+});
+
+test("inline child code origins include the enclosing node path", () => {
+  const text = `id: inline-code-origins
+name: inline-code-origins
+nodes:
+  invoke:
+    kind: call
+    nodes:
+      worker:
+        kind: code
+        output: int
+        code: |-
+          value = 1
+          return value
+    output: \${worker.output}
+output: \${invoke.output}
+`;
+  const codeCursor = SourceDocument.parse(text, "code-origins.yaml")
+    .root.child("nodes")
+    .child("invoke")
+    .child("nodes")
+    .child("worker")
+    .child("code");
+  const { flow, builder } = assembleText(text, "code-origins.yaml");
+  const invoke = flow.compiled.nodes.get("invoke") as CallNode;
+  const node = (invoke.child as CompiledFlow).nodes.get("worker") as CodeNode;
+
+  expect(node.codeOrigin).toEqual(new OriginRef("/s:root/s:node/s:invoke/s:inline/s:node/s:worker/s:field/s:code"));
+  expect(node.codeLineOrigins).toEqual([
+    new OriginRef("/s:root/s:node/s:invoke/s:inline/s:node/s:worker/s:field/s:code/s:line/i:0"),
+    new OriginRef("/s:root/s:node/s:invoke/s:inline/s:node/s:worker/s:field/s:code/s:line/i:1"),
+  ]);
+  expectResolvesCodeCursor(node, builder, codeCursor);
 });
 
 test("formatting moves resolved ranges without changing semantic keys", () => {

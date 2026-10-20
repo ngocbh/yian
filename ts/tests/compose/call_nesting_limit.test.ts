@@ -27,9 +27,13 @@
  * `test_loaded_flow_records_its_import_depth`,
  * `test_imports_and_a_calling_defs_chain_count_apart`,
  * `test_imports_at_the_limit_over_defs_at_the_limit_load` and
- * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); `test_inline_bodies_count`
- * (T3-17); `test_call_directive_counts` and `test_map_and_loop_bodies_count` (T3-22 and T4, their
- * chains of `defs:` loaded and run).
+ * `test_long_cross_file_cycle_reports_the_depth_limit` (T3-22); the run half of
+ * `test_inline_bodies_count` (T4); `test_call_directive_counts` and
+ * `test_map_and_loop_bodies_count` (T3-22 and T4, their chains of `defs:` loaded and run).
+ *
+ * Ported through `assembleText`: the load half of `test_inline_bodies_count`, pinning the whole
+ * message (no recursion guard is needed: TS has no recursion limit to pin), and its case
+ * `load-map-call/compose_call_nesting_limit__inline_bodies_count`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -46,7 +50,9 @@ import {
   resolveChild,
 } from "../../src/compose/nodes/resolver.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget, reload } from "../../src/defaults.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
 
 /** A node whose only static child is `child`, counting how often it is asked. */
 class FakeNode {
@@ -260,6 +266,41 @@ test.each([
       "limit of 50 (each call, map, or loop body is a level); flatten the chain",
   );
 });
+
+/** Return a flow whose root `top` nests `n` inline call bodies around a CODE leaf. */
+function inlineChain(n: number): string {
+  let body = "kind: code\ncode: ./fixtures/compose_codefns.ts:echo\ninput:\n  topic: ${input.x}\noutput: str\n";
+  for (let i = 0; i < n; i++) {
+    body =
+      "kind: call\ninput:\n  x: ${input.x}\nnodes:\n  step:\n" +
+      body.replace(/^(?=.)/gm, "    ") +
+      "output: ${step.output}\n";
+  }
+  const header = `id: inline${n}\nname: inline${n}\ninput:\n  x: !str\nnodes:\n  top:\n`;
+  return `${header}${body.replace(/^(?=.)/gm, "    ")}output: \${top.output}\n`;
+}
+
+test("inline bodies count", () => {
+  expect(() => assembleText(inlineChain(50))).not.toThrow();
+
+  const text = inlineChain(51);
+  const error = loadError(() => assembleText(text));
+
+  expect(error.message).toBe(
+    "call node 'step': calling inline body of node 'step' nests calls more than 50 levels deep, past the " +
+      "call nesting limit of 50 (each call, map, or loop body is a level); flatten the chain",
+  );
+  // An inline body is the callable its node calls, so the error sits on the innermost call
+  // node's `nodes:` body.
+  let innermost = SourceDocument.parse(text).root.child("nodes").child("top");
+  for (let i = 0; i < 50; i++) innermost = innermost.child("nodes").child("step");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(innermost.rangeOf("nodes")!);
+});
+
+test.each<CaseRow>([{ id: "load-map-call/compose_call_nesting_limit__inline_bodies_count", call: assembled }])(
+  "assemble: $id",
+  runCase,
+);
 
 describe("callNestingScope", () => {
   test("counts from zero and restores the count after a throw", () => {

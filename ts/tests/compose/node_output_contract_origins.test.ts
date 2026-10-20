@@ -6,6 +6,8 @@
  * resolves through the scope's catalog builder (`builder.resolveRegistered`) in place of
  * `loaded.origin_resolver`.
  * `test_formatting_only_relocation_preserves_output_origins_and_fingerprint` keeps its origin half.
+ * `test_nested_inline_child_output_contract_uses_its_physical_site` reads the CODE node of the
+ * CALL's baked child.
  *
  * Pinned in `engine/read_type.test.ts` (the cases of the reader that raises):
  * `test_compact_invalid_output_type_reports_the_top_level_output_site`,
@@ -23,18 +25,20 @@
  * Later (T3-22): `test_multi_node_def_output_contract_uses_the_nested_node_site`,
  * `test_flat_def_output_contract_uses_the_projected_def_output_site`,
  * `test_external_alias_rebases_every_output_contract_origin` and the fingerprint half of the
- * formatting row. Later (T3-17): `test_nested_inline_child_output_contract_uses_its_physical_site`.
+ * formatting row.
  * Later (T3-16, T3-22, T4):
  * `test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field`.
  */
 
 import { expect, test } from "bun:test";
 
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import { ContractOrigins, ValueContract } from "../../src/nodes/contracts.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "./declarations.ts";
@@ -220,6 +224,38 @@ output: \${emit.output}
   expect(relocatedOutput.child("profile").child("age").range).not.toEqual(
     baselineOutput.child("profile").child("age").range,
   );
+});
+
+test("a nested inline child's output contract uses its physical site", () => {
+  // Inline extraction retains the nested child's output declaration.
+  const text = `id: inline-output-contract
+name: inline-output-contract
+nodes:
+  invoke:
+    kind: call
+    nodes:
+      emit:
+        kind: code
+        code: |-
+          return {"profile": {"age": 7}}
+        output:
+          profile:
+            age: int
+    output: \${emit.output}
+output: \${invoke.output}
+`;
+  const output = SourceDocument.parse(text, "inline.yaml")
+    .root.child("nodes")
+    .child("invoke")
+    .child("nodes")
+    .child("emit")
+    .child("output");
+  const { flow, builder } = assembleText(text, "inline.yaml");
+  const invoke = flow.compiled.nodes.get("invoke") as CallNode;
+  const contract = (invoke.child as CompiledFlow).nodes.get("emit")!.outputContract;
+
+  expect(contract?.constructor).toBe(ValueContract);
+  expectProfileSites(builder, contract as ValueContract, output);
 });
 
 test("non-string nested output key reports the key site", () => {

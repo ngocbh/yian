@@ -49,9 +49,11 @@
  * feedback keep `±Infinity`, read `-0` back as `0` and refuse NaN; `LearnContext.fromFrozen` stores
  * the given feedback (`toBe`) and checks run, memory and episodes; `freezeFeedback` names items from
  * `firstIndex` and shares a subtree across calls through its memo; each memory `same*` comparison
- * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
- * `samePolicyCommitOutcome`, `sameLearningResult`) is true for separately built equal values and
- * false for each differing field.
+ * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`,
+ * `sameMemorySnapshotEnvelope`, `sameLearningFailure`, `samePolicyCommitOutcome`,
+ * `sameLearningResult`) is true for separately built equal values and false for each differing
+ * field; `sameMemorySnapshotEnvelope` also tells `1n` from `1` and `1` from `true` at depth; a
+ * setup error keeps an explicit `cause` and its origin, and has no `cause` without one.
  *
  * Changed (episodes and learn contexts): the episode and the context hold deep-frozen JSON, so a
  * reader's edit of `inputs`, an interaction value or `feedback` throws `TypeError` where Python
@@ -156,6 +158,7 @@ import {
   sameMemoryMutation,
   sameMemoryOperationFailure,
   sameMemoryScope,
+  sameMemorySnapshotEnvelope,
   samePolicyCommitOutcome,
   validateMutations,
 } from "../../src/memory/contracts.ts";
@@ -1598,6 +1601,32 @@ test("sameMemoryMutation compares the id and the payload by JSON value", () => {
   ] as const) {
     expect(sameMemoryMutation(new MemoryMutation("m", a), new MemoryMutation("m", b))).toBe(false);
   }
+});
+
+test("sameMemorySnapshotEnvelope compares the memory key and the snapshot by JSON value", () => {
+  const snapshot = () => ({ notes: [{ id: "lesson", n: 1n, x: 1.5, ok: true, none: null }], meta: { v: 1 } });
+  const envelope = (memory = "notes", value: JsonObject = snapshot()) => new MemorySnapshotEnvelope(memory, value);
+  expect(sameMemorySnapshotEnvelope(envelope(), envelope())).toBe(true);
+  expect(sameMemorySnapshotEnvelope(envelope("other"), envelope())).toBe(false);
+  for (const [a, b] of [
+    [{ deep: { list: [{ n: 1n }] } }, { deep: { list: [{ n: 2n }] } }],
+    [{ deep: { list: [{ n: 1n }] } }, { deep: { list: [{ n: 1 }] } }],
+    [{ deep: { list: [1] } }, { deep: { list: [true] } }],
+    [{ a: 1 }, { a: 1, b: 1 }],
+  ] as const) {
+    expect(sameMemorySnapshotEnvelope(envelope("notes", a), envelope("notes", b))).toBe(false);
+  }
+});
+
+test("a setup error keeps an explicit cause and its origin", () => {
+  const origin = new OriginRef("memory-policy");
+  const cause = new Error("backend failed");
+  const error = new MemorySetupError("m", { origin, cause });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("m");
+  expect(error.cause).toBe(cause);
+  expect(error.origin).toBe(origin);
+  expect("cause" in new MemorySetupError("m", { origin })).toBe(false);
 });
 
 test("sameLearningFailure compares memory, operation and failure by value", () => {

@@ -1398,13 +1398,17 @@ export class MemorySetupError extends RangeError {
   readonly related: readonly OriginRef[];
 
   /**
-   * Create one setup failure with optional origins; `related` is copied.
+   * Create one setup failure with optional origins; `related` is copied, and `cause` (Python's
+   * `raise ... from`) is passed to `RangeError` when given.
    *
    * @throws TypeError when `message` isn't a string, `origin` is neither `null` nor an
    *   `OriginRef`, or `related` isn't an array of `OriginRef` values.
    * @throws RangeError when `message` holds a lone surrogate.
    */
-  constructor(message: string, options: { origin?: OriginRef | null; related?: readonly OriginRef[] } = {}) {
+  constructor(
+    message: string,
+    options: { origin?: OriginRef | null; related?: readonly OriginRef[]; cause?: unknown } = {},
+  ) {
     const { origin = null, related = [] } = options;
     requireString(message, "message", false);
     const checkedOrigin = requireOrigin(origin, "origin");
@@ -1413,7 +1417,7 @@ export class MemorySetupError extends RangeError {
       if (item === null) throw new TypeError("related must not contain null");
       requireOrigin(item, "related origin");
     }
-    super(message);
+    super(message, "cause" in options ? { cause: options.cause } : undefined);
     this.origin = checkedOrigin;
     this.related = Object.freeze([...related]);
   }
@@ -1458,6 +1462,14 @@ export class MemorySnapshotEnvelope {
     this.snapshot = frozen;
     Object.freeze(this);
   }
+}
+
+/**
+ * Whether two envelopes have the same memory key and equal snapshots, by value and type at each
+ * node: stricter than Python's `==`, which equates `1`, `1.0` and `True`.
+ */
+export function sameMemorySnapshotEnvelope(a: MemorySnapshotEnvelope, b: MemorySnapshotEnvelope): boolean {
+  return a.memory === b.memory && sameJson(a.snapshot, b.snapshot);
 }
 
 /** Sanitized durable failure from one memory operation. Frozen. */

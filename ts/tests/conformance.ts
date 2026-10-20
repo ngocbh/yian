@@ -1418,6 +1418,20 @@ function cliDocument(text: string, stdout: string): Value {
 }
 
 /**
+ * Whether `path` exists, a dangling symlink included; false on any system error, as Python's
+ * `os.path.lexists`.
+ */
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === undefined) throw error;
+    return false;
+  }
+}
+
+/**
  * Run a `cli` case: run the command `entry` with `args` in the case directory, its `fetch` routed
  * to a stub serving `http`, and compare its exit code, output, documents and the paths that exist.
  */
@@ -1438,8 +1452,9 @@ export async function runCli(
     stub = await Stub.start(get(case_, "http", []) as Case[]);
     const hook = join(hookDir, "route.mjs");
     writeFileSync(hook, routeHook(stub.url));
-    // Bun reads `--import` as `--preload`; `--no-install` keeps it from installing packages.
-    const runtime = process.versions.bun !== undefined ? ["--no-install"] : [];
+    // Bun reads `--import` as `--preload`; `--no-install` keeps it from installing packages, and
+    // `--no-env-file` from loading a `.env` in the case directory into the exact environment.
+    const runtime = process.versions.bun !== undefined ? ["--no-install", "--no-env-file"] : [];
     const args = [...runtime, "--import", hook, entry, ...(get(case_, "args", []) as string[])];
     const stdin = get(case_, "stdin", "") as string;
     ran = await runCommand(args, ctx.dir, env, stdin, get(case_, "signal") as Case | undefined);
@@ -1489,7 +1504,7 @@ export async function runCli(
     const exists = Object.fromEntries(
       Object.keys(expect["exists"] as Case).map((path) => [
         path,
-        lstatSync(join(ctx.dir, path), { throwIfNoEntry: false }) !== undefined,
+        lexists(join(ctx.dir, path)),
       ]),
     );
     compare("exists", exists, expect["exists"]);

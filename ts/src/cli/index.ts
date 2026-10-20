@@ -19,7 +19,7 @@ import {
   flush,
   helpText,
   type OptionSpec,
-  type ParsedCommand,
+  type ParsedArgs,
   parseCommand,
   printJson,
   processIo,
@@ -28,7 +28,7 @@ import {
 } from "./utils.ts";
 
 /** A command's handler: it takes the parsed command line and returns the exit code. */
-type Handler = (command: Extract<ParsedCommand, { help: false }>, io: CliIo) => Promise<number>;
+type Handler = (command: ParsedArgs, io: CliIo) => Promise<number>;
 
 /** A command: its spec, and a loader importing its handler. */
 interface Command {
@@ -212,7 +212,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { auth } = await import("./auth.ts");
-      return (_, io) => auth(io);
+      return auth;
     },
   },
   check: {
@@ -262,7 +262,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { providers } = await import("./auth.ts");
-      return (_, io) => providers(io);
+      return providers;
     },
   },
   models: {
@@ -281,7 +281,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { models } = await import("./auth.ts");
-      return (_, io) => models(io);
+      return models;
     },
   },
   "config check": {
@@ -293,7 +293,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { configCheck } = await import("./auth.ts");
-      return (_, io) => configCheck(io);
+      return configCheck;
     },
   },
   "skills check": {

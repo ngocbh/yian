@@ -384,6 +384,7 @@ describe("parseCommand", () => {
     expect(usage(RUN, [flow, "-x"])).toBe("No such option: -x");
     expect(usage(RUN, [flow, "--input"])).toBe("Option '--input' requires an argument.");
     expect(usage(RUN, [flow, "--json=1"])).toBe("Option '--json' does not take a value.");
+    expect(usage(RUN, [flow, "--quiet=1"])).toBe("Option '--quiet' does not take a value.");
   });
 
   test("--help returns help before any other check", () => {

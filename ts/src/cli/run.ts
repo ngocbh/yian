@@ -31,7 +31,7 @@ import { Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, SkillError } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
-import { FileRef, type Value, writeAsText } from "../typesys/values.ts";
+import { FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
 import { type CliIo, printJson, UsageError, type Writer } from "./utils.ts";
 
 // The TS loader and run inspection aren't ported yet; each throws until its module lands.
@@ -49,7 +49,7 @@ const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as con
 type Style = keyof typeof SGR | `${keyof typeof SGR} ${keyof typeof SGR}`;
 
 /** Return `text` in `style` when `out` is a TTY and `NO_COLOR` is unset or empty, else as is. */
-export function paint(text: string, style: Style, out: Writer, env: Env): string {
+function paint(text: string, style: Style, out: Writer, env: Env): string {
   if (!out.isTTY || env("NO_COLOR")) return text;
   const codes = style.split(" ").map((word) => SGR[word as keyof typeof SGR]);
   return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
@@ -150,13 +150,6 @@ export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
   }
   if (diag.notes.length > 0) document.notes = [...diag.notes];
   return document;
-}
-
-/** Whether `value` is a record: a plain object whose prototype is `Object.prototype` or null. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 }
 
 /**
@@ -470,8 +463,8 @@ export function validateRunLogOptions(options: {
 
 /**
  * Create the private CLI directories and return a fresh run's default log path,
- * `~/.yian/runs/<runId>.jsonl`, with `HOME` from `env` (the user's home directory when it is
- * unset or empty).
+ * `~/.yian/runs/<runId>.jsonl`, with `HOME` from `env` (the process user's home directory,
+ * `os.homedir()`, when it is unset or empty).
  *
  * Both directories are created with mode 0700, or set to it if they exist. The file itself is
  * not created: the run log creates it exclusively, owner-only.
@@ -613,7 +606,8 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
     return 1;
   }
   await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath) });
-  return 0;
+  // Running the loaded flow is ported together with the loader; until then nothing runs.
+  throw new Error("yian run is not ported to TypeScript yet");
 }
 
 /**

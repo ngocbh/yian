@@ -186,6 +186,9 @@ export type ParsedCommand =
   | { help: true }
   | { help: false; args: Record<string, string | string[]>; options: Record<string, OptionValue> };
 
+/** A parsed command line that isn't a `--help` request: what a command's handler receives. */
+export type ParsedArgs = Extract<ParsedCommand, { help: false }>;
+
 /** Return `positional`'s name as the usage text shows it. */
 function metavar(positional: PositionalSpec): string {
   const name = positional.name.toUpperCase() + (positional.variadic ? "..." : "");
@@ -246,7 +249,8 @@ function parseArgsError(error: Error): UsageError {
   // `-w -1`: parseArgs refuses a separate value starting with `-`, as Click finds none.
   match = /^Option '([^']*)' argument is ambiguous/.exec(message);
   if (match) return new UsageError(`Option '${match[1]}' requires an argument.`);
-  match = /^Option '([^']*)' does not take an argument/.exec(message);
+  // parseArgs names the option `-q, --quiet`; Click names the long form alone.
+  match = /^Option '(?:-[^-], )?([^']*)' does not take an argument/.exec(message);
   if (match) return new UsageError(`Option '${match[1]}' does not take a value.`);
   return new UsageError(message);
 }

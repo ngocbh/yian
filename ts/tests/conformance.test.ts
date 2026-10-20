@@ -1086,12 +1086,12 @@ describe("runCli", () => {
   );
 
   test(
-    "compares `exists`: a dangling symlink exists",
+    "compares `exists`: a dangling symlink exists, a path under a file doesn't",
     async () => {
       const script =
         'import { symlinkSync, writeFileSync } from "node:fs";\n' +
         'writeFileSync("b", "");\nsymlinkSync("nowhere", "c");\n';
-      const exists = "{a: true, b: true, c: true, d: false}";
+      const exists = "{a: true, b: true, c: true, d: false, a/e: false}";
       await cli(`kind: cli\nfiles: {a: x}\nexpect: {exit: 0, exists: ${exists}}\n`, script);
       await expect(
         cli("kind: cli\nexpect: {exit: 0, exists: {b: false, d: true}}\n", script),

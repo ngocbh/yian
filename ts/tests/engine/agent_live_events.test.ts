@@ -11,8 +11,11 @@
  * (at the `callModel` level the sink throws a `CapabilityFault`, as the evaluator's sink does;
  * through the node the host's own error escapes).
  *
- * Ported through the node: `test_agent_without_sinks_invokes_exactly_as_before` and
- * `test_structured_fallback_reports_usage_and_streams_nothing`.
+ * Ported through the node: `test_agent_without_sinks_invokes_exactly_as_before`,
+ * `test_structured_fallback_reports_usage_and_streams_nothing`, and in the tool loop (the tool in
+ * the run's `ToolSet`) `test_agent_with_tools_orders_model_and_tool_observers`,
+ * `test_tool_error_is_reported_by_type_then_fails_the_node` (a `RangeError`, Python's
+ * `ValueError`) and `test_two_tool_calls_in_one_reply_get_their_own_indexed_brackets`.
  *
  * Changed: a `ScriptedModel` stands in for Python's scripted LangChain chat; every call streams on
  * the wire, so there is no invoke/stream mode to check.
@@ -22,10 +25,6 @@
  * native `json_schema` plan, so its replies are text that doesn't parse, a value that fails the
  * check, then a valid value; the check runs after the call, so no finished event names an error
  * (Python's second reads `ValidationError`).
- *
- * Later (T5-11b), the tool loop: `test_agent_with_tools_orders_model_and_tool_observers`,
- * `test_tool_error_is_reported_by_type_then_fails_the_node` and
- * `test_two_tool_calls_in_one_reply_get_their_own_indexed_brackets`.
  *
  * Later (T6-6), session memory: `test_history_summary_call_is_observed_through_the_wrapper`,
  * `test_history_summary_calls_publish_their_own_observers` and
@@ -58,7 +57,7 @@ import {
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
-import { Message, Request, Response, TextPart, Usage } from "../../src/llm/messages.ts";
+import { Message, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import {
   callModel,
@@ -76,6 +75,8 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type Output } from "../../src/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, rejected } from "./run_state_fixtures.ts";
 
@@ -379,29 +380,34 @@ test("observeSkippedToolCall emits started, then finished interrupted", () => {
 const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
 const INT = Type.scalar(ValueKind.INTEGER);
 
+/** The events an AGENT's event sink receives. */
+type LiveEvent = ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished;
+
 /**
- * Evaluate an AGENT `writer` over `chat` with the sinks asked for (both by default); return its
- * outcome and what the sinks got.
+ * Evaluate an AGENT `writer` over `chat` with the sinks asked for (both by default), granted
+ * `lookup` when `tools` is given; return its outcome and what the sinks got.
  */
 async function evaluate(
   chat: ScriptedModel,
-  options: { stream?: boolean; events?: boolean; output?: Type; retries?: number } = {},
+  options: { stream?: boolean; events?: boolean; output?: Type; retries?: number; tools?: ToolSet } = {},
 ) {
-  const { stream = true, events = true, output = null, retries } = options;
-  const node = new AgentNode("writer", { prompt: "hi", llmConfig: { provider: chat.provider, model: chat.model }, retries });
+  const { stream = true, events = true, output = null, retries, tools } = options;
+  const llmConfig = { provider: chat.provider, model: chat.model };
+  const node = new AgentNode("writer", { prompt: "hi", llmConfig, retries, tools: tools ? ["lookup"] : undefined });
   if (output !== null) node.outputContract = new ValueContract(output);
   const chunks: StreamChunk[] = [];
-  const observed: (ModelCallStarted | ModelCallFinished)[] = [];
+  const observed: LiveEvent[] = [];
   const outcome = await drive(node, {
     models: { env: () => undefined, createModel: () => chat },
+    tools,
     emitStream: stream ? (item) => void chunks.push(item) : null,
-    emitEvent: events ? (event) => void observed.push(event as ModelCallStarted | ModelCallFinished) : null,
+    emitEvent: events ? (event) => void observed.push(event) : null,
   });
   return { outcome, chunks, observed };
 }
 
 /** The last observed event, which must be a `ModelCallFinished`. */
-function lastFinished(observed: readonly (ModelCallStarted | ModelCallFinished)[]): ModelCallFinished {
+function lastFinished(observed: readonly LiveEvent[]): ModelCallFinished {
   const event = observed.at(-1);
   expect(event).toBeInstanceOf(ModelCallFinished);
   return event as ModelCallFinished;
@@ -482,7 +488,7 @@ test("the structured fallback reports usage and streams nothing", async () => {
   expect((outcome as Output).value).toBe(3n);
   expect(chunks).toEqual([]);
   expect(observed.map((event) => event.constructor)).toEqual([ModelCallStarted, ModelCallFinished]);
-  expect(new Set(observed.map((event) => event.purpose))).toEqual(new Set(["structured_fallback"]));
+  expect(new Set(observed.map((event) => (event as ModelCallStarted).purpose))).toEqual(new Set(["structured_fallback"]));
   expect(lastFinished(observed).usage).toEqual(new TokenUsage({ inputTokens: 9, outputTokens: 1, totalTokens: 10 }));
 });
 
@@ -506,4 +512,89 @@ test.each([false, true])("structured native retries the same with or without an 
         ]
       : [],
   );
+});
+
+/** A tool set holding `lookup`, which records each argument record in `seen` and runs `action` on it. */
+function lookupTools(
+  seen: unknown[] = [],
+  action = (args: Record<string, unknown>): unknown => `found:${args.topic}`,
+): ToolSet {
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "Look it up.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    execute: (args) => {
+      seen.push(args);
+      return action(args);
+    },
+  });
+  return new ToolSet({ lookup });
+}
+
+/** A reply of `text` (when not empty) and `lookup` calls on each `[topic, id]`, with `usage`. */
+function callReply(text: string, calls: [string, string][], usage: Usage | null = null): Response {
+  const parts = calls.map(([topic, id]) => new ToolCallPart({ id, name: "lookup", arguments: { topic } }));
+  const message = new Message({ role: "assistant", parts: text === "" ? parts : [new TextPart(text), ...parts] });
+  return new Response({ message, usage, finishReason: "tool_calls" });
+}
+
+/** The identity of call `index` of `lookup` as `toolCallId` in exchange `exchangeId`. */
+const callIdentity = (exchangeId: string, callIndex: number, toolCallId: string) =>
+  ({ nodeId: "writer", exchangeId, callIndex, toolCallId, name: "lookup" });
+
+test("an AGENT with tools orders its model and tool observers", async () => {
+  const seen: unknown[] = [];
+  const usage = (input: number, output: number) =>
+    new Usage({ inputTokens: input, outputTokens: output, totalTokens: input + output });
+  const chat = model(callReply("let me check", [["acme", "call-1"]], usage(10, 4)), reply("acme is fine", usage(20, 3)));
+
+  const { outcome, chunks, observed } = await evaluate(chat, { stream: false, tools: lookupTools(seen) });
+
+  expect((outcome as Output).value).toBe("acme is fine");
+  expect(chunks).toEqual([]);
+  expect(seen).toEqual([{ topic: "acme" }]);
+  const first = (observed[0] as ModelCallStarted).exchangeId;
+  const second = (observed[4] as ModelCallStarted).exchangeId;
+  expect(first).not.toBe(second);
+  const tokens = (input: number, output: number) =>
+    new TokenUsage({ inputTokens: input, outputTokens: output, totalTokens: input + output });
+  expect(observed).toEqual([
+    new ModelCallStarted({ ...identity(first), attempt: 1 }),
+    new ModelCallFinished({ ...identity(first), usage: tokens(10, 4), attempt: 1 }),
+    new ToolCallStarted({ ...callIdentity(first, 0, "call-1"), arguments: { topic: "acme" } }),
+    new ToolCallFinished({ ...callIdentity(first, 0, "call-1"), result: "found:acme" }),
+    new ModelCallStarted({ ...identity(second), attempt: 1 }),
+    new ModelCallFinished({ ...identity(second), usage: tokens(20, 3), attempt: 1 }),
+  ]);
+});
+
+test("a tool error is reported by its name, then fails the node", async () => {
+  const tools = lookupTools([], () => {
+    throw new RangeError("secret detail");
+  });
+
+  const { outcome, observed } = await evaluate(model(callReply("", [["x", "call-1"]])), { tools });
+
+  expect(outcome).toBeInstanceOf(EvaluationFailure);
+  const exchangeId = (observed[0] as ModelCallStarted).exchangeId;
+  expect(observed.at(-1)).toEqual(new ToolCallFinished({ ...callIdentity(exchangeId, 0, "call-1"), error: "RangeError" }));
+  expect(JSON.stringify(observed)).not.toContain("secret detail");
+});
+
+test("two tool calls in one reply get their own indexed brackets", async () => {
+  const seen: unknown[] = [];
+  const chat = model(callReply("", [["a", "call-a"], ["b", "call-b"]]), reply("both fine"));
+
+  const { outcome, observed } = await evaluate(chat, { stream: false, tools: lookupTools(seen) });
+
+  expect((outcome as Output).value).toBe("both fine");
+  expect(seen).toEqual([{ topic: "a" }, { topic: "b" }]);
+  const brackets = observed.filter((event) => event instanceof ToolCallStarted || event instanceof ToolCallFinished);
+  expect(brackets.map((event) => [event.constructor, event.callIndex, event.toolCallId])).toEqual([
+    [ToolCallStarted, 0, "call-a"],
+    [ToolCallFinished, 0, "call-a"],
+    [ToolCallStarted, 1, "call-b"],
+    [ToolCallFinished, 1, "call-b"],
+  ]);
+  expect(new Set(brackets.map((event) => event.exchangeId))).toEqual(new Set([(observed[0] as ModelCallStarted).exchangeId]));
 });

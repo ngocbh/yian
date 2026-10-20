@@ -5,9 +5,11 @@
  * `test_agent_skill_grants_default_to_none`; `test_missing_grant_fails_the_node` and
  * `test_grant_without_a_skills_mapping_fails_the_node`, each as its `grantedSkills` half and its
  * node-failure half through `evalNode` (`drive`), which also checks that no model is built;
- * `test_no_grant_or_no_supply_keeps_the_system_prompt_byte_for_byte` and
- * `test_load_skill_is_not_callable_without_a_grant` through `drive`, with a `ScriptedModel` from
- * `models`.
+ * `test_no_grant_or_no_supply_keeps_the_system_prompt_byte_for_byte`,
+ * `test_load_skill_is_not_callable_without_a_grant`, `test_all_grants_every_supplied_skill`,
+ * `test_granted_skills_are_listed_and_loaded_on_demand` and `test_escape_attempt_fails_the_node`
+ * through `evalNode`, with a `ScriptedModel` from `models` and the `review` skill's directory in a
+ * temp dir; `test_memory_context_gets_the_system_prompt_without_the_listing` through `forward`.
  *
  * Ported (adapted): `test_only_nodes_with_the_skills_trait_receive_skills`, on a local probe that
  * records its capabilities where Python's `FuncNode` would refuse an unexpected keyword: a node
@@ -15,37 +17,45 @@
  *
  * Changed: the grant checks are called directly where Python runs the node through `eval_node`;
  * a list of names in a message is written in the text form (`["absent"]`, Python
- * `['absent']`). `test_memory_context_gets_the_system_prompt_without_the_listing`: only its memory
- * half, the opener seeing `DEFAULT_SYSTEM` without the listing; the model-request half is
- * Later (T5-11b).
+ * `['absent']`). `test_skills_with_structured_output_still_run_the_tool_loop` runs the real
+ * structured call, where Python patches `generate_structured`: the loop's two requests, then a
+ * third, structured one that reads the loaded instructions.
  *
  * TS-only: `grantedSkills` returns no skills without a grant, and the granted ones sorted by
  * name.
- *
- * Later (T5-11b), a skill grant runs the tool loop: `test_all_grants_every_supplied_skill`,
- * `test_skills_with_structured_output_still_run_the_tool_loop` and the model-request half of
- * `test_memory_context_gets_the_system_prompt_without_the_listing`. Later (T5-11b, T6-7), they
- * also load files from a skill directory: `test_granted_skills_are_listed_and_loaded_on_demand`
- * and `test_escape_attempt_fails_the_node`.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
+import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
+import { MemoryContext, ToolCallInteraction, ToolResultInteraction } from "../../src/memory/contracts.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { Skill, SkillError } from "../../src/skills/catalog.ts";
-import { LOAD_SKILL } from "../../src/skills/tool.ts";
+import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { drive, serving, textReply } from "./run_state_fixtures.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { drive, nodeFlow, serving, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
+
+// The `review` skill's directory, with one bundled file.
+const ROOT = mkdtempSync(join(tmpdir(), "yian-skills-"));
+const REVIEW_DIR = join(ROOT, "review");
+mkdirSync(join(REVIEW_DIR, "references"), { recursive: true });
+writeFileSync(join(REVIEW_DIR, "references", "style.md"), "Prefer small diffs.\n");
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };
 
@@ -56,7 +66,15 @@ function failureMessage(outcome: unknown): string {
 }
 
 const SKILLS: ReadonlyMap<string, Skill> = new Map([
-  ["review", new Skill({ name: "review", description: "Review code changes.", instructions: "Read first." })],
+  [
+    "review",
+    new Skill({
+      name: "review",
+      description: "Review code changes.",
+      instructions: "Read references/style.md first.",
+      directory: REVIEW_DIR,
+    }),
+  ],
   ["deploy", new Skill({ name: "deploy", description: "Ship a release.", instructions: "Tag, then publish." })],
   ["other", new Skill({ name: "other", description: "Unrelated.", instructions: "Not granted." })],
 ]);
@@ -157,16 +175,86 @@ test("the memory context gets the system prompt without the listing", async () =
     return new MemoryContext();
   };
   const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
-  const models = serving(new ScriptedModel([textReply("ok")], CONFIG));
+  const model = new ScriptedModel([textReply("ok")], CONFIG);
+  const models = serving(model);
   expect(await node.forward({}, { openMemoryContext, skills: SKILLS, models })).toEqual(new Output("ok"));
   expect(seen).toEqual([DEFAULT_SYSTEM]);
+  expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithSkills(DEFAULT_SYSTEM, [SKILLS.get("review")!]));
 });
 
+/** A reply calling `load_skill` with `args` as call `id`. */
+function loadCall(args: JsonObject, id = "1"): Response {
+  const call = new ToolCallPart({ id, name: LOAD_SKILL, arguments: args });
+  return new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
+}
+
+/** The content of the tool result ending `messages`. */
+function lastResult(messages: readonly Message[]): string {
+  return (messages.at(-1)!.parts[0] as ToolResultPart).content;
+}
+
 test("load_skill is not callable without a grant", async () => {
-  const call = new ToolCallPart({ id: "1", name: LOAD_SKILL, arguments: { name: "review" } });
-  const reply = new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "stop" });
   const outcome = await drive(new AgentNode("agent", { prompt: "p", llmConfig: CONFIG }), {
-    models: serving(new ScriptedModel([reply], CONFIG)),
+    models: serving(new ScriptedModel([loadCall({ name: "review" })], CONFIG)),
   });
   expect(failureMessage(outcome)).toContain("requested tool 'load_skill', but it is not granted");
+});
+
+test("all grants every supplied skill", async () => {
+  const model = new ScriptedModel([textReply("ok")], CONFIG);
+  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: "all" });
+  expect(await drive(node, { models: serving(model), skills: SKILLS })).toEqual(new Output("ok"));
+  expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithSkills(DEFAULT_SYSTEM, [...SKILLS.values()]));
+});
+
+test("granted skills are listed and loaded on demand", async () => {
+  const model = new ScriptedModel(
+    [
+      loadCall({ name: "review" }, "a"),
+      loadCall({ name: "review", path: "references/style.md" }, "b"),
+      textReply("reviewed"),
+    ],
+    CONFIG,
+  );
+  const node = new AgentNode("agent", { prompt: "Review it", llmConfig: CONFIG, skills: ["review", "deploy"] });
+
+  const evaluated = await evalNode(node, nodeFlow(node), new VariablePool(), {
+    models: serving(model),
+    skills: SKILLS,
+    captureEvidence: true,
+  });
+
+  expect(evaluated.outcome).toEqual(new Output("reviewed"));
+  const expectedSystem = systemPromptWithSkills(DEFAULT_SYSTEM, [SKILLS.get("deploy")!, SKILLS.get("review")!]);
+  expect(model.requests[0]!.messages[0]!.text()).toBe(expectedSystem);
+  expect(expectedSystem).toContain("- deploy: Ship a release.\n- review: Review code changes.");
+  expect(expectedSystem).not.toContain("other");
+  expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual([LOAD_SKILL]);
+  expect(lastResult(model.requests[1]!.messages)).toBe("Read references/style.md first.");
+  expect(lastResult(model.requests[2]!.messages)).toBe("Prefer small diffs.\n");
+  const evidence = evaluated.evidence!;
+  expect(evidence.baseSystemPrompt).toBe(expectedSystem);
+  expect(evidence.interactions).toContainEqual(new ToolCallInteraction(LOAD_SKILL, { name: "review" }));
+  expect(evidence.interactions).toContainEqual(new ToolResultInteraction(LOAD_SKILL, "Prefer small diffs.\n"));
+});
+
+test("skills with structured output still run the tool loop", async () => {
+  const model = new ScriptedModel([loadCall({ name: "review" }), textReply("seven"), textReply('{"value": 7}')], CONFIG);
+  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
+  node.outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
+
+  expect(await drive(node, { models: serving(model), skills: SKILLS })).toEqual(new Output(7n));
+  expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual([LOAD_SKILL]);
+  expect(model.requests).toHaveLength(3);
+  const structured = model.requests[2]!.messages;
+  expect(structured.some((message) => message.role === "tool" && lastResult([message]) === "Read references/style.md first.")).toBe(
+    true,
+  );
+});
+
+test("an escape attempt fails the node", async () => {
+  const model = new ScriptedModel([loadCall({ name: "review", path: "../review/../../secret" })], CONFIG);
+  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
+  const outcome = await drive(node, { models: serving(model), skills: SKILLS });
+  expect(failureMessage(outcome)).toContain("relative path inside the skill directory");
 });

@@ -23,8 +23,10 @@
  * client-without-stream row is not ported (every `ChatModel` streams); the `run_flow` half Later
  * (T4-8/T3-22).
  *
- * Later (T5-11b), the tool loop: `test_tool_calling_agent_streams_each_exchange_between_its_observers`
- * and `test_two_streamed_tool_calls_aggregate_by_index`.
+ * Ported through the node's tool loop, the tool in the run's `ToolSet` and each call streamed as two
+ * `ToolCallDelta`s sharing its index, as Python's scripted chat streams it:
+ * `test_tool_calling_agent_streams_each_exchange_between_its_observers` and
+ * `test_two_streamed_tool_calls_aggregate_by_index`.
  *
  * Later (T6-6), session memory: `test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one`
  * and `test_mid_stream_failure_in_a_session_turn_retains_a_failed_model_effect`.
@@ -39,15 +41,25 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { ModelCallFinished, type ModelCallPurpose, ModelCallStarted, StreamChunk, TokenUsage } from "../../src/events.ts";
+import {
+  ModelCallFinished,
+  type ModelCallPurpose,
+  ModelCallStarted,
+  StreamChunk,
+  TokenUsage,
+  ToolCallFinished,
+  ToolCallStarted,
+} from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
-import { Finish, type Event, TextDelta, UsageReport } from "../../src/llm/events.ts";
+import { Finish, type Event, TextDelta, ToolCallDelta, UsageReport } from "../../src/llm/events.ts";
 import { Message, Request, TextPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type Output } from "../../src/nodes/base.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { drive, rejected } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -182,14 +194,20 @@ test("empty text deltas send no chunk", async () => {
 
 // ---------- through the node ----------
 
-/** Evaluate an AGENT `writer` over `model` with the given sinks; return its outcome and what they got. */
-async function evaluate(model: ScriptedModel, options: { events?: boolean } = {}) {
+/**
+ * Evaluate an AGENT `writer` over `model` with the given sinks, granted `lookup` when `tools` is
+ * given; return its outcome and what they got.
+ */
+async function evaluate(model: ScriptedModel, options: { events?: boolean; tools?: ToolSet } = {}) {
+  const { tools } = options;
   const chunks: StreamChunk[] = [];
-  const observed: (ModelCallStarted | ModelCallFinished)[] = [];
-  const outcome = await drive(new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG }), {
+  const observed: (ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished)[] = [];
+  const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG, tools: tools ? ["lookup"] : undefined });
+  const outcome = await drive(node, {
     models: { env: () => undefined, createModel: () => model },
+    tools,
     emitStream: (item) => void chunks.push(item),
-    emitEvent: options.events === false ? null : (event) => void observed.push(event as ModelCallStarted),
+    emitEvent: options.events === false ? null : (event) => void observed.push(event),
   });
   return { outcome, chunks, observed };
 }
@@ -268,5 +286,77 @@ test.each([
   expect(chunks.some((item) => item.final)).toBe(false);
   expect(observed.filter((event) => event instanceof ModelCallFinished).map((event) => event.error)).toEqual([
     "ProviderError",
+  ]);
+});
+
+/** A tool set holding `lookup`, which records each argument record in `seen` and answers `found:<topic>`. */
+function lookupTools(seen: unknown[] = []): ToolSet {
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "Look it up.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    execute: (args) => {
+      seen.push(args);
+      return `found:${args.topic}`;
+    },
+  });
+  return new ToolSet({ lookup });
+}
+
+/**
+ * The events of a reply streaming `text` word by word, then each `lookup` call on `[topic, id]`
+ * as two deltas sharing its index.
+ */
+function streamedCalls(text: string, calls: [string, string][]): Event[] {
+  const words = text === "" ? [] : text.split(" ").map((word, i) => (i === 0 ? word : ` ${word}`));
+  const deltas: Event[] = words.map((word) => new TextDelta(0, word));
+  const first = deltas.length > 0 ? 1 : 0;
+  for (const [i, [topic, id]] of calls.entries()) {
+    const index = first + i;
+    deltas.push(new ToolCallDelta({ index, id, name: "lookup", arguments: '{"topic": ' }));
+    deltas.push(new ToolCallDelta({ index, id: null, name: null, arguments: JSON.stringify(topic) + "}" }));
+  }
+  return [...deltas, new Finish({ reason: "tool_calls" })];
+}
+
+test("a tool-calling agent streams each exchange between its observers", async () => {
+  const chat = model(streamedCalls("let me check", [["acme", "call-1"]]), streamed("acme", " is", " fine"));
+
+  const { outcome, chunks, observed } = await evaluate(chat, { tools: lookupTools() });
+
+  expect((outcome as Output).value).toBe("acme is fine");
+  const [first, second] = [observed[0]!.exchangeId, observed[4]!.exchangeId];
+  const call = { nodeId: "writer", exchangeId: first, callIndex: 0, toolCallId: "call-1", name: "lookup" };
+  expect(observed[2]).toEqual(new ToolCallStarted({ ...call, arguments: { topic: "acme" } }));
+  expect(chunks.map((item) => [item.exchangeId, item.chunk, item.final])).toEqual([
+    [first, "let", false],
+    [first, " me", false],
+    [first, " check", false],
+    [first, "", true],
+    [second, "acme", false],
+    [second, " is", false],
+    [second, " fine", false],
+    [second, "", true],
+  ]);
+});
+
+test("two streamed tool calls aggregate by index", async () => {
+  const seen: unknown[] = [];
+  const chat = model(streamedCalls("", [["a", "call-a"], ["b", "call-b"]]), streamed("both", " fine"));
+
+  const { outcome, chunks, observed } = await evaluate(chat, { tools: lookupTools(seen) });
+
+  expect((outcome as Output).value).toBe("both fine");
+  expect(seen).toEqual([{ topic: "a" }, { topic: "b" }]);
+  const started = observed.filter((event) => event instanceof ToolCallStarted);
+  expect(started.map((event) => [event.callIndex, event.toolCallId, event.arguments])).toEqual([
+    [0, "call-a", { topic: "a" }],
+    [1, "call-b", { topic: "b" }],
+  ]);
+  expect(chunks.map((item) => [item.chunk, item.final])).toEqual([
+    ["", true],
+    ["both", false],
+    [" fine", false],
+    ["", true],
   ]);
 });

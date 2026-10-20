@@ -38,21 +38,27 @@
  * reaches a tool loop) through `evalNode`. A model failure is a scripted
  * `Error`; "the model ran" reads as the model receiving a request.
  *
- * Not ported: `test_visible_string_subclass_has_capture_off_on_behavioral_parity` (TS has no string
- * subclasses); `test_invalid_unicode_text_is_ignored_by_observational_capture` and
+ * Ported, through AGENT's tool loop with the tools in the run's `ToolSet`:
+ * `test_tool_loop_records_calls_results_and_final_text_in_visible_order`,
+ * `test_tool_trace_uses_the_same_effective_arguments_as_invocation` (the falsy arguments are a
+ * streamed call with empty arguments text, which the assembler reads as `{}`, where Python's
+ * are `[]`) and `test_tool_structured_output_retains_discovery_and_generation_order` (2 rows; the
+ * native row runs OpenAI's `json_schema` plan, where Python's runs Anthropic's).
+ * `test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture`: the 2000-deep
+ * arguments arrive unparsed (a parsed `ToolCallPart` refuses them), so the node fails on the
+ * arguments' depth before the grant check, the same with capture off and on.
+ * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture`: text holding a lone
+ * surrogate is not a yian value, so the result fails the node after the call ran (Python's loop
+ * goes on); the failure is the same with capture off and on, and the evidence holds only the call.
+ *
+ * Not ported: `test_visible_string_subclass_has_capture_off_on_behavioral_parity` and
+ * `test_tool_name_subclass_has_capture_off_on_behavioral_parity` (TS has no string subclasses);
+ * `test_invalid_unicode_text_is_ignored_by_observational_capture` and
  * `test_invalid_unicode_fallback_trace_does_not_consume_a_retry` (a reply's `TextPart` refuses an
  * unpaired surrogate, so no model reply carries one);
  * `test_oversized_recall_inputs_fail_identically_with_or_without_capture` (TS has no
  * `memory_json_nesting` bound: a `RecallContext` takes inputs of any depth, and the binder's value
  * nesting limit bounds them).
- *
- * Later (T5-11b), through AGENT's tool loop:
- * `test_tool_loop_records_calls_results_and_final_text_in_visible_order`,
- * `test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture`,
- * `test_tool_name_subclass_has_capture_off_on_behavioral_parity`,
- * `test_tool_trace_uses_the_same_effective_arguments_as_invocation`,
- * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture` and
- * `test_tool_structured_output_retains_discovery_and_generation_order`.
  *
  * Ported, through the engine: `test_dispatcher_contract_failures_retain_the_same_evidence` (3 rows;
  * the grow row's builder throws `GrowthRejected`).
@@ -65,6 +71,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { END_ID, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, ReasoningPart, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -85,6 +92,7 @@ import {
   ModelTextInteraction,
   ModelValueInteraction,
   ToolCallInteraction,
+  ToolResultInteraction,
 } from "../../src/memory/index.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -101,6 +109,8 @@ import {
   prepareRecord,
   type RunState,
 } from "../../src/runtime/state.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, TypeCheckError, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import {
@@ -482,20 +492,22 @@ describe("through AGENT", () => {
   function scopedAgent(
     prompt: string,
     config: Record<string, unknown>,
-    options: { output?: Type; retries?: number } = {},
+    options: { output?: Type; retries?: number; tools?: string[] } = {},
   ): AgentNode {
-    const node = new AgentNode("agent", { prompt, llmConfig: config, retries: options.retries });
+    const { retries, tools } = options;
+    const node = new AgentNode("agent", { prompt, llmConfig: config, retries, tools });
     if (options.output !== undefined) node.outputContract = new ValueContract(options.output);
     node.memoryScope = scope(node.id);
     return node;
   }
 
-  /** Evaluate `node` capturing evidence (or not), with the empty memory context and `model`. */
-  function evaluate(node: AgentNode, model: ScriptedModel, captureEvidence = true) {
+  /** Evaluate `node` capturing evidence (or not), with the empty memory context, `model` and `tools`. */
+  function evaluate(node: AgentNode, model: ScriptedModel, captureEvidence = true, tools: ToolSet | null = null) {
     return evalNode(node, null, new VariablePool(), {
       captureEvidence,
       memoryContextOpener: emptyContext,
       models: serving(model),
+      tools,
     });
   }
 
@@ -676,5 +688,132 @@ describe("through AGENT", () => {
     expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
     expect((evaluated.outcome as EvaluationFailure).failure.message).toContain("not granted");
     expect(evaluated.evidence!.interactions).toEqual([new ToolCallInteraction("lookup", { topic: "ACME" })]);
+  });
+
+  /** A run tool set holding `name`, which runs `execute` on its arguments, `properties` its schema's. */
+  function toolSet(name: string, execute: (args: Record<string, unknown>) => unknown, properties = {}): ToolSet {
+    const parametersJsonSchema = { type: "object", properties };
+    return new ToolSet({ [name]: new FunctionTool({ name, description: `The ${name} tool.`, parametersJsonSchema, execute }) });
+  }
+
+  /** `lookup`, answering `found:<topic>`. */
+  const lookupTools = () => toolSet("lookup", (args) => `found:${args.topic}`, { topic: { type: "string" } });
+
+  /** A reply of `parts`, finished for tool calls. */
+  function partsReply(...parts: (TextPart | ToolCallPart)[]): Response {
+    return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
+  }
+
+  /** A call of `lookup` on `{topic: "ACME"}` as call `id`. */
+  const lookupCall = (id: string) => new ToolCallPart({ id, name: "lookup", arguments: { topic: "ACME" } });
+
+  test("the tool loop records calls, results and final text in visible order", async () => {
+    const usage = new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6 });
+    const first = new Response({
+      message: new Message({ role: "assistant", parts: [new TextPart("private plan"), lookupCall("provider-call-id")] }),
+      finishReason: "tool_calls",
+      usage,
+    });
+    const last = new Message({ role: "assistant", parts: [new TextPart("finished")], providerPayload: { model: "secret" } });
+    const model = new ScriptedModel([first, new Response({ message: last, finishReason: "stop" })], NATIVE);
+
+    const evaluated = await evaluate(scopedAgent("lookup", NATIVE, { tools: ["lookup"] }), model, true, lookupTools());
+
+    expect(evaluated.outcome).toEqual(new Output("finished"));
+    expect(evaluated.evidence!.interactions).toEqual([
+      new ToolCallInteraction("lookup", { topic: "ACME" }),
+      new ToolResultInteraction("lookup", "found:ACME"),
+      new ModelTextInteraction("finished"),
+    ]);
+    const rendered = JSON.stringify(evaluated.evidence);
+    expect(rendered).not.toContain("provider-call-id");
+    expect(rendered).not.toContain("private plan");
+  });
+
+  test("recursive ungranted tool arguments do not change the failure with capture", async () => {
+    const raw = '{"nested":'.repeat(2000) + "{}" + "}".repeat(2000);
+    const deep = () => partsReply(new ToolCallPart({ id: "1", name: "lookup", arguments: null, rawArguments: raw }));
+    const node = scopedAgent("lookup", NATIVE);
+
+    const off = await evaluate(node, new ScriptedModel([deep()], NATIVE), false);
+    const on = await evaluate(node, new ScriptedModel([deep()], NATIVE));
+
+    const failure = (outcome: unknown) => (outcome as EvaluationFailure).failure;
+    expect(off.outcome).toBeInstanceOf(EvaluationFailure);
+    expect(on.outcome).toBeInstanceOf(EvaluationFailure);
+    expect([failure(on.outcome).code, failure(on.outcome).message]).toEqual([
+      failure(off.outcome).code,
+      failure(off.outcome).message,
+    ]);
+    expect(failure(on.outcome).message).toContain("tool call 'lookup' arguments");
+    expect(on.evidence!.interactions).toEqual([]);
+  });
+
+  test("the tool trace uses the same effective arguments as the invocation", async () => {
+    const seen: unknown[] = [];
+    const tools = toolSet("noop", (args) => {
+      seen.push(args);
+      return "ok";
+    });
+    // A provider streams a call without arguments as empty arguments text.
+    const noArguments = [
+      new ToolCallDelta({ index: 0, id: "1", name: "noop", arguments: "" }),
+      new Finish({ reason: "tool_calls" }),
+    ];
+    const model = new ScriptedModel([noArguments, textReply("finished")], NATIVE);
+
+    const evaluated = await evaluate(scopedAgent("run", NATIVE, { tools: ["noop"] }), model, true, tools);
+
+    expect(evaluated.outcome).toEqual(new Output("finished"));
+    expect(seen).toEqual([{}]);
+    expect(evaluated.evidence!.interactions).toEqual([
+      new ToolCallInteraction("noop", {}),
+      new ToolResultInteraction("noop", "ok"),
+      new ModelTextInteraction("finished"),
+    ]);
+  });
+
+  test("an invalid unicode tool result fails the same with or without capture", async () => {
+    const call = () => partsReply(new ToolCallPart({ id: "1", name: "lookup", arguments: {} }));
+    const run = (captureEvidence: boolean) =>
+      evaluate(
+        scopedAgent("lookup", NATIVE, { tools: ["lookup"] }),
+        new ScriptedModel([call(), textReply("finished")], NATIVE),
+        captureEvidence,
+        toolSet("lookup", () => "\ud800"),
+      );
+
+    const off = await run(false);
+    const on = await run(true);
+
+    // Alike but for the traceback, which names each call site.
+    const failure = (outcome: unknown) => ({ ...(outcome as EvaluationFailure).failure, traceback: null });
+    expect(off.outcome).toBeInstanceOf(EvaluationFailure);
+    expect(failure(on.outcome)).toEqual(failure(off.outcome));
+    expect(failure(on.outcome).message).toContain("lone surrogate");
+    expect(on.evidence!.interactions).toEqual([new ToolCallInteraction("lookup", {})]);
+  });
+
+  test.each([
+    ["native", NATIVE],
+    ["fallback", PROMPTED],
+  ] as const)("tool structured output retains discovery and generation order (%s)", async (plan, config) => {
+    const replies = [
+      partsReply(new TextPart("hidden tool-turn prose"), lookupCall("provider-id")),
+      textReply("visible discovery reply"),
+      textReply('{"value": 9}'),
+    ];
+    const output = Type.scalar(ValueKind.INTEGER);
+    const node = scopedAgent("lookup then score", config, { output, retries: 0, tools: ["lookup"] });
+
+    const evaluated = await evaluate(node, new ScriptedModel(replies, config), true, lookupTools());
+
+    expect(evaluated.outcome).toEqual(new Output(9n));
+    expect(evaluated.evidence!.interactions).toEqual([
+      new ToolCallInteraction("lookup", { topic: "ACME" }),
+      new ToolResultInteraction("lookup", "found:ACME"),
+      new ModelTextInteraction("visible discovery reply"),
+      plan === "native" ? new ModelValueInteraction(9n) : new ModelTextInteraction('{"value": 9}'),
+    ]);
   });
 });

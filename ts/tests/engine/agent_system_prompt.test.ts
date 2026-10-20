@@ -2,18 +2,18 @@
  * An authored AGENT `system_prompt:` replaces `DEFAULT_SYSTEM` on every model path: mirrors
  * `tests/engine/test_agent_system_prompt.py`.
  *
- * Ported through `evalNode` with a `ScriptedModel` from `models`: the tool-free rows of
- * `test_every_path_sends_the_rendered_system_prompt` (plain and structured),
+ * Ported through `evalNode` with a `ScriptedModel` from `models`:
+ * `test_every_path_sends_the_rendered_system_prompt` (4 rows),
  * `test_system_prompt_reads_the_node_variables`, `test_memory_sections_append_after_the_authored_prompt`
- * (a hand-made memory context opener) and `test_a_null_system_prompt_value_fails_the_node_before_any_model_call`;
- * the tool-free row of `test_omitted_system_prompt_keeps_default_system` through `forward`.
+ * (a hand-made memory context opener) and
+ * `test_a_null_system_prompt_value_fails_the_node_before_any_model_call`; through `forward`,
+ * `test_omitted_system_prompt_keeps_default_system` (2 rows) and
+ * `test_skills_append_after_the_authored_prompt_and_recall_skips_them`.
  *
  * Changed: the bound inputs come from a one-node `CompiledFlow`'s wiring over a pool, where Python
- * passes a stub flow; "no model call" reads as the model access building no model.
- *
- * Later (T5-11b), the tool loop: the tool rows of `test_every_path_sends_the_rendered_system_prompt`
- * and `test_omitted_system_prompt_keeps_default_system`, and
- * `test_skills_append_after_the_authored_prompt_and_recall_skips_them` (a skill grant runs it).
+ * passes a stub flow; "no model call" reads as the model access building no model. The tool rows
+ * grant a real `noop` tool in the run's `ToolSet`, where Python patches `ToolSet.resolve`; the
+ * model answers without calling it, then (structured) gives the value in a second request.
  *
  * Later (T4-8, T3-22), through `loadFlow`, `runFlow` and `resumeFlow`:
  * `test_run_flow_sends_the_rendered_persona`,
@@ -38,6 +38,10 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure, evalNode, type EvalNodeOptions } from "../../src/runtime/eval_node.ts";
+import { Skill } from "../../src/skills/catalog.ts";
+import { systemPromptWithSkills } from "../../src/skills/tool.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
@@ -55,10 +59,21 @@ function scripted(...texts: string[]): ScriptedModel {
   return new ScriptedModel(texts.map(textReply), CONFIG);
 }
 
-/** An AGENT `agent` whose system prompt (`TEMPLATE` by default) and prompt read inputs `name` and `title`. */
-function agent(options: { structured?: boolean; systemPrompt?: string; variables?: Parameter[] } = {}): AgentNode {
-  const { structured = false, systemPrompt = TEMPLATE, variables } = options;
-  const node = new AgentNode("agent", { prompt: "Hello from ${name}", systemPrompt, llmConfig: CONFIG, variables });
+/** A run tool set holding `noop`, which takes no arguments. */
+function noopTools(): ToolSet {
+  const parametersJsonSchema = { type: "object", properties: {} };
+  return new ToolSet({ noop: new FunctionTool({ name: "noop", description: "Do nothing.", parametersJsonSchema, execute: () => "ok" }) });
+}
+
+/**
+ * An AGENT `agent` whose system prompt (`TEMPLATE` by default) and prompt read inputs `name` and
+ * `title`, granted `tools`.
+ */
+function agent(
+  options: { structured?: boolean; systemPrompt?: string; variables?: Parameter[]; tools?: string[] } = {},
+): AgentNode {
+  const { structured = false, systemPrompt = TEMPLATE, variables, tools } = options;
+  const node = new AgentNode("agent", { prompt: "Hello from ${name}", systemPrompt, llmConfig: CONFIG, variables, tools });
   node.params = [new Parameter("name", { required: true }), new Parameter("title", { required: true })];
   if (structured) node.outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
   return node;
@@ -77,13 +92,22 @@ function systems(model: ScriptedModel): string[] {
   return model.requests.map((request) => request.messages[0]!.text());
 }
 
-test.each([false, true])("every tool-free path sends the rendered system prompt (structured: %p)", async (structured) => {
-  const model = scripted(structured ? '{"value": 7}' : "done");
+test.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])("every path sends the rendered system prompt (structured: %p, tools: %p)", async (structured, tools) => {
+  const answers = structured ? ['{"value": 7}'] : ["done"];
+  // With tools the loop asks first; the structured value then comes in its own request.
+  const model = scripted(...(tools && structured ? ["done", ...answers] : answers));
+  const node = agent({ structured, tools: tools ? ["noop"] : undefined });
 
-  const evaluated = await evaluate(agent({ structured }), { models: serving(model), captureEvidence: true });
+  const evaluated = await evaluate(node, { models: serving(model), captureEvidence: true, tools: noopTools() });
 
   expect(evaluated.outcome).toEqual(new Output(structured ? 7n : "done"));
-  expect(systems(model)).toEqual([RENDERED]);
+  expect(systems(model)).toEqual(Array(model.requests.length).fill(RENDERED));
+  expect(model.requests).toHaveLength(tools && structured ? 2 : 1);
   const user = model.requests[0]!.messages[1]!;
   expect([user.role, user.text()]).toEqual(["user", "Hello from Ada"]);
   expect(evaluated.evidence!.baseSystemPrompt).toBe(RENDERED);
@@ -120,16 +144,34 @@ test("memory sections append after the authored prompt", async () => {
   expect(evaluated.evidence!.memorySections).toEqual(sections);
 });
 
-test("an omitted system prompt keeps DEFAULT_SYSTEM", async () => {
+test("skills append after the authored prompt and recall skips them", async () => {
+  const model = scripted("done");
+  const skill = new Skill({ name: "review", description: "Review code changes.", instructions: "Read the diff." });
+  const seen: string[] = [];
+  const openMemoryContext = async (system: string) => {
+    seen.push(system);
+    return new MemoryContext();
+  };
+  const node = new AgentNode("agent", { prompt: "p", systemPrompt: "You review code.", llmConfig: CONFIG, skills: ["review"] });
+
+  const skills = new Map([["review", skill]]);
+  expect(await node.forward({}, { openMemoryContext, skills, models: serving(model) })).toEqual(new Output("done"));
+
+  expect(seen).toEqual(["You review code."]);
+  expect(systems(model)).toEqual([systemPromptWithSkills("You review code.", [skill])]);
+});
+
+test.each([false, true])("an omitted system prompt keeps DEFAULT_SYSTEM (tools: %p)", async (tools) => {
   const model = scripted("done");
   const seen: string[] = [];
   const openMemoryContext = async (system: string) => {
     seen.push(system);
     return new MemoryContext();
   };
-  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG });
+  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, tools: tools ? ["noop"] : undefined });
 
-  expect(await node.forward({}, { openMemoryContext, models: serving(model) })).toEqual(new Output("done"));
+  const caps = { openMemoryContext, models: serving(model), tools: noopTools() };
+  expect(await node.forward({}, caps)).toEqual(new Output("done"));
 
   expect(seen).toEqual([DEFAULT_SYSTEM]);
   expect(systems(model)).toEqual([DEFAULT_SYSTEM]);

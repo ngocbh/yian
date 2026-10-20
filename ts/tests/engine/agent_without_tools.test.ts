@@ -10,9 +10,11 @@
  * with a `ScriptedModel` from `FlowEngineOptions.models`; the request sending no tools stands for
  * Python's unbound and structured calls.
  *
- * Later (T5-11b): `test_python_built_agent_with_tools_runs_the_tool_loop`,
- * `test_steer_joins_the_single_request_after_the_prompt` and
- * `test_interrupt_while_streaming_keeps_the_partial_text` (the last two with T3-22).
+ * Ported through `evalNode` (`drive`), the tool in the run's `ToolSet`:
+ * `test_python_built_agent_with_tools_runs_the_tool_loop` (the bound tools read from the request).
+ *
+ * Later (T5-11b, steering): `test_steer_joins_the_single_request_after_the_prompt` and
+ * `test_interrupt_while_streaming_keeps_the_partial_text`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -20,15 +22,17 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { RunSucceeded } from "../../src/events.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import type { Node } from "../../src/nodes/base.ts";
+import { type Node, Output } from "../../src/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { engine } from "./run_state_fixtures.ts";
+import { drive, engine, serving } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -92,4 +96,28 @@ test("structured agent without tools makes one structured call", async () => {
 test("skills and steerable need no mode", () => {
   expect(new AgentNode("n", { prompt: "p", skills: ["review"] }).skills).toEqual(["review"]);
   expect(new AgentNode("n", { prompt: "p", steerable: true }).steerable).toBe(true);
+});
+
+test("a Python-built agent with tools runs the tool loop", async () => {
+  const seen: unknown[] = [];
+  const value = new FunctionTool({
+    name: "value",
+    description: "Price a topic.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } } },
+    execute: (args) => {
+      seen.push(args);
+      return `px:${args.topic}`;
+    },
+  });
+  const call = new ToolCallPart({ id: "1", name: "value", arguments: { topic: "ACME" } });
+  const calling = new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
+  const model = new ScriptedModel([calling, reply("done")], CONFIG);
+  const node = new AgentNode("n", { prompt: "hi", tools: ["value"], llmConfig: CONFIG });
+
+  const outcome = await drive(node, { models: serving(model), tools: new ToolSet({ value }) });
+
+  expect(outcome).toEqual(new Output("done"));
+  expect(seen).toEqual([{ topic: "ACME" }]);
+  expect(model.requests).toHaveLength(2);
+  expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual(["value"]);
 });

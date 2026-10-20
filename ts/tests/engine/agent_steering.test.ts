@@ -15,7 +15,7 @@
  *
  * Later (T4): `test_run_boundary_rejects_an_object_without_the_inbox_methods` (the run boundary).
  *
- * Later (T5-11b), a steerable AGENT runs the tool loop:
+ * Later (T5-11b, steering):
  * `test_run_context_receives_steering_only_when_steerable` and the steer and interrupt tests
  * (`test_steers_are_sent_as_user_messages_at_the_top_of_each_iteration` through
  * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer`; the resume and loop ones also need

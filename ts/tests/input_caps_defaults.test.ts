@@ -1,8 +1,8 @@
 /**
  * Input-size caps come from `defaults`; mirrors `tests/test_input_caps_defaults.py`.
  *
- * Holds the base URL, skill, question option, auth store, auth response and OAuth callback rows;
- * the other rows come with their modules.
+ * Holds the base URL, skill, question count, question option, auth store, auth response and OAuth
+ * callback rows; the other rows come with their modules.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -20,6 +20,7 @@ import { request } from "../src/llm_clients/auth/http.ts";
 import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { validateBaseUrl } from "../src/llm_clients/config.ts";
+import { parseQuestions, QuestionSpecError } from "../src/nodes/human_input/questions.ts";
 import { realScheduler } from "../src/platform.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
 import { Skill, SkillError } from "../src/skills/index.ts";
@@ -77,6 +78,15 @@ test("skill description cap", () => {
 test("question option caps", () => {
   install({ ...BUILTIN, maxQuestionOptions: 2, maxQuestionOptionChars: 5 });
   expect(normalizeOptions(["abcdefg", "b", "c"])).toEqual(["abcd…", "b"]);
+});
+
+test("question count cap", () => {
+  const questions = ["a", "b"].map((header) => ({ question: "Which?", header }));
+  expect(parseQuestions(questions)).toHaveLength(2);
+  install({ ...BUILTIN, maxQuestions: 1 });
+  expect(parseQuestions(questions.slice(0, 1))).toHaveLength(1);
+  expect(() => parseQuestions(questions)).toThrow(QuestionSpecError);
+  expect(() => parseQuestions(questions)).toThrow("expected 1..1 questions, got 2");
 });
 
 test("auth store cap", () => {

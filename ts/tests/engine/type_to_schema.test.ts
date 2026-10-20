@@ -8,8 +8,7 @@
  * Every schema Python yian emits (`model_json_schema()`, captured with pydantic 2.13.5) is
  * pinned exactly: the captured JSON text is read with `parseJson`, so its ints are
  * `bigint` as in TS's schema, and a float bound spelled as an int (`float(-0.5..1)`'s `1`) is a
- * `bigint` on both sides. The question-list type of `nodes/human_input/questions.py` is built by
- * hand.
+ * `bigint` on both sides.
  *
  * Differences from pydantic, by design: keys are sorted at every level but a `properties` map
  * (pydantic leaves the schema of a field or definition named `properties` unsorted); in
@@ -35,6 +34,7 @@ import { describe, expect, test } from "bun:test";
 
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { typeToSchema } from "../../src/nodes/agent/structured.ts";
+import { questionListType } from "../../src/nodes/human_input/questions.ts";
 import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
@@ -165,24 +165,6 @@ function expectSchema(typ: Type, expected: JsonValue): void {
   const schema = schemaOf(typ);
   expect(schema).toStrictEqual(expected as JsonObject);
   expectSortedKeys(schema);
-}
-
-/** The question-list type of Python's `nodes/human_input/questions.py`, built by hand. */
-function questionListType(): Type {
-  const option = record(
-    { label: Type.scalar(ValueKind.STRING), description: Type.scalar(ValueKind.STRING) },
-    ["label", "description"],
-  );
-  const question = record(
-    {
-      question: Type.scalar(ValueKind.STRING),
-      header: Type.scalar(ValueKind.STRING),
-      options: new Type({ kind: ValueKind.LIST_OBJECT, element: option }),
-      multi_select: Type.scalar(ValueKind.BOOLEAN),
-    },
-    ["question", "header"],
-  );
-  return new Type({ kind: ValueKind.LIST_OBJECT, element: question });
 }
 
 // Python's `model_json_schema()` per type, as captured (compact JSON, pydantic's key order).

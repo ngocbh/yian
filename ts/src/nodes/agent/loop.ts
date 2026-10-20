@@ -11,7 +11,11 @@
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
  * calls finish in. Python runs them one at a time, which is what a reply without safe tools gets.
  *
- * Here: steering and memory transcripts are not ported yet.
+ * A steerable agent reads the host's steers at the top of each iteration and stops at a host
+ * interrupt between effects, returning its latest reply's text; an interrupt never aborts a
+ * running tool call.
+ *
+ * Here: memory transcripts are not ported yet.
  *
  * Knows about:   diagnostics, llm, nodes/base, skills, tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
@@ -27,13 +31,21 @@ import { isReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { rejectDeepNesting, writeAsText } from "../../typesys/values.ts";
 import { Output } from "../base.ts";
-import { AgentLoopError, type AgentRunContext, checkStopped, ToolIterationLimitError } from "./context.ts";
+import {
+  AgentLoopError,
+  type AgentRunContext,
+  checkStopped,
+  drainSteers,
+  interruptSignal,
+  ToolIterationLimitError,
+} from "./context.ts";
 import {
   callModel,
   type LiveSinks,
   liveSinks,
   markModelFailure,
   newExchangeId,
+  observeSkippedToolCall,
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
@@ -47,19 +59,19 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * Makes one model call without tools or skills, otherwise runs the tool loop until the model
  * answers. Sets `ctx.sent` to the built model's route credentials once the model is built.
  *
- * @returns The checked structured value, or the final reply's visible text.
- * @throws Error before the model is built when a steering inbox is present or the memory context
- *   holds a transcript.
+ * @returns The checked structured value, or the final reply's visible text; after a host
+ *   interrupt, the latest reply's visible text (`""` before any).
+ * @throws Error before the model is built when the memory context holds a transcript.
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply's tool call arguments nest too deep.
  * @throws ToolIterationLimitError when a reply calls tools at the `maxToolIterations`-th turn.
  * @throws AgentLoopError when a reply calls a tool that isn't granted.
  * @throws Whatever building or calling the model throws (marked by `markModelFailure`), a stop's
  *   reason, a tool's own error other than a reported one, a failed argument check, a result
- *   `toolText` refuses, or `generateStructured`'s `OutputInvalidError`.
+ *   `toolText` refuses, or `generateStructured`'s `OutputInvalidError`. The host inbox's faults
+ *   (`CapabilityFault`s) pass through.
  */
 export async function runAgent(ctx: AgentRunContext): Promise<Output> {
-  if (ctx.steering !== undefined) throw new Error("AGENT steering is not ported yet (T5-11b)");
   if (ctx.memoryContext.transcript !== null) {
     throw new Error("AGENT memory transcripts are not ported yet (T6-6)");
   }
@@ -101,10 +113,18 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
   const skills = new Map(ctx.skills.map((skill) => [skill.name, skill]));
   if (skills.size > 0) bound.push(loadSkillTool());
+  const interrupt = interruptSignal(ctx);
   let iterations = 0;
+  let reply: Message | null = null;
 
   while (true) {
     checkStopped(ctx);
+    if (interrupt?.aborted) return interrupted(reply);
+    // Steers join only here, never between a reply's tool calls and their results.
+    const steers = await drainSteers(ctx);
+    // A stop during the drain wins; its steers are never sent.
+    checkStopped(ctx);
+    for (const steer of steers) messages.push(userMessage(steer));
     const exchangeId = newExchangeId();
     const response = await callModel(live, model, new Request({ messages, tools: bound }), {
       purpose: "chat",
@@ -113,7 +133,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     });
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
-    const reply = response.message;
+    reply = response.message;
     rejectInvalidArguments(reply);
     iterations += 1;
     messages.push(reply);
@@ -137,8 +157,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       );
     }
 
-    await runToolCalls({ ctx, toolset, granted, skills, live, exchangeId, messages }, calls);
+    if (await runToolCalls({ ctx, toolset, granted, skills, live, exchangeId, messages, calls, interrupt })) {
+      return interrupted(reply);
+    }
   }
+}
+
+/** End an interrupted loop successfully with the latest reply's visible text; `""` before any. */
+function interrupted(reply: Message | null): Output {
+  return new Output(reply === null ? "" : textOf(reply));
 }
 
 /** What running one reply's tool calls reads and appends to. */
@@ -152,6 +179,10 @@ interface ToolTurn {
   readonly exchangeId: string;
   /** The model's messages; each committed result is appended. */
   readonly messages: Message[];
+  /** The reply's runnable tool calls, in call order. */
+  readonly calls: readonly ToolCallPart[];
+  /** The host's interrupt signal, or `null` for an agent that isn't steerable. */
+  readonly interrupt: AbortSignal | null;
 }
 
 /** One call whose check passed, ready to start. */
@@ -175,31 +206,48 @@ type CallCheck =
  * runs alone, after the group before it. A failed check ends the calls before it as their own
  * group, which runs and commits; then the node fails at it, as Python's one-at-a-time loop does.
  *
+ * A host interrupt seen before a call's check, before a group starts, or at a failed check skips
+ * every call not started yet (`skipFrom`); a running group always finishes and commits.
+ *
+ * @returns Whether a host interrupt skipped the remaining calls.
  * @throws A stop's reason, the first failing call's error, a result `toolText` refuses, the
  *   ungranted `AgentLoopError`, or a failed argument check.
  */
-async function runToolCalls(turn: ToolTurn, calls: readonly ToolCallPart[]): Promise<void> {
+async function runToolCalls(turn: ToolTurn): Promise<boolean> {
   let group: PlannedCall[] = [];
-  for (const [index, call] of calls.entries()) {
+  for (const [index, call] of turn.calls.entries()) {
     // Not `checkStopped(ctx)`: without a context signal, the tools run under the tool set's bound
     // run signal, so a stop on it must stop the calls too.
     checkNodeStopped(turn);
-    // A host interrupt is checked here once steering is ported, after the stop (Python's per-call
-    // position); nothing of `group` has started yet, so it is skipped whole.
+    // After the stop, as in Python; nothing of `group` has started yet, so it is skipped whole.
+    if (turn.interrupt?.aborted) return skipFrom(turn, group[0]?.index ?? index);
     const check = await checkCall(turn, call, index);
     if ("error" in check) {
-      await runGroup(turn, group);
+      if (await runGroup(turn, group)) return true;
       return await failCall(turn, call, index, check);
     }
     if (check.safe) {
       group.push(check.planned);
       continue;
     }
-    await runGroup(turn, group);
+    if (await runGroup(turn, group)) return true;
     group = [];
-    await runGroup(turn, [check.planned]);
+    if (await runGroup(turn, [check.planned])) return true;
   }
-  await runGroup(turn, group);
+  return await runGroup(turn, group);
+}
+
+/**
+ * Report the calls from call `start` on as skipped by a host interrupt, in call order; none of
+ * them runs or leaves evidence.
+ *
+ * @returns `true`, for the caller to return.
+ */
+function skipFrom(turn: ToolTurn, start: number): true {
+  for (const [index, call] of turn.calls.entries()) {
+    if (index >= start) observeSkippedToolCall(turn.live, identityOf(turn, call, index));
+  }
+  return true;
 }
 
 /**
@@ -246,19 +294,23 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
 /**
  * Fail the node at a call whose check failed, once the calls before it committed.
  *
- * As for a call about to start, a stop wins first. The call's evidence is recorded; a granted
- * call whose arguments failed gets the brackets of a call that threw, since Python checks them
- * inside the call, and an ungranted one gets none.
+ * As for a call about to start, a stop wins first, then a host interrupt skips it and every later
+ * call. Otherwise the call's evidence is recorded; a granted call whose arguments failed gets the
+ * brackets of a call that threw, since Python checks them inside the call, and an ungranted one
+ * gets none.
+ *
+ * @returns `true` when a host interrupt skipped the call.
+ * @throws The failed check's error.
  */
 async function failCall(
   turn: ToolTurn,
   call: ToolCallPart,
   index: number,
   failed: { readonly error: unknown; readonly granted: boolean },
-): Promise<never> {
+): Promise<true> {
   const { ctx, live } = turn;
   checkNodeStopped(turn);
-  // A host interrupt is checked here too once steering is ported, as for any call not started.
+  if (turn.interrupt?.aborted) return skipFrom(turn, index);
   recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
   if (failed.granted) {
     await observeToolCall(live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
@@ -275,13 +327,16 @@ async function failCall(
  * The calls share one child signal of the node's. Each starts in call order; the first to fail
  * (in time; a `ReportedToolError` is the call's error result, not a failure) aborts the group's
  * signal, and no further call starts. Every started call is awaited; then a stop wins, else the
- * first failure is thrown with nothing of the group committed.
+ * first failure is thrown with nothing of the group committed. A stop, then a host interrupt, is
+ * checked before the group starts; the interrupt skips from the group's first call.
+ *
+ * @returns Whether a host interrupt skipped the group and every later call.
  */
-async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<void> {
-  if (group.length === 0) return;
+async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<boolean> {
+  if (group.length === 0) return false;
   const { ctx, live } = turn;
   checkNodeStopped(turn);
-  // A host interrupt is checked here once steering is ported: it skips from the group's first call.
+  if (turn.interrupt?.aborted) return skipFrom(turn, group[0]!.index);
   const signal = nodeSignal(turn);
   const controller = new AbortController();
   const relay = () => controller.abort(signal!.reason);
@@ -337,6 +392,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
   } finally {
     signal?.removeEventListener("abort", relay);
   }
+  return false;
 }
 
 /** The node's stop signal: the context's, else the tool set's run signal. */

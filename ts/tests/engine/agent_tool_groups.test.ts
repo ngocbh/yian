@@ -6,7 +6,9 @@
  * and a failed check (an ungranted name, invalid arguments) ends the calls before it as their own
  * group, which runs and commits before the node fails. Results commit in call order whatever order
  * the calls finish in; a failing call aborts its group's siblings, and the node rejects only once
- * every started call has settled.
+ * every started call has settled. A host interrupt never aborts a running group: it skips the calls
+ * not started yet, a failed check after a committed group included, with interrupted brackets and
+ * no evidence, while a run stop still wins.
  *
  * The tools here block on a gate the test settles, and log when they start and end; most rows run
  * `runAgent` directly with sinks for events and evidence, and the host-callback and run-stop rows
@@ -30,6 +32,7 @@ import {
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import type { Steering } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../../src/skills/tool.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
@@ -147,7 +150,13 @@ function agent(
   model: ScriptedModel,
   toolset: ToolSet,
   tools: readonly string[],
-  options: { signal?: AbortSignal; skills?: readonly Skill[]; nodeId?: string; onEvent?: (event: unknown) => void } = {},
+  options: {
+    signal?: AbortSignal;
+    skills?: readonly Skill[];
+    nodeId?: string;
+    onEvent?: (event: unknown) => void;
+    steering?: Steering;
+  } = {},
 ) {
   const events: unknown[] = [];
   const interactions: VisibleInteraction[] = [];
@@ -173,6 +182,7 @@ function agent(
     },
     baseSystemPrompt: DEFAULT_SYSTEM,
     skills: options.skills ?? [],
+    steering: options.steering,
     models: serving(model),
     sent: () => [],
   };
@@ -199,6 +209,15 @@ function toolResults(model: ScriptedModel, index: number): ToolResultPart[] {
   return model.requests[index]!.messages.filter((message) => message.role === "tool").map(
     (message) => message.parts[0] as ToolResultPart,
   );
+}
+
+/** A host inbox with no steers whose `interrupt()` interrupts the node. */
+function interruptible(): { steering: Steering; interrupt: () => void } {
+  const controller = new AbortController();
+  return {
+    steering: { interruptSignal: () => controller.signal, drain: () => [] },
+    interrupt: () => controller.abort(new Error("interrupted")),
+  };
 }
 
 /** A tool result part for call `c<index>`. */
@@ -668,4 +687,99 @@ test("each call gets its own call id, node and run id", async () => {
   // One group: both calls share its signal, a child of the node's.
   expect(a.ctx!.signal).toBe(b.ctx!.signal);
   expect(a.ctx!.signal).not.toBe(stop.signal);
+});
+
+test("an interrupt while a safe group runs lets every call of it finish and skips only later calls", async () => {
+  const log: string[] = [];
+  const a = gated("a", log);
+  const b = gated("b", log);
+  const { steering, interrupt } = interruptible();
+  const model = new ScriptedModel([callsReply(["a"], ["b"], ["c"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool, c: instant("c", log, false) }), ["a", "b", "c"], {
+    steering,
+  });
+
+  await a.entered;
+  await b.entered;
+  interrupt();
+  await flush();
+  expect(a.ctx!.signal.aborted).toBe(false);
+  a.resolve("a result");
+  b.resolve("b result");
+
+  expect((await run.running).value).toBe("");
+  expect(log).toEqual(["a start", "b start", "a end", "b end"]);
+  expect(model.requests).toHaveLength(1);
+  expect(toolEvents(run.events)).toEqual([
+    "started a",
+    "started b",
+    "finished a a result",
+    "finished b b result",
+    "started c",
+    "finished c interrupted",
+  ]);
+});
+
+test("an interrupt seen at a later call's check skips it and the rest with no call evidence", async () => {
+  const log: string[] = [];
+  const a = gated("a", log, { safe: false });
+  const { steering, interrupt } = interruptible();
+  const model = new ScriptedModel([callsReply(["a"], ["b"], ["c"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool, b: instant("b", log), c: instant("c", log) }), ["a", "b", "c"], {
+    steering,
+  });
+
+  await a.entered;
+  interrupt();
+  a.resolve("a result");
+
+  expect((await run.running).value).toBe("");
+  expect(log).toEqual(["a start", "a end"]);
+  expect(run.interactions).toEqual([new ToolCallInteraction("a", {}), new ToolResultInteraction("a", "a result")]);
+  expect(toolEvents(run.events)).toEqual([
+    "started a",
+    "finished a a result",
+    "started b",
+    "finished b interrupted",
+    "started c",
+    "finished c interrupted",
+  ]);
+});
+
+test("an interrupt inside a group before a failed check commits the group and skips the failed call", async () => {
+  const log: string[] = [];
+  const a = gated("a", log);
+  const b = gated("b", log, { parametersValidator: refusing("b", log) });
+  const { steering, interrupt } = interruptible();
+  const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"], { steering });
+
+  await a.entered;
+  interrupt();
+  a.resolve("a result");
+
+  expect((await run.running).value).toBe("");
+  expect(log).toEqual(["b validate", "a start", "a end"]);
+  expect(run.interactions).toEqual([new ToolCallInteraction("a", {}), new ToolResultInteraction("a", "a result")]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b interrupted"]);
+});
+
+test("a run stop inside a group before a failed check rejects with the stop, and the failed call gets no brackets", async () => {
+  const log: string[] = [];
+  const reason = new Error("stopped");
+  const stop = new AbortController();
+  const a = gated("a", log, { onAbort: async () => "a result" });
+  const b = gated("b", log, { parametersValidator: refusing("b", log) });
+  const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"], {
+    signal: stop.signal,
+    steering: interruptible().steering,
+  });
+
+  await a.entered;
+  stop.abort(reason);
+
+  expect(await rejected(run.running)).toBe(reason);
+  expect(log).toEqual(["b validate", "a start", "a end"]);
+  expect(toolEvents(run.events)).toEqual(["started a"]);
 });

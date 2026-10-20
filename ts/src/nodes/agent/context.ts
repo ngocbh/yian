@@ -70,3 +70,16 @@ export interface AgentRunContext {
 export function checkStopped(ctx: Pick<AgentRunContext, "signal">): void {
   ctx.signal?.throwIfAborted();
 }
+
+/**
+ * Take the host's queued steer messages for this node, awaiting a promised answer; none without
+ * an inbox.
+ */
+export async function drainSteers(ctx: Pick<AgentRunContext, "nodeId" | "steering">): Promise<string[]> {
+  return ctx.steering === undefined ? [] : [...(await ctx.steering.drain(ctx.nodeId))];
+}
+
+/** Return the signal the host aborts to interrupt this node; `null` without an inbox. */
+export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | null {
+  return ctx.steering === undefined ? null : ctx.steering.interruptSignal(ctx.nodeId);
+}

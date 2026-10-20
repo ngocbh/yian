@@ -16,8 +16,7 @@
  * `test_nested_references_in_a_loop_body_run_after_growth`.
  *
  * Changed: `test_retired_inline_flow_call_in_a_nested_output_fails` assembles the flow without its
- * `defs:` entry, since the inline-call desugar raises before any callee resolves;
- * `test_nested_call_directive_is_not_lifted` drives `desugarInlineCalls` directly, as Python does.
+ * `defs:` entry, since the inline-call desugar raises before any callee resolves.
  */
 
 import { expect, test } from "bun:test";

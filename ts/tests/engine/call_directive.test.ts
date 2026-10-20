@@ -13,8 +13,8 @@
  * Changed: a TS-era rule changes these rows.
  * `test_bare_keyword_values_read_with_the_flow_yaml_rules`: the date and datetime params give
  * text (rule `dates`) and ints are `bigint`s (`30n`, `0x1F` is `31n`).
- * `test_bare_nan_keyword_value_is_a_float`: TS refuses `.nan` (rule `numbers`), an
- * `ArgumentValueError` with the reason `NaN is not a yian value`.
+ * `test_bare_nan_keyword_value_is_a_float`: TS refuses `.nan`, an `ArgumentValueError`
+ * with the reason `NaN is not a yian value`.
  * `test_a_bare_int_too_long_to_convert_fails_as_in_the_named_form`: a 5000-digit int reads as a
  * `bigint` in both forms (rule `numbers`), so the row loads.
  * `test_bare_and_quoted_dates_into_call_inputs`: the quoted half ports; the unquoted half loads in

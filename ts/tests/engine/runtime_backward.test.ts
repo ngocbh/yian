@@ -50,7 +50,8 @@
  * the instance, its error an `Error`, Python's `OSError`).
  *
  * Ported, through the engine: `test_terminal_trace_keeps_actual_root_writer_until_quiescence`
- * (2 rows), `test_diamond_calls_shared_producer_once_with_two_ordered_messages`,
+ * (2 rows), `test_diamond_calls_shared_producer_once_with_two_ordered_messages` (the delivered
+ * messages are frozen),
  * `test_entire_callback_result_is_validated_before_routing_any_input` (3 rows; each pins the
  * failure's message and cause class),
  * `test_empty_feedback_keeps_complete_history_without_invoking_callbacks` (2 rows; the `[null]`
@@ -99,10 +100,12 @@
  * TS-only: a backward context the trace can't build rejects with its own error before the callback
  * runs.
  *
- * Later: `test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence`. T4-6's pooled engine
- * is merged, but the Python test blocks a template function on a thread event until the peer
- * commits, which a synchronous TS template function can't do. Later, with MAP, CASE, CALL, LOOP,
- * AGENT or `buildGrow`: the file's other 9 tests, from
+ * Not ported: `test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence`. The Python test
+ * blocks a template function on a thread event until the peer commits; a TS template function
+ * binds synchronously at dispatch, so a consumer that started first can't block until a peer
+ * commits and then bind its output.
+ *
+ * Later, with MAP, CASE, CALL, LOOP, AGENT or `buildGrow`: the file's other 9 tests, from
  * `test_map_whole_list_context_and_item_order_survive_reversed_completion` to
  * `test_loop_passthrough_field_routes_feedback_to_its_seed`.
  */

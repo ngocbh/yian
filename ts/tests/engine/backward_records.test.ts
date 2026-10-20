@@ -144,8 +144,8 @@
  *   `dataclasses.replace`.
  * - `test_interrupted_finished_must_exactly_project_the_prefix` (4 rows) rebuilds the outcome and,
  *   for the `message` row, its failure with their constructors, where Python uses
- *   `dataclasses.replace`; that failure is no longer the interruption, so the commit-failure rule
- *   refuses it.
+ *   `dataclasses.replace`; that failure is no longer the interruption, so, as in Python, the
+ *   commit-failure rule refuses it.
  * - `test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting`
  *   drops the module patches, as above; `forward`, `backward` and `captureBackwardContext` throw
  *   on the nodes of a `copyGraph` copy of the run's flow, each prefix replays over a fresh
@@ -1529,25 +1529,27 @@ test("an interrupted attempt after Ready requires an explicit finish before a fr
 const READY_INVENTORY = "backward results must match the complete accepted occurrence order";
 const READY_TRANSFER = "backward received feedback and attribution must match exact transfers";
 
-test.each<[string, typeof TypeError | typeof RangeError, string]>([
-  ["missing", RangeError, READY_INVENTORY],
-  ["duplicate", RangeError, READY_INVENTORY],
-  ["reordered", RangeError, READY_INVENTORY],
-  ["foreign", RangeError, READY_INVENTORY],
-  ["feedback", RangeError, READY_TRANSFER],
-  ["input_coordinate", RangeError, READY_TRANSFER],
-  ["message_coordinate", RangeError, READY_TRANSFER],
-  ["contribution_coordinate", RangeError, READY_TRANSFER],
-  ["parent_coordinate", RangeError, READY_TRANSFER],
-  ["unreached", RangeError, READY_TRANSFER],
-  ["unknown_input", RangeError, "input_feedback selects undeclared input 'foreign'"],
-  ["unknown_variable", RangeError, "variable_feedback selects undeclared variable 'foreign'"],
-  ["short_list", RangeError, 'feedback["x"] must have exactly 2 items; got 1'],
-  ["root", RangeError, "backward root result must match the accepted START and source-zero projection"],
+test.each<[string, string]>([
+  ["missing", READY_INVENTORY],
+  ["duplicate", READY_INVENTORY],
+  ["reordered", READY_INVENTORY],
+  ["foreign", READY_INVENTORY],
+  ["feedback", READY_TRANSFER],
+  ["input_coordinate", READY_TRANSFER],
+  ["message_coordinate", READY_TRANSFER],
+  ["contribution_coordinate", READY_TRANSFER],
+  ["parent_coordinate", READY_TRANSFER],
+  ["unreached", READY_TRANSFER],
+  ["unknown_input", "input_feedback selects undeclared input 'foreign'"],
+  ["unknown_variable", "variable_feedback selects undeclared variable 'foreign'"],
+  ["short_list", 'feedback["x"] must have exactly 2 items; got 1'],
+  ["root", "backward root result must match the accepted START and source-zero projection"],
 ])(
   "Ready rejects an inventory, local contract, transfer or root disagreement before append: %s",
-  async (change, cls, message) => {
-    let { state, log, root, attributed } = await retainedBackward({ topic: [1n, 2n] });
+  async (change, message) => {
+    const built = await retainedBackward({ topic: [1n, 2n] });
+    const { state, log, attributed } = built;
+    let root = built.root;
     acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
     const submitted = [...attributed];
     const workIndex = state.trace!.occurrences.findIndex((occurrence) => occurrence.nodeId === "work");
@@ -1581,7 +1583,7 @@ test.each<[string, typeof TypeError | typeof RangeError, string]>([
     }
     const prior = state.backwardState;
     const sequence = log.nextSequence;
-    expectError(() => prepareRecord(state, new BackwardReadyRecord(1, root, submitted, [])), cls, message);
+    expectError(() => prepareRecord(state, new BackwardReadyRecord(1, root, submitted, [])), RangeError, message);
     expect(state.backwardState).toBe(prior);
     expect(log.nextSequence).toBe(sequence);
     expect(state.trace!.nextSequence).toBe(sequence);
@@ -1617,10 +1619,11 @@ test("mutation ids may repeat across different recorded memories", async () => {
   expect(state.backwardState.ready!.proposals).toEqual(proposals);
 });
 
-const RETRYABLE_CODES = (codes: readonly string[]): [boolean, string][] =>
+/** Each code with `retryable` false, then true. */
+const retryableRows = (codes: readonly string[]): [boolean, string][] =>
   codes.flatMap((code) => [false, true].map((retryable): [boolean, string] => [retryable, code]));
 
-test.each(RETRYABLE_CODES(["learn.failed", "backward.interrupted"]))(
+test.each(retryableRows(["learn.failed", "backward.interrupted"]))(
   "a learner-failed Finished keeps completed feedback and all unrequested policies: retryable %p, %s",
   async (retryable, code) => {
     const [keys] = proposalTable();
@@ -1645,7 +1648,7 @@ test.each(RETRYABLE_CODES(["learn.failed", "backward.interrupted"]))(
   },
 );
 
-test.each(RETRYABLE_CODES(["commit.failed", "backward.interrupted"]))(
+test.each(retryableRows(["commit.failed", "backward.interrupted"]))(
   "a known commit failure stops later requests and admits a later attempt: retryable %p, %s",
   async (retryable, code) => {
     const [keys, proposals] = proposalTable();

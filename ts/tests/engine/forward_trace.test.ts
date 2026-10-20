@@ -177,9 +177,8 @@
  * - `test_pooled_lookup_keeps_value_and_producer_identity_together`: a TS binding is synchronous,
  *   so no commit can land between two reads of one binding; instead `consumer` binds while `peer`
  *   is in flight and `late` after `peer` committed, each read's value and producer agreeing.
- * - `test_discarded_pooled_outcomes_are_not_trace_occurrences`, its engine half: the sibling is a
- *   `BlockingNode` drained by the failure; its `computeBackward` half is Later (T4-6 PR 3): it
- *   needs a stop event.
+ * - `test_discarded_pooled_outcomes_are_not_trace_occurrences`: the sibling is a `BlockingNode`
+ *   drained by the failure, for Python's stop event.
  * - `test_trace_memory_scope_is_detached_and_replayed_without_evidence`: a `MemoryScope` is frozen
  *   by its constructor, so the occurrence may hold the node's scope itself; replacing the node's
  *   scope afterward doesn't change it, and the replay keeps it.
@@ -251,8 +250,11 @@ import {
 import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
-import { BackwardCapture, ForwardCapture } from "../../src/runtime/contracts.ts";
+import { BackwardCapture, BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
   canonicalSeed,
   canonicalTyped,
   decodeRecord,
@@ -297,6 +299,7 @@ import {
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
+  prepareRecord,
   prepareRunResumed,
   prepareRunStopped,
   replayRecords,
@@ -3195,6 +3198,22 @@ test("discarded pooled outcomes are not trace occurrences", async () => {
   expect(trace.occurrences.map((item) => item.nodeId)).toEqual([START_ID, "bad"]);
   expect(trace.currentWriters.has("slow")).toBe(false);
   expect(trace.backwardHandlers.has(sourceKey(new SourceRef(RUN_ID, trace.started.get("slow")!)))).toBe(false);
+  expectError(
+    () => prepareRecord(built.state, new BackwardStartedRecord(1, [null])),
+    RangeError,
+    "feedback requires a recorded list",
+  );
+  const [root, attributed] = await computeBackward(trace, null);
+  for (const record of [
+    new BackwardStartedRecord(1, null),
+    new BackwardReadyRecord(1, root, attributed, []),
+    new BackwardFinishedRecord(1, new BackwardOutcome("succeeded", { feedback: root })),
+  ]) {
+    expect(commitPrepared(built.log, built.state, prepareRecord(built.state, record))).toEqual([]);
+  }
+  expect(attributed.length).toBe(2);
+  expect(attributed.every((item) => !item.invoked)).toBe(true);
+  expect(built.state.backwardState.outcome!.feedback).toEqual(root);
 });
 
 test("the trace memory scope is detached and replayed without evidence", async () => {

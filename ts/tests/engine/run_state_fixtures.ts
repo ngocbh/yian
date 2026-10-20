@@ -160,6 +160,47 @@ export class StreamNode extends Node {
   }
 }
 
+/**
+ * Blocks on `gate`, a promise the test settles, standing in for a node that waits on a human: its
+ * value is what `gate` resolves to, and when its signal aborts first it rejects with the signal's
+ * reason. `entered` resolves once it blocks; `released` turns true once it stops blocking.
+ */
+export class BlockingNode extends Node {
+  readonly kind = NodeKind.CODE;
+  /** The promise the node waits on. */
+  readonly gate: Promise<unknown>;
+  /** Resolves once the node blocks. */
+  readonly entered: Promise<void>;
+  /** Whether the node has stopped blocking. */
+  released = false;
+  readonly #enter: () => void;
+
+  constructor(nodeId: string, gate: Promise<unknown>, options: ConstructorParameters<typeof Node>[1] = {}) {
+    super(nodeId, options);
+    this.gate = gate;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.entered = promise;
+    this.#enter = resolve;
+  }
+
+  override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+    const signal = caps.signal!;
+    this.#enter();
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+    });
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return new Output(await Promise.race([this.gate, aborted]));
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      this.released = true;
+    }
+  }
+}
+
 /** Return `START -> work -> END`, with a real START and an output-less END. */
 export function flow(): CompiledFlow {
   const nodes = new Map<string, Node>([

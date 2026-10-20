@@ -1675,6 +1675,19 @@ describe("modelAnswers", () => {
     expect(scheduler.now()).toBe(30_000);
   });
 
+  test("any failure once the deadline passed reads as the timeout", async () => {
+    const fake = fakeChatModel();
+    const scheduler = virtualScheduler();
+    // A build cut short by the deadline that rejects with its own error, not the signal's reason.
+    fake.build = (_, options) =>
+      new Promise((_, reject) =>
+        options.signal!.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
+      );
+    const deps = { chatModel: fake.chatModel, scheduler };
+    const problem = await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never);
+    expect(problem).toBe("TimeoutError: The model didn't reply within 30 seconds");
+  });
+
   test("no deadline sleeper outlives a check", async () => {
     const fake = fakeChatModel();
     const scheduler = virtualScheduler();

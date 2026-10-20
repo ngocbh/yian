@@ -350,9 +350,8 @@ function validateMemoryFlowBoundaries(flow: Flow, decl: MemoryDecl): void {
   if (flow.endId !== END_ID) {
     throw setupError(`a memory-owning flow end_id must be canonical ${reprText(END_ID)}`, { origin });
   }
-  const missing = [["START", flow.startId], ["END", flow.endId]]
-    .filter(([, nodeId]) => !flow.nodes.has(nodeId!))
-    .map(([label]) => label);
+  const boundaries: [string, string][] = [["START", flow.startId], ["END", flow.endId]];
+  const missing = boundaries.filter(([, nodeId]) => !flow.nodes.has(nodeId)).map(([label]) => label);
   if (missing.length > 0) {
     throw setupError(`a memory-owning flow is missing direct ${missing.join(" and ")} boundary node(s)`, { origin });
   }
@@ -710,7 +709,7 @@ export function checkSessionCompatibility(
       const path = placement.join("/");
       if (!Object.hasOwn(known, path)) {
         if (!Object.hasOwn(effectiveLlm, path)) throw new RangeError(`no effective LLM config for ${reprText(path)}`);
-        configs.push([path, effectiveLlm[path]!]);
+        configs.push([path, effectiveLlm[path] ?? null]);
       } else if (known[path] !== null) {
         configs.push([path, { provider: known[path] }]);
       }

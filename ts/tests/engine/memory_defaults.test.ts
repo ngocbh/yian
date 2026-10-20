@@ -1,13 +1,13 @@
 /**
  * Memory defaults come from `defaults.ts`: a port of `tests/engine/test_memory_defaults.py`.
  *
- * Ported: `test_episodic_limits_default_from_the_environment`.
+ * Ported: `test_episodic_limits_default_from_the_environment` and
+ * `test_session_memory_settings_default_from_the_environment` (the settings are read through the
+ * memory's private members, as Python reads `_history_budget_chars`).
  *
  * TS-only: none.
  *
  * Changed: none.
- *
- * Later: `test_session_memory_settings_default_from_the_environment` (with `memory/session.ts`).
  *
  * Later (T6-5): `test_reflective_limits_default_from_the_environment`,
  * `test_reflection_lesson_material_follows_its_budget`,
@@ -25,6 +25,7 @@ import { afterEach, expect, test } from "bun:test";
 import { BUILTIN, install, reload } from "../../src/defaults.ts";
 import type { JsonObject } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
 
 afterEach(() => install(BUILTIN));
 
@@ -48,4 +49,16 @@ test("episodic limits default from the environment", () => {
   const recorded = snapshotOf(new EpisodicMemory({ maxEpisodes: 7, recallLimit: 5 }));
   expect(recorded.config).toEqual({ max_episodes: 7n, recall_limit: 5n });
   expect(snapshotOf(new EpisodicMemory(), recorded).config).toEqual({ max_episodes: 7n, recall_limit: 5n });
+});
+
+test("session memory settings default from the environment", () => {
+  const env = new Map([
+    ["YIAN_SESSION_HISTORY_BUDGET_CHARS", "10"],
+    ["YIAN_SESSION_RECENT_TURNS", "1"],
+  ]);
+  reload((name) => env.get(name));
+  const memory = new SessionMemory();
+  expect([memory["historyBudgetChars"], memory["recentTurns"]]).toEqual([10, 1]);
+  const explicit = new SessionMemory({ historyBudgetChars: 20, recentTurns: 3 });
+  expect([explicit["historyBudgetChars"], explicit["recentTurns"]]).toEqual([20, 3]);
 });

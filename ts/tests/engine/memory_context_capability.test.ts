@@ -33,8 +33,9 @@
  * opener result that isn't a `MemoryContext`, and sections outside the scope's memories or without
  * text are recall failures.
  *
- * Later (pooled mode): `test_dispatch_binds_accepted_identity_before_worker_submission`, through the
- * engine with and without workers.
+ * Ported (adapted): `test_dispatch_binds_accepted_identity_before_worker_submission` (serial and
+ * two workers): Python's guard that no worker thread reads `accepted_starts` is dropped, since TS
+ * workers share the dispatcher's thread; the opener sees the accepted start's identity.
  * Later (T4-7), with `MemoryRuntime.openContext`:
  * `test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure`,
  * `test_real_backend_cleanup_note_survives_node_error_unwrapping` and
@@ -52,6 +53,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { StreamChunk } from "../../src/events.ts";
 import {
   ConversationInvocation,
@@ -80,8 +82,9 @@ import {
   type EvalNodeOptions,
   type MemoryContextOpener,
 } from "../../src/runtime/eval_node.ts";
+import { NodeStartedRecord } from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { FuncNode, rejected } from "./run_state_fixtures.ts";
+import { engine, FuncNode, graph, rejected } from "./run_state_fixtures.ts";
 
 type Open = NonNullable<NodeCaps["openMemoryContext"]>;
 
@@ -564,4 +567,25 @@ test("invalid recall inputs, a request, results and sections are recall failures
 
   const empty = await failure(async () => new MemoryContext({ sections: [new MemorySection("session", "")] }));
   expect(empty.failure.message).toBe("memory recall returned invalid context");
+});
+
+test.each([0, 2])("dispatch binds the accepted identity before worker submission (numWorkers %p)", async (numWorkers) => {
+  const events: Event[] = [];
+  const node = new Consumer(async (open) => {
+    await open("system", "prompt", {});
+    return new Output(7n);
+  });
+  const built = engine(graph([node], [
+    [START_ID, "work"],
+    ["work", END_ID],
+  ]), { numWorkers, memoryContextOpener: opener(events) });
+
+  await built.run();
+
+  const start = built.log
+    .records()
+    .find((envelope) => envelope.record instanceof NodeStartedRecord && envelope.record.nodeId === "work")!;
+  expect((events[0]![2] as MemoryContextRequest).invocation).toEqual(new ConversationInvocation(start.runId, start.seq));
+  expect(events.at(-1)![0]).toBe("completed");
+  expect("conversationState" in built.state).toBe(false);
 });

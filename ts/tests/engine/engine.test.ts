@@ -16,7 +16,8 @@
  * `test_does_not_misfire_on_optional_terminal`, `test_genuine_none_terminal_succeeds`,
  * `test_node_failure_produces_graph_failed`, `test_output_enforced_rejects_type_mismatch`,
  * `test_multi_output_record_is_a_closed_type`, `test_unresolvable_declared_type_is_not_enforced`,
- * `test_undeclared_output_is_not_enforced` and `test_fixture_engine_defaults_serial`.
+ * `test_undeclared_output_is_not_enforced`, `test_num_workers_0_and_4_same_terminal` and
+ * `test_fixture_engine_defaults_serial`.
  *
  * Changed: `test_output_enforced_coerces_and_types_storage`: an int filling a float slot stays an
  * int in TS, so the stored value is the int 3 with storage kind `int`, where Python coerces it to
@@ -24,8 +25,6 @@
  *
  * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
  * also checks that a failed run aborts its signal.
- *
- * Later (pooled mode): `test_num_workers_0_and_4_same_terminal`, with the pooled engine.
  *
  * Not ported: `test_parallel_module_and_export_are_gone`; TS never had `ParallelFlowEngine`.
  */
@@ -384,6 +383,26 @@ test("undeclared output is not enforced", async () => {
 });
 
 // --- the num_workers knob ---
+
+test("num workers 0 and 4 same terminal", async () => {
+  /** Return the chain `a -> b -> c`, each node appending its id to `log`. */
+  const build = (log: string[]): CompiledFlow =>
+    graph([new RecordNode("a", log), new RecordNode("b", log), new RecordNode("c", log)], [
+      [START_ID, "a"],
+      ["a", "b"],
+      ["b", "c"],
+      ["c", END_ID],
+    ]);
+  const log0: string[] = [];
+  const log4: string[] = [];
+  const events0 = await engine(build(log0), { numWorkers: 0 }).run();
+  const events4 = await engine(build(log4), { numWorkers: 4 }).run();
+  // A chain serializes under either knob.
+  expect(log0).toEqual(["a", "b", "c"]);
+  expect(new Set(log4)).toEqual(new Set(["a", "b", "c"]));
+  expect(events0.at(-1)).toBeInstanceOf(RunSucceeded);
+  expect(events4.at(-1)).toBeInstanceOf(RunSucceeded);
+});
 
 test("fixture engine defaults serial", () => {
   const built = engine(graph([new RecordNode("a", [])], [

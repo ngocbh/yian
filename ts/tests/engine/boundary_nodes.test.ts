@@ -5,23 +5,31 @@
  * nodes exist and that edges carry real adjacency, never that the strings are absent.
  *
  * Ported: `test_loader_synthesizes_start_and_end_nodes`,
- * `test_inputs_read_mints_producer_edge_from_start` and
- * `test_input_reader_is_not_also_a_bare_root`.
+ * `test_inputs_read_mints_producer_edge_from_start`, `test_input_reader_is_not_also_a_bare_root`
+ * and `test_inputs_resolve_to_start_node`.
  *
  * Changed: the flow assembles through `assembleText`, where Python calls `load_flow`; its CODE
  * reference is TS's (`./fixtures/compose_codefns.ts:echo_x`).
  *
- * Later (T4): the run rows (`test_run_result_is_end_node_value`, `test_terminal_helpers_retired`,
- * `test_inputs_resolve_to_start_node`, `test_pool_inputs_namespace_retired`,
- * `test_engine_schedules_start_and_emits_succeeded`). Later (T3-20, T4):
+ * Not ported: `test_terminal_helpers_retired` and `test_pool_inputs_namespace_retired`: they check
+ * that Python-era engine helpers and a pool namespace are gone, and TS never had them.
+ *
+ * Ported, after rewrite (`graph()` with a `FuncNode` reading `${input.x}`, for the loaded CODE
+ * node): the engine half of `test_engine_schedules_start_and_emits_succeeded`.
+ *
+ * Later (T4-8), through `run_flow`: `test_run_result_is_end_node_value` and the `run_flow` half of
+ * `test_engine_schedules_start_and_emits_succeeded`. Later (T3-20, T4-8):
  * `test_terminal_output_of_a_skipped_producer_is_null` (its load half needs `nullSkippedOutputs`).
  */
 
 import { expect, test } from "bun:test";
 
 import { Edge, END_ID, START_ID } from "../../src/compile/model.ts";
+import { NodeStarted, NodeSucceeded } from "../../src/events.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 import { assembleText } from "../compose/declarations.ts";
+import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
 
 const FLOW = `
 id: f
@@ -66,4 +74,27 @@ test("an input reader is not also a bare root", () => {
   const startToN = flow.edges.filter((edge) => edge.from === START_ID && edge.to === "n");
   expect(startToN).toHaveLength(1);
   expect(startToN[0]!.inputGroup).toBe("x");
+});
+
+test("inputs resolve to the START node", () => {
+  const pool = new VariablePool();
+  // START commits the bound input record, so `${input.x}` reads START's `x`.
+  pool.set(START_ID, { x: "ACME" });
+  expect(pool.resolve("input", ["x"])).toBe("ACME");
+});
+
+test("the engine schedules START and emits its success", async () => {
+  // START is an ordinary scheduled node: the engine primes it with the raw run arguments and it
+  // commits its bound record through the evaluator like any node.
+  const flow = graph([new FuncNode("n", (inputs) => inputs.x, { reads: { x: "${input.x}" } })], [
+    [START_ID, "n"],
+    ["n", END_ID],
+  ]);
+  const built = engine(flow, { inputs: { x: "ACME" } });
+
+  const events = await built.run();
+
+  expect(events.some((event) => event instanceof NodeStarted && event.nodeId === START_ID)).toBe(true);
+  expect(events.some((event) => event instanceof NodeSucceeded && event.nodeId === START_ID)).toBe(true);
+  expect(built.state.pool.get(START_ID)).toEqual({ x: "ACME" });
 });

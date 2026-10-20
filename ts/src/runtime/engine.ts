@@ -1,10 +1,12 @@
 /**
  * Append-only flow execution over one prepared run-state/log authority.
  *
- * `FlowEngine` is the sole ready-frontier consumer and state writer. Serial mode evaluates
- * durably started nodes inline, and every `prepare* -> commitPrepared` runs with no `await`
- * between. Every observer it returns follows its record's append and reducer application. Stream
- * chunks are transient callback-only messages and never enter the log.
+ * `FlowEngine` is the sole ready-frontier consumer and state writer. Serial mode (no workers)
+ * evaluates durably started nodes inline. Pooled mode keeps at most `numWorkers` evaluations in
+ * flight and commits their outcomes in settle order, read from a FIFO completion queue. In both,
+ * every `prepare* -> commitPrepared` runs with no `await` between. Every observer it returns
+ * follows its record's append and reducer application. Stream chunks are transient callback-only
+ * messages and never enter the log.
  *
  * Knows about:   compile/model, diagnostics, events, memory contracts, nodes, runtime eval_node,
  *                log, state and trace, skills, tools, typesys.
@@ -66,6 +68,53 @@ export interface FlowEngineOptions {
   skills?: ReadonlyMap<string, Skill> | null;
   /** The run's host inbox, passed to nodes declaring `needsSteering`. */
   steering?: Steering | null;
+}
+
+/** One settled worker: the outcome its evaluation resolved to, or the error it rejected with. */
+type Completion =
+  | { readonly nodeId: string; readonly outcome: EvaluatedOutcome }
+  | { readonly nodeId: string; readonly error: unknown };
+
+/** The settled workers in settle order, read by one dispatcher. */
+class CompletionQueue {
+  readonly #entries: Completion[] = [];
+  /** The next unread entry; read entries are dropped in batches so taking never shifts the array. */
+  #head = 0;
+  #waiter: ((entry: Completion) => void) | null = null;
+
+  /** Add one settled worker, handing it straight to a waiting `take`. */
+  push(entry: Completion): void {
+    const waiter = this.#waiter;
+    if (waiter === null) {
+      this.#entries.push(entry);
+      return;
+    }
+    this.#waiter = null;
+    waiter(entry);
+  }
+
+  /**
+   * Return the oldest unread entry, or a promise of the next one to arrive. At most one `take` may
+   * be pending: the queue has a single reader, the dispatcher.
+   *
+   * @throws Error when another `take` is still pending.
+   */
+  take(): Completion | Promise<Completion> {
+    if (this.#waiter !== null) throw new Error("CompletionQueue has a take pending already");
+    if (this.#head === this.#entries.length) {
+      return new Promise((resolve) => {
+        this.#waiter = resolve;
+      });
+    }
+    const entry = this.#entries[this.#head]!;
+    this.#head += 1;
+    // Dropping the read half costs at most as many moves as the takes that preceded it.
+    if (2 * this.#head >= this.#entries.length) {
+      this.#entries.splice(0, this.#head);
+      this.#head = 0;
+    }
+    return entry;
+  }
 }
 
 /** Whether `log` has the `RunLog` members the engine reads. */
@@ -162,9 +211,8 @@ export class FlowEngine {
    * run signal and rejects `run()`.
    *
    * @returns The new post-durable observers, in order; none when the state is already terminal.
-   * @throws Error (as a rejection) on a second call, when nothing is ready and nothing is in
-   *   flight before a terminal result, or for a pooled engine (`numWorkers` above zero), which is
-   *   not ported yet.
+   * @throws Error (as a rejection) on a second call, or when nothing is ready and nothing is in
+   *   flight before a terminal result.
    * @throws RangeError when the state is uninitialized, its run id, sequence or worker count
    *   differs from the log's or the engine's, or it has unfinished starts.
    * @throws The error of a host fault: a throwing `onEvent`, a callback's rejected promise, a log
@@ -178,8 +226,7 @@ export class FlowEngine {
     if (this.state.inFlight.size > 0) {
       throw new RangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
     }
-    if (this.numWorkers > 0) throw new Error("FlowEngine pooled execution is not ported yet");
-    return await this.#runSerial();
+    return this.numWorkers === 0 ? await this.#runSerial() : await this.#runPooled();
   }
 
   /** Execute each durably started node inline. */
@@ -208,6 +255,60 @@ export class FlowEngine {
       this.#controller.abort(error);
       throw error;
     }
+    return events;
+  }
+
+  /**
+   * Keep at most `numWorkers` evaluations in flight and commit their outcomes in settle order.
+   *
+   * A `RunFailed` is published before the drain, so a host learns of it while siblings still
+   * block. Any other error aborts the run signal, waits for every active worker and rethrows.
+   */
+  async #runPooled(): Promise<readonly RunEvent[]> {
+    const { state, log } = this;
+    const signal = this.#controller.signal;
+    const events: RunEvent[] = [];
+    const completions = new CompletionQueue();
+    const active = new Map<string, Promise<void>>();
+    try {
+      while (state.result === null) {
+        signal.throwIfAborted();
+        while (state.ready.length > 0 && active.size < this.numWorkers) {
+          const nodeId = state.ready[0]!;
+          const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+          const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
+          const steps = this.#nodeSteps(nodeId);
+          // The start is durable and published before its worker starts.
+          this.#publish(started, events);
+          signal.throwIfAborted();
+          const worker = this.#evaluate(nodeId, invocation, steps).then(
+            (outcome) => completions.push({ nodeId, outcome }),
+            (error: unknown) => completions.push({ nodeId, error }),
+          );
+          active.set(nodeId, worker);
+        }
+        if (active.size === 0) throw new Error("FlowEngine reached nonterminal quiescence");
+        const completion = await completions.take();
+        active.delete(completion.nodeId);
+        // An entry taken after the abort is discarded; the abort's error is the run's.
+        signal.throwIfAborted();
+        if ("error" in completion) throw completion.error;
+        const settled = this.#commitOutcome(completion.nodeId, completion.outcome);
+        if ((state.result as RunState["result"]) instanceof RunFailed) {
+          this.#controller.abort();
+          this.#publish(settled, events);
+          await Promise.all(active.values());
+          return events;
+        }
+        this.#publish(settled, events);
+      }
+    } catch (error) {
+      this.#controller.abort(error);
+      // Workers never reject, so the drain can't replace the initiating error.
+      await Promise.all(active.values());
+      throw error;
+    }
+    // A success result means nothing else is ready or in flight, so there is nothing to drain.
     return events;
   }
 

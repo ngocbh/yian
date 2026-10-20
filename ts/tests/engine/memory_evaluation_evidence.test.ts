@@ -45,13 +45,16 @@
  * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture` and
  * `test_tool_structured_output_retains_discovery_and_generation_order`.
  *
- * Later (pooled mode), through the engine: `test_dispatcher_contract_failures_retain_the_same_evidence`
- * and `test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome`.
+ * Ported, through the engine: `test_dispatcher_contract_failures_retain_the_same_evidence` (3 rows;
+ * the grow row's builder throws `GrowthRejected`).
+ *
+ * Ported (adapted): `test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome`: the
+ * sibling returns its late value once the failure aborts its signal, for Python's sleep.
  */
 
 import { expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { END_ID, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import {
   DeclSite,
   EvaluationEvidence,
@@ -65,25 +68,30 @@ import {
   type MemoryStack,
   ModelTextInteraction,
 } from "../../src/memory/index.ts";
-import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { Parameter } from "../../src/nodes/contracts.ts";
+import { Grow, Node, type NodeCaps, NodeKind, type NodeResult, Output, Route } from "../../src/nodes/base.ts";
+import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
-import { NodeSucceededRecord } from "../../src/runtime/log.ts";
+import { NodeFailedRecord, NodeSucceededRecord, type RunRecord } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  type GrowBuilder,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
   type RunState,
 } from "../../src/runtime/state.ts";
-import { TypeCheckError, VariablePool } from "../../src/typesys/index.ts";
+import { Type, TypeCheckError, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import {
+  aborted,
   commitStartSuccess,
+  engine,
   forwardCapture,
   FuncNode,
   graph,
   learnableStarted,
   nodeFlow,
+  noGrowth,
   rejected,
   stacks,
 } from "./run_state_fixtures.ts";
@@ -127,7 +135,7 @@ function learningConfiguration(...nodes: Node[]): {
 
 /** A kind-blind trace-capable test node returning one configured result. */
 class EvidenceOutputNode extends Node {
-  readonly kind = NodeKind.CODE;
+  readonly kind: NodeKind = NodeKind.CODE;
   override readonly needsEvaluationTrace = true;
   readonly result: NodeResult;
 
@@ -136,7 +144,7 @@ class EvidenceOutputNode extends Node {
     this.result = result;
   }
 
-  override forward(): NodeResult {
+  override forward(_inputs: Record<string, unknown>, _caps: NodeCaps): NodeResult | Promise<NodeResult> {
     return this.result;
   }
 }
@@ -330,4 +338,107 @@ test("a trace refuses writes after the evaluation settled", async () => {
   );
   expect(() => trace.recordPrompt("system", "late")).toThrow("evaluation trace is already frozen");
   expect(evidence.interactions).toEqual([]);
+});
+
+// Through the engine: contract failures and discarded siblings keep or drop their evidence.
+
+/** A trace-capable CASE node returning one configured result. */
+class EvidenceRouteNode extends EvidenceOutputNode {
+  override readonly kind = NodeKind.CASE;
+}
+
+/** A trace-capable spawner returning one configured result. */
+class EvidenceGrowNode extends EvidenceOutputNode {
+  override readonly kind = NodeKind.CALL;
+  override readonly isSpawner = true;
+  override readonly growDepthDelta = 1;
+}
+
+/** Return the records of `built`'s log, in order. */
+function logRecords(built: FlowEngine): RunRecord[] {
+  return built.log.records().map((envelope) => envelope.record);
+}
+
+test.each(["output", "route", "grow"] as const)("dispatcher contract failures retain the same evidence: %s", async (arm) => {
+  let node: EvidenceOutputNode;
+  let nodes: Node[];
+  let edges: [string, string, string?][];
+  let growBuilder: GrowBuilder = noGrowth;
+  if (arm === "output") {
+    node = new EvidenceOutputNode("work", new Output("not-an-int"));
+    node.outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
+    nodes = [node];
+    edges = [
+      [START_ID, node.id],
+      [node.id, END_ID],
+    ];
+  } else if (arm === "route") {
+    node = new EvidenceRouteNode("work", new Route("absent"));
+    nodes = [node, new FuncNode("target", () => "done")];
+    edges = [
+      [START_ID, node.id],
+      [node.id, "target", "present"],
+      ["target", END_ID],
+    ];
+  } else {
+    node = new EvidenceGrowNode("work", new Grow({ bad: true }));
+    nodes = [node];
+    edges = [
+      [START_ID, node.id],
+      [node.id, END_ID],
+    ];
+    growBuilder = () => {
+      throw new GrowthRejected(new TypeError("rejected growth"));
+    };
+  }
+  node.memoryScope = scope(node.id);
+  const built = engine(graph(nodes, edges), { growBuilder, learnable: true, ...learningConfiguration(node) });
+
+  await built.run();
+
+  const failures = logRecords(built).filter((record) => record instanceof NodeFailedRecord) as NodeFailedRecord[];
+  expect(failures.length).toBe(1);
+  expect(failures[0]!.evidence).not.toBeNull();
+  expect(failures[0]!.evidence!.scope).toEqual(node.memoryScope);
+  expect(failures[0]!.evidence!.boundInputs).toEqual({});
+});
+
+test("pooled dispatch discards late sibling evidence with its outcome", async () => {
+  /** Blocks until its signal aborts, then returns a late value. */
+  class LateSibling extends EvidenceOutputNode {
+    readonly entered = Promise.withResolvers<void>();
+
+    override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+      this.entered.resolve();
+      await aborted(caps.signal!).catch(() => {});
+      return new Output("late");
+    }
+  }
+  /** Returns a value its contract refuses once the sibling has entered. */
+  class FailAfterSiblingStarts extends EvidenceOutputNode {
+    override async forward(): Promise<NodeResult> {
+      await sibling.entered.promise;
+      return new Output("not-an-int");
+    }
+  }
+  const failing = new FailAfterSiblingStarts("failing", new Output(null));
+  failing.outputContract = new ValueContract(Type.scalar(ValueKind.INTEGER));
+  const sibling = new LateSibling("sibling", new Output(null));
+  failing.memoryScope = scope(failing.id);
+  sibling.memoryScope = scope(sibling.id);
+  const flow = graph([failing, sibling], [
+    [START_ID, failing.id],
+    [START_ID, sibling.id],
+    [failing.id, END_ID],
+    [sibling.id, END_ID],
+  ]);
+  const built = engine(flow, { numWorkers: 2, learnable: true, ...learningConfiguration(failing, sibling) });
+
+  await built.run();
+
+  const records = logRecords(built);
+  const failure = records.find((record) => record instanceof NodeFailedRecord) as NodeFailedRecord;
+  expect(failure.failure.nodeId).toBe(failing.id);
+  expect(failure.evidence).not.toBeNull();
+  expect(records.some((record) => record instanceof NodeSucceededRecord && record.nodeId === sibling.id)).toBe(false);
 });

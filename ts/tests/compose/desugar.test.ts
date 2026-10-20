@@ -5,16 +5,19 @@
  * Each desugar pass rewrites a flow's parsed descriptors into ordinary descriptors and bindings. A
  * synth node a pass mints locates at the SITE it desugared from (the `call(...)` directive's own
  * binding line, not the host node header), so its downstream errors caret the author's actual
- * source.
+ * source. The exception is `adaptive_questions`, whose synth composer genuinely SHARES the gate's
+ * inputs verbatim and so inherits the gate's `range`/`fieldRanges`, except that the brief's range
+ * replaces the gate's `prompt:` range.
  *
  * Ported: the inline-call rows (`test_desugar_inline_calls_locate_at_their_binding_site`,
  * `test_inline_call_error_uses_binding_range`, `test_inline_output_error_uses_section_range`,
  * `test_inline_assert_error_uses_positional_range`,
  * `test_duplicate_inline_assertions_keep_positional_ranges`,
- * `test_inline_map_scalar_over_does_not_use_input_named_over_range`).
+ * `test_inline_map_scalar_over_does_not_use_input_named_over_range`) and the adaptive-questions
+ * rows (`test_desugar_adaptive_questions_preserves_ranges`,
+ * `test_desugar_adaptive_questions_without_source`).
  *
- * Later (T3-17): the adaptive-questions rows (`test_desugar_adaptive_questions_preserves_ranges`,
- * `test_desugar_adaptive_questions_without_source`) and the case rows
+ * Later (T3-17): the case rows
  * (`test_desugar_case_call_targets_locate_at_their_target_line`,
  * `test_case_binding_error_uses_binding_range`, `test_case_output_error_uses_section_range`,
  * `test_case_condition_error_uses_exact_condition_range`,
@@ -24,10 +27,12 @@
 
 import { expect, test } from "bun:test";
 
+import { desugarAdaptiveQuestions } from "../../src/compose/desugar/adaptive_questions.ts";
 import { desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
@@ -154,4 +159,62 @@ test("inline map scalar over does not use the range of an input named over", () 
   );
 
   expect(onlyFrame(error).range).toEqual(scalarRange);
+});
+
+test("desugar adaptive questions preserves ranges", () => {
+  // An adaptive human_input gate lifts a synth composer agent (`<gate>__compose`). The synth agent
+  // inherits the gate node's range/fieldRanges, but its `prompt:` is the brief, so it locates at
+  // the brief and is named as the gate's field.
+  const text =
+    "id: f\nname: f\nnodes:\n" +
+    "  ask:\n    kind: human_input\n" +
+    "    prompt: Pick one\n" +
+    "    adaptive_questions:\n      prompt: Ask about ${input.topic}\n" +
+    "      llm_config: {model: m}\n" +
+    "    input:\n      topic: ${input.topic}\n" +
+    "output: ${ask.output}\n";
+  const descriptors = parseNodes(nodesReader(text));
+  const gate = descriptors.get("ask")!;
+  const brief = gate.fieldRanges.get(siteKey("text", "adaptive_questions.prompt"))!;
+  const llmConfig = gate.fieldRanges.get(siteKey("field", "adaptive_questions.llm_config"))!;
+  const newDescriptors = desugarAdaptiveQuestions(descriptors);
+  const composer = newDescriptors.get("ask__compose")!;
+  expect(composer.range).toBe(gate.range);
+  expect(composer.fieldRanges.get(siteKey("field", "llm_config"))).toBe(llmConfig);
+  expect(composer.fieldRanges).toEqual(
+    new Map([
+      ...gate.fieldRanges,
+      [siteKey("field", "prompt"), brief],
+      [siteKey("field", "llm_config"), llmConfig],
+    ]),
+  );
+  expect(brief).not.toEqual(gate.fieldRanges.get(siteKey("field", "prompt"))!);
+  expect(composer.fieldLabels).toEqual(
+    new Map([
+      ["prompt", "node 'ask' adaptive_questions.prompt"],
+      ["llm_config", "node 'ask' adaptive_questions.llm_config"],
+      ["input 'topic'", "node 'ask' input 'topic'"],
+    ]),
+  );
+  expect(newDescriptors.get("ask")!.fieldLabels).toEqual(new Map());
+});
+
+test("desugar adaptive questions without source", () => {
+  const gate = new HumanInputDescriptor({
+    id: "ask",
+    inputs: { topic: "${input.topic}" },
+    adaptiveQuestions: { prompt: "Q", llm_config: { model: "m" } },
+  });
+  const newDescriptors = desugarAdaptiveQuestions(new Map([["ask", gate]]));
+  const composer = newDescriptors.get("ask__compose")!;
+  expect(composer.fieldRanges.has(siteKey("field", "prompt"))).toBe(false);
+  expect(composer.fieldRanges.has(siteKey("field", "llm_config"))).toBe(false);
+  expect(composer.fieldLabels).toEqual(
+    new Map([
+      ["prompt", "node 'ask' adaptive_questions.prompt"],
+      ["llm_config", "node 'ask' adaptive_questions.llm_config"],
+      ["input 'topic'", "node 'ask' input 'topic'"],
+    ]),
+  );
+  expect(newDescriptors.get("ask")!.fieldLabels).toEqual(new Map());
 });

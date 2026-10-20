@@ -11,11 +11,12 @@
  * loads it.
  *
  * Later (T3-17): `test_nested_branch_call_records_the_outer_call_as_host` (the case-target
- * desugar) and `test_adaptive_composer_records_the_gate_as_host` (the adaptive-questions desugar).
+ * desugar).
  */
 
 import { expect, test } from "bun:test";
 
+import { desugarAdaptiveQuestions } from "../../src/compose/desugar/adaptive_questions.ts";
 import { desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
 import { readValueEntry } from "../../src/compose/desugar/value_entries.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
@@ -94,6 +95,17 @@ test("inline calls in flow output and asserts have no host", () => {
   const synth = [...synthOf(newDescriptors).values()];
   expect(synth.map((desc) => desc.call).sort()).toEqual(["f", "g"]);
   expect(synth.map((desc) => desc.host)).toEqual([null, null]);
+});
+
+test("adaptive composer records the gate as host", () => {
+  const descriptors = descriptorsOf(
+    "  ask:\n    kind: human_input\n" +
+      "    adaptive_questions:\n      prompt: Ask about ${topic}\n" +
+      "    input:\n      topic: ${input.topic}\n",
+  );
+  const newDescriptors = desugarAdaptiveQuestions(descriptors);
+  expect(newDescriptors.get("ask__compose")!.host).toBe("ask");
+  expect(newDescriptors.get("ask")!.host).toBeNull();
 });
 
 test("value entry has no host", () => {

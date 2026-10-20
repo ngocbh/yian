@@ -23,8 +23,8 @@
  * Later (T3-22): `test_multi_node_def_output_contract_uses_the_nested_node_site`,
  * `test_flat_def_output_contract_uses_the_projected_def_output_site`,
  * `test_external_alias_rebases_every_output_contract_origin` and the fingerprint half of the
- * formatting row. Later (T3-17): `test_nested_inline_child_output_contract_uses_its_physical_site`
- * and `test_adaptive_generated_output_contracts_remain_source_free`. Later (T3-16, T3-22, T4):
+ * formatting row. Later (T3-17): `test_nested_inline_child_output_contract_uses_its_physical_site`.
+ * Later (T3-16, T3-22, T4):
  * `test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field`.
  */
 
@@ -161,6 +161,30 @@ output:
   const { contract, builder } = contractOf(text, "compact_output_contract", "compact.yaml");
 
   expectProfileSites(builder, contract, SourceDocument.parse(text, "compact.yaml").root.child("output"));
+});
+
+test("adaptive generated output contracts remain source free", () => {
+  // Desugared contracts without authorable type declarations invent no origins.
+  const text = `id: adaptive-output-contracts
+name: adaptive-output-contracts
+input:
+  topic: !str
+nodes:
+  ask:
+    kind: human_input
+    input:
+      topic: \${input.topic}
+    adaptive_questions:
+      prompt: Ask about \${topic}
+output: \${ask.output}
+`;
+  const nodes = assembleText(text).flow.compiled.nodes;
+
+  for (const nodeId of ["ask__compose", "ask"]) {
+    const contract = nodes.get(nodeId)!.outputContract;
+    expect(contract?.constructor).toBe(ValueContract);
+    expect((contract as ValueContract).origins).toEqual(new ContractOrigins());
+  }
 });
 
 test("formatting-only relocation preserves output origins", () => {

@@ -78,6 +78,7 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
@@ -1891,8 +1892,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   for (const [nodeId, descriptor] of descriptors) {
     if (descriptor.host !== null && descriptor.fieldLabels.size > 0) synthHosts.set(nodeId, descriptor.host);
   }
-  // T3-17: the ids of the edges from a synth node into its host's question parameter (`QPARAM`).
-  const synthWires: ReadonlySet<string> = new Set();
+  const synthWires = new Set(
+    edges.filter((edge) => synthHosts.get(edge.from) === edge.to && edge.inputGroup === QPARAM).map((edge) => edge.id),
+  );
   rejectCycles(edges, nodeIds, {
     nodeRanges,
     diagnostics,
@@ -1925,14 +1927,13 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          desugarAdaptiveQuestions, desugarCaseCallTargets (1): return the descriptors.
+//          desugarCaseCallTargets (1): returns the descriptors.
 //          caseOutputReads (1), valueCases (2): return `new Set()`.
 //          expandCaseOutputs (1): returns `[descriptors, outputsSection]`.
 //          buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
-//          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
 //          fillTypeTables (2, with _site_range).
@@ -1963,14 +1964,6 @@ function extractInlineBodies(
   options: { owner: readonly string[] },
 ): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
   return [nodesCursor, new Map()];
-}
-
-/** Python's `compose.desugar.adaptive_questions.desugar_adaptive_questions`; not ported yet. */
-function desugarAdaptiveQuestions(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
 }
 
 /** Python's `compose.desugar.case_targets.desugar_case_call_targets`; not ported yet. */

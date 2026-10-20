@@ -68,9 +68,8 @@
  *   `SimpleNamespace` over bare nodes.
  * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
  *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
- * - The CALL type-check rows build a `CallNode`, where Python passes a `SimpleNamespace` node; the
- *   LOOP type-check row passes a cast object with Python's `is_loop`, `output_contract` and
- *   `returned_fields`.
+ * - The CALL and LOOP type-check rows build a `CallNode` and a `LoopNode`, where Python passes
+ *   `SimpleNamespace` nodes.
  * - The data-edge row's sink is a base `NodeDescriptor`, where Python passes a bare `object()`.
  * - The canonical-storage row assembles its flow through `assembleText`, where Python calls
  *   `load_flow`, and also checks that START and END have wiring; its CODE reference is TS's
@@ -133,6 +132,7 @@ import {
   ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
@@ -1169,7 +1169,8 @@ test("the loop type check projects a known partial seed field", () => {
     ["n", new ValueContract(INT)],
     ["note", null],
   ]);
-  const node = { isLoop: true, outputContract: loopContract, returnedFields: null } as unknown as Node;
+  const node = new LoopNode("loop", { flowId: "body" });
+  node.outputContract = loopContract;
   const result = new BuildResult({ node, wiring: new Map() });
 
   const error = loadError(() =>

@@ -141,9 +141,10 @@ function load(
   bodyIn: string,
   bodyOut: string,
   seed: string,
-  options: { driver?: string; flowInput?: string } = {},
+  options: { driver?: string; flowInput?: string; ret?: string } = {},
 ): void {
-  assembleText(namedLoop(bodyIn, bodyOut, "null", seed, options), "flow.yaml", { children: step(bodyIn, bodyOut) });
+  const { ret = "null", ...loop } = options;
+  assembleText(namedLoop(bodyIn, bodyOut, ret, seed, loop), "flow.yaml", { children: step(bodyIn, bodyOut) });
 }
 
 /** The message of the load error `load(...)` raises. */
@@ -169,7 +170,7 @@ test("a typed seed leaves a returned null to the input check", () => {
 
 test("a typed seed with an optional returned field loads", () => {
   // Python's test_typed_seed_with_an_optional_returned_field_runs; the run half is T4's.
-  load("int", "Optional(int)", "!int ${input.z}");
+  load("int", "Optional(int)", "!int ${input.z}", { ret: 'inputs["n"] + 1n' });
 });
 
 test("a while loop ending on null over an untyped seed loads", () => {

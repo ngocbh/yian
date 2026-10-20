@@ -19,7 +19,7 @@ flow: |2
             n: int
             r: Done
           code: |
-            return {"n": inputs["n"] + 1n, "r": {"answer": "ok"}}
+            return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
       output: ${step.output}
   nodes:
     ask:

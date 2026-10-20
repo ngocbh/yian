@@ -19,14 +19,14 @@ flow: |2
         n: ${input.v}
       output: int
       code: |
-        return inputs["n"] * 2n
+        return inputs["n"] * 2
     lo:
       kind: code
       input:
         n: ${input.v}
       output: int
       code: |
-        return inputs["n"] * 2n
+        return inputs["n"] * 2
   output: ${hi.output | lo.output}
 
   asserts:

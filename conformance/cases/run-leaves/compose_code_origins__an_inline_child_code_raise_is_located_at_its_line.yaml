@@ -13,7 +13,7 @@ flow: |
           kind: code
           output: int
           code: |-
-            const marker = 1n
+            const marker = 1
             throw new Error("boom")
             return marker
       output: ${worker.output}

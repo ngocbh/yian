@@ -17,7 +17,7 @@ flow: |2
           output:
             n: Optional(int)
           code: |
-            return {"n": inputs["n"] >= 2n ? null : inputs["n"] + 1n}
+            return {"n": inputs["n"] >= 2 ? null : inputs["n"] + 1}
       output: ${bump.output}
   nodes:
     repeat:

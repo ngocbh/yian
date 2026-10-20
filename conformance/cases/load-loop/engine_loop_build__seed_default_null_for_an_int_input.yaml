@@ -19,7 +19,7 @@ flow: |
             k: ${input.k}
           output:
             k: int
-          code: 'return {k: inputs["k"] + 1n}'
+          code: 'return {k: inputs["k"] + 1}'
       output: ${step.output}
   nodes:
     loop:

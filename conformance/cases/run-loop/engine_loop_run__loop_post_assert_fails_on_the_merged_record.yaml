@@ -21,8 +21,8 @@ flow: |2
           code: |
             if (inputs["person"]["name"] !== "Ada") throw new Error("assert")
             if (inputs["talking_to"] !== "Bob") throw new Error("assert")
-            const n = inputs["n"] + 1n
-            return {"n": n, "done": n >= 3n}
+            const n = inputs["n"] + 1
+            return {"n": n, "done": n >= 3}
           input:
             person: ${input.person}
             talking_to: ${input.talking_to}

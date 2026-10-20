@@ -73,8 +73,8 @@ export function took(inputs: Record<string, any>): string {
 }
 
 /** The `checked` def body for child-boundary-assert tests. */
-export function double(inputs: Record<string, any>): bigint {
-  return inputs.n * 2n;
+export function double(inputs: Record<string, any>): number {
+  return inputs.n * 2;
 }
 
 /** Surface the bound `${system.run_id}` so the run test can assert on it. */
@@ -88,8 +88,8 @@ export function echo_rid(inputs: Record<string, any>): string {
  * Drives the while-loop e2e (3 iterations from a `{n:0, exited:false}` seed).
  */
 export function loop_bump(inputs: Record<string, any>): Record<string, unknown> {
-  const n = inputs.n + 1n;
-  return { n, exited: n >= 3n };
+  const n = inputs.n + 1;
+  return { n, exited: n >= 3 };
 }
 
 /**
@@ -99,7 +99,7 @@ export function loop_bump(inputs: Record<string, any>): Record<string, unknown> 
  * not let it escape the run uncaught.
  */
 export function loop_countdown(inputs: Record<string, any>): Record<string, unknown> {
-  return { n: inputs.n - 1n };
+  return { n: inputs.n - 1 };
 }
 
 // Tags `record` saw, in call order; never cleared (a case observes only the return value).

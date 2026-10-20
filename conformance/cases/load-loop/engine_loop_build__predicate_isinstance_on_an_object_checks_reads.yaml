@@ -23,8 +23,8 @@ flow: |2
             n: int
             r: object
           code: |
-            const n = inputs["n"] + 1n
-            return {"n": n, "r": n >= 3n ? {"answer": "ok"} : {"hint": "again"}}
+            const n = inputs["n"] + 1
+            return {"n": n, "r": n >= 3 ? {"answer": "ok"} : {"hint": "again"}}
       output: ${step.output}
   output: ${ask.output}
 python_flow: |2

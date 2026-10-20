@@ -11,7 +11,7 @@ flow: |2
         step:
           kind: code
           code: |
-            return {"n": inputs["n"] + 1n}
+            return {"n": inputs["n"] + 1}
           input:
             n: ${input.n}
           output:

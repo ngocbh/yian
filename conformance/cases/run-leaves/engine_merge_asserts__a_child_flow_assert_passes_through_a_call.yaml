@@ -17,7 +17,7 @@ flow: |2
             seed: ${input.seed}
           output: {n: int}
           code: |
-            return {"n": inputs["seed"] + 1n}
+            return {"n": inputs["seed"] + 1}
       output: ${emit.output}
       asserts:
         - "emit.output.n >= 1"

@@ -43,8 +43,8 @@ import type { FlowOutput } from "../../compile/model.ts";
 import { typeRelation } from "../../compile/validation.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { Tree } from "../../expr/grammar.ts";
-import { ExpressionError, scanTemplate } from "../../expr/index.ts";
-import { Span } from "../../expr/template.ts";
+import { ExpressionError } from "../../expr/index.ts";
+import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts";
 import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
 import {
   Binding,
@@ -338,7 +338,7 @@ export function localInputContracts(
 function boundSource(binding: unknown): string | null {
   const source = bindingSource(binding);
   if (typeof source !== "string") return null;
-  let segments;
+  let segments: TemplateSegment[];
   try {
     segments = scanTemplate(source);
   } catch (error) {

@@ -35,14 +35,26 @@
  * with every count; `newExchangeId`; a call without sinks still marks its error; a retryable
  * `ProviderError` then a reply gives one started/finished pair per attempt in one exchange; a stop
  * emits nothing more and rethrows the reason unmarked; `modelFailureCode` for every kind of the
- * mapping, an `AuthError`, a 401 status, a marked non-provider error and an unmarked error.
+ * mapping, an `AuthError`, a 401 status, a marked non-provider error and an unmarked error;
+ * `observeToolCall` emits `ToolCallStarted` (its `arguments` a copy) then `ToolCallFinished` with
+ * the result's text and the call's identity, reports a rejecting call by its `name` and rethrows,
+ * lets a `CapabilityFault` through with no finished event, emits no finished event once the given
+ * signal has aborted (success or failure), and without an event sink emits nothing and returns the
+ * result; `observeSkippedToolCall` emits started, then finished with `error: "interrupted"`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import type { FailureCode } from "../../src/diagnostics.ts";
-import { ModelCallFinished, ModelCallStarted, type StreamChunk, TokenUsage } from "../../src/events.ts";
+import {
+  ModelCallFinished,
+  ModelCallStarted,
+  type StreamChunk,
+  TokenUsage,
+  ToolCallFinished,
+  ToolCallStarted,
+} from "../../src/events.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
@@ -55,6 +67,9 @@ import {
   markModelFailure,
   modelFailureCode,
   newExchangeId,
+  observeSkippedToolCall,
+  observeToolCall,
+  SKIPPED_TOOL_ERROR,
   usageOf,
 } from "../../src/nodes/agent/live.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -268,6 +283,95 @@ test("modelFailureCode is null for an unmarked error and a thrown primitive", ()
   expect(modelFailureCode(new AuthError("no key"))).toBeNull();
   markModelFailure("text");
   expect(modelFailureCode("text")).toBeNull();
+});
+
+// ---------- tool call brackets ----------
+
+const CALL = { exchangeId: "x1", callIndex: 2, toolCallId: "c1", name: "lookup", arguments: { q: { deep: ["x"] } } };
+const toolIdentity = { nodeId: "writer", exchangeId: "x1", callIndex: 2, toolCallId: "c1", name: "lookup" };
+const shown = (result: unknown) => `text:${String(result)}`;
+
+test("observeToolCall brackets a call with started, then finished with the result's text", async () => {
+  const { live, events } = sinks();
+  const result = await observeToolCall(live, async () => 42, CALL, { text: shown });
+  expect(result).toBe(42);
+  expect(events).toEqual([
+    new ToolCallStarted({ ...toolIdentity, arguments: { q: { deep: ["x"] } } }),
+    new ToolCallFinished({ ...toolIdentity, result: "text:42" }),
+  ]);
+  // The started event shows a copy, so the arguments can't change under the host.
+  const started = events[0] as ToolCallStarted;
+  expect(started.arguments).not.toBe(CALL.arguments);
+  expect((started.arguments as typeof CALL.arguments).q).not.toBe(CALL.arguments.q);
+});
+
+test("observeToolCall reports a result whose text can't be written as null", async () => {
+  const { live, events } = sinks();
+  const text = () => {
+    throw new TypeError("no text");
+  };
+  expect(await observeToolCall(live, async () => "r", CALL, { text })).toBe("r");
+  expect((events[1] as ToolCallFinished).result).toBeNull();
+});
+
+test("observeToolCall reports a rejecting call by its name and rethrows", async () => {
+  const { live, events } = sinks();
+  const error = new RangeError("secret=sk-hidden");
+  const call = observeToolCall(live, () => Promise.reject(error), CALL, { text: shown });
+  expect(await call.catch((caught: unknown) => caught)).toBe(error);
+  expect(events).toEqual([
+    new ToolCallStarted({ ...toolIdentity, arguments: { q: { deep: ["x"] } } }),
+    new ToolCallFinished({ ...toolIdentity, error: "RangeError" }),
+  ]);
+  expect(JSON.stringify(events)).not.toContain("sk-hidden");
+  const thrown = observeToolCall(live, () => Promise.reject("text"), CALL, { text: shown });
+  expect(await thrown.catch((caught: unknown) => caught)).toBe("text");
+  expect((events.at(-1) as ToolCallFinished).error).toBe("string");
+});
+
+test("observeToolCall lets a CapabilityFault through with no finished event", async () => {
+  const { live, events } = sinks();
+  const fault = new CapabilityFault(new Error("host"));
+  const call = observeToolCall(live, () => Promise.reject(fault), CALL, { text: shown });
+  expect(await call.catch((caught: unknown) => caught)).toBe(fault);
+  expect(events.map((event) => (event as { type: string }).type)).toEqual(["ToolCallStarted"]);
+});
+
+test("observeToolCall emits no finished event once the signal has aborted", async () => {
+  const { live, events } = sinks();
+  const stop = new AbortController();
+  const done = await observeToolCall(
+    live,
+    async () => {
+      stop.abort(new Error("stopped"));
+      return "late";
+    },
+    CALL,
+    { signal: stop.signal, text: shown },
+  );
+  expect(done).toBe("late");
+  const error = new Error("boom");
+  const failed = observeToolCall(live, () => Promise.reject(error), CALL, { signal: stop.signal, text: shown });
+  expect(await failed.catch((caught: unknown) => caught)).toBe(error);
+  expect(events.map((event) => (event as { type: string }).type)).toEqual(["ToolCallStarted", "ToolCallStarted"]);
+});
+
+test("observeToolCall without an event sink emits nothing and returns the result", async () => {
+  const { live, chunks } = sinks({ events: false });
+  expect(await observeToolCall(live, async () => "r", CALL, { text: shown })).toBe("r");
+  expect(await observeToolCall(null, async () => "s", CALL, { text: shown })).toBe("s");
+  expect(chunks).toEqual([]);
+});
+
+test("observeSkippedToolCall emits started, then finished interrupted", () => {
+  const { live, events } = sinks();
+  observeSkippedToolCall(live, CALL);
+  observeSkippedToolCall(null, CALL);
+  expect(SKIPPED_TOOL_ERROR).toBe("interrupted");
+  expect(events).toEqual([
+    new ToolCallStarted({ ...toolIdentity, arguments: { q: { deep: ["x"] } } }),
+    new ToolCallFinished({ ...toolIdentity, error: "interrupted" }),
+  ]);
 });
 
 // ---------- through the node ----------

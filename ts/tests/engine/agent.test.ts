@@ -33,7 +33,9 @@
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
  * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`, `recordModelValue`
  * and `recordToolResult` (an interaction recorded, a carrier construction error ignored, a `null`
- * trace does nothing); the `DEFAULT_SYSTEM` text and the loop errors' names; `isTextOutput`;
+ * trace does nothing); `toolText` of a string, a record, a list, `null`, `Infinity`, a big int and
+ * a `Date` (a `TypeCheckError` naming the tool's result); `reportedText` (the message, else the
+ * error's `name`); the `SKIPPED_TOOL_RESULT` and `SKIPPED_TOOL_ERROR` texts; the `DEFAULT_SYSTEM` text and the loop errors' names; `isTextOutput`;
  * `isMaxToolIterations`; the default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given
  * as `llmConfig`; `backward` not ported yet; the load-time hooks
  * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
@@ -98,13 +100,16 @@ import {
 } from "../../src/memory/contracts.ts";
 import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
+import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
+import { reportedText, SKIPPED_TOOL_RESULT, toolText } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
 import { recordModelText, recordModelValue, recordToolResult, textOf } from "../../src/nodes/agent/text.ts";
 import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { type EvalNodeOptions, EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { ReportedToolError } from "../../src/tools/errors.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, rejected } from "./run_state_fixtures.ts";
@@ -188,6 +193,30 @@ test("recordModelValue records the value, ignores a carrier construction error, 
   recordModelValue(sink, Number.NaN);
   expect(interactions).toEqual([new ModelValueInteraction({ a: 1n })]);
   expect(recordModelValue(null, 1n)).toBeUndefined();
+});
+
+test("toolText writes a tool result in the text form", () => {
+  expect(toolText("x", "plain text")).toBe("plain text");
+  expect(toolText("x", { a: 1, b: [true, null] })).toBe('{"a":1,"b":[true,null]}');
+  expect(toolText("x", ["a", 2.5])).toBe('["a",2.5]');
+  expect(toolText("x", null)).toBe("null");
+  expect(toolText("x", Infinity)).toBe("Infinity");
+  expect(toolText("x", 12345678901234567890123n)).toBe("12345678901234567890123");
+  expect(() => toolText("x", new Date(0))).toThrow(new TypeCheckError("tool 'x' result: Date is not a yian value"));
+});
+
+test("reportedText gives the message, else the error's name", () => {
+  expect(reportedText("x", new ReportedToolError("no such file"))).toBe("no such file");
+  expect(reportedText("x", new ReportedToolError())).toBe("ReportedToolError");
+  class NotFound extends ReportedToolError {
+    override name = "NotFound";
+  }
+  expect(reportedText("x", new NotFound(""))).toBe("NotFound");
+});
+
+test("the skipped tool texts keep Python's wording", () => {
+  expect(SKIPPED_TOOL_RESULT).toBe("Not run: interrupted by the user.");
+  expect(SKIPPED_TOOL_ERROR).toBe("interrupted");
 });
 
 test("DEFAULT_SYSTEM keeps Python's text and the loop errors are named", () => {

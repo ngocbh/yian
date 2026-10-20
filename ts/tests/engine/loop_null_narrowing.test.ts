@@ -44,7 +44,8 @@
  * `test_returned_field_of_the_wrong_type_names_the_declared_input_under_a_while_check`,
  * `test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it`,
  * `test_inline_returned_field_of_the_wrong_type_names_the_seed_type`,
- * `test_inline_body_under_until_reads_the_seed_as_optional` and the ok load of
+ * `test_inline_body_under_until_reads_the_seed_as_optional`, the load half of
+ * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check` and the ok load of
  * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` (with the loop type contract).
  * Later (T3-20): the `then="loop"` ok load of `test_while_null_check_keeps_the_case_narrowed_seed`
  * (CASE narrowing). Later (T4): the run halves of
@@ -56,10 +57,10 @@
  * `test_while_null_check_keeps_the_case_narrowed_seed`,
  * `test_partial_loop_seed_check_alone_decides_a_carried_over_field`,
  * `test_nested_null_check_narrows_the_record_above_it`,
- * `test_while_null_check_lets_a_seed_record_omit_the_checked_field` and
- * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry`, and
- * `test_optional_seed_pagination_resumes_after_its_first_expansion` and
- * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`.
+ * `test_while_null_check_lets_a_seed_record_omit_the_checked_field`,
+ * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry` and
+ * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`; and all of
+ * `test_optional_seed_pagination_resumes_after_its_first_expansion`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -429,7 +430,9 @@ test("a while null check keeps the case-narrowed seed", () => {
   // after it is the CASE narrowing's.
   const error = loadError(() => load(routed("e", "loop"), { body }));
 
-  expect(error.message).toContain("loop node 'loop': binding 'order' — child expects");
+  expect(error.message).toContain(
+    "loop node 'loop': binding 'order' — child expects '{\"kind\":Literal(buy),\"qty\":int}', source is '",
+  );
 });
 
 // ---------- inline bodies ----------
@@ -460,8 +463,6 @@ nodes:
 output: \${pages.output}
 `;
 }
-
-
 
 /** The `fetch_page` def: `cursor: str` in, its `get` node's `Optional(str)` out. */
 function fetchPage() {

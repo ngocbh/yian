@@ -80,6 +80,7 @@ import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
+import { CallDescriptor } from "../nodes/call.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
@@ -1052,7 +1053,31 @@ export function stampFlowOutputOrigins(
   });
 }
 
-/** Python's `compose.build.pipeline._stamp_inline_call_origins`; not ported yet. */
+/**
+ * Locate each inline `call(...)` node and its arguments at the binding it was written in.
+ *
+ * A synth call node has no authored entry of its own, so its argument bindings and the node itself
+ * take the origin of the authored binding named by its `callSite`: a failing argument then points
+ * at that binding, and the child flow's failures get it as their outer frame. A node input, MAP
+ * `over:`, flow output, or flow assert already owns an origin, which the call shares rather than
+ * registering a second site, because the argument sits inside that authored scalar. A CASE
+ * `then:`/`else:` target owns no binding origin, so its site is registered once here; a nested
+ * call reuses it. An argument or node that already has an origin keeps it.
+ *
+ * @param descriptors Final descriptors keyed by node id after every graph desugar.
+ * @param nodesCursor Retained source view of the flow's authored node mapping.
+ * @param nodes Built runtime nodes keyed by final descriptor id; a synth call node's `origin` is
+ *   set in place.
+ * @param flowWiring Mutable final binding maps keyed by node id and wiring key, with the authored
+ *   node bindings already originated.
+ * @param flowOutputs Final output carriers, with their authored origins already stamped.
+ * @param flowAsserts The flow's `asserts:` carriers in authored order, or `null`.
+ * @param options.owner Complete lexical owner path used to namespace catalog sites.
+ * @param options.catalogBuilder File-owned origin catalog builder shared by all lexical children.
+ * @param options.diagnostics Factory for located load errors.
+ * @throws LoadError when a retained source cursor cannot be traversed or a catalog site collides
+ *   with another registration.
+ */
 function stampInlineCallOrigins(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   nodesCursor: SourceCursor,
@@ -1061,7 +1086,77 @@ function stampInlineCallOrigins(
   flowOutputs: readonly FlowOutput[],
   flowAsserts: readonly Assertion[] | null,
   options: { owner: readonly string[]; catalogBuilder: SourceCatalogBuilder; diagnostics: LoadDiagnostics },
-): void {}
+): void {
+  const { owner, catalogBuilder, diagnostics } = options;
+
+  /** Return the origin already stamped on one node binding, if any. */
+  const wiringOrigin = (host: string, key: string): OriginRef | null => {
+    const source = flowWiring.get(host)?.get(key);
+    return source === undefined ? null : asBinding(source).origin;
+  };
+
+  /** Register and return the origin of one CASE `then:` or `else:` branch. */
+  const branchOrigin = (address: readonly (string | number | null)[]): OriginRef | null => {
+    const caseId = address[1] as string;
+    if (!nodesCursor.has(caseId)) return null;
+    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(caseId));
+    let path: SourceSitePath;
+    if (address[0] === "else") {
+      if (!cursor.has("else")) return null;
+      path = [...owner, "node", caseId, "field", "else"];
+      cursor = cursor.child("else");
+    } else {
+      const index = address[2] as number;
+      if (!cursor.has("cases")) return null;
+      const item = cursor.child("cases").child(index);
+      if (!item.has("then")) return null;
+      path = [...owner, "node", caseId, "case", index, "then"];
+      cursor = item.child("then");
+    }
+    return catalogBuilder.register(path, cursor);
+  };
+
+  /** Return the origin of the authored binding at one `callSite` address. */
+  const siteOrigin = (address: readonly (string | number | null)[]): OriginRef | null => {
+    const kind = address[0];
+    if (kind === "input" || kind === "field") return wiringOrigin(address[1] as string, address[2] as string);
+    if (kind === "output") {
+      const name = address[1] ?? SINGLE_OUTPUT_NAME;
+      return flowOutputs.find((flowOutput) => flowOutput.name === name)?.binding.origin ?? null;
+    }
+    if (kind === "assert") {
+      const index = address[1] as number;
+      if (flowAsserts === null || index >= flowAsserts.length) return null;
+      return flowAsserts[index]!.origin;
+    }
+    return branchOrigin(address);
+  };
+
+  // The calls of one branch share its address; registering it twice would collide. Keyed by the
+  // address's JSON, since arrays don't compare by value.
+  const origins = new Map<string, OriginRef | null>();
+  for (const [callId, descriptor] of descriptors) {
+    if (!(descriptor instanceof CallDescriptor) || descriptor.callSite === null) continue;
+    const address = descriptor.callSite;
+    const addressKey = JSON.stringify(address);
+    if (!origins.has(addressKey)) {
+      try {
+        origins.set(addressKey, siteOrigin(address));
+      } catch (error) {
+        if (!(error instanceof SourceAccessError)) throw error;
+        throw diagnostics.error(error.message, { range: error.range, cause: error });
+      }
+    }
+    const origin = origins.get(addressKey)!;
+    if (origin === null) continue;
+    const wiring = flowWiring.get(callId);
+    for (const [key, source] of wiring ?? []) {
+      if (asBinding(source).origin === null) wiring!.set(key, withOrigin(source, origin));
+    }
+    const node = nodes.get(callId);
+    if (node !== undefined && node.origin === null) node.origin = origin;
+  }
+}
 
 /** Python's `compose.build.pipeline._fill_type_tables`; not ported yet. */
 function fillTypeTables(
@@ -1834,7 +1929,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
-//          stampInlineCallOrigins (2).
 //          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).

@@ -16,6 +16,15 @@
  * Later (T3-19): `test_inline_call_e06_type_mismatch_is_loud` (the typed-binding check).
  * Later (T4): the run half of every load-and-run row.
  *
+ * The origin rows locate each synth call node and its argument bindings at the authored binding
+ * the `call(...)` was written in: the load halves of
+ * `test_inline_call_rewrite_keeps_host_site_and_generated_call_shares_it`
+ * (`tests/compose/test_node_input_origins.py`) and
+ * `test_boundary_nodes_are_originless_and_an_inline_call_shares_its_binding`
+ * (`tests/compose/test_node_origins.py`), neither file having a TS mirror yet, and TS-only rows for
+ * nested calls in a node input, a flow output and a flow assert. Origins resolve through the
+ * assembly's catalog builder.
+ *
  * TS-only: the harvested cases the inline-call desugar raises whose Python test file has no TS
  * mirror, each named by its case id (from `test_expression_nesting.py`, `test_limit_overrides.py`,
  * `test_constructor_load.py`, `test_any_name_literals.py` and this file), pinned at the end.
@@ -23,12 +32,15 @@
 
 import { afterEach, expect, test } from "bun:test";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { desugarInlineCalls } from "../../src/compose/desugar/inline_calls.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
+import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -448,4 +460,166 @@ test("assembled: load-map-call/seed_21_inline_call", () => {
     id: "load-map-call/seed_21_inline_call",
     call: assembledWith({ enrich: def("  topic: !str\n", "list(str)") }),
   });
+});
+
+// ---------- origins: a synth call shares the authored binding it was written in ----------
+
+/** Return node `nodeId`'s wiring binding `name` of `compiled` as the `Binding` it is. */
+function bindingOf(compiled: ReturnType<typeof load>, nodeId: string, name: string): Binding {
+  const binding = compiled.wiring.get(nodeId)!.get(name);
+  expect(binding).toBeInstanceOf(Binding);
+  return binding as Binding;
+}
+
+// From tests/compose/test_node_input_origins.py.
+test("inline call rewrite keeps host site and generated call shares it", () => {
+  const text = `id: rewritten-input-origin
+name: rewritten-input-origin
+defs:
+  helper:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: !int
+    output: int
+nodes:
+  consumer:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: call(helper, x=3)
+    output: int
+output: \${consumer.output}
+`;
+  const hostCursor = SourceDocument.parse(text).root.child("nodes").child("consumer").child("input").child("x");
+  const { flow, builder } = assembleText(text, "flow.yaml", { children: { helper: def("  x: !int\n", "int") } });
+  const compiled = flow.compiled;
+
+  const host = compiled.nodes.get("consumer")!;
+  const hostBinding = bindingOf(compiled, "consumer", "x");
+  const parameter = host.params!.find((param) => param.name === "x")!;
+  expect(parameter.origin).toBeInstanceOf(OriginRef);
+  expect(hostBinding.origin).toBeInstanceOf(OriginRef);
+  expect(hostBinding.source).toBe("${__call_0.output}");
+  expect(builder.resolveRegistered(parameter.origin!)!.range).toEqual(hostCursor.keyRange!);
+  expect(builder.resolveRegistered(hostBinding.origin!)!.range).toEqual(hostCursor.range!);
+  expect(builder.resolveRegistered(hostBinding.origin!)!.text).toBe(text);
+
+  // The generated call and its argument sit inside the host's binding, so they share it.
+  const generated = compiled.nodes.get("__call_0")!;
+  const generatedBinding = bindingOf(compiled, "__call_0", "x");
+  expect(generated.params!.find((param) => param.name === "x")!.origin).toBeNull();
+  expect(generatedBinding.source).toBe(3n);
+  expect(generatedBinding.origin).toBe(hostBinding.origin);
+  expect(generated.origin).toBe(hostBinding.origin);
+});
+
+// From tests/compose/test_node_origins.py.
+test("boundary nodes are originless and an inline call shares its binding", () => {
+  const text = `id: generated-origins
+name: generated-origins
+input:
+  topic: !str
+defs:
+  echo:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: !str
+    output: str
+nodes:
+  consumer:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(echo, topic=\${input.topic})
+    output: str
+output: \${consumer.output}
+`;
+  const compiled = load(text, { echo: def("  topic: !str\n", "str") });
+  const nodes = compiled.nodes;
+
+  expect(nodes.get(START_ID)!.origin).toBeNull();
+  expect(nodes.get(END_ID)!.origin).toBeNull();
+  expect(nodes.get("consumer")!.origin).toBeInstanceOf(OriginRef);
+  const hostBindingOrigin = bindingOf(compiled, "consumer", "topic").origin;
+  expect(hostBindingOrigin).toBeInstanceOf(OriginRef);
+  expect(nodes.get("__call_0")!.origin).toBe(hostBindingOrigin);
+});
+
+test("nested calls in a node input take the binding's origin", () => {
+  const topic = def("  topic: !str\n", "str");
+  const compiled = load(
+    `
+id: ic_nested
+name: ic_nested
+input:
+  topic: !str
+nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(outer, topic=call(inner, topic=\${input.topic}))
+    output: str
+output: \${use.output}
+`,
+    { inner: topic, outer: topic },
+  );
+  const origin = bindingOf(compiled, "use", "topic").origin;
+  expect(origin).toBeInstanceOf(OriginRef);
+  for (const callId of ["__call_0", "__call_1"]) {
+    expect(compiled.nodes.get(callId)!.origin).toBe(origin);
+    expect(bindingOf(compiled, callId, "topic").origin).toBe(origin);
+  }
+});
+
+test("a flow output call takes the output binding's origin", () => {
+  const compiled = load(`
+id: ic_out
+name: ic_out
+input:
+  topic: !str
+${ENRICH_DEF}
+nodes:
+  seed:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+output: call(enrich, topic=\${seed.output})
+`);
+  const origin = compiled.outputs[0]!.binding.origin;
+  expect(origin).toBeInstanceOf(OriginRef);
+  expect(compiled.nodes.get("__call_0")!.origin).toBe(origin);
+  expect(bindingOf(compiled, "__call_0", "topic").origin).toBe(origin);
+});
+
+test("a flow assert call takes the assertion's origin", () => {
+  const text = `
+id: ic_assert
+name: ic_assert
+input:
+  topic: !str
+${ENRICH_DEF}
+nodes:
+  seed:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+output: \${seed.output}
+asserts:
+  - call(enrich, topic=\${input.topic})
+`;
+  const item = SourceDocument.parse(text).root.child("asserts").child(0);
+  const { flow, builder } = assembleText(text, "flow.yaml", { children: ENRICH });
+  const compiled = flow.compiled;
+
+  const origin = compiled.nodes.get("__call_0")!.origin;
+  expect(origin).toBeInstanceOf(OriginRef);
+  expect(builder.resolveRegistered(origin!)!.range).toEqual(item.range!);
+  expect(bindingOf(compiled, "__call_0", "topic").origin).toBe(origin);
 });

@@ -7,7 +7,8 @@
 // covered by cli_utils.test.ts and the `cli` cases.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -24,7 +25,7 @@ import {
   validateOrganization,
 } from "../../src/llm_clients/connection_settings.ts";
 import { ModelListError } from "../../src/llm_clients/model_list.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+import { lockFile, virtualScheduler } from "../../src/platform.ts";
 
 let tmp: string;
 
@@ -89,6 +90,8 @@ async function run<D>(handler: Handler<D>, args: ParsedArgs, io: ReturnType<type
   }
   return { code, out: io.out(), err: io.err() };
 }
+
+const CANCELLED = "Authentication cancelled; the previous login is unchanged";
 
 const PROVIDERS_TEXT = `openai: api-key, subscription (OPENAI_API_KEY)
 xai: api-key (XAI_API_KEY)
@@ -677,5 +680,283 @@ describe("auth option checks", () => {
       "--header X-G reads its value from a hidden prompt, which needs a terminal; use --header NAME=VARIABLE to read it from a variable",
       { ANTHROPIC_API_KEY: "private-key" },
     );
+  });
+});
+
+/** Save an openai subscription, an anthropic key, an ollama login and an azure key with its endpoint. */
+async function saveEachKind(store: AuthStore) {
+  const oauth = new OAuthCredentials({
+    accessToken: "private-access",
+    refreshToken: "private-refresh",
+    expiresAt: 9999999999,
+    accountId: "test-account",
+  });
+  await store.save("openai", oauth, "gpt-test");
+  await store.save("anthropic", new ApiKeyCredentials("private-key"), "claude-test");
+  await store.save("ollama", null, "llama-test");
+  await store.save("azure", new ApiKeyCredentials("private-azure"), "gpt-azure", { endpoint: "https://r.openai.azure.com/" });
+}
+
+/** The indented login lines of a listing, by provider. */
+function loginLines(text: string): Record<string, string> {
+  const lines = text.split("\n").filter((line) => line.startsWith("  "));
+  return Object.fromEntries(lines.map((line) => [line.split(":")[0]!.trim(), line]));
+}
+
+describe("auth list, default and remove", () => {
+  /** Run `yian auth [provider] options` on `setup`'s store with its environment changed by `env` (`null` unsets). */
+  async function runAuth(
+    setup: ReturnType<typeof setupAuth>,
+    provider?: string,
+    options: Record<string, OptionValue> = {},
+    env: Record<string, string | null> = {},
+  ) {
+    const merged: Record<string, string> = { ...setup.env };
+    for (const [name, value] of Object.entries(env)) {
+      if (value === null) delete merged[name];
+      else merged[name] = value;
+    }
+    const result = await run(auth, authArgs(provider, options), fakeIo({ env: merged }), setup.deps);
+    return { ...result, output: result.out + result.err };
+  }
+  const noDefaults = { YIAN_DEFAULT_PROVIDER: null, YIAN_DEFAULT_MODEL: null };
+
+  test("the list shows saved logins without secrets", async () => {
+    const setup = setupAuth();
+    let result = await runAuth(setup, undefined, {}, noDefaults);
+    expect(result.code).toBe(0);
+    expect(result.out).toBe("No login is saved; run 'yian auth <provider>' to add one\n");
+
+    await saveEachKind(setup.store);
+    await setup.store.setDefault("anthropic");
+    result = await runAuth(setup, undefined, {}, noDefaults);
+    expect(result.code).toBe(0);
+    const lines = loginLines(result.out);
+    expect(Object.keys(lines).sort()).toEqual(["anthropic", "azure", "ollama", "openai"]);
+    expect(lines["openai"]).toBe("  openai: subscription, model gpt-test");
+    expect(lines["anthropic"]).toBe("  anthropic: api-key, model claude-test (default)");
+    expect(lines["ollama"]).toBe("  ollama: none, model llama-test");
+    expect(lines["azure"]).toBe("  azure: api-key, model gpt-azure, endpoint https://r.openai.azure.com/");
+    expect(result.output).not.toContain("private-");
+    expect(result.output).not.toContain("YIAN_DEFAULT");
+    expect(setup.service.calls).toEqual([]);
+
+    result = await runAuth(setup, undefined, {}, { ...noDefaults, YIAN_DEFAULT_PROVIDER: "openai" });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("YIAN_DEFAULT_PROVIDER");
+    expect(result.out).not.toContain("YIAN_DEFAULT_MODEL");
+  });
+
+  test("--default switches without sign-in", async () => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    for (const provider of ["openai", "ollama", "azure", "anthropic"]) {
+      const result = await runAuth(setup, provider, { default: true });
+      expect(result).toMatchObject({ code: 0, out: `Default provider: ${provider}\n` });
+      expect(setup.store.read().defaultProvider).toBe(provider);
+    }
+    expect(setup.service.calls).toEqual([]);
+
+    let result = await runAuth(setup, "google", { default: true });
+    expect(result.code).toBe(1);
+    expect(result.err).toBe("There is no saved google login; run 'yian auth' to list them\n");
+    result = await runAuth(setup, "openai", { default: true, model: "x" });
+    expect(result.code).toBe(1);
+    expect(setup.store.read().defaultProvider).toBe("anthropic");
+  });
+
+  test("--remove deletes one login", async () => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    await setup.store.setDefault("openai");
+
+    let result = await runAuth(setup, "anthropic", { remove: true }, noDefaults);
+    expect(result).toMatchObject({ code: 0, out: "Removed the saved anthropic login\n" });
+    let state = setup.store.read();
+    expect(state.defaultProvider).toBe("openai");
+    expect(state.selections.map((item) => item.provider).sort()).toEqual(["azure", "ollama", "openai"]);
+
+    result = await runAuth(setup, "openai", { remove: true }, noDefaults);
+    expect(result).toMatchObject({
+      code: 0,
+      out: "Removed the saved openai login\nNo default provider is saved; choose one with 'yian auth <provider> --default'\n",
+    });
+    expect(setup.store.read().defaultProvider).toBeNull();
+    result = await runAuth(setup, undefined, {}, noDefaults);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("No default provider is saved; choose one with 'yian auth <provider> --default'\n");
+
+    for (const provider of ["ollama", "azure"]) {
+      expect((await runAuth(setup, provider, { remove: true })).code).toBe(0);
+    }
+    expect(setup.store.read().selections).toEqual([]);
+    result = await runAuth(setup, "anthropic", { remove: true });
+    expect(result.code).toBe(1);
+    expect(result.err).toBe("There is no saved anthropic login; run 'yian auth' to list them\n");
+    result = await runAuth(setup, "anthropic", { remove: true, default: true });
+    expect(result.code).toBe(1);
+    expect(setup.service.calls).toEqual([]);
+  });
+
+  test("--remove accepts an unsupported saved provider", async () => {
+    const setup = setupAuth();
+    const saved = {
+      version: 1,
+      default_provider: null,
+      providers: {
+        "legacy-x": { method: "api_key", model: "m", credential_id: "abcd", credentials: { api_key: "k" } },
+      },
+    };
+    writeFileSync(setup.path, JSON.stringify(saved), { mode: 0o600 });
+    chmodSync(setup.path, 0o600);
+    const result = await runAuth(setup, "legacy-x", { remove: true });
+    expect(result).toMatchObject({ code: 0, out: "Removed the saved legacy-x login\n" });
+    expect(setup.store.read().selections).toEqual([]);
+  });
+
+  test("--remove finds a lowercase saved name", async () => {
+    const setup = setupAuth();
+    await setup.store.save("vllm", null, "m1");
+    const result = await runAuth(setup, "VLLM", { remove: true });
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith("Removed the saved vllm login\n");
+    expect(setup.store.read().selections).toEqual([]);
+  });
+
+  test("the environment override note agrees with the number of variables", async () => {
+    const setup = setupAuth();
+    let result = await runAuth(setup);
+    expect(result.out).toBe("No login is saved; run 'yian auth <provider>' to add one\n");
+    await setup.store.save("anthropic", new ApiKeyCredentials("private-key"), "claude-test");
+    result = await runAuth(setup);
+    expect(result.out).toEndWith(
+      "YIAN_DEFAULT_PROVIDER and YIAN_DEFAULT_MODEL are set in the environment and override the saved choice\n",
+    );
+    result = await runAuth(setup, undefined, {}, { YIAN_DEFAULT_MODEL: null });
+    expect(result.out).toEndWith("YIAN_DEFAULT_PROVIDER is set in the environment and overrides the saved choice\n");
+  });
+
+  test("the list shows connection settings by name only", async () => {
+    const setup = setupAuth();
+    await setup.store.save("openai", new ApiKeyCredentials("private-key", { "X-G": "private-gw" }), "gpt-test", {
+      organization: "org-1",
+      project: "proj-1",
+    });
+    await setup.store.save(
+      "anthropic",
+      new ApiKeyCredentials("private-key", { "X-B": "private-b", "X-A": "private-a" }),
+      "claude-test",
+    );
+    const result = await runAuth(setup);
+    expect(result.code).toBe(0);
+    const lines = loginLines(result.out);
+    expect(lines["openai"]).toBe("  openai: api-key, model gpt-test, organization org-1, project proj-1, headers X-G");
+    expect(lines["anthropic"]).toBe("  anthropic: api-key, model claude-test, headers X-A, X-B (default)");
+    expect(result.output).not.toContain("private-");
+  });
+
+  const jsonUsage = "Invalid value: --json applies to --remove and to openai --method subscription --login device";
+  test.each<[string, string | undefined, Record<string, OptionValue>]>([
+    ["the list", undefined, {}],
+    ["--default", "openai", { default: true }],
+    ["API-key setup", "openai", { method: "api-key", model: "gpt-test" }],
+    ["browser sign-in", "openai", { method: "subscription", login: "browser" }],
+  ])("--json on %s is a usage error", async (_, provider, options) => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    const before = readFileSync(setup.path);
+    const result = await runAuth(setup, provider, { ...options, json: true });
+    expect(result).toMatchObject({ code: 2, out: "", err: `Error: ${jsonUsage}\n` });
+    expect(readFileSync(setup.path)).toEqual(before);
+    expect(setup.service.calls).toEqual([]);
+  });
+
+  test("--remove --auth-file F without a provider deletes F", async () => {
+    const setup = setupAuth();
+    const path = join(tmp, "auth", "other.json");
+    for (const json of [false, true]) {
+      const store = new AuthStore(path);
+      await saveEachKind(store);
+      const result = await runAuth(setup, undefined, { remove: true, "auth-file": path, json });
+      expect(result.code).toBe(0);
+      if (json) expect(JSON.parse(result.out)).toEqual({ format: "yian.cli.v1", ok: true });
+      else expect(result.out).toBe(`Removed the saved logins in ${path}\n`);
+      expect(existsSync(path)).toBe(false);
+    }
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  const wholeFile = "--remove without a provider deletes the whole --auth-file; it takes no --default or setup option";
+  test.each<[string, Record<string, OptionValue>]>([
+    ["--default", { default: true }],
+    ["--model", { model: "x" }],
+    ["--header", { header: ["X-G=GW_TOKEN"] }],
+  ])("whole-file removal refuses %s", async (_, options) => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    const args = { remove: true, "auth-file": setup.path, ...options };
+    const text = await runAuth(setup, undefined, args);
+    expect(text).toMatchObject({ code: 1, out: "", err: `${wholeFile}\n` });
+    const json = await runAuth(setup, undefined, { ...args, json: true });
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.out)).toEqual({ format: "yian.cli.v1", error: { code: "auth.failed", message: wholeFile } });
+    expect(existsSync(setup.path)).toBe(true);
+  });
+
+  test("--remove without a provider or --auth-file names a provider", async () => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    const message = "Name a provider: yian auth <provider> [options]";
+    const text = await runAuth(setup, undefined, { remove: true });
+    expect(text).toMatchObject({ code: 1, out: "", err: `${message}\n` });
+    const json = await runAuth(setup, undefined, { remove: true, json: true });
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.out)).toEqual({ format: "yian.cli.v1", error: { code: "auth.failed", message } });
+    expect(existsSync(setup.path)).toBe(true);
+  });
+
+  test("a JSON removal prints ok, or an auth.failed document", async () => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    const removed = await runAuth(setup, "anthropic", { remove: true, json: true });
+    expect(removed.code).toBe(0);
+    expect(removed.out).toBe('{"format":"yian.cli.v1","ok":true}\n');
+    const missing = await runAuth(setup, "anthropic", { remove: true, json: true });
+    expect(missing).toMatchObject({ code: 1, err: "" });
+    expect(JSON.parse(missing.out)).toEqual({
+      format: "yian.cli.v1",
+      error: { code: "auth.failed", message: "There is no saved anthropic login; run 'yian auth' to list them" },
+    });
+  });
+
+  test.each([false, true])("SIGINT during a removal waiting for the lock stops it (--json %p)", async (json) => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    const signals = new EventEmitter();
+    const holder = lockFile(`${setup.path}.lock`);
+    try {
+      const io = fakeIo({ env: setup.env });
+      const running = auth(authArgs("anthropic", { remove: true, json }), io.io, { ...setup.deps, signals });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(signals.listenerCount("SIGINT")).toBe(1);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      signals.emit("SIGINT");
+      const code = await running;
+      if (json) expect({ code, out: io.out(), err: io.err() }).toEqual({ code: 130, out: "", err: "" });
+      else expect({ code, out: io.out(), err: io.err() }).toEqual({ code: 1, out: "", err: `${CANCELLED}\n` });
+    } finally {
+      holder.release();
+    }
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(setup.store.selection("anthropic")?.model).toBe("claude-test");
+  });
+
+  test("a finished command leaves no signal listener", async () => {
+    const setup = setupAuth();
+    const signals = new EventEmitter();
+    const result = await run(auth, authArgs(), fakeIo({ env: setup.env }), { ...setup.deps, signals });
+    expect(result.code).toBe(0);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
   });
 });

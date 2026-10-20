@@ -57,6 +57,8 @@ export interface AuthDeps {
   listModels?: typeof listModels;
   /** The clock deadlines run on; defaults to `realScheduler`. */
   scheduler?: Scheduler;
+  /** Where `auth` listens for SIGINT (and SIGTERM, for the JSON device sign-in); defaults to `process`. */
+  signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
 }
 
 /** A deadline passed before the work it bounds was done. */
@@ -167,6 +169,32 @@ function headerSources(specs: readonly string[], provider: string, io: CliIo): M
   return sources;
 }
 
+/** Print each saved login in `store` and the default without reading any credential. */
+async function list(store: AuthStore, io: CliIo): Promise<void> {
+  const state = store.read();
+  const overrides = ["YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL"].filter((name) => io.env(name));
+  if (state.selections.length === 0) {
+    await io.stdout.write("No login is saved; run 'yian auth <provider>' to add one\n");
+  } else {
+    await io.stdout.write("Saved logins:\n");
+    for (const selection of state.selections) {
+      const details = [KINDS[selection.method], `model ${selection.model}`];
+      if (selection.endpoint) details.push(`endpoint ${selection.endpoint}`);
+      if (selection.organization) details.push(`organization ${selection.organization}`);
+      if (selection.project) details.push(`project ${selection.project}`);
+      // Header values are secrets; only their names are shown.
+      if (selection.headerNames.length > 0) details.push(`headers ${selection.headerNames.join(", ")}`);
+      const isDefault = selection.provider === state.defaultProvider ? " (default)" : "";
+      await io.stdout.write(`  ${selection.provider}: ${details.join(", ")}${isDefault}\n`);
+    }
+    if (state.defaultProvider === null) await io.stdout.write(`${NO_DEFAULT}\n`);
+  }
+  if (overrides.length > 0 && state.selections.length > 0) {
+    const [is, override] = overrides.length === 1 ? ["is", "overrides"] : ["are", "override"];
+    await io.stdout.write(`${overrides.join(" and ")} ${is} set in the environment and ${override} the saved choice\n`);
+  }
+}
+
 /**
  * Refuse an Azure endpoint that a config's `base_url` could not name.
  *
@@ -274,6 +302,37 @@ function checkOptions(provider: string, options: AuthOptions, io: CliIo): [strin
   return [name, headerSources(header, name, io)];
 }
 
+/** Sign in to OpenAI, choose an available model, and save the login. Not ported yet. */
+async function setupOpenai(..._args: unknown[]): Promise<void> {
+  throw new Error("not ported yet");
+}
+
+/** Read a provider's key, endpoint, and model, check the model, and save the login. Not ported yet. */
+async function setupProvider(..._args: unknown[]): Promise<void> {
+  throw new Error("not ported yet");
+}
+
+/**
+ * Abort `controller` on the first of the signals `names` that `target` emits, and return the
+ * function that stops listening. The first signal stops listening, so a second one gets the
+ * signal's default action (for a process, it ends it).
+ */
+function onStopSignals(
+  names: readonly NodeJS.Signals[],
+  controller: AbortController,
+  target: Pick<NodeJS.EventEmitter, "on" | "off">,
+): () => void {
+  const off = () => {
+    for (const name of names) target.off(name, stop);
+  };
+  const stop = () => {
+    off();
+    controller.abort();
+  };
+  for (const name of names) target.on(name, stop);
+  return off;
+}
+
 /**
  * List, set up, choose the default among, or remove saved provider logins.
  *
@@ -307,7 +366,7 @@ function checkOptions(provider: string, options: AuthOptions, io: CliIo): [strin
  * @returns 0, or 1 when the command fails or is cancelled (saved logins stay unchanged).
  * @throws {UsageError} `--json` is given to another form.
  */
-export async function auth(command: ParsedArgs, io: CliIo, _deps: AuthDeps = {}): Promise<number> {
+export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}): Promise<number> {
   const provider = command.args["provider"] as string | undefined;
   const o = command.options;
   const options: AuthOptions = {
@@ -333,20 +392,80 @@ export async function auth(command: ParsedArgs, io: CliIo, _deps: AuthDeps = {})
   if (json && !(options.remove || device)) {
     throw new UsageError("Invalid value: --json applies to --remove and to openai --method subscription --login device");
   }
+  const stop = new AbortController();
+  // Only the JSON device sign-in handles SIGTERM, as Python's did; every form takes Ctrl-C.
+  const names: NodeJS.Signals[] = json && device ? ["SIGTERM", "SIGINT"] : ["SIGINT"];
+  const off = onStopSignals(names, stop, deps.signals ?? process);
+  const authFile = (o["auth-file"] as string | undefined) ?? null;
+  const open = (path: string | null) => new AuthStore(path, { env: io.env, signal: stop.signal });
   try {
     if (provider === undefined) {
       const { method, login, model, apiKeyEnv, endpoint, organization, project } = options;
       const setup =
         [method, login, model, apiKeyEnv, endpoint, organization, project].some((value) => value !== undefined) ||
         options.header.length > 0;
+      if (options.remove && authFile !== null) {
+        if (options.default || setup) {
+          throw new AuthError(
+            "--remove without a provider deletes the whole --auth-file; it takes no --default or setup option",
+          );
+        }
+        await open(authFile).delete();
+        if (json) await printJson({ ok: true }, io.stdout);
+        else await io.stdout.write(`Removed the saved logins in ${authFile}\n`);
+        return 0;
+      }
       if (options.default || options.remove || setup) {
         throw new AuthError("Name a provider: yian auth <provider> [options]");
       }
-      throw new Error("not ported yet");
+      await list(open(authFile), io);
+      return 0;
     }
-    checkOptions(provider, options, io);
-    throw new Error("not ported yet");
+    let [name, sources] = checkOptions(provider, options, io);
+    if (json && device) throw new Error("not ported yet");
+    const store = open(authFile);
+    if (options.remove) {
+      const state = store.read();
+      const saved = new Set(state.selections.map((selection) => selection.provider));
+      if (!saved.has(name) && saved.has(name.toLowerCase())) name = name.toLowerCase();
+      const wasDefault = state.defaultProvider === name;
+      await store.remove(name);
+      if (json) {
+        await printJson({ ok: true }, io.stdout);
+        return 0;
+      }
+      await io.stdout.write(`Removed the saved ${name} login\n`);
+      if (wasDefault) await io.stdout.write(`${NO_DEFAULT}\n`);
+      return 0;
+    }
+    if (options.default) {
+      await store.setDefault(name);
+      await io.stdout.write(`Default provider: ${name}\n`);
+      return 0;
+    }
+    // Reading first also diagnoses an unusable store before account sign-in.
+    const current = store.read().defaultProvider;
+    if (name === "openai") {
+      const { method, login, model, apiKeyEnv, organization, project } = options;
+      const keyEnv = apiKeyEnv ?? "OPENAI_API_KEY";
+      await setupOpenai(store, method, login, model, keyEnv, current === null, organization, project, sources);
+    } else {
+      const { model, apiKeyEnv, endpoint } = options;
+      await setupProvider(store, name, model, apiKeyEnv, endpoint, current === null, sources);
+    }
+    if (current === null || current === name) {
+      await io.stdout.write(`Default provider: ${name}\n`);
+    } else {
+      await io.stdout.write(`Default provider: ${current} (switch with 'yian auth ${name} --default')\n`);
+    }
+    return 0;
   } catch (error) {
+    if (stop.signal.aborted) {
+      // A stopped --json command exits 130 and writes no document.
+      if (json) return 130;
+      await io.stderr.write(`${CANCELLED}\n`);
+      return 1;
+    }
     if (!(error instanceof AuthError)) throw error;
     if (json) {
       const failure = { code: "auth.failed", message: error.message };
@@ -356,6 +475,8 @@ export async function auth(command: ParsedArgs, io: CliIo, _deps: AuthDeps = {})
       await io.stderr.write(`${error.message}\n`);
     }
     return 1;
+  } finally {
+    off();
   }
 }
 

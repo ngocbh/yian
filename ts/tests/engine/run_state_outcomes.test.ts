@@ -32,10 +32,12 @@
  * `test_competing_success_plans_reject_the_second_sequence_before_append`,
  * `test_success_record_replay_reconstructs_identical_state`,
  * `test_end_output_waits_for_full_quiescence`, `test_newly_ready_successor_prevents_quiescence`,
+ * `test_late_sibling_failure_wins`,
  * `test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record`,
  * `test_route_latches_causal_terminal_failure_until_sibling_quiescence`,
  * `test_causal_route_canonicalizes_origin_subclass_for_wire` (`SpecialOrigin extends OriginRef`,
  * checked through `constructor`),
+ * `test_explicit_failure_wins_after_terminal_unreachable_is_latched`,
  * `test_terminal_unreachable_latch_is_installed_only_after_route_append`,
  * `test_causal_route_replay_requires_its_persisted_terminal_failure`,
  * `test_noncausal_route_replay_rejects_a_terminal_failure` (its unused message reads `null`),
@@ -46,7 +48,14 @@
  * `flow.incoming`), `test_terminal_success_values_are_mutation_isolated`, and both rows of
  * `test_terminal_derivation_replays_from_causal_records_only` (the record class names, not
  * Python's type names) and `test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged`,
- * one test per row.
+ * one test per row; `test_failure_is_terminal_and_preserves_diagnostics`,
+ * `test_failure_transition_canonicalizes_origin_subclass_for_wire`,
+ * `test_failure_record_replay_reconstructs_identical_state`,
+ * `test_failure_append_failure_leaves_every_state_coordinate_unchanged`,
+ * `test_failure_requires_an_existing_unknown_in_flight_node` (2 rows),
+ * `test_failure_requires_initialized_nonterminal_unknown_state`,
+ * `test_failure_record_rejects_derived_terminal_unreachable_code`,
+ * `test_competing_failure_plan_rejects_after_another_same_sequence_outcome`.
  * Python's `ValueError` is a `RangeError` here, and a type mismatch the value layer's
  * `TypeCheckError`; each rejected row names its one class and full message, where Python matches a
  * part of the message. A rejection Python raises as `_NodeDataError` is a `NodeDataError` whose
@@ -83,6 +92,14 @@
  *   each test pins the full observers where Python counts them.
  * - `test_success_rejects_touched_topology_invariant_breaks` (3 rows): the `incoming` row clears the
  *   public `flow.incomingEdges` entry of `after-baked`.
+ * - `test_failure_requires_exact_diagnostic_carriers_before_append` (2 rows): the failure without
+ *   a node id is refused by the `NodeFailedRecord` constructor `prepareNodeFailed` calls, a
+ *   `RangeError`, where Python's record takes it and the replay check raises `TypeError`.
+ * - `test_failure_replay_rejects_a_non_failure_authority`: the `NodeFailedRecord` constructor
+ *   refuses a non-`Failure`, so no such record reaches `prepareRecord`.
+ * - `test_failure_commit_uses_only_materialized_data_after_append`: the instance patches throwing
+ *   `flow.incoming` and `flow.outgoing` before the commit, and the log that patches them again
+ *   after its append.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
  *   Python's `id()` values; it compares the pool as its wire object and adds the start counts and
  *   steps.
@@ -102,21 +119,9 @@
  * and `NodeSkipped` after the append), of `test_success_commit_uses_only_the_prevalidated_delta`
  * (`_validate_success_value`, `_prepare_success_delta`, `canonical_typed`, `encode_pool`,
  * `decode_pool`) and of `test_terminal_commit_performs_no_materialization_after_append`
- * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`).
- *
- * Later (T4-4 PR 2), failures: `test_late_sibling_failure_wins`,
- * `test_explicit_failure_wins_after_terminal_unreachable_is_latched`,
- * `test_failure_is_terminal_and_preserves_diagnostics`,
- * `test_failure_transition_canonicalizes_origin_subclass_for_wire`,
- * `test_failure_record_replay_reconstructs_identical_state`,
- * `test_failure_append_failure_leaves_every_state_coordinate_unchanged`,
- * `test_failure_requires_exact_diagnostic_carriers_before_append`,
- * `test_failure_requires_an_existing_unknown_in_flight_node`,
- * `test_failure_requires_initialized_nonterminal_unknown_state`,
- * `test_failure_replay_rejects_a_non_failure_authority`,
- * `test_failure_record_rejects_derived_terminal_unreachable_code`,
- * `test_competing_failure_plan_rejects_after_another_same_sequence_outcome` and
- * `test_failure_commit_uses_only_materialized_data_after_append`.
+ * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`) and of
+ * `test_failure_commit_uses_only_materialized_data_after_append` (`_validate_failure_record`, and
+ * `NodeFailed` and `RunFailed` after the append).
  *
  * Later (T4-5): `test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause` (growth).
  */
@@ -125,7 +130,15 @@ import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
-import { NodeRouted, NodeSkipped, NodeSucceeded, type RunEvent, RunFailed, RunSucceeded } from "../../src/events.ts";
+import {
+  NodeFailed,
+  NodeRouted,
+  NodeSkipped,
+  NodeSucceeded,
+  type RunEvent,
+  RunFailed,
+  RunSucceeded,
+} from "../../src/events.ts";
 import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -146,11 +159,12 @@ import {
   commitPrepared,
   NodeDataError,
   type PreparedTransition,
+  prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
-  type RunState,
+  RunState,
 } from "../../src/runtime/state.ts";
 import { Type, TypeCheckError, type Value, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -160,6 +174,7 @@ import {
   fanoutFlow,
   FuncNode,
   initializedAndStarted,
+  nodeFailure,
   reducerSnapshot,
   replayOutcomeLog,
   roots,
@@ -873,6 +888,18 @@ test("a newly ready successor prevents quiescence", () => {
   expect([...state.inFlight]).toEqual([]);
 });
 
+test("a late sibling failure wins", () => {
+  const { state, log } = endCommittedWithSiblingInFlight();
+  const failure = nodeFailure("sibling", "late boom", { causeType: "RuntimeError" });
+
+  const observers = commitPrepared(log, state, prepareNodeFailed(state, failure));
+
+  expect(observers).toStrictEqual([new NodeFailed({ failure }), new RunFailed({ failure })]);
+  expect(state.pool.get(END_ID)).toEqual({ terminal: ["stable"] });
+  expect(state.result).toStrictEqual(new RunFailed({ failure }));
+  expect(state.ready).toEqual(["queued"]);
+});
+
 test("a typed null END membership succeeds at quiescence", () => {
   const { state, log } = endOnlyInFlight();
 
@@ -1476,6 +1503,27 @@ test("a causal route canonicalizes an origin subclass for the wire", () => {
   expect(state.ready).toEqual([]);
 });
 
+test("an explicit failure wins after the terminal-unreachable latch is set", () => {
+  const { state, log } = terminalSkipWithSiblingInFlight();
+  const route = prepareNodeRouted(state, "router", "go");
+  const routeFailure = routePlan(route).delta.terminalUnreachableFailure;
+  commitPrepared(log, state, route);
+  const explicit = nodeFailure("unrelated", "explicit failure", { causeType: "RuntimeError" });
+
+  const prepared = prepareNodeFailed(state, explicit);
+  const failure = (prepared.record as NodeFailedRecord).failure;
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual([new NodeFailed({ failure }), new RunFailed({ failure })]);
+  expect((observers[0] as NodeFailed).failure).toBe(failure);
+  expect((observers[1] as RunFailed).failure).toBe(failure);
+  expect((state.result as RunFailed | null)?.failure).toBe(failure);
+  expect(failure).toStrictEqual(explicit);
+  expect(failure).not.toBe(routeFailure);
+  expect(state.terminalUnreachableFailure).toBe(routeFailure);
+  expect(state.ready).toEqual([]);
+});
+
 test("the terminal-unreachable latch is installed only after the route's append", () => {
   const { state, log: prior } = terminalSkipWithSiblingInFlight();
   const prepared = prepareNodeRouted(state, "router", "go");
@@ -1677,4 +1725,256 @@ test("a terminal commit does no materialization after append (route)", () => {
   ]);
   expect(state.result).toStrictEqual(new RunFailed({ failure: zetaUnreachable() }));
   expect(state.ready).toEqual([]);
+});
+
+/** Return END and two ordinary nodes concurrently in flight, plus a queued leaf. */
+function failureFlow(): CompiledFlow {
+  return CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["failing", func("failing")],
+      ["sibling", func("sibling")],
+      ["queued", func("queued")],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [
+      new Edge("start-end", START_ID, END_ID),
+      new Edge("start-failing", START_ID, "failing"),
+      new Edge("start-sibling", START_ID, "sibling"),
+      new Edge("start-queued", START_ID, "queued"),
+    ],
+  );
+}
+
+/** Return a live run whose END has its output while `failing` and its sibling run. */
+function failureInFlight(): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(failureFlow());
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, END_ID));
+  commitPrepared(log, state, prepareNodeStarted(state, "failing"));
+  commitPrepared(log, state, prepareNodeStarted(state, "sibling"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, {}));
+  return { state, log };
+}
+
+/** Return `prepared`'s plan narrowed to a failure plan; throw unless it is one. */
+function failurePlan(prepared: PreparedTransition) {
+  const plan = prepared._plan;
+  if (plan.kind !== "failure") throw new Error(`expected a failure plan, found ${plan.kind}`);
+  return plan;
+}
+
+test("a failure is terminal and keeps its diagnostics", () => {
+  const { state, log } = failureInFlight();
+  const failure = nodeFailure("failing", "value must be positive", {
+    causeType: "NodeAssertFailed",
+    traceback: "Traceback (most recent call last):\n  boom",
+  });
+  const poolBefore = encodePool(state.pool);
+  const edgesBefore = new Map(state.edgeState);
+  const readyBefore = [...state.ready];
+  const sequenceBefore = state.nextSequence;
+
+  const prepared = prepareNodeFailed(state, failure);
+
+  const expectedRecord = new NodeFailedRecord(failure);
+  const authority = (prepared.record as NodeFailedRecord).failure;
+  const expectedResult = new RunFailed({ failure: authority });
+  expect(prepared.record).toStrictEqual(expectedRecord);
+  expect(failurePlan(prepared).failure).toBe(authority);
+  expect(prepared.observers).toStrictEqual([new NodeFailed({ failure: authority }), expectedResult]);
+  expect((prepared.observers[0] as NodeFailed).failure).toBe(authority);
+  expect((prepared.observers[1] as RunFailed).failure).toBe(authority);
+  expect(state.result).toBeNull();
+  expect(state.pool.get(END_ID)).toEqual({});
+
+  (prepared.observers[0] as { failure: Failure }).failure = nodeFailure("failing", "mutated");
+  (prepared.observers[1] as { failure: Failure }).failure = nodeFailure("failing", "mutated");
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual([new NodeFailed({ failure: authority }), expectedResult]);
+  expect(state.result).toStrictEqual(expectedResult);
+  expect(observers[1]).not.toBe(state.result);
+  expect((observers[0] as NodeFailed).failure).toBe(authority);
+  expect((observers[1] as RunFailed).failure).toBe(authority);
+  expect((state.result as RunFailed | null)?.failure).toBe(authority);
+  (observers[1] as { failure: Failure }).failure = nodeFailure("failing", "mutated returned observer");
+  expect((state.result as RunFailed | null)?.failure.message).toBe("value must be positive");
+  expect(state.nodeState.get("failing")).toBe(NodeState.TAKEN);
+  expect(state.nodeState.get("sibling")).toBe(NodeState.UNKNOWN);
+  expect([...state.inFlight]).toEqual(["sibling"]);
+  expect(state.ready).toEqual(readyBefore);
+  expect(state.ready).toEqual(["queued"]);
+  expect(encodePool(state.pool)).toEqual(poolBefore);
+  expect(state.edgeState).toEqual(edgesBefore);
+  expect(state.nextSequence).toBe(sequenceBefore + 1);
+  expect(log.records().at(-1)!.record).toStrictEqual(expectedRecord);
+});
+
+test("a failure transition canonicalizes an origin subclass for the wire", () => {
+  const { state, log } = failureInFlight();
+  const supplied = new Failure({
+    code: "node.execute",
+    message: "boom",
+    nodeId: "failing",
+    trace: [new SpecialOrigin("special-failure-site")],
+  });
+
+  const prepared = prepareNodeFailed(state, supplied);
+  const failure = (prepared.record as NodeFailedRecord).failure;
+
+  expect(failure.trace).toEqual([new OriginRef("special-failure-site")]);
+  expect(failure.trace[0]!.constructor).toBe(OriginRef);
+  expect(failure).toBe(failurePlan(prepared).failure);
+  expect((prepared.observers[0] as NodeFailed).failure).toBe(failure);
+  expect((prepared.observers[1] as RunFailed).failure).toBe(failure);
+
+  commitPrepared(log, state, prepared);
+
+  expect((state.result as RunFailed | null)?.failure).toBe(failure);
+  const logged = (log.records().at(-1)!.record as NodeFailedRecord).failure;
+  expect(logged).toStrictEqual(failure);
+  expect(logged.trace[0]!.constructor).toBe(OriginRef);
+  expect(state.ready).toEqual(["queued"]);
+});
+
+test("a failure record replay reconstructs an identical state", () => {
+  const live = failureInFlight();
+  commitPrepared(
+    live.log,
+    live.state,
+    prepareNodeFailed(live.state, nodeFailure("failing", "boom", { causeType: "ValueError", traceback: "trace" })),
+  );
+
+  const replay = replayOutcomeLog(failureFlow(), live.log);
+
+  expect(reducerSnapshot(replay.state)).toEqual(reducerSnapshot(live.state));
+  expect(replay.log.records()).toEqual(live.log.records());
+  expect(replay.state.ready).toEqual(["queued"]);
+});
+
+test("a failure append failure leaves every state coordinate unchanged", () => {
+  const { state, log: prior } = failureInFlight();
+  const prepared = prepareNodeFailed(state, nodeFailure("failing"));
+  const before = snapshot(state);
+  const log = new FailingLog(RUN_ID, prior.records());
+
+  expectError(() => commitPrepared(log, state, prepared), Error, "disk full");
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test.each<[string, () => Failure, new (...args: never[]) => Error, string]>([
+  ["not a Failure", () => 1 as unknown as Failure, TypeError, "prepareNodeFailed expects a Failure"],
+  [
+    "no node id",
+    () => new Failure({ code: "node.execute", message: "boom", nodeId: null }),
+    RangeError,
+    "NodeFailedRecord failure node_id must be a non-empty string",
+  ],
+])("a failure requires exact diagnostic carriers before append: %s", (_name, failure, cls, message) => {
+  const { state, log } = failureInFlight();
+  const before = snapshot(state);
+
+  expectError(() => prepareNodeFailed(state, failure()), cls, message);
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test.each([
+  ["missing", "NodeFailed node 'missing' does not exist in the flow"],
+  ["queued", "NodeFailed node 'queued' is not in-flight"],
+] as const)("a failure requires an existing unknown in-flight node: %s", (nodeId, message) => {
+  const { state, log } = failureInFlight();
+  const before = snapshot(state);
+
+  expectError(() => prepareNodeFailed(state, nodeFailure(nodeId)), RangeError, message);
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test("a failure requires an initialized nonterminal state and an UNKNOWN node", () => {
+  const pristine = new RunState(failureFlow());
+  expectError(() => prepareNodeFailed(pristine, nodeFailure("failing")), RangeError, "run state is not initialized");
+
+  const { state, log } = failureInFlight();
+  state.nodeState.set("failing", NodeState.TAKEN);
+  let before = snapshot(state);
+  expectError(
+    () => prepareNodeFailed(state, nodeFailure("failing")),
+    RangeError,
+    "NodeFailed node 'failing' must have UNKNOWN disposition",
+  );
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+
+  state.nodeState.set("failing", NodeState.UNKNOWN);
+  state.result = new RunFailed({ failure: nodeFailure("failing", "already terminal") });
+  before = snapshot(state);
+  expectError(
+    () => prepareNodeFailed(state, nodeFailure("failing")),
+    RangeError,
+    "terminal run state cannot prepare another graph transition",
+  );
+  expectUnchanged(state, before);
+});
+
+test("a failure record refuses a non-Failure authority at construction", () => {
+  expectError(() => new NodeFailedRecord({} as Failure), TypeError, "NodeFailedRecord failure must be a Failure");
+});
+
+test("a failure record refuses the derived terminal-unreachable code", () => {
+  const { state, log } = failureInFlight();
+  const failure = new Failure({
+    code: "graph.terminal_unreachable",
+    message: "terminal output 'result' skipped",
+    nodeId: "failing",
+  });
+  const before = snapshot(state);
+
+  for (const call of [
+    () => prepareNodeFailed(state, failure),
+    () => prepareRecord(state, new NodeFailedRecord(failure)),
+  ]) {
+    expectError(call, RangeError, "graph.terminal_unreachable must be derived from a route record");
+  }
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test("a competing failure plan is refused after another same-sequence outcome", () => {
+  const { state, log } = failureInFlight();
+  const failure = prepareNodeFailed(state, nodeFailure("failing"));
+  const siblingSuccess = prepareNodeSucceeded(state, "sibling", { ok: true });
+
+  commitPrepared(log, state, siblingSuccess);
+  const sequence = log.nextSequence;
+  expectError(() => commitPrepared(log, state, failure), RangeError, "run-state sequence mismatch: prepared 7, state 8");
+
+  expect(log.nextSequence).toBe(sequence);
+  expect(state.result).toBeNull();
+  expect([...state.inFlight]).toEqual(["failing"]);
+  expect(state.ready).toEqual(["queued"]);
+});
+
+test("a failure commit uses only the materialized data after append", () => {
+  const { state, log: prior } = failureInFlight();
+  const failure = nodeFailure("failing", "boom", { causeType: "RuntimeError" });
+  const prepared = prepareNodeFailed(state, failure);
+  const unexpected = (): never => {
+    throw new Error("failure commit repeated preparation work");
+  };
+  state.flow.incoming = unexpected;
+  state.flow.outgoing = unexpected;
+  const log = new PoisonAfterAppendLog(prior, state.flow);
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual([new NodeFailed({ failure }), new RunFailed({ failure })]);
+  expect(state.result).toStrictEqual(new RunFailed({ failure }));
+  expect(state.ready).toEqual(["queued"]);
 });

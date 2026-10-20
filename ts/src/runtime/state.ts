@@ -18,6 +18,7 @@ import { CompiledFlow, Edge, type Flow } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
+  NodeFailed,
   NodeRouted,
   NodeSkipped,
   NodeStarted,
@@ -787,6 +788,35 @@ export function prepareNodeRouted(
 }
 
 /**
+ * Prepare one terminal node failure with its canonical durable authority.
+ *
+ * @param state An initialized nonterminal state with the failing node in flight.
+ * @param failure The semantic failure whose non-empty `nodeId` names the executing node.
+ * @param options.evidence Frozen visible evidence captured before the evaluation failed.
+ * @param options.forwardCapture The canonical binding capture, including unavailable inputs on an
+ *   early failure.
+ * @returns The canonical `NodeFailedRecord` and a detached append-before-apply plan.
+ * @throws TypeError when `state` or `failure` isn't of its exact class, or a carrier has the wrong
+ *   type.
+ * @throws RangeError when the failure has no node id, or the state or the executing node isn't
+ *   eligible to fail.
+ */
+export function prepareNodeFailed(
+  state: RunState,
+  failure: Failure,
+  options: OutcomeCarriers = {},
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeFailed expects a RunState");
+  if (!isExactly(failure, Failure)) throw new TypeError("prepareNodeFailed expects a Failure");
+  const record = new NodeFailedRecord(failure, {
+    evidence: options.evidence ?? null,
+    forwardCapture: options.forwardCapture ?? null,
+  });
+  requireInitializedNonterminal(state);
+  return prepareFailureTransition(state, record);
+}
+
+/**
  * Prepare a recovery segment from the state's ordered unfinished starts.
  *
  * The retry list comes only from the insertion-ordered `state.inFlight`; the caller chooses only
@@ -877,6 +907,7 @@ export function prepareRecord(
     }
     return prepareGrowthRecord(state, record, options.growBuilder);
   }
+  if (isExactly(record, NodeFailedRecord)) return prepareFailureTransition(state, record);
   if (isExactly(record, NodeStartedRecord)) {
     validateNodeStarted(state, record);
   } else if (isExactly(record, RunResumedRecord)) {
@@ -1067,6 +1098,41 @@ function prepareRouteTransition(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
+/** Freeze one validated terminal failure and its canonical public record. */
+function prepareFailureTransition(state: RunState, record: NodeFailedRecord): PreparedTransition {
+  validateFailureRecord(state, record);
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  // The record already holds its failure through `retainFailure`, which rebuilds each origin as a
+  // plain `OriginRef`: the wire's single-key identity shape.
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, NodeFailedRecord)) {
+    throw new TypeError("node-failure envelope decoded to a different record kind");
+  }
+  // An exhaustive codec invariant: the record was decoded from this very text.
+  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeFailedRecord is not in canonical wire form");
+
+  const failure = canonical.failure;
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: FailurePlan = Object.freeze({
+    kind: "failure",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope, { terminalSucceeded: false, terminalFailure: failure }),
+    failure,
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, failureObservers(failure));
+}
+
 /**
  * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
  * with `growBuilder`, without mutating `state`.
@@ -1149,6 +1215,9 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       break;
     case "route":
       observers = commitRoute(log, state, prepared);
+      break;
+    case "failure":
+      observers = commitFailure(log, state, prepared);
       break;
     case "growth":
       observers = commitGrowth(log, state, prepared);
@@ -1513,6 +1582,33 @@ function commitRoute(log: RunLog, state: RunState, prepared: PreparedTransition)
   for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
   state.terminalUnreachableFailure = delta.terminalUnreachableFailure;
   if (apply.terminal !== null) state.result = apply.terminal.result;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
+}
+
+/** Validate, append and install one immediately terminal node failure. */
+function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "failure") throw new TypeError("failure commit requires a failure plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeFailedRecord)) throw new TypeError("failure plan requires a NodeFailedRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  requireOutcomeTraceScope(state, prepared);
+  requireOutcomeTraceTerminal(state, prepared);
+  if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
+  const nodeId: unknown = plan.failure.nodeId;
+  if (typeof nodeId !== "string" || !nodeId) throw new RangeError("failure plan has no executing node");
+  const apply = materializeFailure(plan.failure);
+
+  appendAndVerify(log, prepared);
+  state.nodeState.set(nodeId, NodeState.TAKEN);
+  state.inFlight.delete(nodeId);
+  state.acceptedStarts.delete(nodeId);
+  forgetNodeSteps(state, nodeId);
+  state.result = apply.result;
   state.nextSequence = prepared.expectedSequence + 1;
   return apply.observers;
 }
@@ -1914,6 +2010,18 @@ function requireRoutingNode(state: RunState, nodeId: string): void {
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeRouted node ${reprText(nodeId)} is not in-flight`);
 }
 
+/** Require an existing unknown node in the ordered in-flight frontier. */
+function requireFailingNode(state: RunState, nodeId: string): void {
+  if (!nodeId) throw new RangeError("NodeFailed node_id must be non-empty");
+  if (!state.flow.nodes.has(nodeId)) {
+    throw new RangeError(`NodeFailed node ${reprText(nodeId)} does not exist in the flow`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
+}
+
 /** Validate a replayed route's exact scalar carriers and its executing router. */
 function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
   const nodeId: unknown = record.nodeId;
@@ -1982,6 +2090,19 @@ function validateNodeEvidence(state: RunState, nodeId: string, evidence: Evaluat
   if (!sameOptional(evidence.scope, scope, sameMemoryScope)) {
     throw new RangeError(`node ${reprText(nodeId)} evidence scope does not match its compiled scope`);
   }
+}
+
+/** Validate a failure's exact diagnostic carriers and its executing node. */
+function validateFailureRecord(state: RunState, record: NodeFailedRecord): void {
+  if (!isExactly(record.failure, Failure)) throw new TypeError("NodeFailedRecord failure must be a Failure");
+  if (record.failure.code === "graph.terminal_unreachable") {
+    throw new RangeError("graph.terminal_unreachable must be derived from a route record");
+  }
+  const nodeId: unknown = record.failure.nodeId;
+  if (typeof nodeId !== "string") throw new TypeError("NodeFailedRecord failure node_id must be a string");
+  if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
+  requireFailingNode(state, nodeId);
+  validateNodeEvidence(state, nodeId, record.evidence);
 }
 
 /** Validate one replayed value against its explicit commit target exactly once. */
@@ -2884,4 +3005,20 @@ interface TerminalApply {
 /** Build independent state and callback terminal values before the durable append. */
 function materializeTerminal(delta: TerminalDelta): TerminalApply {
   return { result: terminalObserver(delta), observer: terminalObserver(delta) };
+}
+
+/** Build the ordered observers, sharing one immutable failure. */
+function failureObservers(failure: Failure): RunEvent[] {
+  return [new NodeFailed({ failure }), new RunFailed({ failure })];
+}
+
+/** The detached values one failure commit installs, all built before the durable append. */
+interface FailureApply {
+  result: RunFailed;
+  observers: readonly RunEvent[];
+}
+
+/** Build independent state and callback values before the durable append. */
+function materializeFailure(failure: Failure): FailureApply {
+  return { result: new RunFailed({ failure }), observers: failureObservers(failure) };
 }

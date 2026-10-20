@@ -10,7 +10,7 @@ import { expect } from "bun:test";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import type { OriginRef } from "../../src/diagnostics.ts";
+import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
@@ -463,6 +463,15 @@ export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: 
         : null,
     }),
   );
+}
+
+/** Return one canonical node-execution failure of `nodeId`. */
+export function nodeFailure(
+  nodeId: string,
+  message = "boom",
+  options: { causeType?: string | null; traceback?: string | null } = {},
+): Failure {
+  return new Failure({ code: "node.execute", message, nodeId, ...options });
 }
 
 /**

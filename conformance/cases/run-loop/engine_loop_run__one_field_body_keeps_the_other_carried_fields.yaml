@@ -17,7 +17,7 @@ flow: |2
             n: ${input.count}
           output: int
           code: |
-            return inputs["n"] + 1n
+            return inputs["n"] + 1
       output:
         count: ${bump.output}
   output: ${loop.output}

@@ -194,7 +194,8 @@
  * `test_learning_retains_noncanonical_partial_temporary_comparisons` (a lone-surrogate key is not
  * a yian value).
  *
- * Later (T4-9), with a loaded CODE node: `test_accepted_backward_inventories_and_layout_replay_without_recapturing`.
+ * Later (T3-22, T4-8), with a loaded CODE node:
+ * `test_accepted_backward_inventories_and_layout_replay_without_recapturing`.
  *
  * Later (T4-10), through CALL, MAP and LOOP growth:
  * `test_nested_growth_preserves_authored_paths_and_local_driver_zero`,

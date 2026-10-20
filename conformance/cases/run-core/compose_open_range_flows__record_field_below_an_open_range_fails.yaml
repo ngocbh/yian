@@ -18,7 +18,7 @@ flow: |2
         counts: ${input.counts}
         maybe: ${input.maybe}
       code: |
-        const extra = inputs["counts"].reduce((a, b) => a + b, 0n) + (inputs["maybe"] ?? 0n)
+        const extra = inputs["counts"].reduce((a, b) => a + b, 0) + (inputs["maybe"] ?? 0)
         return {"qty": 0, "price": 1.0 + Number(extra)}
       output: Order
   output: ${order.output}

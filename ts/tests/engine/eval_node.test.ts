@@ -13,7 +13,10 @@
  * `test_non_spawner_grow_returns_clear_evaluation_failure`,
  * `test_bad_return_type_returns_clear_evaluation_failure`,
  * `test_reserved_input_rejection_is_an_input_contract_failure` (2 rows),
- * `test_case_rejects_a_non_origin_predicate_carrier`, `test_node_raise_returns_evaluation_failure`,
+ * `test_case_rejects_a_non_origin_predicate_carrier`,
+ * `test_case_predicate_failure_selects_the_active_ordered_origin`,
+ * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`,
+ * `test_node_raise_returns_evaluation_failure`,
  * `test_post_assert_isolated_from_node_input_mutation`,
  * `test_wrapper_post_assertion_uses_assertion_stage_and_origin`,
  * `test_body_raised_assertion_exception_remains_node_execution`,
@@ -56,7 +59,8 @@
  * through `run`, which rejects with the node's own error; the non-string `when` is a cast. The
  * not-a-list message is pinned as the golden format's text.
  *
- * TS-only: `test_map_over_not_a_list_message_is_byte_identical` also checks the error's `origin`
+ * TS-only: both CASE predicate-failure rows also check the code (`condition.evaluate`) and the
+ * cause type; `test_map_over_not_a_list_message_is_byte_identical` also checks the error's `origin`
  * (the carrier's, else `null`); `evalNode`'s argument checks; `evalNode` gives every node, whatever
  * its traits, exactly the `scheduler` and `random` it was given as `caps.scheduler` and
  * `caps.random`, and neither key without them, and refuses a malformed one; `FlowEngine` passes its
@@ -64,9 +68,6 @@
  * a node that records steps and whose reserved key fails to bind after an earlier start recorded
  * steps rejects with a `RangeError`, while a node that doesn't read its steps gets the ordinary
  * binding failure.
- *
- * Later (T4-9): `test_case_predicate_failure_selects_the_active_ordered_origin` and
- * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
  *
  * Later (T4-10): the run-result half of `test_map_over_accepts_a_binding_carrier` (the `Grow`
  * through the evaluator).
@@ -216,6 +217,36 @@ test("case rejects a non origin predicate carrier", () => {
 
   expect(make).toThrow(TypeError);
   expect(make).toThrow("CASE predicate origin");
+});
+
+test("case predicate failure selects the active ordered origin", async () => {
+  // The failing arm wins even when an earlier ordered predicate was evaluated.
+  const firstOrigin = new OriginRef("case/0/when");
+  const secondOrigin = new OriginRef("case/1/when");
+  const node = new CaseNode("case", [
+    new Case("first", { when: "1 == 2", origin: firstOrigin }),
+    new Case("second", { when: "1 / 0 > 0", origin: secondOrigin }),
+  ]);
+  node.origin = new OriginRef("case/node");
+
+  const failure = await driveFailure(node);
+
+  expect(failure.code).toBe("condition.evaluate");
+  expect(failure.causeType).toBe("ExpressionError");
+  expect(failure.trace).toEqual([secondOrigin]);
+});
+
+test("source free case predicate failure falls back to the node origin", async () => {
+  // A predicate without its own site retains the common node fallback.
+  const nodeOrigin = new OriginRef("case/node");
+  const node = new CaseNode("case", [new Case("broken", { when: "1 / 0 > 0" })]);
+  node.origin = nodeOrigin;
+
+  const failure = await driveFailure(node);
+
+  expect(failure.code).toBe("condition.evaluate");
+  expect(failure.causeType).toBe("ExpressionError");
+  expect(failure.trace).toEqual([nodeOrigin]);
 });
 
 test("success returns output without observer events", async () => {

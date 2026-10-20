@@ -32,7 +32,7 @@
  * `test_generated_child_clone_preserves_code_origins_for_original_resolver` and the fingerprint
  * half of `test_formatting_moves_resolved_ranges_without_changing_semantic_keys`.
  *
- * Later (T4-9): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
+ * Later (T3-22, T4-8): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
  */
 
 import { expect, test } from "bun:test";

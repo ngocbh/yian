@@ -15,7 +15,7 @@ flow: |2
           output:
             n: int
           code: |
-            return {"n": inputs["n"] + 1n}
+            return {"n": inputs["n"] + 1}
       output: ${step.output}
   nodes:
     chat_loop:

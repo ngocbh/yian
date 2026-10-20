@@ -6,12 +6,12 @@
  * `test_unparseable_loop_predicate_raises_before_the_first_body`,
  * `test_times_loop_has_no_predicate_to_check` and `test_validate_conditions_names_the_given_path`.
  *
+ * Ported (adapted): `test_case_when_evaluation_error_still_fails_in_forward` (the rejection's stack
+ * names `forward`, where Python reads the traceback's frames).
+ *
  * Changed: `run` is async, so the setup error is a rejection. The LOOP's child is a stub object.
  *
- * TS-only: a CASE whose `when` parses rejects from `run` as not ported yet; LOOP's
- * `validateConditions` names the given path.
- *
- * Later (T4-9): `test_case_when_evaluation_error_still_fails_in_forward`.
+ * TS-only: LOOP's `validateConditions` names the given path.
  *
  * Later (T4-8): `test_python_set_case_when_fails_before_the_run_starts` and
  * `test_python_set_loop_predicate_fails_before_the_run_starts`.
@@ -32,6 +32,17 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
   }
   throw new Error("expected a rejection");
 }
+
+test("case when evaluation error still fails in forward", async () => {
+  // A `when` that parses but can't evaluate is unchanged: it rejects from `forward`.
+  const node = new CaseNode("gate", [new Case("pos", { when: "x > 0" })]);
+
+  const error = await rejection(node.run({ x: { a: 1n } }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).not.toContain("is not a valid boolean expression");
+  expect((error as Error).stack).toContain("forward");
+});
 
 test("unparseable case when raises its parse error from setup", async () => {
   // `run` names the node, case, and field instead of failing inside `forward`.
@@ -100,8 +111,3 @@ test("loop validate conditions names the given path", () => {
   expect(() => node.validateConditions({ path: "outer/loop" })).toThrow(/^node 'outer\/loop' `while:`/);
 });
 
-test("a case whose when parses rejects from run as not ported yet", async () => {
-  const node = new CaseNode("gate", [new Case("pos", { when: "x > 0" })]);
-
-  await expect(node.run({ x: 1n })).rejects.toThrow("node 'gate' (CaseNode) forward is not ported yet (T4-9)");
-});

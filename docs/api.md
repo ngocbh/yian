@@ -2368,7 +2368,8 @@ Changed (TS yian): the fingerprint is SHA-256 over the RFC 8785 (JCS) text of TS
 yian's own manifest, so it differs from Python yian's for the same flow; a
 reference-mode CODE node contributes its `./file.ts:fn` text, a tagged value
 entry contributes the built-in identity operation, and the directory the flow
-was loaded from isn't covered.
+was loaded from isn't covered. A flow's CODE runs when the flow runs, never when it
+is loaded or checked (`yian check`); run only flows you trust.
 
 If the original run enabled memory and forward execution is unfinished,
 recovery requires backends under the same memory keys. Each session

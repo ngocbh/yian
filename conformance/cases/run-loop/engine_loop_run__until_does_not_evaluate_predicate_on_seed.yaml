@@ -17,7 +17,7 @@ flow: |2
             seen: Optional(list(str))
             n: int
           code: |
-            return {"seen": ["a", "b"].slice(0, Number(inputs["n"] + 1n)), "n": inputs["n"] + 1n}
+            return {"seen": ["a", "b"].slice(0, inputs["n"] + 1), "n": inputs["n"] + 1}
       output: ${bump.output}
   nodes:
     repeat:

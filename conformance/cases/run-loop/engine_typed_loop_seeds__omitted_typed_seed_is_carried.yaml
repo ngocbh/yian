@@ -14,7 +14,7 @@ flow: |2
             n: ${input.n}
           output: int
           code: |
-            return inputs["n"] + 1n
+            return inputs["n"] + 1
       output:
         n: ${step.output}
   nodes:

@@ -6,12 +6,16 @@
  * `test_code_build_stamps_descriptor_origin_without_affecting_equality` drops its `==` half (TS
  * has no dataclass `==`), and its message ends "or null" where Python's ends "or None".
  *
- * TS-only: `build` passes the context's `baseDir`, the descriptor's code origins and its title to
- * the node, and compiles nothing.
+ * Changed: the CODE check runs after assembly, so a valid output type keeps the
+ * syntax error reachable: `test_code_build_frames_inline_syntax_error_at_yaml_line` and
+ * `test_nonliteral_syntax_error_uses_whole_code_scalar` write `outputs: str` where Python writes
+ * the invalid `outputs: string`/`output: string`, and go through `parse`, `withSourceOrigins`,
+ * `build` and `checkCodeNode` with the catalog builder's registered-origin resolver (the second
+ * where Python loads the flow). Only the message's `node 'broken': ` prefix is pinned; the rest is
+ * the runtime's (`'(' was never closed` is CPython's).
  *
- * Later (T4-9): `test_code_build_frames_inline_syntax_error_at_yaml_line` and
- * `test_nonliteral_syntax_error_uses_whole_code_scalar` (TS `build` compiles nothing at load, and
- * the message `'(' was never closed` is CPython's).
+ * TS-only: `build` passes the context's `baseDir`, the descriptor's code origins and its title to
+ * the node, and compiles nothing; `checkFlowCode` reaches a CODE node inside a child flow.
  *
  * Held here until T3-22: the harvested cases at the end, whose error the CODE parse raises, each
  * under a comment naming the Python file it comes from, and the flows that assemble.
@@ -19,12 +23,15 @@
 
 import { expect, test } from "bun:test";
 
+import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
-import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
+import { checkCodeNode, checkFlowCode, CodeDescriptor } from "../../src/compose/nodes/code.ts";
+import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { assembled, type CaseRow, parsedNodes, runCase } from "./declarations.ts";
+import { rejected } from "../engine/run_state_fixtures.ts";
+import { assembled, assembleText, type CaseRow, parsedNodes, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
   verdict:
@@ -94,6 +101,65 @@ test("code build stamps descriptor origin", () => {
   );
 });
 
+/**
+ * Parse node `nodeId` of `text`, attach its source origins, build it and run the CODE load check
+ * with the catalog builder's registered-origin resolver; return the `LoadError` it rejects with.
+ */
+async function checkError(text: string, nodeId: string): Promise<LoadError> {
+  const reader = SourceDocument.parse(text, "flow.yaml").root.child("nodes").child(nodeId);
+  const builder = new SourceCatalogBuilder();
+  const desc = CodeDescriptor.parse(nodeId, reader).withSourceOrigins(reader, {
+    sitePath: ["root", "node", nodeId],
+    catalogBuilder: builder,
+  });
+  const node = desc.build(reading()).node as CodeNode;
+  const error = await rejected(
+    checkCodeNode(node, {
+      diagnostics: LoadDiagnostics.fromCursor(reader),
+      resolveOrigin: (origin) => builder.resolveRegistered(origin),
+    }),
+  );
+  expect(error).toBeInstanceOf(LoadError);
+  return error as LoadError;
+}
+
+test("code build frames inline syntax error at yaml line", async () => {
+  // `code: |` indicator is on line 7; the body's first (and only) line is line 8.
+  const text = `nodes:
+  broken:
+    kind: code
+    inputs:
+      rating: \${input.rating}
+    outputs: str
+    code: |
+      return (
+`;
+
+  const error = await checkError(text, "broken");
+
+  // Body line 1 selects the first exact constructed CODE line (YAML line 8).
+  expect(error.diagnostic.frames.length).toBe(1);
+  expect(error.diagnostic.frames[0]!.range!.startLine).toBe(8);
+  expect(error.diagnostic.frames[0]!.text).toBe(text);
+  expect(error.diagnostic.message.startsWith("node 'broken': ")).toBe(true);
+});
+
+test.each([
+  ["quoted", '    code: "return (\\n"\n'],
+  ["folded", "    code: >-\n      return (\n"],
+])("nonliteral syntax error uses whole code scalar: %s", async (_id, codeField) => {
+  const text =
+    "id: syntax-fallback\nname: syntax-fallback\nnodes:\n  broken:\n    kind: code\n    outputs: str\n" +
+    codeField +
+    "output: ${broken.output}\n";
+  const codeCursor = SourceDocument.parse(text, "flow.yaml").root.child("nodes").child("broken").child("code");
+
+  const error = await checkError(text, "broken");
+
+  expect(error.diagnostic.message.startsWith("node 'broken': ")).toBe(true);
+  expect(error.diagnostic.frames[0]!.range).toEqual(codeCursor.range!);
+});
+
 // --- TS-only rows --- //
 
 test("build passes the base directory, the code origins and the title, and compiles nothing", () => {
@@ -117,8 +183,45 @@ test("build passes the base directory, the code origins and the title, and compi
   expect((desc.build(reading()).node as CodeNode).baseDir).toBeNull();
 });
 
+test("checkFlowCode reaches a CODE node inside a child flow", async () => {
+  const text = `id: child-code-check
+name: child-code-check
+nodes:
+  first:
+    kind: code
+    output: int
+    code: return 1
+  invoke:
+    kind: call
+    nodes:
+      worker:
+        kind: code
+        output: int
+        code: |-
+          const value = 1
+          return (
+    output: \${worker.output}
+output: \${invoke.output}
+`;
+  const document = SourceDocument.parse(text, "flow.yaml");
+  const lineRange = document.root.child("nodes").child("invoke").child("nodes").child("worker").child("code")
+    .scalarSource!.constructedLineRanges![1]!;
+  const { flow, builder } = assembleText(text, "flow.yaml");
+
+  const error = await rejected(
+    checkFlowCode(flow.compiled, {
+      diagnostics: LoadDiagnostics.fromDocument(document),
+      resolveOrigin: (origin) => builder.resolveRegistered(origin),
+    }),
+  );
+
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as LoadError).diagnostic.message.startsWith("node 'worker': ")).toBe(true);
+  expect((error as LoadError).diagnostic.frames.map((frame) => frame.range)).toEqual([lineRange]);
+});
+
 // ---------- harvested conformance cases ----------
-// Later (T4-9): `load-leaves/seed_e30_inline_syntax_error`, `load-leaves/seed_e32_malformed_code_ref`
+// Later (T3-22, T4-8): `load-leaves/seed_e30_inline_syntax_error`, `load-leaves/seed_e32_malformed_code_ref`
 // and `load-leaves/compose_kind_code_parse__quoted_body_syntax_error_frames_the_whole_scalar`,
 // whose errors come from compiling the CODE body.
 

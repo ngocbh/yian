@@ -15,29 +15,53 @@
  *   form rather than to code text.
  *
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
- * return the node's one output value.
+ * return the node's one output value. Nothing is compiled or imported at construction; the
+ * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
+ * `module:function` value, and requires a reference's file to exist, running no code.
  *
- * Only the node's shell is here. Nothing is compiled or imported at construction; the body
- * (importing a reference, running an inline body or a built-in, and mapping a failure to its
- * line) is not ported yet and comes with `forward`.
+ * A reference's module is imported when the node runs (`import()` caches it) and its named export
+ * must be a function. An inline body is stripped of its types and built as a strict async function
+ * of `inputs` each time the node runs. Both are called the same way: `inputs` is a frozen host copy
+ * of the record (ints as `number`s, big ones as `bigint`s) behind a proxy that throws on an
+ * undeclared name. What the code throws (a reference's module while it loads included) rejects as
+ * a `CodeError` reading `<name>: <message>`; an inline body's is located at the authored line of
+ * its first body frame when it has one, a reference's at the whole `code:` value. A result of
+ * `undefined` fails; a result goes through host intake, and a value intake refuses fails
+ * `contract.output`. The built-in identity returns its field as bound.
  *
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
  * there is no injection vector into the code itself, and running it in-process is the same
  * capability reference mode already has. Loading a flow from an untrusted or agent-generated
  * source runs that source's code when the flow runs.
  *
- * Knows about:   nodes/base, nodes/contracts, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/contracts, diagnostics, typesys, platform and `node:*`.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
 import { OriginRef, reprText } from "../../diagnostics.ts";
-import { isRecord, jsTypeName } from "../../typesys/values.ts";
-import { Node, NodeKind } from "../base.ts";
+import { stripTypes } from "../../platform.ts";
+import {
+  fromHost,
+  isRecord,
+  jsTypeName,
+  toHost,
+  type Value,
+  writeAsText,
+} from "../../typesys/values.ts";
+import { HostOutputError, hostOutput, markerMessage, Node, NodeKind, Output } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
 // A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export
 // name. Anchoring plus a whitespace-free path keep multi-token bodies out.
 const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+// Python's own reference shape (`pkg.mod:fn`). Read as TS it is a labeled statement, so the load
+// check refuses it rather than run it as a body.
+const PYTHON_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
 
 /** The built-in identity operation: return the input named `field` unchanged. */
 export interface BuiltinCode {
@@ -124,13 +148,137 @@ export function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknow
   }
 }
 
+/** An inline body or a referenced function: a function of the `inputs` record. */
+type CodeBody = (inputs: Readonly<Record<string, unknown>>) => unknown;
+
+// The constructor isn't a global; every async function's `constructor` is it.
+const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => CodeBody;
+
+/** The number of lines the runtime's function constructor puts before a body; measured once. */
+let headerLines: number | null = null;
+
+/** Return how many lines the runtime's function constructor puts before a body. */
+function headerLineCount(): number {
+  if (headerLines === null) {
+    const text = new AsyncFunction("inputs", "/*yian*/").toString();
+    headerLines = text.slice(0, text.indexOf("/*yian*/")).split("\n").length - 1;
+  }
+  return headerLines;
+}
+
+/**
+ * Strip an inline body's types and build it as a strict async function of `inputs`.
+ *
+ * The `sourceURL` comment names the body's stack frames `yian-code:<nodeId>:<line>:<column>`, and
+ * the strict prologue shares the first line, so frame lines stay body lines plus the header.
+ *
+ * @throws TypeStripError when the body doesn't parse or strip.
+ * @throws SyntaxError when the constructor refuses the stripped body.
+ */
+async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
+  const js = await stripTypes(body);
+  return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
+}
+
+/** Split a `./file.ts:fn` reference into its path and its export name. */
+function splitReference(reference: string): { path: string; name: string } {
+  const colon = reference.lastIndexOf(":");
+  return { path: reference.slice(0, colon), name: reference.slice(colon + 1) };
+}
+
+/**
+ * Import a `./file.ts:fn` reference's module, resolved against `baseDir` (the current directory
+ * when `null`), and return its export `fn`.
+ *
+ * @throws CodeError when the module throws while it loads (or can't be imported).
+ * @throws TypeError when the module has no function export by that name.
+ */
+async function importReference(reference: string, baseDir: string | null): Promise<CodeBody> {
+  const { path, name } = splitReference(reference);
+  let module: Record<string, unknown>;
+  try {
+    module = await import(pathToFileURL(resolve(baseDir ?? process.cwd(), path)).href);
+  } catch (error) {
+    throw new CodeError(error);
+  }
+  const fn = module[name];
+  if (typeof fn !== "function") throw new TypeError(`${reprText(path)} exports no function ${reprText(name)}`);
+  return fn as CodeBody;
+}
+
+/** Return the 1-based body line of the first `yian-code:<nodeId>` frame in `error`'s stack, else `null`. */
+function bodyLine(error: unknown, nodeId: string): number | null {
+  const stack = error instanceof Error ? error.stack : undefined;
+  if (typeof stack !== "string") return null;
+  const marker = `yian-code:${nodeId}:`;
+  for (const line of stack.split("\n")) {
+    const at = line.indexOf(marker);
+    if (at === -1) continue;
+    const match = /^\d+/.exec(line.slice(at + marker.length));
+    if (match !== null) return Number(match[0]) - headerLineCount();
+  }
+  return null;
+}
+
+/** Return the error a CODE body throws when it reads an input the node doesn't declare. */
+function undeclaredInput(name: string): ReferenceError {
+  return new ReferenceError(`CODE input ${reprText(name)} is not declared`);
+}
+
+/**
+ * Return `record` behind a proxy that throws on a string key the record doesn't hold.
+ *
+ * The keys the runtime itself probes pass: inherited `Object.prototype` members, `then` (promise
+ * resolution), `toJSON` (`JSON.stringify`) and symbols.
+ */
+function inputsProxy(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return new Proxy(record, {
+    get(target, key, receiver) {
+      if (typeof key === "symbol" || key in target || key === "then" || key === "toJSON") {
+        return Reflect.get(target, key, receiver);
+      }
+      throw undeclaredInput(key);
+    },
+  });
+}
+
+/**
+ * A value CODE's own code threw, wrapped so the failure reads `<name>: <message>`.
+ *
+ * A non-`Error` reads as its text form when it is a yian value, else as `String(value)`. The
+ * stack is the thrown error's, so a failure's traceback shows the code's own frames.
+ */
+export class CodeError extends Error {
+  override name = "CodeError";
+  /** The exact value the code threw. */
+  readonly original: unknown;
+
+  /** Wrap `original`, also kept as the `cause`. */
+  constructor(original: unknown) {
+    super(codeErrorMessage(original), { cause: original });
+    this.original = original;
+    if (original instanceof Error) this.stack = original.stack;
+  }
+}
+
+/** Return the text of a value CODE's code threw. */
+function codeErrorMessage(original: unknown): string {
+  if (original instanceof Error) return `${original.name}: ${original.message}`;
+  try {
+    return writeAsText(fromHost(original, "error"));
+  } catch {
+    return markerMessage(original);
+  }
+}
+
 /**
  * Run deterministic code: a file reference or an inline body, both in-process, or a built-in.
  *
  * The one `code:` field is classified by shape at construction, and the mode is stored: text with
  * `classifyCodeSource`, a built-in form as `"builtin"`. A tagged value entry lowers to the built-in
- * identity form. The node never touches the pool: its body returns `new Output(value)`. Running
- * any mode, the built-in included, is not ported yet and comes with `forward`.
+ * identity form. The node never touches the pool: its body returns `new Output(value)`. A
+ * reference's function and an inline body run in-process with one calling convention (an inline
+ * body built afresh on each run), and a built-in reads the bound record directly.
  */
 export class CodeNode extends Node {
   readonly kind = NodeKind.CODE;
@@ -204,8 +352,92 @@ export class CodeNode extends Node {
     this.codeLineOrigins = Object.freeze(this.codeLineOrigins.map((origin) => mapOrigin(origin, mapper)!));
   }
 
-  /** The reference, inline and built-in bodies; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (CodeNode) forward is not ported yet (T4-9)`);
+  /**
+   * Return the most precise authored origin for one body error.
+   *
+   * A built-in's is the node's, and a result host intake refuses is located by the base, in the
+   * output contract. A reference's is the whole `code:` origin, else the node's. Otherwise the first `yian-code:<id>`
+   * frame of what the code threw selects the authored line, falling back to the whole `code:`
+   * origin, then the node's (a thrown non-`Error` has no stack, and a native error thrown after an
+   * `await` has no body frame on Bun).
+   */
+  override exceptionOrigin(error: unknown): OriginRef | null {
+    if (this.mode === "builtin" || error instanceof HostOutputError) return super.exceptionOrigin(error);
+    if (this.mode === "reference") return this.codeOrigin ?? super.exceptionOrigin(error);
+    const line = error instanceof CodeError ? bodyLine(error.original, this.id) : null;
+    return selectInlineCodeOrigin(line, {
+      codeOrigin: this.codeOrigin,
+      codeLineOrigins: this.codeLineOrigins,
+      nodeOrigin: this.origin,
+    });
+  }
+
+  /**
+   * Check the code without running any of it: the load step's node half.
+   *
+   * A built-in passes. A reference's file, resolved against `baseDir` (the current directory
+   * when `null`), must be a regular file; its module isn't imported, so a missing export is
+   * found when the node runs. An inline body that has Python's `module:function` shape is
+   * refused; otherwise it is stripped of its types and built, never called.
+   *
+   * @throws RangeError when a reference's file isn't a regular file, or an inline body looks
+   *   like a Python reference.
+   * @throws TypeStripError when the body doesn't parse or strip.
+   * @throws SyntaxError when the function constructor refuses the stripped body.
+   */
+  async check(): Promise<void> {
+    const code = this.code;
+    if (typeof code !== "string") return;
+    if (this.mode === "reference") {
+      const { path } = splitReference(code);
+      const dir = this.baseDir ?? process.cwd();
+      if (statSync(resolve(dir, path), { throwIfNoEntry: false })?.isFile() !== true) {
+        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist in ${reprText(dir)}`);
+      }
+      return;
+    }
+    if (PYTHON_REFERENCE_RE.test(code)) {
+      throw new RangeError(
+        `\`code:\` value ${reprText(code)} looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
+      );
+    }
+    await compileBody(this.id, code);
+  }
+
+  /**
+   * Run the code on the bound input record and return its one value.
+   *
+   * The built-in identity returns the record's field as bound. A reference's function or an
+   * inline body gets `inputs`, a frozen host copy (ints as `number`s, big ones as `bigint`s)
+   * behind a proxy that throws on an undeclared name; what it throws rejects as a `CodeError`, and
+   * its result goes through host intake (a top-level `return inputs` returns the record).
+   *
+   * @throws ReferenceError when the built-in's field isn't in the record.
+   * @throws CodeError when a reference's module throws while it loads.
+   * @throws TypeError when a reference's module has no function export by that name.
+   * @throws TypeStripError when the body doesn't parse or strip.
+   * @throws SyntaxError when the function constructor refuses the stripped body.
+   * @throws CodeError when the body or the referenced function throws.
+   * @throws Error when the code returns `undefined`.
+   * @throws HostOutputError when host intake refuses the result (`contract.output`).
+   */
+  override async forward(inputs: Record<string, unknown>): Promise<Output> {
+    const code = this.code;
+    if (typeof code !== "string") {
+      if (!Object.hasOwn(inputs, code.field)) throw undeclaredInput(code.field);
+      return new Output(inputs[code.field]);
+    }
+    const body =
+      this.mode === "reference" ? await importReference(code, this.baseDir) : await compileBody(this.id, code);
+    const record = Object.freeze(toHost(inputs as Value) as Record<string, unknown>);
+    const proxy = inputsProxy(record);
+    let result: unknown;
+    try {
+      result = await body(proxy);
+    } catch (error) {
+      throw new CodeError(error);
+    }
+    if (result === undefined) throw new Error("CODE body returned no value; return null for no value");
+    return new Output(hostOutput(result === proxy ? record : result));
   }
 }

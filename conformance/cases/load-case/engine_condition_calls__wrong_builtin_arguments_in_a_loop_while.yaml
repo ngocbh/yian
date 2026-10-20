@@ -9,7 +9,7 @@ flow: |2
       nodes:
         s:
           kind: code
-          code: "return {n: inputs['n'] + 1n, exited: inputs['n'] >= 2n}"
+          code: "return {n: inputs['n'] + 1, exited: inputs['n'] >= 2}"
           input:
             n: ${input.n}
           output:

@@ -16,7 +16,7 @@ flow: |
           output:
             n: int
           code: |
-            return {"n": inputs["n"] + 1n}
+            return {"n": inputs["n"] + 1}
       output: ${b.output}
   nodes:
     seed:
@@ -39,7 +39,7 @@ flow: |
           output:
             n: int
           code: |
-            return {"n": inputs["n"] + 1n}
+            return {"n": inputs["n"] + 1}
       output: ${b.output}
   output: ${repeat.output}
 python_flow: |

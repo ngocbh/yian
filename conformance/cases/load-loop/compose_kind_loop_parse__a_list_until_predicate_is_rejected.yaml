@@ -13,7 +13,7 @@ flow: |
       nodes:
         inc:
           kind: code
-          code: 'return inputs["x"] + 1n'
+          code: 'return inputs["x"] + 1'
           input:
             x: ${input.x}
           output: int

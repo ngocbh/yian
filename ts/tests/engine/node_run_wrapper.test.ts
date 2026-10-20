@@ -26,9 +26,10 @@
  * original errors; an async `forward` that throws after an `await` rejects (a `NodeBodyError` under
  * `runForEvaluator`), and its `Output` gets the post-asserts.
  *
+ * Ported: `test_wrapper_delegates_to_real_code_node_forward`.
+ *
  * Ported (half): `test_wrapper_delegates_for_grow_kind`'s check that `CallNode` doesn't override
- * `run`, and `test_wrapper_delegates_to_real_code_node_forward`'s check that `CodeNode` doesn't
- * override `run`.
+ * `run`.
  *
  * Ported (adapted), through the shared `drive`: `test_runtime_does_not_drive_backward`,
  * `test_eval_node_does_not_fire_when_run_bypasses_firing` (the bypassing `run` is async) and
@@ -37,8 +38,7 @@
  * Not ported: `test_eval_node_no_longer_has_first_failing_assert`: it checks that a Python module
  * attribute is gone, which TS never had.
  *
- * Later (T4-9 / T4-10): the forward half of `test_wrapper_delegates_to_real_code_node_forward`
- * (T4-9); the forward half of `test_wrapper_delegates_for_grow_kind` (T4-10).
+ * Later (T4-10): the forward half of `test_wrapper_delegates_for_grow_kind`.
  */
 
 import { expect, test } from "bun:test";
@@ -453,9 +453,15 @@ test("run rejects with the original errors", async () => {
   expect(await rejection(asserted.run({ x: 5n }))).toBeInstanceOf(NodeAssertFailed);
 });
 
-test("wrapper delegates to real code node forward (CodeNode inherits run)", () => {
+test("wrapper delegates to real code node forward", async () => {
   const node = new CodeNode("c", { code: "return inputs.v" });
+  // The kind defines no `run`, so the base template runs the kind's `forward`.
   expect(node.run).toBe(Node.prototype.run);
+
+  const result = await node.run({ v: "hi" });
+
+  expect(result).toBeInstanceOf(Output);
+  expect((result as Output).value).toBe("hi");
 });
 
 test("wrapper delegates for grow kind (CallNode inherits run)", () => {

@@ -15,12 +15,14 @@
  * `test_unsupported_nested_output_type_reports_the_exact_value_site` and
  * `test_invalid_output_list_item_reports_the_exact_item_site`.
  *
- * Later (T4-9):
+ * Changed: `test_code_syntax_error_precedes_an_invalid_output_type` becomes `an invalid output
+ * type precedes a CODE syntax error`: the CODE check runs after assembly, so `build`
+ * throws the output-type error and compiles nothing.
+ *
+ * Later (T3-22, T4-8):
  * `test_nested_output_failure_selects_the_exact_contract_field`,
- * `test_root_output_failure_selects_the_contract_root`,
- * `test_scalar_list_output_failure_falls_back_to_the_contract_root` and
- * `test_code_syntax_error_precedes_an_invalid_output_type` (TS `build` compiles no CODE, so T4-9
- * decides that order). Later (T5-11a):
+ * `test_root_output_failure_selects_the_contract_root` and
+ * `test_scalar_list_output_failure_falls_back_to_the_contract_root`. Later (T5-11a):
  * `test_agent_structured_failure_selects_exact_authored_output_field`.
  * Later (T3-22): `test_multi_node_def_output_contract_uses_the_nested_node_site`,
  * `test_flat_def_output_contract_uses_the_projected_def_output_site`,
@@ -30,7 +32,7 @@
  * `test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field`.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
@@ -39,6 +41,7 @@ import type { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { ContractOrigins, ValueContract } from "../../src/nodes/contracts.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "./declarations.ts";
@@ -136,6 +139,33 @@ output: \${emit.output}
   expectSite(builder, entries.get("profile.age"), winning.child("age"));
   expectSite(builder, entries.get("profile.active"), winning.child("active"));
   expectSite(builder, entries.get("status"), output.child(1).child("status"));
+});
+
+test("an invalid output type precedes a CODE syntax error", () => {
+  const text = `id: invalid-code-before-output
+name: invalid-code-before-output
+nodes:
+  broken:
+    kind: code
+    code: |-
+      return (
+    output: DefinitelyNotAType
+output: \${broken.output}
+`;
+  const document = SourceDocument.parse(text, "precedence.yaml");
+  const outputCursor = document.root.child("nodes").child("broken").child("output");
+  // Nothing in assembly calls `check` today; this guards the order once the loader awaits it.
+  const check = spyOn(CodeNode.prototype, "check");
+
+  try {
+    const error = loadError(() => assembleText(text, "precedence.yaml"));
+
+    expect(error.diagnostic.message.startsWith("bad type expression 'DefinitelyNotAType': ")).toBe(true);
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(outputCursor.range!);
+    expect(check).not.toHaveBeenCalled();
+  } finally {
+    check.mockRestore();
+  }
 });
 
 test("direct descriptor output contract remains source free", () => {

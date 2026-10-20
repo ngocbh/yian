@@ -16,7 +16,7 @@ flow: |2
             n: ${input.rounds}
           output: int
           code: |
-            return inputs["n"] + 1n
+            return inputs["n"] + 1
       output:
         rounds: ${bump.output}
   output: ${loop.output}

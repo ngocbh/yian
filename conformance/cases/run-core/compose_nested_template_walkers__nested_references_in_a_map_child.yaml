@@ -12,7 +12,7 @@ flow: |2
           kind: code
           input:
             v: ${input.v}
-          code: "return inputs[\"v\"] * 10n"
+          code: "return inputs[\"v\"] * 10"
         w:
           kind: code
           input:

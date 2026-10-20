@@ -20,7 +20,7 @@ flow: |2
           input:
             t: ${input.t}
           code: |
-            return inputs["t"] * 2n
+            return inputs["t"] * 2
       output: ${twice.output}
   output: ${m.output}
 python_flow: |2

@@ -20,7 +20,8 @@
  * (the inline MAP body's outputs). Also `test_rewritten_output_fingerprints_as_the_explicit_null_default`
  * (`flowFingerprint`).
  *
- * Ported, the load errors: `test_inline_loop_over_an_untyped_seed_asks_for_its_type` (the loop
+ * Ported, the load-time rows (all errors but the comparison, which loads):
+ * `test_inline_loop_over_an_untyped_seed_asks_for_its_type` (the loop
  * type contract raises it, since the skip makes the body field `Optional(str)`),
  * `test_arithmetic_on_a_skipped_output_is_a_load_error`,
  * `test_arithmetic_in_a_node_input_that_still_runs_is_a_load_error`,
@@ -47,9 +48,9 @@
  * `over:` one with its `child` def built by hand (`handChild`), since def bodies load in T3-22.
  *
  * Changed: CODE bodies are TS; load doesn't run them. The literal output `5` reads as `5n`. The
- * fingerprint row drops its second half, which stubs `null_skipped_outputs` in the pipeline
- * module to fingerprint the flow without the rewrite: a test can't stub a function another ES
- * module imports. The MAP `over:` row builds its `child` def by hand. The error rows pin the whole
+ * fingerprint row's second half stubs `null_skipped_outputs` in Python's pipeline module to
+ * fingerprint the flow without the rewrite; a test can't stub a function another ES module
+ * imports, so it puts the authored output source back on a fresh assembly by hand. The MAP `over:` row builds its `child` def by hand. The error rows pin the whole
  * message where Python checks fragments.
  *
  * Later (T3-22), reading a `defs:` child's own output contract:
@@ -77,7 +78,7 @@
 import { expect, test } from "bun:test";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
-import type { CompiledFlow } from "../../src/compile/model.ts";
+import { type CompiledFlow, FlowOutput } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
@@ -408,6 +409,12 @@ test("the rewritten output fingerprints as the explicit null default", () => {
   const rewritten = flowFingerprint(assembleText(flow(R1, "\n  order: ${order.output}")).flow.compiled);
   const explicit = assembleText(flow(R1, "\n  order: ${order.output:-null}")).flow.compiled;
   expect(rewritten).toBe(flowFingerprint(explicit));
+  // Python reloads with the rewrite switched off; an ES module import can't be swapped, so a fresh
+  // assembly gets its authored output source back by hand.
+  const plain = assembleText(flow(R1, "\n  order: ${order.output}")).flow.compiled;
+  plain.outputs = plain.outputs.map((output) => new FlowOutput(output.name, "${order.output}"));
+  expect(plain.outputs[0]!.binding.source).toBe("${order.output}");
+  expect(rewritten).not.toBe(flowFingerprint(plain));
 });
 
 test("the hint names a placeholder default", () => {

@@ -2,8 +2,10 @@
  * YAML nested past the loader's limit is a located error: a port of
  * `tests/compose/test_yaml_nesting_limit.py`.
  *
- * The `load_flow` cases come with the loader; the harvested one is pinned at the end through
- * `parseSourceDocument`, with the TS message (the case leaves Python's out). TS-era additions:
+ * The `load_flow` cases come with the loader; the harvested ones are pinned at the end:
+ * `__600_levels_is_located` through `parseSourceDocument`, with the TS message (the case leaves
+ * Python's out), and `__value_at_the_document_limit_parses`, which parses and then fails the value
+ * limit, through `assembled`. TS-era additions:
  * the first problem in the text wins over a later one, and aliases resolve in the composed tree.
  */
 
@@ -27,7 +29,7 @@ import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/s
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { Value } from "../../src/typesys/index.ts";
-import { runTextCase } from "./declarations.ts";
+import { assembled, runCase, runTextCase } from "./declarations.ts";
 
 const MAX_YAML_NESTING = BUILTIN.maxYamlNesting;
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
@@ -261,4 +263,8 @@ test("parseSourceDocument: yaml/compose_yaml_nesting_limit__600_levels_is_locate
       "invalid YAML: this list nests deeper than 200 levels, the limit for a YAML document " +
       "(each mapping and list is a level; a yian value nests at most 100); flatten it",
   });
+});
+
+test("assemble: yaml/compose_yaml_nesting_limit__value_at_the_document_limit_parses", () => {
+  runCase({ id: "yaml/compose_yaml_nesting_limit__value_at_the_document_limit_parses", call: assembled });
 });

@@ -7,7 +7,8 @@
  * `load_flow` cases, with their frames, come with the loader; here each text is composed
  * directly, and the error node's line stands in for the frame's line. The harvested cases are
  * pinned at the end through `parseSourceDocument`, with the TS message (the cases leave Python's
- * out).
+ * out), except `__alias_chain_meets_the_value_limit`, which parses and then fails the value limit,
+ * through `assembled`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,7 +21,7 @@ import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/lite
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { isRecord } from "../../src/typesys/index.ts";
-import { runTextCase } from "./declarations.ts";
+import { assembled, runCase, runTextCase } from "./declarations.ts";
 
 const MAX_YAML_NODES = BUILTIN.maxYamlNodes;
 
@@ -456,4 +457,8 @@ test.each([
   ["yaml/compose_yaml_node_limit__exponential_nodes_inside_a_cycle", "mapping"],
 ])("parseSourceDocument: %s", (id, kind) => {
   runTextCase({ id, call: parseSourceDocument, message: nodeLimitMessage(kind) });
+});
+
+test("assemble: yaml/compose_yaml_node_limit__alias_chain_meets_the_value_limit", () => {
+  runCase({ id: "yaml/compose_yaml_node_limit__alias_chain_meets_the_value_limit", call: assembled });
 });

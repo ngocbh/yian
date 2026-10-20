@@ -29,7 +29,9 @@
  *
  * TS-only: the harvested cases from files with no TS mirror, pinned at the end with `full` (every
  * frame and the notes): `load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host`
- * (its `defs:` entry built by hand).
+ * (its `defs:` entry built by hand) and
+ * `load-core/engine_limit_overrides__written_value_over_the_set_value_limit` (its `env:` sets the
+ * value limit, restored by the `afterEach`).
  *
  * Later (T3-18): the reference validator's rows (`test_validate_references_diag_has_range`,
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
@@ -57,6 +59,7 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
+  assembled,
   assembledWith,
   type CaseRow,
   fileOf,
@@ -408,6 +411,11 @@ test.each<CaseRow>([
   {
     id: "load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host",
     call: assembledWith({ child: child() }),
+    full: true,
+  },
+  {
+    id: "load-core/engine_limit_overrides__written_value_over_the_set_value_limit",
+    call: assembled,
     full: true,
   },
 ])("assemble: $id", runCase);

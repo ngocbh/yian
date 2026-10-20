@@ -108,6 +108,7 @@ import {
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
 import { validateHumanQuestions } from "../validate/human_questions.ts";
+import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
 // T3-20 imports
@@ -2122,7 +2123,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-18  checkWrittenValues, stampToolInputTypes, validateReferences, checkReservedSources (1).
+//   T3-18  stampToolInputTypes, validateReferences, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
 //   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
 //          checkTypedInputs, checkCallMapTypes, checkLoopTypeContract, checkTypedOutputs,
@@ -2144,18 +2145,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts
-
-/** Python's `compose.validate.value_nesting.check_written_values`; not ported yet. */
-function checkWrittenValues(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  outputsSection: unknown,
-  options: {
-    outputsTagged: boolean;
-    outputRange: (name: unknown) => SourceRange | null;
-    outputsRange: SourceRange | null;
-    diagnostics: LoadDiagnostics;
-  },
-): void {}
 
 /** Python's `compose.validate.tool_inputs.stamp_tool_input_types`; not ported yet. */
 function stampToolInputTypes(

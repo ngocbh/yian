@@ -1639,8 +1639,11 @@ transport errors retry, under the process's `YIAN_MODEL_RETRIES`. yian checks th
 reply itself (exactly `actions`); an invalid reply fails `reflective.contract` without
 a retry, and a model without native structured output fails
 `reflective.structured_output`. The reflection prompt shows its materials in the text
-form (`1.0` is `1`, bare `Infinity`, JS key order). Messages keep Python's wording,
-with `null` for `None`.
+form (`1.0` is `1`, bare `Infinity`, JS key order). Limits are integral `number`s or
+`bigint`s; snapshots are deep-frozen; `recall` awaits `rewriteQuery`, which may return a
+promise, and the default query uses `logJson`; blank checks use JS `trim()` whitespace.
+Messages keep Python's wording, with `null` for `None`, `array` for `tuple` and
+`rewriteQuery()` for `rewrite_query()`.
 
 ### Profile memory
 

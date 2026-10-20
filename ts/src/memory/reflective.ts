@@ -488,6 +488,8 @@ export function visibleInteractionJson(interaction: VisibleInteraction): JsonObj
  */
 export function boundedJsonMaterial(value: JsonValue, limit: number): string {
   const material = writeAsJson(value as Value);
+  // UTF-16 length is at least the code-point count, so short material never needs the split below.
+  if (material.length <= limit) return material;
   // Code points, as Python's `len` and slices count, so a cut never splits a surrogate pair.
   const chars = Array.from(material);
   if (chars.length <= limit) return material;

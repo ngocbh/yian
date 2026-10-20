@@ -36,9 +36,11 @@
  * hold `EpisodicMemory`, `ReflectiveMemory` and `SessionMemory`; the profile backend is not ported yet.
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `conversation.ts` and
- * `summary.ts` also know `typesys`; `storage/` also knows `platform` and `typesys`.
- * Never imports: `nodes`, `compile`, `compose`, `runtime`, `run`, the CLI, `llm`, or persistence
- * frameworks.
+ * `summary.ts` also know `typesys`; `storage/` also knows `platform` and `typesys`; the backends
+ * `episodic.ts`, `session.ts` and `reflective.ts` also know `typesys`, and `reflective.ts` also
+ * knows `llm` and `llm_clients`.
+ * Never imports (this facade and `contracts.ts`): `nodes`, `compile`, `compose`, `runtime`, `run`,
+ * the CLI, `llm`, or persistence frameworks.
  */
 
 export type {

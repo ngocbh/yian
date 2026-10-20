@@ -374,8 +374,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   structured model call to propose lesson mutations. Changed: the constructor takes an options
   object (`llmConfig`, `maxItems`, `recallLimit`, `storage`, `createParent`, `env`, `createModel`,
   `onRetry`); `createModel(config)` builds the learner's model (default `chatModelFromConfig`);
-  `recall` and `learn` are async; snapshot and stored ints are `bigint`s; there is no `with` form
-  and no fork check.
+  `recall` and `learn` are async, and `rewriteQuery` may be async; snapshot and stored ints are
+  `bigint`s; there is no `with` form and no fork check.
 - The profile backend is not ported yet.
 
 ## Runtime

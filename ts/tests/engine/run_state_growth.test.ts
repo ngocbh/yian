@@ -3,33 +3,34 @@
  * `tests/engine/test_run_state_growth.py`. Python's `ValueError` is a `RangeError` here, and a
  * live rejection is a `GrowthRejected` whose `original` has the exact class and message.
  *
- * Ported: `test_growth_rejects_a_nonfinite_seed_before_builder`,
- * `test_growth_builder_non_flow_return_is_a_raw_host_fault`,
+ * Ported:
+ * `test_growth_rejects_a_nonfinite_seed_before_builder`,
+ * `test_growth_rejects_invalid_node_owned_topology_targets`,
+ * `test_growth_rejects_invalid_skipped_output_hook_target`,
  * `test_growth_rejects_duplicate_redirect_owner_in_final_topology`,
  * `test_growth_rejects_executable_redirect_target_in_final_topology`,
  * `test_growth_accepts_disconnected_inert_redirect_placeholder`,
+ * `test_growth_replay_rejects_a_changed_but_valid_builder_digest`,
  * `test_growth_live_and_record_replay_produce_equal_state`,
  * `test_growth_record_replay_requires_the_injected_builder`,
- * `test_growth_stamps_positive_reference_depth_on_the_boundary`,
- * `test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order`,
- * `test_growth_records_the_spawner_as_owner_of_its_fragment`,
- * `test_growth_rejects_invalid_node_owned_topology_targets`,
- * `test_growth_rejects_invalid_skipped_output_hook_target`,
- * `test_growth_replay_rejects_a_changed_but_valid_builder_digest`,
  * `test_growth_accepts_the_closed_system_ambients`,
  * `test_growth_accepts_typed_fields_and_nested_map_item_scope`,
  * `test_growth_rejects_a_field_read_on_a_scalar_contract`,
+ * `test_growth_builder_non_flow_return_is_a_raw_host_fault`,
  * `test_growth_rejects_a_binding_wrapped_unknown_reference_before_digesting`,
  * `test_growth_rejects_an_unknown_reference_nested_in_a_template`,
  * `test_growth_rejects_malformed_static_contract_as_a_host_invariant`,
  * `test_growth_enforces_peak_node_budget_before_same_transition_pruning`,
+ * `test_growth_accepts_peak_node_count_equal_to_budget`,
  * `test_growth_rejects_invalid_exact_depth_deltas`,
  * `test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error`,
- * `test_growth_rejects_live_node_collision_even_when_the_id_is_pruned`,
- * `test_growth_accepts_peak_node_count_equal_to_budget`,
+ * `test_growth_stamps_positive_reference_depth_on_the_boundary`,
  * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
+ * `test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order`,
+ * `test_growth_rejects_live_node_collision_even_when_the_id_is_pruned`,
  * `test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node`,
  * `test_growth_rejects_a_template_dependency_on_a_pruned_node`,
+ * `test_growth_records_the_spawner_as_owner_of_its_fragment`,
  * `test_pruning_keeps_a_grown_subtree_with_unsettled_work`,
  * `test_pruning_retires_a_grown_subtree_once_settled`,
  * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
@@ -40,6 +41,8 @@
  * reference, so a growth's topology change needs its own detached copy.
  *
  * Changed:
+ * - `test_growth_canonicalizes_seed_and_isolates_builder_record_and_observers`: the record seed is
+ *   deep-frozen, so the after-prepare mutations go to the observer's seed and the caller's seed.
  * - `test_growth_rejects_a_cyclic_seed_before_builder`: the original is a `TypeCheckError`
  *   (`value contains itself`), not a `ValueError` about a cyclic container.
  * - `test_growth_rejects_an_excessively_nested_seed_before_builder`: the seed nests one level past
@@ -49,28 +52,22 @@
  *   (`copyGraph` copies the spawner shallowly, and `env` is read-only by contract); the builder
  *   gets a copy, its title change doesn't reach the live spawner, its error keeps its identity and
  *   the state is unchanged.
- * - `test_growth_requires_exact_live_carriers`: the `{1, 2}` seed row is a JS `Set` in the seed (a
- *   `TypeCheckError`, `<Set object> is not a JSON value`); the empty prune id and the missing
- *   builder rows are as Python's.
- * - `test_growth_canonicalizes_seed_and_isolates_builder_record_and_observers`: the record seed is
- *   deep-frozen, so the after-prepare mutations go to the observer's seed and the caller's seed.
+ * - `test_growth_rejects_invalid_edge_field_types`: the bad values go in through a cast to a new
+ *   `Edge` (its constructor doesn't validate its fields), and each row pins the whole message.
  * - `test_growth_append_failure_leaves_topology_and_every_state_coordinate_unchanged`: the failing
  *   log's error is `disk full` (`FailingLog`), not `OSError: durability unavailable`.
- * - `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`: it keeps the
- *   after-prepare mutations, the builder call count and the `addSubgraph`/`removeSubgraph` spies;
- *   the guards on `copy.deepcopy`, `canonical_seed`, `expansion_digest` and `NodeExpanded` go,
- *   since they monkeypatch module functions.
  * - `test_growth_replay_unwraps_shared_growth_rejection_identity`: no monkeypatched validator; the
  *   replay builder returns a cyclic fragment, and replay throws the original `RangeError`, not a
  *   `GrowthRejected`, with no `cause`.
- * - `test_growth_reference_validation_reads_a_binding_source`: no monkeypatched `expr_refs_of`
- *   spy; an origin-carrying `Binding` with a valid reference prepares, and the plan's delta holds
- *   the fragment's node and edge ids.
  * - `test_growth_rejects_invalid_fragments_atomically`: each row pins the original's class and
  *   message, where Python checks only that it is a `TypeError` or `ValueError`; a raw param's type
  *   label is `string` and the subclass is `ParameterSubclass`.
- * - `test_growth_rejects_invalid_edge_field_types`: the bad values go in through a cast to a new
- *   `Edge` (its constructor doesn't validate its fields), and each row pins the whole message.
+ * - `test_growth_reference_validation_reads_a_binding_source`: no monkeypatched `expr_refs_of`
+ *   spy; an origin-carrying `Binding` with a valid reference prepares, and the plan's delta holds
+ *   the fragment's node and edge ids.
+ * - `test_growth_requires_exact_live_carriers`: the `{1, 2}` seed row is a JS `Set` in the seed (a
+ *   `TypeCheckError`, `<Set object> is not a JSON value`); the empty prune id and the missing
+ *   builder rows are as Python's.
  * - `test_growth_rejects_unsafe_pruning_matrix_atomically`: each row pins the original's message,
  *   where Python checks only that it is a `ValueError`.
  * - `test_read_ids_include_references_nested_in_a_template`: `readIds` is private, so the test goes
@@ -80,8 +77,12 @@
  *   `expr_refs_of`; the wiring is a real malformed `Binding`, and the error is a raw `RangeError`
  *   whose `cause` is the `ExpressionError`. Two rows: with the growth index built at this growth
  *   the index build reads the wiring first (`node '__end__' has invalid wiring`, the site Python's
- *   test reaches too), and with it built earlier the prune scan does (`surviving node '__end__'
- *   has invalid wiring`).
+ *   test reaches too), and with it built before the growth the prune scan does (`surviving node
+ *   '__end__' has invalid wiring`).
+ * - `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`: it keeps the
+ *   after-prepare mutations, the builder call count and the `addSubgraph`/`removeSubgraph` spies;
+ *   the guards on `copy.deepcopy`, `canonical_seed`, `expansion_digest` and `NodeExpanded` go,
+ *   since they monkeypatch module functions.
  *
  * TS-only:
  * - a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`;
@@ -162,6 +163,9 @@ class Spawner extends Node {
   override readonly growDepthDelta = 1;
 }
 
+/** A `Parameter` subclass, near-canonical, proving growth requires the exact carrier. */
+class ParameterSubclass extends Parameter {}
+
 /** An ordinary dynamic-overlay node. */
 class OverlayNode extends Node {
   readonly kind = NodeKind.CODE;
@@ -206,6 +210,20 @@ function initializedSpawner(flow: CompiledFlow = parentFlow()): { state: RunStat
   return { state, log };
 }
 
+/** Return a real manifestable child flow, as `build_grow` accepts. */
+function canonicalChild(): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID, { params: [] })],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
+    wiring: new Map([
+      [START_ID, new Map()],
+      [END_ID, new Map()],
+    ]),
+  });
+}
+
 /** Return a manifestable two-boundary fragment committing under `spawnerId`. */
 function fragment(spawnerId: string, suffix: string = "child"): Flow {
   const startId = `${spawnerId}/${suffix}/start`;
@@ -246,6 +264,28 @@ function topologySnapshot(state: RunState): Record<string, unknown> {
   };
 }
 
+/**
+ * Install settled dynamic nodes without changing `initialStaticIds`; return their ids. With
+ * `residue`, also install a settled `<prefix>/child/residue` the ids don't name.
+ */
+function installSettledOverlay(state: RunState, options: { prefix?: string; residue?: boolean } = {}): string[] {
+  const prefix = options.prefix ?? "old";
+  const built = fragment(prefix);
+  state.flow.addSubgraph(built.nodes, built.edges, built.wiring);
+  for (const nodeId of built.nodes.keys()) {
+    state.nodeState.set(nodeId, NodeState.TAKEN);
+    state.pool.set(nodeId, { retained: nodeId });
+    state.depth.set(nodeId, 4);
+    state.wiringOverrides.set(nodeId, { copy: [nodeId] });
+  }
+  for (const edge of built.edges) state.edgeState.set(edge.id, NodeState.TAKEN);
+  if (options.residue) {
+    addLiveNode(state, new OverlayNode(`${prefix}/child/residue`));
+    state.nodeState.set(`${prefix}/child/residue`, NodeState.TAKEN);
+  }
+  return [...built.nodes.keys()];
+}
+
 /** Assert `fn`'s growth rejection leaves the state, the topology and the log unchanged. */
 function expectAtomic(state: RunState, log: MemoryRunLog, fn: () => void): void {
   const before = snapshot(state);
@@ -257,6 +297,50 @@ function expectAtomic(state: RunState, log: MemoryRunLog, fn: () => void): void 
   expectUnchanged(state, before);
   expect(topologySnapshot(state)).toEqual(beforeTopology);
   expect(log.nextSequence).toBe(sequence);
+}
+
+/**
+ * Expect `state.growthIndex` to equal one rebuilt from the live state, and every edge and reducer
+ * container to name only live nodes (`_require_index_matches_rebuild` of `test_growth_index.py`).
+ */
+function expectIndexMatchesRebuild(state: RunState): void {
+  const flow = state.flow;
+  const kept = state.growthIndex!;
+  state.growthIndex = null;
+  let fresh: GrowthIndex;
+  try {
+    fresh = growthIndex(state);
+  } finally {
+    state.growthIndex = kept;
+  }
+  const asSets = (map: ReadonlyMap<string, ReadonlySet<string>>) =>
+    Object.fromEntries([...map].filter(([, ids]) => ids.size > 0).map(([key, ids]) => [key, [...ids].sort()]));
+  expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
+  expect(asSets(kept.referrers)).toEqual(asSets(fresh.referrers));
+  expect(asSets(kept.grown)).toEqual(asSets(fresh.grown));
+
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, Edge[]>();
+  for (const edge of flow.edges) {
+    expect([edge.id, flow.nodes.has(edge.from) && flow.nodes.has(edge.to)]).toEqual([edge.id, true]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+  }
+  expect(Object.fromEntries(flow.outgoingEdges)).toEqual(Object.fromEntries(outgoing));
+  expect(Object.fromEntries(flow.incomingEdges)).toEqual(Object.fromEntries(incoming));
+  expect([...state.edgeState.keys()].sort()).toEqual(flow.edges.map((edge) => edge.id).sort());
+  expect([...state.nodeState.keys()].sort()).toEqual([...flow.nodes.keys()].sort());
+  for (const ids of [
+    flow.wiring.keys(),
+    state.depth.keys(),
+    state.growthOwner.keys(),
+    state.growthOwner.values(),
+    state.deferredPrune,
+    state.ready,
+    state.inFlight,
+  ]) {
+    expect([...ids].filter((nodeId) => !flow.nodes.has(nodeId))).toEqual([]);
+  }
 }
 
 /** Add one live node of `state`'s flow with no edges and no wiring, as an `UNKNOWN` node. */
@@ -298,6 +382,55 @@ function expectRejected(fn: () => unknown, cls: new (...args: never[]) => Error,
   expect(error.cause).toBe(error.original);
   return error.original;
 }
+
+test("growth canonicalizes the seed and isolates the builder, record and observers", () => {
+  const { state, log } = initializedSpawner();
+  const originalSeed = { items: [{ label: "stable" }], nested: { values: [1, 2] } };
+  const builderInputs: unknown[] = [];
+  const mutatingBuilder: GrowBuilder = (spawner, seed) => {
+    builderInputs.push(structuredClone(seed));
+    (seed as { nested: { values: number[] } }).nested.values.push(99);
+    return fragment(spawner.id);
+  };
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+
+  const prepared = prepareExpanded(state, "spawn", new Grow(originalSeed), mutatingBuilder);
+
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(builderInputs).toEqual([{ items: [{ label: "stable" }], nested: { values: [1, 2] } }]);
+  expect(prepared.record).toEqual(
+    new NodeExpandedRecord(
+      "spawn",
+      { items: [{ label: "stable" }], nested: { values: [1, 2] } },
+      [],
+      expansionDigest(fragment("spawn")),
+    ),
+  );
+  // The record seed is deep-frozen; the observer's seed and the caller's seed are not.
+  ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { values: number[] } }).nested.values.push(88);
+  originalSeed.nested.values.push(77);
+  expect((prepared.record as NodeExpandedRecord).seed).toEqual({
+    items: [{ label: "stable" }],
+    nested: { values: [1, 2] },
+  });
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toEqual([
+    new NodeExpanded({
+      nodeId: "spawn",
+      grow: new Grow({ items: [{ label: "stable" }], nested: { values: [1, 2] } }),
+    }),
+  ]);
+  expect(observers[0]).not.toBe(prepared.observers[0]);
+  expect(state.nodeState.get("spawn")).toBe(NodeState.EXPANDED);
+  expect(state.inFlight.has("spawn")).toBe(false);
+  expect(state.ready).toEqual(["spawn/child/start"]);
+  expect(state.depth.get("spawn/child/end")).toBe(1);
+  expect(state.nextSequence).toBe(5);
+});
 
 test("growth rejects a cyclic seed before the builder", () => {
   const { state } = initializedSpawner();
@@ -372,98 +505,47 @@ test("the growth builder receives a detached spawner and its failure is pure", (
   expect(liveSpawner.title).toBe("live");
 });
 
-test("a growth builder's non-Flow return is a raw host fault", () => {
-  const { state } = initializedSpawner();
-
-  expectError(
-    () => prepareExpanded(state, "spawn", new Grow({}), (() => ({})) as unknown as GrowBuilder),
-    TypeError,
-    /^grow_builder must return a Flow$/,
-  );
-});
-
 test.each([
-  {
-    name: "empty prune id",
-    grow: () => new Grow({}, [""]),
-    original: RangeError as new (...args: never[]) => Error,
-    message: /^Grow\.prune node IDs must be non-empty$/,
-  },
-  {
-    name: "non-text prune id",
-    grow: () => new Grow({}, [1] as unknown as string[]),
-    original: TypeError,
-    message: /^Grow\.prune must contain only strings$/,
-  },
-  {
-    name: "Set in the seed",
-    grow: () => new Grow({ bad: new Set([1, 2]) }),
-    original: TypeCheckError,
-    message: /^<Set object> is not a JSON value$/,
-  },
-])("growth wraps a node-produced carrier rejection: $name", ({ grow, original, message }) => {
-  const { state } = initializedSpawner();
-
-  expectRejected(() => prepareExpanded(state, "spawn", grow(), fragmentBuilder), original, message);
-});
-
-test("growth requires a callable builder, a raw host fault", () => {
-  const { state } = initializedSpawner();
-
-  expectError(
-    () => prepareExpanded(state, "spawn", new Grow({}), null as unknown as GrowBuilder),
-    TypeError,
-    /^grow_builder must be callable$/,
-  );
-});
-
-test("growth canonicalizes the seed and isolates the builder, record and observers", () => {
+  ["commit_as", "absent-target", RangeError, "commit_as target 'absent-target' does not exist"],
+  ["commit_as", "", RangeError, "commit_as must be non-empty"],
+  ["commit_as", 7, TypeError, "commit_as must be a string or null"],
+  ["origin_id", "absent-target", RangeError, "origin_id target 'absent-target' does not exist"],
+  ["origin_id", "", RangeError, "origin_id must be non-empty"],
+  ["origin_id", 7, TypeError, "origin_id must be a string or null"],
+] as const)("growth rejects an invalid node-owned topology target: %s %p", (attribute, target, cls, message) => {
   const { state, log } = initializedSpawner();
-  const originalSeed = { items: [{ label: "stable" }], nested: { values: [1, 2] } };
-  const builderInputs: unknown[] = [];
-  const mutatingBuilder: GrowBuilder = (spawner, seed) => {
-    builderInputs.push(structuredClone(seed));
-    (seed as { nested: { values: number[] } }).nested.values.push(99);
-    return fragment(spawner.id);
+  const invalidTargetBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    const end = built.nodes.get(built.endId)! as unknown as Record<string, unknown>;
+    end[attribute === "commit_as" ? "commitAs" : "originId"] = target;
+    return built;
   };
-  const before = snapshot(state);
-  const beforeTopology = topologySnapshot(state);
 
-  const prepared = prepareExpanded(state, "spawn", new Grow(originalSeed), mutatingBuilder);
-
-  expectUnchanged(state, before);
-  expect(topologySnapshot(state)).toEqual(beforeTopology);
-  expect(builderInputs).toEqual([{ items: [{ label: "stable" }], nested: { values: [1, 2] } }]);
-  expect(prepared.record).toEqual(
-    new NodeExpandedRecord(
-      "spawn",
-      { items: [{ label: "stable" }], nested: { values: [1, 2] } },
-      [],
-      expansionDigest(fragment("spawn")),
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), invalidTargetBuilder),
+      cls,
+      new RegExp(`^growth fragment node 'spawn/child/end' ${message}$`),
     ),
   );
-  // The record seed is deep-frozen; the observer's seed and the caller's seed are not.
-  ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { values: number[] } }).nested.values.push(88);
-  originalSeed.nested.values.push(77);
-  expect((prepared.record as NodeExpandedRecord).seed).toEqual({
-    items: [{ label: "stable" }],
-    nested: { values: [1, 2] },
-  });
+});
 
-  const observers = commitPrepared(log, state, prepared);
+test("growth rejects an invalid skipped-output hook target", () => {
+  // A future hook override can't hide a missing logical output target.
+  const { state, log } = initializedSpawner();
+  const invalidTargetBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    built.nodes.get(built.endId)!.skippedOutputTarget = () => "missing";
+    return built;
+  };
 
-  expect(observers).toEqual([
-    new NodeExpanded({
-      nodeId: "spawn",
-      grow: new Grow({ items: [{ label: "stable" }], nested: { values: [1, 2] } }),
-    }),
-  ]);
-  expect(observers[0]).not.toBe(prepared.observers[0]);
-  expect(state.nodeState.get("spawn")).toBe(NodeState.EXPANDED);
-  expect(state.inFlight.has("spawn")).toBe(false);
-  expect(state.ready).toEqual(["spawn/child/start"]);
-  expect(state.depth.get("spawn/child/end")).toBe(1);
-  expect(state.nextSequence).toBe(5);
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), invalidTargetBuilder),
+      RangeError,
+      /^node 'spawn\/child\/end' skipped output target 'missing' does not exist$/,
+    ),
+  );
 });
 
 test("growth rejects a duplicate redirect owner in the final topology", () => {
@@ -518,6 +600,41 @@ test("growth accepts a disconnected inert redirect placeholder", () => {
   expect(log.nextSequence).toBe(4);
 });
 
+const END_EDGE = "'spawn/child/start->spawn/child/end'";
+
+test.each([
+  ["sourceHandle", 7, TypeError, "source_handle must be a string or null"],
+  ["sourceHandle", "", RangeError, "source_handle must be non-empty"],
+  ["inputGroup", 7, TypeError, "input_group must be a string or null"],
+  ["inputGroup", "", RangeError, "input_group must be non-empty"],
+  ["optional", 1, TypeError, "optional must be a bool"],
+  ["ordering", 1, TypeError, "ordering must be a bool"],
+] as const)("growth rejects an invalid edge field type: %s %p", (attribute, value, cls, message) => {
+  const { state, log } = initializedSpawner();
+  const invalidEdgeBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    const edge = built.edges[0]!;
+    const fields: Record<string, unknown> = {
+      sourceHandle: edge.sourceHandle,
+      inputGroup: edge.inputGroup,
+      optional: edge.optional,
+      ordering: edge.ordering,
+    };
+    fields[attribute] = value;
+    // The TS `Edge` constructor doesn't validate its fields.
+    built.edges[0] = new Edge(edge.id, edge.from, edge.to, fields as ConstructorParameters<typeof Edge>[3]);
+    return built;
+  };
+
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), invalidEdgeBuilder),
+      cls,
+      new RegExp(`^growth fragment edge ${END_EDGE} ${message}$`),
+    ),
+  );
+});
+
 test("a growth append failure leaves the topology and every state coordinate unchanged", () => {
   const { state, log: prior } = initializedSpawner();
   const log = new FailingLog(RUN_ID, prior.records());
@@ -525,6 +642,45 @@ test("a growth append failure leaves the topology and every state coordinate unc
 
   expectAtomic(state, log, () => expectError(() => commitPrepared(log, state, prepared), Error, /^disk full$/));
   expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test("growth replay rejects a changed but valid builder digest", () => {
+  const { state: live } = initializedSpawner();
+  const prepared = prepareExpanded(live, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
+  const { state: replay, log: replayLog } = initializedSpawner();
+  const recorded = (prepared.record as NodeExpandedRecord).topologyDigest;
+  const rebuilt = expansionDigest(fragment("spawn", "changed"));
+
+  expectAtomic(replay, replayLog, () =>
+    expectError(
+      () => prepareRecord(replay, prepared.record, { growBuilder: (spawner) => fragment(spawner.id, "changed") }),
+      RangeError,
+      new RegExp(`^NodeExpandedRecord topology digest mismatch: recorded '${recorded}', rebuilt '${rebuilt}'$`),
+    ),
+  );
+  expect(replay.flow.nodes.has("spawn/changed/start")).toBe(false);
+});
+
+test("growth replay unwraps a fragment rejection to its original", () => {
+  const { state: live } = initializedSpawner();
+  const prepared = prepareExpanded(live, "spawn", new Grow({}), fragmentBuilder);
+  const { state: replay, log } = initializedSpawner();
+  const cyclicBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    built.edges.push(new Edge("cycle-back", built.endId, built.startId, { ordering: true }));
+    return built;
+  };
+
+  let error: unknown;
+  expectAtomic(replay, log, () => {
+    error = caught(() => prepareRecord(replay, prepared.record, { growBuilder: cyclicBuilder }));
+  });
+
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe(
+    'growth fragment creates a cycle involving ["spawn/child/end","spawn/child/start"]',
+  );
+  expect((error as Error).cause).toBeUndefined();
 });
 
 test("live growth and its record replay produce equal state", () => {
@@ -549,112 +705,59 @@ test("growth record replay requires the injected builder", () => {
   expectError(() => prepareRecord(state, record), TypeError, /grow_builder/);
 });
 
-test("growth stamps a positive reference depth on the boundary", () => {
-  // Depth is bookkeeping, not a cap: a spawner already 7 levels deep grows an 8th level.
-  const { state, log } = initializedSpawner();
-  state.depth.set("spawn", 7);
-
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
-
-  expect(state.depth.get("spawn/child/end")).toBe(8);
-});
-
-test("growth preserves unrelated in-flight siblings and FIFO order", () => {
-  const { state, log } = initializedSpawner(parentFlow({ sibling: true }));
-  expect(state.ready).toEqual(["side"]);
-  commitPrepared(log, state, prepareNodeStarted(state, "side"));
-  const sideStart = state.acceptedStarts.get("side");
-
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
-
-  expect([...state.inFlight]).toEqual(["side"]);
-  expect(state.acceptedStarts).toEqual(new Map([["side", sideStart!]]));
-  expect(state.ready).toEqual(["spawn/child/start"]);
-  expect(state.nodeState.get("side")).toBe(NodeState.UNKNOWN);
-});
-
-test("a growth commit does no builder or graph work after append", () => {
-  const { state, log: prior } = initializedSpawner();
-  const built = fragment("spawn");
-  const builderSeeds: unknown[] = [];
-  let builderCalls = 0;
-  const builder: GrowBuilder = (_spawner, seed) => {
-    builderCalls += 1;
-    builderSeeds.push(seed);
+test.each(["today", "now", "run_id"])("growth accepts the closed system ambient %s", (ambient) => {
+  const { state } = initializedSpawner();
+  const systemReferenceBuilder: GrowBuilder = (spawner) => {
+    const built = fragment(spawner.id);
+    const end = EndNode.value(built.endId, { outputName: "value" });
+    end.commitAs = spawner.id;
+    built.nodes.set(built.endId, end);
+    built.wiring.set(built.endId, new Map([["value", new Binding(`\${system.${ambient}}`)]]));
     return built;
   };
-  const rawSeed = { nested: { items: ["stable"] } };
-  const prepared = prepareExpanded(state, "spawn", new Grow(rawSeed), builder);
-  const expectedStart = (prepared._plan as { delta: { fragmentStartId: string } }).delta.fragmentStartId;
 
-  // Every object the caller or the builder still owns may change after preparation.
-  rawSeed.nested.items.push("raw-mutated");
-  (builderSeeds[0] as { nested: { items: string[] } }).nested.items.push("builder-mutated");
-  built.nodes.clear();
-  built.edges.length = 0;
-  built.wiring.clear();
-  ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { items: string[] } }).nested.items.push(
-    "observer-mutated",
+  expect(prepareExpanded(state, "spawn", new Grow({}), systemReferenceBuilder).record).toBeInstanceOf(
+    NodeExpandedRecord,
   );
-
-  let appended = false;
-  class GuardedLog extends MemoryRunLog {
-    override append(record: RunRecord): RecordEnvelope {
-      const envelope = super.append(record);
-      if (record instanceof NodeExpandedRecord) appended = true;
-      return envelope;
-    }
-  }
-  const log = new GuardedLog(RUN_ID);
-  for (const envelope of prior.records()) log.append(envelope.record);
-  const addSubgraph = spyOn(CompiledFlow.prototype, "addSubgraph").mockImplementation(() => {
-    throw new Error("addSubgraph ran during commit");
-  });
-  const removeSubgraph = spyOn(CompiledFlow.prototype, "removeSubgraph").mockImplementation(() => {
-    throw new Error("removeSubgraph ran during commit");
-  });
-  let observers: readonly RunEvent[];
-  try {
-    observers = commitPrepared(log, state, prepared);
-  } finally {
-    addSubgraph.mockRestore();
-    removeSubgraph.mockRestore();
-  }
-
-  expect(appended).toBe(true);
-  expect(builderCalls).toBe(1);
-  expect(state.flow.nodes.has(expectedStart)).toBe(true);
-  expect(state.ready.at(-1)).toBe(expectedStart);
-  expect((observers[0] as NodeExpanded).grow.seed).toEqual({ nested: { items: ["stable"] } });
 });
 
-test("growth records the spawner as the owner of its fragment", () => {
-  const { state, log } = initializedSpawner();
-  const staticIds = new Set(state.flow.nodes.keys());
-
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
-
-  const newIds = [...state.flow.nodes.keys()].filter((nodeId) => !staticIds.has(nodeId));
-  expect(newIds.length).toBeGreaterThan(0);
-  expect(state.growthOwner).toEqual(new Map(newIds.map((nodeId) => [nodeId, "spawn"])));
-});
-
-/** A `Parameter` subclass, near-canonical, proving growth requires the exact carrier. */
-class ParameterSubclass extends Parameter {}
-
-/** Return a real manifestable child flow, as `build_grow` accepts. */
-function canonicalChild(): CompiledFlow {
-  const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: [] })],
-    [END_ID, EndNode.value(END_ID, { outputName: null })],
-  ]);
-  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
-    wiring: new Map([
-      [START_ID, new Map()],
-      [END_ID, new Map()],
-    ]),
+test("growth accepts typed fields and a nested MAP item scope", () => {
+  const sourceType = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["known", Type.scalar(ValueKind.STRING)]]),
+    required: new Set(["known"]),
   });
-}
+  const spawner = new Spawner("spawn", {
+    outputContract: new ValueContract(
+      sourceType,
+      new ContractOrigins({
+        default: new OriginRef("spawn/output"),
+        entries: [[["known"], new OriginRef("spawn/output/known")]],
+      }),
+    ),
+  });
+  const { state } = initializedSpawner(parentFlow({ spawner }));
+  const typedMapBuilder: GrowBuilder = (parent) => {
+    const nodeId = `${parent.id}/nested-map`;
+    const node = new MapNode(nodeId, { flowId: "child", child: canonicalChild() });
+    node.params = [new Parameter("value")];
+    return new Flow(new Map([[nodeId, node]]), [], {
+      wiring: new Map([
+        [
+          nodeId,
+          new Map([
+            ["over", `\${${parent.id}.output.known}`],
+            ["value", "${item.known}"],
+          ]),
+        ],
+      ]),
+      startId: nodeId,
+      endId: nodeId,
+    });
+  };
+
+  expect(prepareExpanded(state, "spawn", new Grow({}), typedMapBuilder).record).toBeInstanceOf(NodeExpandedRecord);
+});
 
 /** Return a fragment whose required START param has no wiring source. */
 function missingRequiredFragment(spawnerId: string): Flow {
@@ -841,199 +944,6 @@ function invalidFragment(name: string): Flow {
   return built;
 }
 
-/**
- * Install settled dynamic nodes without changing `initialStaticIds`; return their ids. With
- * `residue`, also install a settled `<prefix>/child/residue` the ids don't name.
- */
-function installSettledOverlay(state: RunState, options: { prefix?: string; residue?: boolean } = {}): string[] {
-  const prefix = options.prefix ?? "old";
-  const built = fragment(prefix);
-  state.flow.addSubgraph(built.nodes, built.edges, built.wiring);
-  for (const nodeId of built.nodes.keys()) {
-    state.nodeState.set(nodeId, NodeState.TAKEN);
-    state.pool.set(nodeId, { retained: nodeId });
-    state.depth.set(nodeId, 4);
-    state.wiringOverrides.set(nodeId, { copy: [nodeId] });
-  }
-  for (const edge of built.edges) state.edgeState.set(edge.id, NodeState.TAKEN);
-  if (options.residue) {
-    addLiveNode(state, new OverlayNode(`${prefix}/child/residue`));
-    state.nodeState.set(`${prefix}/child/residue`, NodeState.TAKEN);
-  }
-  return [...built.nodes.keys()];
-}
-
-const END_EDGE = "'spawn/child/start->spawn/child/end'";
-
-test.each([
-  ["commit_as", "absent-target", RangeError, "commit_as target 'absent-target' does not exist"],
-  ["commit_as", "", RangeError, "commit_as must be non-empty"],
-  ["commit_as", 7, TypeError, "commit_as must be a string or null"],
-  ["origin_id", "absent-target", RangeError, "origin_id target 'absent-target' does not exist"],
-  ["origin_id", "", RangeError, "origin_id must be non-empty"],
-  ["origin_id", 7, TypeError, "origin_id must be a string or null"],
-] as const)("growth rejects an invalid node-owned topology target: %s %p", (attribute, target, cls, message) => {
-  const { state, log } = initializedSpawner();
-  const invalidTargetBuilder: GrowBuilder = (spawner) => {
-    const built = fragment(spawner.id);
-    const end = built.nodes.get(built.endId)! as unknown as Record<string, unknown>;
-    end[attribute === "commit_as" ? "commitAs" : "originId"] = target;
-    return built;
-  };
-
-  expectAtomic(state, log, () =>
-    expectRejected(
-      () => prepareExpanded(state, "spawn", new Grow({}), invalidTargetBuilder),
-      cls,
-      new RegExp(`^growth fragment node 'spawn/child/end' ${message}$`),
-    ),
-  );
-});
-
-test("growth rejects an invalid skipped-output hook target", () => {
-  // A future hook override can't hide a missing logical output target.
-  const { state, log } = initializedSpawner();
-  const invalidTargetBuilder: GrowBuilder = (spawner) => {
-    const built = fragment(spawner.id);
-    built.nodes.get(built.endId)!.skippedOutputTarget = () => "missing";
-    return built;
-  };
-
-  expectAtomic(state, log, () =>
-    expectRejected(
-      () => prepareExpanded(state, "spawn", new Grow({}), invalidTargetBuilder),
-      RangeError,
-      /^node 'spawn\/child\/end' skipped output target 'missing' does not exist$/,
-    ),
-  );
-});
-
-test.each([
-  ["sourceHandle", 7, TypeError, "source_handle must be a string or null"],
-  ["sourceHandle", "", RangeError, "source_handle must be non-empty"],
-  ["inputGroup", 7, TypeError, "input_group must be a string or null"],
-  ["inputGroup", "", RangeError, "input_group must be non-empty"],
-  ["optional", 1, TypeError, "optional must be a bool"],
-  ["ordering", 1, TypeError, "ordering must be a bool"],
-] as const)("growth rejects an invalid edge field type: %s %p", (attribute, value, cls, message) => {
-  const { state, log } = initializedSpawner();
-  const invalidEdgeBuilder: GrowBuilder = (spawner) => {
-    const built = fragment(spawner.id);
-    const edge = built.edges[0]!;
-    const fields: Record<string, unknown> = {
-      sourceHandle: edge.sourceHandle,
-      inputGroup: edge.inputGroup,
-      optional: edge.optional,
-      ordering: edge.ordering,
-    };
-    fields[attribute] = value;
-    // The TS `Edge` constructor doesn't validate its fields.
-    built.edges[0] = new Edge(edge.id, edge.from, edge.to, fields as ConstructorParameters<typeof Edge>[3]);
-    return built;
-  };
-
-  expectAtomic(state, log, () =>
-    expectRejected(
-      () => prepareExpanded(state, "spawn", new Grow({}), invalidEdgeBuilder),
-      cls,
-      new RegExp(`^growth fragment edge ${END_EDGE} ${message}$`),
-    ),
-  );
-});
-
-test("growth replay rejects a changed but valid builder digest", () => {
-  const { state: live } = initializedSpawner();
-  const prepared = prepareExpanded(live, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
-  const { state: replay, log: replayLog } = initializedSpawner();
-  const recorded = (prepared.record as NodeExpandedRecord).topologyDigest;
-  const rebuilt = expansionDigest(fragment("spawn", "changed"));
-
-  expectAtomic(replay, replayLog, () =>
-    expectError(
-      () => prepareRecord(replay, prepared.record, { growBuilder: (spawner) => fragment(spawner.id, "changed") }),
-      RangeError,
-      new RegExp(`^NodeExpandedRecord topology digest mismatch: recorded '${recorded}', rebuilt '${rebuilt}'$`),
-    ),
-  );
-  expect(replay.flow.nodes.has("spawn/changed/start")).toBe(false);
-});
-
-test("growth replay unwraps a fragment rejection to its original", () => {
-  const { state: live } = initializedSpawner();
-  const prepared = prepareExpanded(live, "spawn", new Grow({}), fragmentBuilder);
-  const { state: replay, log } = initializedSpawner();
-  const cyclicBuilder: GrowBuilder = (spawner) => {
-    const built = fragment(spawner.id);
-    built.edges.push(new Edge("cycle-back", built.endId, built.startId, { ordering: true }));
-    return built;
-  };
-
-  let error: unknown;
-  expectAtomic(replay, log, () => {
-    error = caught(() => prepareRecord(replay, prepared.record, { growBuilder: cyclicBuilder }));
-  });
-
-  expect((error as Error).constructor).toBe(RangeError);
-  expect((error as Error).message).toBe(
-    'growth fragment creates a cycle involving ["spawn/child/end","spawn/child/start"]',
-  );
-  expect((error as Error).cause).toBeUndefined();
-});
-
-test.each(["today", "now", "run_id"])("growth accepts the closed system ambient %s", (ambient) => {
-  const { state } = initializedSpawner();
-  const systemReferenceBuilder: GrowBuilder = (spawner) => {
-    const built = fragment(spawner.id);
-    const end = EndNode.value(built.endId, { outputName: "value" });
-    end.commitAs = spawner.id;
-    built.nodes.set(built.endId, end);
-    built.wiring.set(built.endId, new Map([["value", new Binding(`\${system.${ambient}}`)]]));
-    return built;
-  };
-
-  expect(prepareExpanded(state, "spawn", new Grow({}), systemReferenceBuilder).record).toBeInstanceOf(
-    NodeExpandedRecord,
-  );
-});
-
-test("growth accepts typed fields and a nested MAP item scope", () => {
-  const sourceType = new Type({
-    kind: ValueKind.OBJECT,
-    fields: new Map([["known", Type.scalar(ValueKind.STRING)]]),
-    required: new Set(["known"]),
-  });
-  const spawner = new Spawner("spawn", {
-    outputContract: new ValueContract(
-      sourceType,
-      new ContractOrigins({
-        default: new OriginRef("spawn/output"),
-        entries: [[["known"], new OriginRef("spawn/output/known")]],
-      }),
-    ),
-  });
-  const { state } = initializedSpawner(parentFlow({ spawner }));
-  const typedMapBuilder: GrowBuilder = (parent) => {
-    const nodeId = `${parent.id}/nested-map`;
-    const node = new MapNode(nodeId, { flowId: "child", child: canonicalChild() });
-    node.params = [new Parameter("value")];
-    return new Flow(new Map([[nodeId, node]]), [], {
-      wiring: new Map([
-        [
-          nodeId,
-          new Map([
-            ["over", `\${${parent.id}.output.known}`],
-            ["value", "${item.known}"],
-          ]),
-        ],
-      ]),
-      startId: nodeId,
-      endId: nodeId,
-    });
-  };
-
-  expect(prepareExpanded(state, "spawn", new Grow({}), typedMapBuilder).record).toBeInstanceOf(NodeExpandedRecord);
-});
-
 const WIRING = "growth fragment node 'spawn/child/end' wiring 'value': reference";
 
 test.each([
@@ -1127,6 +1037,16 @@ test("growth rejects a field read on a scalar contract", () => {
   );
 });
 
+test("a growth builder's non-Flow return is a raw host fault", () => {
+  const { state } = initializedSpawner();
+
+  expectError(
+    () => prepareExpanded(state, "spawn", new Grow({}), (() => ({})) as unknown as GrowBuilder),
+    TypeError,
+    /^grow_builder must return a Flow$/,
+  );
+});
+
 test("growth reference validation reads a Binding source", () => {
   // A valid wrapped reference reaches the same closed-reference scanner as raw text.
   const { state } = initializedSpawner();
@@ -1172,6 +1092,41 @@ test("growth rejects an unknown reference nested in a template", () => {
   );
 });
 
+test.each([
+  {
+    name: "empty prune id",
+    grow: () => new Grow({}, [""]),
+    original: RangeError as new (...args: never[]) => Error,
+    message: /^Grow\.prune node IDs must be non-empty$/,
+  },
+  {
+    name: "non-text prune id",
+    grow: () => new Grow({}, [1] as unknown as string[]),
+    original: TypeError,
+    message: /^Grow\.prune must contain only strings$/,
+  },
+  {
+    name: "Set in the seed",
+    grow: () => new Grow({ bad: new Set([1, 2]) }),
+    original: TypeCheckError,
+    message: /^<Set object> is not a JSON value$/,
+  },
+])("growth wraps a node-produced carrier rejection: $name", ({ grow, original, message }) => {
+  const { state } = initializedSpawner();
+
+  expectRejected(() => prepareExpanded(state, "spawn", grow(), fragmentBuilder), original, message);
+});
+
+test("growth requires a callable builder, a raw host fault", () => {
+  const { state } = initializedSpawner();
+
+  expectError(
+    () => prepareExpanded(state, "spawn", new Grow({}), null as unknown as GrowBuilder),
+    TypeError,
+    /^grow_builder must be callable$/,
+  );
+});
+
 test("growth rejects a malformed static contract as a host invariant", () => {
   // A corrupt live contract the fragment reads stays outside the fragment boundary.
   const { state, log } = initializedSpawner();
@@ -1209,6 +1164,19 @@ test("growth enforces the peak node budget before same-transition pruning", () =
   );
 });
 
+test("growth accepts a peak node count equal to the budget", () => {
+  const { state, log } = initializedSpawner();
+  const oldIds = installSettledOverlay(state);
+  const newCount = fragment("spawn").nodes.size;
+  state.runDefaults = { ...state.runDefaults, maxTotalNodes: state.flow.nodes.size + newCount };
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder));
+
+  expect(oldIds.filter((nodeId) => state.flow.nodes.has(nodeId))).toEqual([]);
+  expect(state.flow.nodes.has("spawn/child/start")).toBe(true);
+  expectIndexMatchesRebuild(state);
+});
+
 test.each([true, -1, 1.5, "1"])("growth rejects an invalid exact depth delta %p", (delta) => {
   const spawner = new Spawner("spawn");
   (spawner as unknown as { growDepthDelta: unknown }).growDepthDelta = delta;
@@ -1236,32 +1204,14 @@ test("growth treats a corrupt stored depth as a host invariant error", () => {
   );
 });
 
-test("growth rejects a live node collision even when the id is pruned", () => {
+test("growth stamps a positive reference depth on the boundary", () => {
+  // Depth is bookkeeping, not a cap: a spawner already 7 levels deep grows an 8th level.
   const { state, log } = initializedSpawner();
-  const collidingId = "spawn/child/start";
-  addLiveNode(state, new OverlayNode(collidingId));
-  state.nodeState.set(collidingId, NodeState.TAKEN);
+  state.depth.set("spawn", 7);
 
-  expectAtomic(state, log, () =>
-    expectRejected(
-      () => prepareExpanded(state, "spawn", new Grow({}, [collidingId]), fragmentBuilder),
-      RangeError,
-      /^growth fragment node 'spawn\/child\/start' collides with live topology$/,
-    ),
-  );
-});
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
 
-test("growth accepts a peak node count equal to the budget", () => {
-  const { state, log } = initializedSpawner();
-  const oldIds = installSettledOverlay(state);
-  const newCount = fragment("spawn").nodes.size;
-  state.runDefaults = { ...state.runDefaults, maxTotalNodes: state.flow.nodes.size + newCount };
-
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder));
-
-  expect(oldIds.filter((nodeId) => state.flow.nodes.has(nodeId))).toEqual([]);
-  expect(state.flow.nodes.has("spawn/child/start")).toBe(true);
-  expectIndexMatchesRebuild(state);
+  expect(state.depth.get("spawn/child/end")).toBe(8);
 });
 
 test("growth prunes only the named settled dynamic overlay coordinates", () => {
@@ -1292,6 +1242,35 @@ test("growth prunes only the named settled dynamic overlay coordinates", () => {
   expect(state.flow.nodes.has(residueId)).toBe(true);
   expect(state.nodeState.get(residueId)).toBe(NodeState.TAKEN);
   expectIndexMatchesRebuild(state);
+});
+
+test("growth preserves unrelated in-flight siblings and FIFO order", () => {
+  const { state, log } = initializedSpawner(parentFlow({ sibling: true }));
+  expect(state.ready).toEqual(["side"]);
+  commitPrepared(log, state, prepareNodeStarted(state, "side"));
+  const sideStart = state.acceptedStarts.get("side");
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+
+  expect([...state.inFlight]).toEqual(["side"]);
+  expect(state.acceptedStarts).toEqual(new Map([["side", sideStart!]]));
+  expect(state.ready).toEqual(["spawn/child/start"]);
+  expect(state.nodeState.get("side")).toBe(NodeState.UNKNOWN);
+});
+
+test("growth rejects a live node collision even when the id is pruned", () => {
+  const { state, log } = initializedSpawner();
+  const collidingId = "spawn/child/start";
+  addLiveNode(state, new OverlayNode(collidingId));
+  state.nodeState.set(collidingId, NodeState.TAKEN);
+
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}, [collidingId]), fragmentBuilder),
+      RangeError,
+      /^growth fragment node 'spawn\/child\/start' collides with live topology$/,
+    ),
+  );
 });
 
 /** Add a LOOP clone `cloneId` of `originId` to `state`, put it in flight and return its id. */
@@ -1450,7 +1429,7 @@ test("an unsettled reader keeps a settled prune id it reads only through a templ
 
 test.each([
   ["at this growth", false, /^node '__end__' has invalid wiring: /],
-  ["by an earlier growth", true, /^surviving node '__end__' has invalid wiring: /],
+  ["before this growth", true, /^surviving node '__end__' has invalid wiring: /],
 ])("the prune scan rejects malformed surviving wiring as a raw invariant, index built %s", (_name, built, message) => {
   const { state } = initializedSpawner();
   const oldId = installSettledOverlay(state)[0]!;
@@ -1468,49 +1447,71 @@ test.each([
   expect(error.cause).toBeInstanceOf(ExpressionError);
 });
 
-/**
- * Expect `state.growthIndex` to equal one rebuilt from the live state, and every edge and reducer
- * container to name only live nodes (`_require_index_matches_rebuild` of `test_growth_index.py`).
- */
-function expectIndexMatchesRebuild(state: RunState): void {
-  const flow = state.flow;
-  const kept = state.growthIndex!;
-  state.growthIndex = null;
-  let fresh: GrowthIndex;
-  try {
-    fresh = growthIndex(state);
-  } finally {
-    state.growthIndex = kept;
-  }
-  const asSets = (map: ReadonlyMap<string, ReadonlySet<string>>) =>
-    Object.fromEntries([...map].filter(([, ids]) => ids.size > 0).map(([key, ids]) => [key, [...ids].sort()]));
-  expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
-  expect(asSets(kept.referrers)).toEqual(asSets(fresh.referrers));
-  expect(asSets(kept.grown)).toEqual(asSets(fresh.grown));
+test("a growth commit does no builder or graph work after append", () => {
+  const { state, log: prior } = initializedSpawner();
+  const built = fragment("spawn");
+  const builderSeeds: unknown[] = [];
+  let builderCalls = 0;
+  const builder: GrowBuilder = (_spawner, seed) => {
+    builderCalls += 1;
+    builderSeeds.push(seed);
+    return built;
+  };
+  const rawSeed = { nested: { items: ["stable"] } };
+  const prepared = prepareExpanded(state, "spawn", new Grow(rawSeed), builder);
+  const expectedStart = (prepared._plan as { delta: { fragmentStartId: string } }).delta.fragmentStartId;
 
-  const outgoing = new Map<string, Edge[]>();
-  const incoming = new Map<string, Edge[]>();
-  for (const edge of flow.edges) {
-    expect([edge.id, flow.nodes.has(edge.from) && flow.nodes.has(edge.to)]).toEqual([edge.id, true]);
-    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
-    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+  // Every object the caller or the builder still owns may change after preparation.
+  rawSeed.nested.items.push("raw-mutated");
+  (builderSeeds[0] as { nested: { items: string[] } }).nested.items.push("builder-mutated");
+  built.nodes.clear();
+  built.edges.length = 0;
+  built.wiring.clear();
+  ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { items: string[] } }).nested.items.push(
+    "observer-mutated",
+  );
+
+  let appended = false;
+  class GuardedLog extends MemoryRunLog {
+    override append(record: RunRecord): RecordEnvelope {
+      const envelope = super.append(record);
+      if (record instanceof NodeExpandedRecord) appended = true;
+      return envelope;
+    }
   }
-  expect(Object.fromEntries(flow.outgoingEdges)).toEqual(Object.fromEntries(outgoing));
-  expect(Object.fromEntries(flow.incomingEdges)).toEqual(Object.fromEntries(incoming));
-  expect([...state.edgeState.keys()].sort()).toEqual(flow.edges.map((edge) => edge.id).sort());
-  expect([...state.nodeState.keys()].sort()).toEqual([...flow.nodes.keys()].sort());
-  for (const ids of [
-    flow.wiring.keys(),
-    state.depth.keys(),
-    state.growthOwner.keys(),
-    state.growthOwner.values(),
-    state.deferredPrune,
-    state.ready,
-    state.inFlight,
-  ]) {
-    expect([...ids].filter((nodeId) => !flow.nodes.has(nodeId))).toEqual([]);
+  const log = new GuardedLog(RUN_ID);
+  for (const envelope of prior.records()) log.append(envelope.record);
+  const addSubgraph = spyOn(CompiledFlow.prototype, "addSubgraph").mockImplementation(() => {
+    throw new Error("addSubgraph ran during commit");
+  });
+  const removeSubgraph = spyOn(CompiledFlow.prototype, "removeSubgraph").mockImplementation(() => {
+    throw new Error("removeSubgraph ran during commit");
+  });
+  let observers: readonly RunEvent[];
+  try {
+    observers = commitPrepared(log, state, prepared);
+  } finally {
+    addSubgraph.mockRestore();
+    removeSubgraph.mockRestore();
   }
-}
+
+  expect(appended).toBe(true);
+  expect(builderCalls).toBe(1);
+  expect(state.flow.nodes.has(expectedStart)).toBe(true);
+  expect(state.ready.at(-1)).toBe(expectedStart);
+  expect((observers[0] as NodeExpanded).grow.seed).toEqual({ nested: { items: ["stable"] } });
+});
+
+test("growth records the spawner as the owner of its fragment", () => {
+  const { state, log } = initializedSpawner();
+  const staticIds = new Set(state.flow.nodes.keys());
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+
+  const newIds = [...state.flow.nodes.keys()].filter((nodeId) => !staticIds.has(nodeId));
+  expect(newIds.length).toBeGreaterThan(0);
+  expect(state.growthOwner).toEqual(new Map(newIds.map((nodeId) => [nodeId, "spawn"])));
+});
 
 /** Return a state whose prunable `x/child/start` owns settled nodes and `side`. */
 function grownUnderRequested(sideState: NodeState): {

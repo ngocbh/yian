@@ -20,16 +20,23 @@ import {
   markerMessage,
   validateBackwardResult,
 } from "../nodes/base.ts";
-import { sameMemorySnapshotEnvelope, sameMemorySpec } from "../memory/contracts.ts";
+import { reprText } from "../diagnostics.ts";
+import {
+  LearningFailure,
+  MemoryOperationFailure,
+  sameMemorySnapshotEnvelope,
+  sameMemorySpec,
+} from "../memory/contracts.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { jsTypeName } from "../typesys/values.ts";
-import { AttributedBackwardResult, BackwardFailure, BackwardOutcome } from "./contracts.ts";
+import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
 import {
   addMessage,
   ContextCache,
   contextualTransfers,
   materializeContext,
   memoryCommitId,
+  OwnerContextError,
   prefixLearning,
   projectOwnerContexts,
   projectRootBackward,
@@ -41,12 +48,13 @@ import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
   BackwardStartedRecord,
+  MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
   type RunLog,
   type RunRecord,
 } from "./log.ts";
-import { MemoryRuntime } from "./memory_runtime.ts";
+import { LearningProposalError, MemoryRuntime } from "./memory_runtime.ts";
 import { commitPrepared, prepareRecord, RunState } from "./state.ts";
 import type { RetainedTrace } from "./trace.ts";
 
@@ -221,16 +229,53 @@ async function driveOpenedBackward(
       new BackwardOutcome("failed", { failure: error.failure, learning: prefixLearning(state.backwardState) }),
     );
   }
-  const contexts = projectOwnerContexts(
-    trace,
-    state.memories ?? [],
-    state.memoryStacks ?? [],
-    started.feedback,
-    root,
-    attributed,
-    { cache },
-  );
-  const proposals = memory === null ? [] : await memory.proposeLearning(contexts);
+  let proposals: readonly MemoryProposal[];
+  try {
+    const contexts = projectOwnerContexts(
+      trace,
+      state.memories ?? [],
+      state.memoryStacks ?? [],
+      started.feedback,
+      root,
+      attributed,
+      { cache },
+    );
+    proposals = memory === null ? [] : await memory.proposeLearning(contexts);
+  } catch (error) {
+    let key: string;
+    let context: BackwardContext | null = null;
+    let cause: MemoryOperationFailure;
+    if (error instanceof OwnerContextError) {
+      key = error.memory;
+      context = error.context;
+      let message = "memory learn context could not be constructed";
+      // A trace's backward context always names its occurrence's node.
+      if (context !== null) message += ` for node ${reprText(context.nodeId!)}`;
+      const text = `${message}: ${error.original.message}`;
+      cause = new MemoryOperationFailure("learn", "memory.invalid_context", text, false);
+    } else if (error instanceof LearningProposalError) {
+      key = error.memory;
+      cause = error.failure;
+    } else {
+      throw error;
+    }
+    const failure = new BackwardFailure("learn", cause.code, cause.message, {
+      scope: context?.scope ?? null,
+      runId: context?.runId ?? null,
+      nodeId: context?.nodeId ?? null,
+      nodeStartedSeq: context?.nodeStartedSeq ?? null,
+      memory: key,
+      cause,
+    });
+    const learning = prefixLearning(state.backwardState, { learnerFailure: new LearningFailure(key, "learn", cause) });
+    return finishBackward(
+      state,
+      log,
+      attemptId,
+      new BackwardOutcome("failed", { feedback: root, failure, learning }),
+      attributed,
+    );
+  }
 
   acceptBackward(state, log, new BackwardReadyRecord(attemptId, root, attributed, proposals));
   const backward = state.backwardState;
@@ -240,7 +285,17 @@ async function driveOpenedBackward(
     const commitId = memoryCommitId(state.runId!, key, batch, backward.commitAttemptKey!);
     acceptBackward(state, log, new MemoryCommitRequestedRecord(key, commitId, batch, attemptId));
     // The backend receives the accepted request, re-read after its append.
-    await memory!.commitLearning(state.backwardState.current!.requests.at(-1)!);
+    const cause = await memory!.commitLearning(state.backwardState.current!.requests.at(-1)!);
+    if (cause !== null) {
+      acceptBackward(state, log, new MemoryCommitFailedRecord(key, commitId, cause, attemptId));
+      const failure = new BackwardFailure("commit", cause.code, cause.message, { memory: key, cause });
+      return finishBackward(
+        state,
+        log,
+        attemptId,
+        new BackwardOutcome("failed", { feedback: root, failure, learning: prefixLearning(state.backwardState) }),
+      );
+    }
     acceptBackward(state, log, new MemoryCommitSucceededRecord(key, commitId, attemptId));
   }
   return finishBackward(

@@ -4,11 +4,15 @@
  *
  * Ported: `test_proposal_phase_visits_every_memory_without_committing` and
  * `test_proposal_contexts_validate_completely_before_any_learner` (6 rows), with the `_table` and
- * `_open` helpers; `test_empty_feedback_still_learns_empty_memories_and_commits_empty_batches`,
+ * `_open` helpers; the `backend` and `duplicate` rows of
+ * `test_late_proposal_failure_discards_all_staged_mutations`,
+ * `test_policy_failure_preserves_prior_success_and_stops_later_policies` (2 rows; `{}` for Python's
+ * `object()`), `test_empty_feedback_still_learns_empty_memories_and_commits_empty_batches`,
  * `test_no_policy_backward_still_records_ready_and_finished_without_opening_resources`,
  * `test_computation_failure_finishes_without_partial_feedback_or_learning` (2 rows; the callback
- * throws a plain `Error`, Python's `ValueError`), the `succeeded` and `requested_unfinished` rows of
- * `test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything`,
+ * throws a plain `Error`, Python's `ValueError`),
+ * `test_known_precommit_failure_allows_fresh_complete_pass_without_prior_proposals`,
+ * `test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything` (3 rows),
  * `test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batches`,
  * `test_opened_memory_runtime_subclass_is_closed_by_the_driver` and
  * `test_submission_gates_reject_before_opening_or_appending` (3 rows), with the `_terminal`,
@@ -23,24 +27,34 @@
  * `test_backward_finishes_all_callbacks_before_ready_and_policy_requests` wraps the session's
  * commit with `spyOn(FakeSession.prototype, "commit")` (Python's class-level `monkeypatch`),
  * restored with `mockRestore()`.
+ * - `test_late_proposal_failure_discards_all_staged_mutations`: the `tuple` row's learner returns a
+ *   `Set` (not an array), and the `forged` row returns a plain object shaped like a mutation with
+ *   `mutationId: true`, since a `MemoryMutation` is frozen (Python forges with `object.__setattr__`).
+ * - `test_context_depth_failure_keeps_completed_backward_without_calling_learners` and
+ *   `test_replayed_context_failure_must_name_an_accepted_receiving_occurrence` (7 rows): TS has no
+ *   memory JSON nesting bound, so a spy on `LearnContext.fromFrozen` throws
+ *   `RangeError("context too deep")` on its first call (START's occurrence, seq 1, under
+ *   `_terminal`'s every-node scope), restored with `mockRestore()`; the six changes rebuild the
+ *   failure through the `BackwardFailure` and `MemoryOperationFailure` constructors (Python's
+ *   `dataclasses.replace`), and each refusal pins its `RangeError` and full message (Python's
+ *   `ValueError`).
+ * - `test_backend_host_or_unexpected_error_escapes_with_exact_prefix`: the `RuntimeError` and
+ *   `RecursionError` cells, × learn and commit, throw a plain `Error` and a `RangeError`.
+ * - `test_host_capability_identity_and_cleanup_error_preserve_primary_exception`: the learner's
+ *   `CapabilityFault` escapes as that same object (TS unwraps no capability fault), with both
+ *   sessions' close failures noted on it; the close is wrapped with
+ *   `spyOn(FakeSession.prototype, "close")` and throws an `Error` (Python's `OSError`).
+ * - `test_learner_mutation_of_its_arguments_and_returned_values_cannot_change_authority`: the
+ *   context and the mutation are frozen, so each learner's edit throws a `TypeError` (asserted)
+ *   before the same authority checks.
  *
- * Later (PR 3 of T4-7): `test_late_proposal_failure_discards_all_staged_mutations`,
- * `test_policy_failure_preserves_prior_success_and_stops_later_policies`,
- * `test_context_depth_failure_keeps_completed_backward_without_calling_learners`,
- * `test_replayed_context_failure_must_name_an_accepted_receiving_occurrence`,
- * `test_append_fault_preserves_exact_prefix_and_closes_resources`,
+ * Later (PR 3 of T4-7): `test_append_fault_preserves_exact_prefix_and_closes_resources`,
  * `test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory`,
- * `test_known_precommit_failure_allows_fresh_complete_pass_without_prior_proposals`,
- * `test_failed_resource_setup_does_not_close_an_interrupted_attempt`, the `RuntimeError` and
- * `RecursionError` cells (a plain `Error` and a `RangeError`) of
- * `test_backend_host_or_unexpected_error_escapes_with_exact_prefix`, the two `with_primary` cells
+ * `test_failed_resource_setup_does_not_close_an_interrupted_attempt`, the two `with_primary` cells
  * of `test_cleanup_unwraps_host_failure_after_closing_all_sessions` (plain errors),
- * `test_host_capability_identity_and_cleanup_error_preserve_primary_exception`, the `commit_failed`
- * row of `test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything`,
  * `test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt`,
  * `test_backward_and_memory_replay_calls_no_callbacks_or_materialization`,
  * `test_prepare_failure_is_not_sanitized_as_a_learner_failure`,
- * `test_learner_mutation_of_its_arguments_and_returned_values_cannot_change_authority`,
  * `test_wrapped_host_error_during_partial_setup_closes_prior_sessions` and
  * `test_commit_batch_is_detached_from_every_accepted_authority`.
  *
@@ -61,20 +75,23 @@
 import { expect, spyOn, test } from "bun:test";
 
 import { FlowOutput, START_ID } from "../../src/compile/model.ts";
-import type { FeedbackValue } from "../../src/expr/lineage.ts";
+import { type FeedbackValue, SourceRef } from "../../src/expr/lineage.ts";
 import {
   DeclSite,
   LearnContext,
+  LearningFailure,
   MemoryMutation,
+  MemoryOperationError,
+  MemoryOperationFailure,
   MemoryScope,
   MemorySnapshotEnvelope,
   MemorySpec,
 } from "../../src/memory/contracts.ts";
-import { BackwardResult } from "../../src/nodes/base.ts";
+import { BackwardResult, CapabilityFault } from "../../src/nodes/base.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
-import { MemoryProposal } from "../../src/runtime/contracts.ts";
+import { BackwardFailure, BackwardOutcome, MemoryProposal } from "../../src/runtime/contracts.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
-import { memoryCommitId } from "../../src/runtime/learning.ts";
+import { memoryCommitId, prefixLearning } from "../../src/runtime/learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -285,6 +302,77 @@ test("backward finishes all callbacks before Ready and policy requests", async (
   expect(records(built).at(-1)!.constructor).toBe(BackwardFinishedRecord);
 });
 
+test("a late proposal failure discards all staged mutations", async () => {
+  for (const failureKind of ["backend", "duplicate", "tuple", "forged"]) {
+    const { engine: built, node } = await terminal(["A", "B", "C"]);
+    const prior = new MemoryMutation("same", { lesson: "first" });
+    const fail = () => {
+      if (failureKind === "backend") {
+        throw new MemoryOperationError("provider", "backward.interrupted", "Backend declined.", true);
+      }
+      if (failureKind === "duplicate") return [new MemoryMutation("same", {}), new MemoryMutation("same", {})];
+      if (failureKind === "tuple") return new Set();
+      // A mutation can't be forged in place: it is frozen.
+      return [{ mutationId: true, payload: {} }];
+    };
+    const memory = new Map([
+      ["A", new FakeMemory({ learnOutcomes: [[prior]] })],
+      ["B", new FakeMemory({ learnOutcomes: [fail] })],
+      ["C", new FakeMemory()],
+    ]);
+    const outcome = await drive(built, memory);
+    expect(outcome.status).toBe("failed");
+    expect(outcome.failure!.stage).toBe("learn");
+    expect(outcome.failure!.memory).toBe("B");
+    expect(outcome.failure!.code).toBe(failureKind === "backend" ? "backward.interrupted" : "memory.invalid_result");
+    expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["review"] });
+    expect(outcome.learning!.status).toBe("failed");
+    expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(Array(3).fill("unrequested"));
+    const backward = built.state.backwardState;
+    expect(backward.finished!.attributedResults).toHaveLength(built.state.trace!.occurrences.length);
+    expect(backward.ready).toBeNull();
+    expect(backward.canStart).toBe(true);
+    expect(node.calls).toHaveLength(1);
+    expect(memory.get("A")!.learnContexts).toHaveLength(1);
+    expect(memory.get("B")!.learnContexts).toHaveLength(1);
+    expect(memory.get("C")!.learnContexts).toEqual([]);
+    for (const backend of memory.values()) {
+      expect(backend.commitCalls).toEqual([]);
+      expect(backend.closeCount).toBe(1);
+    }
+  }
+});
+
+test("a policy failure preserves prior success and stops later policies", async () => {
+  for (const invalidResult of [false, true]) {
+    const { engine: built, node } = await terminal(["A", "B", "C"]);
+    const failed = invalidResult
+      ? {}
+      : new MemoryOperationError("storage", "backward.interrupted", "Store refused.", true);
+    const memory = new Map([
+      ["A", new FakeMemory()],
+      ["B", new FakeMemory({ commitOutcomes: [failed] })],
+      ["C", new FakeMemory()],
+    ]);
+    const outcome = await drive(built, memory);
+    expect(outcome.status).toBe("failed");
+    expect(outcome.failure!.stage).toBe("commit");
+    expect(outcome.failure!.memory).toBe("B");
+    expect(outcome.failure!.code).toBe(invalidResult ? "memory.invalid_result" : "backward.interrupted");
+    expect(outcome.learning!.status).toBe("failed");
+    expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(["succeeded", "failed", "unrequested"]);
+    expect(["A", "B", "C"].map((name) => memory.get(name)!.commitCalls.length)).toEqual([1, 1, 0]);
+    for (const backend of memory.values()) {
+      expect(backend.learnContexts).toHaveLength(1);
+      expect(backend.closeCount).toBe(1);
+    }
+    expect(node.calls).toHaveLength(1);
+    expect(built.state.backwardState.canStart).toBe(true);
+    expect(built.state.backwardState.finished!.attributedResults).toEqual([]);
+    expect(built.state.backwardState.ready!.attributedResults).toHaveLength(3);
+  }
+});
+
 test("empty feedback still learns empty memories and commits empty batches", async () => {
   const { engine: built, node } = await terminal(["A", "B"]);
   const memory = new Map([
@@ -326,6 +414,129 @@ test("a backward without policies still records Ready and Finished without openi
   expect(node.calls).toHaveLength(2);
 });
 
+/**
+ * Spy on `LearnContext.fromFrozen`, throwing `RangeError("context too deep")` on its first call
+ * (START's occurrence, seq 1, under `terminal`'s every-node scope) and passing the others through;
+ * restore it with `mockRestore()`.
+ */
+function failFirstContext() {
+  const fromFrozen = LearnContext.fromFrozen;
+  let calls = 0;
+  return spyOn(LearnContext, "fromFrozen").mockImplementation((...args) => {
+    calls += 1;
+    if (calls === 1) throw new RangeError("context too deep");
+    return fromFrozen.apply(LearnContext, args);
+  });
+}
+
+test("a context failure keeps the completed backward without calling learners", async () => {
+  const { engine: built, node } = await terminal();
+  const memory = new FakeMemory();
+  const spy = failFirstContext();
+  let outcome;
+  try {
+    outcome = await drive(built, new Map([["A", memory]]));
+  } finally {
+    spy.mockRestore();
+  }
+  const failure = outcome.failure!;
+  expect(failure.stage).toBe("learn");
+  expect(failure.code).toBe("memory.invalid_context");
+  expect(failure.memory).toBe(built.state.memories![0]!.key);
+  const context = built.state.trace!.backwardContext(new SourceRef(built.state.runId!, 1));
+  expect(failure.runId).toBe(built.state.runId);
+  expect(failure.nodeId).toBe(context.nodeId);
+  expect(failure.nodeStartedSeq).toBe(1);
+  expect(failure.scope).toEqual(context.scope);
+  expect(failure.message).toBe("memory learn context could not be constructed for node '__start__': context too deep");
+  expect(failure.cause!.message).toBe(failure.message);
+  expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["review"] });
+  expect(built.state.backwardState.finished!.attributedResults).toHaveLength(3);
+  expect(node.calls).toHaveLength(1);
+  expect(memory.learnContexts).toEqual([]);
+  expect(memory.commitCalls).toEqual([]);
+  expect(memory.closeCount).toBe(1);
+  expect(built.state.backwardState.canStart).toBe(true);
+});
+
+/** Return a Finished record for a fresh attempt that ends with `failure`. */
+function contextFailureRetry(built: FlowEngine, failure: BackwardFailure): BackwardFinishedRecord {
+  const first = built.state.backwardState.finished!;
+  commitPrepared(built.log, built.state, prepareRecord(built.state, new BackwardStartedRecord(2, "review")));
+  const learning = prefixLearning(built.state.backwardState, {
+    learnerFailure: new LearningFailure(failure.memory!, "learn", failure.cause as MemoryOperationFailure),
+  });
+  return new BackwardFinishedRecord(
+    2,
+    new BackwardOutcome("failed", { feedback: first.outcome.feedback, failure, learning }),
+    first.attributedResults,
+  );
+}
+
+test("a replayed context failure must name an accepted receiving occurrence", async () => {
+  const mismatch = "a context failure must match its recorded occurrence";
+  const foreign = "an attributed learner failure must be a context failure of this run";
+  const messages: Record<string, string> = {
+    node: mismatch,
+    source: "a context failure must name an accepted occurrence",
+    memory_scope: "a context failure must name an occurrence that receives its memory",
+    scope: mismatch,
+    run: foreign,
+    code: foreign,
+  };
+  for (const change of [null, "node", "source", "memory_scope", "scope", "run", "code"]) {
+    const { engine: built } = await terminal(["A", "B"]);
+    const spy = failFirstContext();
+    let failure: BackwardFailure;
+    try {
+      failure = (await drive(built, new Map([["A", new FakeMemory()], ["B", new FakeMemory()]]))).failure!;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(failure.nodeStartedSeq).toBe(1);
+    let cause = failure.cause as MemoryOperationFailure;
+    let fields = {
+      code: failure.code,
+      scope: failure.scope,
+      runId: failure.runId,
+      nodeId: failure.nodeId,
+      nodeStartedSeq: failure.nodeStartedSeq,
+      memory: failure.memory,
+    };
+    if (change === "node") fields = { ...fields, nodeId: "other" };
+    // Seq 2 is START's success record, not an accepted occurrence start.
+    else if (change === "source") fields = { ...fields, nodeStartedSeq: 2 };
+    // Every node's memory scope holds only "A".
+    else if (change === "memory_scope") fields = { ...fields, memory: "B" };
+    else if (change === "scope") {
+      const later = built.state.trace!.backwardContext(new SourceRef(built.state.runId!, 3));
+      fields = { ...fields, scope: later.scope };
+    } else if (change === "run") fields = { ...fields, runId: "other" };
+    else if (change === "code") {
+      cause = new MemoryOperationFailure(cause.stage, "learn.failed", cause.message, cause.retryable);
+      fields = { ...fields, code: cause.code };
+    }
+    const { code, ...options } = fields;
+    const record = contextFailureRetry(
+      built,
+      new BackwardFailure(failure.stage, code, failure.message, { ...options, cause }),
+    );
+    if (change === null) {
+      prepareRecord(built.state, record);
+      continue;
+    }
+    const error = (() => {
+      try {
+        prepareRecord(built.state, record);
+      } catch (caught) {
+        return caught as Error;
+      }
+    })();
+    expect(error?.constructor).toBe(RangeError);
+    expect(error!.message).toBe(messages[change]!);
+  }
+});
+
 test("a computation failure finishes without partial feedback or learning", async () => {
   for (const invalidResult of [false, true]) {
     const callback = () => {
@@ -347,8 +558,100 @@ test("a computation failure finishes without partial feedback or learning", asyn
   }
 });
 
+test("a known precommit failure allows a fresh complete pass without prior proposals", async () => {
+  const { engine: built, node } = await terminal(["A", "B"]);
+  const proposal = (name: string) => () => [new MemoryMutation(name, {})];
+  const memory = new Map([
+    ["A", new FakeMemory({ learnOutcomes: [proposal("old"), proposal("new-first")] })],
+    [
+      "B",
+      new FakeMemory({
+        learnOutcomes: [new MemoryOperationError("learn", "rejected", "Rejected.", false), proposal("new-second")],
+      }),
+    ],
+  ]);
+  expect((await drive(built, memory)).status).toBe("failed");
+  expect(built.state.backwardState.canStart).toBe(true);
+  expect((await drive(built, memory)).status).toBe("succeeded");
+  expect(node.calls).toHaveLength(2);
+  for (const backend of memory.values()) {
+    expect(backend.learnContexts).toHaveLength(2);
+    expect(backend.openSnapshots).toEqual([{}, {}]);
+    expect(backend.closeCount).toBe(2);
+  }
+  expect(memory.get("A")!.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["new-first"]);
+  expect(memory.get("B")!.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["new-second"]);
+});
+
+test("a backend host or unexpected error escapes with the exact prefix", async () => {
+  for (const operation of ["learn", "commit"]) {
+    for (const cls of [Error, RangeError]) {
+      const { engine: built, node } = await terminal(["A", "B"]);
+      const error = new cls("host stopped");
+      const memory = new Map([
+        [
+          "A",
+          new FakeMemory({
+            learnOutcomes: operation === "learn" ? [error] : [],
+            commitOutcomes: operation === "commit" ? [error] : [],
+          }),
+        ],
+        ["B", new FakeMemory()],
+      ]);
+      expect(await rejected(drive(built, memory))).toBe(error);
+      expect(node.calls).toHaveLength(1);
+      const backward = built.state.backwardState;
+      expect(backward.finished).toBeNull();
+      expect(backward.policyOutcomes[0]!.status).toBe(operation === "learn" ? "unrequested" : "unknown");
+      expect(memory.get("B")!.commitCalls).toEqual([]);
+      for (const backend of memory.values()) expect(backend.closeCount).toBe(1);
+      if (operation === "commit") {
+        expect((await drive(built, memory, "after host stop")).status).toBe("succeeded");
+        const finished = records(built).filter(
+          (record) => record.constructor === BackwardFinishedRecord,
+        ) as BackwardFinishedRecord[];
+        expect(finished.map((record) => record.attemptId)).toEqual([1, 2]);
+        expect(finished[0]!.outcome.failure!.code).toBe("backward.interrupted");
+        expect(finished[0]!.outcome.learning!.policies.map((policy) => policy.status)).toEqual([
+          "unknown",
+          "unrequested",
+        ]);
+        for (const backend of memory.values()) expect(backend.openSnapshots).toEqual([{}, {}]);
+      }
+    }
+  }
+});
+
+test("a host capability fault escapes as itself, with cleanup errors noted on it", async () => {
+  const { engine: built } = await terminal(["A", "B"]);
+  const fault = new CapabilityFault(new Error("capability failed"));
+  const memory = new Map([
+    ["A", new FakeMemory({ learnOutcomes: [fault] })],
+    ["B", new FakeMemory()],
+  ]);
+  const originalClose = FakeSession.prototype.close;
+  const close = spyOn(FakeSession.prototype, "close").mockImplementation(function (this: FakeSession) {
+    originalClose.call(this);
+    throw new Error("close failed");
+  });
+  let caught: unknown;
+  try {
+    caught = await rejected(drive(built, memory));
+  } finally {
+    close.mockRestore();
+  }
+  expect(caught).toBe(fault);
+  expect((caught as { notes?: unknown }).notes).toEqual([
+    "memory 'B' session close also raised Error: close failed",
+    "memory 'A' session close also raised Error: close failed",
+  ]);
+  for (const backend of memory.values()) expect(backend.closeCount).toBe(1);
+  expect(built.state.backwardState.finished).toBeNull();
+  expect(built.state.backwardState.everRequested).toBe(false);
+});
+
 test("a later attempt follows or closes any prior attempt and recomputes everything", async () => {
-  for (const prior of ["succeeded", "requested_unfinished"]) {
+  for (const prior of ["succeeded", "commit_failed", "requested_unfinished"]) {
     const { engine: built, node } = await terminal(["A"]);
     if (prior === "requested_unfinished") {
       const state = built.state;
@@ -363,7 +666,11 @@ test("a later attempt follows or closes any prior attempt and recomputes everyth
         commitPrepared(built.log, state, prepareRecord(state, record));
       }
     } else {
-      expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
+      const first = new FakeMemory({
+        commitOutcomes:
+          prior === "commit_failed" ? [new MemoryOperationError("storage", "store.moved", "Moved.", true)] : [],
+      });
+      expect((await drive(built, new Map([["A", first]]))).status).toBe(prior === "succeeded" ? "succeeded" : "failed");
     }
     const calls = node.calls.length;
     const later = new FakeMemory();
@@ -401,6 +708,33 @@ test("repeated driven attempts request distinct commit ids for identical batches
   expect(memory.commitCalls.map(([commitId]) => commitId)).toEqual(requests.map((record) => record.commitId));
   expect(new Set(requests.map((record) => record.commitId)).size).toBe(3);
   expect(requests[0]!.commitId.startsWith("ac-memory-v3:")).toBe(true);
+});
+
+test("a learner's edits to its arguments and returned values cannot change authority", async () => {
+  const { engine: built } = await terminal(["A", "B"]);
+  const returned = new MemoryMutation("first", { items: ["saved"] });
+  const learnFirst = (context: LearnContext) => {
+    expect(() => {
+      (context as { memory: string }).memory = "wrong";
+    }).toThrow(TypeError);
+    return [returned];
+  };
+  const learnSecond = () => {
+    expect(() => {
+      (returned as { mutationId: string }).mutationId = "changed-later";
+    }).toThrow(TypeError);
+    return [];
+  };
+  const memory = new Map([
+    ["A", new FakeMemory({ learnOutcomes: [learnFirst] })],
+    ["B", new FakeMemory({ learnOutcomes: [learnSecond] })],
+  ]);
+  const outcome = await drive(built, memory);
+  expect(outcome.status).toBe("succeeded");
+  const ready = records(built).find((record) => record.constructor === BackwardReadyRecord) as BackwardReadyRecord;
+  expect(ready.proposals.map((proposal) => proposal.memory)).toEqual(["A", "B"]);
+  expect(memory.get("A")!.commitCalls[0]![1][0]!.mutationId).toBe("first");
+  expect(memory.get("A")!.commitCalls[0]![1][0]!.payload).toEqual({ items: ["saved"] });
 });
 
 test("an opened MemoryRuntime subclass is closed by the driver", async () => {

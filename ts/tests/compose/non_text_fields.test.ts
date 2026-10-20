@@ -17,7 +17,8 @@
  * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
  * and `adaptive_questions.llm_config` sites with `assembleText`, as the loader assembles the root
  * flow. So do the searched-when and on-when rows of `test_already_located_fields_are_unchanged`,
- * whose errors the CASE build raises.
+ * whose errors the CASE build raises, and its then and else rows, whose errors the case-branch
+ * check raises.
  *
  * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
  * by the call that raises their error. The inline-body rows of
@@ -28,8 +29,7 @@
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
  *
- * Later (T3-22): the load half of `test_text_call_still_loads`. Later (T3-20): the then and else
- * rows of `test_already_located_fields_are_unchanged`.
+ * Later (T3-22): the load half of `test_text_call_still_loads`.
  * Later (T3-18, T3-22): the unresolved-reference error of `test_null_case_on_is_absent`. Later
  * (T3-22): the loading of `test_text_case_on_still_loads`.
  * Later (T3-22): the defs, compact and merge rows of those two tests, the flow and def sites of
@@ -573,8 +573,21 @@ describe("the CASE build", () => {
   });
 
   test.each([
+    ["then", "then: b", "then: 5"],
+    ["else", "else: c", "else: 5"],
+  ])("a non-text %s is located as before", (key, written, marker) => {
+    const text = caseOn("${input.proj}").replace(written, marker);
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toContain("a branch names a node or calls a flow");
+    expect(startLine(error)).toBe(lineOf(text, marker));
+  });
+
+  test.each([
     "load-core/compose_non_text_fields__list_on_when",
     "load-core/compose_non_text_fields__non_text_searched_when",
+    "load-core/compose_non_text_fields__non_text_then",
   ])("case %s", (id) => runCase({ id, call: assembled }));
 });
 

@@ -11,6 +11,7 @@
  * `test_case_parse_tells_else_null_from_no_else`,
  * `test_case_descriptor_constructed_with_else_has_else`, `test_case_parse_keeps_then_null_key`,
  * `test_case_parse_on_form_keeps_styles`, `test_case_rejects_malformed_cases_at_their_location`,
+ * `test_source_attachment_does_not_preempt_malformed_case_validation`,
  * `test_source_free_case_build_keeps_predicates_and_wiring_origin_free`, the origin half of
  * `test_searched_case_origins_are_positional_and_select_the_failing_entry` (on the parsed
  * descriptor and on the built node), and the `thenRanges[0]` assertion of
@@ -25,8 +26,10 @@
  * `CaseNode`; the searched and `on:` rows also assemble the flow (`assembleText`) and read the
  * built node and its `__r0` or `__on` wiring. The misaligned origins are a `RangeError` where
  * Python's are a `ValueError`, and the message says "or null" where Python's says "or None". The
- * requires-cases row pins the whole message and its range (the node body), where Python matches a
- * fragment. The misaligned-origins row also checks that the origins are a frozen copy.
+ * requires-cases row pins the whole message and its range (the node body), and the
+ * source-attachment row the whole message, where Python matches a fragment; the source-attachment
+ * row assembles the flow (`assembleText`). The misaligned-origins row also checks that the origins
+ * are a frozen copy.
  *
  * TS-only: the lowering row also checks the `__on` input's range and label; an `on:` case entry
  * with a null `when:` is refused at that `when:`; a lone surrogate in `on:` or in a searched
@@ -36,22 +39,19 @@
  * Dropped: `test_case_keeps_no_key_normalization` (Python class-dict introspection).
  *
  * Later (T4): the run half of
- * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T3-20):
- * `test_source_attachment_does_not_preempt_malformed_case_validation` (`case_branches`; its
- * `[{when: 1}]` row is the harvested `a_case_with_no_branch_has_no_value`, pinned). Later (T3-22,
- * T4):
+ * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T3-22, T4):
  * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T4):
  * `test_inline_definition_case_failure_keeps_child_predicate_origin`. Later (T3-22):
  * `test_external_alias_rebases_case_and_generated_binding_origins`,
  * `test_generated_child_clone_preserves_case_predicate_origins`,
- * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`. Later (T3-20): the
- * harvested `load-case/compose_kind_case_parse__a_flow_style_case_names_no_node`.
+ * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`.
  *
  * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
  * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
  * from `tests/compose/test_expression_nesting.py`, which has no TS mirror yet, and
  * `load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value`, which the case-output
- * expansion raises.
+ * expansion raises, and `load-case/compose_kind_case_parse__a_flow_style_case_names_no_node`,
+ * which the case-branch check raises.
  */
 
 import { expect, test } from "bun:test";
@@ -313,6 +313,31 @@ test("case descriptor rejects misaligned or non-opaque origins", () => {
   expect(Object.isFrozen(copied.whenOrigins)).toBe(true);
 });
 
+test.each([
+  [
+    "[{then: done}]",
+    "case node 'gate' then: `done` names no node. For the text, add a value entry and name it: " +
+      "`done_text: !str done`",
+  ],
+  [
+    "[{when: 1}]",
+    "flow outputs: ${gate.output} — case 'gate' has no resolvable branch value (a case needs a " +
+      "`then:` or `else:`, and its targets must not form a cycle)",
+  ],
+])("source attachment does not preempt malformed case validation: %s", (malformedCases, message) => {
+  // The origin hook stays inert for malformed shapes until the normal phases.
+  const text =
+    "id: malformed-case\n" +
+    "name: malformed-case\n" +
+    "nodes:\n" +
+    "  gate:\n" +
+    "    kind: case\n" +
+    `    cases: ${malformedCases}\n` +
+    "output: ${gate.output}\n";
+
+  expect(loadError(() => assembleText(text)).message).toBe(message);
+});
+
 test("case parse keeps then styles aligned with cases", () => {
   const desc = parseCase(`kind: case
 cases:
@@ -548,6 +573,7 @@ test.each<CaseRow>([
 test.each<CaseRow>([
   // tests/compose/test_kind_case_parse.py
   { id: "load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value", call: assembled },
+  { id: "load-case/compose_kind_case_parse__a_flow_style_case_names_no_node", call: assembled },
   // tests/compose/test_expression_nesting.py
   { id: "load-core/compose_expression_nesting__thousands_of_nested_spans", call: assembled },
   { id: "load-core/compose_expression_nesting__too_deep_searched_when", call: assembled },

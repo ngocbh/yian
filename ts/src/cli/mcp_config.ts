@@ -16,7 +16,7 @@ import { reprText } from "../diagnostics.ts";
 import { isSystemError } from "../skills/catalog.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../typesys/json.ts";
-import { type Value, writeAsText } from "../typesys/values.ts";
+import { type Value, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { osReason } from "./utils.ts";
 
 const KNOWN_KEYS: ReadonlySet<string> = new Set([
@@ -181,7 +181,7 @@ function build(
       throw new McpConfigError(`${where}: 'type' must be one of ${TYPES.join(", ")}; got ${shown}`);
     }
     const [needed, other] = type === "stdio" ? (["command", "url"] as const) : (["url", "command"] as const);
-    if ((type === "stdio" ? command : url) === undefined) {
+    if ((needed === "command" ? command : url) === undefined) {
       throw new McpConfigError(`${where}: 'type' ${reprText(type)} needs ${reprText(needed)}, not ${reprText(other)}`);
     }
   }
@@ -203,7 +203,7 @@ function build(
       : Object.fromEntries(
           Object.entries(value).map(([key, item]) => [
             key,
-            expand(where, `${field}[${JSON.stringify(key)}]`, item, env),
+            expand(where, `${field}[${writeAsJson(key)}]`, item, env),
           ]),
         );
 
@@ -245,7 +245,7 @@ function optionalStringRecord(where: string, entry: JsonObject, key: string): Re
   }
   for (const [itemKey, item] of Object.entries(value)) {
     if (typeof item !== "string") {
-      throw new McpConfigError(`${where}: ${key}[${JSON.stringify(itemKey)}] must be a string, got ${kind(item)}`);
+      throw new McpConfigError(`${where}: ${key}[${writeAsJson(itemKey)}] must be a string, got ${kind(item)}`);
     }
   }
   return value as Record<string, string>;

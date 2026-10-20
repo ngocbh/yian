@@ -149,6 +149,7 @@ test("test_missing_variable_names_file_server_and_field", () => {
 test.each([
   ["${MISSING:-d}", "d"],
   ["${SET:-d}", "v"],
+  ["${MISSING:-}", ""],
   ["x${SET}y", "xvy"],
   ["a$$b", "a$b"],
   ["$${SET}", "${SET}"],
@@ -359,6 +360,18 @@ test("test_missing_file_names_it", () => {
 
 test("test_no_files_gives_no_servers", () => {
   expect(Object.keys(loadMcpConfig([], envOf({})))).toEqual([]);
+});
+
+test("null counts as absent for type, env, headers, cwd and url", () => {
+  const path = write("mcp.json", {
+    local: { command: "srv", type: null, env: null, cwd: null, url: null },
+    remote: { url: "https://x.example.com/mcp", headers: null, command: null },
+  });
+
+  const servers = loadMcpConfig([path], envOf({}));
+
+  expect(spec(servers["local"])).toMatchObject({ command: "srv", env: undefined, cwd: undefined, url: undefined });
+  expect(spec(servers["remote"])).toMatchObject({ url: "https://x.example.com/mcp", headers: undefined });
 });
 
 test("a __proto__ server name and a __proto__ env key stay data", () => {

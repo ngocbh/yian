@@ -13,9 +13,10 @@
  * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
  * where a case's `defs:` entry would be loaded, for the rows that read a child's signature or
  * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`). The harness
- * scope registers and resolves inline body children itself; the loader's callable scope, with
- * its collision and recursion checks, is T3-22's. The harness reads the flow's `llm_config:` as
- * the loader reads a value layer; the loader's checks of a plain record layer are T3-22's.
+ * assembles through the loader's real `CallableScope`, so a case's `defs:` entries resolve lazily
+ * and inline bodies register through it; hand-built children are looked up in front of it. The
+ * harness reads the flow's `llm_config:` as the loader reads a value layer; the loader's checks of
+ * a plain record layer run only through `loadFlow`.
  */
 
 import { existsSync, readFileSync, symlinkSync } from "node:fs";
@@ -25,14 +26,14 @@ import { fileURLToPath } from "node:url";
 import { expect } from "bun:test";
 
 import { CompiledFlow, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { assemble, type CallableScope, ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { boundaryFieldRanges } from "../../src/compose/helpers/source.ts";
 import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/helpers/types.ts";
 import { checkLlmConfigValue, readLlmConfig } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
+import { CallableScope, loadFlow } from "../../src/compose/loader.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
@@ -290,36 +291,16 @@ export const parsedNodes: CaseCall = (document) =>
 /** Child flows by callable name, standing in for the `defs:` entries the loader would compose. */
 export type ChildFlows = Readonly<Record<string, ComposedFlow>>;
 
-/** Return a scope `resolve` that hands back `children[flowId]`, else throws (no loader yet). */
-function resolveFrom(children: ChildFlows = {}): CallableScope["resolve"] {
-  return (flowId) => {
-    if (Object.hasOwn(children, flowId)) return children[flowId]!;
-    throw new Error("child flows load in T3-22");
-  };
-}
-
 /**
- * Return a scope whose catalog is `builder` and which registers private (inline body) children:
- * `resolve` builds a registered child and memoizes only a successful build; any other callable
- * goes to `fallback`. A repeated registration keeps the first builder.
+ * Return `scope` with a thin lookup of hand-built `children` in front of its `resolve`: a name in
+ * `children` resolves to that flow; any other goes to the real scope.
  */
-function scopeOf(builder: SourceCatalogBuilder, fallback: CallableScope["resolve"]): CallableScope {
-  const builders = new Map<string, () => ComposedFlow>();
-  const built = new Map<string, ComposedFlow>();
+function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyScope {
   return {
-    catalogBuilder: builder,
-    registerPrivate: (flowId, _owner, _label, build) => {
-      if (!builders.has(flowId)) builders.set(flowId, build);
-    },
-    resolve: (flowId, version) => {
-      const flow = built.get(flowId);
-      if (flow !== undefined) return flow;
-      const build = builders.get(flowId);
-      if (build === undefined) return fallback(flowId, version);
-      const child = build();
-      built.set(flowId, child);
-      return child;
-    },
+    catalogBuilder: scope.catalogBuilder,
+    registerPrivate: (flowId, owner, label, build) => scope.registerPrivate(flowId, owner, label, build),
+    resolve: (flowId, version) =>
+      Object.hasOwn(children, flowId) ? children[flowId]! : scope.resolve(flowId, version),
   };
 }
 
@@ -327,7 +308,7 @@ function scopeOf(builder: SourceCatalogBuilder, fallback: CallableScope["resolve
  * Read the root's `llm_config:` (`authored`, as `parseFile` read it) as the loader reads a flow
  * layer: a layer holding values is read through its tags and checked (`readLlmConfig`,
  * `checkLlmConfigValue`); a plain record is returned as is (the loader's `LLMConfig`, host-only
- * and not-text checks are T3-22's); an absent or untagged `null` layer is `{}`.
+ * and not-text checks run only through `loadFlow`); an absent or untagged `null` layer is `{}`.
  *
  * @throws LoadError when the layer is malformed or is not a mapping.
  */
@@ -364,10 +345,11 @@ function readAuthoredLlmConfig(
 }
 
 /**
- * Assemble the root flow of `document` as the loader calls `assemble` on it, with a scope whose
- * catalog is `builder`, which registers and resolves inline body children, and which resolves
- * any other callable through `resolve` (default: none resolves). The flow's `llm_config:` is read
- * by `readAuthoredLlmConfig`; the loader's `uses:` aliases and root memories are left out.
+ * Assemble the root flow of `document` as the loader calls `assemble` on it, through the loader's
+ * `CallableScope` over the file's `defs:` (no `uses:`), whose catalog is `builder`, with the
+ * hand-built `children` (default none) looked up in front of it. Defs resolve lazily, as calls
+ * reach them. The flow's `llm_config:` is read by `readAuthoredLlmConfig`; the loader's `uses:`
+ * aliases, root memories and CODE checks are left out.
  *
  * @param diagnostics The case's factory for located load errors.
  */
@@ -376,11 +358,16 @@ function assembleRoot(
   registry: TypeRegistry,
   builder: SourceCatalogBuilder,
   diagnostics: LoadDiagnostics,
-  resolve: CallableScope["resolve"] = resolveFrom(),
+  children: ChildFlows = {},
 ): ComposedFlow {
   const file = parseFile(document);
   const root = document.root;
-  const scope = scopeOf(builder, resolve);
+  const realScope = new CallableScope(file.defs, registry, null, {}, {
+    defsCursor: root.has("defs") ? root.child("defs") : null,
+    catalogBuilder: builder,
+    diagnostics,
+  });
+  const scope = resolveFrom(realScope, children);
   // A compact flow (no `nodes:`) lends its top-level `output:` to its one synthesized node, so the
   // loader locates the flow's `asserts:` and `output:` only in a full flow.
   const childOf = (key: string, flowOnly = false) =>
@@ -417,7 +404,7 @@ export const assembled: CaseCall = (document, registry, diagnostics, builder) =>
 export const assembledWith =
   (children: ChildFlows): CaseCall =>
   (document, registry, diagnostics, builder) =>
-    assembleRoot(document, registry, builder, diagnostics, resolveFrom(children));
+    assembleRoot(document, registry, builder, diagnostics, children);
 
 /**
  * Assemble flow `text`'s root as `assembled` does, returning the flow and the catalog builder
@@ -439,7 +426,7 @@ export function assembleText(
       caseRegistry(document),
       builder,
       LoadDiagnostics.fromDocument(document),
-      resolveFrom(options.children),
+      options.children,
     ),
     builder,
   };

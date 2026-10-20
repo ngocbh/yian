@@ -1700,7 +1700,10 @@ function fragmentOf(nodes: Map<string, Node>, edges: Edge[], startId: string, en
   return new Flow(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])), startId, endId });
 }
 
-/** Return a dynamic router whose `go` route skips `dead`, so its END's `zeta` and global END's `result`. */
+/**
+ * Return a dynamic fragment whose router's `go` route skips `dead`, which skips the fragment END's
+ * `zeta` and so global END's `result`.
+ */
 function terminalRouterFragment(spawnerId: string): Flow {
   const startId = `${spawnerId}/child/start`;
   const routerId = `${spawnerId}/child/router`;

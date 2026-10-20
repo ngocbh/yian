@@ -151,7 +151,6 @@ import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import {
   expectUnchanged,
   FailingLog,
-  FuncNode,
   fragment,
   fragmentBuilder,
   initializedSpawner,

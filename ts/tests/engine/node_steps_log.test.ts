@@ -47,7 +47,8 @@
  * and a list are both an array).
  *
  * Later (T4-5, replay): `test_replay_reproduces_steps_and_starts`,
- * `test_learnable_replay_reproduces_steps_starts_and_trace`, `test_replay_without_steps_has_no_steps`.
+ * `test_learnable_replay_reproduces_steps_starts_and_trace`,
+ * `test_replay_without_steps_has_no_steps`.
  *
  * Later (T3-22, it needs `build_grow` and `LoopNode.run`):
  * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune`.

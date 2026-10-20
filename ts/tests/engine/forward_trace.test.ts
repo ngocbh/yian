@@ -2169,11 +2169,11 @@ function expectRefused(
   expect(state.trace!.nextSequence).toBe(log.nextSequence);
 }
 
-/** An outcome kind `preparedScopedOutcome` prepares. */
-type OutcomeKind = "success" | "route" | "failure" | "growth";
-
-/** The outcome kinds of the occurrence and scope checks. */
+/** The outcome kinds `preparedScopedOutcome` prepares. */
 const OUTCOME_KINDS = ["success", "route", "failure", "growth"] as const;
+
+/** An outcome kind `preparedScopedOutcome` prepares. */
+type OutcomeKind = (typeof OUTCOME_KINDS)[number];
 
 /** A CODE node that may grow the graph, Python's `FuncNode` subclass `Spawner`. */
 class FuncSpawner extends FuncNode {

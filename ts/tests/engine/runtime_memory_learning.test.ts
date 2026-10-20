@@ -11,8 +11,9 @@
  * `test_learning_rejects_a_scope_without_a_recorded_stack`,
  * `test_empty_enabled_table_retains_scope_free_evidence_without_episodes`,
  * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success`,
- * `route` and `growth` rows of `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`
- * (the growth into the shared `fragment`).
+ * `route` and `growth` rows of
+ * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (the growth into the
+ * shared `fragment`).
  *
  * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
  * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
@@ -43,8 +44,9 @@
  * `episodeOutcome` projects a success's canonical value and a failed record's failure JSON, and
  * refuses a record of another class and a forged success without a canonical typed value.
  *
- * Later (T4-5, replay): `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack`
- * (it replays through `replayRecords`).
+ * Later (T4-5, replay):
+ * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (it replays
+ * through `replayRecords`).
  *
  * Later (T4-7, with `computeBackward` and the engine): the owner-context and episode tests
  * (`test_owner_contexts_include_general_occurrences_and_empty_memories` through

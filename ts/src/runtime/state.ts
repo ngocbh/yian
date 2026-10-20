@@ -8,8 +8,8 @@
  * and relinquishes direct mutation of its execution fields; chronological reducer transitions are
  * the only topology writers. Everything here is synchronous.
  *
- * Knows about:   compile/manifest, compile/model, compile/validation, defaults, diagnostics, events,
- *                expr, memory, nodes, runtime/common, runtime/contracts, runtime/learning,
+ * Knows about:   compile/manifest, compile/model, compile/validation, defaults, diagnostics,
+ *                events, expr, memory, nodes, runtime/common, runtime/contracts, runtime/learning,
  *                runtime/log, runtime/trace, typesys.
  * Never imports: engine, run, backward, compose, or the CLI.
  */
@@ -217,7 +217,7 @@ export class NodeDataError extends Error {
 }
 
 /** Mark one explicit live node-produced growth rejection. */
-function raiseGrowthRejected(original: Error): never {
+function raiseGrowthRejected(original: TypeError | RangeError): never {
   throw new GrowthRejected(original);
 }
 
@@ -1257,11 +1257,10 @@ function prepareGrowthTransition(
   state: RunState,
   record: NodeExpandedRecord,
   fragment: Flow,
-  options: { actualDigest?: string | null; validatedFragment?: ValidatedFragment | null } = {},
+  options: { actualDigest: string; validatedFragment: ValidatedFragment },
 ): PreparedTransition {
   validateGrowthRecord(state, record);
-  const validated = options.validatedFragment ?? validateGrowthFragment(state, fragment);
-  const digest = options.actualDigest ?? expansionDigest(fragment);
+  const { actualDigest: digest, validatedFragment: validated } = options;
   if (digest !== record.topologyDigest) {
     throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
   }
@@ -2459,9 +2458,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
     }
     const wiring: unknown = fragment.wiring.get(nodeId);
     if (!isExactly(wiring, Map) || [...wiring.keys()].some((key) => typeof key !== "string")) {
-      raiseGrowthRejected(
-        new TypeError(`growth fragment wiring for ${reprText(nodeId)} must be a string-keyed Map`),
-      );
+      raiseGrowthRejected(new TypeError(`growth fragment wiring for ${reprText(nodeId)} must be a string-keyed Map`));
     }
     const params: unknown = node.params ?? [];
     if (!Array.isArray(params)) {
@@ -2575,10 +2572,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
   validateGrowthReachability(fragment);
   // Fragment edges target only fresh fragment nodes and live edges can't reach them, so any new
   // cycle lies wholly inside the fragment.
-  rejectGrowthCycle(
-    new Set(fragment.nodes.keys()),
-    fragment.edges.filter((edge) => fragment.nodes.has(edge.from)),
-  );
+  rejectGrowthCycle(new Set(fragment.nodes.keys()), fragment.edges.filter((edge) => fragment.nodes.has(edge.from)));
   return Object.freeze([Object.freeze(newNodeIds), Object.freeze(newEdgeIds)] as const);
 }
 
@@ -2684,16 +2678,14 @@ function rejectGrowthCycle(nodeIds: ReadonlySet<string>, edges: readonly Edge[])
 function validatedGrowthDepth(state: RunState, spawnerId: string): number | null {
   const delta: unknown = state.flow.nodes.get(spawnerId)!.growDepthDelta;
   if (delta === null) return null;
-  if (!Number.isSafeInteger(delta) || (delta as number) < 0) {
-    throw new RangeError(
-      `spawner ${reprText(spawnerId)} grow_depth_delta must be null, 0, or a positive integer`,
-    );
+  if (typeof delta !== "number" || !Number.isSafeInteger(delta) || delta < 0) {
+    throw new RangeError(`spawner ${reprText(spawnerId)} grow_depth_delta must be null, 0, or a positive integer`);
   }
   const parentDepth: unknown = state.depth.has(spawnerId) ? state.depth.get(spawnerId) : 0;
-  if (!Number.isSafeInteger(parentDepth) || (parentDepth as number) < 0) {
+  if (typeof parentDepth !== "number" || !Number.isSafeInteger(parentDepth) || parentDepth < 0) {
     throw new RangeError(`spawner ${reprText(spawnerId)} has an invalid parent depth`);
   }
-  return (parentDepth as number) + (delta as number);
+  return parentDepth + delta;
 }
 
 /** Return the node ids one node names through its wiring and redirect fields. */
@@ -3275,8 +3267,7 @@ function validateGrowthRedirects(
 ): void {
   // Python's `_GrowthNodeIds`: membership after the growth, without copying the ids.
   const finalIds = {
-    has: (id: string): boolean =>
-      fragment.nodes.has(id) || (state.flow.nodes.has(id) && !retiredIds.has(id)),
+    has: (id: string): boolean => fragment.nodes.has(id) || (state.flow.nodes.has(id) && !retiredIds.has(id)),
   };
   const newOwners = new Map<string, string[]>();
   for (const [nodeId, node] of fragment.nodes) {

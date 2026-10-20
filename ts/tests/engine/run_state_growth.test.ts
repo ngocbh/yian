@@ -77,7 +77,7 @@
  * - the `empty-param-tuple` and `param-tuple` rows of
  *   `test_growth_rejects_invalid_fragments_atomically`: a tuple and a list are both a JS array.
  *
- * Later (next commits of this PR; update this list as they land):
+ * Later (T4-5, pruning):
  * `test_growth_accepts_peak_node_count_equal_to_budget`,
  * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
  * `test_growth_rejects_unsafe_pruning_matrix_atomically`,
@@ -228,6 +228,19 @@ function topologySnapshot(state: RunState): Record<string, unknown> {
   };
 }
 
+/** Assert `fn`'s growth rejection leaves the state, the topology and the log unchanged. */
+function expectAtomic(state: RunState, log: MemoryRunLog, fn: () => void): void {
+  const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
+  const sequence = log.nextSequence;
+
+  fn();
+
+  expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expect(log.nextSequence).toBe(sequence);
+}
+
 /** Add one live node of `state`'s flow with no edges and no wiring, as an `UNKNOWN` node. */
 function addLiveNode(state: RunState, node: Node): void {
   state.flow.addSubgraph(new Map([[node.id, node]]), [], new Map([[node.id, new Map()]]));
@@ -256,13 +269,14 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 
 /**
  * Assert `fn` throws a `GrowthRejected` whose `original` has exactly class `cls` and a message
- * matching `message`; return that original.
+ * matching `message` (a string matches exactly); return that original.
  */
-function expectRejected(fn: () => unknown, cls: new (...args: never[]) => Error, message: RegExp): Error {
+function expectRejected(fn: () => unknown, cls: new (...args: never[]) => Error, message: RegExp | string): Error {
   const error = caught(fn) as GrowthRejected;
   expect(error.constructor).toBe(GrowthRejected);
   expect(error.original.constructor).toBe(cls);
-  expect(error.original.message).toMatch(message);
+  if (typeof message === "string") expect(error.original.message).toBe(message);
+  else expect(error.original.message).toMatch(message);
   expect(error.cause).toBe(error.original);
   return error.original;
 }
@@ -317,11 +331,9 @@ test("growth rejects an excessively nested seed before the builder", () => {
 });
 
 test("the growth builder receives a detached spawner and its failure is pure", () => {
-  const { state } = initializedSpawner();
+  const { state, log } = initializedSpawner();
   const liveSpawner = state.flow.nodes.get("spawn")!;
   liveSpawner.title = "live";
-  const before = snapshot(state);
-  const beforeTopology = topologySnapshot(state);
   const original = new Error("builder failed");
   let received: Node | null = null;
   const mutatingFailingBuilder: GrowBuilder = (spawner) => {
@@ -330,13 +342,14 @@ test("the growth builder receives a detached spawner and its failure is pure", (
     throw original;
   };
 
-  const error = caught(() => prepareExpanded(state, "spawn", new Grow({ value: 1 }), mutatingFailingBuilder));
+  let error: unknown;
+  expectAtomic(state, log, () => {
+    error = caught(() => prepareExpanded(state, "spawn", new Grow({ value: 1 }), mutatingFailingBuilder));
+  });
 
   expect(error).toBe(original);
   expect(received).not.toBeNull();
   expect(received).not.toBe(liveSpawner);
-  expectUnchanged(state, before);
-  expect(topologySnapshot(state)).toEqual(beforeTopology);
   expect(state.flow.nodes.get("spawn")).toBe(liveSpawner);
   expect(liveSpawner.title).toBe("live");
 });
@@ -440,39 +453,31 @@ test("growth rejects a duplicate redirect owner in the final topology", () => {
   const existing = new OverlayNode("existing-owner");
   existing.commitAs = "spawn";
   addLiveNode(state, existing);
-  const before = snapshot(state);
-  const beforeTopology = topologySnapshot(state);
 
-  expectRejected(
-    () => prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder),
-    RangeError,
-    /^logical output target 'spawn' has multiple skipped output owners: \["existing-owner","spawn\/child\/end"\]$/,
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder),
+      RangeError,
+      `logical output target 'spawn' has multiple skipped output owners: ["existing-owner","spawn/child/end"]`,
+    ),
   );
-
-  expectUnchanged(state, before);
-  expect(topologySnapshot(state)).toEqual(beforeTopology);
-  expect(log.nextSequence).toBe(4);
 });
 
 test("growth rejects an executable redirect target in the final topology", () => {
   const { state, log } = initializedSpawner();
-  const before = snapshot(state);
-  const beforeTopology = topologySnapshot(state);
   const executableTargetBuilder: GrowBuilder = (spawner) => {
     const built = fragment(spawner.id);
     built.nodes.get(built.endId)!.commitAs = END_ID;
     return built;
   };
 
-  expectRejected(
-    () => prepareExpanded(state, "spawn", new Grow({}), executableTargetBuilder),
-    RangeError,
-    /^logical output target '__end__' is also executable$/,
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), executableTargetBuilder),
+      RangeError,
+      /^logical output target '__end__' is also executable$/,
+    ),
   );
-
-  expectUnchanged(state, before);
-  expect(topologySnapshot(state)).toEqual(beforeTopology);
-  expect(log.nextSequence).toBe(4);
 });
 
 test("growth accepts a disconnected inert redirect placeholder", () => {
@@ -499,13 +504,8 @@ test("a growth append failure leaves the topology and every state coordinate unc
   const { state, log: prior } = initializedSpawner();
   const log = new FailingLog(RUN_ID, prior.records());
   const prepared = prepareExpanded(state, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
-  const before = snapshot(state);
-  const beforeTopology = topologySnapshot(state);
 
-  expectError(() => commitPrepared(log, state, prepared), Error, /^disk full$/);
-
-  expectUnchanged(state, before);
-  expect(topologySnapshot(state)).toEqual(beforeTopology);
+  expectAtomic(state, log, () => expectError(() => commitPrepared(log, state, prepared), Error, /^disk full$/));
   expect(log.nextSequence).toBe(prior.nextSequence);
 });
 
@@ -701,14 +701,18 @@ function unknownReferenceFragment(spawnerId: string): Flow {
   );
 }
 
-/** Replace `built`'s end with a value END committing under `spawn` that wires `value` from `source`. */
-function valueEnd(built: Flow, source: string, options: { record?: boolean } = {}): void {
+/**
+ * Replace `built`'s end with a value (or `record`) END committing under `spawn` that wires `value`
+ * from `source`, and its edge with one feeding `value`, unless `keepEdge`.
+ */
+function valueEnd(built: Flow, source: string, options: { record?: boolean; keepEdge?: boolean } = {}): void {
   const end = options.record
     ? EndNode.record(built.endId, { outputNames: ["value"] })
     : EndNode.value(built.endId, { outputName: "value" });
   end.commitAs = "spawn";
   built.nodes.set(built.endId, end);
   built.wiring.set(built.endId, new Map([["value", new Binding(source)]]));
+  if (options.keepEdge) return;
   built.edges[0] = new Edge(built.edges[0]!.id, built.startId, built.endId, { inputGroup: "value" });
 }
 
@@ -787,8 +791,7 @@ function invalidFragment(name: string): Flow {
       built.wiring.set("spawn/child/orphan", new Map());
       break;
     case "unknown-system-ambient":
-      valueEnd(built, "${system.not_declared}");
-      built.edges[0] = edge;
+      valueEnd(built, "${system.not_declared}", { keepEdge: true });
       break;
     case "unknown-typed-field":
       start.outputContract = new ValueContract(
@@ -832,19 +835,6 @@ function installSettledOverlay(state: RunState, prefix: string = "old"): string[
   }
   for (const edge of built.edges) state.edgeState.set(edge.id, NodeState.TAKEN);
   return [...built.nodes.keys()];
-}
-
-/** Assert `fn`'s growth rejection leaves the state, the topology and the log unchanged. */
-function expectAtomic(state: RunState, log: MemoryRunLog, fn: () => void): void {
-  const before = snapshot(state);
-  const beforeTopology = topologySnapshot(state);
-  const sequence = log.nextSequence;
-
-  fn();
-
-  expectUnchanged(state, before);
-  expect(topologySnapshot(state)).toEqual(beforeTopology);
-  expect(log.nextSequence).toBe(sequence);
 }
 
 const END_EDGE = "'spawn/child/start->spawn/child/end'";
@@ -1029,7 +1019,8 @@ test.each([
   [
     "extra-wiring-key",
     RangeError,
-    `growth fragment node 'spawn/child/start' wiring parity failed: extra=["extra"], missing_reserved=[], missing_required=[]`,
+    "growth fragment node 'spawn/child/start' wiring parity failed: " +
+      `extra=["extra"], missing_reserved=[], missing_required=[]`,
   ],
   [
     "raw-param",
@@ -1049,12 +1040,14 @@ test.each([
   [
     "missing-required",
     RangeError,
-    `growth fragment node 'spawn/required/start' wiring parity failed: extra=[], missing_reserved=[], missing_required=["required"]`,
+    "growth fragment node 'spawn/required/start' wiring parity failed: " +
+      `extra=[], missing_reserved=[], missing_required=["required"]`,
   ],
   [
     "missing-reserved",
     RangeError,
-    `growth fragment node 'spawn/nested-map' wiring parity failed: extra=[], missing_reserved=["over"], missing_required=[]`,
+    "growth fragment node 'spawn/nested-map' wiring parity failed: " +
+      `extra=[], missing_reserved=["over"], missing_required=[]`,
   ],
   ["duplicate-edge-id", RangeError, `growth fragment edge ID ${END_EDGE} is duplicated`],
   ["empty-edge-id", RangeError, "growth fragment edge IDs must be non-empty strings"],
@@ -1091,29 +1084,21 @@ test.each([
 ] as const)("growth rejects an invalid fragment atomically: %s", (name, cls, message) => {
   const { state, log } = initializedSpawner();
 
-  expectAtomic(state, log, () => {
-    const original = expectRejected(
-      () => prepareExpanded(state, "spawn", new Grow({}), () => invalidFragment(name)),
-      cls,
-      /./,
-    );
-    expect(original.message).toBe(message);
-  });
+  expectAtomic(state, log, () =>
+    expectRejected(() => prepareExpanded(state, "spawn", new Grow({}), () => invalidFragment(name)), cls, message),
+  );
 });
 
 test("growth rejects a field read on a scalar contract", () => {
   const { state, log } = initializedSpawner();
 
-  let original: Error | null = null;
-  expectAtomic(state, log, () => {
-    original = expectRejected(
+  expectAtomic(state, log, () =>
+    expectRejected(
       () => prepareExpanded(state, "spawn", new Grow({}), () => invalidFragment("field-on-scalar")),
       RangeError,
-      /./,
-    );
-  });
-
-  expect(original!.message).toContain("reads field 'order' on type str, which has no fields");
+      /reads field 'order' on type str, which has no fields$/,
+    ),
+  );
 });
 
 test("growth reference validation reads a Binding source", () => {
@@ -1141,7 +1126,7 @@ test("growth rejects a Binding-wrapped unknown reference before digesting", () =
     expectRejected(
       () => prepareExpanded(state, "spawn", new Grow({}), () => built),
       RangeError,
-      /^growth fragment node 'spawn\/ref\/end' wiring 'value': reference \$\{absent\.output\} uses unknown namespace 'absent'$/,
+      "growth fragment node 'spawn/ref/end' wiring 'value': reference ${absent.output} uses unknown namespace 'absent'",
     ),
   );
 });

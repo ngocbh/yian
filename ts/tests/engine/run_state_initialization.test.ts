@@ -617,7 +617,11 @@ test("growth refuses an uninitialized state and a non-spawner; the replay entry 
   const owned = flow();
   const state = new RunState(owned);
   const builder = () => owned;
-  expectError(() => prepareExpanded(state, "work", new Grow({}), builder), RangeError, /^run state is not initialized$/);
+  expectError(
+    () => prepareExpanded(state, "work", new Grow({}), builder),
+    RangeError,
+    /^run state is not initialized$/,
+  );
   expectError(() => replayRecords(state, [], { growBuilder: builder }), Error, /^not ported yet \(T4-5\)$/);
 
   const { state: started } = initializedAndStarted(flow());

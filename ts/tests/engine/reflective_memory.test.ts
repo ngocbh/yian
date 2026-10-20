@@ -1,10 +1,11 @@
 /**
  * Process-local reflective-memory behavior: a port of `tests/engine/test_reflective_memory.py`.
  *
- * Ported: `test_constructor_and_protocol_are_exact`,
+ * Ported: `test_reflective_episode_material_retains_the_physical_execution_sequence`,
+ * `test_constructor_and_protocol_are_exact`,
  * `test_snapshot_contains_only_public_pinned_model_configuration`,
  * `test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them`,
- * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned` (the open half),
+ * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned`,
  * `test_snapshot_is_defensive_and_foreign_restore_is_conservative`,
  * `test_pristine_restore_keeps_recorded_limits`,
  * `test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match`,
@@ -13,18 +14,30 @@
  * `test_reflective_json_rejects_non_utf8_model_and_snapshot_strings`,
  * `test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot`,
  * `test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources`,
- * `test_session_idempotency_and_closed_session_operations` (the recall and commit rows),
+ * `test_session_idempotency_and_closed_session_operations`,
  * `test_sessions_of_one_instance_share_one_lesson_list_and_limit`,
  * `test_recall_all_and_context_ranking_are_deterministic`, `test_subclass_controls_query_rewriting`,
  * `test_query_rewriting_failure_is_sanitized`,
+ * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`,
+ * `test_learn_rejects_malformed_or_conflicting_actions`,
+ * `test_model_construction_failure_is_final_and_sanitized`,
+ * `test_structured_binding_failure_is_final_and_sanitized`,
+ * `test_learn_provider_failure_is_retryable_and_sanitized`,
+ * `test_learn_errors_scrub_the_key_variable_and_saved_login`,
+ * `test_structured_output_parser_failure_is_a_final_contract_error`,
+ * `test_parsed_response_validation_failure_is_final_and_sanitized`,
+ * `test_episode_material_is_capped_in_one_model_call`,
+ * `test_huge_current_lessons_cannot_displace_new_episode_evidence`,
+ * `test_learning_is_propose_only_and_rejects_a_stale_generation`,
  * `test_commit_is_atomic_idempotent_and_empty_batches_advance_revision`,
- * `test_revise_and_remove_are_learned_and_committed`,
- * `test_learn_and_commit_enforce_final_max_items` (the commit half),
+ * `test_revise_and_remove_are_learned_and_committed`, `test_learn_and_commit_enforce_final_max_items`,
  * `test_multi_mutation_commit_failure_has_no_partial_effect`,
  * `test_concurrent_same_generation_commits_have_one_winner`,
- * `test_reset_preserves_commit_ledger_ordering_and_old_recall` and
- * `test_old_reflective_snapshot_rejects_active_retired_options`. Also ported: the `organization`,
- * `project` and `headers` rows of `tests/engine/test_run_connection_settings.py::
+ * `test_reset_preserves_commit_ledger_ordering_and_old_recall`,
+ * `test_reflective_memory_implements_protocol_and_imports_only_lower_layers`,
+ * `test_old_reflective_snapshot_rejects_active_retired_options` and
+ * `test_session_reflects_under_the_memory_key`. Also ported: the `organization`, `project` and
+ * `headers` rows of `tests/engine/test_run_connection_settings.py::
  * test_reflective_memory_refuses_connection_settings`, in the constructor test.
  *
  * TS-only: `bigint` limits, `null` limits as unset, a limit one past 2^53 − 1 refused, a `number` int
@@ -37,18 +50,33 @@
  * `test_subclass_controls_query_rewriting`); a re-entrant `memory.close()` from inside it is
  * `reflective.busy`; a host mutation whose payload holds `-0` is `reflective.invalid_batch`
  * "mutation batch cannot be encoded canonically", with a `TypeError` cause; the closing
- * `memory.close()` in `test_session_idempotency_and_closed_session_operations` (a failed recall
- * releases its operation).
+ * `memory.close()` in `test_session_idempotency_and_closed_session_operations` (a failed recall or
+ * learn releases its operation); in `test_learn_rejects_malformed_or_conflicting_actions`, one row
+ * for each of learn's other action messages, and every row's code and message; in
+ * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`, the request's roles, system
+ * text and output format, and the mutation id's digest; in
+ * `test_parsed_response_validation_failure_is_final_and_sanitized`, one row for each other reply
+ * defect, and a reply with absent `lesson_id`/`text` accepted; a model without a `stream` function,
+ * or whose `stream` getter throws, is `reflective.structured_output`; `close()` while `learn` awaits
+ * the model is `reflective.busy`, and the learn then fails `reflective.session_closed` when the
+ * session closed meanwhile; an episode holding `Infinity` reaches the prompt as `Infinity`;
+ * `onRetry` sees a retried `ProviderError`; `REFLECTION_SCHEMA` is frozen;
+ * `boundedJsonMaterial` counts code points; `visibleInteractionJson` writes sorted keys.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
  *   variables, and each test starts from the built-in defaults.
+ * - `installModel(replies)` stands in for Python's `_install_model`: the backend's `createModel`
+ *   option records each config and returns a `ScriptedModel` answering with the next scripted
+ *   reply, a `Response` whose text is the JSON of `{actions}`, or an `Error`. Python's one fixed
+ *   result becomes one reply per learn, and the prompt is read off the recorded requests.
  * - `test_constructor_and_protocol_are_exact`: `1.0` is the int 1 in JS, so `true`, `1.5` and `"1"`
  *   stand in for the non-int rows; `isMemory` replaces the protocol check.
  * - `test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them`: an `env` counting reads
  *   of `YIAN_DEFAULT_PROVIDER` stands in for patching `resolve_model_config`.
  * - `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned`: `fail_default` is an
- *   `env` that throws a sentinel on `YIAN_DEFAULT_PROVIDER`, so the cause is the sentinel.
+ *   `env` that throws a sentinel on `YIAN_DEFAULT_PROVIDER`, so the cause is the sentinel; the learn
+ *   half's `env` throws on a reread of it.
  * - `test_snapshot_is_defensive_and_foreign_restore_is_conservative`: a snapshot is deep-frozen, so
  *   the assignment throws `TypeError` and the next snapshot is unchanged.
  * - `test_snapshot_rejects_noncanonical_scalars_and_circular_json`: the snapshot rows edit a
@@ -58,57 +86,69 @@
  * - `test_old_reflective_snapshot_rejects_active_retired_options`: TS reads no Python-era snapshot,
  *   so every row fails on the `sandbox: null`/`cwd: null` keys before its own field; each row is
  *   still `reflective.invalid_snapshot`.
- * - `test_commit_is_atomic_idempotent_and_empty_batches_advance_revision`,
- *   `test_revise_and_remove_are_learned_and_committed`,
- *   `test_recall_all_and_context_ranking_are_deterministic`, `test_subclass_controls_query_rewriting`,
- *   `test_reset_preserves_commit_ledger_ordering_and_old_recall`,
- *   `test_concurrent_same_generation_commits_have_one_winner` and the replacement row of
- *   `test_learn_and_commit_enforce_final_max_items` commit hand-built mutations where Python learns
- *   them.
  * - `test_concurrent_same_generation_commits_have_one_winner`: JS commits are synchronous, so two
  *   sessions of one generation commit in turn and the second is stale.
+ * - `test_structured_binding_failure_is_final_and_sanitized`: the model is the catalog's one model
+ *   without native structured output (`no-structured-sentinel`), whose plan is the prompt strategy;
+ *   the cause is a `TypeError`.
+ * - `test_structured_output_parser_failure_is_a_final_contract_error`: the reply's text is not
+ *   JSON, so the cause is the `StructuredOutputError` `plan.parse` throws.
+ * - `test_parsed_response_validation_failure_is_final_and_sanitized`: the cause is the hand-written
+ *   check's `TypeError`, which holds none of the reply's text.
+ * - `test_learn_errors_scrub_the_key_variable_and_saved_login`: an `env` map without defaults and a
+ *   saved login through `AuthStore` stand in for the process environment.
+ * - `test_reflective_episode_material_retains_the_physical_execution_sequence`: the episode material
+ *   is read from the learner's prompt, since it is private.
+ * - `test_reflective_memory_implements_protocol_and_imports_only_lower_layers`: `isMemory`; the
+ *   module's import specifiers have no path segment in Python's forbidden list; `logJson` encodes
+ *   the snapshot.
  * - Recall's messages say "context must be a RecallContext or null" and "rewriteQuery() must return
  *   a string" where Python's say `None` and `rewrite_query()`.
- * - JSON ints written into snapshots are `bigint`s; `recall` is async; `with` blocks are
- *   `try`/`finally` around `close()`.
- *
- * Later (in this PR): `test_reflective_episode_material_retains_the_physical_execution_sequence`,
- * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`,
- * `test_learn_rejects_malformed_or_conflicting_actions`,
- * `test_model_construction_failure_is_final_and_sanitized`,
- * `test_structured_binding_failure_is_final_and_sanitized`,
- * `test_learn_provider_failure_is_retryable_and_sanitized`,
- * `test_learn_errors_scrub_the_key_variable_and_saved_login`,
- * `test_structured_output_parser_failure_is_a_final_contract_error`,
- * `test_parsed_response_validation_failure_is_final_and_sanitized`,
- * `test_episode_material_is_capped_in_one_model_call`,
- * `test_huge_current_lessons_cannot_displace_new_episode_evidence`,
- * `test_learning_is_propose_only_and_rejects_a_stale_generation`,
- * `test_reflective_memory_implements_protocol_and_imports_only_lower_layers`,
- * `test_session_reflects_under_the_memory_key`, the learn half of
- * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned`, the learn row of
- * `test_session_idempotency_and_closed_session_operations`, the learn half of
- * `test_learn_and_commit_enforce_final_max_items`, and the learned versions of the hand-built
- * commit tests above.
+ * - JSON ints written into snapshots are `bigint`s; `recall` and `learn` are async; `with` blocks
+ *   are `try`/`finally` around `close()`.
  *
  * Not ported: `test_old_api_snapshot_keeps_digest_and_api_semantics` (TS reads no Python-era
  * snapshot, so there is no retired-key branch).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BUILTIN, type Env, install } from "../../src/defaults.ts";
+import { BUILTIN, current, type Env, install } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import type { ChatModel } from "../../src/llm/events.ts";
+import type { RetryInfo } from "../../src/llm/executor.ts";
+import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
+import { StructuredOutputError } from "../../src/llm/structured.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { ApiKeyCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import {
   isMemory,
   type JsonObject,
+  LearnContext,
+  MemoryEpisode,
+  MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOperationError,
+  MemorySection,
+  ModelTextInteraction,
+  ModelValueInteraction,
   RecallContext,
+  ToolCallInteraction,
+  ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
-import { ReflectiveMemory, type ReflectiveSession } from "../../src/memory/reflective.ts";
+import {
+  boundedJsonMaterial,
+  REFLECTION_SCHEMA,
+  ReflectiveMemory,
+  type ReflectiveSession,
+  visibleInteractionJson,
+} from "../../src/memory/reflective.ts";
+import { logJson } from "../../src/typesys/json.ts";
 
 // Cloned snapshots and nested test values are edited freely.
 type Mutable = any;
@@ -196,6 +236,92 @@ async function rejection(promise: Promise<unknown>): Promise<MemoryOperationErro
 
 const OLLAMA = { provider: "ollama", model: "qwen" };
 
+const SYSTEM_TEXT =
+  "You maintain atomic workflow lessons. Return only the requested structured actions. Use add for a " +
+  "new id, revise/remove only for an existing id, or one noop when nothing should change. Never use tools.";
+
+type Action = Record<string, unknown>;
+
+const NOOP: Action[] = [{ action: "noop", lesson_id: null, text: null }];
+
+/** A scripted assistant reply whose text is `text`. */
+function textReply(text: string): Response {
+  return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
+}
+
+/** A scripted reflector reply whose text is the JSON of `{actions}`. */
+function reply(actions: readonly Action[]): Response {
+  return textReply(JSON.stringify({ actions }));
+}
+
+/**
+ * Python's `_install_model`: a `createModel` option that records each config and returns a new
+ * `ScriptedModel` (named by the config) answering with the next reply of the shared list.
+ */
+function installModel(replies: readonly (Response | Error)[]) {
+  const queue = [...replies];
+  const configs: Record<string, unknown>[] = [];
+  const models: ScriptedModel[] = [];
+  const createModel = (config: Readonly<Record<string, unknown>>): ScriptedModel => {
+    configs.push(structuredClone(config) as Record<string, unknown>);
+    const next = queue.shift();
+    const model = new ScriptedModel(next === undefined ? [] : [next], {
+      provider: String(config.provider),
+      model: String(config.model),
+    });
+    models.push(model);
+    return model;
+  };
+  return {
+    createModel,
+    configs,
+    /** Every request the models received, in order. */
+    get requests(): Request[] {
+      return models.flatMap((model) => model.requests);
+    },
+  };
+}
+
+/** The user prompt of one reflector request. */
+function promptOf(request: Request): string {
+  return request.messages.at(-1)!.text();
+}
+
+/** The number of code points in `text` (Python's `len`). */
+function codePoints(text: string): number {
+  return Array.from(text).length;
+}
+
+/** One succeeded episode of `agent` echoing `text`. */
+function episode(runId = "run-1", text = "hello"): MemoryEpisode {
+  return new MemoryEpisode(runId, [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text }, {
+    output: { answer: text.toUpperCase() },
+  });
+}
+
+/** One learning context holding `episode(runId, text)`. */
+function context(options: { runId?: string; text?: string; memory?: string } = {}): LearnContext {
+  const { runId = "run-1", text = "hello", memory = "reflective" } = options;
+  return new LearnContext(runId, memory, [episode(runId, text)]);
+}
+
+/** The most code points a reflection prompt can hold: three budgets and labels. */
+function promptBudget(memory = "reflective"): number {
+  const values = current();
+  const labels = `Memory: ${memory}\nLimits: \nCurrent lessons: \nEpisodes: `;
+  return (
+    values.reflectiveMaxLessonChars +
+    values.reflectiveMaxEpisodeChars +
+    values.reflectiveMaxLimitChars +
+    codePoints(labels)
+  );
+}
+
+/** Learn `context()` in a fresh run of `memory` (Python's `_learn_actions` after installing). */
+function learnOnce(memory: ReflectiveMemory): Promise<MemoryMutation[]> {
+  return withRun(memory, (session) => session.learn(context()));
+}
+
 test("constructor and protocol are exact", () => {
   for (const value of [true, 1.5, "1"]) {
     expect(() => newMemory({ maxItems: value as never })).toThrow(new TypeError("max_items must be an integer"));
@@ -268,7 +394,7 @@ test("defaults are read once and recorded snapshot never rereads them", () => {
   expect(reads).toBe(0);
 });
 
-test("empty ambient model is rejected and open session config is pinned", () => {
+test("empty ambient model is rejected and open session config is pinned", async () => {
   const emptyEnv = baseEnv({ YIAN_DEFAULT_PROVIDER: "ollama", YIAN_DEFAULT_MODEL: "" });
   const empty = failure(() => newMemory({ env: emptyEnv }).openRun());
   expect(empty.code).toBe("reflective.config");
@@ -291,9 +417,20 @@ test("empty ambient model is rejected and open session config is pinned", () => 
   expect(configError.message).not.toContain("secret-provider-value");
   expect(configError.cause).toBeDefined();
 
-  const memory = newMemory({ env: baseEnv({ YIAN_DEFAULT_PROVIDER: "ollama", YIAN_DEFAULT_MODEL: "qwen" }) });
+  let pinnedAlready = false;
+  const ollamaEnv = baseEnv({ YIAN_DEFAULT_PROVIDER: "ollama", YIAN_DEFAULT_MODEL: "qwen" });
+  const rereadEnv: Env = (name) => {
+    if (pinnedAlready && name === "YIAN_DEFAULT_PROVIDER") throw new Error("defaults were reread");
+    return ollamaEnv(name);
+  };
+  const model = installModel([reply(NOOP)]);
+  const memory = newMemory({ env: rereadEnv, createModel: model.createModel });
   const session = memory.openRun();
-  expect(session.snapshot.llm_config).toEqual(OLLAMA);
+  const pinned = session.snapshot.llm_config;
+  expect(pinned).toEqual(OLLAMA);
+  pinnedAlready = true;
+  expect(await session.learn(context())).toEqual([]);
+  expect(model.configs as unknown[]).toEqual([pinned]);
   session.close();
 });
 
@@ -460,8 +597,9 @@ test("session idempotency and closed session operations", async () => {
   session.close();
   session.close();
   expect((await rejection(session.recall())).message).toContain("closed");
+  expect((await rejection(session.learn(context()))).message).toContain("closed");
   expect(failure(() => session.commit("commit", [])).message).toContain("closed");
-  // The failed recall released its operation, so the backend isn't busy.
+  // The failed recall and learn released their operations, so the backend isn't busy.
   memory.close();
 });
 
@@ -498,14 +636,16 @@ test("sessions of one instance share one lesson list and limit", async () => {
 });
 
 test("recall all and context ranking are deterministic", async () => {
-  const memory = newMemory({ llmConfig: OLLAMA, recallLimit: 2 });
-  await withRun(memory, (session) =>
-    session.commit("seed", [
-      mutation("b", "add", "b", "red apple"),
-      mutation("a", "add", "a", "blue berry"),
-      mutation("c", "add", "c", "red berry"),
+  const model = installModel([
+    reply([
+      { action: "add", lesson_id: "b", text: "red apple" },
+      { action: "add", lesson_id: "a", text: "blue berry" },
+      { action: "add", lesson_id: "c", text: "red berry" },
     ]),
-  );
+  ]);
+  const memory = newMemory({ llmConfig: OLLAMA, recallLimit: 2, createModel: model.createModel });
+  const mutations = await learnOnce(memory);
+  await withRun(memory, (session) => session.commit("seed", mutations));
   await withRun(memory, async (session) => {
     expect(await session.recall()).toBe("[b] red apple\n[a] blue berry\n[c] red berry");
     const recalled = await session.recall(new RecallContext("", "RED berry", { tone: "BLUE" }, ["root", "user"]));
@@ -527,13 +667,15 @@ test("subclass controls query rewriting", async () => {
     }
   }
   for (const Memory of [AppleMemory, AsyncAppleMemory]) {
-    const memory = new Memory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1 });
-    await withRun(memory, (session) =>
-      session.commit("seed", [
-        mutation("berry", "add", "berry", "fresh berry"),
-        mutation("apple", "add", "apple", "green apple"),
+    const model = installModel([
+      reply([
+        { action: "add", lesson_id: "berry", text: "fresh berry" },
+        { action: "add", lesson_id: "apple", text: "green apple" },
       ]),
-    );
+    ]);
+    const memory = new Memory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1, createModel: model.createModel });
+    const mutations = await learnOnce(memory);
+    await withRun(memory, (session) => session.commit("seed", mutations));
     await withRun(memory, async (session) => {
       expect(await session.recall(new RecallContext("", "berry", {}, ["root"]))).toBe("[apple] green apple");
     });
@@ -585,8 +727,9 @@ test("recall rejects an invalid context and a non-string query", async () => {
 });
 
 test("commit is atomic idempotent and empty batches advance revision", async () => {
-  const memory = newMemory({ llmConfig: OLLAMA });
-  const add = [mutation("one", "add", "one", "first")];
+  const model = installModel([reply([{ action: "add", lesson_id: "one", text: "first" }])]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const add = await learnOnce(memory);
   await withRun(memory, (session) => {
     session.commit("add", add);
     session.commit("add", add);
@@ -598,23 +741,41 @@ test("commit is atomic idempotent and empty batches advance revision", async () 
 });
 
 test("revise and remove are learned and committed", async () => {
-  const memory = newMemory({ llmConfig: OLLAMA });
-  await withRun(memory, (session) => session.commit("add", [mutation("add", "add", "one", "first")]));
-  await withRun(memory, (session) => session.commit("revise", [mutation("revise", "revise", "one", "revised")]));
+  const model = installModel([
+    reply([{ action: "add", lesson_id: "one", text: "first" }]),
+    reply([{ action: "revise", lesson_id: "one", text: "revised" }]),
+    reply([{ action: "remove", lesson_id: "one", text: null }]),
+  ]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const add = await learnOnce(memory);
+  await withRun(memory, (session) => session.commit("add", add));
+  const revise = await learnOnce(memory);
+  await withRun(memory, (session) => session.commit("revise", revise));
   await withRun(memory, async (session) => expect(await session.recall()).toBe("[one] revised"));
-  await withRun(memory, (session) => session.commit("remove", [mutation("remove", "remove", "one")]));
+  const remove = await learnOnce(memory);
+  await withRun(memory, (session) => session.commit("remove", remove));
   await withRun(memory, async (session) => expect(await session.recall()).toBe(""));
 });
 
-test("learn and commit enforce final max items (commit half)", async () => {
-  const memory = newMemory({ llmConfig: OLLAMA, maxItems: 1 });
+test("learn and commit enforce final max items", async () => {
+  const model = installModel([
+    reply([
+      { action: "add", lesson_id: "new", text: "new lesson" },
+      { action: "remove", lesson_id: "old", text: null },
+    ]),
+    reply([
+      { action: "add", lesson_id: "two", text: "two" },
+      { action: "add", lesson_id: "three", text: "three" },
+    ]),
+  ]);
+  const memory = newMemory({ llmConfig: OLLAMA, maxItems: 1, createModel: model.createModel });
   await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "old", "old lesson")]));
-  await withRun(memory, (session) =>
-    session.commit("replace", [mutation("new", "add", "new", "new lesson"), mutation("old", "remove", "old")]),
-  );
+  await withRun(memory, async (session) => session.commit("replace", await session.learn(context())));
   await withRun(memory, async (session) => expect(await session.recall()).toBe("[new] new lesson"));
 
-  const empty = newMemory({ llmConfig: OLLAMA, maxItems: 1 });
+  const empty = newMemory({ llmConfig: OLLAMA, maxItems: 1, createModel: model.createModel });
+  const learnError = await withRun(empty, (session) => rejection(session.learn(context())));
+  expect([learnError.code, learnError.message]).toEqual(["reflective.max_items", "proposed lessons exceed max_items"]);
   const error = await withRun(empty, async (session) => {
     const commitError = failure(() =>
       session.commit("too-many", [mutation("two", "add", "two", "two"), mutation("three", "add", "three", "three")]),
@@ -643,12 +804,18 @@ test("multi mutation commit failure has no partial effect", async () => {
   await withRun(memory, async (session) => expect(await session.recall()).toBe(""));
 });
 
-test("concurrent same generation commits have one winner", () => {
-  const memory = newMemory({ llmConfig: OLLAMA });
+test("concurrent same generation commits have one winner", async () => {
+  const model = installModel([
+    reply([{ action: "add", lesson_id: "one", text: "first" }]),
+    reply([{ action: "add", lesson_id: "two", text: "second" }]),
+  ]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const first = await learnOnce(memory);
+  const second = await learnOnce(memory);
   const left = memory.openRun();
   const right = memory.openRun();
-  left.commit("left", [mutation("one", "add", "one", "first")]);
-  const error = failure(() => right.commit("right", [mutation("two", "add", "two", "second")]));
+  left.commit("left", first);
+  const error = failure(() => right.commit("right", second));
   expect([error.stage, error.code, error.message, error.retryable]).toEqual([
     "commit",
     "reflective.stale_generation",
@@ -660,8 +827,9 @@ test("concurrent same generation commits have one winner", () => {
 });
 
 test("reset preserves commit ledger ordering and old recall", async () => {
-  const memory = newMemory({ llmConfig: OLLAMA });
-  const add = [mutation("one", "add", "one", "first")];
+  const model = installModel([reply([{ action: "add", lesson_id: "one", text: "first" }])]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const add = await learnOnce(memory);
   await withRun(memory, (seed) => seed.commit("applied", add));
   const old = memory.openRun();
   expect(await old.recall()).toBe("[one] first");
@@ -788,4 +956,400 @@ test("a re-entrant close from inside an async rewriteQuery is busy", async () =>
   ]);
   memory.close();
   expect(failure(() => memory.openRun()).code).toBe("reflective.closed");
+});
+
+test("reflective episode material retains the physical execution sequence", async () => {
+  const model = installModel([reply(NOOP)]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const sequenced = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hello" }, {
+    output: "HELLO",
+    executionSeq: 17,
+  });
+  await withRun(memory, (session) => session.learn(new LearnContext("run-1", "reflective", [sequenced])));
+  const material = JSON.parse(promptOf(model.requests[0]!).split("Episodes: ")[1]!);
+  expect(material.episodes[0].execution_seq).toBe(17);
+  expect(material.episodes[0].owner_static_path).toEqual(["agent"]);
+});
+
+test("learn uses pinned config and returns deterministic proposals", async () => {
+  const add = { action: "add", lesson_id: "one", text: "Keep it short" };
+  const model = installModel([reply([add, ...NOOP]), reply([add]), reply([add])]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  let pinned: unknown;
+  const noop = await withRun(memory, (session) => {
+    pinned = session.snapshot.llm_config;
+    return rejection(session.learn(context()));
+  });
+  expect(noop.message).toContain("no-op");
+  expect(model.configs).toEqual([pinned as Record<string, unknown>]);
+  const request = model.requests[0]!;
+  expect(request.outputFormat?.name).toBe("_ReflectionResponse");
+  expect(request.messages.map((message) => message.role)).toEqual(["system", "user"]);
+  expect(request.messages[0]!.text()).toBe(SYSTEM_TEXT);
+
+  await withRun(memory, async (session) => {
+    const first = await session.learn(context());
+    const second = await session.learn(context());
+    expect(first).toEqual(second);
+    const payload = { action: "add", lesson_id: "one", source: { run_id: "run-1" }, text: "Keep it short" };
+    expect(first[0]!.payload).toEqual(payload);
+    const identity = logJson({ index: 0n, memory: "reflective", payload, run_id: "run-1" });
+    expect(first[0]!.mutationId).toBe(`reflective:${createHash("sha256").update(identity).digest("hex")}`);
+  });
+});
+
+test("learn rejects malformed or conflicting actions", async () => {
+  const rows: [Action[], string, string][] = [
+    [[{ action: "add", lesson_id: "", text: "x" }], "reflective.contract", "lesson ids must be non-empty strings"],
+    [
+      [{ action: "add", lesson_id: "one", text: "   " }],
+      "reflective.contract",
+      "add and revise actions require non-blank text",
+    ],
+    [
+      [{ action: "remove", lesson_id: "missing", text: null }],
+      "reflective.contract",
+      "reflector remove action targets a missing lesson",
+    ],
+    [
+      [
+        { action: "add", lesson_id: "same", text: "x" },
+        { action: "add", lesson_id: "same", text: "y" },
+      ],
+      "reflective.contract",
+      "actions cannot target one lesson more than once",
+    ],
+    // TS-only: learn's other action messages.
+    [
+      [{ action: "noop", lesson_id: "kept", text: null }],
+      "reflective.contract",
+      "a no-op action cannot carry an id or text",
+    ],
+    [[{ action: "add", text: "x" }], "reflective.contract", "lesson ids must be non-empty strings"],
+    [[{ action: "remove", lesson_id: "kept", text: "x" }], "reflective.contract", "remove actions cannot carry text"],
+    [
+      [{ action: "add", lesson_id: "kept", text: "x" }],
+      "reflective.contract",
+      "reflector add action targets an existing lesson",
+    ],
+    [
+      [{ action: "revise", lesson_id: "missing", text: "x" }],
+      "reflective.contract",
+      "reflector revise action targets a missing lesson",
+    ],
+  ];
+  const model = installModel(rows.map(([actions]) => reply(actions)));
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "kept", "kept lesson")]));
+  for (const [, code, message] of rows) {
+    const error = await withRun(memory, (session) => rejection(session.learn(context())));
+    expect([error.stage, error.code, error.message, error.retryable]).toEqual(["learn", code, message, false]);
+  }
+});
+
+test("model construction failure is final and sanitized", async () => {
+  const cause = new Error("construction-secret");
+  const memory = newMemory({
+    llmConfig: OLLAMA,
+    createModel: () => {
+      throw cause;
+    },
+  });
+  const error = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([error.code, error.message, error.retryable]).toEqual([
+    "reflective.model_construction",
+    "reflector model construction failed",
+    false,
+  ]);
+  expect(error.cause).toBe(cause);
+});
+
+test("structured binding failure is final and sanitized", async () => {
+  const memory = newMemory({
+    llmConfig: OLLAMA,
+    createModel: () => new ScriptedModel([], { provider: "scripted", model: "no-structured-sentinel" }),
+  });
+  const error = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([error.code, error.message, error.retryable]).toEqual([
+    "reflective.structured_output",
+    "reflector does not support the required structured output",
+    false,
+  ]);
+  expect(error.cause).toBeInstanceOf(TypeError);
+  expect((error.cause as Error).message).toBe("the reflector model has no native structured output");
+});
+
+test("a model that can't stream is a structured output failure", async () => {
+  const getterFailure = new Error("getter-failure");
+  const throwing = {
+    provider: "ollama",
+    model: "qwen",
+    get stream(): never {
+      throw getterFailure;
+    },
+  };
+  for (const model of [{ provider: "ollama", model: "qwen" }, throwing]) {
+    const memory = newMemory({ llmConfig: OLLAMA, createModel: () => model as unknown as ChatModel });
+    const error = await withRun(memory, (session) => rejection(session.learn(context())));
+    expect([error.code, error.message, error.retryable]).toEqual([
+      "reflective.structured_output",
+      "reflector does not support the required structured output",
+      false,
+    ]);
+    if (model === throwing) {
+      expect(error.cause).toBe(getterFailure);
+    } else {
+      expect(error.cause).toEqual(new TypeError("the reflector model must provide stream()"));
+    }
+  }
+});
+
+test("learn provider failure is retryable and sanitized", async () => {
+  const cause = new Error("provider-secret");
+  const model = installModel([cause]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const error = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([error.code, error.message, error.retryable]).toEqual([
+    "reflective.provider",
+    "reflector invocation failed",
+    true,
+  ]);
+  expect(error.cause).toBe(cause);
+});
+
+test("onRetry sees a retried provider error", async () => {
+  const retried = new ProviderError("rate_limit", "slow down", { retryAfter: 0.001 });
+  const retries: RetryInfo[] = [];
+  const memory = newMemory({
+    llmConfig: OLLAMA,
+    createModel: () => new ScriptedModel([retried, reply(NOOP)], OLLAMA),
+    onRetry: (retry) => {
+      retries.push(retry);
+    },
+  });
+  expect(await learnOnce(memory)).toEqual([]);
+  expect(retries.map((retry) => [retry.attempt, retry.error])).toEqual([[1, retried]]);
+});
+
+test("learn errors scrub the key variable and saved login", async () => {
+  for (const [key, login] of [
+    ["sk-variable-reflect-hgtw", false],
+    ["sk-login-reflect-bmrc", true],
+  ] as const) {
+    const vars = new Map([["YIAN_AUTH_FILE", join(home, `auth-${login}.json`)]]);
+    const env: Env = (name) => vars.get(name);
+    if (login) await new AuthStore(null, { env }).save("vllm", new ApiKeyCredentials(key), "m");
+    else vars.set("VLLM_API_KEY", key);
+    const echo = `Incorrect API key provided: ${key.slice(0, 8)}****${key.slice(-4)} (${key})`;
+    const refuse = () => {
+      throw new Error(echo);
+    };
+    for (const [code, createModel] of [
+      ["reflective.model_construction", refuse],
+      ["reflective.provider", installModel([new Error(echo)]).createModel],
+    ] as const) {
+      const memory = new ReflectiveMemory({ env, llmConfig: { provider: "vllm", model: "m" }, createModel });
+      const error = await withRun(memory, (session) => rejection(session.learn(context())));
+      const cause = (error.cause as Error).message;
+      expect(error.code).toBe(code);
+      expect(cause).toContain("[REDACTED]");
+      expect(cause).not.toContain(key.slice(0, 8));
+      expect(cause).not.toContain(key.slice(-4));
+    }
+  }
+});
+
+test("structured output parser failure is a final contract error", async () => {
+  const model = installModel([textReply("parser-secret")]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const error = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([error.code, error.message, error.retryable]).toEqual([
+    "reflective.contract",
+    "reflector returned invalid structured output",
+    false,
+  ]);
+  expect(error.cause).toBeInstanceOf(StructuredOutputError);
+});
+
+test("parsed response validation failure is final and sanitized", async () => {
+  const replies = [
+    { actions: [{ action: "add", lesson_id: "one", text: "text-secret", unexpected: "response-secret" }] },
+    // TS-only: the other reply defects.
+    {},
+    { actions: [{ action: "noop" }], extra: "response-secret" },
+    { actions: "response-secret" },
+    { actions: [] },
+    { actions: ["response-secret"] },
+    { actions: [{}] },
+    { actions: [{ action: "response-secret" }] },
+    { actions: [{ action: "add", lesson_id: 1, text: "text-secret" }] },
+    { actions: [{ action: "add", lesson_id: "one", text: ["text-secret"] }] },
+  ];
+  const model = installModel(replies.map((value) => textReply(JSON.stringify(value))));
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  for (const _ of replies) {
+    const error = await withRun(memory, (session) => rejection(session.learn(context())));
+    expect([error.code, error.message, error.retryable]).toEqual([
+      "reflective.contract",
+      "reflector returned invalid structured output",
+      false,
+    ]);
+    expect(error.cause).toBeInstanceOf(TypeError);
+    const cause = (error.cause as Error).message;
+    expect(cause).not.toContain("response-secret");
+    expect(cause).not.toContain("text-secret");
+  }
+
+  // TS-only: absent `lesson_id` and `text` are `null`.
+  const absent = installModel([reply([{ action: "noop" }])]);
+  expect(await learnOnce(newMemory({ llmConfig: OLLAMA, createModel: absent.createModel }))).toEqual([]);
+});
+
+test("episode material is capped in one model call", async () => {
+  const model = installModel([reply(NOOP)]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const huge = "x".repeat(current().reflectiveMaxEpisodeChars * 2);
+  expect(await withRun(memory, (session) => session.learn(context({ text: huge })))).toEqual([]);
+  expect(model.configs).toHaveLength(1);
+  expect(model.requests).toHaveLength(1);
+  const material = promptOf(model.requests[0]!);
+  expect(codePoints(material)).toBeLessThanOrEqual(promptBudget());
+  expect(material).toContain("truncated");
+});
+
+test("huge current lessons cannot displace new episode evidence", async () => {
+  const model = installModel([reply(NOOP)]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  await withRun(memory, (session) =>
+    session.commit("large-lesson", [
+      mutation("large-lesson", "add", "large", `old-evidence-${"x".repeat(40_000)}`),
+    ]),
+  );
+  expect(await withRun(memory, (session) => session.learn(context({ text: "new-evidence" })))).toEqual([]);
+  const prompt = promptOf(model.requests[0]!);
+  expect(codePoints(prompt)).toBeLessThanOrEqual(promptBudget());
+  for (const part of ["Current lessons:", "truncated", "Episodes:", "new-evidence", "NEW-EVIDENCE"]) {
+    expect(prompt).toContain(part);
+  }
+});
+
+test("learning is propose only and rejects a stale generation", async () => {
+  const add = reply([{ action: "add", lesson_id: "one", text: "first" }]);
+  const model = installModel([add, add]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const session = memory.openRun();
+  const proposals = await session.learn(context());
+  expect(await session.recall()).toBe("");
+  await withRun(memory, (winner) => winner.commit("winner", proposals));
+  const error = await rejection(session.learn(context()));
+  expect([error.stage, error.code, error.message]).toEqual([
+    "learn",
+    "reflective.stale_generation",
+    "memory session is stale",
+  ]);
+  session.close();
+});
+
+test("reflective memory implements protocol and imports only lower layers", () => {
+  expect(isMemory(newMemory())).toBe(true);
+  const source = readFileSync(join(import.meta.dir, "../../src/memory/reflective.ts"), "utf8");
+  const specifiers = [...source.matchAll(/\bfrom\s+"([^"]+)"|\bimport\s*\(?\s*"([^"]+)"/g)].map(
+    (match) => (match[1] ?? match[2])!,
+  );
+  expect(specifiers.length).toBeGreaterThan(0);
+  const forbidden = ["nodes", "compile", "compose", "runtime", "run", "cli"];
+  for (const specifier of specifiers) {
+    const parts = specifier.replace(/\.[jt]s$/, "").split("/");
+    expect(parts.filter((part) => forbidden.includes(part))).toEqual([]);
+  }
+  logJson(snapshotOf(newMemory()));
+});
+
+test("session reflects under the memory key", async () => {
+  const cite = reply([{ action: "add", lesson_id: "a", text: "Cite" }]);
+  const model = installModel([cite, cite]);
+  const memory = newMemory({ createModel: model.createModel });
+  const noted = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hi" }, {
+    output: "HI",
+    memorySections: [new MemorySection("notes", "prior")],
+  });
+  const [notes, other, prompt] = await withRun(memory, async (session) => {
+    expect("openFrame" in session).toBe(false);
+    const notes = await session.learn(new LearnContext("run-1", "notes", [noted]));
+    const other = await session.learn(new LearnContext("run-1", "other", [noted]));
+    session.commit("one", notes);
+    return [notes, other, promptOf(model.requests.at(-1)!)] as const;
+  });
+  expect(prompt.split("\n")[0]).toBe("Memory: other");
+  expect(prompt).not.toContain("Frame:");
+  const material = JSON.parse(prompt.split("Episodes: ")[1]!);
+  expect(material.episodes[0].memory_sections).toEqual([{ memory: "notes", text: "prior" }]);
+  expect(material.episodes[0].occurrence_path).toEqual([]);
+  expect(notes[0]!.mutationId).not.toBe(other[0]!.mutationId);
+  await withRun(memory, async (session) => expect(await session.recall()).toBe("[a] Cite"));
+});
+
+test("close while learn awaits the model is busy, and a session closed meanwhile fails the learn", async () => {
+  let release!: (model: ChatModel) => void;
+  const pending = new Promise<ChatModel>((resolve) => {
+    release = resolve;
+  });
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: () => pending });
+  const session = memory.openRun();
+  const learning = session.learn(context());
+  const busy = failure(() => memory.close());
+  expect([busy.code, busy.retryable]).toEqual(["reflective.busy", true]);
+  session.close();
+  release(new ScriptedModel([reply(NOOP)], OLLAMA));
+  const error = await rejection(learning);
+  expect([error.stage, error.code]).toEqual(["session", "reflective.session_closed"]);
+  memory.close();
+});
+
+test("an episode holding Infinity reaches the prompt as Infinity", async () => {
+  const model = installModel([reply(NOOP)]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const infinite = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hi" }, {
+    output: { score: Infinity },
+  });
+  await withRun(memory, (session) => session.learn(new LearnContext("run-1", "reflective", [infinite])));
+  expect(promptOf(model.requests[0]!)).toContain('"output":{"score":Infinity}');
+});
+
+test("REFLECTION_SCHEMA is the frozen reply schema", () => {
+  expect(REFLECTION_SCHEMA.title).toBe("_ReflectionResponse");
+  expect((REFLECTION_SCHEMA.properties as Mutable).actions.minItems).toBe(1n);
+  expect(Object.isFrozen(REFLECTION_SCHEMA)).toBe(true);
+  expect(Object.isFrozen(REFLECTION_SCHEMA.properties)).toBe(true);
+});
+
+test("boundedJsonMaterial counts code points and keeps both ends", () => {
+  expect(boundedJsonMaterial({ a: [1n, Infinity] }, 256)).toBe('{"a":[1,Infinity]}');
+  const text = "😀".repeat(300);
+  const material = boundedJsonMaterial(text, 256);
+  expect(codePoints(material)).toBeLessThanOrEqual(256);
+  const summary = JSON.parse(material);
+  expect(Object.keys(summary)).toEqual(["original_chars", "prefix", "sha256", "suffix", "truncated"]);
+  expect(summary.original_chars).toBe(302);
+  expect(summary.prefix.startsWith('"😀')).toBe(true);
+  expect(summary.suffix.endsWith('😀"')).toBe(true);
+  expect(summary.prefix.isWellFormed() && summary.suffix.isWellFormed()).toBe(true);
+  expect(summary.sha256).toBe(createHash("sha256").update(JSON.stringify(text)).digest("hex"));
+  expect(summary.truncated).toBe(true);
+});
+
+test("visibleInteractionJson writes each interaction with sorted keys", () => {
+  expect(Object.keys(visibleInteractionJson(new ToolCallInteraction("search", { q: "x" })))).toEqual([
+    "arguments",
+    "kind",
+    "name",
+  ]);
+  expect(visibleInteractionJson(new ToolResultInteraction("search", "found"))).toEqual({
+    kind: "tool_result",
+    name: "search",
+    text: "found",
+  });
+  expect(visibleInteractionJson(new ModelTextInteraction("hi"))).toEqual({ kind: "model_text", text: "hi" });
+  expect(visibleInteractionJson(new ModelValueInteraction([1n]))).toEqual({ kind: "model_value", value: [1n] });
+  expect(() => visibleInteractionJson({} as never)).toThrow(new TypeError("unsupported visible interaction"));
 });

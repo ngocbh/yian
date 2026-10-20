@@ -15,28 +15,87 @@ import crypto from "node:crypto";
 
 import { current, type Env, processEnv } from "../defaults.ts";
 import type { ChatModel } from "../llm/events.ts";
-import type { RetryInfo } from "../llm/executor.ts";
+import { callWithRetries, type RetryInfo, RouteModel } from "../llm/executor.ts";
+import { Message, Request, type Response, TextPart } from "../llm/messages.ts";
+import { planStructured, StructuredOutputError, type StructuredPlan, structuredTarget } from "../llm/structured.ts";
 import { LLMConfig } from "../llm_clients/config.ts";
-import { resolveModelConfig, splitModelConfig } from "../llm_clients/connection.ts";
+import {
+  legacyConnectionConfig,
+  resolveModelConfig,
+  scrubCallCredentials,
+  splitModelConfig,
+} from "../llm_clients/connection.ts";
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
-import { logJson } from "../typesys/json.ts";
-import { fromHost } from "../typesys/values.ts";
+import { logJson, type JsonObject as SchemaObject } from "../typesys/json.ts";
+import { fromHost, type Value, writeAsJson } from "../typesys/values.ts";
 import {
   freezeJsonObject,
   type JsonObject,
   type JsonValue,
   LearnContext,
   type Memory,
+  type MemoryEpisode,
   MemoryMutation,
   MemoryOperationError,
   type MemorySession,
+  ModelTextInteraction,
+  ModelValueInteraction,
   RecallContext,
+  ToolCallInteraction,
+  ToolResultInteraction,
+  type VisibleInteraction,
 } from "./contracts.ts";
 import { checkStoragePath, SQLiteStorage } from "./storage/sqlite.ts";
 
 const SNAPSHOT_FORMAT = "yian.reflective_memory";
 const SNAPSHOT_VERSION = 2n;
 const POLICY_NAME = "reflective";
+
+/**
+ * @internal The reflector's reply schema, Python's `_ReflectionResponse.model_json_schema()`,
+ * frozen.
+ */
+export const REFLECTION_SCHEMA: JsonObject = freezeJsonObject(
+  {
+    $defs: {
+      _ReflectionAction: {
+        additionalProperties: false,
+        description: "One closed model-proposed lesson action.",
+        properties: {
+          action: { enum: ["add", "revise", "remove", "noop"], title: "Action", type: "string" },
+          lesson_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null, title: "Lesson Id" },
+          text: { anyOf: [{ type: "string" }, { type: "null" }], default: null, title: "Text" },
+        },
+        required: ["action"],
+        title: "_ReflectionAction",
+        type: "object",
+      },
+    },
+    additionalProperties: false,
+    description: "Strict structured result from one reflective model call.",
+    properties: {
+      actions: { items: { $ref: "#/$defs/_ReflectionAction" }, minItems: 1n, title: "Actions", type: "array" },
+    },
+    required: ["actions"],
+    title: "_ReflectionResponse",
+    type: "object",
+  },
+  "REFLECTION_SCHEMA",
+  { limitNesting: false },
+);
+
+const REFLECTION_KINDS = ["add", "revise", "remove", "noop"] as const;
+
+const REFLECTION_SYSTEM =
+  "You maintain atomic workflow lessons. Return only the requested structured actions. Use add for a " +
+  "new id, revise/remove only for an existing id, or one noop when nothing should change. Never use tools.";
+
+/** One closed model-proposed lesson action (Python's `_ReflectionAction`). */
+interface ReflectionAction {
+  readonly action: (typeof REFLECTION_KINDS)[number];
+  readonly lessonId: string | null;
+  readonly text: string | null;
+}
 
 /** One immutable atomic lesson in insertion order. Frozen. */
 interface Lesson {
@@ -383,6 +442,119 @@ function parseSnapshot(value: unknown): [string, number, number, State, JsonObje
     if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
     throw snapshotError("recorded memory snapshot is invalid", error);
   }
+}
+
+/** Encode one immutable episode for the reflector prompt, keys in sorted order. */
+function episodeJson(episode: MemoryEpisode): JsonObject {
+  return {
+    base_system_prompt: episode.baseSystemPrompt,
+    execution_seq: episode.executionSeq === null ? null : BigInt(episode.executionSeq),
+    failure: episode.failure,
+    inputs: episode.inputs,
+    interactions: episode.interactions.map(visibleInteractionJson),
+    memory_sections: episode.memorySections.map((section) => ({ memory: section.memory, text: section.text })),
+    occurrence_path: episode.occurrencePath.map((segment) => ({
+      index: BigInt(segment.index),
+      kind: segment.kind,
+      static_path: [...segment.staticPath],
+    })),
+    output: episode.output,
+    owner_static_path: [...episode.ownerStaticPath],
+    prompt: episode.prompt,
+    run_id: episode.runId,
+    status: episode.status,
+  };
+}
+
+/**
+ * @internal Encode one closed visible interaction for the reflector prompt, keys in sorted order.
+ *
+ * @throws TypeError when `interaction` isn't exactly one of the visible interaction classes.
+ */
+export function visibleInteractionJson(interaction: VisibleInteraction): JsonObject {
+  // Unknown, so one class's check doesn't narrow away a structurally wider one.
+  const value: unknown = interaction;
+  if (isExactly(value, ModelTextInteraction)) return { kind: "model_text", text: value.text };
+  if (isExactly(value, ModelValueInteraction)) return { kind: "model_value", value: value.value };
+  if (isExactly(value, ToolCallInteraction)) return { arguments: value.arguments, kind: "tool_call", name: value.name };
+  if (isExactly(value, ToolResultInteraction)) return { kind: "tool_result", name: value.name, text: value.text };
+  throw new TypeError("unsupported visible interaction");
+}
+
+/**
+ * @internal Encode JSON as its text form under a deterministic cap of `limit` code points. Longer
+ * text becomes the summary `{original_chars, prefix, sha256, suffix, truncated}`, keeping both
+ * ends of the text, shrunk until it fits or its ends are empty.
+ */
+export function boundedJsonMaterial(value: JsonValue, limit: number): string {
+  const material = writeAsJson(value as Value);
+  // Code points, as Python's `len` and slices count, so a cut never splits a surrogate pair.
+  const chars = Array.from(material);
+  if (chars.length <= limit) return material;
+  const digest = crypto.createHash("sha256").update(material).digest("hex");
+  const summary = (chunk: number) =>
+    writeAsJson({
+      original_chars: BigInt(chars.length),
+      prefix: chars.slice(0, chunk).join(""),
+      sha256: digest,
+      suffix: chunk ? chars.slice(-chunk).join("") : "",
+      truncated: true,
+    });
+  let chunk = Math.max(0, Math.floor((limit - 200) / 2));
+  let encoded = summary(chunk);
+  let length = Array.from(encoded).length;
+  while (length > limit && chunk) {
+    const reduction = Math.max(1, Math.floor((length - limit + 1) / 2));
+    chunk = Math.max(0, chunk - reduction);
+    encoded = summary(chunk);
+    length = Array.from(encoded).length;
+  }
+  return encoded;
+}
+
+/** Return the episodes and feedback of `context` within their reserved prompt budget. */
+function boundedEpisodeMaterial(context: LearnContext): string {
+  return boundedJsonMaterial(
+    { episodes: context.episodes.map(episodeJson), feedback: context.feedback },
+    current().reflectiveMaxEpisodeChars,
+  );
+}
+
+/** Return the complete deterministic mutation identity material, keys in sorted order. */
+function mutationDigestPayload(context: LearnContext, index: number, payload: JsonObject): JsonObject {
+  return { index: BigInt(index), memory: context.memory, payload, run_id: context.runId };
+}
+
+/**
+ * Check one parsed reflector reply against `REFLECTION_SCHEMA`: exactly `actions`, a non-empty
+ * array of objects with an `action` of `add`, `revise`, `remove` or `noop` and optional
+ * `lesson_id` and `text` that are strings or `null`, and no other keys.
+ *
+ * @returns The actions, an absent `lesson_id` or `text` as `null`.
+ * @throws TypeError naming the defect, without the reply's text.
+ */
+function checkReply(value: JsonObject): ReflectionAction[] {
+  if (!hasFields(value, ["actions"])) throw new TypeError("the reply must have exactly the key actions");
+  const actions = value.actions;
+  if (!Array.isArray(actions)) throw new TypeError("actions must be an array");
+  if (actions.length === 0) throw new TypeError("actions must not be empty");
+  return (actions as readonly JsonValue[]).map((item, index) => {
+    if (!isObject(item)) throw new TypeError(`actions[${index}] must be an object`);
+    if (Object.keys(item).some((key) => key !== "action" && key !== "lesson_id" && key !== "text")) {
+      throw new TypeError(`actions[${index}] may hold only action, lesson_id and text`);
+    }
+    const action = REFLECTION_KINDS.find((kind) => kind === item.action);
+    if (action === undefined) throw new TypeError(`actions[${index}].action must be add, revise, remove or noop`);
+    const lessonId = item.lesson_id ?? null;
+    const text = item.text ?? null;
+    if (lessonId !== null && typeof lessonId !== "string") {
+      throw new TypeError(`actions[${index}].lesson_id must be a string or null`);
+    }
+    if (text !== null && typeof text !== "string") {
+      throw new TypeError(`actions[${index}].text must be a string or null`);
+    }
+    return { action, lessonId, text };
+  });
 }
 
 /** One decoded private storage inventory: the state, the commit ledger and the flags. */
@@ -1073,8 +1245,182 @@ export class ReflectiveSession implements MemorySession {
     }
   }
 
-  /** Propose, but do not apply, one exact array of lesson mutations. */
+  /** Build one bounded deterministic user message for reflection. */
+  private reflectionPrompt(context: LearnContext): string {
+    const lessons = this.state.lessons.map((lesson) => ({
+      id: lesson.lessonId,
+      source: lesson.source,
+      text: lesson.text,
+    }));
+    const values = current();
+    const lessonMaterial = boundedJsonMaterial(lessons, values.reflectiveMaxLessonChars);
+    const episodeMaterial = boundedEpisodeMaterial(context);
+    const limitMaterial = boundedJsonMaterial(
+      { max_items: BigInt(this.state.limits.maxItems) },
+      values.reflectiveMaxLimitChars,
+    );
+    return (
+      `Memory: ${context.memory}\n` +
+      `Limits: ${limitMaterial}\n` +
+      `Current lessons: ${lessonMaterial}\n` +
+      `Episodes: ${episodeMaterial}`
+    );
+  }
+
+  /**
+   * Validate closed actions against the pinned state and build proposals.
+   *
+   * @throws MemoryOperationError `reflective.contract` for an action the pinned lessons refuse;
+   *   `reflective.max_items` when the proposed lessons exceed the limit.
+   */
+  private validateActions(context: LearnContext, actions: readonly ReflectionAction[]): MemoryMutation[] {
+    const contract = (message: string) => operationError("learn", "reflective.contract", message);
+    const noops = actions.filter((action) => action.action === "noop");
+    if (noops.length > 0 && actions.length !== 1) throw contract("a no-op action must be the only action");
+    if (noops.length > 0) {
+      if (noops[0]!.lessonId !== null || noops[0]!.text !== null) {
+        throw contract("a no-op action cannot carry an id or text");
+      }
+      return [];
+    }
+
+    // Only membership and size matter, so the ids stand in for Python's lesson dict.
+    const lessonIds = new Set(this.state.lessons.map((lesson) => lesson.lessonId));
+    const touched = new Set<string>();
+    const proposals: MemoryMutation[] = [];
+    const source = sourceJson(context.runId);
+    for (const [index, { action, lessonId, text }] of actions.entries()) {
+      if (typeof lessonId !== "string" || !lessonId) throw contract("lesson ids must be non-empty strings");
+      if (touched.has(lessonId)) throw contract("actions cannot target one lesson more than once");
+      touched.add(lessonId);
+      if (action === "add" || action === "revise") {
+        if (typeof text !== "string" || !text.trim()) throw contract("add and revise actions require non-blank text");
+      } else if (text !== null) {
+        throw contract("remove actions cannot carry text");
+      }
+
+      if (action === "add") {
+        if (lessonIds.has(lessonId)) throw contract("reflector add action targets an existing lesson");
+        lessonIds.add(lessonId);
+      } else if (action === "revise") {
+        if (!lessonIds.has(lessonId)) throw contract("reflector revise action targets a missing lesson");
+      } else {
+        if (!lessonIds.has(lessonId)) throw contract("reflector remove action targets a missing lesson");
+        lessonIds.delete(lessonId);
+      }
+
+      const payload: Record<string, JsonValue> = { action, lesson_id: lessonId, source };
+      if (action === "add" || action === "revise") payload.text = text;
+      const identity = logJson(mutationDigestPayload(context, index, payload));
+      const mutationId = `reflective:${crypto.createHash("sha256").update(identity).digest("hex")}`;
+      proposals.push(new MemoryMutation(mutationId, payload));
+    }
+
+    if (lessonIds.size > this.state.limits.maxItems) {
+      throw operationError("learn", "reflective.max_items", "proposed lessons exceed max_items");
+    }
+    return proposals;
+  }
+
+  /**
+   * Propose, but do not apply, one exact array of lesson mutations from one structured call of the
+   * pinned model. The operation spans the call, so `close()` stays busy until learn returns.
+   *
+   * @throws MemoryOperationError `reflective.invalid_context` for a context that isn't exactly a
+   *   `LearnContext`; `reflective.stale_generation` before or after the call;
+   *   `reflective.model_construction` when the model can't be built; `reflective.structured_output`
+   *   when it can't stream or has no native structured output; `reflective.provider` (retryable)
+   *   when the call fails; `reflective.contract` for an invalid reply or action;
+   *   `reflective.max_items`; the session or backend is closed. Causes are scrubbed of the call's
+   *   credentials.
+   */
   async learn(context: LearnContext): Promise<MemoryMutation[]> {
-    throw new Error("not implemented");
+    const memory = this.memory;
+    memory["begin"]();
+    try {
+      if (!isExactly(context, LearnContext)) {
+        throw operationError("learn", "reflective.invalid_context", "context must be a LearnContext");
+      }
+      this.ensureOpen();
+      this.assertCurrent("learn");
+      const prompt = this.reflectionPrompt(context);
+      const system = new Message({ role: "system", parts: [new TextPart(REFLECTION_SYSTEM)] });
+      const user = new Message({ role: "user", parts: [new TextPart(prompt)] });
+      const callConfig = legacyConnectionConfig(this.llmConfig);
+      const env = memory["env"];
+
+      let model: ChatModel;
+      try {
+        model = await memory["createModel"](callConfig);
+      } catch (error) {
+        // Providers may echo any credential the call sent; the chained cause must not carry it.
+        throw operationError("learn", "reflective.model_construction", "reflector model construction failed", {
+          cause: scrubCallCredentials(error, callConfig, { env }),
+        });
+      }
+      const scrub = (error: unknown) => {
+        let sent: readonly string[] = [];
+        try {
+          if (model instanceof RouteModel) sent = model.route.auth.credentials();
+        } catch {}
+        return scrubCallCredentials(error, callConfig, { env, sent });
+      };
+      const unsupported = (error: unknown) =>
+        operationError(
+          "learn",
+          "reflective.structured_output",
+          "reflector does not support the required structured output",
+          { cause: scrub(error) },
+        );
+
+      let plan: StructuredPlan;
+      try {
+        // A throwing `stream` getter counts as no stream, as Python's `invoke()` check.
+        if (typeof model.stream !== "function") throw new TypeError("the reflector model must provide stream()");
+      } catch (error) {
+        throw unsupported(error);
+      }
+      try {
+        plan = planStructured(structuredTarget(model), REFLECTION_SCHEMA as SchemaObject);
+      } catch (error) {
+        throw unsupported(error);
+      }
+      if (plan.strategy === "prompt") {
+        throw unsupported(new TypeError("the reflector model has no native structured output"));
+      }
+
+      const request = plan.apply(new Request({ messages: [system, user] }));
+      let response: Response;
+      try {
+        response = await callWithRetries(model, request, { onRetry: memory["onRetry"] ?? undefined });
+      } catch (error) {
+        throw operationError("learn", "reflective.provider", "reflector invocation failed", {
+          retryable: true,
+          cause: scrub(error),
+        });
+      }
+      const invalid = (cause: unknown) =>
+        operationError("learn", "reflective.contract", "reflector returned invalid structured output", { cause });
+      let reply: JsonObject;
+      try {
+        reply = plan.parse(response);
+      } catch (error) {
+        if (!(error instanceof StructuredOutputError)) throw error;
+        throw invalid(scrub(error));
+      }
+      let actions: ReflectionAction[];
+      try {
+        actions = checkReply(reply);
+      } catch (error) {
+        // The check's defect names no reply text, so it needs no scrub.
+        throw invalid(error);
+      }
+      const proposals = this.validateActions(context, actions);
+      this.ensureOpen();
+      this.assertCurrent("learn");
+      return proposals;
+    } finally {
+      memory["end"]();
+    }
   }
 }

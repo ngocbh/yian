@@ -321,6 +321,7 @@ test("the growth builder receives a detached spawner and its failure is pure", (
   const liveSpawner = state.flow.nodes.get("spawn")!;
   liveSpawner.title = "live";
   const before = snapshot(state);
+  const beforeTopology = topologySnapshot(state);
   const original = new Error("builder failed");
   let received: Node | null = null;
   const mutatingFailingBuilder: GrowBuilder = (spawner) => {
@@ -335,6 +336,7 @@ test("the growth builder receives a detached spawner and its failure is pure", (
   expect(received).not.toBeNull();
   expect(received).not.toBe(liveSpawner);
   expectUnchanged(state, before);
+  expect(topologySnapshot(state)).toEqual(beforeTopology);
   expect(state.flow.nodes.get("spawn")).toBe(liveSpawner);
   expect(liveSpawner.title).toBe("live");
 });
@@ -874,17 +876,19 @@ test.each([
 
 test("growth rejects an invalid skipped-output hook target", () => {
   // A future hook override can't hide a missing logical output target.
-  const { state } = initializedSpawner();
+  const { state, log } = initializedSpawner();
   const invalidTargetBuilder: GrowBuilder = (spawner) => {
     const built = fragment(spawner.id);
     built.nodes.get(built.endId)!.skippedOutputTarget = () => "missing";
     return built;
   };
 
-  expectRejected(
-    () => prepareExpanded(state, "spawn", new Grow({}), invalidTargetBuilder),
-    RangeError,
-    /^node 'spawn\/child\/end' skipped output target 'missing' does not exist$/,
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), invalidTargetBuilder),
+      RangeError,
+      /^node 'spawn\/child\/end' skipped output target 'missing' does not exist$/,
+    ),
   );
 });
 
@@ -924,14 +928,16 @@ test.each([
 test("growth replay rejects a changed but valid builder digest", () => {
   const { state: live } = initializedSpawner();
   const prepared = prepareExpanded(live, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
-  const { state: replay } = initializedSpawner();
+  const { state: replay, log: replayLog } = initializedSpawner();
   const recorded = (prepared.record as NodeExpandedRecord).topologyDigest;
   const rebuilt = expansionDigest(fragment("spawn", "changed"));
 
-  expectError(
-    () => prepareRecord(replay, prepared.record, { growBuilder: (spawner) => fragment(spawner.id, "changed") }),
-    RangeError,
-    new RegExp(`^NodeExpandedRecord topology digest mismatch: recorded '${recorded}', rebuilt '${rebuilt}'$`),
+  expectAtomic(replay, replayLog, () =>
+    expectError(
+      () => prepareRecord(replay, prepared.record, { growBuilder: (spawner) => fragment(spawner.id, "changed") }),
+      RangeError,
+      new RegExp(`^NodeExpandedRecord topology digest mismatch: recorded '${recorded}', rebuilt '${rebuilt}'$`),
+    ),
   );
   expect(replay.flow.nodes.has("spawn/changed/start")).toBe(false);
 });
@@ -1096,15 +1102,18 @@ test.each([
 });
 
 test("growth rejects a field read on a scalar contract", () => {
-  const { state } = initializedSpawner();
+  const { state, log } = initializedSpawner();
 
-  const original = expectRejected(
-    () => prepareExpanded(state, "spawn", new Grow({}), () => invalidFragment("field-on-scalar")),
-    RangeError,
-    /./,
-  );
+  let original: Error | null = null;
+  expectAtomic(state, log, () => {
+    original = expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}), () => invalidFragment("field-on-scalar")),
+      RangeError,
+      /./,
+    );
+  });
 
-  expect(original.message).toContain("reads field 'order' on type str, which has no fields");
+  expect(original!.message).toContain("reads field 'order' on type str, which has no fields");
 });
 
 test("growth reference validation reads a Binding source", () => {

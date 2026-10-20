@@ -56,6 +56,10 @@
  * field; `sameMemorySnapshotEnvelope` also tells `1n` from `1` and `1` from `true` at depth; a
  * setup error keeps an explicit `cause` and its origin, and has no `cause` without one.
  *
+ * Changed (setup error notes): Python's `MemorySetupError` gathers notes through `add_note` after
+ * it is built; here they are a `notes` constructor option, a frozen copy defaulting to `[]`, with
+ * each note checked as a string.
+ *
  * Changed (episodes and learn contexts): the episode and the context hold deep-frozen JSON, so a
  * reader's edit of `inputs`, an interaction value or `feedback` throws `TypeError` where Python
  * edits a private copy. Python's keyword arguments are an options object (`{ output, failure,
@@ -1665,6 +1669,17 @@ test("sameMemorySpec compares key, type, config, owners and eligibility by value
   const agent = spec(undefined, undefined, undefined, [site("root", "writer")], true);
   expect(sameMemorySpec(agent, spec(undefined, undefined, undefined, [site("root", "writer")], true))).toBe(true);
   expect(sameMemorySpec(agent, spec(undefined, undefined, undefined, [site()], false))).toBe(false);
+});
+
+test("a setup error keeps its notes as a frozen copy", () => {
+  expect(new MemorySetupError("m").notes).toEqual([]);
+  const notes = ["also declared at root"];
+  const error = new MemorySetupError("m", { notes });
+  expect(error.notes).toEqual(["also declared at root"]);
+  expect(error.notes).not.toBe(notes);
+  expect(Object.isFrozen(error.notes)).toBe(true);
+  expectError(() => new MemorySetupError("m", { notes: "note" as never }), TypeError, "notes must be an array of strings");
+  expectError(() => new MemorySetupError("m", { notes: [1] as never }), TypeError, "notes items must be a string");
 });
 
 test("a setup error keeps an explicit cause and its origin", () => {

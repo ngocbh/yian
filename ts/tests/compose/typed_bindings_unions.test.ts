@@ -4,20 +4,18 @@
  * `load_flow`.
  *
  * Ported: `test_a_member_over_the_union_loads`, `test_a_declared_union_accepts_one_member`,
- * `test_a_union_disjoint_from_the_declared_type_fails` and `test_each_branch_may_name_its_own_member`
- * (it loads with or without narrowing); the harvested cases
- * `load-types/compose_typed_bindings_unions__a_union_disjoint_from_the_declared_type_fails` and
- * `…__a_declared_union_accepts_one_member`.
- *
- * Changed: the error row pins the whole message and its line, where Python matches a fragment.
- *
- * Later (T3-20): the rows CASE and `isinstance` narrowing decide,
+ * `test_a_union_disjoint_from_the_declared_type_fails`,
  * `test_a_member_over_another_branchs_member_fails_in_that_branch`,
- * `test_the_else_branch_reads_the_unlisted_members` and
- * `test_an_isinstance_branch_narrows_the_typed_binding_too`, and their cases
- * `load-types/compose_typed_bindings_unions__a_member_over_another_branchs_member_fails`,
+ * `test_the_else_branch_reads_the_unlisted_members`, `test_each_branch_may_name_its_own_member` and
+ * `test_an_isinstance_branch_narrows_the_typed_binding_too`; the harvested cases
+ * `load-types/compose_typed_bindings_unions__a_union_disjoint_from_the_declared_type_fails`,
+ * `…__a_declared_union_accepts_one_member`, `…__a_member_over_another_branchs_member_fails`,
  * `…__the_else_branch_reads_the_unlisted_members` and
  * `…__an_isinstance_branch_narrows_the_typed_binding`.
+ *
+ * Changed: `test_a_union_disjoint_from_the_declared_type_fails` pins the whole message and its line,
+ * where Python matches a fragment.
+ *
  * Later (T3-22): `test_a_flow_output_narrows_to_a_member_and_a_call_parent_sees_it` (the def's
  * own output check and its output contract come from def loading).
  */
@@ -84,6 +82,9 @@ const ROUTE =
   "      - when: sell\n        then: on_sell\n" +
   "    else: on_hold\n";
 
+/** Return the message of the `LoadError` assembling `text` throws. */
+const assembleError = (text: string): string => loadError(() => assembleText(text)).message;
+
 test("a member over the union loads", () => {
   const { flow: loaded } = assembleText(flow(consumer("use", "buy: !Buy ${decide.output}")));
 
@@ -108,6 +109,34 @@ test("a union disjoint from the declared type fails", () => {
   );
 });
 
+test("a member over another branch's member fails in that branch", () => {
+  const message = assembleError(
+    flow(
+      ROUTE +
+        consumer("on_buy", "buy: !Buy ${decide.output}") +
+        consumer("on_sell", "buy: !Buy ${decide.output}") +
+        consumer("on_hold", "note: !str ${decide.output.note}"),
+    ),
+  );
+
+  expect(message.endsWith(`node 'on_sell' input 'buy': declared Buy, but the value is ${label("Sell")}`)).toBe(true);
+});
+
+test("the else branch reads the unlisted members", () => {
+  const message = assembleError(
+    flow(
+      ROUTE +
+        consumer("on_buy", "buy: !Buy ${decide.output}") +
+        consumer("on_sell", "sell: !Sell ${decide.output}") +
+        consumer("on_hold", "trade: !BuyOrSell ${decide.output}"),
+    ),
+  );
+
+  expect(
+    message.endsWith(`node 'on_hold' input 'trade': declared BuyOrSell, but the value is ${label("Hold")}`),
+  ).toBe(true);
+});
+
 test("each branch may name its own member", () => {
   assembleText(
     flow(
@@ -119,10 +148,30 @@ test("each branch may name its own member", () => {
   );
 });
 
+test("an isinstance branch narrows the typed binding too", () => {
+  const message = assembleError(
+    flow(
+      "  route:\n    kind: case\n    cases:\n" +
+        "      - when: isinstance(decide.output, Buy)\n        then: on_buy\n" +
+        "    else: other\n" +
+        consumer("on_buy", "sell: !Sell ${decide.output}") +
+        consumer("other", "sell: !Sell ${decide.output}"),
+    ),
+  );
+
+  expect(message.endsWith(`node 'on_buy' input 'sell': declared Sell, but the value is ${label("Buy")}`)).toBe(true);
+});
+
 // ---------- Pinned harvested cases ----------
 
 test.each<CaseRow>(
-  ["a_union_disjoint_from_the_declared_type_fails", "a_declared_union_accepts_one_member"].map((name) => ({
+  [
+    "a_union_disjoint_from_the_declared_type_fails",
+    "a_declared_union_accepts_one_member",
+    "a_member_over_another_branchs_member_fails",
+    "the_else_branch_reads_the_unlisted_members",
+    "an_isinstance_branch_narrows_the_typed_binding",
+  ].map((name) => ({
     id: `load-types/compose_typed_bindings_unions__${name}`,
     call: assembled,
   })),

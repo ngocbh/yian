@@ -14,20 +14,28 @@
  * `test_desugared_on_routes_via_evaluate_when_record`, `test_handles_align_with_control_edges`,
  * `test_on_value_with_double_quote_uses_single_quote_and_routes`,
  * `test_on_value_with_both_quotes_is_loud_load_error`,
- * `test_build_emits_reconciled_edges_no_provisional_group`, the build halves of
- * `test_exhaustiveness_missing_tag_no_else_raises` and
- * `test_on_non_enum_producer_skips_exhaustiveness`, the build half of
+ * `test_build_emits_reconciled_edges_no_provisional_group`,
+ * `test_exhaustiveness_missing_tag_no_else_raises`, `test_exhaustiveness_else_satisfies_coverage`,
+ * `test_exhaustiveness_all_tags_covered_no_else_ok`,
+ * `test_exhaustiveness_walks_dotted_field_into_record`,
+ * `test_exhaustiveness_dotted_missing_tag_raises`,
+ * `test_exhaustiveness_projects_known_field_from_partial_record`,
+ * `test_exhaustiveness_rejects_noncanonical_producer_contract`,
+ * `test_exhaustiveness_rejects_noncanonical_unused_producer_contract`,
+ * `test_no_exhaustiveness_for_searched_form`, `test_on_non_enum_producer_skips_exhaustiveness`, the
+ * build half of
  * `tests/engine/test_validate_refs.py`'s `test_case_node_local_ref_does_not_error`, and the
  * allocation order of `tests/compose/test_null_narrowing_case.py`'s
  * `test_a_case_param_read_after_a_null_check_sees_the_value_as_not_null` (`__r0`, `__r1`, `__r2` in
- * read order).
+ * read order); the whole row, with its narrowing, is ported in `compose/null_narrowing_case.test.ts`.
  *
  * Changed: the seed rows parse seeds 02, 06 and 10 through the conformance cases
  * `load-case/seed_02_case`, `load-case/seed_06_case_on` and
  * `load-leaves/seed_10_asserts_arithmetic` (`parseFile`, `flowNodesCursor`, `parseNodes`), where
  * Python reads the seed files. The quote rows build an `on:` case whose `when:` holds the quotes,
- * where Python calls `_quote`, which stays module-private. The exhaustiveness build halves build
- * without the producers, which a build doesn't read. The malformed-`when:` row pins the whole
+ * where Python calls `_quote`, which stays module-private. The exhaustiveness rows build without
+ * the producers, which a build doesn't read. The non-canonical producer row pins the whole message,
+ * which names the class (`Type`). The malformed-`when:` row pins the whole
  * message, where Python matches a fragment. The multiref row pins the whole data-edge list, where
  * Python checks for the `score` edge and against a `weight` one.
  *
@@ -39,18 +47,8 @@
  * `cases:`, else at the node; an `on:` entry with a `when:` and no `then:` ("each on:-form case
  * needs a `when:` value and a `then:`") at `cases:`, else at the node.
  *
- * Later (T3-20, `case_exhaustive`): the exhaustiveness halves of
- * `test_exhaustiveness_missing_tag_no_else_raises` and
- * `test_on_non_enum_producer_skips_exhaustiveness`, and
- * `test_exhaustiveness_else_satisfies_coverage`, `test_exhaustiveness_all_tags_covered_no_else_ok`,
- * `test_exhaustiveness_walks_dotted_field_into_record`,
- * `test_exhaustiveness_dotted_missing_tag_raises`,
- * `test_exhaustiveness_projects_known_field_from_partial_record`,
- * `test_exhaustiveness_rejects_noncanonical_producer_contract`,
- * `test_exhaustiveness_rejects_noncanonical_unused_producer_contract` and
- * `test_no_exhaustiveness_for_searched_form`. Later (T3-18): the `validate_references` half of
- * `test_case_node_local_ref_does_not_error`. Later (T3-20): the narrowing half of
- * `test_a_case_param_read_after_a_null_check_sees_the_value_as_not_null`.
+ * Later (T3-18): the `validate_references` half of
+ * `test_case_node_local_ref_does_not_error`.
  */
 
 import { expect, test } from "bun:test";
@@ -60,10 +58,13 @@ import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { BuildContext, type BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
+import { checkCaseExhaustive } from "../../src/compose/validate/case_exhaustive.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
+import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { caseText, loadError, nodesOf } from "../compose/declarations.ts";
 
 /** A build context with no typedefs; a CASE build reads none. */
@@ -413,13 +414,130 @@ test("desugared on routes via evaluateWhenRecord", () => {
   expect(evaluateWhenRecord(node.cases[1]!.when!, { __on: "con" })).toBe(true);
 });
 
-test("exhaustiveness missing tag with no else: the build lowers", () => {
+/** The producers of an `on: ${cls.output}` case: `cls` gives a `Literal` of `tags`. */
+function enumProducers(tags: readonly string[]): Map<string, OutputContract> {
+  return new Map([["cls", new ValueContract(new Type({ kind: ValueKind.STRING, tags: new Set(tags) }))]]);
+}
+
+/** The `Literal(positive, negative, neutral)` stance tag. */
+const STANCE = new Type({ kind: ValueKind.STRING, tags: new Set(["positive", "negative", "neutral"]) });
+
+/** A record type whose `stance` field is `Literal(positive, negative, neutral)`, with `fields`. */
+function view(fields: Record<string, Type> = {}): Type {
+  const all = new Map([["stance", STANCE], ...Object.entries(fields)]);
+  return new Type({ kind: ValueKind.OBJECT, fields: all, required: new Set(all.keys()) });
+}
+
+/** An `on: ${synth.output.stance}` case routing positive and negative, with `options`. */
+function stanceCase(options: { else_?: string | null; range?: SourceRange | null } = {}): CaseDescriptor {
+  return new CaseDescriptor({
+    id: "route",
+    on: "${synth.output.stance}",
+    cases: [
+      { when: "positive", then: "pro_note" },
+      { when: "negative", then: "con_note" },
+    ],
+    else_: options.else_ ?? null,
+    range: options.range ?? null,
+  });
+}
+
+/** Return the one-entry descriptor map of `desc`. */
+const only = (desc: CaseDescriptor) => new Map([[desc.id, desc]]);
+
+test("exhaustiveness missing tag with no else raises", () => {
+  const desc = onCase(["pro", "con"]);
+
   // The build lowers unconditionally; the exhaustiveness check is a later pass.
-  expect(onCase(["pro", "con"]).build(CTX).node).toBeInstanceOf(CaseNode);
+  expect(desc.build(CTX).node).toBeInstanceOf(CaseNode);
+  expect(loadError(() => checkCaseExhaustive(only(desc), enumProducers(["pro", "con", "mixed"]))).message).toContain(
+    "mixed",
+  );
 });
 
-test("on over a non-enum producer: the build lowers", () => {
+test("exhaustiveness: an else satisfies coverage", () => {
+  // Two of three tags and an `else:` is not flagged.
+  const desc = onCase(["pro", "con"], "neutral_note");
+
+  expect(desc.build(CTX).node).toBeInstanceOf(CaseNode);
+  checkCaseExhaustive(only(desc), enumProducers(["pro", "con", "mixed"]));
+});
+
+test("exhaustiveness: every tag covered with no else is ok", () => {
+  const desc = onCase(["pro", "con"]);
+
+  expect(desc.build(CTX).node).toBeInstanceOf(CaseNode);
+  checkCaseExhaustive(only(desc), enumProducers(["pro", "con"]));
+});
+
+test("exhaustiveness walks a dotted field into a record", () => {
+  // The `else:` covers `neutral`.
+  checkCaseExhaustive(
+    only(stanceCase({ else_: "neutral_note" })),
+    new Map([["synth", new ValueContract(view({ claim: Type.scalar(ValueKind.STRING) }))]]),
+  );
+});
+
+test("exhaustiveness: a dotted missing tag raises at the case", () => {
+  const range = new SourceRange(17, 3, 17, 8);
+
+  const error = loadError(() =>
+    checkCaseExhaustive(only(stanceCase({ range })), new Map([["synth", new ValueContract(view())]]), {
+      diagnostics: new LoadDiagnostics("flow.yaml", `${"x".repeat(80)}\n`.repeat(30)),
+    }),
+  );
+
+  expect(error.message).toContain("neutral");
+  expect(error.diagnostic.frames[0]!.range).toEqual(range);
+});
+
+test("exhaustiveness projects a known field from a partial record", () => {
+  // An opaque sibling does not hide a proven enum field from coverage checks.
+  const partial = new PartialRecordContract([
+    ["stance", new ValueContract(STANCE)],
+    ["note", null],
+  ]);
+
+  expect(loadError(() => checkCaseExhaustive(only(stanceCase()), new Map([["synth", partial]]))).message).toContain(
+    "neutral",
+  );
+});
+
+test("exhaustiveness rejects a non-canonical producer contract", () => {
+  const notAContract = new Type({ kind: ValueKind.STRING, tags: new Set(["pro", "con"]) });
+
+  expect(() =>
+    checkCaseExhaustive(only(onCase(["pro"])), new Map([["cls", notAContract as unknown as OutputContract]])),
+  ).toThrow(
+    new TypeError(
+      "output producer contracts must be ValueContract or PartialRecordContract values, got Type for 'cls'",
+    ),
+  );
+});
+
+test("exhaustiveness rejects a non-canonical unused producer contract", () => {
+  // The CASE validator checks its contract map before looking at any case's form.
+  const notAContract = Type.scalar(ValueKind.STRING) as unknown as OutputContract;
+
+  expect(() => checkCaseExhaustive(only(seed02()), new Map([["unused", notAContract]]))).toThrow(
+    "ValueContract or PartialRecordContract",
+  );
+});
+
+test("no exhaustiveness for the searched form", () => {
+  // A searched case over an enum-ish producer is not checked for exhaustiveness.
+  checkCaseExhaustive(
+    only(seed02()),
+    new Map([["score", new ValueContract(new Type({ kind: ValueKind.STRING, tags: new Set(["a"]) }))]]),
+  );
+});
+
+test("on over a non-enum producer skips exhaustiveness", () => {
+  // A plain scalar producer (no tags) is lenient.
+  const producers = new Map([["classify", new ValueContract(Type.scalar(ValueKind.STRING))]]);
+
   expect(seed06().build(CTX).node).toBeInstanceOf(CaseNode);
+  checkCaseExhaustive(only(seed06()), producers);
 });
 
 test("handles align with control edges", () => {

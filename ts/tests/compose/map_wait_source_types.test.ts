@@ -19,8 +19,8 @@
  * `test_the_issue_flow_is_a_load_error_at_until`, `test_fitting_or_unproven_sources_load` (13),
  * `test_call_directive_over_with_a_str_output_is_a_load_error`, `test_isinstance_keeps_its_own_error`,
  * the first half of `test_tagged_wrong_reference_reports_the_type_first`,
- * `test_record_typedef_is_named`, `test_none_typed_source_is_a_load_error` and
- * `test_type_error_comes_before_the_cycle_error`.
+ * `test_record_typedef_is_named`, `test_none_typed_source_is_a_load_error`,
+ * `test_type_error_comes_before_the_cycle_error` and `test_a_case_branch_narrows_the_source`.
  *
  * Changed: TS YAML reads an unquoted date or timestamp as text, so `over: 2026-01-01` and
  * `over: 2026-01-01T10:00:00` are read as text (Python: "a date", "a date and time"), and the
@@ -33,7 +33,6 @@
  * literal_until_check_in_an_inline_body}`).
  *
  * Later (T3-18 PR 3): `test_dangling_reference_keeps_its_error` (the reference validator).
- * Later (T3-20): `test_a_case_branch_narrows_the_source` (`computeNarrowing`).
  * Later (T3-22): the `defs` half of `test_literal_check_reaches_defs_and_inline_bodies` and
  * `test_reference_check_reaches_defs` (the def's own assembly); the last third of `test_tagged_wrong_literal_reports_the_type_first` and the second
  * half of `test_tagged_wrong_reference_reports_the_type_first` ("a tag types a value",
@@ -520,6 +519,55 @@ test("a None-typed source is a load error", () => {
 test("the type error comes before the cycle error", () => {
   // `after` waits on `w`, so reading it in `until:` is also a cycle.
   expect(errorOf(waitRef("${after.output}")).diagnostic.message).toBe(untilRefMessage("int"));
+});
+
+/** A flow whose CASE routes to `m` only in union member `branch` of `d`'s output. */
+function caseRouted(branch: string, field: string): string {
+  const node =
+    field === "over"
+      ? "  m:\n    kind: map\n    over: ${d.output.items}\n    call: child\n    input:\n      x: 1\n"
+      : "  m:\n    kind: wait\n    until: ${d.output.when}\n";
+  return `id: p
+name: p
+typedefs:
+  A: {tag: 'Literal(a)', items: list(str), when: date}
+  B: {tag: 'Literal(b)', items: int, when: int}
+  U: Union(A, B)
+nodes:
+  d:
+    kind: code
+    output: U
+    code: return None
+  r:
+    kind: case
+    on: \${d.output.tag}
+    cases:
+      - when: ${branch}
+        then: m
+    else: z
+${node}  z:
+    kind: code
+    code: return 1
+output: 1
+defs:
+  child:
+    input:
+      x: !Any
+    nodes:
+      e:
+        kind: code
+        input:
+          x: \${input.x}
+        code: return 1
+    output: \${e.output}
+`;
+}
+
+test.each(["over", "until"])("a case branch narrows the source (%s)", (field) => {
+  const children = { child: CHILD };
+  load(caseRouted("a", field), children);
+  const message = errorOf(caseRouted("b", field), children).diagnostic.message;
+  expect(message).toBe(field === "over" ? overRefMessage("int") : untilRefMessage("int", "m"));
 });
 
 // ---------- harvested conformance cases ----------

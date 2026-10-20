@@ -13,8 +13,9 @@
  * `canonicalTypeLabel`, in the expected message; the messages themselves are T3-19's
  * `call_types` and `typed_bindings` (the open-range typed-binding case is pinned with its
  * message in `typed_bindings_check.test.ts`, the call one in `call_binding_types.test.ts`) and
- * T3-20's `case_exhaustive`. And one `ok` case whose union typedef reads and whose `input:`
- * declarations then read through `readSourceFlowInputs`.
+ * `case_exhaustive`'s, whose open-range case is also pinned whole here, assembled (its Python test,
+ * `tests/compose/test_open_range_flows.py`, has no TS mirror). And one `ok` case whose union
+ * typedef reads and whose `input:` declarations then read through `readSourceFlowInputs`.
  *
  * Changed: an empty or surrogate field name is refused without a source too, as an unranged
  * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.
@@ -33,6 +34,7 @@ import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, type Type, ValueKind } from "../../src/typesys/values.ts";
 import {
+  assembled,
   type CaseCall,
   caseDocument,
   caseRegistry,
@@ -306,4 +308,8 @@ test.each<{ id: string; fragment: (document: SourceDocument, registry: TypeRegis
   const registry = caseRegistry(document);
   const wanted = (((case_["expect"] as Case)["load"] as Case)["diagnostics"] as Case[])[0]!;
   expect(wanted["message"] as string).toContain(fragment(document, registry));
+});
+
+test(`assembled: ${OPEN_RANGE}case_when_outside_an_open_range`, () => {
+  runCase({ id: `${OPEN_RANGE}case_when_outside_an_open_range`, call: assembled });
 });

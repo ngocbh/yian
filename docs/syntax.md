@@ -2986,6 +2986,9 @@ The reason in parentheses is one of:
 - `enum tag(s) ['b'] not covered`: a tag has no `when:`;
 - `bool value(s) [false] not covered`: a `bool` `on:` lacks `when: false`.
 
+Changed (TS yian): the reason writes the tag list in the text form: `enum tag(s) ["b"] not
+covered`. The routing-only missing-tag error writes its list the same way.
+
 A routing-only `case` keeps "no match, nothing runs", and routing on a `Literal`
 node output or flow input is still checked for missing tags.
 
@@ -3099,6 +3102,8 @@ place_buy:
   tag of `on: ${decide.output.action}` (`Literal(buy, hold, sell)`); use one of: buy,
   hold, sell``. Without `else:` every tag needs a
   `when:` (`enum tag(s) ['hold'] not covered`).
+- Changed (TS yian): the missing tags are written in the text form:
+  `enum tag(s) ["hold"] not covered`.
 - Narrowing follows the branch target's chain: a node that reads it through a plain
   reference, or names it in `depends_on`, sees the same members. A join
   `${b.output | s.output}` of a `buy` and a `sell` branch sees `Buy` or `Sell`.

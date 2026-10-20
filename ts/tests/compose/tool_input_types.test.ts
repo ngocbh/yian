@@ -4,12 +4,12 @@
  * calls `load_flow`.
  *
  * Ported: `test_a_proven_input_is_stamped_with_its_inferred_type` (11),
- * `test_a_non_finite_number_literal_is_absent`, `test_an_unproven_input_is_absent` and
+ * `test_a_non_finite_number_literal_is_absent`, `test_an_unproven_input_is_absent`,
+ * `test_a_case_narrowed_input_is_stamped_with_the_member_record` and
  * `test_a_map_body_tool_reads_the_element_type` (an inline body, registered by the scope).
  *
  * Changed: CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
  *
- * Later (T3-20): `test_a_case_narrowed_input_is_stamped_with_the_member_record` (`computeNarrowing`).
  * Later (T3-22): `test_a_tool_in_a_child_flow_is_stamped` (the child's own assembly).
  */
 
@@ -77,6 +77,49 @@ test("a non-finite number literal is absent", () => {
 
 test("an unproven input is absent", () => {
   expect(labels(loadedNodes(toolFlow("${c.output}")).get("t"))).toEqual({});
+});
+
+test("a case-narrowed input is stamped with the member record", () => {
+  const nodes = loadedNodes(`
+id: narrowed
+name: narrowed
+typedefs:
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Decision: Union(Buy, Sell)
+input:
+  decision: !object
+nodes:
+  d:
+    kind: code
+    input:
+      decision: \${input.decision}
+    code: |
+      return inputs["decision"]
+    output: Decision
+  route:
+    kind: case
+    on: \${d.output.action}
+    cases:
+      - when: sell
+        then: t
+    else: hold
+  t:
+    kind: tool
+    tool_id: place_order
+    input:
+      order: \${d.output}
+  hold:
+    kind: code
+    depends_on: [d]
+    code: |
+      return "hold"
+output: \${t.output | hold.output}
+`);
+
+  const stamped = (nodes.get("t") as ToolNode).inputTypes.get("order")!;
+  expect(stamped.variants).toBeUndefined();
+  expect(new Set(stamped.fields!.keys())).toStrictEqual(new Set(["action", "qty", "price"]));
 });
 
 test("a map body tool reads the element type", () => {

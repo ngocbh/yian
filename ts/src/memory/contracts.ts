@@ -14,8 +14,8 @@
  * `MemorySection` values and the visible model and tool interactions), the accepted episodes
  * (`MemoryEpisode`) and one memory's learning batch (`LearnContext`, with its feedback snapshot
  * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
- * the scope, operation failure and learning carriers (`sameMemoryScope`,
- * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
+ * the scope, snapshot, spec, operation failure and learning carriers (`sameMemoryScope`,
+ * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
  * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the conversation carriers (the
  * invocation, request, item, stamp, effect state, completion, applied entry, view and the four
  * checkpoints), the recall carriers (`RecallContext`, `MemoryContent`, `MemoryContextRequest`,
@@ -1470,6 +1470,21 @@ export class MemorySnapshotEnvelope {
  */
 export function sameMemorySnapshotEnvelope(a: MemorySnapshotEnvelope, b: MemorySnapshotEnvelope): boolean {
   return a.memory === b.memory && sameJson(a.snapshot, b.snapshot);
+}
+
+/**
+ * Whether two specs have the same key, type, config, owners and eligibility, by value and type:
+ * Python's dataclass equality, with configs compared as `sameMemorySnapshotEnvelope` compares
+ * snapshots and owners item by item with `DeclSite.compare`.
+ */
+export function sameMemorySpec(a: MemorySpec, b: MemorySpec): boolean {
+  return (
+    a.key === b.key &&
+    a.type === b.type &&
+    sameJson(a.config, b.config) &&
+    sameItems(a.owners, b.owners, (x, y) => DeclSite.compare(x, y) === 0) &&
+    a.conversationEligible === b.conversationEligible
+  );
 }
 
 /** Sanitized durable failure from one memory operation. Frozen. */

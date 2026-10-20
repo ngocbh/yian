@@ -82,9 +82,12 @@
  *   to the original; the `OwnerContextError` names `memory`, `original` (the spy's error, also its
  *   `cause`) and `work`'s backward context, and the log and the terminal output stay unchanged. The
  *   spy is restored in `finally`.
- *
- * PR 3 of T4-7 (they drive backward): `test_root_feedback_context_failure_names_no_node` and
- * `test_root_fallback_failure_names_no_node_end_to_end`.
+ * - `test_root_feedback_context_failure_names_no_node` and
+ *   `test_root_fallback_failure_names_no_node_end_to_end` (one test): `_freeze_feedback` can't be
+ *   patched and TS has no memory JSON nesting bound, so on `startOnlyRun(true)` a spy on
+ *   `LearnContext.fromFrozen` throws a `RangeError` on the root-fallback call (the second, after
+ *   START's occurrence) and passes the others to the original; the driven failure names no node.
+ *   The spy is restored in `finally`.
  *
  * Later: `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory` (T4-10's MAP,
  * T3-22's `buildGrow` and child memory layout) and
@@ -126,8 +129,8 @@ import {
 import { Binding, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { computeBackward } from "../../src/runtime/backward.ts";
-import type { AttributedBackwardResult } from "../../src/runtime/contracts.ts";
+import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
+import type { AttributedBackwardResult, BackwardOutcome } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
   BackwardReadyRecord,
@@ -143,6 +146,7 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import * as learning from "../../src/runtime/learning.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import {
   commitPrepared,
   prepareExpanded,
@@ -173,6 +177,7 @@ import {
   startTraceNode,
   terminalSkipRouteFlow,
 } from "./run_state_fixtures.ts";
+import { FakeMemory } from "./memory_fakes.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -1045,6 +1050,39 @@ test("an owner context error identifies the receiver without changing forward ac
   expect(failure.context).toEqual(trace.backwardContext(work.source));
   expect(built.log.records()).toEqual(accepted);
   expect(trace.terminal!.output).toBe("leaf");
+});
+
+test("a root fallback context failure names no node", async () => {
+  const { state, log, memories } = await startOnlyRun(true);
+  // The second call checks the root fallback: the first checks START's occurrence.
+  const original = new RangeError("boom");
+  const fromFrozen = LearnContext.fromFrozen;
+  let calls = 0;
+  const spy = spyOn(LearnContext, "fromFrozen").mockImplementation((...args) => {
+    calls += 1;
+    if (calls === 2) throw original;
+    return fromFrozen.apply(LearnContext, args);
+  });
+  let outcome: BackwardOutcome;
+  try {
+    outcome = await driveBackward(state, log, "review", {
+      openMemory: () =>
+        MemoryRuntime.open({
+          memories,
+          origins: new Map(memories.map((spec) => [spec.key, null])),
+          memory: new Map([[POLICY, new FakeMemory()]]),
+          snapshots: memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {})),
+        }),
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  const failure = outcome.failure!;
+  expect(failure.code).toBe("memory.invalid_context");
+  expect(failure.memory).toBe(POLICY);
+  expect(failure.message).toBe("memory learn context could not be constructed: boom");
+  expect([failure.scope, failure.runId, failure.nodeId, failure.nodeStartedSeq]).toEqual([null, null, null, null]);
+  expect(failure.cause!.message).toBe(failure.message);
 });
 
 test("owner context authority errors are not context construction failures", async () => {

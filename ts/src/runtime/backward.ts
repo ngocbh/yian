@@ -5,12 +5,21 @@
  * evaluate expressions, drive child flows, or write logs/memory. Small durable attribution
  * references live in `runtime/contracts.ts` below this module; materialized interpretation data and
  * ordering keys remain transient. The shared learning projection owns formatting without
- * performing this callback fold.
+ * performing this callback fold. The internal attempt driver surrounds that pure computation with
+ * accepted records and injected memory resources. It never resumes proposals or invokes public run
+ * lifecycle operations.
  *
  * Never imports: compile, compose, the engine, run or the CLI.
  */
 
+import { reprText } from "../diagnostics.ts";
 import { type FeedbackValue, sameSource, sourceKey } from "../expr/lineage.ts";
+import {
+  LearningFailure,
+  MemoryOperationFailure,
+  sameMemorySnapshotEnvelope,
+  sameMemorySpec,
+} from "../memory/contracts.ts";
 import {
   type BackwardContext,
   BackwardResult,
@@ -18,18 +27,35 @@ import {
   markerMessage,
   validateBackwardResult,
 } from "../nodes/base.ts";
-import { sameOptional } from "../nodes/contracts.ts";
+import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { jsTypeName } from "../typesys/values.ts";
-import { AttributedBackwardResult, BackwardFailure } from "./contracts.ts";
+import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
 import {
   addMessage,
   ContextCache,
   contextualTransfers,
   materializeContext,
+  memoryCommitId,
+  OwnerContextError,
+  prefixLearning,
+  projectOwnerContexts,
   projectRootBackward,
+  proposalBatches,
   seedBackward,
   takeMessages,
 } from "./learning.ts";
+import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
+  MemoryCommitFailedRecord,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
+  type RunLog,
+  type RunRecord,
+} from "./log.ts";
+import { LearningProposalError, MemoryRuntime } from "./memory_runtime.ts";
+import { commitPrepared, prepareRecord, RunState } from "./state.ts";
 import type { RetainedTrace } from "./trace.ts";
 
 /** @internal A callback or result-contract failure attributed to one occurrence; forward state is unchanged. */
@@ -140,4 +166,220 @@ export async function computeBackward(
   }
   const root = projectRootBackward(trace, pending, rootInputs, directRoot);
   return [root, occurrences.map((item) => results.get(sourceKey(item.source))!)];
+}
+
+/** Whether `log` has the `RunLog` members the driver reads. Local copy of engine.ts's isRunLog. */
+function isRunLog(log: unknown): log is RunLog {
+  const candidate = log as Partial<RunLog> | null;
+  return (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    typeof candidate.append === "function" &&
+    typeof candidate.runId === "string" &&
+    typeof candidate.nextSequence === "number"
+  );
+}
+
+/**
+ * Append and reduce one exact observer-free backward transition; its prepare and commit run in one
+ * synchronous step, so no other drive can advance the state in between.
+ */
+function acceptBackward(state: RunState, log: RunLog, record: RunRecord): void {
+  if (commitPrepared(log, state, prepareRecord(state, record)).length > 0) {
+    throw new Error("backward records cannot emit observers");
+  }
+}
+
+/**
+ * Finish attempt `attemptId` and return only the outcome of the accepted Finished record. A drive
+ * finishes only its own attempt: the reducer refuses a Finished whose attempt is no longer the
+ * unfinished current one.
+ */
+function finishBackward(
+  state: RunState,
+  log: RunLog,
+  attemptId: number,
+  outcome: BackwardOutcome,
+  attributed: readonly AttributedBackwardResult[] = [],
+): BackwardOutcome {
+  acceptBackward(state, log, new BackwardFinishedRecord(attemptId, outcome, attributed));
+  return state.backwardState.finished!.outcome;
+}
+
+/** Compute once, stage every memory, then request and observe each memory key in order. */
+async function driveOpenedBackward(
+  state: RunState,
+  log: RunLog,
+  memory: MemoryRuntime | null,
+): Promise<BackwardOutcome> {
+  const started = state.backwardState.started!;
+  const attemptId = started.attemptId;
+  const trace = state.trace!;
+  const cache = new ContextCache(trace);
+  let root: BackwardResult;
+  let attributed: readonly AttributedBackwardResult[];
+  try {
+    [root, attributed] = await computeBackward(trace, started.feedback, { cache });
+  } catch (error) {
+    if (!(error instanceof BackwardComputeError)) throw error;
+    return finishBackward(
+      state,
+      log,
+      attemptId,
+      new BackwardOutcome("failed", { failure: error.failure, learning: prefixLearning(state.backwardState) }),
+    );
+  }
+  let proposals: readonly MemoryProposal[];
+  try {
+    const contexts = projectOwnerContexts(
+      trace,
+      state.memories ?? [],
+      state.memoryStacks ?? [],
+      started.feedback,
+      root,
+      attributed,
+      { cache },
+    );
+    proposals = memory === null ? [] : await memory.proposeLearning(contexts);
+  } catch (error) {
+    let key: string;
+    let context: BackwardContext | null = null;
+    let cause: MemoryOperationFailure;
+    if (error instanceof OwnerContextError) {
+      key = error.memory;
+      context = error.context;
+      let message = "memory learn context could not be constructed";
+      // A trace's backward context always names its occurrence's node.
+      if (context !== null) message += ` for node ${reprText(context.nodeId!)}`;
+      const text = `${message}: ${error.original.message}`;
+      cause = new MemoryOperationFailure("learn", "memory.invalid_context", text, false);
+    } else if (error instanceof LearningProposalError) {
+      key = error.memory;
+      cause = error.failure;
+    } else {
+      throw error;
+    }
+    const failure = new BackwardFailure("learn", cause.code, cause.message, {
+      scope: context?.scope ?? null,
+      runId: context?.runId ?? null,
+      nodeId: context?.nodeId ?? null,
+      nodeStartedSeq: context?.nodeStartedSeq ?? null,
+      memory: key,
+      cause,
+    });
+    const learning = prefixLearning(state.backwardState, { learnerFailure: new LearningFailure(key, "learn", cause) });
+    return finishBackward(
+      state,
+      log,
+      attemptId,
+      new BackwardOutcome("failed", { feedback: root, failure, learning }),
+      attributed,
+    );
+  }
+
+  acceptBackward(state, log, new BackwardReadyRecord(attemptId, root, attributed, proposals));
+  const backward = state.backwardState;
+  const batches = proposalBatches(backward, backward.ready!);
+  for (const [index, key] of backward.memoryOrder.entries()) {
+    const batch = batches[index]!;
+    const commitId = memoryCommitId(state.runId!, key, batch, backward.commitAttemptKey!);
+    acceptBackward(state, log, new MemoryCommitRequestedRecord(key, commitId, batch, attemptId));
+    // The backend receives the accepted request, re-read after its append.
+    const cause = await memory!.commitLearning(state.backwardState.current!.requests.at(-1)!);
+    if (cause !== null) {
+      acceptBackward(state, log, new MemoryCommitFailedRecord(key, commitId, cause, attemptId));
+      const failure = new BackwardFailure("commit", cause.code, cause.message, { memory: key, cause });
+      return finishBackward(
+        state,
+        log,
+        attemptId,
+        new BackwardOutcome("failed", { feedback: root, failure, learning: prefixLearning(state.backwardState) }),
+      );
+    }
+    acceptBackward(state, log, new MemoryCommitSucceededRecord(key, commitId, attemptId));
+  }
+  return finishBackward(
+    state,
+    log,
+    attemptId,
+    new BackwardOutcome("succeeded", {
+      feedback: root,
+      learning: prefixLearning(state.backwardState, { succeeded: true }),
+    }),
+  );
+}
+
+/**
+ * Drive one new explicit whole backward attempt against an accepted terminal run.
+ *
+ * Every call starts a new attempt, including after a successful, failed, or committing earlier
+ * attempt.
+ *
+ * @param state Verified retained forward and backward record authority.
+ * @param log The open append authority for that state.
+ * @param rootFeedback Ordinary feedback on the recorded terminal.
+ * @param options.openMemory Fresh resource opener using the recorded memory table and snapshots;
+ *   required only for enabled memories, and called only then. This driver closes the returned
+ *   runtime on every exit.
+ * @returns The exact accepted Finished disposition. An unfinished earlier attempt, including one
+ *   with unconfirmed commit requests, is first closed as interrupted; all callbacks and proposals
+ *   are recomputed.
+ * @throws TypeError (as a rejection, as are all below) when `state` isn't exactly a `RunState`,
+ *   `log` isn't a `RunLog`, the feedback is malformed, or the opener returns something other than
+ *   a `MemoryRuntime`.
+ * @throws RangeError for invalid feedback or terminal state, a missing opener, an opened runtime
+ *   that is closed or doesn't match the recorded memory table and snapshots, or a state another
+ *   drive advanced meanwhile.
+ * @throws Error when a backward record emits observers. Host, setup, unexpected backend, and
+ *   append/reducer faults escape with their accepted prefix intact; cleanup never manufactures a
+ *   completion record.
+ */
+export async function driveBackward(
+  state: RunState,
+  log: RunLog,
+  rootFeedback: FeedbackValue,
+  options: { openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null } = {},
+): Promise<BackwardOutcome> {
+  if (!isExactly(state, RunState) || !isRunLog(log)) {
+    throw new TypeError("backward driving requires a RunState and RunLog");
+  }
+  const started = new BackwardStartedRecord(state.backwardState.attempts.length + 1, rootFeedback);
+  seedBackward(state.trace!, started.feedback);
+  const backward = state.backwardState;
+  const interrupted = backward.started !== null && backward.finished === null;
+  const first = interrupted ? new BackwardFinishedRecord(backward.started!.attemptId, backward.outcome!) : started;
+  // A gate only: `seedBackward` already refused the learn-disabled and terminal cases; this
+  // refuses a record that passes that check but can't be prepared (e.g. feedback that isn't
+  // canonical JSON) before the opener runs. The record is prepared again with its commit, since
+  // the opener's await lets another drive advance the state.
+  prepareRecord(state, first);
+  let memory: MemoryRuntime | null = null;
+  // Boxed, so a thrown `undefined` still counts as the primary error.
+  let primary: { error: unknown } | null = null;
+  try {
+    if (backward.memoryOrder.length > 0) {
+      const { openMemory = null } = options;
+      if (typeof openMemory !== "function") {
+        throw new RangeError("enabled backward memories require a fresh memory runtime");
+      }
+      const opened: unknown = await openMemory();
+      if (!(opened instanceof MemoryRuntime)) throw new TypeError("backward memory opener must return a MemoryRuntime");
+      memory = opened;
+      if (
+        memory.closed ||
+        !sameItems(memory.memories, state.memories ?? [], sameMemorySpec) ||
+        !sameItems(memory.snapshots, state.memorySnapshots ?? [], sameMemorySnapshotEnvelope)
+      ) {
+        throw new RangeError("opened memory runtime does not match the recorded memory table and snapshots");
+      }
+    }
+    acceptBackward(state, log, first);
+    if (interrupted) acceptBackward(state, log, started);
+    return await driveOpenedBackward(state, log, memory);
+  } catch (error) {
+    primary = { error };
+    throw error;
+  } finally {
+    await memory?.closePreserving(primary);
+  }
 }

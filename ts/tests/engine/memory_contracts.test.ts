@@ -51,7 +51,7 @@
  * the given feedback (`toBe`) and checks run, memory and episodes; `freezeFeedback` names items from
  * `firstIndex` and shares a subtree across calls through its memo; each memory `same*` comparison
  * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`,
- * `sameMemorySnapshotEnvelope`, `sameLearningFailure`, `samePolicyCommitOutcome`,
+ * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameLearningFailure`, `samePolicyCommitOutcome`,
  * `sameLearningResult`) is true for separately built equal values and false for each differing
  * field; `sameMemorySnapshotEnvelope` also tells `1n` from `1` and `1` from `true` at depth; a
  * setup error keeps an explicit `cause` and its origin, and has no `cause` without one.
@@ -164,6 +164,7 @@ import {
   sameMemoryOperationFailure,
   sameMemoryScope,
   sameMemorySnapshotEnvelope,
+  sameMemorySpec,
   samePolicyCommitOutcome,
   validateMutations,
 } from "../../src/memory/contracts.ts";
@@ -1642,6 +1643,28 @@ test("sameMemorySnapshotEnvelope compares the memory key and the snapshot by JSO
   ] as const) {
     expect(sameMemorySnapshotEnvelope(envelope("notes", a), envelope("notes", b))).toBe(false);
   }
+});
+
+test("sameMemorySpec compares key, type, config, owners and eligibility by value", () => {
+  const site = (owner = "root", node: string | null = null) => new DeclSite([], [owner], node);
+  const spec = (
+    key = "notes",
+    type = "summary",
+    config: JsonObject = { limit: 3, tags: ["a"] },
+    owners: DeclSite[] = [site(), site("tool")],
+    eligible = false,
+  ) => new MemorySpec(key, type, config, owners, eligible);
+  expect(sameMemorySpec(spec(), spec())).toBe(true);
+  expect(sameMemorySpec(spec("other"), spec())).toBe(false);
+  expect(sameMemorySpec(spec(undefined, "episodic"), spec())).toBe(false);
+  expect(sameMemorySpec(spec(undefined, undefined, { limit: 4, tags: ["a"] }), spec())).toBe(false);
+  expect(sameMemorySpec(spec(undefined, undefined, { limit: 3n, tags: ["a"] }), spec())).toBe(false);
+  expect(sameMemorySpec(spec(undefined, undefined, undefined, [site()]), spec())).toBe(false);
+  expect(sameMemorySpec(spec(undefined, undefined, undefined, [site(), site("zeta")]), spec())).toBe(false);
+  // Eligibility follows the owners, so it differs only with them: one AGENT site against one flow site.
+  const agent = spec(undefined, undefined, undefined, [site("root", "writer")], true);
+  expect(sameMemorySpec(agent, spec(undefined, undefined, undefined, [site("root", "writer")], true))).toBe(true);
+  expect(sameMemorySpec(agent, spec(undefined, undefined, undefined, [site()], false))).toBe(false);
 });
 
 test("a setup error keeps an explicit cause and its origin", () => {

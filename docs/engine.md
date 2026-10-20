@@ -337,6 +337,11 @@ unconfirmed request remains `unknown`, including when the
 backend returned but its observation could not append. Host/cancellation/log
 faults escape with the accepted prefix and never create a completion record.
 
+Changed (TS yian): stops are signals, so a backend's typed `MemoryOperationError` is a
+learning failure whatever its `cause`, and a drive finishes only its own attempt: one
+overtaken by a later call while it awaits (its opener, a handler, a learner or a commit)
+is refused after that await and appends nothing further.
+
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
 through the same reducer used live. After any incomplete-tail repair, a terminal prefix

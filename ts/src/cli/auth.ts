@@ -9,9 +9,12 @@
  * OpenAI subscription login or a provider's key offers.
  */
 
+import { spawn } from "node:child_process";
+import type { EventEmitter } from "node:events";
+
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
-import { AuthError, AuthStore, type OAuthCredentials, OpenAIAuth } from "../llm_clients/auth/index.ts";
+import { ApiKeyCredentials, AuthError, AuthStore, type OAuthCredentials, OpenAIAuth } from "../llm_clients/auth/index.ts";
 import {
   LLM_CONFIG_KEYS,
   LLMConfig,
@@ -21,15 +24,18 @@ import {
 } from "../llm_clients/config.ts";
 import {
   validateHeaderName,
+  validateHeaders,
   validateHeaderValue,
   validateOrganization,
 } from "../llm_clients/connection_settings.ts";
 import { listModels, ModelListError } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
+import { redactKeys } from "../llm_clients/redact.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { parseJson } from "../typesys/json.ts";
-import { type CliIo, type ParsedArgs, printJson, UsageError } from "./utils.ts";
+import { Terminal } from "./terminal.ts";
+import { type CliIo, type ParsedArgs, printJson, UsageError, type Writer } from "./utils.ts";
 
 const KINDS: Readonly<Record<string, string>> = { api_key: "api-key", subscription: "subscription", none: "none" };
 const CANCELLED = "Authentication cancelled; the previous login is unchanged";
@@ -46,19 +52,42 @@ const SETTINGS_NEED_API_KEY = "--organization, --project and --header apply to A
 /** The message for an unknown top-level `llm_config` key, which never names the key. */
 export const EXTRA_FIELD = `llm_config has an extra field; the fields are ${[...LLM_CONFIG_KEYS].sort(compareCodeUnits).join(", ")}`;
 
+/** The prompts `auth` asks on a terminal. */
+type AuthTerminal = Pick<Terminal, "askText" | "askChoice" | "close">;
+
 /** What the handlers reach the outside through; each defaults to the real one. Tests pass fakes. */
 export interface AuthDeps {
   /** Build the OpenAI authentication service; defaults to `new OpenAIAuth(options)`. */
   openAIAuth?: (options: {
     signal?: AbortSignal;
     requestTimeoutMs?: number;
-  }) => Pick<OpenAIAuth, "deviceLogin" | "refresh" | "subscriptionModels">;
+  }) => Pick<OpenAIAuth, "apiModels" | "browserLogin" | "deviceLogin" | "refresh" | "subscriptionModels">;
   /** List a provider's models; defaults to `listModels`. */
   listModels?: typeof listModels;
+  /**
+   * The terminal `auth` prompts on, which it closes when done; `null` for none. Defaults to a
+   * `Terminal` over stdin when stdin is a TTY, else none.
+   */
+  terminal?: AuthTerminal | null;
+  /** Show the browser sign-in URL and open it; defaults to `openBrowser` on stdout. */
+  openUrl?: (url: string) => Promise<void> | void;
   /** The clock deadlines run on; defaults to `realScheduler`. */
   scheduler?: Scheduler;
   /** Where `auth` listens for SIGINT (and SIGTERM, for the JSON device sign-in); defaults to `process`. */
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
+}
+
+/** The real OpenAI authentication service, the default of `AuthDeps.openAIAuth`. */
+const newOpenAIAuth: NonNullable<AuthDeps["openAIAuth"]> = (options) => new OpenAIAuth(options);
+
+/** What a setup step reaches the outside through. */
+interface SetupContext {
+  io: CliIo;
+  deps: AuthDeps;
+  /** The terminal to prompt on; `null` when no interactive terminal is available. */
+  terminal: AuthTerminal | null;
+  /** The command's stop, which cancels every prompt and request. */
+  signal: AbortSignal;
 }
 
 /** A deadline passed before the work it bounds was done. */
@@ -107,14 +136,69 @@ function stdinText(bytes: Buffer): string | null {
 }
 
 /**
- * Refuse a prompt when no interactive terminal is available.
+ * Refuse a prompt when no interactive terminal is available, and return the terminal.
  *
- * @throws {AuthError} Standard input is not a terminal; the message names `option`.
+ * @throws {AuthError} No terminal is available; the message names `option`.
  */
-function requireTerminal(option: string, io: CliIo): void {
-  if (io.stdin.isTTY !== true) {
+function requireTerminal(option: string, ctx: SetupContext): AuthTerminal {
+  if (ctx.terminal === null) {
     throw new AuthError(`Authentication needs ${option} when no interactive terminal is available`);
   }
+  return ctx.terminal;
+}
+
+/** Select a value on a terminal, or require an explicit command option. */
+async function choose(
+  message: string,
+  choices: readonly string[],
+  options: { initial: string; option: string },
+  ctx: SetupContext,
+): Promise<string> {
+  const terminal = requireTerminal(options.option, ctx);
+  const answer = await terminal.askChoice(message, choices, { initial: options.initial, signal: ctx.signal });
+  if (answer === null) throw new AuthError(CANCELLED);
+  return answer;
+}
+
+/** Read a typed value on a terminal, or require an explicit command option. */
+async function ask(message: string, option: string, ctx: SetupContext): Promise<string> {
+  const terminal = requireTerminal(option, ctx);
+  const answer = await terminal.askText(message, { signal: ctx.signal });
+  if (answer === null || !answer.trim()) throw new AuthError(CANCELLED);
+  return answer.trim();
+}
+
+/**
+ * Read the provider's key from `variable` or a hidden prompt.
+ *
+ * @param provider Provider name shown in the prompt.
+ * @param variable Environment variable checked first.
+ * @param options.optional The provider can run without a key; off a terminal or with an empty
+ *   answer, no key is returned.
+ * @returns The key, or `null` when an optional key is not given.
+ * @throws {AuthError} A required key is missing, or the prompt is cancelled.
+ */
+async function apiKey(
+  provider: string,
+  variable: string,
+  options: { optional?: boolean },
+  ctx: SetupContext,
+): Promise<string | null> {
+  const optional = options.optional === true;
+  const key = ctx.io.env(variable);
+  if (key) return key;
+  if (ctx.terminal === null) {
+    if (optional) return null;
+    throw new AuthError(`Set ${variable} before API-key setup, or run in an interactive terminal`);
+  }
+  const hint = optional ? " (leave empty for none)" : "";
+  const answer = await ctx.terminal.askText(`${provider} API key${hint}:`, { secret: true, signal: ctx.signal });
+  if (answer === null) throw new AuthError(CANCELLED);
+  if (!answer.trim()) {
+    if (optional) return null;
+    throw new AuthError("Authentication cancelled; no API key was supplied");
+  }
+  return answer.trim();
 }
 
 /**
@@ -131,7 +215,7 @@ function requireTerminal(option: string, io: CliIo): void {
  *   variable is empty or unset, a value is not allowed, or a value needs a prompt and no terminal
  *   is available.
  */
-function headerSources(specs: readonly string[], provider: string, io: CliIo): Map<string, string | null> {
+function headerSources(specs: readonly string[], provider: string, ctx: SetupContext): Map<string, string | null> {
   const sources = new Map<string, string | null>();
   const seen = new Set<string>();
   for (const spec of specs) {
@@ -147,7 +231,7 @@ function headerSources(specs: readonly string[], provider: string, io: CliIo): M
     if (seen.has(name.toLowerCase())) throw new AuthError(`--header ${name} is given more than once (names ignore case)`);
     seen.add(name.toLowerCase());
     if (variable === null) {
-      if (io.stdin.isTTY !== true) {
+      if (ctx.terminal === null) {
         throw new AuthError(
           `--header ${name} reads its value from a hidden prompt, which needs a terminal; ` +
             "use --header NAME=VARIABLE to read it from a variable",
@@ -157,7 +241,7 @@ function headerSources(specs: readonly string[], provider: string, io: CliIo): M
       continue;
     }
     if (!variable) throw new AuthError(`--header ${name}=VARIABLE needs an environment variable name`);
-    const value = io.env(variable);
+    const value = ctx.io.env(variable);
     if (!value) throw new AuthError(`The environment variable given for --header ${name} is not set`);
     try {
       sources.set(name, validateHeaderValue(name, value));
@@ -167,6 +251,91 @@ function headerSources(specs: readonly string[], provider: string, io: CliIo): M
     }
   }
   return sources;
+}
+
+/**
+ * Prompt, hidden, for each header value not read yet, and check all of them.
+ *
+ * @param sources From `headerSources`.
+ * @param provider The provider the headers go to.
+ * @returns Each header name and its value.
+ * @throws {AuthError} A prompt is cancelled or left empty, or a value or the number of headers is
+ *   not allowed.
+ */
+async function headers(
+  sources: ReadonlyMap<string, string | null>,
+  provider: string,
+  ctx: SetupContext,
+): Promise<Record<string, string>> {
+  const values: Record<string, string> = {};
+  for (let [name, value] of sources) {
+    if (value === null) {
+      // headerSources refused a bare header without a terminal.
+      value = await ctx.terminal!.askText(`${name} header value:`, { secret: true, signal: ctx.signal });
+      if (value === null) throw new AuthError(CANCELLED);
+      if (!value) throw new AuthError(`Authentication cancelled; no value was given for ${name}`);
+    }
+    values[name] = value;
+  }
+  try {
+    return validateHeaders(values, provider);
+  } catch (error) {
+    if (error instanceof RangeError) throw new AuthError(`Invalid --header: ${error.message}`);
+    throw error;
+  }
+}
+
+/** Start a program that opens a URL; `spawn` by default. */
+type Launch = (
+  command: string,
+  args: readonly string[],
+  options: { detached: boolean; stdio: "ignore" },
+) => Pick<EventEmitter, "once"> & { unref(): void };
+
+/**
+ * Present the login URL on `out` and open it with the host's browser.
+ *
+ * The platform's opener (`open`, `rundll32 url.dll,FileProtocolHandler` or `xdg-open`) gets the URL
+ * as an argument, never through a shell, and runs detached. Resolves once it has started or failed
+ * to: the printed URL stays usable either way.
+ */
+export async function openBrowser(
+  url: string,
+  out: Writer,
+  { platform = process.platform, launch = spawn }: { platform?: NodeJS.Platform; launch?: Launch } = {},
+): Promise<void> {
+  await out.write(`Open this URL to sign in:\n${url}\n`);
+  const [command, args] =
+    platform === "darwin"
+      ? ["open", [url]]
+      : platform === "win32"
+        ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
+        : ["xdg-open", [url]];
+  try {
+    const child = launch(command, args, { detached: true, stdio: "ignore" });
+    child.unref();
+    await new Promise<void>((resolve) => {
+      child.once("spawn", () => resolve());
+      // Also the listener a later error finds, so it doesn't end the process.
+      child.once("error", () => resolve());
+    });
+  } catch {
+    // The displayed URL remains usable when the opener can't start.
+  }
+}
+
+/** Present the verification page and one-time user code. */
+async function deviceCode(url: string, code: string, io: CliIo): Promise<void> {
+  await io.stdout.write(`Open ${url} and enter code: ${code}\n`);
+}
+
+/** Offer general text-model families from the authenticated API catalog. */
+function textModels(models: readonly string[]): string[] {
+  return models.filter(
+    (name) =>
+      ["gpt-", "chatgpt-", "o1", "o3", "o4"].some((prefix) => name.startsWith(prefix)) &&
+      !["realtime", "audio", "image", "transcribe", "tts"].some((part) => name.includes(part)),
+  );
 }
 
 /** Print each saved login in `store` and the default without reading any credential. */
@@ -235,7 +404,7 @@ interface AuthOptions {
  * @throws {AuthError} The provider or an option does not apply, a connection setting is invalid,
  *   or Azure setup lacks its API version or has an invalid endpoint.
  */
-function checkOptions(provider: string, options: AuthOptions, io: CliIo): [string, Map<string, string | null>] {
+function checkOptions(provider: string, options: AuthOptions, ctx: SetupContext): [string, Map<string, string | null>] {
   const { method, login, model, apiKeyEnv, endpoint, organization, project, header } = options;
   const setup: [string, unknown][] = [
     ["--method", method],
@@ -294,17 +463,86 @@ function checkOptions(provider: string, options: AuthOptions, io: CliIo): [strin
   }
   if (name === "azure" && !options.default) {
     // The Azure client reads the API version only from the environment.
-    if (!io.env("OPENAI_API_VERSION")) {
+    if (!ctx.io.env("OPENAI_API_VERSION")) {
       throw new AuthError("Azure needs OPENAI_API_VERSION set to its API version (runs read it too)");
     }
     if (endpoint !== undefined) checkEndpoint(endpoint);
   }
-  return [name, headerSources(header, name, io)];
+  return [name, headerSources(header, name, ctx)];
 }
 
-/** Sign in to OpenAI, choose an available model, and save the login. Not ported yet. */
-async function setupOpenai(..._args: unknown[]): Promise<void> {
-  throw new Error("not ported yet");
+/**
+ * Sign in to OpenAI, choose an available model, and save the login.
+ *
+ * An API key is saved with the given organization, project and headers, which its model listing
+ * sends too; a subscription takes none of them.
+ *
+ * @throws {AuthError} Sign-in, a setting, the listing, or the model choice fails.
+ */
+async function setupOpenai(
+  store: AuthStore,
+  method: string | undefined,
+  login: string | undefined,
+  model: string | undefined,
+  apiKeyEnv: string,
+  makeDefault: boolean,
+  organization: string | undefined,
+  project: string | undefined,
+  sources: ReadonlyMap<string, string | null>,
+  ctx: SetupContext,
+): Promise<void> {
+  method ??= await choose(
+    "OpenAI authentication method:",
+    ["subscription", "api-key"],
+    { initial: "subscription", option: "--method" },
+    ctx,
+  );
+  if (method === "subscription" && (organization || project || sources.size > 0)) {
+    throw new AuthError(SETTINGS_NEED_API_KEY);
+  }
+  const service = (ctx.deps.openAIAuth ?? newOpenAIAuth)({ signal: ctx.signal });
+  let credentials: OAuthCredentials | ApiKeyCredentials;
+  let models: readonly string[];
+  let choices: readonly string[];
+  if (method === "subscription") {
+    login ??= await choose(
+      "Subscription sign-in:",
+      ["browser", "device"],
+      { initial: ctx.io.env("SSH_CONNECTION") ? "device" : "browser", option: "--login" },
+      ctx,
+    );
+    const openUrl = ctx.deps.openUrl ?? ((url: string) => openBrowser(url, ctx.io.stdout));
+    credentials =
+      login === "device"
+        ? await service.deviceLogin((url, code) => deviceCode(url, code, ctx.io))
+        : await service.browserLogin(openUrl);
+    models = await service.subscriptionModels(credentials);
+    choices = models;
+  } else {
+    if (login !== undefined) throw new AuthError("--login applies to subscription authentication");
+    // A required key is never null.
+    const key = (await apiKey("openai", apiKeyEnv, {}, ctx))!;
+    const values = await headers(sources, "openai", ctx);
+    const apiCredentials = new ApiKeyCredentials(key, values);
+    credentials = apiCredentials;
+    try {
+      models = await service.apiModels(apiCredentials, { organization, project });
+    } catch (error) {
+      // The messages are fixed today; scrubbed so no sent secret can reach output.
+      if (!(error instanceof AuthError)) throw error;
+      throw new AuthError(redactKeys(error.message, [key, ...Object.values(values)]));
+    }
+    choices = textModels(models);
+  }
+  if (model === undefined) {
+    if (choices.length === 0) {
+      throw new AuthError("No general text models were returned; use --model with an available text model");
+    }
+    model = await choose("Model:", choices, { initial: choices[0]!, option: "--model" }, ctx);
+  }
+  if (!models.includes(model)) throw new AuthError("The selected model is not available for this connection");
+  await store.save("openai", credentials, model, { organization, project, makeDefault });
+  await ctx.io.stdout.write(`Saved OpenAI ${method} authentication with model ${model}\n`);
 }
 
 /**
@@ -327,7 +565,7 @@ async function signInLines(
   const store = new AuthStore(authFile, { env: io.env, signal });
   // Reading first also diagnoses an unusable store before any request.
   const makeDefault = store.read().defaultProvider === null;
-  const service = (deps.openAIAuth ?? ((options) => new OpenAIAuth(options)))({ signal });
+  const service = (deps.openAIAuth ?? newOpenAIAuth)({ signal });
   const credentials = await service.deviceLogin(async (url, code) => {
     await printJson({ event: "code", user_code: code, verification_uri: url }, io.stdout);
     await printJson({ event: "waiting" }, io.stdout);
@@ -433,6 +671,9 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
   const off = onStopSignals(names, stop, deps.signals ?? process);
   const authFile = (o["auth-file"] as string | undefined) ?? null;
   const open = (path: string | null) => new AuthStore(path, { env: io.env, signal: stop.signal });
+  const terminal =
+    deps.terminal !== undefined ? deps.terminal : io.stdin.isTTY === true ? new Terminal({ input: io.stdin }) : null;
+  const ctx: SetupContext = { io, deps, terminal, signal: stop.signal };
   try {
     if (provider === undefined) {
       const { method, login, model, apiKeyEnv, endpoint, organization, project } = options;
@@ -456,7 +697,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
       await list(open(authFile), io);
       return 0;
     }
-    const [checked, sources] = checkOptions(provider, options, io);
+    const [checked, sources] = checkOptions(provider, options, ctx);
     let name = checked;
     if (json && device) {
       await signInLines(authFile, options.model, io, deps, stop.signal);
@@ -487,10 +728,10 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
     if (name === "openai") {
       const { method, login, model, apiKeyEnv, organization, project } = options;
       const keyEnv = apiKeyEnv ?? "OPENAI_API_KEY";
-      await setupOpenai(store, method, login, model, keyEnv, current === null, organization, project, sources);
+      await setupOpenai(store, method, login, model, keyEnv, current === null, organization, project, sources, ctx);
     } else {
       const { model, apiKeyEnv, endpoint } = options;
-      await setupProvider(store, name, model, apiKeyEnv, endpoint, current === null, sources);
+      await setupProvider(store, name, model, apiKeyEnv, endpoint, current === null, sources, ctx);
     }
     if (current === null || current === name) {
       await io.stdout.write(`Default provider: ${name}\n`);
@@ -516,6 +757,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
     return 1;
   } finally {
     off();
+    terminal?.close();
   }
 }
 
@@ -642,8 +884,7 @@ async function subscriptionModels(
       if (selection === null || selection.method !== "subscription") {
         throw new AuthError(`There is no saved openai subscription login in ${authFile}`);
       }
-      const openAIAuth = deps.openAIAuth ?? ((options) => new OpenAIAuth(options));
-      const service = openAIAuth({ signal, requestTimeoutMs: timeoutMs });
+      const service = (deps.openAIAuth ?? newOpenAIAuth)({ signal, requestTimeoutMs: timeoutMs });
       const credentials = await store.credentials("openai", selection.credentialId, {
         refresh: (old) => service.refresh(old),
       });

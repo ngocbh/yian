@@ -7,16 +7,27 @@
 // `test_remove_deletes_one_login`, `test_remove_accepts_an_unsupported_saved_provider`,
 // `test_remove_finds_a_lowercase_saved_name`, `test_env_override_note_agrees_with_the_number_of_variables`,
 // `test_list_shows_connection_settings_by_name_only`,
-// `test_device_json_stopped_before_the_save_exits_130_and_saves_nothing` and
-// `test_device_json_stopped_after_the_rename_is_saved_and_done`.
+// `test_device_json_stopped_before_the_save_exits_130_and_saves_nothing`,
+// `test_device_json_stopped_after_the_rename_is_saved_and_done`,
+// `test_explicit_setup_saves_method_and_model_without_echoing_secrets`,
+// `test_interactive_setup_defaults_to_subscription_and_catalog_first_model`,
+// `test_failed_or_cancelled_setup_preserves_previous_connection`,
+// `test_noninteractive_setup_requires_explicit_choices`, `test_setup_keeps_existing_default`,
+// `test_openai_api_key_setup_saves_connection_settings`,
+// `test_subscription_chosen_at_the_prompt_refuses_settings` and
+// `test_openai_listing_failure_is_scrubbed_of_header_values`.
 // Added here, since Python left them to the `cli` conformance cases or didn't test them: `yian
 // providers`, `yian config check` (including `_config_errors`'s rows), the rest of `yian models`
 // (usage errors, the provider and subscription forms, the deadline), `--default` with `--remove`,
 // `--json` on a form that doesn't take it, whole-file removal and its refusals, "Name a provider" and
 // the removal documents under `--json`, SIGINT during a removal, no signal listener left behind, and
-// the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule.
-// Python's monkeypatched `list_models` and `OpenAIAuth` are `deps` fakes here, so no test reaches a
-// real host.
+// the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule,
+// the OpenAI sign-in picker's SSH initial, OpenAI's hidden key and header prompts and their
+// refusals, a listing with no text model, SIGINT during a picker, and `openBrowser`'s opener
+// commands.
+// Python's monkeypatched `list_models`, `OpenAIAuth`, `_choose`, questionary and `webbrowser` are
+// `deps` fakes here (a fake terminal, a recording opener and `launch`), so no test reaches a real
+// host or opens a browser.
 // The handlers are called directly with the `ParsedArgs` the parser would give, so parsing stays
 // covered by cli_utils.test.ts and the `cli` cases.
 
@@ -27,7 +38,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { auth, type AuthDeps, configCheck, configErrors, EXTRA_FIELD, models, providers } from "../../src/cli/auth.ts";
+import {
+  auth,
+  type AuthDeps,
+  configCheck,
+  configErrors,
+  EXTRA_FIELD,
+  models,
+  openBrowser,
+  providers,
+} from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
@@ -382,6 +402,12 @@ describe("models --auth-file", () => {
           calls.push(`list ${credentials.accessToken}`);
           return list(credentials, options.signal);
         },
+        browserLogin: async () => {
+          throw new Error("yian models never signs in");
+        },
+        apiModels: async () => {
+          throw new Error("yian models never lists API-key models");
+        },
       };
     };
     return { openAIAuth, built, calls };
@@ -517,9 +543,13 @@ function authArgs(provider?: string, options: Record<string, OptionValue> = {}):
   };
 }
 
-/** Python's `Service`: a fake OpenAI authentication service recording each call. */
+/**
+ * Python's `Service`: a fake OpenAI authentication service recording each call, and the key,
+ * headers and settings each API-key listing is sent. Its browser login opens a fixed URL.
+ */
 function fakeService() {
   const calls: string[] = [];
+  const settings: Record<string, unknown>[] = [];
   const credentials = () =>
     new OAuthCredentials({
       accessToken: "private-access",
@@ -533,8 +563,9 @@ function fakeService() {
       await display("https://example.invalid/device", "TEST-CODE");
       return credentials();
     },
-    browserLogin: async () => {
+    browserLogin: async (openUrl: (url: string) => void | Promise<void>) => {
       calls.push("browser");
+      await openUrl("https://example.invalid/authorize");
       return credentials();
     },
     refresh: async (old: OAuthCredentials) => {
@@ -545,19 +576,24 @@ function fakeService() {
       calls.push("subscription_models");
       return ["gpt-test", "gpt-other"];
     },
-    apiModels: async () => {
+    apiModels: async (
+      sent: ApiKeyCredentials,
+      options: { organization?: unknown; project?: unknown } = {},
+    ): Promise<readonly string[]> => {
       calls.push("api_models");
+      settings.push({ apiKey: sent.apiKey, headers: sent.headers, ...options });
       return ["embedding-test", "gpt-test", "gpt-other"];
     },
   };
-  return { calls, openAIAuth: () => service };
+  return { calls, settings, service, openAIAuth: () => service };
 }
 
 /**
  * Python's `setup_auth`: a store path in `YIAN_AUTH_FILE`, `OPENAI_API_KEY=private-key`, the
  * environment defaults the Python suite sets for every test, and a fake service. The store's
  * directory is private (`storeOpen`, the default), or 0755, so any store read fails with
- * "Credential storage must be private to its owner".
+ * "Credential storage must be private to its owner". The browser opener records each URL in
+ * `opened`.
  */
 function setupAuth({ storeOpen = true }: { storeOpen?: boolean } = {}) {
   const directory = join(tmp, "auth");
@@ -572,8 +608,10 @@ function setupAuth({ storeOpen = true }: { storeOpen?: boolean } = {}) {
     YIAN_DEFAULT_MODEL: "gpt-5.5",
   };
   const service = fakeService();
-  const deps: AuthDeps = { openAIAuth: service.openAIAuth };
-  return { path, store: new AuthStore(path), env, service, deps };
+  // Recorded, so no test opens a real browser.
+  const opened: string[] = [];
+  const deps: AuthDeps = { openAIAuth: service.openAIAuth, openUrl: (url) => void opened.push(url) };
+  return { path, store: new AuthStore(path), env, service, deps, opened };
 }
 
 /** The message of the `RangeError` `check` throws. */
@@ -1134,5 +1172,336 @@ describe("auth device sign-in as JSON lines", () => {
     });
     expect(setup.store.read().defaultProvider).toBe("anthropic");
     expect(setup.store.selection("openai")?.model).toBe("gpt-other");
+  });
+});
+
+/** An answer the fake terminal never gives: the prompt waits until its signal aborts, then rejects with its reason. */
+const WAIT = Symbol("wait");
+
+/**
+ * A fake prompt terminal recording each prompt (kind, label, choices, initial, secret) and
+ * answering from `answers` in order (`null` = cancel, `WAIT` = wait for the signal). It counts the
+ * `close()` calls.
+ */
+function fakeTerminal(answers: (string | null | typeof WAIT)[]) {
+  const asked: { kind: string; label: string; choices?: readonly string[]; initial?: string; secret?: boolean }[] = [];
+  const signals: (AbortSignal | undefined)[] = [];
+  let closed = 0;
+  const answer = (signal: AbortSignal | undefined): Promise<string | null> => {
+    signals.push(signal);
+    if (answers.length === 0) throw new Error("unexpected prompt");
+    const next = answers.shift()!;
+    if (next !== WAIT) return Promise.resolve(next);
+    return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  };
+  const terminal = {
+    askText: async (label: string, options: { initial?: string; secret?: boolean; signal?: AbortSignal } = {}) => {
+      asked.push({ kind: "text", label, secret: options.secret === true });
+      return answer(options.signal);
+    },
+    askChoice: async (label: string, choices: readonly string[], options: { initial?: string; signal?: AbortSignal } = {}) => {
+      asked.push({ kind: "choice", label, choices: [...choices], initial: options.initial });
+      return answer(options.signal);
+    },
+    close: () => void (closed += 1),
+  };
+  return { terminal, asked, signals, closed: () => closed };
+}
+
+describe("auth OpenAI setup", () => {
+  /** Run `yian auth openai options` on `setup`'s store, with `env` added and `deps` overriding. */
+  async function runSetup(
+    setup: ReturnType<typeof setupAuth>,
+    options: Record<string, OptionValue> = {},
+    { env = {}, deps = {}, isTTY }: { env?: Record<string, string>; deps?: AuthDeps; isTTY?: boolean } = {},
+  ) {
+    const io = fakeIo({ env: { ...setup.env, ...env }, isTTY });
+    const result = await run(auth, authArgs("openai", options), io, { ...setup.deps, ...deps });
+    return { ...result, output: result.out + result.err };
+  }
+
+  const METHOD = { kind: "choice", label: "OpenAI authentication method:", choices: ["subscription", "api-key"] };
+  const LOGIN = { kind: "choice", label: "Subscription sign-in:", choices: ["browser", "device"] };
+
+  // Python: test_explicit_setup_saves_method_and_model_without_echoing_secrets.
+  test.each<[string, string | undefined, string]>([
+    ["subscription", "device", "Open https://example.invalid/device and enter code: TEST-CODE\n"],
+    ["subscription", "browser", ""],
+    ["api-key", undefined, ""],
+  ])("explicit setup: --method %p --login %p", async (method, login, shown) => {
+    const setup = setupAuth();
+    const options: Record<string, OptionValue> = { method, model: "gpt-test" };
+    if (login) options["login"] = login;
+    const result = await runSetup(setup, options);
+    expect(result).toEqual({
+      code: 0,
+      out: `${shown}Saved OpenAI ${method} authentication with model gpt-test\nDefault provider: openai\n`,
+      err: "",
+      output: expect.any(String),
+    });
+    const selected = setup.store.selection()!;
+    expect([selected.provider, selected.model]).toEqual(["openai", "gpt-test"]);
+    expect(selected.method).toBe(method === "api-key" ? "api_key" : "subscription");
+    expect(result.output).not.toContain("private-");
+    expect(setup.service.calls).toEqual(login ? [login, "subscription_models"] : ["api_models"]);
+    expect(setup.opened).toEqual(login === "browser" ? ["https://example.invalid/authorize"] : []);
+  });
+
+  // Python: test_interactive_setup_defaults_to_subscription_and_catalog_first_model.
+  test("interactive setup defaults to a subscription and the catalog's first model", async () => {
+    const setup = setupAuth();
+    const fake = fakeTerminal(["subscription", "device", "gpt-test"]);
+    const result = await runSetup(setup, {}, { deps: { terminal: fake.terminal } });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([
+      { ...METHOD, initial: "subscription" },
+      { ...LOGIN, initial: "browser" },
+      { kind: "choice", label: "Model:", choices: ["gpt-test", "gpt-other"], initial: "gpt-test" },
+    ]);
+    expect(fake.signals.every((signal) => signal instanceof AbortSignal && !signal.aborted)).toBe(true);
+    expect(fake.closed()).toBe(1);
+    expect(setup.store.selection()?.model).toBe("gpt-test");
+  });
+
+  test("the sign-in picker starts at device over SSH", async () => {
+    const setup = setupAuth();
+    const fake = fakeTerminal(["device"]);
+    const env = { SSH_CONNECTION: "10.0.0.1 22 10.0.0.2 22" };
+    const result = await runSetup(setup, { method: "subscription", model: "gpt-test" }, { env, deps: { terminal: fake.terminal } });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([{ ...LOGIN, initial: "device" }]);
+  });
+
+  // Python: test_failed_or_cancelled_setup_preserves_previous_connection.
+  test.each(["login", "model", "cancel", "missing_model"])("a %s failure keeps the previous login", async (failure) => {
+    const setup = setupAuth();
+    const previous = await setup.store.save("openai", new ApiKeyCredentials("old-key"), "old-model");
+    const before = readFileSync(setup.path);
+    const fail = async (): Promise<never> => {
+      throw new AuthError("Simulated setup failure");
+    };
+    if (failure === "login") setup.service.service.deviceLogin = fail;
+    if (failure === "model") setup.service.service.subscriptionModels = fail;
+    const options: Record<string, OptionValue> = { method: "subscription", login: "device" };
+    if (failure !== "cancel") options["model"] = failure === "missing_model" ? "unavailable" : "gpt-test";
+    const fake = fakeTerminal([null]);
+    const result = await runSetup(setup, options, { deps: { terminal: fake.terminal } });
+    expect(result.code).toBe(1);
+    const expected = {
+      login: "Simulated setup failure",
+      model: "Simulated setup failure",
+      cancel: CANCELLED,
+      missing_model: "The selected model is not available for this connection",
+    }[failure];
+    expect(result.err).toBe(`${expected}\n`);
+    expect(readFileSync(setup.path)).toEqual(before);
+    expect(setup.store.selection()).toEqual(previous);
+    expect(result.output).not.toContain("old-key");
+    expect(result.output).not.toContain("private-");
+  });
+
+  // Python: test_noninteractive_setup_requires_explicit_choices.
+  test.each<[string, boolean, AuthDeps]>([
+    ["stdin is not a TTY", false, {}],
+    ["the terminal is null", true, { terminal: null }],
+  ])("non-interactive setup requires explicit choices (%s)", async (_, isTTY, deps) => {
+    const setup = setupAuth();
+    const result = await runSetup(setup, {}, { isTTY, deps });
+    expect(result).toMatchObject({
+      code: 1,
+      out: "",
+      err: "Authentication needs --method when no interactive terminal is available\n",
+    });
+    expect(setup.service.calls).toEqual([]);
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  // Python: test_setup_keeps_existing_default.
+  test("setup keeps an existing default", async () => {
+    const setup = setupAuth();
+    const options = { method: "api-key", model: "gpt-test" };
+    let result = await runSetup(setup, options);
+    expect(result.code).toBe(0);
+    expect(setup.store.read().defaultProvider).toBe("openai");
+    expect(result.output).toContain("Default provider: openai");
+
+    result = await runSetup(setup, options);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("Default provider: openai");
+    expect(result.output).not.toContain("switch with");
+
+    await setup.store.save("anthropic", new ApiKeyCredentials("private-other"), "claude-test");
+    result = await runSetup(setup, options);
+    expect(result.code).toBe(0);
+    expect(setup.store.read().defaultProvider).toBe("anthropic");
+    expect(setup.store.selection("openai")?.model).toBe("gpt-test");
+    expect(result.out).toEndWith("Default provider: anthropic (switch with 'yian auth openai --default')\n");
+  });
+
+  // Python: test_openai_api_key_setup_saves_connection_settings.
+  test("API-key setup saves the connection settings", async () => {
+    const setup = setupAuth();
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gpt-test", organization: "org-1", project: "proj-1", header: ["X-G=GW_TOKEN"] },
+      { env: { GW_TOKEN: "private-gw" } },
+    );
+    expect(result.code).toBe(0);
+    expect(setup.service.settings).toEqual([
+      { apiKey: "private-key", headers: [["X-G", "private-gw"]], organization: "org-1", project: "proj-1" },
+    ]);
+    const selected = setup.store.selection("openai")!;
+    expect([selected.organization, selected.project]).toEqual(["org-1", "proj-1"]);
+    expect(selected.headerNames).toEqual(["X-G"]);
+    const credentials = (await setup.store.credentials("openai", selected.credentialId)) as ApiKeyCredentials;
+    expect(credentials.headers).toEqual([["X-G", "private-gw"]]);
+    expect(result.output).not.toContain("private-");
+  });
+
+  test("API-key setup reads the key and a bare header's value from hidden prompts", async () => {
+    const setup = setupAuth();
+    const { OPENAI_API_KEY: _, ...env } = setup.env;
+    setup.env = env;
+    const fake = fakeTerminal(["  typed-key  ", "typed-gw"]);
+    const options = { method: "api-key", model: "gpt-test", header: ["X-G"] };
+    const result = await runSetup(setup, options, { deps: { terminal: fake.terminal } });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([
+      { kind: "text", label: "openai API key:", secret: true },
+      { kind: "text", label: "X-G header value:", secret: true },
+    ]);
+    expect(setup.service.settings).toEqual([{ apiKey: "typed-key", headers: [["X-G", "typed-gw"]] }]);
+    expect(result.output).not.toContain("typed-");
+  });
+
+  test.each<[string, (string | null)[], string]>([
+    ["a cancelled key prompt", [null], CANCELLED],
+    ["an empty key", ["  "], "Authentication cancelled; no API key was supplied"],
+    ["a cancelled header prompt", ["typed-key", null], CANCELLED],
+    ["an empty header value", ["typed-key", ""], "Authentication cancelled; no value was given for X-G"],
+  ])("%s saves nothing", async (_, answers, message) => {
+    const setup = setupAuth();
+    const { OPENAI_API_KEY: __, ...env } = setup.env;
+    setup.env = env;
+    const fake = fakeTerminal(answers);
+    const options = { method: "api-key", model: "gpt-test", header: ["X-G"] };
+    const result = await runSetup(setup, options, { deps: { terminal: fake.terminal } });
+    expect(result).toMatchObject({ code: 1, err: `${message}\n` });
+    expect(setup.service.calls).toEqual([]);
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  test("API-key setup without the key or a terminal names the variable", async () => {
+    const setup = setupAuth();
+    const result = await runSetup(setup, { method: "api-key", model: "gpt-test", "api-key-env": "MY_KEY" });
+    expect(result).toMatchObject({ code: 1, err: "Set MY_KEY before API-key setup, or run in an interactive terminal\n" });
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  // Python: test_subscription_chosen_at_the_prompt_refuses_settings.
+  test("a subscription chosen at the prompt refuses settings", async () => {
+    const setup = setupAuth();
+    const fake = fakeTerminal(["subscription"]);
+    const result = await runSetup(setup, { organization: "org-1" }, { deps: { terminal: fake.terminal } });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "--organization, --project and --header apply to API-key authentication\n",
+    });
+    expect(setup.service.calls).toEqual([]);
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  // Python: test_openai_listing_failure_is_scrubbed_of_header_values.
+  test("the listing failure is scrubbed of header values", async () => {
+    const setup = setupAuth();
+    setup.service.service.apiModels = async () => {
+      throw new AuthError("rejected gwvalue7 with private-key");
+    };
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gpt-test", header: ["X-G=GW_TOKEN"] },
+      { env: { GW_TOKEN: "gwvalue7" } },
+    );
+    expect(result).toMatchObject({ code: 1, err: "rejected [REDACTED] with [REDACTED]\n" });
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  test("no text model in the listing needs --model", async () => {
+    const setup = setupAuth();
+    setup.service.service.apiModels = async () => ["embedding-test", "gpt-realtime-test"];
+    const fake = fakeTerminal([]);
+    const result = await runSetup(setup, { method: "api-key" }, { deps: { terminal: fake.terminal } });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "No general text models were returned; use --model with an available text model\n",
+    });
+  });
+
+  test("a SIGINT while a picker waits cancels the setup and saves nothing", async () => {
+    const setup = setupAuth();
+    const signals = new EventEmitter();
+    const fake = fakeTerminal([WAIT]);
+    const io = fakeIo({ env: setup.env });
+    const running = auth(authArgs("openai"), io.io, { ...setup.deps, terminal: fake.terminal, signals });
+    while (fake.asked.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    signals.emit("SIGINT");
+    expect({ code: await running, out: io.out(), err: io.err() }).toEqual({ code: 1, out: "", err: `${CANCELLED}\n` });
+    expect(fake.closed()).toBe(1);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(setup.service.calls).toEqual([]);
+    expect(existsSync(setup.path)).toBe(false);
+  });
+});
+
+describe("openBrowser", () => {
+  const URL = "https://auth.example.invalid/authorize?a=1&b=2";
+  const SHOWN = `Open this URL to sign in:\n${URL}\n`;
+
+  /**
+   * A fake `launch` recording each call and what `out` held then; its child records `unref()` and
+   * emits `event` (with an error for "error") just after the call returns.
+   */
+  function fakeLaunch(out: ReturnType<typeof sink>, event: "spawn" | "error") {
+    const launched: { command: string; args: readonly string[]; options: object; printed: string }[] = [];
+    const child = Object.assign(new EventEmitter(), { unrefs: 0, unref: () => void (child.unrefs += 1) });
+    const launch = (command: string, args: readonly string[], options: object) => {
+      launched.push({ command, args, options, printed: out.text() });
+      queueMicrotask(() => child.emit(event, ...(event === "error" ? [new Error("spawn ENOENT")] : [])));
+      return child;
+    };
+    return { launch, launched, child };
+  }
+
+  test.each<[NodeJS.Platform, string, string[]]>([
+    ["darwin", "open", [URL]],
+    ["linux", "xdg-open", [URL]],
+    ["freebsd", "xdg-open", [URL]],
+    ["win32", "rundll32", ["url.dll,FileProtocolHandler", URL]],
+  ])("on %s it prints the URL, then runs %s without a shell, detached, unref'd", async (platform, command, args) => {
+    const out = sink();
+    const fake = fakeLaunch(out, "spawn");
+    await openBrowser(URL, out.out, { platform, launch: fake.launch });
+    expect(fake.launched).toEqual([{ command, args, options: { detached: true, stdio: "ignore" }, printed: SHOWN }]);
+    expect(fake.child.unrefs).toBe(1);
+    expect(out.text()).toBe(SHOWN);
+  });
+
+  test("an opener that fails to start still resolves", async () => {
+    const out = sink();
+    const fake = fakeLaunch(out, "error");
+    await openBrowser(URL, out.out, { platform: "linux", launch: fake.launch });
+    expect(fake.launched).toHaveLength(1);
+    expect(out.text()).toBe(SHOWN);
+  });
+
+  test("a launch that throws still resolves after printing the URL", async () => {
+    const out = sink();
+    await openBrowser(URL, out.out, {
+      platform: "linux",
+      launch: () => {
+        throw new Error("no opener");
+      },
+    });
+    expect(out.text()).toBe(SHOWN);
   });
 });

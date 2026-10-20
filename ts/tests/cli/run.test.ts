@@ -2,7 +2,7 @@
 // `test_inputs_file_must_be_utf8` and `test_flag_overrides_json`, on the helpers those runs go
 // through (`parseKv`, `readInputsJson`, `mergeInputs`). Added here: the other `cli/run.ts` helpers
 // (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`), `skillsCheck`, and `main`'s
-// command table: the defaults check, usage errors and unported commands. `run`, `check` and
+// command table: the defaults check, usage errors and the routing to `cli/auth.ts`. `run`, `check` and
 // `status` are covered up to the loader and the run inspection, which aren't ported yet; from
 // tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
@@ -370,17 +370,21 @@ describe("main", () => {
     }
   });
 
-  test("an unported command exits 1 with its line", async () => {
-    for (const [argv, name] of [
-      [["providers"], "providers"],
-      [["config", "check"], "config check"],
-      [["auth", "openai"], "auth"],
-    ] as const) {
-      const { io, stdout, stderr } = testIo();
-      expect(await main(argv, io)).toBe(1);
-      expect(stdout()).toBe("");
-      expect(stderr()).toBe(`yian ${name} is not ported to TypeScript yet\n`);
-    }
+  test("the provider commands reach cli/auth.ts", async () => {
+    let { io, stdout, stderr } = testIo();
+    expect(await main(["providers"], io)).toBe(0);
+    expect(stdout().split("\n")[0]).toBe("openai: api-key, subscription (OPENAI_API_KEY)");
+    expect(stderr()).toBe("");
+    ({ io, stdout, stderr } = testIo());
+    expect(await main(["auth", "--json"], io)).toBe(2);
+    expect(stdout()).toBe("");
+    expect(stderr()).toContain(
+      "Error: Invalid value: --json applies to --remove and to openai --method subscription --login device\n",
+    );
+    // `--timeout` is a float option: Click's message, before the handler runs.
+    ({ io, stdout, stderr } = testIo());
+    expect(await main(["models", "--provider", "openai", "--timeout", "soon"], io)).toBe(2);
+    expect(stderr()).toContain("Error: Invalid value for '--timeout': 'soon' is not a valid float.\n");
   });
 
   test("a command's --help prints its help and exits 0", async () => {

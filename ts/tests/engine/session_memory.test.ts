@@ -788,6 +788,8 @@ test("second consumer waits for the first turn", async () => {
         }),
       );
       await macrotask();
+      expect(other.settled).toBe(false);
+      expect(h.memory["queue"].length).toBe(1);
       expect(entered).toBe(false);
     });
     await other!.promise;
@@ -814,8 +816,7 @@ test("cancelled ticket is removed", async () => {
       await macrotask();
       expect(h.memory["queue"].length).toBe(1);
       controller.abort(reason);
-      await second.promise.catch(() => {});
-      expect(second.error).toBe(reason);
+      expect(await rejected(second.promise)).toBe(reason);
       expect(h.memory["queue"].length).toBe(0);
     });
   });
@@ -851,9 +852,9 @@ test("reset rejects queued backend without mutation", async () => {
           waitingSession.session.close();
           await worker.promise.catch(() => {});
         }
-        expect(worker.error).toBeInstanceOf(MemoryOperationError);
-        expect((worker.error as MemoryOperationError).code).toBe("session.stale");
-        expect((worker.error as MemoryOperationError).message).toBe(STALE_SESSION);
+        const error = worker.error as MemoryOperationError;
+        expect(error).toBeInstanceOf(MemoryOperationError);
+        expect([error.code, error.message]).toEqual(["session.stale", STALE_SESSION]);
       });
     }, h.memory);
   });
@@ -1063,10 +1064,9 @@ test("session close removes own waiters without poisoning other owner", async ()
         await macrotask();
         expect(one.memory["queue"].length).toBe(1);
         two.session.close();
-        await worker.promise.catch(() => {});
-        expect(worker.error).toBeInstanceOf(MemoryOperationError);
-        expect((worker.error as MemoryOperationError).code).toBe("session.stale");
-        expect((worker.error as MemoryOperationError).message).toBe(STALE_SESSION);
+        const error = (await rejected(worker.promise)) as MemoryOperationError;
+        expect(error).toBeInstanceOf(MemoryOperationError);
+        expect([error.code, error.message]).toEqual(["session.stale", STALE_SESSION]);
         expect(one.memory["queue"].length).toBe(0);
         expect(one.memory["active"]).not.toBeNull();
       });
@@ -1092,6 +1092,7 @@ test("stop and external call do not hold backend lock", async () => {
     } finally {
       spy.mockRestore();
     }
+    // The admission, the request, the observation and the close each save one candidate.
     expect(reads.length).toBe(4);
   });
 });
@@ -1335,8 +1336,7 @@ describe("TS-only", () => {
         await macrotask();
         expect(h.memory["queue"].length).toBe(1);
         queued.abort(why);
-        await waiting.promise.catch(() => {});
-        expect(waiting.error).toBe(why);
+        expect(await rejected(waiting.promise)).toBe(why);
         expect(h.memory["queue"].length).toBe(0);
       });
       expect(h.memory["active"]).toBeNull();
@@ -1402,10 +1402,7 @@ describe("TS-only", () => {
         [request(), { signal: { aborted: false } }, "signal must be an AbortSignal"],
       ];
       for (const [value, options, message] of rows) {
-        const error = await h.frame.openTurn(value as never, options as never).then(
-          () => null,
-          (rejected: unknown) => rejected,
-        );
+        const error = await rejected(h.frame.openTurn(value as never, options as never));
         expect(Object.getPrototypeOf(error)).toBe(TypeError.prototype);
         expect((error as Error).message).toBe(message);
         expect(h.memory["queue"].length).toBe(0);

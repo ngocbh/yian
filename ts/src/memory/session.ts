@@ -931,7 +931,7 @@ export class Turn implements ConversationTurn {
       memory["guard"]();
       session["ensureLease"](lease);
     } catch (failure) {
-      this.finish(failure);
+      this.finish(failure, true);
       throw failure;
     }
   }
@@ -1075,15 +1075,18 @@ export class Turn implements ConversationTurn {
     this.finish(error);
   }
 
-  /** Python's `_finish`, without re-raising a pending `error`. */
-  private finish(error: unknown): void {
+  /**
+   * Python's `_finish`, without re-raising a pending `error`; `pending` says whether `error` is a
+   * body failure, so a failed open that threw `undefined` still records `failed`.
+   */
+  private finish(error: unknown, pending = error !== undefined): void {
     const lease = this.lease;
     if (lease === null || lease.released) return;
-    let failed = error !== undefined;
+    let hasPrimary = pending;
     let primary = error;
     const fail = (value: unknown): void => {
-      if (!failed) {
-        failed = true;
+      if (!hasPrimary) {
+        hasPrimary = true;
         primary = value;
       } else if (primary !== value) {
         secondary(primary, value);
@@ -1094,12 +1097,8 @@ export class Turn implements ConversationTurn {
       if (this.signal.aborted) fail(this.signal.reason);
       if (this.ordinal) {
         session["memory"]["guard"]();
-        const status =
-          this.signal.aborted || session["closed"] || (error === undefined && this.interrupted)
-            ? "interrupted"
-            : error !== undefined
-              ? "failed"
-              : "completed";
+        const stopped = this.signal.aborted || session["closed"] || (!pending && this.interrupted);
+        const status = stopped ? "interrupted" : pending ? "failed" : "completed";
         this.publish(new ConversationClosed(this.stamp(), status));
       }
     } catch (cleanup) {
@@ -1111,6 +1110,6 @@ export class Turn implements ConversationTurn {
         fail(cleanup);
       }
     }
-    if (failed && error === undefined) throw primary;
+    if (hasPrimary && !pending) throw primary;
   }
 }

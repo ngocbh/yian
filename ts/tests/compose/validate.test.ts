@@ -41,10 +41,9 @@
  * frame and the notes): `load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host`
  * (its `defs:` entry built by hand),
  * `load-core/engine_limit_overrides__written_value_over_the_set_value_limit` (its `env:` sets the
- * value limit, restored by the `afterEach`), and the type-table pass's
- * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output` and
- * `load-core/compose_field_read_sites__loop_while_reads_a_field_on_a_builtin_result` (its `body`
- * def built by hand).
+ * value limit, restored by the `afterEach`), the type-table pass's
+ * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, and the node-assert
+ * check's `load-core/compose_expression_nesting__too_deep_node_assert`.
  *
  * Later (T3-18 PR 3): the reference validator's rows (`test_validate_references_diag_has_range`,
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
@@ -70,7 +69,6 @@ import { CallNode } from "../../src/nodes/call/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
-import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -540,16 +538,6 @@ const child = () =>
     output: "${x.output}",
   });
 
-/** The `body` def of the field-read case: `st: !Rec3` into `bump`, whose `{st: Rec3}` it returns. */
-const body = () => {
-  const registry = readTypedefs({ Rec3: { a: "str", b: "Optional(str)" }, Out: { st: "Rec3" } });
-  return handChild({
-    inputs: parametersFromYaml("input:\n  st: !Rec3\n", registry),
-    producers: { bump: new ValueContract(typeFor("Out", registry)) },
-    output: "${bump.output}",
-  });
-};
-
 test.each<CaseRow>([
   {
     id: "load-map-call/compose_call_argument_labels__a_cycle_through_an_inline_call_names_its_host",
@@ -567,8 +555,8 @@ test.each<CaseRow>([
     full: true,
   },
   {
-    id: "load-core/compose_field_read_sites__loop_while_reads_a_field_on_a_builtin_result",
-    call: assembledWith({ body: body() }),
+    id: "load-core/compose_expression_nesting__too_deep_node_assert",
+    call: assembled,
     full: true,
   },
 ])("assemble: $id", runCase);

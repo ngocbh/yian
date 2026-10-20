@@ -34,10 +34,9 @@
  * `test_a_tagged_loop_seed_over_an_any_output_loads` (and its `ok` case
  * `load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads`). The `child` and
  * `bump` defs are built by hand (`handChild`), since def bodies load in T3-22; the error rows pin
- * the whole message where Python matches fragments, and CODE bodies are TS.
- *
- * Later (T3-20): `test_an_assert_reading_a_field_of_an_any_output_loads` and its case
- * `load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads` (node asserts).
+ * the whole message where Python matches fragments, and CODE bodies are TS. Also
+ * `test_an_assert_reading_a_field_of_an_any_output_loads` (node asserts) and its `ok` case
+ * `load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads`.
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,
@@ -72,6 +71,7 @@ import {
   ValueKind,
 } from "../../src/typesys/values.ts";
 import {
+  assembled,
   assembledWith,
   assembleText,
   handChild,
@@ -454,6 +454,27 @@ describe("field reads on Any", () => {
   test("a field read on Any is not checked", () => {
     const contract = new ValueContract(ANY);
     expect(outputContractFieldError(contract, ["anything"], "xs.anything")).toBe(null);
+  });
+
+  test("an assert reading a field of an Any output loads", () => {
+    assembleText(
+      "id: p\nname: p\n" +
+        "input:\n  s: !str\n" +
+        "nodes:\n" +
+        "  step:\n" +
+        "    kind: code\n" +
+        "    input:\n" +
+        "      x: ${input.s}\n" +
+        "    output: Any\n" +
+        "    code: return null\n" +
+        "    asserts:\n" +
+        "      - output.a.b == 1\n" +
+        "output: ${step.output}\n",
+    );
+  });
+
+  test("assembled: load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads", () => {
+    runCase({ id: "load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads", call: assembled });
   });
 });
 

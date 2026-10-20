@@ -87,10 +87,10 @@
  * TS-only: the pinned-case table, which makes the call a site makes on the conformance cases a
  * narrowing message decides (an impossible check, or a narrowed read's error) and checks that the
  * case's message, or its last line for a multi-line one, is the row's site prefix plus the
- * produced text. A `compose_null_narrowing__*` and a `compose_null_narrowing_case__*` row sit here
- * too, in the one harness, though their Python tests are `test_null_narrowing.py` and
- * `test_null_narrowing_case.py`; the cases `checkImpossibleWhens` raises are pinned whole in
- * `null_narrowing.test.ts` and `union_narrowing.test.ts`. The sites' locations are not pinned
+ * produced text. The cases `checkImpossibleWhens` raises are pinned whole in
+ * `null_narrowing.test.ts` and `union_narrowing.test.ts`, and the node-assert cases in the mirrors
+ * of their Python files (`field_read_sites.test.ts`, `null_narrowing.test.ts`,
+ * `null_narrowing_case.test.ts`). The sites' locations are not pinned
  * here. Two rows read a `Narrowing` built by hand: an empty one gives the unchanged maps, and a
  * filled one gives each node's and param's results.
  *
@@ -1788,7 +1788,6 @@ function runNarrowingRow(row: NarrowingRow): void {
 
 const FIELD_READ_SITES = "load-core/compose_field_read_sites__";
 const LOOP_BUILD = "load-loop/engine_loop_build__";
-const NULL_NARROWING = "load-types/compose_null_narrowing__";
 const UNION_NARROWING = "load-types/compose_union_narrowing__";
 
 test.each<NarrowingRow>([
@@ -1809,37 +1808,6 @@ test.each<NarrowingRow>([
     at: ["asserts", 0],
     prefix: "assert 'isinstance(d.output, Buy) and isinstance(d.output, Sell)': ",
     bases: { "d.output": "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}impossible_node_assert_check`,
-    at: ["nodes", "c", "asserts", 0],
-    prefix: "  node 'c' assert: ",
-    bases: { v: "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}node_assert_check_no_value_fits`,
-    at: ["nodes", "c", "asserts", 0],
-    prefix: "  node 'c' assert: ",
-    bases: { output: "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}node_assert_compares_with_a_non_tag`,
-    at: ["nodes", "c", "asserts", 0],
-    prefix: "  node 'c' assert: ",
-    bases: { v: "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}node_assert_negated_check_always_true`,
-    at: ["nodes", "c", "asserts", 0],
-    prefix: "  node 'c' assert: ",
-    bases: { output: "Order" },
-  },
-  {
-    id: `${FIELD_READ_SITES}node_assert_read_on_the_other_member`,
-    at: ["nodes", "c", "asserts", 0],
-    prefix: "  node 'c' assert: ",
-    bases: { v: "Order" },
-    read: "v.qty",
   },
   {
     id: `${LOOP_BUILD}predicate_isinstance_of_a_disjoint_type_is_rejected`,
@@ -1864,19 +1832,6 @@ test.each<NarrowingRow>([
     at: ["nodes", "ask", "until"],
     prefix: "loop node 'ask': `until:` ",
     bases: { r: "Step" },
-  },
-  {
-    id: `${NULL_NARROWING}a_node_assert_check_made_impossible_is_reported`,
-    at: ["nodes", "c", "asserts", 0],
-    prefix: "  node 'c' assert: ",
-    bases: { x: "Optional(AB)" },
-  },
-  {
-    id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read",
-    at: ["nodes", "x", "asserts", 0],
-    prefix: "  node 'x' assert: ",
-    bases: { output: "Optional(Item)" },
-    read: "output.nosuch",
   },
   {
     id: `${UNION_NARROWING}a_misspelled_read_in_a_when_names_the_narrowed_type`,

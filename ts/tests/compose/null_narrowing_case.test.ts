@@ -23,8 +23,10 @@
  * types with `typeEquals`. The `take` and `take_each` defs are built by hand (`handChild`: the def's
  * parameters read from its `input:` text with the flow's typedefs, its node `d` with its output
  * contract), since def bodies load in T3-22; the CODE references are TS's
- * (`./fixtures/compose_codefns.ts:echo`). The pinned `compose_null_narrowing_case__*` case sits in
- * `narrowing_core.test.ts`'s table.
+ * (`./fixtures/compose_codefns.ts:echo`).
+ *
+ * TS-only: the harvested `load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read`,
+ * pinned at the end.
  *
  * Later (T3-20, `lowerFlowAsserts`):
  * `test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
@@ -51,12 +53,14 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import {
+  assembled,
   assembleText,
   caseRegistry,
   type ChildFlows,
   handChild,
   loadError,
   parametersFromYaml,
+  runCase,
 } from "./declarations.ts";
 
 const ECHO = "./fixtures/compose_codefns.ts:echo";
@@ -417,4 +421,12 @@ test("a node assert read after a null check names the non-null type", () => {
       "  node 'x' assert: reference ${output.nosuch} reads field 'nosuch', which Item doesn't " +
       "have; output is Item here, by the checks before this read",
   );
+});
+
+// --------------------------------------------------------------------------- //
+// Harvested conformance cases
+// --------------------------------------------------------------------------- //
+
+test("assembled: load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read", () => {
+  runCase({ id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read", call: assembled });
 });

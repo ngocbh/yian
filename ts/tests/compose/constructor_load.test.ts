@@ -14,11 +14,14 @@
  * `test_a_builtin_type_name_in_a_case_when_is_not_a_conversion`,
  * `test_an_unknown_name_in_a_case_when_is_an_unknown_function`,
  * `test_a_constructor_in_wait_until_is_a_located_load_error`,
- * `test_a_field_read_on_a_constructor_in_a_case_when_type_checks` and
- * `test_keywords_missing_a_field_in_a_case_when_are_a_load_error`; and the load halves of
+ * `test_a_field_read_on_a_constructor_in_a_case_when_type_checks`,
+ * `test_keywords_missing_a_field_in_a_case_when_are_a_load_error` and
+ * `test_a_constructor_in_a_call_nodes_asserts_is_a_located_load_error` (the node-assert check,
+ * pinning the whole message); and the load halves of
  * `test_a_constructor_in_a_case_when` (its type table), `test_a_constructor_in_node_and_flow_asserts`,
  * `test_a_constructor_in_a_flow_output` and `test_a_constructor_in_a_map_per_item_input` (each
- * loads). The `one` def the map calls is a hand-built child (`handChild`) with the def's signature.
+ * loads). The `one` def the map calls and the `check` def the CALL calls are hand-built children
+ * (`handChild`) with the def's signature.
  * `engine/inline_calls.test.ts` pins the cases of the binding sites the inline-call desugar raises.
  *
  * TS-only: one row per constructor message the type-table pass reports at a `case when` (a union,
@@ -41,9 +44,6 @@
  * `compose/typed_bindings_check.test.ts` pins the case
  * `load-types/compose_constructor_load__downstream_sees_the_constructed_type`.
  *
- * Later (T3-20): `test_a_constructor_in_a_call_nodes_asserts_is_a_located_load_error` (the
- * node-assert check).
- *
  * Later (T3-22): `test_a_caller_sees_a_childs_constructed_output_type` (the child's own assembly),
  * `test_a_uses_child_resolves_constructors_against_its_own_typedefs` and
  * `test_a_parent_cannot_construct_a_childs_typedef` (`uses:`).
@@ -61,6 +61,7 @@ import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
 import {
   assembled,
+  assembledWith,
   assembleText,
   type CaseRow,
   type ChildFlows,
@@ -301,6 +302,54 @@ output: \${w.output}
   expect(errorLine(error)).toBe(lineOf(text, "until:"));
 });
 
+/** The hand-built `check` def: `order: !object` in, its untyped CODE node `e`'s result out. */
+const CHECK = {
+  check: handChild({
+    inputs: parametersFromYaml("input:\n  order: !object\n", new Map()),
+    producers: { e: null },
+    output: "${e.output}",
+  }),
+};
+
+test("a constructor in a call node's asserts is a located load error", () => {
+  const text =
+    "id: p\nname: p\n" +
+    TYPEDEFS +
+    `input:
+  order: !object
+defs:
+  check:
+    input:
+      order: !object
+    nodes:
+      e:
+        kind: code
+        input:
+          order: \${input.order}
+        code: |
+          return inputs["order"]
+    output: \${e.output}
+nodes:
+  run:
+    kind: call
+    call: check
+    input:
+      order: \${input.order}
+    asserts:
+      - Buy(output).conviction > 0
+output: \${run.output}
+`;
+
+  const error = loadError(() => loadedNodes(text, CHECK));
+
+  expect(error.message).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'run' assert 'Buy(output).conviction > 0': Buy(...) in a call node's asserts is not " +
+      "supported; assert inside the child flow",
+  );
+  expect(errorLine(error)).toBe(lineOf(text, "Buy(output)"));
+});
+
 // ---------- static types ----------
 
 test("a field read on a constructor in a case when type checks", () => {
@@ -365,3 +414,7 @@ test.each<CaseRow>(
     "load-types/compose_constructor_load__keywords_missing_a_field_in_a_case_when",
   ].map((id) => ({ id, call: assembled })),
 )("assembled: $id", runCase);
+
+test("assembledWith: load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", () => {
+  runCase({ id: "load-types/compose_constructor_load__a_constructor_in_a_call_nodes_asserts", call: assembledWith(CHECK) });
+});

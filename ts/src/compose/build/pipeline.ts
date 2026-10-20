@@ -111,7 +111,7 @@ import { validateHumanQuestions } from "../validate/human_questions.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
-import { ExpressionError } from "../../expr/expressions.ts";
+import { ExpressionError } from "../../expr/index.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
 import { checkLlmConfigSources } from "../validate/llm_config_sources.ts";

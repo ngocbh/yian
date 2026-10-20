@@ -20,10 +20,11 @@
  * flow layer is checked once, so a value every agent overrides is still checked, its references
  * included.
  *
- * Imports flow down only: `compile/validation` (the type relation and reference paths),
- * `compose/helpers` (constructor names, tag labels, load diagnostics, output contracts),
- * `compose/nodes/base` (build results), `compose/validate/typed_bindings` (binding type
- * inference), `llm_clients`, `nodes`, `typesys`, `expr` and `diagnostics`.
+ * Knows about: `compile/validation` (the type relation and reference paths), `compose/helpers`
+ * (constructor names, tag labels, load diagnostics, output contracts), `compose/nodes/base` (build
+ * results), `compose/validate/typed_bindings` (binding type inference), `llm_clients`, `nodes`,
+ * `typesys`, `expr` and `diagnostics`.
+ * Never imports: the loader or the compose package facade; only the pipeline imports this.
  */
 
 import { classifyPath, typeRelation } from "../../compile/validation.ts";

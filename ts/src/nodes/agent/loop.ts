@@ -181,21 +181,23 @@ type CallCheck =
 async function runToolCalls(turn: ToolTurn, calls: readonly ToolCallPart[]): Promise<void> {
   let group: PlannedCall[] = [];
   for (const [index, call] of calls.entries()) {
+    // Not `checkStopped(ctx)`: without a context signal, the tools run under the tool set's bound
+    // run signal, so a stop on it must stop the calls too.
     checkNodeStopped(turn);
     // A host interrupt is checked here once steering is ported, after the stop (Python's per-call
     // position); nothing of `group` has started yet, so it is skipped whole.
-    const checked = await checkCall(turn, call, index);
-    if ("error" in checked) {
+    const check = await checkCall(turn, call, index);
+    if ("error" in check) {
       await runGroup(turn, group);
-      return await failCall(turn, call, index, checked);
+      return await failCall(turn, call, index, check);
     }
-    if (checked.safe) {
-      group.push(checked.planned);
+    if (check.safe) {
+      group.push(check.planned);
       continue;
     }
     await runGroup(turn, group);
     group = [];
-    await runGroup(turn, [checked.planned]);
+    await runGroup(turn, [check.planned]);
   }
   await runGroup(turn, group);
 }
@@ -325,6 +327,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     if (failure !== null) throw failure.error;
     for (const [position, outcome] of settled.entries()) {
       const { call } = group[position]!;
+      // A `null` outcome is a failure, and a failure was thrown above.
       const { value, reported } = outcome!;
       const content = reported ? reportedText(call.name, value) : toolText(call.name, value);
       recordToolResult(ctx.evaluationTrace, call.name, content);

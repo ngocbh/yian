@@ -74,7 +74,7 @@ export function desugarCaseCallTargets(
     const newCases = desc.cases.map((spec, index) =>
       Object.freeze({
         ...spec,
-        then: liftCaseTarget(spec["then"], mint, synth, {
+        then: liftCaseTarget(spec["then"] ?? null, mint, synth, {
           host: `case node ${id} then:`,
           site: `node ${id} cases[${index}].then`,
           callSite: ["then", nodeId, index],

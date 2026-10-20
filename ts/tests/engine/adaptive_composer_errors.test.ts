@@ -16,7 +16,7 @@
  * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
  * `test_bad_brief_and_bad_input_are_each_reported_once`,
  * `test_bad_input_is_listed_before_a_bad_gate_prompt` (the reference validator),
- * `test_isinstance_unknown_type_names_the_gate` (the reserved-source check), and every cycle row
+ * `test_isinstance_unknown_type_names_the_gate` (the type-table pass, `fillTypeTables`), and every cycle row
  * (`rejectCycles`): `test_self_reading_gate_cycle_names_only_the_gate`,
  * `test_cycle_through_a_gate_names_only_authored_nodes`,
  * `test_ordering_cycle_through_a_gate_names_only_authored_nodes`,

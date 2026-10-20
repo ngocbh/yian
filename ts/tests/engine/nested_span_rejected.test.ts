@@ -9,7 +9,8 @@
  * (`assemble`, whose CASE build raises it), and so is
  * `load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite` (`assembledWith`, the
  * `step` def built by hand; the LOOP build raises it), and
- * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (`assemble`, whose inline-call
+ * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (the load half of
+ * `test_binding_with_a_nested_span_fails_to_load_with_the_rewrite`; `assemble`, whose inline-call
  * desugar raises it).
  *
  * Left for later: the case, assert, loop and prompt load tests and the run tests land with compose

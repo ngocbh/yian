@@ -4,6 +4,15 @@
  * `test_causal_route_episode_retains_the_accepted_failure` (with the `_scope` and `_evidence`
  * helpers) and `test_route_and_growth_projection_use_closed_source_neutral_envelopes`.
  *
+ * Ported, the run-state tests (on the shared `startTraceNode`, Python's `_start_trace_node`; each
+ * rejected row names its `RangeError` and full message, Python's `ValueError` matched in part):
+ * `test_evidence_is_rejected_when_learning_is_not_enabled` (2 rows),
+ * `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`,
+ * `test_learning_rejects_a_scope_without_a_recorded_stack`,
+ * `test_empty_enabled_table_retains_scope_free_evidence_without_episodes`,
+ * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success` row
+ * of `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`.
+ *
  * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
  * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result
  * (`BackwardResult(self_feedback=("original text",))`) and the empty results built by hand instead
@@ -21,6 +30,10 @@
  * - The root entry's `message_index` is `0n`; Python's tuples are arrays.
  * - The export half checks the removed names in camelCase (`projectOutcomeEpisodes`,
  *   `occurrenceKey`); the half that runs a flow comes with the engine (below).
+ * - `test_graph_outcome_uses_constant_memory_roots_and_indexed_scope`: Python counts the calls of
+ *   the patched `_recorded_stack`, which an ES module can't patch; the test commits the outcome over
+ *   1024 keys and stacks and asserts the memory roots and the occurrence's scope keep their
+ *   identity.
  *
  * TS-only: the run id, memory and mutation-item messages of `memoryCommitId`; a float payload
  * digests its `logJson` text, and a `-0` payload digests as a float `0` payload (the run log
@@ -29,20 +42,20 @@
  * `episodeOutcome` projects a success's canonical value and a failed record's failure JSON, and
  * refuses a record of another class and a forged success without a canonical typed value.
  *
- * Later (T4-4, T4-5, with the run state): `test_evidence_is_rejected_when_learning_is_not_enabled`,
- * `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`,
- * `test_learning_rejects_a_scope_without_a_recorded_stack`,
- * `test_empty_enabled_table_retains_scope_free_evidence_without_episodes`,
- * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory`,
- * `test_graph_outcome_uses_constant_memory_roots_and_indexed_scope` and
- * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack`.
+ * Later (T4-4 PR 2), routes: the `route` row of
+ * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`.
+ *
+ * Later (T4-5): `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack`
+ * (it replays through `replayRecords`) and the `growth` row of
+ * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`.
  *
  * Later (T4-7, with `computeBackward` and the engine): the owner-context and episode tests
  * (`test_owner_contexts_include_general_occurrences_and_empty_memories` through
  * `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`, except
  * `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`, ported above;
- * `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`,
- * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome`,
+ * `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`, the `failure` row of
+ * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (it reads the owner
+ * contexts),
  * `test_failure_episode_uses_full_canonical_durable_failure_json`,
  * `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope` and the rest of
  * `test_owner_contexts_are_the_only_episode_projection`).
@@ -63,9 +76,10 @@ import {
   MemoryOccurrenceSegment,
   MemoryScope,
   MemorySpec,
+  MemoryStack,
   ModelTextInteraction,
 } from "../../src/memory/index.ts";
-import { BackwardResult } from "../../src/nodes/base.ts";
+import { BackwardResult, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -74,7 +88,9 @@ import {
   NodeSucceededRecord,
 } from "../../src/runtime/log.ts";
 import * as learning from "../../src/runtime/learning.ts";
+import { commitPrepared, prepareNodeSucceeded } from "../../src/runtime/state.ts";
 import { type OutcomeRecord, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
+import { FuncNode, forwardCapture, stacks, startTraceNode } from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -88,12 +104,35 @@ function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeErro
   expect((caught as Error).message).toBe(message);
 }
 
-/** One exact trace scope for the node `agent`: an outer and a local memory, in one MAP item. */
-function scope(): MemoryScope {
-  return new MemoryScope(["flow", "agent"], {
-    memories: ["outer", "local"],
-    occurrencePath: [new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["flow"], 2)],
+/** One outer and one local memory key, in stack order. */
+function keys(): string[] {
+  return ["outer", "local"];
+}
+
+/** One canonical dynamic MAP occurrence. */
+function occurrence(index = 2): MemoryOccurrenceSegment[] {
+  return [new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["flow"], index)];
+}
+
+/** One exact trace scope for a test node: by default `keys()` in `occurrence()`. */
+function scope(
+  nodeId = "agent",
+  options: { memories?: readonly string[]; occurrence?: readonly MemoryOccurrenceSegment[] } = {},
+): MemoryScope {
+  return new MemoryScope(["flow", nodeId], {
+    memories: options.memories ?? keys(),
+    occurrencePath: options.occurrence ?? occurrence(),
   });
+}
+
+/** A trait-capable AGENT-kind node that evaluates without calling a model. */
+class TraceNode extends Node {
+  readonly kind = NodeKind.AGENT;
+  override readonly needsEvaluationTrace = true;
+
+  override forward(inputs: Record<string, unknown>): NodeResult {
+    return new Output(inputs);
+  }
 }
 
 /** Deterministic visible evidence for one accepted outcome. */
@@ -318,4 +357,155 @@ test("owner contexts are the only episode projection", () => {
     expect(Object.hasOwn(learning, name)).toBe(false);
   }
   expect(typeof learning.projectOwnerContexts).toBe("function");
+});
+
+// The run-state reducer's learning authority, on `startTraceNode`.
+
+test("an engine episode uses the physical start sequence: success", () => {
+  const node = new TraceNode("agent");
+  node.memoryScope = scope(node.id);
+  const { state, log } = startTraceNode(node, { keys: node.memoryScope.memories, learnable: true });
+  const physicalSequence = state.trace!.started.get(node.id);
+  const outcomeSequence = state.nextSequence;
+
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, node.id, { answer: 7n }, {
+      evidence: evidence(node.memoryScope),
+      forwardCapture: forwardCapture(node, { question: "q" }),
+    }),
+  );
+
+  expect(physicalSequence).not.toBe(outcomeSequence);
+  expect(state.trace!.occurrences.at(-1)!.source.executionSeq).toBe(physicalSequence!);
+  expect(state.ready).toEqual([END_ID]);
+});
+
+test.each([
+  ["memory disabled", false],
+  ["memory enabled", true],
+])("evidence is rejected when learning is not enabled: %s", (_label, enabled) => {
+  const node = new TraceNode("agent");
+  node.memoryScope = scope(node.id);
+  const { state } = startTraceNode(node, { keys: enabled ? node.memoryScope.memories : null, learnable: false });
+
+  expectError(
+    () => prepareNodeSucceeded(state, node.id, "done", { evidence: evidence(node.memoryScope) }),
+    RangeError,
+    "node 'agent' is ineligible for evaluation evidence",
+  );
+  expect((prepareNodeSucceeded(state, node.id, "done").record as NodeSucceededRecord).evidence).toBeNull();
+});
+
+test("learning requires evidence and rejects an ineligible or unrecorded scope", () => {
+  const node = new TraceNode("agent");
+  node.memoryScope = scope(node.id);
+  const { state } = startTraceNode(node, { keys: keys(), learnable: true });
+  expectError(
+    () => prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) }),
+    RangeError,
+    "eligible node 'agent' requires evaluation evidence while learning",
+  );
+
+  const ordinary = new FuncNode("ordinary", () => "done");
+  ordinary.memoryScope = scope(ordinary.id);
+  const { state: ordinaryState } = startTraceNode(ordinary, { keys: keys(), learnable: true });
+  expectError(
+    () =>
+      prepareNodeSucceeded(ordinaryState, ordinary.id, "done", {
+        evidence: evidence(ordinary.memoryScope),
+        forwardCapture: forwardCapture(ordinary, { question: "q" }),
+      }),
+    RangeError,
+    "node 'ordinary' is ineligible for evaluation evidence",
+  );
+  const accepted = prepareNodeSucceeded(ordinaryState, ordinary.id, "done", {
+    forwardCapture: forwardCapture(ordinary, {}),
+  });
+  expect((accepted.record as NodeSucceededRecord).evidence).toBeNull();
+
+  const mismatched = new TraceNode("agent");
+  mismatched.memoryScope = scope(mismatched.id);
+  const { state: mismatchedState } = startTraceNode(mismatched, {
+    keys: keys(),
+    learnable: true,
+    stacks: [new MemoryStack(["flow", "agent"], ["outer"])],
+  });
+  expectError(
+    () =>
+      prepareNodeSucceeded(mismatchedState, mismatched.id, "done", {
+        evidence: evidence(mismatched.memoryScope),
+        forwardCapture: forwardCapture(mismatched, { question: "q" }),
+      }),
+    RangeError,
+    "node 'agent' memory scope must carry its exact recorded memory stack",
+  );
+});
+
+test("learning rejects a scope without a recorded stack", () => {
+  const node = new TraceNode("agent");
+  node.memoryScope = scope(node.id);
+  const { state } = startTraceNode(node, { keys: keys(), learnable: true, stacks: [] });
+
+  expectError(
+    () =>
+      prepareNodeSucceeded(state, node.id, "done", {
+        evidence: evidence(node.memoryScope),
+        forwardCapture: forwardCapture(node, { question: "q" }),
+      }),
+    RangeError,
+    "node 'agent' has no recorded memory stack",
+  );
+});
+
+test("an empty enabled table retains scope-free evidence without episodes", () => {
+  const node = new TraceNode("agent");
+  const { state } = startTraceNode(node, { keys: [], learnable: true });
+
+  const prepared = prepareNodeSucceeded(state, node.id, "done", {
+    evidence: evidence(null),
+    forwardCapture: forwardCapture(node, { question: "q" }),
+  });
+  expect((prepared.record as NodeSucceededRecord).evidence!.scope).toBeNull();
+  expectError(
+    () =>
+      prepareNodeSucceeded(state, node.id, "done", {
+        evidence: evidence(scope(node.id)),
+        forwardCapture: forwardCapture(node, { question: "q" }),
+      }),
+    RangeError,
+    "node 'agent' evidence scope does not match its compiled scope",
+  );
+});
+
+test.each(["outer", "local"])("learning rejects a trace scope that omits a recorded memory: keeps %s", (retained) => {
+  const node = new TraceNode("agent");
+  node.memoryScope = scope(node.id, { memories: [retained] });
+  const { state } = startTraceNode(node, { keys: keys(), learnable: true, stacks: stacks(scope(node.id)) });
+
+  expectError(
+    () => prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) }),
+    RangeError,
+    "node 'agent' memory scope must carry its exact recorded memory stack",
+  );
+});
+
+test("a graph outcome uses constant memory roots and an indexed scope", () => {
+  const memoryKeys = Array.from({ length: 1024 }, (_, index) => `agent-${String(index).padStart(4, "0")}`);
+  const node = new TraceNode("agent");
+  node.memoryScope = new MemoryScope(["agents", "agent-1023"], { memories: [memoryKeys.at(-1)!] });
+  const recorded = memoryKeys.map((key) => new MemoryStack(["agents", key], [key]));
+  const { state, log } = startTraceNode(node, { keys: memoryKeys, learnable: true, stacks: recorded });
+  const roots = [state.memories, state.memoryStacks, state.memorySnapshots];
+
+  const prepared = prepareNodeSucceeded(state, node.id, "done", {
+    evidence: evidence(node.memoryScope),
+    forwardCapture: forwardCapture(node, { question: "q" }),
+  });
+  commitPrepared(log, state, prepared);
+
+  const after = [state.memories, state.memoryStacks, state.memorySnapshots];
+  after.forEach((root, index) => expect(root).toBe(roots[index]!));
+  expect(state.trace!.occurrences.at(-1)!.memoryScope).toBe(node.memoryScope);
 });

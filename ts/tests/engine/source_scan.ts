@@ -180,3 +180,19 @@ export function importStatements(text: string): ImportStatement[] {
   }
   return found;
 }
+
+/**
+ * Return the index of the bracket closing the `(` or `{` at `open` in `code`, or
+ * `code.length` when it never closes.
+ *
+ * Pass blanked text (`blank`), so brackets in comments and strings don't count.
+ */
+export function closing(code: string, open: number): number {
+  const [opener, closer] = code[open] === "(" ? ["(", ")"] : ["{", "}"];
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === opener) depth++;
+    else if (code[i] === closer && --depth === 0) return i;
+  }
+  return code.length;
+}

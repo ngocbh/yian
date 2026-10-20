@@ -99,6 +99,23 @@
  * text); `test_typed_object_output_canonicalizes_a_tuple` (TS has no tuples); the
  * recursion-depth tests (the TS codec is iterative); `test_pool_codec_rejects_nonfinite_values`
  * (`inf` is a TS float, and a NaN fails at `pool.set`).
+ *
+ * Ported, through the run state: `test_prepared_record_tamper_check_uses_frozen_schema` (3 rows,
+ * calling the internal `requireUnchangedRecord` as Python does; the record is frozen, so the
+ * `payload` row forges a `PreparedTransition` pairing a changed record with the original plan, and
+ * the coordinate rows forge one with another run id or sequence).
+ *
+ * Changed, through the run state: `test_append_result_wrong_schema_is_protocol_fault`: TS refuses
+ * to build an envelope of another schema, so the log returns one built on the envelope prototype
+ * with schema 9; `encodeRecord` doesn't check the schema, so it fails as `run-log append result
+ * does not match prepared transition` where Python names the old schema.
+ *
+ * Not ported: `test_historical_record_requires_an_exact_supported_schema` (`prepareRecord` has no
+ * schema parameter, since schema 10 is the only one).
+ *
+ * Later (T4-5): `test_historical_frontier_prepares_recorded_schema_bytes` (`replayRecords`).
+ * Later (T4-5, T4-8): `test_historical_outcomes_keep_schema_in_trace_bytes` (the replay fold and
+ * `run.ts`'s log replay).
  */
 
 import { expect, test } from "bun:test";
@@ -134,6 +151,7 @@ import {
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
+  MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -153,6 +171,13 @@ import {
 } from "../../src/runtime/log.ts";
 import * as runLog from "../../src/runtime/log.ts";
 import {
+  commitPrepared,
+  PreparedTransition,
+  prepareRunStarted,
+  requireUnchangedRecord,
+  RunState,
+} from "../../src/runtime/state.ts";
+import {
   FileRef,
   type PoolWire,
   TypeCheckError,
@@ -162,6 +187,7 @@ import {
   VariablePool,
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
+import { flow, startData, stateSnapshot } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -1781,4 +1807,58 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
 ])("decode rejects a run_resumed payload with %s (TS-only)", (_name, payload, cls, message) => {
   const text = `{"schema":10,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
   expectError(() => decodeRecord(text), cls, message);
+});
+
+const TAMPERED = ["payload", "run id", "sequence"];
+
+test.each(TAMPERED)("the prepared record tamper check uses the frozen schema: %s", (change) => {
+  const state = new RunState(flow());
+  let prepared = prepareRunStarted(state, startData(state.flow));
+  const before = stateSnapshot(state);
+  requireUnchangedRecord(prepared, prepared._plan.envelopeJson);
+  const { record, expectedRunId, expectedSequence, _plan: plan, observers } = prepared;
+  if (change === "payload") {
+    const started = record as RunStartedRecord;
+    const tampered = new RunStartedRecord({
+      ...started,
+      startWiringOverride: { ...started.startWiringOverride, new: "tampered" },
+    });
+    prepared = new PreparedTransition(tampered, expectedRunId, expectedSequence, plan, observers);
+  } else if (change === "run id") {
+    prepared = new PreparedTransition(record, "other", expectedSequence, plan, observers);
+  } else {
+    prepared = new PreparedTransition(record, expectedRunId, 1, plan, observers);
+  }
+  expectError(
+    () => requireUnchangedRecord(prepared, prepared._plan.envelopeJson),
+    RangeError,
+    change === "payload" ? "prepared record changed after validation" : "prepared coordinates changed after validation",
+  );
+  expect(stateSnapshot(state)).toEqual(before);
+});
+
+test("an append result of the wrong schema is a protocol fault", () => {
+  /** Retain the record, then return its envelope with schema 9. */
+  class WrongSchemaLog extends MemoryRunLog {
+    override append(record: RunRecord): RecordEnvelope {
+      const accepted = super.append(record);
+      expect(accepted.schema).toBe(SCHEMA_VERSION);
+      const forged = Object.create(RecordEnvelope.prototype) as RecordEnvelope;
+      return Object.assign(forged, { ...accepted, schema: 9 });
+    }
+  }
+
+  const state = new RunState(flow());
+  const prepared = prepareRunStarted(state, { ...startData(state.flow), learnable: true });
+  const before = stateSnapshot(state);
+  const log = new WrongSchemaLog(prepared.expectedRunId);
+  expectError(
+    () => commitPrepared(log, state, prepared),
+    RangeError,
+    "run-log append result does not match prepared transition",
+  );
+  expect(stateSnapshot(state)).toEqual(before);
+  expect(state.trace).toBeNull();
+  expect(log.nextSequence).toBe(1);
+  expect(encodeRecord(log.records()[0]!)).toBe(prepared._plan.envelopeJson);
 });

@@ -70,11 +70,116 @@
  * names only; a resume clearing unfinished starts; an applied delta leaving earlier occurrences
  * alone; a `TraceDelta`'s defaults and frozen arrays.
  *
- * Later (T4-4 to T4-7): the trace tests that run flows.
+ * TS-only (frontier trace), on `learnableStarted` with START's `NodeStarted` committed: a learnable
+ * `RunStopped` carries a sequence-only trace delta and commits; a forged stop plan whose trace
+ * delta starts a node is refused; a frontier plan holding an outcome record is refused by the
+ * frontier trace check.
+ *
+ * Ported, the run-state trace checks, on the shared `startTraceNode` (Python's
+ * `_start_trace_node`) and a local `preparedScopedOutcome` (Python's `_prepared_scoped_outcome`,
+ * its `success` kind): `test_outcome_trace_writer_matches_the_same_accepted_physical_output`
+ * (`target`, `source`, `sequence`, `value`, `missing`),
+ * `test_terminal_trace_root_writer_must_be_the_physical_accepted_output` (`none`, `source`,
+ * `sequence`, `value`), and the `success` rows of
+ * `test_terminal_trace_output_must_match_the_prepared_outcome_before_append`,
+ * `test_outcome_trace_occurrence_identity_matches_the_canonical_record` (`replace`: `source`,
+ * `node`, `sequence`, `record`), `test_outcome_trace_cannot_override_dispatch_authority`
+ * (`initialized`, `started`, `resumed`), `test_terminal_trace_rejects_forged_fields_before_append`
+ * (`replace`: every change but `source_float`),
+ * `test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority` (4 rows),
+ * `test_outcome_rejects_valid_scope_substitution_before_append` (`replace`: 3 rows) and
+ * `test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta` (3 rows). Each
+ * rejected row names its one class and full message (all `RangeError`s, where Python matches a
+ * part of a `ValueError` or accepts either class); a refused commit leaves the log, the state
+ * (the shared `snapshot`) and the trace (the shared `traceSnapshot`) unchanged.
+ *
+ * Ported, after rewrite (the start is built with prepareRunStarted, not the engine), on
+ * `learnableStarted`: `test_trace_is_applied_only_after_successful_append` (the log's `append`
+ * patched on the instance, its error an `Error`, Python's `OSError`),
+ * `test_terminal_trace_root_start_latch_must_match_the_accepted_start` (`none`, `sequence`, `run`),
+ * `test_paired_resolver_preserves_pool_namespaces` (10 rows; the system value is the fixture's run
+ * id) and `test_reducer_requires_capture_exactly_when_learning` (its run that doesn't learn on
+ * `initializedAndStarted`); the frontier trace checks, on a local `preparedTraceFrontier` (Python's
+ * `_prepared_trace_frontier`): `test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append`,
+ * `test_frontier_trace_rejects_inappropriate_fields_before_append` (19 of its 34 rows; the rest
+ * below) and `test_frontier_trace_started_identity_is_exact` (`node`, `sequence`).
+ *
+ * Changed:
+ * - A forged trace delta, occurrence, source entry or terminal is rebuilt with its constructor,
+ *   for Python's `dataclasses.replace`; a value its constructor refuses (a terminal whose
+ *   `succeeded` is `1`, a success terminal with a failure, an occurrence with a scope that isn't a
+ *   `MemoryScope`) is forged through its class's prototype, for Python's `object.__setattr__`.
+ * - The `carrier` row of `test_trace_rejects_forged_memory_scope_before_append_and_when_copied`:
+ *   the occurrence constructor refuses the scope, and the commit refuses a forged occurrence that
+ *   holds it, each with a `TypeError` naming the historical memory scope.
+ * - The trace snapshot keeps the backward handlers by reference, for Python's bound-method
+ *   identities.
+ * - `preparedTraceFrontier` dispatches `work` of the shared `flow()`, for Python's `router` of
+ *   `_terminal_skip_route_flow()`: the frontier checks read only the dispatched node, and routes
+ *   come in PR 2.
+ *
+ * Not ported (TS types): every `mutate` row (a TS delta, occurrence and terminal are frozen); the
+ * `float_sequence` and `source_float` rows, and the `sequence` row of
+ * `test_outcome_trace_cannot_override_dispatch_authority` (`float(n)` is the number `n`); the
+ * `tuple` row of `test_outcome_trace_writer_matches_the_same_accepted_physical_output` (a list
+ * and a tuple are both an array); the `nested` row of
+ * `test_trace_rejects_forged_memory_scope_before_append_and_when_copied` (a `MemoryScope` is
+ * frozen by its constructor); of `test_frontier_trace_rejects_inappropriate_fields_before_append`,
+ * the `sequence` rows (`float(n)`), the `resumed` rows (`int(bool)`), the `prune_ids`,
+ * `connections` and `boundaries` rows (`EmptyChanges`; a `TraceDelta` holds frozen array copies)
+ * and the `consumed_connection` and `boundary_update` rows (`UnavailableChange`; it holds frozen
+ * pair copies), and the `started` row of a dispatch (a list and a tuple are both an array); of
+ * `test_frontier_trace_started_identity_is_exact`, the `float_sequence` row and the
+ * `tuple_subclass` row (the delta copies the pair by index).
+ *
+ * TS-only (frontier trace): the same history-field rows, with `started` and `resumed`, on a
+ * prepared `NodeStep` and `RunStopped` of the in-flight `work`.
+ *
+ * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
+ *
+ * Later (T4-4 PR 2), routes and failures: the `route` and `failure` rows of the outcome and
+ * terminal trace tests above, and
+ * `test_outcome_trace_source_must_match_the_physical_accepted_start_before_append` (a failure).
+ *
+ * Later (T4-5), growth and replay: the `growth` rows of the outcome trace tests above,
+ * `test_terminal_trace_accepts_detached_authority_without_repreparing`,
+ * `test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure` and
+ * `test_outcome_accepts_detached_physical_scope_and_replays_it`.
+ *
+ * Later (T4-6, with the engine): `test_accepted_backward_inventories_and_layout_replay_without_recapturing`,
+ * `test_static_capture_host_fault_does_not_append_a_node_outcome`,
+ * `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`,
+ * `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data`,
+ * `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`,
+ * `test_trace_source_is_the_actual_commit_as_producer`,
+ * `test_failed_binding_and_rejected_outcomes_retain_canonical_failures`,
+ * `test_pooled_lookup_keeps_value_and_producer_identity_together`,
+ * `test_trace_memory_scope_is_detached_and_replayed_without_evidence`,
+ * `test_learn_false_omits_backward_capture`,
+ * `test_nested_growth_preserves_authored_paths_and_local_driver_zero`,
+ * `test_missing_seed_selector_is_an_accepted_growth_failure`,
+ * `test_growth_recipe_tampering_fails_replay_before_apply`,
+ * `test_reference_looking_seed_strings_reach_the_child_as_text`,
+ * `test_failed_child_binding_joins_captured_fields`,
+ * `test_seed_connections_wait_for_append_and_survive_unfinished_start_retry`,
+ * `test_pruned_seed_connections_do_not_leak_into_reused_node_ids`,
+ * `test_call_seed_routes_survive_materialized_values`,
+ * `test_null_materialized_seed_keeps_its_selected_source`,
+ * `test_map_seed_routes_preserve_equal_item_positions`,
+ * `test_loop_carried_routes_survive_live_pruning`, `test_trace_replay_matches_live_accepted_prefixes`,
+ * `test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced`,
+ * `test_capture_canonicalizes_supported_binding_objects`,
+ * `test_learning_retains_opaque_calls_with_arguments`,
+ * `test_learning_retains_valid_results_of_noncanonical_unicode_temporaries` and
+ * `test_learning_retains_noncanonical_partial_temporary_comparisons`.
+ *
+ * Later (T4-7, with `computeBackward`): `test_discarded_pooled_outcomes_are_not_trace_occurrences`
+ * and `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing`.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
+import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
@@ -99,6 +204,7 @@ import {
   encodePool,
   encodeRecord,
   evidencePayload,
+  type MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -108,6 +214,7 @@ import {
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
+  RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import {
@@ -122,11 +229,36 @@ import {
   sameSourceEntry,
   selectSeedRoute,
   TraceDelta,
+  type TraceDeltaFields,
   TraceOccurrence,
   TraceTerminal,
 } from "../../src/runtime/trace.ts";
+import {
+  commitPrepared,
+  PreparedTransition,
+  prepareNodeStarted,
+  prepareNodeStep,
+  prepareNodeSucceeded,
+  prepareRunResumed,
+  prepareRunStopped,
+  type RunState,
+} from "../../src/runtime/state.ts";
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
+import {
+  commitStartSuccess,
+  expectUnchanged,
+  flow,
+  forwardCapture,
+  FuncNode,
+  graph,
+  initializedAndStarted,
+  learnableStarted,
+  RUN_ID,
+  snapshot,
+  startTraceNode,
+  traceSnapshot,
+} from "./run_state_fixtures.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -1878,4 +2010,625 @@ test("a trace delta holds frozen copies of its arrays and defaults to an empty c
   expect(Object.isFrozen(delta)).toBe(true);
   expect(Object.isFrozen(delta.pruneIds)).toBe(true);
   expect(Object.isFrozen(delta.started)).toBe(true);
+});
+
+// TS-only (frontier trace): the learnable stop.
+
+/** A learnable started state with START in flight, its log and a prepared `RunStopped`. */
+function preparedLearnableStop(): { state: RunState; log: MemoryRunLog; prepared: PreparedTransition } {
+  const { state, log } = learnableStarted(flow());
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  return { state, log, prepared: prepareRunStopped(state, "signal", "SIGTERM") };
+}
+
+/** Return `prepared` with its record or its plan's trace delta replaced. */
+function forgedStop(
+  prepared: PreparedTransition,
+  changes: { record?: RunRecord; traceDelta?: TraceDelta },
+): PreparedTransition {
+  const plan = Object.freeze({ ...prepared._plan, traceDelta: changes.traceDelta ?? prepared._plan.traceDelta });
+  return new PreparedTransition(
+    changes.record ?? prepared.record,
+    prepared.expectedRunId,
+    prepared.expectedSequence,
+    plan as never,
+    [],
+  );
+}
+
+test("a learnable RunStopped carries a sequence-only trace delta and commits", () => {
+  const { state, log, prepared } = preparedLearnableStop();
+  const trace = state.trace!;
+  const delta = prepared._plan.traceDelta!;
+
+  expect(delta).toBeInstanceOf(TraceDelta);
+  expect(delta.originatingTrace).toBe(trace);
+  expect(delta.sequence).toBe(2);
+  expect(delta.started).toBeNull();
+  expect(delta.resumed).toBe(false);
+
+  expect(commitPrepared(log, state, prepared)).toEqual([]);
+
+  expect(prepared.record).toStrictEqual(new RunStoppedRecord("signal", "SIGTERM", [START_ID]));
+  // The trace applies in place: only its sequence moves.
+  expect(state.trace).toBe(trace);
+  expect(trace.nextSequence).toBe(3);
+  expect([...trace._started]).toEqual([[START_ID, 1]]);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test("a learnable stop whose trace delta starts a node is refused", () => {
+  const { state, log, prepared } = preparedLearnableStop();
+  const forged = forgedStop(prepared, {
+    traceDelta: new TraceDelta(state.trace, state.nextSequence, { started: [START_ID, state.nextSequence] }),
+  });
+
+  expectError(
+    () => commitPrepared(log, state, forged),
+    RangeError,
+    "frontier trace stop must only advance the accepted sequence",
+  );
+
+  expect(log.nextSequence).toBe(2);
+  expect(state.trace!.nextSequence).toBe(2);
+});
+
+test("a learnable frontier plan holding an outcome record is refused", () => {
+  const { state, log, prepared } = preparedLearnableStop();
+  const failure = new Failure({ code: "node.execute", message: "done", nodeId: START_ID });
+  const forged = forgedStop(prepared, { record: new NodeFailedRecord(failure) });
+
+  expectError(
+    () => commitPrepared(log, state, forged),
+    RangeError,
+    "frontier trace requires a dispatch, resume, step or stop record",
+  );
+
+  expect(log.nextSequence).toBe(2);
+});
+
+// The run-state reducer's trace authority: outcome and terminal trace checks before append.
+
+/** Return `prepared` with its plan's trace delta replaced by `traceDelta`. */
+function withTrace(prepared: PreparedTransition, traceDelta: TraceDelta | null): PreparedTransition {
+  return new PreparedTransition(
+    prepared.record,
+    prepared.expectedRunId,
+    prepared.expectedSequence,
+    Object.freeze({ ...prepared._plan, traceDelta }) as never,
+    prepared.observers,
+  );
+}
+
+/** Return a copy of `delta` with `changes`, for Python's `dataclasses.replace`. */
+function changedDelta(delta: TraceDelta, changes: TraceDeltaFields): TraceDelta {
+  return new TraceDelta(delta.originatingTrace, delta.sequence, { ...delta, ...changes });
+}
+
+/** Return a copy of `occurrence` with `changes`, built through its constructor. */
+function changedOccurrence(
+  occurrence: TraceOccurrence,
+  changes: {
+    source?: SourceRef;
+    nodeId?: string;
+    outcomeSeq?: number;
+    envelope?: RecordEnvelope;
+    memoryScope?: MemoryScope | null;
+  },
+): TraceOccurrence {
+  return new TraceOccurrence(
+    changes.source ?? occurrence.source,
+    changes.nodeId ?? occurrence.nodeId,
+    changes.outcomeSeq ?? occurrence.outcomeSeq,
+    changes.envelope ?? occurrence.envelope,
+    occurrence.inputRoute,
+    changes.memoryScope === undefined ? occurrence.memoryScope : changes.memoryScope,
+    occurrence.hiddenInputs,
+  );
+}
+
+/** Return a copy of `entry` with `changes`. */
+function changedEntry(entry: SourceEntry, changes: { source?: SourceRef; outcomeSeq?: number; valueJson?: string }) {
+  return new SourceEntry(
+    changes.source ?? entry.source,
+    changes.outcomeSeq ?? entry.outcomeSeq,
+    changes.valueJson ?? entry.valueJson,
+    entry.files,
+  );
+}
+
+/** Return a frozen copy of `value`'s own fields under `cls`'s prototype, skipping its constructor's checks. */
+function forged<T extends object>(cls: abstract new (...args: never[]) => T, value: T, changes: object): T {
+  return Object.freeze(Object.assign(Object.create(cls.prototype) as T, value, changes));
+}
+
+/**
+ * Assert that committing `prepared` throws exactly `cls` with `message` and leaves the log, the
+ * state and its trace unchanged.
+ */
+function expectRefused(
+  state: RunState,
+  log: MemoryRunLog,
+  prepared: PreparedTransition,
+  cls: ErrorClass,
+  message: string,
+): void {
+  const records = log.records();
+  const before = snapshot(state);
+  const beforeTrace = traceSnapshot(state.trace!);
+
+  expectError(() => commitPrepared(log, state, prepared), cls, message);
+
+  expect(log.records()).toEqual(records);
+  expectUnchanged(state, before);
+  expect(traceSnapshot(state.trace!)).toEqual(beforeTrace);
+  expect(state.nextSequence).toBe(log.nextSequence);
+  expect(state.trace!.nextSequence).toBe(log.nextSequence);
+}
+
+/**
+ * Python's `_prepared_scoped_outcome("success")`: a scoped CODE node `physical`, the sole in-flight
+ * node of a learnable run, and its prepared success committed to END, which ends the run.
+ */
+function preparedScopedOutcome(): { node: FuncNode; state: RunState; log: MemoryRunLog; prepared: PreparedTransition } {
+  const node = new FuncNode("physical", () => "done");
+  node.memoryScope = new MemoryScope([node.id], { memories: ["memory"] });
+  const { state, log } = startTraceNode(node, { keys: ["memory"], learnable: true });
+  const prepared = prepareNodeSucceeded(state, node.id, "done", {
+    commitAs: END_ID,
+    forwardCapture: forwardCapture(node, {}),
+  });
+  return { node, state, log, prepared };
+}
+
+/** A START -> END flow for the learnable trace tests, Python's `_graph([], [(START_ID, END_ID)])`. */
+function startEndFlow(): CompiledFlow {
+  return graph([], [[START_ID, END_ID]]);
+}
+
+test("the trace is applied only after a successful append", () => {
+  const { state, log } = learnableStarted(startEndFlow());
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  const trace = state.trace!;
+  const prior = traceSnapshot(trace);
+  const prepared = prepareNodeSucceeded(state, START_ID, {}, {
+    forwardCapture: forwardCapture(state.flow.nodes.get(START_ID)!, {}),
+  });
+  expect(trace.occurrences).toEqual([]);
+  const append = log.append;
+
+  log.append = () => {
+    throw new Error("append failed");
+  };
+  expectError(() => commitPrepared(log, state, prepared), Error, "append failed");
+  expect(traceSnapshot(trace)).toEqual(prior);
+
+  log.append = append;
+  commitPrepared(log, state, prepared);
+  expect(trace.occurrences).toHaveLength(1);
+  expect(trace.currentWriters.get(START_ID)!.source!.executionSeq).toBe(1);
+});
+
+test("the trace rejects a forged memory scope before append and when copied: carrier", () => {
+  const node = new FuncNode("code", () => "done");
+  node.memoryScope = new MemoryScope(["code"], { memories: ["memory"] });
+  const { state, log } = startTraceNode(node, { keys: ["memory"], learnable: true });
+  const prepared = prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) });
+  const delta = prepared._plan.traceDelta!;
+  const malformed = {} as MemoryScope;
+  const message = "historical memory scope must be a MemoryScope or null";
+
+  expectError(() => changedOccurrence(delta.occurrence!, { memoryScope: malformed }), TypeError, message);
+  const occurrence = forged(TraceOccurrence, delta.occurrence!, { memoryScope: malformed });
+  expectRefused(state, log, withTrace(prepared, changedDelta(delta, { occurrence })), TypeError, message);
+});
+
+test("a terminal trace output must match the prepared outcome before append", () => {
+  const { state, log, prepared } = preparedScopedOutcome();
+  const delta = prepared._plan.traceDelta!;
+  const terminal = delta.terminal!;
+  const changed = new TraceTerminal(terminal.succeeded, terminal.source, typedJson("forged"), terminal.failure);
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, changedDelta(delta, { terminal: changed })),
+    RangeError,
+    "terminal trace disagrees with the prepared terminal outcome",
+  );
+});
+
+test.each(["source", "node", "sequence", "record"] as const)(
+  "an outcome trace occurrence must match the canonical record: success, %s",
+  (change) => {
+    const { state, log, prepared } = preparedScopedOutcome();
+    const delta = prepared._plan.traceDelta!;
+    const occurrence = delta.occurrence!;
+    const changes = {
+      source: { source: new SourceRef(state.runId!, 0) },
+      node: { nodeId: START_ID },
+      sequence: { outcomeSeq: occurrence.outcomeSeq + 1 },
+      record: { envelope: log.records().at(-1)! },
+    }[change];
+
+    expectRefused(
+      state,
+      log,
+      withTrace(prepared, changedDelta(delta, { occurrence: changedOccurrence(occurrence, changes) })),
+      RangeError,
+      "physical trace occurrence disagrees with the accepted outcome",
+    );
+  },
+);
+
+test.each(["initialized", "started", "resumed"] as const)(
+  "an outcome trace cannot override dispatch authority: success, %s",
+  (field) => {
+    const { state, log, prepared } = preparedScopedOutcome();
+    const changes: TraceDeltaFields = {
+      initialized: { initialized: state.trace },
+      started: { started: ["physical", 0] as const },
+      resumed: { resumed: true },
+    }[field];
+
+    expectRefused(
+      state,
+      log,
+      withTrace(prepared, changedDelta(prepared._plan.traceDelta!, changes)),
+      RangeError,
+      "outcome trace cannot change initialization or dispatch authority",
+    );
+  },
+);
+
+test.each([
+  ["target", "physical trace writer disagrees with the accepted output target"],
+  ["source", "physical trace writer disagrees with the accepted outcome"],
+  ["sequence", "physical trace writer disagrees with the accepted outcome"],
+  ["value", "physical trace writer disagrees with the accepted outcome"],
+  ["missing", "physical trace writer disagrees with the accepted output target"],
+] as const)("an outcome trace writer must match the same accepted physical output: %s", (change, message) => {
+  const { node, state, log } = preparedScopedOutcome();
+  const prepared = prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) });
+  const delta = prepared._plan.traceDelta!;
+  const [target, writer] = delta.writer!;
+  const writers: Record<typeof change, readonly [string, SourceEntry] | null> = {
+    target: [state.flow.startId, writer],
+    source: [target, changedEntry(writer, { source: new SourceRef(state.runId!, 0) })],
+    sequence: [target, changedEntry(writer, { outcomeSeq: writer.outcomeSeq + 1 })],
+    value: [target, changedEntry(writer, { valueJson: [...state.trace!.sources.values()][0]!.valueJson })],
+    missing: null,
+  };
+
+  const changed = changedDelta(delta, { writer: writers[change] });
+  expectRefused(state, log, withTrace(prepared, changed), RangeError, message);
+});
+
+test.each([
+  "none",
+  "carrier",
+  "source_none",
+  "source_sequence",
+  "source_run",
+  "succeeded",
+  "disposition",
+  "output",
+  "failure",
+] as const)("a terminal trace rejects forged fields before append: success, %s", (change) => {
+  const { state, log, prepared } = preparedScopedOutcome();
+  const delta = prepared._plan.traceDelta!;
+  const terminal = delta.terminal!;
+  const failure = new Failure({ code: "node.execute", message: "forged", nodeId: "router" });
+  const source = terminal.source!;
+  const terminals: Record<typeof change, () => TraceTerminal | null> = {
+    none: () => null,
+    carrier: () => ({}) as TraceTerminal,
+    source_none: () => new TraceTerminal(true, null, terminal.outputJson, null),
+    source_sequence: () => new TraceTerminal(true, new SourceRef(state.runId!, 0), terminal.outputJson, null),
+    source_run: () =>
+      new TraceTerminal(true, new SourceRef("foreign-run", source.executionSeq), terminal.outputJson, null),
+    succeeded: () => forged(TraceTerminal, terminal, { succeeded: 1 }),
+    disposition: () => new TraceTerminal(false, source, null, failure),
+    output: () => new TraceTerminal(true, source, typedJson("forged"), null),
+    failure: () => forged(TraceTerminal, terminal, { failure }),
+  };
+  const message =
+    change === "none" || change === "carrier"
+      ? "terminal outcome requires an exact terminal trace"
+      : "terminal trace disagrees with the prepared terminal outcome";
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, changedDelta(delta, { terminal: terminals[change]() })),
+    RangeError,
+    message,
+  );
+});
+
+test.each<[string, string]>([
+  ["terminal", "nonterminal outcome cannot install a terminal trace"],
+  ["rootWriter", "terminal trace root writer disagrees with the accepted outcome"],
+  ["causalRouteSource", "terminal trace causal source disagrees with the accepted outcome"],
+  ["rootStartSource", "terminal trace root START source disagrees with the accepted outcome"],
+])("a nonterminal outcome rejects fabricated terminal trace authority: success, %s", (field, message) => {
+  const { node, state, log } = preparedScopedOutcome();
+  const prepared = prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) });
+  const delta = prepared._plan.traceDelta!;
+  expect(delta.terminal).toBeNull();
+  const source = delta.occurrence!.source;
+  const changes: Record<string, TraceDeltaFields> = {
+    terminal: {
+      terminal: new TraceTerminal(
+        false,
+        source,
+        null,
+        new Failure({ code: "node.execute", message: "forged", nodeId: node.id }),
+      ),
+    },
+    rootWriter: { rootWriter: [...state.trace!.currentWriters.values()][0]! },
+    causalRouteSource: { causalRouteSource: source },
+    rootStartSource: { rootStartSource: source },
+  };
+
+  expectRefused(state, log, withTrace(prepared, changedDelta(delta, changes[field]!)), RangeError, message);
+});
+
+test.each(["none", "source", "sequence", "value"] as const)(
+  "a terminal trace root writer must be the physical accepted output: %s",
+  (change) => {
+    const { state, log, prepared } = preparedScopedOutcome();
+    const delta = prepared._plan.traceDelta!;
+    const writer = delta.rootWriter!;
+    const writers = {
+      none: null,
+      source: changedEntry(writer, { source: new SourceRef(state.runId!, 0) }),
+      sequence: changedEntry(writer, { outcomeSeq: writer.outcomeSeq + 1 }),
+      value: changedEntry(writer, { valueJson: [...state.trace!.currentWriters.values()][0]!.valueJson }),
+    };
+
+    expectRefused(
+      state,
+      log,
+      withTrace(prepared, changedDelta(delta, { rootWriter: writers[change] })),
+      RangeError,
+      "terminal trace root writer disagrees with the accepted outcome",
+    );
+  },
+);
+
+test.each(["none", "sequence", "run"] as const)(
+  "a terminal trace root START latch must match the accepted start: %s",
+  (change) => {
+    const { state, log } = learnableStarted(startEndFlow());
+    commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+    const prepared = prepareNodeSucceeded(state, START_ID, {}, {
+      forwardCapture: forwardCapture(state.flow.nodes.get(START_ID)!, {}),
+    });
+    const delta = prepared._plan.traceDelta!;
+    const source = delta.rootStartSource!;
+    const sources = {
+      none: null,
+      sequence: new SourceRef(state.runId!, 0),
+      run: new SourceRef("foreign-run", source.executionSeq),
+    };
+
+    expectRefused(
+      state,
+      log,
+      withTrace(prepared, changedDelta(delta, { rootStartSource: sources[change] })),
+      RangeError,
+      "terminal trace root START source disagrees with the accepted outcome",
+    );
+    commitPrepared(log, state, prepared);
+    expect(state.trace!.rootStartSource).toEqual(source);
+  },
+);
+
+test.each(["none", "foreign_path", "foreign_memory"] as const)(
+  "an outcome rejects a valid scope substitution before append: success, %s",
+  (change) => {
+    const { node, state, log, prepared } = preparedScopedOutcome();
+    const scope = node.memoryScope!;
+    const scopes = {
+      none: null,
+      foreign_path: new MemoryScope(["other"], { memories: scope.memories }),
+      foreign_memory: new MemoryScope(scope.staticPath, { memories: ["foreign"] }),
+    };
+    const delta = prepared._plan.traceDelta!;
+    const occurrence = changedOccurrence(delta.occurrence!, { memoryScope: scopes[change] });
+
+    expectRefused(
+      state,
+      log,
+      withTrace(prepared, changedDelta(delta, { occurrence })),
+      RangeError,
+      "outcome memory scope disagrees with the physical executing node",
+    );
+  },
+);
+
+test.each([
+  ["display_node", "outcome memory scope disagrees with the physical executing node"],
+  ["delta", "a retained outcome requires its physical trace occurrence"],
+  ["occurrence", "a retained outcome requires its physical trace occurrence"],
+] as const)("outcome scope authority can't be selected or omitted by the trace delta: success, %s", (change, message) => {
+  const { state, log, prepared } = preparedScopedOutcome();
+  const delta = prepared._plan.traceDelta!;
+  const deltas: Record<typeof change, TraceDelta | null> = {
+    display_node: changedDelta(delta, {
+      occurrence: changedOccurrence(delta.occurrence!, { nodeId: START_ID, memoryScope: null }),
+    }),
+    delta: null,
+    occurrence: changedDelta(delta, { occurrence: null }),
+  };
+
+  expectRefused(state, log, withTrace(prepared, deltas[change]), RangeError, message);
+});
+
+test.each<[string, Value, boolean, (string | number)[] | null]>([
+  ["input.x", null, true, ["x"]],
+  ["input.absent", null, false, null],
+  ["input.x.more", null, false, null],
+  ["input.items.0", null, false, null],
+  [`${START_ID}.output`, { x: null, items: [1n] }, true, []],
+  ["system.run_id.ignored", RUN_ID, true, null],
+  ["system", null, false, null],
+  ["input", null, false, null],
+  [" input.x ", null, true, ["x"]],
+  ["input. x", null, false, null],
+])("the paired resolver preserves pool namespaces: %s", (path, value, present, sourcePath) => {
+  const { state } = learnableStarted(startEndFlow(), { inputs: { x: null, items: [1n] } });
+  const resolved = state.trace!.resolve(path);
+
+  expect(resolved.value).toEqual(value);
+  expect(resolved.present).toBe(present);
+  expect(resolved.source).toEqual(sourcePath === null ? null : new SourceRef(state.runId!, 0, sourcePath));
+  const [head, ...rest] = path.trim().split(".");
+  expect(resolved.value).toEqual(state.pool.resolve(head!, rest));
+});
+
+test("the reducer requires a capture exactly when learning", () => {
+  const { state: plain } = initializedAndStarted(startEndFlow());
+  const capture = forwardCapture(plain.flow.nodes.get(START_ID)!, {});
+  expectError(
+    () => prepareNodeSucceeded(plain, START_ID, {}, { forwardCapture: capture }),
+    RangeError,
+    "forward capture requires recorded learning",
+  );
+
+  const { state, log } = learnableStarted(startEndFlow());
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  expectError(
+    () => prepareNodeSucceeded(state, START_ID, {}),
+    RangeError,
+    "accepted outcome requires forward capture while learning",
+  );
+});
+
+// The frontier trace checks on a learnable run.
+
+/** A frontier record a learnable run prepares after START's success. */
+type FrontierKind = "started" | "resumed" | "step" | "stopped";
+
+/**
+ * Python's `_prepared_trace_frontier`: a learnable `flow()` after START's success, with `work`'s
+ * prepared dispatch or, once `work` is in flight, a prepared resume, step or stop.
+ */
+function preparedTraceFrontier(kind: FrontierKind): {
+  state: RunState;
+  log: MemoryRunLog;
+  prepared: PreparedTransition;
+} {
+  const { state, log } = learnableStarted(flow());
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitStartSuccess(state, log, {});
+  let prepared = prepareNodeStarted(state, "work");
+  if (kind !== "started") {
+    commitPrepared(log, state, prepared);
+    if (kind === "resumed") prepared = prepareRunResumed(state, { numWorkers: 0 });
+    else if (kind === "step") prepared = prepareNodeStep(state, "work", { event: "progress" });
+    else prepared = prepareRunStopped(state, "signal", "SIGTERM");
+  }
+  return { state, log, prepared };
+}
+
+test("a frontier trace can't inject a causal terminal source before append", () => {
+  const { state, log, prepared } = preparedTraceFrontier("started");
+  const delta = changedDelta(prepared._plan.traceDelta!, { causalRouteSource: new SourceRef(state.runId!, 0) });
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, delta),
+    RangeError,
+    "frontier trace cannot change outcome or terminal history",
+  );
+});
+
+/** The message each frontier kind's record check gives a forged `started` or `resumed`. */
+const FRONTIER_RECORD_MESSAGES: Record<FrontierKind, string> = {
+  started: "frontier trace start disagrees with its canonical record",
+  resumed: "frontier trace resume disagrees with its canonical record",
+  step: "frontier trace step must only advance the accepted sequence",
+  stopped: "frontier trace stop must only advance the accepted sequence",
+};
+
+/** The fields that would change outcome or terminal history, plus the missing delta. */
+const HISTORY_FIELDS = [
+  "missing",
+  "initialized",
+  "occurrence",
+  "handler",
+  "writer",
+  "rootStartSource",
+  "rootWriter",
+  "causalRouteSource",
+  "terminal",
+] as const;
+
+/** A forged field of a frontier trace delta. */
+type FrontierField = (typeof HISTORY_FIELDS)[number] | "started" | "resumed";
+
+/**
+ * Each kind's forged fields: a dispatch's history fields (its `started` and `resumed` rows aren't
+ * portable), a resume's `started` too, and a step's and a stop's `started` and `resumed` too.
+ */
+const FRONTIER_ROWS: (readonly [FrontierKind, FrontierField])[] = [
+  ...HISTORY_FIELDS.map((field) => ["started", field] as const),
+  ...(["started", ...HISTORY_FIELDS] as const).map((field) => ["resumed", field] as const),
+  ...(["step", "stopped"] as const).flatMap((kind) =>
+    (["started", "resumed", ...HISTORY_FIELDS] as const).map((field) => [kind, field] as const),
+  ),
+];
+
+test.each(FRONTIER_ROWS)("a frontier trace rejects an inappropriate field before append: %s, %s", (kind, field) => {
+  const { state, log, prepared } = preparedTraceFrontier(kind);
+  const trace = state.trace!;
+  const delta = prepared._plan.traceDelta!;
+  const writer = [...trace.currentWriters][0]!;
+  const changes: Record<Exclude<FrontierField, "missing">, TraceDeltaFields> = {
+    initialized: { initialized: trace },
+    started: { started: ["work", delta.sequence] },
+    resumed: { resumed: true },
+    occurrence: { occurrence: trace.occurrences.at(-1)! },
+    handler: {
+      handler: () => {
+        throw new Error("invoked a forged frontier handler");
+      },
+    },
+    writer: { writer },
+    rootStartSource: { rootStartSource: new SourceRef(state.runId!, 0) },
+    rootWriter: { rootWriter: writer[1] },
+    causalRouteSource: { causalRouteSource: new SourceRef(state.runId!, 0) },
+    terminal: { terminal: new TraceTerminal(true, writer[1].source, writer[1].valueJson, null) },
+  };
+  const message =
+    field === "missing"
+      ? "frontier trace delta requires its exact accepted sequence"
+      : field === "started" || field === "resumed"
+        ? FRONTIER_RECORD_MESSAGES[kind]
+        : "frontier trace cannot change outcome or terminal history";
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, field === "missing" ? null : changedDelta(delta, changes[field])),
+    RangeError,
+    message,
+  );
+});
+
+test.each(["node", "sequence"] as const)("a frontier trace start's identity is exact: %s", (change) => {
+  const { state, log, prepared } = preparedTraceFrontier("started");
+  const delta = prepared._plan.traceDelta!;
+  const started = { node: [START_ID, delta.sequence] as const, sequence: ["work", 0] as const }[change];
+
+  expectRefused(
+    state,
+    log,
+    withTrace(prepared, changedDelta(delta, { started })),
+    RangeError,
+    "frontier trace start disagrees with its canonical record",
+  );
 });

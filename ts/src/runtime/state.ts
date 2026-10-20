@@ -2260,11 +2260,7 @@ function buildGrowthFragment(spawner: Node, builderSeed: JsonValue, growBuilder:
   return copyGraph(built);
 }
 
-/**
- * Validate one growth and build the detached change commit applies in place.
- *
- * Pruning isn't ported yet: a growth that names prune ids, or meets earlier deferred ones, throws.
- */
+/** Validate one growth and build the detached change commit applies in place. */
 function prepareGrowthTopology(
   state: RunState,
   record: NodeExpandedRecord,
@@ -2280,22 +2276,22 @@ function prepareGrowthTopology(
   }
   const derivedDepth = validatedGrowthDepth(state, record.spawnerId);
   const index = growthIndex(state);
-  if (record.pruneIds.length > 0 || state.deferredPrune.size > 0) throw new Error("pruning is not ported yet");
-  const retiredIds: ReadonlySet<string> = new Set();
-  const deferredPrune = state.deferredPrune;
+  validateGrowthPrune(state, record.spawnerId, record.pruneIds, new Set(newNodeIds));
+  const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index.grown);
+  validatePruneDependencies(state, fragment, retired, index);
 
-  const sortedRetiredIds = [...retiredIds].sort(compareCodeUnits);
+  const sortedRetiredIds = [...retired].sort(compareCodeUnits);
   const retiredEdges = new Map<string, Edge>();
   for (const nodeId of sortedRetiredIds) {
     for (const edge of [...state.flow.outgoing(nodeId), ...state.flow.incoming(nodeId)]) {
       if (!retiredEdges.has(edge.id)) retiredEdges.set(edge.id, edge);
     }
   }
-  validateGrowthRedirects(state, fragment, record.spawnerId, retiredIds, new Set(retiredEdges.keys()), index);
+  validateGrowthRedirects(state, fragment, record.spawnerId, retired, new Set(retiredEdges.keys()), index);
 
   /** Return the nearest owner at or above `owner` that this growth keeps. */
   const survivingOwner = (owner: string | null): string | null => {
-    while (owner !== null && retiredIds.has(owner)) owner = state.growthOwner.get(owner) ?? null;
+    while (owner !== null && retired.has(owner)) owner = state.growthOwner.get(owner) ?? null;
     return owner;
   };
 
@@ -2304,7 +2300,7 @@ function prepareGrowthTopology(
   const ownerChanges: (readonly [string, string | null])[] = [];
   for (const retiredId of sortedRetiredIds) {
     for (const nodeId of index.grown.get(retiredId) ?? []) {
-      if (!retiredIds.has(nodeId)) ownerChanges.push([nodeId, survivingOwner(retiredId)]);
+      if (!retired.has(nodeId)) ownerChanges.push([nodeId, survivingOwner(retiredId)]);
     }
   }
   const newOwner = survivingOwner(record.spawnerId);
@@ -2709,8 +2705,12 @@ function nodeNames(nodeId: string, node: Node, wiring: ReadonlyMap<string, unkno
   return Object.freeze([...names]);
 }
 
-/** Return `state.growthIndex`, building it from the live graph on first use. */
-function growthIndex(state: RunState): GrowthIndex {
+/**
+ * Return `state.growthIndex`, building it from the live graph on first use.
+ *
+ * @internal Exported so tests can compare the kept index with a rebuild.
+ */
+export function growthIndex(state: RunState): GrowthIndex {
   if (state.growthIndex === null) {
     const names = new Map<string, readonly string[]>();
     for (const [nodeId, node] of state.flow.nodes) {
@@ -2735,6 +2735,241 @@ function setDefault<V>(map: Map<string, V>, key: string, make: () => V): V {
     map.set(key, value);
   }
   return value;
+}
+
+/**
+ * Split the requested and deferred prune ids into those retired now and those kept.
+ *
+ * Each candidate is a requested prune id or one an earlier growth deferred. It is retired with its
+ * whole grown subtree when every node in it is settled (taken, skipped, or expanded; none ready or
+ * running). Otherwise it stays live with that subtree and is deferred, so a later growth retires it
+ * once settled; a kept node also keeps every candidate it reads. A spawner that asks to prune
+ * itself is always retired; its grown nodes go with it only if all are settled, else they move to
+ * the nearest surviving owner.
+ *
+ * The candidates are `pruneIds`, then `state.deferredPrune`, without repeats; the deferred ids keep
+ * the order they were found to be kept in.
+ *
+ * @param state The pre-transition state whose `deferredPrune` names earlier deferred ids.
+ * @param spawnerId The spawner whose growth record asks for `pruneIds`.
+ * @param pruneIds The node ids the growth record asks to prune.
+ * @param grown Each owner's directly grown live nodes.
+ * @returns The node ids retired by this growth, and the candidates kept live and deferred to a
+ *   later growth.
+ */
+function retiredIds(
+  state: RunState,
+  spawnerId: string,
+  pruneIds: readonly string[],
+  grown: ReadonlyMap<string, ReadonlySet<string>>,
+): readonly [ReadonlySet<string>, ReadonlySet<string>] {
+  if (pruneIds.length === 0 && state.deferredPrune.size === 0) return [new Set(), new Set()];
+  const settled: ReadonlySet<NodeState | undefined> = new Set([
+    NodeState.TAKEN,
+    NodeState.SKIPPED,
+    NodeState.EXPANDED,
+  ]);
+  const readyIds = new Set(state.ready);
+  const isSettled = (nodeId: string): boolean =>
+    settled.has(state.nodeState.get(nodeId)) && !state.inFlight.has(nodeId) && !readyIds.has(nodeId);
+
+  const units = new Map<string, string[]>();
+  for (const candidate of new Set([...pruneIds, ...state.deferredPrune])) {
+    const unit = [candidate];
+    const pending = [candidate];
+    while (pending.length > 0) {
+      for (const nodeId of grown.get(pending.pop()!) ?? []) {
+        unit.push(nodeId);
+        pending.push(nodeId);
+      }
+    }
+    units.set(candidate, unit);
+  }
+
+  const retired = new Set<string>();
+  // A deferred spawner growing now is unsettled and kept like any other candidate.
+  if (pruneIds.includes(spawnerId)) {
+    const spawnerUnit = units.get(spawnerId)!;
+    units.delete(spawnerId);
+    retired.add(spawnerId);
+    const grownIds = spawnerUnit.slice(1);
+    if (grownIds.every(isSettled)) for (const nodeId of grownIds) retired.add(nodeId);
+  }
+  const kept = new Set<string>();
+  for (const [candidate, unit] of units) if (!unit.every(isSettled)) kept.add(candidate);
+  // A settled node that kept work still reads must stay with it. Units overlap when a deferred id
+  // lies under another candidate, so a node can be in several.
+  const unitsOf = new Map<string, string[]>();
+  for (const [candidate, unit] of units) {
+    for (const nodeId of unit) setDefault(unitsOf, nodeId, () => []).push(candidate);
+  }
+  const pending: string[] = [];
+  for (const candidate of kept) for (const nodeId of units.get(candidate)!) pending.push(nodeId);
+  while (pending.length > 0) {
+    for (const read of readIds(state, pending.pop()!)) {
+      for (const candidate of unitsOf.get(read) ?? []) {
+        if (!kept.has(candidate)) {
+          kept.add(candidate);
+          for (const nodeId of units.get(candidate)!) pending.push(nodeId);
+        }
+      }
+    }
+  }
+  for (const [candidate, unit] of units) {
+    if (!kept.has(candidate)) for (const nodeId of unit) retired.add(nodeId);
+  }
+  return [retired, new Set([...kept].filter((candidate) => !retired.has(candidate)))];
+}
+
+/** Return the node ids a live node reads through edges, wiring, or output targets. */
+function readIds(state: RunState, nodeId: string): Set<string> {
+  const node = state.flow.nodes.get(nodeId)!;
+  const reads = new Set(state.flow.incoming(nodeId).map((edge) => edge.from));
+  for (const target of [node.commitAs, node.originId, node.skippedOutputTarget()] as unknown[]) {
+    if (typeof target === "string") reads.add(target);
+  }
+  for (const source of (state.flow.wiring.get(nodeId) ?? new Map<string, unknown>()).values()) {
+    for (const [, text] of iterSourceStrings(source)) {
+      let paths: string[];
+      try {
+        paths = exprRefsOf(text);
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        continue; // the prune dependency check reports invalid wiring
+      }
+      for (const path of paths) reads.add(path.split(".", 1)[0]!);
+    }
+  }
+  return reads;
+}
+
+/**
+ * Reject requested prune ids that are not dynamic overlay or a self-prunable LOOP clone.
+ *
+ * Unsettled requested ids are not errors: `retiredIds` keeps them live.
+ */
+function validateGrowthPrune(
+  state: RunState,
+  spawnerId: string,
+  pruneIds: readonly string[],
+  newNodeIds: ReadonlySet<string>,
+): void {
+  const spawner = state.flow.nodes.get(spawnerId)!;
+  for (const nodeId of pruneIds) {
+    if (!state.flow.nodes.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth prune node ${reprText(nodeId)} does not exist`));
+    }
+    if (nodeId === state.flow.startId || nodeId === state.flow.endId) {
+      raiseGrowthRejected(new RangeError(`growth cannot prune top-level boundary ${reprText(nodeId)}`));
+    }
+    if (newNodeIds.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth cannot prune new fragment node ${reprText(nodeId)}`));
+    }
+    if (state.initialStaticIds.has(nodeId)) {
+      raiseGrowthRejected(new RangeError(`growth cannot prune initial static node ${reprText(nodeId)}`));
+    }
+    if (nodeId === spawnerId) {
+      const originId: unknown = spawner.originId;
+      if (
+        !(
+          spawner.isLoop === true &&
+          typeof originId === "string" &&
+          originId &&
+          originId !== spawnerId &&
+          state.flow.nodes.has(originId) &&
+          !pruneIds.includes(originId)
+        )
+      ) {
+        raiseGrowthRejected(new RangeError(`growth spawner ${reprText(spawnerId)} is not a self-prunable LOOP clone`));
+      }
+    }
+  }
+}
+
+/**
+ * Reject future work whose edge, wiring, commit, or origin reads a pruned id.
+ *
+ * The future work checked is every fragment node plus each unfinished live node that names a
+ * pruned id or has an edge from one, found through the growth index and adjacency rather than a
+ * scan of every node.
+ */
+function validatePruneDependencies(
+  state: RunState,
+  fragment: Flow,
+  pruneIds: ReadonlySet<string>,
+  index: GrowthIndex,
+): void {
+  if (pruneIds.size === 0) return;
+  const sortedPruneIds = [...pruneIds].sort(compareCodeUnits);
+  const candidates = new Set(fragment.nodes.keys());
+  for (const nodeId of sortedPruneIds) {
+    for (const referrer of index.referrers.get(nodeId) ?? []) candidates.add(referrer);
+    for (const edge of state.flow.outgoing(nodeId)) candidates.add(edge.to);
+  }
+  const dependentIds = [...candidates].filter(
+    (nodeId) =>
+      fragment.nodes.has(nodeId) || (!pruneIds.has(nodeId) && state.nodeState.get(nodeId) === NodeState.UNKNOWN),
+  );
+  const dependents = new Set(dependentIds);
+  const combinedNode = (nodeId: string): Node => fragment.nodes.get(nodeId) ?? state.flow.nodes.get(nodeId)!;
+  const combinedNodeIds = { has: (nodeId: string) => fragment.nodes.has(nodeId) || state.flow.nodes.has(nodeId) };
+  const prunedEdges: Edge[] = [];
+  for (const nodeId of sortedPruneIds) for (const edge of state.flow.outgoing(nodeId)) prunedEdges.push(edge);
+  for (const edge of fragment.edges) if (pruneIds.has(edge.from)) prunedEdges.push(edge);
+  for (const edge of prunedEdges) {
+    if (dependents.has(edge.to)) {
+      raiseGrowthRejected(
+        new RangeError(`surviving node ${reprText(edge.to)} depends on pruned edge source ${reprText(edge.from)}`),
+      );
+    }
+  }
+  for (const nodeId of dependentIds) {
+    const node = combinedNode(nodeId);
+    if (node.commitAs !== null && pruneIds.has(node.commitAs)) {
+      raiseGrowthRejected(
+        new RangeError(`surviving node ${reprText(nodeId)} commits to pruned node ${reprText(node.commitAs)}`),
+      );
+    }
+    if (node.originId !== null && pruneIds.has(node.originId)) {
+      raiseGrowthRejected(
+        new RangeError(`surviving node ${reprText(nodeId)} has pruned origin ${reprText(node.originId)}`),
+      );
+    }
+    const target: unknown = node.skippedOutputTarget();
+    let skippedTarget: string;
+    try {
+      skippedTarget = validateSkippedOutputTarget(combinedNodeIds, nodeId, target);
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+      throw error;
+    }
+    if (pruneIds.has(skippedTarget)) {
+      raiseGrowthRejected(
+        new RangeError(
+          `surviving node ${reprText(nodeId)} has pruned skipped output target ${reprText(skippedTarget)}`,
+        ),
+      );
+    }
+    const wiring = fragment.wiring.get(nodeId) ?? state.flow.wiring.get(nodeId) ?? new Map<string, unknown>();
+    for (const source of wiring.values()) {
+      for (const [, text] of iterSourceStrings(source)) {
+        let paths: string[];
+        try {
+          paths = exprRefsOf(text);
+        } catch (error) {
+          if (!(error instanceof ExpressionError)) throw error;
+          throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
+            cause: error,
+          });
+        }
+        for (const path of paths) {
+          if (pruneIds.has(path.split(".", 1)[0]!)) {
+            raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
+          }
+        }
+      }
+    }
+  }
 }
 
 /** Validate a replayed route's exact scalar carriers and its executing router. */

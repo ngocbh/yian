@@ -25,7 +25,11 @@
  * `test_growth_enforces_peak_node_budget_before_same_transition_pruning`,
  * `test_growth_rejects_invalid_exact_depth_deltas`,
  * `test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error`,
- * `test_growth_rejects_live_node_collision_even_when_the_id_is_pruned`.
+ * `test_growth_rejects_live_node_collision_even_when_the_id_is_pruned`,
+ * `test_growth_accepts_peak_node_count_equal_to_budget`,
+ * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
+ * `test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node`,
+ * `test_growth_rejects_a_template_dependency_on_a_pruned_node`.
  *
  * Python's `_snapshot` is `snapshot` plus `topologySnapshot`: `snapshot` holds the flow by
  * reference, so a growth's topology change needs its own detached copy.
@@ -62,6 +66,17 @@
  *   label is `string` and the subclass is `ParameterSubclass`.
  * - `test_growth_rejects_invalid_edge_field_types`: the bad values go in through a cast to a new
  *   `Edge` (its constructor doesn't validate its fields), and each row pins the whole message.
+ * - `test_growth_rejects_unsafe_pruning_matrix_atomically`: each row pins the original's message,
+ *   where Python checks only that it is a `ValueError`.
+ * - `test_read_ids_include_references_nested_in_a_template`: `readIds` is private, so the test goes
+ *   through the keep rule: an unsettled node that reads a settled prune id only through a template
+ *   keeps that id live and deferred.
+ * - `test_growth_prune_scan_rejects_malformed_surviving_wiring_as_raw_invariant`: no monkeypatched
+ *   `expr_refs_of`; the wiring is a real malformed `Binding`, and the error is a raw `RangeError`
+ *   whose `cause` is the `ExpressionError`. Two rows: with the growth index built at this growth
+ *   the index build reads the wiring first (`node '__end__' has invalid wiring`, the site Python's
+ *   test reaches too), and with it built earlier the prune scan does (`surviving node '__end__'
+ *   has invalid wiring`).
  *
  * TS-only: a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`.
  *
@@ -78,13 +93,6 @@
  *   `test_growth_rejects_invalid_fragments_atomically`: a tuple and a list are both a JS array.
  *
  * Later (T4-5, pruning):
- * `test_growth_accepts_peak_node_count_equal_to_budget`,
- * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
- * `test_growth_rejects_unsafe_pruning_matrix_atomically`,
- * `test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node`,
- * `test_growth_rejects_a_template_dependency_on_a_pruned_node`,
- * `test_read_ids_include_references_nested_in_a_template`,
- * `test_growth_prune_scan_rejects_malformed_surviving_wiring_as_raw_invariant`,
  * `test_pruning_keeps_a_grown_subtree_with_unsettled_work`,
  * `test_pruning_retires_a_grown_subtree_once_settled`,
  * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
@@ -104,6 +112,7 @@ import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, GrowthRejected, START_ID } from "../../src/compile/model.ts";
 import { current } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { ExpressionError } from "../../src/expr/expressions.ts";
 import { NodeExpanded, type RunEvent } from "../../src/events.ts";
 import { Grow, Node, NodeKind } from "../../src/nodes/base.ts";
 import {
@@ -116,6 +125,7 @@ import {
   ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
@@ -123,6 +133,7 @@ import { MemoryRunLog, NodeExpandedRecord, type RecordEnvelope, type RunRecord }
 import {
   commitPrepared,
   type GrowBuilder,
+  growthIndex,
   prepareExpanded,
   prepareNodeStarted,
   prepareNodeSucceeded,
@@ -823,8 +834,12 @@ function invalidFragment(name: string): Flow {
   return built;
 }
 
-/** Install settled dynamic nodes without changing `initialStaticIds`; return their ids. */
-function installSettledOverlay(state: RunState, prefix: string = "old"): string[] {
+/**
+ * Install settled dynamic nodes without changing `initialStaticIds`; return their ids. With
+ * `residue`, also install a settled `<prefix>/child/residue` the ids don't name.
+ */
+function installSettledOverlay(state: RunState, options: { prefix?: string; residue?: boolean } = {}): string[] {
+  const prefix = options.prefix ?? "old";
   const built = fragment(prefix);
   state.flow.addSubgraph(built.nodes, built.edges, built.wiring);
   for (const nodeId of built.nodes.keys()) {
@@ -834,6 +849,10 @@ function installSettledOverlay(state: RunState, prefix: string = "old"): string[
     state.wiringOverrides.set(nodeId, { copy: [nodeId] });
   }
   for (const edge of built.edges) state.edgeState.set(edge.id, NodeState.TAKEN);
+  if (options.residue) {
+    addLiveNode(state, new OverlayNode(`${prefix}/child/residue`));
+    state.nodeState.set(`${prefix}/child/residue`, NodeState.TAKEN);
+  }
   return [...built.nodes.keys()];
 }
 
@@ -1223,4 +1242,219 @@ test("growth rejects a live node collision even when the id is pruned", () => {
       /^growth fragment node 'spawn\/child\/start' collides with live topology$/,
     ),
   );
+});
+
+test("growth accepts a peak node count equal to the budget", () => {
+  const { state, log } = initializedSpawner();
+  const oldIds = installSettledOverlay(state);
+  const newCount = fragment("spawn").nodes.size;
+  state.runDefaults = { ...state.runDefaults, maxTotalNodes: state.flow.nodes.size + newCount };
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder));
+
+  expect(oldIds.filter((nodeId) => state.flow.nodes.has(nodeId))).toEqual([]);
+  expect(state.flow.nodes.has("spawn/child/start")).toBe(true);
+});
+
+test("growth prunes only the named settled dynamic overlay coordinates", () => {
+  const { state, log } = initializedSpawner();
+  const oldIds = installSettledOverlay(state, { residue: true });
+  const old = new Set(oldIds);
+  const oldEdgeIds = new Set(
+    state.flow.edges.filter((edge) => old.has(edge.from) || old.has(edge.to)).map((edge) => edge.id),
+  );
+  const residueId = "old/child/residue";
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder));
+
+  for (const nodeId of oldIds) {
+    expect(state.flow.nodes.has(nodeId)).toBe(false);
+    expect(state.flow.wiring.has(nodeId)).toBe(false);
+    expect(state.nodeState.has(nodeId)).toBe(false);
+    expect(state.pool.store.has(nodeId)).toBe(false);
+    expect(state.depth.has(nodeId)).toBe(false);
+    expect(state.wiringOverrides.has(nodeId)).toBe(false);
+    expect(state.ready.includes(nodeId)).toBe(false);
+    expect(state.inFlight.has(nodeId)).toBe(false);
+    expect(state.flow.incomingEdges.has(nodeId)).toBe(false);
+    expect(state.flow.outgoingEdges.has(nodeId)).toBe(false);
+  }
+  expect([...state.edgeState.keys()].filter((edgeId) => oldEdgeIds.has(edgeId))).toEqual([]);
+  expect(state.flow.edges.some((edge) => old.has(edge.from) || old.has(edge.to))).toBe(false);
+  expect(state.flow.nodes.has(residueId)).toBe(true);
+  expect(state.nodeState.get(residueId)).toBe(NodeState.TAKEN);
+});
+
+/** Add a LOOP clone `cloneId` of `originId` to `state`, put it in flight and return its id. */
+function startLoopClone(state: RunState, log: MemoryRunLog, cloneId: string, originId: string): string {
+  const clone = new LoopNode(cloneId, {
+    flowId: "child",
+    child: canonicalChild(),
+    childInputs: [],
+    predicateKind: "times",
+    times: 3,
+    maxIters: 3,
+    iteration: 1,
+    originId,
+  });
+  clone.params = [];
+  addLiveNode(state, clone);
+  state.ready.unshift(cloneId);
+  commitPrepared(log, state, prepareNodeStarted(state, cloneId));
+  return cloneId;
+}
+
+test.each([
+  ["missing", "growth prune node 'absent' does not exist"],
+  ["top-start", "growth cannot prune top-level boundary '__start__'"],
+  ["top-end", "growth cannot prune top-level boundary '__end__'"],
+  ["initial-static", "growth cannot prune initial static node 'spawn'"],
+  ["non-loop-self", "growth spawner 'clone' is not a self-prunable LOOP clone"],
+  ["loop-missing-origin", "growth spawner 'loop~1' is not a self-prunable LOOP clone"],
+  ["loop-pruned-origin", "growth spawner 'loop-origin~1' is not a self-prunable LOOP clone"],
+  ["edge-dependency", "surviving node '__end__' depends on pruned edge source 'old/child/start'"],
+  ["wiring-dependency", "surviving node '__end__' wiring depends on pruned node"],
+  ["commit-dependency", "surviving node '__end__' commits to pruned node 'old/child/start'"],
+  ["origin-dependency", "surviving node '__end__' has pruned origin 'old/child/start'"],
+  ["skipped-output-dependency", "surviving node '__end__' has pruned skipped output target 'old/child/start'"],
+])("growth rejects unsafe pruning atomically: %s", (name, message) => {
+  const { state, log } = initializedSpawner();
+  const oldId = installSettledOverlay(state)[0]!;
+  let pruneIds: string[] = [oldId];
+  let executing = "spawn";
+  const dependent = state.flow.nodes.get(END_ID)!;
+  switch (name) {
+    case "missing":
+      pruneIds = ["absent"];
+      break;
+    case "top-start":
+      pruneIds = [START_ID];
+      break;
+    case "top-end":
+      pruneIds = [END_ID];
+      break;
+    case "initial-static":
+      pruneIds = ["spawn"];
+      break;
+    case "non-loop-self":
+      addLiveNode(state, new Spawner("clone"));
+      state.ready.unshift("clone");
+      commitPrepared(log, state, prepareNodeStarted(state, "clone"));
+      executing = "clone";
+      pruneIds = ["clone"];
+      break;
+    case "loop-missing-origin":
+      executing = startLoopClone(state, log, "loop~1", "missing-origin");
+      pruneIds = [executing];
+      break;
+    case "loop-pruned-origin":
+      addLiveNode(state, new OverlayNode("loop-origin"));
+      state.nodeState.set("loop-origin", NodeState.TAKEN);
+      executing = startLoopClone(state, log, "loop-origin~1", "loop-origin");
+      pruneIds = ["loop-origin", executing];
+      break;
+    case "edge-dependency": {
+      const edge = new Edge("old-to-end", oldId, END_ID, { ordering: true });
+      state.flow.addSubgraph(new Map(), [edge], new Map());
+      state.edgeState.set(edge.id, NodeState.UNKNOWN);
+      break;
+    }
+    case "wiring-dependency":
+      state.flow.wiring.set(END_ID, new Map([["value", new Binding(`\${${oldId}.output}`)]]));
+      break;
+    case "commit-dependency":
+      dependent.commitAs = oldId;
+      break;
+    case "origin-dependency":
+      dependent.originId = oldId;
+      break;
+    case "skipped-output-dependency":
+      dependent.skippedOutputTarget = () => oldId;
+      break;
+    default:
+      throw new Error(name);
+  }
+
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, executing, new Grow({}, pruneIds), fragmentBuilder),
+      RangeError,
+      message,
+    ),
+  );
+});
+
+test("growth rejects a Binding-wrapped dependency on a pruned node", () => {
+  // A wrapped reference can't hide a live dependency on removed topology.
+  const { state, log } = initializedSpawner();
+  const oldId = installSettledOverlay(state)[0]!;
+  state.flow.wiring.set(
+    END_ID,
+    new Map([["value", new Binding(`\${${oldId}.output}`, { origin: new OriginRef("pruned-dependency") })]]),
+  );
+
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder),
+      RangeError,
+      "surviving node '__end__' wiring depends on pruned node",
+    ),
+  );
+  expect(log.nextSequence).toBe(4);
+});
+
+test("growth rejects a template dependency on a pruned node", () => {
+  // A reference nested in a value template keeps its producer from being pruned.
+  const { state, log } = initializedSpawner();
+  const oldId = installSettledOverlay(state)[0]!;
+  state.flow.wiring.set(
+    END_ID,
+    new Map([["value", new Binding(new ValueTemplate({ seen: [`\${${oldId}.output}`] }))]]),
+  );
+
+  expectAtomic(state, log, () =>
+    expectRejected(
+      () => prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder),
+      RangeError,
+      "surviving node '__end__' wiring depends on pruned node",
+    ),
+  );
+  expect(log.nextSequence).toBe(4);
+});
+
+test("an unsettled reader keeps a settled prune id it reads only through a template", () => {
+  const { state, log } = initializedSpawner();
+  const oldId = installSettledOverlay(state)[0]!;
+  const reader = new OverlayNode("reader");
+  state.flow.addSubgraph(
+    new Map([[reader.id, reader]]),
+    [],
+    new Map([[reader.id, new Map([["value", new Binding(new ValueTemplate({ seen: `saw \${${oldId}.output}` }))]])]]),
+  );
+  state.nodeState.set(reader.id, NodeState.UNKNOWN);
+
+  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, [oldId, reader.id]), fragmentBuilder));
+
+  expect(state.flow.nodes.has(oldId)).toBe(true);
+  expect([...state.deferredPrune].sort()).toEqual([oldId, reader.id].sort());
+});
+
+test.each([
+  ["at this growth", false, /^node '__end__' has invalid wiring: /],
+  ["by an earlier growth", true, /^surviving node '__end__' has invalid wiring: /],
+])("the prune scan rejects malformed surviving wiring as a raw invariant, index built %s", (_name, built, message) => {
+  const { state } = initializedSpawner();
+  const oldId = installSettledOverlay(state)[0]!;
+  if (built) {
+    // With the index already built, the malformed wiring is first read by the prune scan.
+    state.flow.wiring.set(END_ID, new Map([["value", new Binding(`\${${oldId}.output}`)]]));
+    growthIndex(state);
+  }
+  state.flow.wiring.set(END_ID, new Map([["value", new Binding(`\${${oldId}.output`)]]));
+
+  const error = caught(() => prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder)) as Error;
+
+  expect(error.constructor).toBe(RangeError);
+  expect(error.message).toMatch(message);
+  expect(error.cause).toBeInstanceOf(ExpressionError);
 });

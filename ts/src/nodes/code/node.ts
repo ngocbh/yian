@@ -15,25 +15,37 @@
  *   form rather than to code text.
  *
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
- * return the node's one output value.
+ * return the node's one output value. Nothing is compiled or imported at construction.
  *
- * Only the node's shell is here. Nothing is compiled or imported at construction; the body
- * (importing a reference, running an inline body or a built-in, and mapping a failure to its
- * line) is not ported yet and comes with `forward`.
+ * An inline body is stripped of its types and built as a strict async function of `inputs` each
+ * time the node runs. `inputs` is a frozen host copy of the record (ints as `number`s, big ones as
+ * `bigint`s) behind a proxy that throws on an undeclared name. What the body throws rejects as a
+ * `CodeError` reading `<name>: <message>`, located at the authored line of its first body frame
+ * when it has one; a body returning `undefined` fails; its result goes through host intake, and a
+ * value intake refuses fails `contract.output`. The built-in identity returns its field as bound.
  *
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
  * there is no injection vector into the code itself, and running it in-process is the same
  * capability reference mode already has. Loading a flow from an untrusted or agent-generated
  * source runs that source's code when the flow runs.
  *
- * Knows about:   nodes/base, nodes/contracts, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/contracts, diagnostics, typesys, platform and `node:*`.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
-import { OriginRef, reprText } from "../../diagnostics.ts";
-import { isRecord, jsTypeName } from "../../typesys/values.ts";
-import { Node, NodeKind } from "../base.ts";
-import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
+import { type FailureCode, OriginRef, reprText } from "../../diagnostics.ts";
+import { stripTypes } from "../../platform.ts";
+import {
+  fromHost,
+  isRecord,
+  jsTypeName,
+  toHost,
+  TypeCheckError,
+  type Value,
+  writeAsText,
+} from "../../typesys/values.ts";
+import { markerMessage, Node, NodeKind, Output } from "../base.ts";
+import { mapOrigin, type OriginMapper, outputContractOrigin, validateOptionalOrigin } from "../contracts.ts";
 
 // A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export
 // name. Anchoring plus a whitespace-free path keep multi-token bodies out.
@@ -124,13 +136,110 @@ export function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknow
   }
 }
 
+/** An inline body: an async function of the `inputs` record. */
+type CodeBody = (inputs: Readonly<Record<string, unknown>>) => Promise<unknown>;
+
+// The constructor isn't a global; every async function's `constructor` is it.
+const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => CodeBody;
+
+/** The number of lines the runtime's function constructor puts before a body; measured once. */
+let headerLines: number | null = null;
+
+/** Return how many lines the runtime's function constructor puts before a body. */
+function headerLineCount(): number {
+  if (headerLines === null) {
+    const text = new AsyncFunction("inputs", "/*yian*/").toString();
+    headerLines = text.slice(0, text.indexOf("/*yian*/")).split("\n").length - 1;
+  }
+  return headerLines;
+}
+
+/**
+ * Strip an inline body's types and build it as a strict async function of `inputs`.
+ *
+ * The `sourceURL` comment names the body's stack frames `yian-code:<nodeId>:<line>:<column>`, and
+ * the strict prologue shares the first line, so frame lines stay body lines plus the header.
+ *
+ * @throws TypeStripError when the body doesn't parse or strip.
+ * @throws SyntaxError when the constructor refuses the stripped body.
+ */
+async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
+  const js = await stripTypes(body);
+  return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
+}
+
+/** Return the 1-based body line of the first `yian-code:<nodeId>` frame in `error`'s stack, else `null`. */
+function bodyLine(error: unknown, nodeId: string): number | null {
+  const stack = error instanceof Error ? error.stack : undefined;
+  if (typeof stack !== "string") return null;
+  const marker = `yian-code:${nodeId}:`;
+  for (const line of stack.split("\n")) {
+    const at = line.indexOf(marker);
+    if (at === -1) continue;
+    const match = /^\d+/.exec(line.slice(at + marker.length));
+    if (match !== null) return Number(match[0]) - headerLineCount();
+  }
+  return null;
+}
+
+/** Return the error a CODE body throws when it reads an input the node doesn't declare. */
+function undeclaredInput(name: string): ReferenceError {
+  return new ReferenceError(`CODE input ${reprText(name)} is not declared`);
+}
+
+/**
+ * Return `record` behind a proxy that throws on a string key the record doesn't hold.
+ *
+ * The keys the runtime itself probes pass: inherited `Object.prototype` members, `then` (promise
+ * resolution), `toJSON` (`JSON.stringify`) and symbols.
+ */
+function inputsProxy(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return new Proxy(record, {
+    get(target, key, receiver) {
+      if (typeof key === "symbol" || key in target || key === "then" || key === "toJSON") {
+        return Reflect.get(target, key, receiver);
+      }
+      throw undeclaredInput(key);
+    },
+  });
+}
+
+/**
+ * A value CODE's own code threw, wrapped so the failure reads `<name>: <message>`.
+ *
+ * A non-`Error` reads as its text form when it is a yian value, else as `String(value)`. The
+ * stack is the thrown error's, so a failure's traceback shows the code's own frames.
+ */
+export class CodeError extends Error {
+  override name = "CodeError";
+  /** The exact value the code threw. */
+  readonly original: unknown;
+
+  /** Wrap `original`, also kept as the `cause`. */
+  constructor(original: unknown) {
+    super(codeErrorMessage(original), { cause: original });
+    this.original = original;
+    if (original instanceof Error) this.stack = original.stack;
+  }
+}
+
+/** Return the text of a value CODE's code threw. */
+function codeErrorMessage(original: unknown): string {
+  if (original instanceof Error) return `${original.name}: ${original.message}`;
+  try {
+    return writeAsText(fromHost(original, "error"));
+  } catch {
+    return markerMessage(original);
+  }
+}
+
 /**
  * Run deterministic code: a file reference or an inline body, both in-process, or a built-in.
  *
  * The one `code:` field is classified by shape at construction, and the mode is stored: text with
  * `classifyCodeSource`, a built-in form as `"builtin"`. A tagged value entry lowers to the built-in
- * identity form. The node never touches the pool: its body returns `new Output(value)`. Running
- * any mode, the built-in included, is not ported yet and comes with `forward`.
+ * identity form. The node never touches the pool: its body returns `new Output(value)`. An inline
+ * body runs in-process, built afresh on each run, and a built-in reads the bound record directly.
  */
 export class CodeNode extends Node {
   readonly kind = NodeKind.CODE;
@@ -204,8 +313,64 @@ export class CodeNode extends Node {
     this.codeLineOrigins = Object.freeze(this.codeLineOrigins.map((origin) => mapOrigin(origin, mapper)!));
   }
 
-  /** The reference, inline and built-in bodies; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (CodeNode) forward is not ported yet (T4-9)`);
+  /**
+   * Return the failure code for one body error: `contract.output` for a result host intake
+   * refuses, else the base's.
+   */
+  override exceptionCode(error: unknown): FailureCode {
+    return error instanceof TypeCheckError ? "contract.output" : super.exceptionCode(error);
+  }
+
+  /**
+   * Return the most precise authored origin for one body error.
+   *
+   * A built-in's is the node's. A result host intake refuses is located in the output contract.
+   * Otherwise the first `yian-code:<id>` frame of what the code threw selects the authored line,
+   * falling back to the whole `code:` origin, then the node's (a thrown non-`Error` has no stack,
+   * and a native error thrown after an `await` has no body frame on Bun).
+   */
+  override exceptionOrigin(error: unknown): OriginRef | null {
+    if (this.mode === "builtin") return super.exceptionOrigin(error);
+    if (error instanceof TypeCheckError) return outputContractOrigin(this.outputContract, error.path);
+    const line = error instanceof CodeError ? bodyLine(error.original, this.id) : null;
+    return selectInlineCodeOrigin(line, {
+      codeOrigin: this.codeOrigin,
+      codeLineOrigins: this.codeLineOrigins,
+      nodeOrigin: this.origin,
+    });
+  }
+
+  /**
+   * Run the code on the bound input record and return its one value.
+   *
+   * The built-in identity returns the record's field as bound. An inline body gets `inputs`, a
+   * frozen host copy (ints as `number`s, big ones as `bigint`s) behind a proxy that throws on an
+   * undeclared name; what it throws rejects as a `CodeError`, and its result goes through host
+   * intake (a top-level `return inputs` returns the record).
+   *
+   * @throws ReferenceError when the built-in's field isn't in the record.
+   * @throws Error when a body returns `undefined`.
+   * @throws TypeCheckError when host intake refuses the result.
+   */
+  override async forward(inputs: Record<string, unknown>): Promise<Output> {
+    const code = this.code;
+    if (typeof code !== "string") {
+      if (!Object.hasOwn(inputs, code.field)) throw undeclaredInput(code.field);
+      return new Output(inputs[code.field]);
+    }
+    if (this.mode === "reference") {
+      throw new Error(`node ${reprText(this.id)} (CodeNode) forward is not ported yet (T4-9)`);
+    }
+    const body = await compileBody(this.id, code);
+    const record = Object.freeze(toHost(inputs as Value) as Record<string, unknown>);
+    const proxy = inputsProxy(record);
+    let result: unknown;
+    try {
+      result = await body(proxy);
+    } catch (error) {
+      throw new CodeError(error);
+    }
+    if (result === undefined) throw new Error("CODE body returned no value; return null for no value");
+    return new Output(fromHost(result === proxy ? record : result, "output"));
   }
 }

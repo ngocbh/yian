@@ -5,12 +5,14 @@
  * Ported: `test_route_derives_skip_closure_without_skip_record`,
  * `test_route_takes_every_edge_matching_else_or_named_handle` (2 rows),
  * `test_route_preserves_dfs_observers_and_existing_fifo_readiness`,
+ * `test_route_skip_join_matches_control_data_ordering_and_wait_semantics`,
  * `test_route_rejects_a_previously_settled_outgoing_edge` (2 rows),
  * `test_route_append_failure_leaves_every_state_coordinate_unchanged`,
  * `test_route_delta_preserves_all_reducer_container_identities`,
  * `test_competing_route_plans_reject_the_second_sequence_before_append`,
  * `test_route_observers_are_fresh_and_isolated_from_prepared_mutation`,
  * `test_route_record_replay_reconstructs_identical_state`,
+ * `test_route_scans_each_touched_head_incoming_adjacency_once`,
  * `test_route_skip_flood_is_iterative_for_a_deep_chain`,
  * `test_success_commits_canonical_value_before_fifo_successors`,
  * `test_success_replay_revalidates_partial_record_contract`,
@@ -89,9 +91,7 @@
  * `decode_pool`) and of `test_terminal_commit_performs_no_materialization_after_append`
  * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`).
  *
- * Later (T4-4 PR 2), routes and failures:
- * `test_route_skip_join_matches_control_data_ordering_and_wait_semantics`,
- * `test_route_scans_each_touched_head_incoming_adjacency_once`, `test_late_sibling_failure_wins`,
+ * Later (T4-4 PR 2), terminal routes and failures: `test_late_sibling_failure_wins`,
  * `test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record`,
  * `test_route_latches_causal_terminal_failure_until_sibling_quiescence`,
  * `test_causal_route_canonicalizes_origin_subclass_for_wire`,
@@ -1270,4 +1270,80 @@ test("a route skip flood is iterative for a deep chain", () => {
   expect(observers[1]).toStrictEqual(new NodeSkipped({ nodeId: "dead-0" }));
   expect(observers.at(-1)).toStrictEqual(new NodeSkipped({ nodeId: `dead-${depth - 1}` }));
   expect(state.ready).toEqual(["chosen"]);
+});
+
+test("a route skip join matches the control, data, ordering and wait semantics", () => {
+  const ids = [
+    "router",
+    "dead-parent",
+    "control-dead",
+    "data-dead",
+    "ordering-dead",
+    "waiting",
+    "optional-ready",
+    "runs-after-ready",
+    "unused",
+  ];
+  const flow = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ...ids.map((id) => [id, func(id)] as const),
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [
+      new Edge("start-router", START_ID, "router"),
+      new Edge("start-control-data", START_ID, "control-dead", { inputGroup: "value" }),
+      new Edge("route-parent", "router", "dead-parent", { sourceHandle: "no" }),
+      new Edge("route-live", "router", "unused", { sourceHandle: "yes" }),
+      new Edge("parent-control", "dead-parent", "control-dead", { sourceHandle: "gate" }),
+      new Edge("parent-data", "dead-parent", "data-dead", { inputGroup: "required" }),
+      new Edge("parent-ordering", "dead-parent", "ordering-dead", { ordering: true }),
+      new Edge("parent-ordering-again", "dead-parent", "ordering-dead", { ordering: true }),
+      new Edge("parent-wait", "dead-parent", "waiting", { inputGroup: "both" }),
+      new Edge("unused-wait", "unused", "waiting", { inputGroup: "both" }),
+      new Edge("parent-optional", "dead-parent", "optional-ready", { optional: true }),
+      new Edge("parent-runs-after", "dead-parent", "runs-after-ready", { optional: true, ordering: true }),
+    ],
+  );
+  const { state, log } = routeInFlight(flow);
+
+  const observers = commitPrepared(log, state, prepareNodeRouted(state, "router", "yes"));
+
+  expect(observers).toStrictEqual(
+    routed("router", "yes", "dead-parent", "control-dead", "data-dead", "ordering-dead"),
+  );
+  expect(state.nodeState.get("waiting")).toBe(NodeState.UNKNOWN);
+  expect(state.edgeState.get("start-control-data")).toBe(NodeState.TAKEN);
+  expect(state.edgeState.get("unused-wait")).toBe(NodeState.UNKNOWN);
+  expect(state.edgeState.get("parent-ordering-again")).toBe(NodeState.SKIPPED);
+  expect(state.ready).toEqual(["optional-ready", "runs-after-ready", "unused"]);
+});
+
+test("a route scans each touched head's incoming adjacency once", () => {
+  const edges = [new Edge("start-router", START_ID, "router")];
+  for (let index = 0; index < 64; index++) {
+    edges.push(new Edge(`route-${index}`, "router", "head", { sourceHandle: `no-${index}` }));
+  }
+  edges.push(new Edge("route-live", "router", "head", { sourceHandle: "yes" }));
+  const flow = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["router", func("router")],
+      ["head", func("head")],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    edges,
+  );
+  const { state } = routeInFlight(flow);
+  const incoming = flow.incoming.bind(flow);
+  const scans = new Map<string, number>();
+  flow.incoming = (nodeId) => {
+    scans.set(nodeId, (scans.get(nodeId) ?? 0) + 1);
+    return incoming(nodeId);
+  };
+
+  const prepared = prepareNodeRouted(state, "router", "yes");
+
+  expect([...scans]).toEqual([["head", 1]]);
+  expect(routePlan(prepared).delta.newlyReadyIds).toEqual(["head"]);
 });

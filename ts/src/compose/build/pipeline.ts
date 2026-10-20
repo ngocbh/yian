@@ -85,9 +85,9 @@ import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.t
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
-import { bindingProducers } from "../edges/producers.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
+import { bindingProducers } from "../edges/producers.ts";
 import { CallDescriptor } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";

@@ -157,7 +157,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        code: return inputs['n'] + 1
+        code: return inputs['n'] + 1n
     output:
       n: \${b.output}
       d: 2026-01-01

@@ -12,7 +12,9 @@
  * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`; through `assembleText`, the
  * load halves of `test_flow_result_follows_the_output_shape` (the END's mode and names),
  * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
- * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type).
+ * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type). Changed: Python's
+ * three rows check only the run output, so the TS load halves check the END's mode and names, or
+ * the driver's output type, instead.
  *
  * Changed: the child-signature rows build the child with `handChild` (a `step` producer typed
  * `str`), where Python loads a flow; the empty-record row compares with `sameOutputContract`
@@ -359,7 +361,7 @@ nodes:
           n: \${input.count}
         output: int
         code: |
-          return inputs["n"] + 1
+          return inputs["n"] + 1n
     output:
       count: \${bump.output}
 output: \${lp.output}

@@ -1114,7 +1114,7 @@ nodes:
   producer:
     kind: code
     code: |
-      return None
+      return null
     output: "None"
 output: \${consumer.output}
 `);
@@ -1918,7 +1918,7 @@ test.each([
       inner:
         kind: code
         code: |
-          return {"n": inputs["n"] + 1}
+          return {"n": inputs["n"] + 1n}
         input:
           n: \${input.n}
         output:

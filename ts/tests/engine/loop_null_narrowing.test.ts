@@ -218,7 +218,7 @@ nodes:
         input:
           n: \${input.n}
         output: int
-        code: return inputs["n"] + 1
+        code: return inputs["n"] + 1n
     output:
       token: \${input.token}
       n: \${step.output}

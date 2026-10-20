@@ -68,6 +68,9 @@
  *   whose shutdown could fail; replaced by the event callback row, where a worker rejecting during
  *   the drain never replaces the callback error.
  *
+ * TS-only: each failing callback row also checks the `RunStopped` (`callback`) the stop records,
+ * naming the nodes in flight when the callback failed.
+ *
  * Not ported: `test_submit_failure_is_exact_and_leaves_the_started_node_recoverable`: TS has no
  * executor, so nothing can refuse a submission.
  *
@@ -101,6 +104,7 @@ import {
   NodeSucceededRecord,
   RecordEnvelope,
   type RunRecord,
+  RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
@@ -959,10 +963,11 @@ describe("host callbacks and drains", () => {
     expect(built.signal.reason).toBe(expected);
     expect(inFlight(state)).toEqual(["blocked"]);
     expect(state.result).toBeNull();
-    // Nothing is appended after the trigger's success, whose observer threw.
-    const last = log.records().at(-1)!.record;
-    expect(last).toBeInstanceOf(NodeSucceededRecord);
-    expect((last as NodeSucceededRecord).nodeId).toBe("trigger");
+    // Only the stop is appended after the trigger's success, whose observer threw.
+    const [succeeded, stopped] = log.records().slice(-2).map((envelope) => envelope.record);
+    expect(succeeded).toBeInstanceOf(NodeSucceededRecord);
+    expect((succeeded as NodeSucceededRecord).nodeId).toBe("trigger");
+    expect(stopped).toEqual(new RunStoppedRecord("callback", "observer failed", ["blocked"]));
   });
 
   test("started observer failure prevents submission of that node", async () => {
@@ -976,6 +981,7 @@ describe("host callbacks and drains", () => {
     expect(await rejected(dispatcher(state, log, 1, { onEvent }).run())).toBe(expected);
     expect(executed).toEqual([]);
     expect(inFlight(state)).toEqual(["work"]);
+    expect(log.records().at(-1)!.record).toEqual(new RunStoppedRecord("callback", "started observer failed", ["work"]));
   });
 
   test("node failure drains sibling and discards late stream chunks", async () => {
@@ -1007,5 +1013,6 @@ describe("host callbacks and drains", () => {
     expect(await rejected(dispatcher(state, log, numWorkers, { onStream }).run())).toBe(expected);
     expect(inFlight(state)).toEqual(["stream"]);
     expect(anyFailure(log)).toBe(false);
+    expect(log.records().at(-1)!.record).toEqual(new RunStoppedRecord("callback", "stream callback failed", ["stream"]));
   });
 });

@@ -124,11 +124,12 @@ function capabilityFault(error: unknown): CapabilityFault {
 }
 
 /**
- * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
- * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
- * `text`, is ignored. Local copy of `memory/session.ts`'s `addNote`.
+ * @internal Append the note `text()` to `error`'s own `notes` array, creating it when absent
+ * (Python's `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a
+ * throwing `text`, is ignored. Local copy of `memory/session.ts`'s `addNote`; the engine notes a
+ * refused stop record with it.
  */
-function addNote(error: unknown, text: () => string): void {
+export function addNote(error: unknown, text: () => string): void {
   try {
     if (typeof error !== "object" || error === null) return;
     const target = error as { notes?: unknown };

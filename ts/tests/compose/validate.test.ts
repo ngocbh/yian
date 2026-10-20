@@ -13,7 +13,8 @@
  * `test_reject_cycles_frames_an_unlocated_host_at_its_synth_node`,
  * `test_reject_cycles_alias_keeps_other_members`,
  * `test_reject_cycles_keeps_a_synth_node_read_inside_the_cycle`,
- * `test_reject_cycles_ignores_synth_out_edges_outside_the_component`); and the parse rows
+ * `test_reject_cycles_ignores_synth_out_edges_outside_the_component`);
+ * `test_check_wiring_parity_moved` and `test_validate_human_questions_diag_has_range`; and the parse rows
  * `test_node_local_asserts_carry_ranges`, `test_per_input_param_carries_ranges`,
  * `test_input_named_like_field_no_collision` (through `nodesOf`),
  * `test_unknown_top_level_key_lists_authored_names` (through `fileOf`) and
@@ -33,8 +34,7 @@
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
  * `test_validate_references_diag_case_on_form_locates_at_on_line`,
  * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when`,
- * `test_validate_references_diag_case_then_call_locates_at_then_line`),
- * `test_check_wiring_parity_moved` and `test_validate_human_questions_diag_has_range`.
+ * `test_validate_references_diag_case_then_call_locates_at_then_line`).
  * Later (T3-19): `test_check_call_map_types_is_owned_by_call_validation`,
  * `test_check_loop_type_contract_moved`,
  * `test_check_loop_type_contract_tolerates_a_loop_without_child_inputs` and
@@ -45,11 +45,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { Edge } from "../../src/compile/model.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
-import { siteKey } from "../../src/compose/nodes/base.ts";
+import { BuildContext, BuildResult, siteKey } from "../../src/compose/nodes/base.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { rejectCycles } from "../../src/compose/validate/cycles.ts";
+import { validateHumanQuestions } from "../../src/compose/validate/human_questions.ts";
+import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
+import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembledWith,
@@ -239,6 +243,37 @@ describe("rejectCycles", () => {
     const error = loadError(() => rejectCycles(edges, new Set(["g", "c", "log"]), aliasOptions));
     expect(error.message).toBe('flow has a cycle involving ["g"]; flows must be acyclic');
   });
+});
+
+test("checkWiringParity anchors a parity failure at the input: mapping", () => {
+  // An orphan wiring key with no matching param fails parity; the error anchors on the node's
+  // `input:` mapping span (else its node range), and the frame carries that range.
+  const { node, wiring } = new CodeDescriptor({ id: "n", code: "m:f", inputs: { x: "${input.x}" } }).build(
+    new BuildContext({ registry: new Map() }),
+  );
+  const range = new SourceRange(3, 5, 4, 20);
+  const result = new BuildResult({ node, wiring, fieldRanges: new Map([[siteKey("field", "inputs"), range]]) });
+  const error = loadError(() =>
+    checkWiringParity(new Map([["n", result]]), new Map([["n", new Map([...wiring, ["orphan", "${input.y}"]])]]), {
+      diagnostics: rangeDiagnostics(),
+    }),
+  );
+  expect(error.message).toContain("key parity");
+  expect(error.diagnostic.frames[0]!.range).toEqual(range);
+});
+
+test("validateHumanQuestions anchors an invalid literal list at the questions: field", () => {
+  // An empty list is refused ("expected 1..4 questions, got 0"); the frame carries the gate's
+  // `questions:` field span.
+  const range = new SourceRange(5, 5, 6, 20);
+  const result = new BuildResult({
+    node: new HumanInputNode("ask", { questions: [] }),
+    wiring: new Map(),
+    fieldRanges: new Map([[siteKey("field", "questions"), range]]),
+  });
+  const error = loadError(() => validateHumanQuestions(new Map([["ask", result]]), { diagnostics: rangeDiagnostics() }));
+  expect(error.message).toContain("questions");
+  expect(error.diagnostic.frames[0]!.range).toEqual(range);
 });
 
 describe("parse ranges", () => {

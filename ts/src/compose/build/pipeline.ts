@@ -107,6 +107,8 @@ import {
 // T3-18 imports
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
+import { validateHumanQuestions } from "../validate/human_questions.ts";
+import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
 // T3-20 imports
 
@@ -2120,8 +2122,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
-//          validateHumanQuestions, checkReservedSources (1).
+//   T3-18  checkWrittenValues, stampToolInputTypes, validateReferences, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
 //   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
 //          checkTypedInputs, checkCallMapTypes, checkLoopTypeContract, checkTypedOutputs,
@@ -2165,13 +2166,6 @@ function stampToolInputTypes(
   options: { narrowing?: Narrowing | null; typeFn?: TypeFn | null } = {},
 ): void {}
 
-/** Python's `compose.validate.wiring_parity.check_wiring_parity`; not ported yet. */
-function checkWiringParity(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): void {}
-
 /** Python's `compose.validate.references.validate_references`; not ported yet. */
 function validateReferences(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -2188,12 +2182,6 @@ function validateReferences(
     resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
-): void {}
-
-/** Python's `compose.validate.human_questions.validate_human_questions`; not ported yet. */
-function validateHumanQuestions(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
 ): void {}
 
 /** Python's `compose.validate.reserved_sources.check_reserved_sources`; not ported yet. */

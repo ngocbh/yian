@@ -16,8 +16,21 @@
 // `test_openai_api_key_setup_saves_connection_settings`,
 // `test_subscription_chosen_at_the_prompt_refuses_settings`,
 // `test_openai_listing_failure_is_scrubbed_of_header_values`, `test_model_answers_builds_and_invokes_once`,
-// `test_model_answers_mutes_the_unknown_model_warning`, `test_model_answers_scrubs_the_azure_ad_token` and
-// `test_model_answers_sends_and_scrubs_connection_headers`.
+// `test_model_answers_mutes_the_unknown_model_warning`, `test_model_answers_scrubs_the_azure_ad_token`,
+// `test_model_answers_sends_and_scrubs_connection_headers`,
+// `test_api_key_provider_setup_saves_key_and_model`, `test_api_key_setup_keeps_another_default`,
+// `test_api_key_env_option_names_the_variable`,
+// `test_unlisted_model_is_checked_with_one_reply`, `test_listing_failure_falls_back_to_one_reply`,
+// `test_listing_failure_on_a_terminal_asks_for_a_model_name`, `test_base_url_variable_skips_the_listing`,
+// `test_vertex_switch_does_not_skip_the_google_listing`,
+// `test_base_url_variable_on_a_terminal_asks_for_a_model_name`, `test_ollama_setup_saves_model_only`,
+// `test_vllm_key_is_optional`, `test_vllm_named_key_variable_is_required`,
+// `test_hidden_prompt_reads_the_key`, `test_hidden_prompt_empty_answer_means_no_vllm_key`,
+// `test_noninteractive_setup_requires_model`, `test_azure_setup_saves_endpoint_key_and_deployment`,
+// `test_azure_setup_requires_the_api_version`,
+// `test_provider_setup_sends_headers_to_listing_and_reply_check`,
+// `test_saving_again_without_settings_keeps_none`, `test_bare_header_reads_a_hidden_prompt`,
+// `test_headers_need_a_vllm_key` and `test_listing_failure_text_is_scrubbed_of_header_values`.
 // Dropped: `test_model_answers_reports_a_missing_extra` (TS yian has no extras to install).
 // Added here, since Python left them to the `cli` conformance cases or didn't test them: `yian
 // providers`, `yian config check` (including `_config_errors`'s rows), the rest of `yian models`
@@ -27,8 +40,10 @@
 // the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule,
 // the OpenAI sign-in picker's SSH initial, OpenAI's hidden key and header prompts and their
 // refusals, a listing with no text model, SIGINT during a picker, `openBrowser`'s opener
-// commands, and the reply check's failure text (whitespace folded, cut at 200 characters, a thrown
-// non-`Error`), its 30 s deadline and a stop during it.
+// commands, the reply check's failure text (whitespace folded, cut at 200 characters, a thrown
+// non-`Error`), its 30 s deadline and a stop during it, and in provider setup the model picker, an
+// empty listing, the Azure prompts, an empty or cancelled model name, `ANTHROPIC_API_URL`, and
+// SIGINT during the listing or the reply check.
 // Python's monkeypatched `list_models`, `OpenAIAuth`, `create_llm_client`, `_choose`, questionary and
 // `webbrowser` are `deps` fakes here (a fake terminal, a fake chat model, a recording opener and
 // `launch`), so no test reaches a real host or opens a browser.
@@ -54,6 +69,7 @@ import {
   providers,
 } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
+import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
@@ -65,7 +81,7 @@ import {
   validateOrganization,
 } from "../../src/llm_clients/connection_settings.ts";
 import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
-import { ModelListError } from "../../src/llm_clients/model_list.ts";
+import { type ListModelsOptions, ModelListError } from "../../src/llm_clients/model_list.ts";
 import { type Event, Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { lockFile, virtualScheduler } from "../../src/platform.ts";
@@ -1641,6 +1657,496 @@ describe("modelAnswers", () => {
     while (fake.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
     stop.abort(reason);
     await expect(checking).rejects.toBe(reason);
+  });
+});
+
+/**
+ * Python's `checks`: `setupAuth` with a fake `listModels` and a fake `chatModel`. The listing
+ * records `[provider, apiKey, baseUrl]`, the headers and the signal of each call, then waits for
+ * its signal when `wait` is set, throws `models` when it is an error, or answers it. Each reply
+ * check's config is in `chat.built`; `answers()` gives `[provider, model, api_key, base_url]` per
+ * check and `answerHeaders()` the headers.
+ */
+function checks() {
+  const setup = setupAuth();
+  const chat = fakeChatModel();
+  const fake = {
+    models: ["m1", "m2"] as readonly string[] | Error,
+    wait: false,
+    listings: [] as [unknown, unknown, unknown][],
+    listingHeaders: [] as Record<string, string>[],
+    listingSignals: [] as (AbortSignal | undefined)[],
+  };
+  const listModels = (async (provider: unknown, options: ListModelsOptions = {}) => {
+    fake.listings.push([provider, options.apiKey ?? null, options.baseUrl ?? null]);
+    fake.listingHeaders.push({ ...options.headers });
+    fake.listingSignals.push(options.signal);
+    if (fake.wait) {
+      const signal = options.signal!;
+      await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }
+    if (fake.models instanceof Error) throw fake.models;
+    return fake.models;
+  }) as NonNullable<AuthDeps["listModels"]>;
+  const answers = () =>
+    chat.built.map(({ config }) => [config["provider"], config["model"], config["api_key"] ?? null, config["base_url"] ?? null]);
+  const answerHeaders = () => chat.built.map(({ config }) => config["headers"] ?? {});
+  const deps: AuthDeps = { ...setup.deps, listModels, chatModel: chat.chatModel };
+  return { ...setup, deps, fake, chat, answers, answerHeaders };
+}
+
+describe("auth provider setup", () => {
+  /** Run `yian auth provider options` on `c`'s store and environment, `deps` overriding. */
+  async function runAuth(
+    c: ReturnType<typeof checks>,
+    provider: string,
+    options: Record<string, OptionValue> = {},
+    deps: AuthDeps = {},
+  ) {
+    const io = fakeIo({ env: c.env });
+    const result = await run(auth, authArgs(provider, options), io, { ...c.deps, ...deps });
+    return { ...result, output: result.out + result.err };
+  }
+
+  const MODEL = { kind: "text", label: "Model:", secret: false };
+
+  // Python: test_api_key_provider_setup_saves_key_and_model.
+  test.each(
+    Object.keys(PROVIDER_API_KEY_ENV)
+      .filter((name) => !["openai", "azure", "ollama", "vllm"].includes(name))
+      .sort(),
+  )("%s setup saves the key and model", async (provider) => {
+    const c = checks();
+    c.env[PROVIDER_API_KEY_ENV[provider]!] = "private-key";
+    const result = await runAuth(c, provider, { model: "m1" });
+    expect(result).toMatchObject({
+      code: 0,
+      out: `Saved ${provider} login (api-key) with model m1\nDefault provider: ${provider}\n`,
+      err: "",
+    });
+    const selected = c.store.selection(provider)!;
+    expect([selected.method, selected.model]).toEqual(["api_key", "m1"]);
+    expect(((await c.store.credentials(provider, selected.credentialId)) as ApiKeyCredentials).apiKey).toBe(
+      "private-key",
+    );
+    expect(c.store.read().defaultProvider).toBe(provider);
+    expect(c.fake.listings).toEqual([[provider, "private-key", null]]);
+    expect(c.fake.listingSignals[0]).toBeInstanceOf(AbortSignal);
+    expect(c.answers()).toEqual([]);
+  });
+
+  // Python: test_api_key_setup_keeps_another_default.
+  test("API-key setup keeps another default", async () => {
+    const c = checks();
+    await c.store.save("openai", new ApiKeyCredentials("private-other"), "gpt-test");
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    const result = await runAuth(c, "anthropic", { model: "m2" });
+    expect(result.code).toBe(0);
+    expect(c.store.selection("anthropic")?.model).toBe("m2");
+    expect(c.store.read().defaultProvider).toBe("openai");
+    expect(result.out).toContain("Default provider: openai (switch with 'yian auth anthropic --default')\n");
+  });
+
+  // Python: test_api_key_env_option_names_the_variable.
+  test("--api-key-env names the key variable", async () => {
+    const c = checks();
+    let result = await runAuth(c, "anthropic", { model: "m1" });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "Set ANTHROPIC_API_KEY before API-key setup, or run in an interactive terminal\n",
+    });
+    expect(c.fake.listings).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
+
+    c.env["MY_KEY"] = "private-key";
+    result = await runAuth(c, "anthropic", { model: "m1", "api-key-env": "MY_KEY" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([["anthropic", "private-key", null]]);
+  });
+
+  // Python: test_unlisted_model_is_checked_with_one_reply.
+  test("an unlisted model is checked with one reply", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = ["claude-x-20250101"];
+    let result = await runAuth(c, "anthropic", { model: "claude-x" });
+    expect(result.code).toBe(0);
+    expect(c.answers()).toEqual([["anthropic", "claude-x", "private-key", null]]);
+    expect(c.store.selection("anthropic")?.model).toBe("claude-x");
+
+    const before = readFileSync(c.path);
+    c.chat.failure = named("NotFoundError", "model not found");
+    result = await runAuth(c, "anthropic", { model: "claude-y" });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "The model didn't answer: NotFoundError: model not found; the previous login is unchanged\n",
+    });
+    expect(readFileSync(c.path)).toEqual(before);
+  });
+
+  // Python: test_listing_failure_falls_back_to_one_reply.
+  test("a listing failure falls back to one reply", async () => {
+    const c = checks();
+    const previous = await c.store.save("anthropic", new ApiKeyCredentials("old-key"), "claude-old");
+    const before = readFileSync(c.path);
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = new ModelListError("HTTP 401");
+    c.chat.failure = named("AuthenticationError", "invalid key");
+    const result = await runAuth(c, "anthropic", { model: "claude-x" });
+    expect(result.code).toBe(1);
+    expect(c.answers()).toEqual([["anthropic", "claude-x", "private-key", null]]);
+    expect(readFileSync(c.path)).toEqual(before);
+    expect(c.store.selection()).toEqual(previous);
+    expect(c.store.read().defaultProvider).toBe("anthropic");
+    expect(result.output).not.toContain("private-");
+    expect(result.output).not.toContain("old-key");
+  });
+
+  // Python: test_listing_failure_on_a_terminal_asks_for_a_model_name.
+  test("a listing failure on a terminal asks for a model name", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = new ModelListError("can't reach host");
+    const fake = fakeTerminal(["claude-x"]);
+    const result = await runAuth(c, "anthropic", {}, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith("Couldn't list the anthropic models (can't reach host); type a model name\n");
+    expect(fake.asked).toEqual([MODEL]);
+    expect(c.answers()).toEqual([["anthropic", "claude-x", "private-key", null]]);
+    expect(c.store.selection("anthropic")?.model).toBe("claude-x");
+  });
+
+  test("an empty listing on a terminal asks for a model name", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = [];
+    const fake = fakeTerminal(["claude-x"]);
+    const result = await runAuth(c, "anthropic", {}, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith("Couldn't list the anthropic models (none were returned); type a model name\n");
+  });
+
+  test("a listed model is chosen on a terminal, starting at the first", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    const fake = fakeTerminal(["m2"]);
+    const result = await runAuth(c, "anthropic", {}, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([{ kind: "choice", label: "Model:", choices: ["m1", "m2"], initial: "m1" }]);
+    expect(c.answers()).toEqual([]);
+    expect(c.store.selection("anthropic")?.model).toBe("m2");
+  });
+
+  test.each<[string, string | null]>([
+    ["an empty", "  "],
+    ["a cancelled", null],
+  ])("%s model name saves nothing", async (_, answer) => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = [];
+    const result = await runAuth(c, "anthropic", {}, { terminal: fakeTerminal([answer]).terminal });
+    expect(result).toMatchObject({ code: 1, err: `${CANCELLED}\n` });
+    expect(c.answers()).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
+  });
+
+  // Python: test_base_url_variable_skips_the_listing.
+  test.each([
+    ["anthropic", "ANTHROPIC_BASE_URL"],
+    ["anthropic", "ANTHROPIC_API_URL"],
+    ["google", "GOOGLE_GEMINI_BASE_URL"],
+  ])("%s with %s set skips the listing", async (provider, variable) => {
+    const c = checks();
+    c.env[PROVIDER_API_KEY_ENV[provider]!] = "private-key";
+    c.env[variable] = "https://gateway.example.com";
+    const result = await runAuth(c, provider, { model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([]);
+    expect(c.answers()).toEqual([[provider, "m1", "private-key", null]]);
+    expect(c.store.selection(provider)?.model).toBe("m1");
+  });
+
+  // Python: test_vertex_switch_does_not_skip_the_google_listing.
+  test("the Vertex switch doesn't skip the Google listing", async () => {
+    const c = checks();
+    c.env["GOOGLE_API_KEY"] = "private-key";
+    c.env["GOOGLE_GENAI_USE_VERTEXAI"] = "true";
+    const result = await runAuth(c, "google", { model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([["google", "private-key", null]]);
+    expect(c.answers()).toEqual([]);
+    expect(c.store.selection("google")?.model).toBe("m1");
+  });
+
+  // Python: test_base_url_variable_on_a_terminal_asks_for_a_model_name.
+  test("a base-URL variable on a terminal asks for a model name", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.env["ANTHROPIC_BASE_URL"] = "https://gateway.example.com";
+    const fake = fakeTerminal(["claude-x"]);
+    const result = await runAuth(c, "anthropic", {}, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith(
+      "ANTHROPIC_BASE_URL is set, so runs use another host than the anthropic listing; type a model name\n",
+    );
+    expect(fake.asked).toEqual([MODEL]);
+    expect(c.fake.listings).toEqual([]);
+    expect(c.answers()).toEqual([["anthropic", "claude-x", "private-key", null]]);
+  });
+
+  // Python: test_ollama_setup_saves_model_only.
+  test("ollama setup saves the model only", async () => {
+    const c = checks();
+    c.env["OLLAMA_BASE_URL"] = "http://localhost:9999";
+    c.fake.models = ["llama3"];
+    const result = await runAuth(c, "ollama", { model: "llama3" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([["ollama", null, "http://localhost:9999"]]);
+    expect(c.answers()).toEqual([]);
+    const selected = c.store.selection("ollama")!;
+    expect([selected.method, selected.model]).toEqual(["none", "llama3"]);
+    expect(result.out).toContain("Saved ollama login (none) with model llama3\n");
+  });
+
+  // Python: test_vllm_key_is_optional.
+  test("vllm's key is optional", async () => {
+    const c = checks();
+    let result = await runAuth(c, "vllm", { model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([["vllm", null, null]]);
+    expect(c.store.selection("vllm")?.method).toBe("none");
+
+    c.env["VLLM_API_KEY"] = "private-key";
+    c.env["VLLM_BASE_URL"] = "https://vllm.example.com/v1";
+    result = await runAuth(c, "vllm", { model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings.at(-1)).toEqual(["vllm", "private-key", "https://vllm.example.com/v1"]);
+    expect(c.store.selection("vllm")?.method).toBe("api_key");
+    expect(result.output).not.toContain("private-");
+  });
+
+  // Python: test_vllm_named_key_variable_is_required.
+  test("a vllm key variable named by --api-key-env is required", async () => {
+    const c = checks();
+    const result = await runAuth(c, "vllm", { model: "m1", "api-key-env": "MY_KEY" });
+    expect(result).toMatchObject({ code: 1, err: "Set MY_KEY before API-key setup, or run in an interactive terminal\n" });
+    expect(c.fake.listings).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
+  });
+
+  // Python: test_hidden_prompt_reads_the_key.
+  test("a hidden prompt reads the key", async () => {
+    const c = checks();
+    let fake = fakeTerminal(["private-key"]);
+    let result = await runAuth(c, "anthropic", { model: "m1" }, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([{ kind: "text", label: "anthropic API key:", secret: true }]);
+    expect(c.fake.listings).toEqual([["anthropic", "private-key", null]]);
+    expect(c.store.selection("anthropic")?.method).toBe("api_key");
+
+    fake = fakeTerminal([null]);
+    result = await runAuth(c, "anthropic", { model: "m2" }, { terminal: fake.terminal });
+    expect(result).toMatchObject({ code: 1, err: `${CANCELLED}\n` });
+    expect(c.store.selection("anthropic")?.model).toBe("m1");
+  });
+
+  // Python: test_hidden_prompt_empty_answer_means_no_vllm_key.
+  test("an empty hidden-prompt answer means no vllm key", async () => {
+    const c = checks();
+    let fake = fakeTerminal([""]);
+    let result = await runAuth(c, "vllm", { model: "m1" }, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([{ kind: "text", label: "vllm API key (leave empty for none):", secret: true }]);
+    expect(c.store.selection("vllm")?.method).toBe("none");
+
+    fake = fakeTerminal([""]);
+    result = await runAuth(c, "vllm", { model: "m2", "api-key-env": "MY_KEY" }, { terminal: fake.terminal });
+    expect(result).toMatchObject({ code: 1, err: "Authentication cancelled; no API key was supplied\n" });
+    expect(fake.asked).toEqual([{ kind: "text", label: "vllm API key:", secret: true }]);
+    expect(c.store.selection("vllm")?.model).toBe("m1");
+  });
+
+  // Python: test_noninteractive_setup_requires_model.
+  test("non-interactive setup requires --model", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    for (const provider of ["anthropic", "ollama"]) {
+      const result = await runAuth(c, provider);
+      expect(result).toMatchObject({
+        code: 1,
+        err: "Authentication needs --model when no interactive terminal is available\n",
+      });
+    }
+    expect(c.fake.listings).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
+  });
+
+  // Python: test_azure_setup_saves_endpoint_key_and_deployment.
+  test("azure setup saves the endpoint, key and deployment", async () => {
+    const c = checks();
+    c.env["AZURE_OPENAI_API_KEY"] = "private-key";
+    c.env["OPENAI_API_VERSION"] = "2025-03-01-preview";
+    const endpoint = "https://r.openai.azure.com/";
+    let result = await runAuth(c, "azure", { endpoint, model: "dep" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([]);
+    expect(c.answers()).toEqual([["azure", "dep", "private-key", endpoint]]);
+    const selected = c.store.selection("azure")!;
+    expect([selected.endpoint, selected.model, selected.method]).toEqual([endpoint, "dep", "api_key"]);
+    expect(result.output).not.toContain("private-");
+
+    const before = readFileSync(c.path);
+    result = await runAuth(c, "azure", { model: "dep" });
+    expect(result).toMatchObject({ code: 1, err: "Authentication needs --endpoint when no interactive terminal is available\n" });
+    result = await runAuth(c, "azure", { endpoint });
+    expect(result).toMatchObject({ code: 1, err: "Authentication needs --model when no interactive terminal is available\n" });
+    result = await runAuth(c, "azure", { endpoint: "http://r.example.com", model: "dep" });
+    expect(result.code).toBe(1);
+    expect(result.err).toStartWith("Invalid Azure endpoint: ");
+    expect(c.answers()).toHaveLength(1);
+    expect(c.fake.listings).toEqual([]);
+    expect(readFileSync(c.path)).toEqual(before);
+  });
+
+  test("azure setup asks for the endpoint and deployment on a terminal", async () => {
+    const c = checks();
+    c.env["AZURE_OPENAI_API_KEY"] = "private-key";
+    c.env["OPENAI_API_VERSION"] = "2025-03-01-preview";
+    const endpoint = "https://r.openai.azure.com/";
+    const fake = fakeTerminal([` ${endpoint} `, "dep"]);
+    const result = await runAuth(c, "azure", {}, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([
+      { kind: "text", label: "Azure OpenAI endpoint (https://<resource>.openai.azure.com/):", secret: false },
+      { kind: "text", label: "Deployment name:", secret: false },
+    ]);
+    expect(c.answers()).toEqual([["azure", "dep", "private-key", endpoint]]);
+    expect(c.store.selection("azure")?.endpoint).toBe(endpoint);
+  });
+
+  // Python: test_azure_setup_requires_the_api_version.
+  test("azure setup requires the API version", async () => {
+    const c = checks();
+    const result = await runAuth(c, "azure", { endpoint: "https://r.openai.azure.com/", model: "dep" });
+    expect(result).toMatchObject({ code: 1, err: "Azure needs OPENAI_API_VERSION set to its API version (runs read it too)\n" });
+    expect(result.output).not.toContain("AZURE_OPENAI_API_KEY");
+    expect(c.answers()).toEqual([]);
+    expect(c.fake.listings).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
+  });
+
+  // Python: test_provider_setup_sends_headers_to_listing_and_reply_check.
+  test("provider setup sends the headers to the listing and the reply check", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.env["GW_TOKEN"] = "private-gw";
+    const result = await runAuth(c, "anthropic", { header: ["X-G=GW_TOKEN"], model: "m" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listingHeaders).toEqual([{ "X-G": "private-gw" }]);
+    expect(c.answerHeaders()).toEqual([{ "X-G": "private-gw" }]);
+    const selected = c.store.selection("anthropic")!;
+    expect(selected.headerNames).toEqual(["X-G"]);
+    expect(selected.organization).toBeNull();
+    const credentials = (await c.store.credentials("anthropic", selected.credentialId)) as ApiKeyCredentials;
+    expect(credentials.headers).toEqual([["X-G", "private-gw"]]);
+    expect(result.output).not.toContain("private-");
+  });
+
+  // Python: test_saving_again_without_settings_keeps_none.
+  test("saving again without settings keeps none", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.env["GW_TOKEN"] = "private-gw";
+    expect((await runAuth(c, "anthropic", { header: ["X-G=GW_TOKEN"], model: "m1" })).code).toBe(0);
+    expect((await runAuth(c, "anthropic", { model: "m1" })).code).toBe(0);
+    const selected = c.store.selection("anthropic")!;
+    expect(selected.headerNames).toEqual([]);
+    expect(((await c.store.credentials("anthropic", selected.credentialId)) as ApiKeyCredentials).headers).toEqual([]);
+    expect(c.fake.listingHeaders.at(-1)).toEqual({});
+  });
+
+  // Python: test_bare_header_reads_a_hidden_prompt.
+  test("a bare header reads a hidden prompt", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    let fake = fakeTerminal(["private-gw"]);
+    let result = await runAuth(c, "anthropic", { header: ["X-G"], model: "m1" }, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(fake.asked).toEqual([{ kind: "text", label: "X-G header value:", secret: true }]);
+    expect(c.fake.listingHeaders).toEqual([{ "X-G": "private-gw" }]);
+    expect(c.store.selection("anthropic")?.headerNames).toEqual(["X-G"]);
+    expect(result.output).not.toContain("private-");
+
+    fake = fakeTerminal(["private bad "]);
+    result = await runAuth(c, "anthropic", { header: ["X-G"], model: "m2" }, { terminal: fake.terminal });
+    expect(result.code).toBe(1);
+    expect(result.err).toStartWith("Invalid --header: ");
+    expect(result.err).toContain("X-G");
+    expect(result.output).not.toContain("private");
+    expect(c.store.selection("anthropic")?.model).toBe("m1");
+  });
+
+  // Python: test_headers_need_a_vllm_key.
+  test("headers need a vllm key", async () => {
+    const c = checks();
+    c.env["GW_TOKEN"] = "private-gw";
+    let result = await runAuth(c, "vllm", { header: ["X-G=GW_TOKEN"], model: "m1" });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "Set VLLM_API_KEY before API-key setup, or run in an interactive terminal\n",
+    });
+    expect(c.fake.listings).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
+
+    c.env["VLLM_API_KEY"] = "private-key";
+    c.env["VLLM_BASE_URL"] = "https://vllm.example.com/v1";
+    result = await runAuth(c, "vllm", { header: ["X-G=GW_TOKEN"], model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.store.selection("vllm")?.headerNames).toEqual(["X-G"]);
+  });
+
+  // Python: test_listing_failure_text_is_scrubbed_of_header_values.
+  test("the listing failure text is scrubbed of header values", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.env["GW_TOKEN"] = "gwvalue7";
+    c.fake.models = new ModelListError("rejected gwvalue7");
+    const fake = fakeTerminal(["claude-x"]);
+    const result = await runAuth(c, "anthropic", { header: ["X-G=GW_TOKEN"] }, { terminal: fake.terminal });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("(rejected [REDACTED])");
+    expect(result.output).not.toContain("gwvalue7");
+  });
+
+  test("a SIGINT during the reply check cancels the setup and saves nothing", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.chat.hang = true;
+    const signals = new EventEmitter();
+    const io = fakeIo({ env: c.env });
+    const running = auth(authArgs("anthropic", { model: "claude-x" }), io.io, { ...c.deps, signals });
+    while (c.chat.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    signals.emit("SIGINT");
+    expect({ code: await running, out: io.out(), err: io.err() }).toEqual({ code: 1, out: "", err: `${CANCELLED}\n` });
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(existsSync(c.path)).toBe(false);
+  });
+
+  test("a SIGINT during the listing cancels the setup before any prompt and saves nothing", async () => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.wait = true;
+    const signals = new EventEmitter();
+    const fake = fakeTerminal([]);
+    const io = fakeIo({ env: c.env });
+    const running = auth(authArgs("anthropic"), io.io, { ...c.deps, terminal: fake.terminal, signals });
+    while (c.fake.listings.length === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    signals.emit("SIGINT");
+    expect({ code: await running, out: io.out(), err: io.err() }).toEqual({ code: 1, out: "", err: `${CANCELLED}\n` });
+    expect(c.fake.listingSignals[0]?.aborted).toBe(true);
+    expect(fake.asked).toEqual([]);
+    expect(c.answers()).toEqual([]);
+    expect(existsSync(c.path)).toBe(false);
   });
 });
 

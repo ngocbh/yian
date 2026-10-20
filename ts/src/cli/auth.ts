@@ -657,9 +657,84 @@ export async function modelAnswers(
   return null;
 }
 
-/** Read a provider's key, endpoint, and model, check the model, and save the login. Not ported yet. */
-async function setupProvider(..._args: unknown[]): Promise<void> {
-  throw new Error("not ported yet");
+/**
+ * Read a provider's key, endpoint, and model, check the model, and save the login.
+ *
+ * A model in the provider's listing is accepted as is. Any other model, every Azure deployment, and
+ * every model when a variable in `ELSEWHERE_ENV` sends runs to another host, must answer one short
+ * prompt. vLLM's key is optional unless `apiKeyEnv` names its variable or headers are given, since
+ * headers are sent only beside a key. The listing and the reply check send the headers, which are
+ * saved with the key.
+ *
+ * @throws {AuthError} A value is missing or invalid, or the model did not answer.
+ */
+async function setupProvider(
+  store: AuthStore,
+  provider: string,
+  model: string | undefined,
+  apiKeyEnv: string | undefined,
+  endpoint: string | undefined,
+  makeDefault: boolean,
+  sources: ReadonlyMap<string, string | null>,
+  ctx: SetupContext,
+): Promise<void> {
+  if (provider === "azure" && endpoint === undefined) {
+    endpoint = await ask("Azure OpenAI endpoint (https://<resource>.openai.azure.com/):", "--endpoint", ctx);
+    checkEndpoint(endpoint);
+  }
+  let key: string | null = null;
+  if (provider !== "ollama") {
+    // Every provider but ollama has a key variable.
+    const variable = apiKeyEnv ?? PROVIDER_API_KEY_ENV[provider]!;
+    const optional = OPTIONAL_API_KEY_PROVIDERS.has(provider) && apiKeyEnv === undefined && sources.size === 0;
+    key = await apiKey(provider, variable, { optional }, ctx);
+  }
+  const values = await headers(sources, provider, ctx);
+  let models: readonly string[] | null = null;
+  if (provider === "azure") {
+    model ||= await ask("Deployment name:", "--model", ctx);
+  } else {
+    if (model === undefined) requireTerminal("--model", ctx); // Before the listing request.
+    const elsewhere = (ELSEWHERE_ENV[provider] ?? []).find((name) => ctx.io.env(name));
+    const variable = BASE_URL_ENV[provider];
+    const baseUrl = (variable && ctx.io.env(variable)) || null;
+    let failure: string | null = null;
+    if (elsewhere === undefined) {
+      try {
+        models = await (ctx.deps.listModels ?? listModels)(provider, {
+          apiKey: key,
+          baseUrl,
+          headers: values,
+          signal: ctx.signal,
+        });
+      } catch (error) {
+        if (!(error instanceof ModelListError)) throw error;
+        // The reasons are fixed today; scrubbed so no sent secret can reach output.
+        failure = redactKeys(error.message, [key, ...Object.values(values)]);
+      }
+    }
+    if (model === undefined) {
+      if (elsewhere !== undefined) {
+        await ctx.io.stdout.write(
+          `${elsewhere} is set, so runs use another host than the ${provider} listing; type a model name\n`,
+        );
+        model = await ask("Model:", "--model", ctx);
+      } else if (models !== null && models.length > 0) {
+        model = await choose("Model:", models, { initial: models[0]!, option: "--model" }, ctx);
+      } else {
+        await ctx.io.stdout.write(
+          `Couldn't list the ${provider} models (${failure || "none were returned"}); type a model name\n`,
+        );
+        model = await ask("Model:", "--model", ctx);
+      }
+    }
+  }
+  if (models === null || !models.includes(model)) {
+    const problem = await modelAnswers(provider, model, key, endpoint ?? null, values, ctx.io, ctx.deps, ctx.signal);
+    if (problem !== null) throw new AuthError(`The model didn't answer: ${problem}; the previous login is unchanged`);
+  }
+  await store.save(provider, key ? new ApiKeyCredentials(key, values) : null, model, { endpoint, makeDefault });
+  await ctx.io.stdout.write(`Saved ${provider} login (${key ? "api-key" : "none"}) with model ${model}\n`);
 }
 
 /**

@@ -67,7 +67,7 @@ import { fileURLToPath } from "node:url";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
-import { Output } from "../../src/nodes/base.ts";
+import { HostOutputError, Output } from "../../src/nodes/base.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
 import { TypeStripError } from "../../src/platform.ts";
@@ -213,10 +213,17 @@ test("inline return is checked by intake", async () => {
 
   const error = await rejected(node.run({}));
 
-  expect(error).toBeInstanceOf(TypeCheckError);
+  expect(error).toBeInstanceOf(HostOutputError);
   expect((error as Error).message).toBe("output at bad: Date is not a yian value");
   expect(node.exceptionCode(error)).toBe("contract.output");
   expect(node.exceptionOrigin(error)).toBe(contractOrigin);
+});
+
+test("a TypeCheckError the code throws stays node.execute", () => {
+  const node = new CodeNode("n", { code: "return 1" });
+  // What the code throws is wrapped, so only intake's `HostOutputError` is `contract.output`.
+  expect(node.exceptionCode(new CodeError(new TypeCheckError("bad")))).toBe("node.execute");
+  expect(node.exceptionCode(new TypeCheckError("bad"))).toBe("node.execute");
 });
 
 // --- reference mode --- //

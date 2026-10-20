@@ -42,19 +42,18 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { type FailureCode, OriginRef, reprText } from "../../diagnostics.ts";
+import { OriginRef, reprText } from "../../diagnostics.ts";
 import { stripTypes } from "../../platform.ts";
 import {
   fromHost,
   isRecord,
   jsTypeName,
   toHost,
-  TypeCheckError,
   type Value,
   writeAsText,
 } from "../../typesys/values.ts";
-import { markerMessage, Node, NodeKind, Output } from "../base.ts";
-import { mapOrigin, type OriginMapper, outputContractOrigin, validateOptionalOrigin } from "../contracts.ts";
+import { HostOutputError, hostOutput, markerMessage, Node, NodeKind, Output } from "../base.ts";
+import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
 // A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export
 // name. Anchoring plus a whitespace-free path keep multi-token bodies out.
@@ -354,25 +353,16 @@ export class CodeNode extends Node {
   }
 
   /**
-   * Return the failure code for one body error: `contract.output` for a result host intake
-   * refuses, else the base's.
-   */
-  override exceptionCode(error: unknown): FailureCode {
-    return error instanceof TypeCheckError ? "contract.output" : super.exceptionCode(error);
-  }
-
-  /**
    * Return the most precise authored origin for one body error.
    *
-   * A built-in's is the node's. A result host intake refuses is located in the output contract. A
-   * reference's is the whole `code:` origin, else the node's. Otherwise the first `yian-code:<id>`
+   * A built-in's is the node's, and a result host intake refuses is located by the base, in the
+   * output contract. A reference's is the whole `code:` origin, else the node's. Otherwise the first `yian-code:<id>`
    * frame of what the code threw selects the authored line, falling back to the whole `code:`
    * origin, then the node's (a thrown non-`Error` has no stack, and a native error thrown after an
    * `await` has no body frame on Bun).
    */
   override exceptionOrigin(error: unknown): OriginRef | null {
-    if (this.mode === "builtin") return super.exceptionOrigin(error);
-    if (error instanceof TypeCheckError) return outputContractOrigin(this.outputContract, error.path);
+    if (this.mode === "builtin" || error instanceof HostOutputError) return super.exceptionOrigin(error);
     if (this.mode === "reference") return this.codeOrigin ?? super.exceptionOrigin(error);
     const line = error instanceof CodeError ? bodyLine(error.original, this.id) : null;
     return selectInlineCodeOrigin(line, {
@@ -429,7 +419,7 @@ export class CodeNode extends Node {
    * @throws SyntaxError when the function constructor refuses the stripped body.
    * @throws CodeError when the body or the referenced function throws.
    * @throws Error when the code returns `undefined`.
-   * @throws TypeCheckError when host intake refuses the result.
+   * @throws HostOutputError when host intake refuses the result (`contract.output`).
    */
   override async forward(inputs: Record<string, unknown>): Promise<Output> {
     const code = this.code;
@@ -448,6 +438,6 @@ export class CodeNode extends Node {
       throw new CodeError(error);
     }
     if (result === undefined) throw new Error("CODE body returned no value; return null for no value");
-    return new Output(fromHost(result === proxy ? record : result, "output"));
+    return new Output(hostOutput(result === proxy ? record : result));
   }
 }

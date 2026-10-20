@@ -16,8 +16,8 @@
  * `test_a_fresh_store_pins_its_default_limits`, `test_corrupt_private_state_never_partially_adopts_ram`
  * and `test_invalid_last_mutation_never_reaches_storage`.
  *
- * TS-only: a failed first open whose primary is an `Error` gets the note
- * `EpisodicMemory cleanup failed: Cleanup` when closing the storage also fails. With
+ * TS-only: a failed first open whose primary is an object (an `Error` or a plain object) gets the
+ * note `EpisodicMemory cleanup failed: Cleanup` when closing the storage also fails. With
  * `YIAN_TEST_NODE` set to a Node binary, the built backend reopens a store Bun wrote (episodes,
  * limits, tombstones) under Node and commits, and Bun reads the result back.
  *
@@ -272,6 +272,7 @@ test.each(["extra", "version", "counter", "flag", "ledger", "digest", "unopened"
     const caught = failure(() => firstOpen(new EpisodicMemory({ storage: file })));
     expect(caught.code).toBe("episodic.invalid_storage");
     expect(caught.stage).toBe("storage");
+    expect(caught.message).toBe("stored episodic state is invalid");
     expect(loadInventory(file)).toEqual(inventory);
   },
 );
@@ -332,7 +333,8 @@ test("pristine adoption persists across restart", async () => {
   );
   await withMemory(new EpisodicMemory({ storage: file }), (memory) => {
     expect(snapshotOf(memory)).toEqual(saved);
-    expect((memory as Mutable).everOpened && (memory as Mutable).everCommitted).toBe(true);
+    expect((memory as Mutable).everOpened).toBe(true);
+    expect((memory as Mutable).everCommitted).toBe(true);
   });
 });
 
@@ -480,9 +482,7 @@ test.each([
     load.mockRestore();
     cleanup.mockRestore();
   }
-  if (primary instanceof Error) {
-    expect((primary as Mutable).notes).toEqual(["EpisodicMemory cleanup failed: Cleanup"]);
-  }
+  expect((primary as Mutable).notes).toEqual(["EpisodicMemory cleanup failed: Cleanup"]);
   await withMemory(new EpisodicMemory({ storage: file }), () => {});
 });
 
@@ -530,7 +530,9 @@ test.each([false, true])(
 
 test("invalid limits do not create storage", () => {
   const file = path.join(dir, "memory.sqlite");
-  expect(() => new EpisodicMemory({ maxEpisodes: 0, storage: file })).toThrow(RangeError);
+  expect(() => new EpisodicMemory({ maxEpisodes: 0, storage: file })).toThrow(
+    new RangeError("max_episodes must be positive"),
+  );
   expect(fs.existsSync(file)).toBe(false);
 });
 
@@ -584,7 +586,7 @@ test("corrupt private state never partially adopts RAM", async () => {
   value.applied_commits.bad = "invalid";
   saveInventory(file, value);
   const partial = new EpisodicMemory({ storage: file });
-  failure(() => firstOpen(partial));
+  expect(failure(() => firstOpen(partial)).code).toBe("episodic.invalid_storage");
   const m = partial as Mutable;
   expect(m.namespace).not.toBe(value.snapshot.namespace);
   expect(m.state.episodes).toEqual([]);

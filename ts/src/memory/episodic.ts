@@ -511,8 +511,9 @@ function parseInventory(value: unknown): Inventory {
     const commits = new Map<string, string>();
     for (const [commitId, digest] of Object.entries(copyObject(data.applied_commits, "applied_commits"))) {
       jsonString(commitId, "commit_id", true);
-      if (!/^[0-9a-f]{64}$/.test(jsonString(digest, "digest", true))) throw new RangeError("invalid commit digest");
-      commits.set(commitId, digest as string);
+      const text = jsonString(digest, "digest", true);
+      if (!/^[0-9a-f]{64}$/.test(text)) throw new RangeError("invalid commit digest");
+      commits.set(commitId, text);
     }
     const episodes = state.episodes.length > 0;
     if (

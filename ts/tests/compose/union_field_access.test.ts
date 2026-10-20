@@ -9,15 +9,18 @@
  * `::test_shared_field_optional_in_one_member_reads_as_optional`,
  * `::test_shared_field_through_an_optional_union_reads_as_optional` and
  * `::test_shared_field_of_differing_types_is_untyped_and_loads` (the signature, not the load);
- * `::test_map_over_a_union_output_gives_a_list_of_objects` and
- * `::test_loop_carrying_a_union_keeps_the_non_record_error`. `typeFor` stands in for compose's
+ * `::test_map_over_a_union_output_gives_a_list_of_objects`,
+ * `::test_loop_carrying_a_union_keeps_the_non_record_error` and
+ * `::test_non_exhaustive_on_over_the_tag_names_the_missing_member`. `typeFor` stands in for compose's
  * `read_type`. The child-signature rows build the child with `handChild` (a producer `d` of the
  * given type and a record output), where Python loads a flow; the MAP row builds a
  * `MapDescriptor` over a hand-built child returning its `Decision` producer, where Python loads a
  * flow whose def is that child. The LOOP row loads Python's flow with `assembleText` (without the
  * unused `Text`, `Num` and `Reply` typedefs) and pins the whole message; its harvested case
  * `load-types/compose_union_field_access__loop_carrying_a_union_keeps_the_non_record_error` is
- * pinned at the end.
+ * pinned at the end. The non-exhaustive row loads Python's flow with `assembleText` (without the
+ * unused `Text`, `Num` and `Reply` typedefs); the uncovered tags are written as JSON text,
+ * `["hold"]` (Python `['hold']`).
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -274,6 +277,26 @@ test("a map over a union output gives a list of objects", () => {
 
   expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
   expect(contract.type.element!.variants).toBeDefined();
+});
+
+test("a non-exhaustive on over the tag names the missing member", () => {
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n" +
+    "  Buy: {action: 'Literal(buy)', qty: int, note: str}\n" +
+    "  Hold: {action: 'Literal(hold)', note: str}\n" +
+    "  Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}\n" +
+    "  Decision: Union(Buy, Hold, Sell)\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  d:\n    kind: code\n    input:\n      x: ${input.s}\n    output: Decision\n    code: return None\n" +
+    "  route:\n    kind: case\n    on: ${d.output.action}\n    cases:\n" +
+    "      - when: buy\n        then: sink\n" +
+    "      - when: sell\n        then: sink\n" +
+    "  sink:\n    kind: code\n    input:\n      x: ${input.s}\n    output: str\n    code: return 'x'\n" +
+    "output: ${sink.output}\n";
+
+  expect(loadError(() => assembleText(text)).message).toContain('enum tag(s) ["hold"] not covered');
 });
 
 test("a loop carrying a union keeps the non-record error", () => {

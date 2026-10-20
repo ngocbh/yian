@@ -140,6 +140,8 @@ import {
   localInputContracts,
 } from "../validate/typed_bindings.ts";
 // T3-20 imports
+import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
+import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
 // returns the bare resolved value, so the name only labels the carrier.
@@ -2401,12 +2403,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //
 //   T3-18  validateReferences (1).
 //   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
-//          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
-//          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
-//          checkSkippedArithmetic (1).
+//          validateNodeAsserts, checkSkippedArithmetic (1).
 //          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
-//          exhaustiveCases (1): returns `new Set()`; skipModel (1, Python's `SkipModel` class):
-//            returns `null`; nullSkippedOutputs (1): returns the outputs.
+//          skipModel (1, Python's `SkipModel` class): returns `null`; nullSkippedOutputs (1):
+//            returns the outputs.
 //          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
@@ -2454,45 +2454,6 @@ function checkCaseBranches(
   },
 ): void {}
 
-/** Python's `compose.validate.narrowing.compute_narrowing`; not ported yet. */
-function computeNarrowing(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  edges: readonly Edge[],
-  producers: ReadonlyMap<string, OutputContract>,
-  inputs: ReadonlyMap<string, ValueContract>,
-  options: { registry?: TypeRegistry | null } = {},
-): Narrowing {
-  return new Narrowing({ producers, inputs });
-}
-
-/** Python's `compose.validate.case_exhaustive.check_case_when_values`; not ported yet. */
-function checkCaseWhenValues(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract>,
-  options: { narrowing?: Narrowing | null; diagnostics?: LoadDiagnostics | null } = {},
-): void {}
-
-/** Python's `compose.validate.narrowing.check_impossible_whens`; not ported yet. */
-function checkImpossibleWhens(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  producers: ReadonlyMap<string, OutputContract>,
-  inputs: ReadonlyMap<string, ValueContract>,
-  narrowing: Narrowing,
-  options: { registry?: TypeRegistry | null; diagnostics?: LoadDiagnostics | null } = {},
-): void {}
-
-/** Python's `compose.validate.case_exhaustive.check_case_exhaustive`; not ported yet. */
-function checkCaseExhaustive(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  producers: ReadonlyMap<string, OutputContract>,
-  options: {
-    narrowing?: Narrowing | null;
-    valueCases?: ReadonlySet<string>;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
 /** Python's `compose.validate.asserts.validate_node_asserts`; not ported yet. */
 function validateNodeAsserts(
   nodes: ReadonlyMap<string, Node>,
@@ -2523,16 +2484,6 @@ function lowerFlowAsserts(
   } = {},
 ): LoweredAsserts {
   return new LoweredAsserts();
-}
-
-/** Python's `compose.validate.case_exhaustive.exhaustive_cases`; not ported yet. */
-function exhaustiveCases(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  producers: ReadonlyMap<string, OutputContract>,
-  flowInputs: ReadonlyMap<string, ValueContract> | null = null,
-  options: { narrowing?: Narrowing | null } = {},
-): Set<string> {
-  return new Set();
 }
 
 /** Python's `compose.validate.skips.SkipModel` constructor; not ported yet. */

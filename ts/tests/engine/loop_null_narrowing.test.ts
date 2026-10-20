@@ -19,8 +19,8 @@
  * `test_while_null_check_rejects_a_null_seed_the_zero_iteration_output_cannot_carry` (each also
  * pinned as its harvested case at the end, `assembledWith`),
  * `test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check`, both loads of
- * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` and the `other="loop"`
- * error load of `test_while_null_check_keeps_the_case_narrowed_seed`. The loop type contract (a
+ * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` and both loads of
+ * `test_while_null_check_keeps_the_case_narrowed_seed`. The loop type contract (a
  * returned field keeps its carried type and fits the body input it is bound to next), through
  * `assembleText`: `test_until_null_check_narrows_neither_the_seed_nor_a_returned_field`,
  * `test_null_check_under_or_narrows_nothing`,
@@ -33,8 +33,7 @@
  * inline rows `test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it`,
  * `test_inline_returned_field_of_the_wrong_type_names_the_seed_type` and
  * `test_inline_body_under_until_reads_the_seed_as_optional`. Each error row pins the whole
- * message, where Python matches a fragment of some, except the case-narrowed one: its source type
- * is the CASE narrowing's, so it keeps Python's fragment.
+ * message, where Python matches a fragment of some.
  *
  * Changed: `whileNonNullPaths` returns the proven paths as distinct field-name lists in path order,
  * where Python returns a `frozenset` of tuples. The declared-types row parses the loop node
@@ -49,8 +48,7 @@
  * record, a partly typed record (its opaque fields skipped) and anything else; `whileNonNullPaths`
  * giving a path checked twice once and in order, and nothing for a condition that doesn't parse.
  *
- * Later (T3-20): the `then="loop"` ok load of `test_while_null_check_keeps_the_case_narrowed_seed`
- * (CASE narrowing). Later (T4): the run halves of
+ * Later (T4): the run halves of
  * `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed`,
  * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check`,
  * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`,
@@ -513,12 +511,14 @@ test("a while null check keeps the case-narrowed seed", () => {
     output: "${step.output}",
   });
 
-  // Under `else:` the seed is not narrowed to `Buy`. Python matches this fragment; the source type
-  // after it is the CASE narrowing's.
+  load(routed("loop", "e"), { body });
+
+  // Under `else:` the seed is narrowed to `Hold`, not `Buy`.
   const error = loadError(() => load(routed("e", "loop"), { body }));
 
-  expect(error.message).toContain(
-    "loop node 'loop': binding 'order' — child expects '{\"kind\":Literal(buy),\"qty\":int}', source is '",
+  expect(error.message).toBe(
+    "loop node 'loop': binding 'order' — child expects '{\"kind\":Literal(buy),\"qty\":int}', " +
+      "source is '{\"kind\":Literal(hold),\"note\":str}'",
   );
 });
 

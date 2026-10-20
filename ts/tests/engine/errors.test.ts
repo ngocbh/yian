@@ -18,9 +18,13 @@
  * built by hand (`handChild`) where Python loads the seed with a child resolver; it pins the
  * whole message, where Python matches fragments.
  *
+ * `test_e04_exhaustiveness_mechanism_loud` and `test_e04_else_satisfies_coverage` assemble their
+ * inline flows (`assembleText`), where Python loads them; the seed `e17` case
+ * (`load-case/seed_e17_case_nonexhaustive`, the same mechanism) is pinned with `assembled`. Changed:
+ * its message writes the uncovered tags in the text form (`["flat"]`, rule `messages`).
+ *
  * Later (T3-22): `test_e01_dangling_ref_located`, `test_e03_unknown_field_located`,
- * `test_negative_fixtures_are_located`, `test_e04_exhaustiveness_mechanism_loud`,
- * `test_e04_else_satisfies_coverage`, `test_single_node_def_model_kind_is_removed`, the e13, e14,
+ * `test_negative_fixtures_are_located`, `test_single_node_def_model_kind_is_removed`, the e13, e14,
  * e15, e16, e17, e30, e31 and e32 rows of `test_compile_error_gallery`,
  * `test_inline_code_construction_errors_carry_ranges`,
  * `test_invalid_authored_default_carries_input_range`,
@@ -94,7 +98,10 @@ test("input named like a field does not collide", () => {
   expect(fr.get(siteKey("field", "env"))).not.toEqual(fr.get(siteKey("input", "env")));
 });
 
-test.each<CaseRow>([{ id: "load-core/seed_e02_cycle", call: assembled, full: true }])("assemble: $id", runCase);
+test.each<CaseRow>([
+  { id: "load-core/seed_e02_cycle", call: assembled, full: true },
+  { id: "load-case/seed_e17_case_nonexhaustive", call: assembled },
+])("assemble: $id", runCase);
 
 // ---------- e06: a cross-flow type mismatch at a `call` boundary ----------
 
@@ -122,3 +129,72 @@ test("e06 cross-flow type mismatch is loud", () => {
 test(`assemble: ${E06}`, () => {
   runCase({ id: E06, call: assembledWith({ "research-one": researchOne() }) });
 });
+
+// ---------- e04: case exhaustiveness ----------
+
+// classify gives a Literal(pro, con, flat); route covers only pro and con with no `else:`, so the
+// `flat` tag is uncovered.
+const E04_NONEXHAUSTIVE = `
+id: e04-constructed
+name: e04_constructed
+
+input:
+  topic: !str
+
+nodes:
+  classify:
+    kind: agent
+    input:
+      topic: \${input.topic}
+    output: Literal(pro, con, flat)
+    prompt: "Classify \${topic}."
+  route:
+    kind: case
+    on: \${classify.output}
+    cases:
+      - when: pro
+        then: pro_note
+      - when: con
+        then: con_note
+  pro_note:
+    kind: agent
+    input:
+      topic: \${input.topic}
+    output: str
+    prompt: "Pro note for \${topic}."
+  con_note:
+    kind: agent
+    input:
+      topic: \${input.topic}
+    output: str
+    prompt: "Con note for \${topic}."
+
+output: \${pro_note.output | con_note.output}
+`;
+
+// The same flow, with an `else:` that covers the remaining tag.
+const E04_WITH_ELSE = E04_NONEXHAUSTIVE.replace(
+  "        then: con_note\n",
+  "        then: con_note\n    else: flat_note\n",
+).replace(
+  "  pro_note:",
+  "  flat_note:\n" +
+    "    kind: agent\n" +
+    "    input:\n" +
+    "      topic: ${input.topic}\n" +
+    "    output: str\n" +
+    '    prompt: "Flat note for ${topic}."\n' +
+    "  pro_note:",
+);
+
+test("e04: the exhaustiveness mechanism is loud", () => {
+  const message = loadError(() => assembleText(E04_NONEXHAUSTIVE)).message;
+
+  expect(message).toContain("non-exhaustive");
+  expect(message).toContain("flat"); // names the uncovered enum tag
+});
+
+test("e04: an else satisfies coverage", () => {
+  assembleText(E04_WITH_ELSE);
+});
+

@@ -40,18 +40,59 @@
  * `::test_code_after_an_always_true_check_is_not_reported`,
  * `::test_a_check_the_routing_rules_out_is_impossible`,
  * `::test_routing_and_the_checks_together_use_the_checks_wording`,
- * `::test_searched_param_guards_lists_the_checks_before_each_read`, and the `check_text`,
+ * `::test_searched_param_guards_lists_the_checks_before_each_read`,
+ * `::test_an_isinstance_case_narrows_its_target_to_the_member_or_sub_union`,
+ * `::test_a_case_branch_sees_what_its_when_proves`,
+ * `::test_a_case_branch_under_a_check_that_may_not_hold_is_not_narrowed`,
+ * `::test_a_case_param_after_an_impossible_check_is_not_checked`,
+ * `::test_a_case_param_after_a_check_the_type_decides_sees_the_case_s_view`,
+ * `::test_an_isinstance_case_on_a_non_union_base_gives_the_exact_type`,
+ * `::test_isinstance_facts_use_the_original_base_union`,
+ * `::test_an_isinstance_of_a_type_the_base_fits_gives_no_fact`,
+ * `::test_two_isinstance_cases_into_one_target_join_by_union`,
+ * `::test_two_isinstance_cases_on_unrelated_types_into_one_target_drop_the_fact`,
+ * `::test_a_plain_case_or_else_into_the_target_drops_the_fact`,
+ * `::test_an_unknown_isinstance_type_gives_no_fact`, `::test_a_guarded_case_param_gets_the_checked_view`,
+ * `::test_on_case_narrows_each_branch_and_else_to_the_unlisted_members`,
+ * `::test_views_keep_origins_and_unnarrowed_nodes_get_the_same_maps`,
+ * `::test_else_keeps_the_base_nullability_and_when_branches_drop_it`,
+ * `::test_a_when_branch_and_else_into_one_target_join_to_every_member`,
+ * `::test_a_then_target_named_default_is_narrowed_like_any_node`,
+ * `::test_a_then_target_named_default_leaves_the_else_target_the_unlisted_members`,
+ * `::test_else_keeps_nullability_from_a_nullable_path_segment`,
+ * `::test_control_edges_join_by_union_and_an_edge_without_facts_unconstrains`,
+ * `::test_a_required_data_group_joins_its_producers_by_union`,
+ * `::test_depends_on_carries_the_source_environment_and_runs_after_does_not`,
+ * `::test_contributions_intersect`, `::test_two_required_groups_from_disjoint_branches_meet_empty`,
+ * `::test_nested_case_composes_with_its_own_environment`,
+ * `::test_a_contradictory_nested_case_branch_is_empty`, `::test_outer_bases_narrow_before_inner_ones`,
+ * `::test_flow_input_bases_narrow_the_input_view`,
+ * `::test_partial_record_producer_narrows_a_proven_field`,
+ * `::test_bases_that_are_not_tagged_unions_give_no_facts`,
+ * `::test_defensive_else_after_every_tag_is_empty_and_unnarrowed`,
+ * `::test_defensive_else_over_a_nullable_base_sees_none`,
+ * `::test_a_when_value_that_is_not_a_tag_narrows_its_branch_to_nothing`,
+ * `::test_a_when_value_that_is_not_a_tag_is_a_load_error`,
+ * `::test_the_tag_error_points_at_the_when_value`,
+ * `::test_a_tag_error_on_a_base_only_the_branch_view_has`,
+ * `::test_nodes_kahn_cannot_order_stay_unnarrowed`, `::test_unknown_ids_are_ignored`,
+ * `::test_narrow_contract_at_the_root_and_a_nested_record_field`,
+ * `::test_narrow_contract_at_does_not_cross_unions_or_missing_fields`,
+ * `::test_narrow_contract_at_inside_a_partial_record`,
+ * `::test_narrow_contract_at_the_root_of_a_partial_record_rebases_field_origins`, and the
+ * `check_text`,
  * `check_fact`, `unresolved_type`, `declared_impossible` and `never_value` sites of
  * `::test_an_unknown_check_kind_fails_loudly`.
  *
  * TS-only: the pinned-case table, which makes the call a site makes on the conformance cases a
  * narrowing message decides (an impossible check, or a narrowed read's error) and checks that the
  * case's message, or its last line for a multi-line one, is the row's site prefix plus the
- * produced text. The `compose_null_narrowing__*` and `compose_null_narrowing_case__*` rows sit
- * here too, in the one harness, though their Python tests are `test_null_narrowing.py` and
- * `test_null_narrowing_case.py`. The sites' locations are not pinned here. Two rows read a
- * `Narrowing` built by hand: an empty one gives the unchanged maps, and a filled one gives each
- * node's and param's results.
+ * produced text. A `compose_null_narrowing__*` and a `compose_null_narrowing_case__*` row sit here
+ * too, in the one harness, though their Python tests are `test_null_narrowing.py` and
+ * `test_null_narrowing_case.py`; the cases `checkImpossibleWhens` raises are pinned whole in
+ * `null_narrowing.test.ts` and `union_narrowing.test.ts`. The sites' locations are not pinned
+ * here. Two rows read a `Narrowing` built by hand: an empty one gives the unchanged maps, and a
+ * filled one gives each node's and param's results.
  *
  * Changed: the re-export test compares the runtime names only, since `Env` and `Fact` are types
  * and TS has no `__all__`. Facts, environments and guards compare with `toStrictEqual`, which
@@ -60,52 +101,17 @@
  * `did you mean "buy"?` (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and
  * `neverValue` are exported for these tests (Python's `_declared_impossible` and `_never_value`).
  * `searchedParamGuards` gives a `Map` of `[case index, guard]` arrays where Python gives a dict of
- * tuples.
+ * tuples. `narrowContractAt`'s contracts and the narrowed views compare with
+ * `sameOutputContract`, and their types with `typeEquals`, as Python's `==` compares them; a
+ * `parametrize`d row is a `test.each` naming each type.
  *
- * Later (T3-20): the `narrows` site of `test_an_unknown_check_kind_fails_loudly`,
- * `test_an_isinstance_case_narrows_its_target_to_the_member_or_sub_union`,
- * `test_a_case_branch_sees_what_its_when_proves`,
- * `test_a_case_branch_under_a_check_that_may_not_hold_is_not_narrowed`,
- * `test_a_case_param_after_an_impossible_check_is_not_checked`,
- * `test_a_case_param_after_a_check_the_type_decides_sees_the_case_s_view`,
- * `test_an_isinstance_case_on_a_non_union_base_gives_the_exact_type`,
- * `test_isinstance_facts_use_the_original_base_union`,
- * `test_an_isinstance_of_a_type_the_base_fits_gives_no_fact`,
- * `test_two_isinstance_cases_into_one_target_join_by_union`,
- * `test_two_isinstance_cases_on_unrelated_types_into_one_target_drop_the_fact`,
- * `test_a_plain_case_or_else_into_the_target_drops_the_fact`,
- * `test_an_unknown_isinstance_type_gives_no_fact`, `test_a_guarded_case_param_gets_the_checked_view`,
- * `test_on_case_narrows_each_branch_and_else_to_the_unlisted_members`,
- * `test_views_keep_origins_and_unnarrowed_nodes_get_the_same_maps`,
- * `test_else_keeps_the_base_nullability_and_when_branches_drop_it`,
- * `test_a_when_branch_and_else_into_one_target_join_to_every_member`,
- * `test_a_then_target_named_default_is_narrowed_like_any_node`,
- * `test_a_then_target_named_default_leaves_the_else_target_the_unlisted_members`,
- * `test_else_keeps_nullability_from_a_nullable_path_segment`,
- * `test_control_edges_join_by_union_and_an_edge_without_facts_unconstrains`,
- * `test_a_required_data_group_joins_its_producers_by_union`,
- * `test_depends_on_carries_the_source_environment_and_runs_after_does_not`,
- * `test_contributions_intersect`, `test_two_required_groups_from_disjoint_branches_meet_empty`,
- * `test_nested_case_composes_with_its_own_environment`,
- * `test_a_contradictory_nested_case_branch_is_empty`, `test_outer_bases_narrow_before_inner_ones`,
- * `test_flow_input_bases_narrow_the_input_view`,
- * `test_partial_record_producer_narrows_a_proven_field`,
- * `test_bases_that_are_not_tagged_unions_give_no_facts`,
- * `test_defensive_else_after_every_tag_is_empty_and_unnarrowed`,
- * `test_defensive_else_over_a_nullable_base_sees_none`,
- * `test_a_when_value_that_is_not_a_tag_narrows_its_branch_to_nothing`,
- * `test_a_when_value_that_is_not_a_tag_is_a_load_error`,
- * `test_the_tag_error_points_at_the_when_value`,
- * `test_a_tag_error_on_a_base_only_the_branch_view_has`,
- * `test_nodes_kahn_cannot_order_stay_unnarrowed`, `test_unknown_ids_are_ignored`,
- * `test_narrow_contract_at_the_root_and_a_nested_record_field`,
- * `test_narrow_contract_at_does_not_cross_unions_or_missing_fields`,
- * `test_narrow_contract_at_inside_a_partial_record` and
- * `test_narrow_contract_at_the_root_of_a_partial_record_rebases_field_origins`.
+ * Later (T3-20): the `narrows` site of `test_an_unknown_check_kind_fails_loudly` (the asserts
+ * validator).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { Edge } from "../../src/compile/model.ts";
 import {
   AllOf,
   type Check,
@@ -145,27 +151,46 @@ import {
   unresolvedType,
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import * as narrowingFacts from "../../src/compose/helpers/narrowing_facts.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
+import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";
+import { checkCaseWhenValues } from "../../src/compose/validate/case_exhaustive.ts";
 import * as narrowing from "../../src/compose/validate/narrowing.ts";
 import {
+  computeNarrowing,
   Exact,
   intersectFacts,
   isinstanceFact,
   Members,
   Narrowing,
+  narrowContractAt,
   unionFacts,
   type Views,
 } from "../../src/compose/validate/narrowing.ts";
 import { forget } from "../../src/defaults.ts";
-import { SourceRange } from "../../src/diagnostics.ts";
+import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { parseCondition } from "../../src/expr/index.ts";
-import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";
+import {
+  ContractOrigins,
+  isExactly,
+  type OutputContract,
+  PartialRecordContract,
+  sameOutputContract,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
-import { canonicalTypeLabel, Type, TypeCheckError, typesOverlap, ValueKind } from "../../src/typesys/values.ts";
+import {
+  canonicalTypeLabel,
+  Type,
+  TypeCheckError,
+  typeEquals,
+  typesOverlap,
+  ValueKind,
+} from "../../src/typesys/values.ts";
 import type { Case } from "../conformance.ts";
-import { caseDocument, caseRegistry, cursorAt } from "./declarations.ts";
+import { caseDocument, caseRegistry, cursorAt, loadError } from "./declarations.ts";
 
 // `caseDocument` reloads the defaults from each case's `env:`.
 afterEach(forget);
@@ -201,6 +226,13 @@ const TEXT = t("Text");
 const MARKET = t("Market");
 const OBJECT = Type.scalar(ValueKind.OBJECT);
 const BOOL = t("bool");
+const ROOT = new OriginRef("/s:root/s:node/s:d/s:field/s:output");
+const QTY = new OriginRef("/s:root/s:node/s:d/s:field/s:output/s:qty");
+
+/** An exact output contract for `d` with a root and a nested origin. */
+function decisionContract(typ: Type = DECISION): ValueContract {
+  return new ValueContract(typ, new ContractOrigins({ default: ROOT, entries: [[["qty"], QTY]] }));
+}
 
 // --------------------------------------------------------------------------- //
 // The fact domain
@@ -941,6 +973,715 @@ test("searchedParamGuards lists the checks before each read", () => {
 });
 
 // --------------------------------------------------------------------------- //
+// Propagation fixtures
+// --------------------------------------------------------------------------- //
+
+/** A plain node descriptor with optional ordering lists. */
+function node(nodeId: string, options: { dependsOn?: string[]; runsAfter?: string[] } = {}): NodeDescriptor {
+  return new NodeDescriptor({ id: nodeId, ...options });
+}
+
+/** A CASE descriptor and the data and control edges its own build returns. */
+function caseNode(
+  caseId: string,
+  on: string | null,
+  cases: readonly (readonly [string, string])[],
+  else_: string | null = null,
+  options: { whenRanges?: readonly SourceRange[] } = {},
+): [CaseDescriptor, Edge[]] {
+  const desc = new CaseDescriptor({
+    id: caseId,
+    on,
+    cases: cases.map(([when, then]) => ({ when, then })),
+    else_,
+    whenRanges: options.whenRanges ?? [],
+  });
+  return [desc, [...desc.build(new BuildContext({ registry: new Map() })).edges]];
+}
+
+/** One data edge from `src`'s output into `dst`'s input group. */
+function data(src: string, dst: string, group = "x", optional = false): Edge {
+  return new Edge(`${src}->${dst}:${group}`, src, dst, { inputGroup: group, optional });
+}
+
+type Item = NodeDescriptor | [CaseDescriptor, Edge[]];
+
+/** Run the narrowing pass over hand-built nodes and edges. */
+function compute(
+  nodes: readonly Item[],
+  edges: readonly Edge[],
+  producers: ReadonlyMap<string, OutputContract>,
+  inputs: ReadonlyMap<string, ValueContract> = new Map(),
+): Narrowing {
+  const descriptors = new Map<string, NodeDescriptor>();
+  const allEdges = [...edges];
+  for (const item of nodes) {
+    const desc = Array.isArray(item) ? item[0] : item;
+    if (Array.isArray(item)) allEdges.push(...item[1]);
+    descriptors.set(desc.id, desc);
+  }
+  return computeNarrowing(descriptors, allEdges, producers, inputs, { registry: REGISTRY });
+}
+
+/** The type node `nodeId` sees for `producer`'s output. */
+function viewType(narrowing: Narrowing, nodeId: string, producer = "d"): Type {
+  return (narrowing.forNode(nodeId)[0].get(producer) as ValueContract).type;
+}
+
+/** `d` (a Decision) routed by `c` on its tag: buy -> b, sell -> s, else -> h. */
+function branches(): Item[] {
+  return [
+    node("d"),
+    caseNode(
+      "c",
+      "${d.output.action}",
+      [
+        ["buy", "b"],
+        ["sell", "s"],
+      ],
+      "h",
+    ),
+    node("b"),
+    node("s"),
+    node("h"),
+  ];
+}
+
+/** `d` producing a `contract` (default: a Decision with origins). */
+const produced = (contract: OutputContract = decisionContract()) => new Map([["d", contract]]);
+
+/** The type `target` sees for `d` under a searched CASE `c` over `cases`. */
+function searchedView(
+  cases: readonly (readonly [string, string])[],
+  else_: string | null = null,
+  typ: Type = DECISION,
+  target = "b",
+): Type {
+  const nodes = [node("d"), caseNode("c", null, cases, else_), node("b"), node("s")];
+  return viewType(compute(nodes, [], produced(new ValueContract(typ))), target);
+}
+
+/** Whether `a` and `b` are equal types; `expect(...).toBe(true)` reads it. */
+
+// --------------------------------------------------------------------------- //
+// Searched CASE views
+// --------------------------------------------------------------------------- //
+
+test("an isinstance case narrows its target to the member or sub-union", () => {
+  expect(typeEquals(searchedView([["isinstance(d.output, Buy)", "b"]]), BUY)).toBe(true);
+  expect(typeEquals(searchedView([["isinstance(d.output, BuyOrSell) and x", "b"]]), BUY_OR_SELL)).toBe(true);
+});
+
+describe("a case branch sees what its when proves", () => {
+  test.each<[string, string]>([
+    ["d.output.action == 'buy'", "Buy"],
+    ["'buy' == d.output.action", "Buy"],
+    ["d.output.action != 'hold'", "BuyOrSell"],
+    ["not isinstance(d.output, Hold)", "BuyOrSell"],
+    ["isinstance(d.output, Buy) or isinstance(d.output, Sell)", "BuyOrSell"],
+    ["not (isinstance(d.output, Hold) or x > 1)", "BuyOrSell"],
+  ])("%s", (when, expected) => {
+    expect(typeEquals(searchedView([[when, "b"]]), t(expected))).toBe(true);
+  });
+});
+
+test("a case branch under a check that may not hold is not narrowed", () => {
+  expect(typeEquals(searchedView([["isinstance(d.output, Buy) or x > 1", "b"]]), DECISION)).toBe(true);
+  expect(typeEquals(searchedView([["not (isinstance(d.output, Buy) and x > 1)", "b"]]), DECISION)).toBe(true);
+});
+
+test("a case param after an impossible check is not checked", () => {
+  const cases = [["isinstance(d.output, Buy) and d.output.action == 'hold' and d.output.qty > 0", "b"]] as const;
+  const nodes = [node("d"), caseNode("c", null, cases), node("b")];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  expect(narrowing.paramUnchecked("c", "__r2")).toBe(true);
+  expect(narrowing.paramUnchecked("c", "__r0")).toBe(false);
+});
+
+test("a case param after a check the type decides sees the case's view", () => {
+  const cases = [["isinstance(d.output, Decision) or d.output.qty > 0", "b"]] as const;
+  const nodes = [node("d"), caseNode("c", null, cases), node("b")];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  expect(narrowing.paramUnchecked("c", "__r1")).toBe(false);
+  expect(typeEquals((narrowing.forParam("c", "__r1")[0].get("d") as ValueContract).type, DECISION)).toBe(true);
+});
+
+test("an isinstance case on a non-union base gives the exact type", () => {
+  const nodes = [node("d"), caseNode("c", null, [["isinstance(d.output, Text)", "b"]]), node("b")];
+  const narrowing = compute(nodes, [], produced(new ValueContract(OBJECT)));
+  expect(narrowing.environment("b")).toStrictEqual(new Map([["d.output", new Exact(TEXT)]]));
+  expect(typeEquals(viewType(narrowing, "b"), TEXT)).toBe(true);
+});
+
+test("isinstance facts use the original base union", () => {
+  // Under an outer `buy` branch, an inner `isinstance(d.output, Buy)` still names a member.
+  const nodes = [
+    node("d"),
+    caseNode("o", "${d.output.action}", [["buy", "c"]], "h"),
+    caseNode("c", null, [["isinstance(d.output, Buy)", "b"]]),
+    node("b"),
+    node("h"),
+  ];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  expect(narrowing.environment("b")).toStrictEqual(new Map([["d.output", new Members([BUY])]]));
+});
+
+test("an isinstance of a type the base fits gives no fact", () => {
+  const nodes = [
+    node("d"),
+    caseNode("c", null, [["isinstance(d.output, Decision) and isinstance(d.output, Buy)", "b"]]),
+    node("b"),
+  ];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  expect(narrowing.environment("b")).toStrictEqual(new Map([["d.output", new Members([BUY])]]));
+});
+
+test("two isinstance cases into one target join by union", () => {
+  const cases = [
+    ["isinstance(d.output, Buy)", "b"],
+    ["isinstance(d.output, Sell)", "b"],
+  ] as const;
+  expect(typeEquals(searchedView(cases), BUY_OR_SELL)).toBe(true);
+});
+
+test("two isinstance cases on unrelated types into one target drop the fact", () => {
+  const obj = new ValueContract(OBJECT);
+  const cases = [
+    ["isinstance(d.output, Text)", "b"],
+    ["isinstance(d.output, Buy)", "b"],
+  ] as const;
+  const nodes = [node("d"), caseNode("c", null, cases), node("b")];
+  const narrowing = compute(nodes, [], produced(obj));
+  expect(narrowing.environment("b")).toStrictEqual(new Map());
+  expect(narrowing.forNode("b")[0].get("d")).toBe(obj);
+});
+
+test("a plain case or else into the target drops the fact", () => {
+  const nodes = [
+    node("d"),
+    caseNode(
+      "c",
+      null,
+      [
+        ["isinstance(d.output, Buy)", "b"],
+        ["x > 1", "b"],
+      ],
+      "s",
+    ),
+    node("b"),
+    node("s"),
+  ];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  expect(narrowing.environment("b")).toStrictEqual(new Map());
+  expect(narrowing.environment("s")).toStrictEqual(new Map());
+});
+
+test("an unknown isinstance type gives no fact", () => {
+  const nodes = [node("d"), caseNode("c", null, [["isinstance(d.output, Nope)", "b"]]), node("b")];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  expect(narrowing.environment("b")).toStrictEqual(new Map());
+});
+
+test("a guarded case param gets the checked view", () => {
+  const nodes = [
+    node("d"),
+    caseNode("c", null, [
+      ["isinstance(d.output, Buy) and d.output.qty > 5", "b"],
+      ["isinstance(d.output, Sell) and d.output.qty > 1", "s"],
+      ["d.output.action == 'hold' and isinstance(d.output, Hold)", "s"],
+    ]),
+    node("b"),
+    node("s"),
+  ];
+  const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
+  const paramType = (param: string) => (narrowing.forParam("c", param)[0].get("d") as ValueContract).type;
+  expect(typeEquals(paramType("__r1"), BUY_OR_SELL)).toBe(true);
+  // `d.output` and `d.output.action` are read unguarded: they see the CASE's own view.
+  expect(typeEquals(paramType("__r0"), DECISION)).toBe(true);
+  expect(typeEquals(paramType("__r2"), DECISION)).toBe(true);
+});
+
+// --------------------------------------------------------------------------- //
+// Propagation
+// --------------------------------------------------------------------------- //
+
+test("an on case narrows each branch and else to the unlisted members", () => {
+  // Each `when:` branch sees its member; `else:` sees the rest.
+  const narrowing = compute(branches(), [], produced());
+
+  expect(typeEquals(viewType(narrowing, "b"), BUY)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "s"), SELL)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "h"), HOLD)).toBe(true);
+  expect(narrowing.environment("b")).toStrictEqual(new Map([["d.output", new Members([BUY])]]));
+});
+
+test("views keep origins and unnarrowed nodes get the same maps", () => {
+  // A narrowed view keeps the producer's origins; other nodes see the inputs as-is.
+  const contract = decisionContract();
+  const producers = produced(contract);
+  const inputs = new Map([["s", new ValueContract(Type.scalar(ValueKind.STRING))]]);
+  const narrowing = compute(branches(), [], producers, inputs);
+
+  const [view, viewInputs] = narrowing.forNode("b");
+  expect((view.get("d") as ValueContract).origins).toStrictEqual(contract.origins);
+  expect(viewInputs).toBe(inputs);
+  const [plainProducers, plainInputs] = narrowing.forNode("d");
+  expect(plainProducers).toBe(producers);
+  expect(plainInputs).toBe(inputs);
+  const [caseProducers, caseInputs] = narrowing.forNode("c");
+  expect(caseProducers).toBe(producers);
+  expect(caseInputs).toBe(inputs);
+});
+
+test("else keeps the base nullability and when branches drop it", () => {
+  // A nullable base stays nullable under `else:` only.
+  const narrowing = compute(branches(), [], produced(decisionContract(DECISION.replace({ nullable: true }))));
+
+  expect(typeEquals(viewType(narrowing, "b"), BUY)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "h"), HOLD.replace({ nullable: true }))).toBe(true);
+});
+
+test("a when branch and else into one target join to every member", () => {
+  // Routing `buy` and `else:` to one node leaves every member possible.
+  const nodes = [node("d"), caseNode("c", "${d.output.action}", [["buy", "x"]], "x"), node("x")];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(narrowing.environment("x")).toStrictEqual(new Map([["d.output", new Members([BUY, HOLD, SELL])]]));
+  expect(typeEquals(viewType(narrowing, "x"), DECISION)).toBe(true);
+});
+
+test("a then target named default is narrowed like any node", () => {
+  // A `then:` node named `default` sees its member; the name is not reserved.
+  const nodes = [
+    node("d"),
+    caseNode("c", "${d.output.action}", [
+      ["buy", "b"],
+      ["sell", "default"],
+    ]),
+    node("b"),
+    node("default"),
+  ];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(typeEquals(viewType(narrowing, "b"), BUY)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "default"), SELL)).toBe(true);
+});
+
+test("a then target named default leaves the else target the unlisted members", () => {
+  // With `then: default` and `else: h`, `h` still sees the unlisted member.
+  const nodes = [
+    node("d"),
+    caseNode(
+      "c",
+      "${d.output.action}",
+      [
+        ["buy", "b"],
+        ["sell", "default"],
+      ],
+      "h",
+    ),
+    node("b"),
+    node("default"),
+    node("h"),
+  ];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(typeEquals(viewType(narrowing, "b"), BUY)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "default"), SELL)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "h"), HOLD)).toBe(true);
+});
+
+test("else keeps nullability from a nullable path segment", () => {
+  // A nullable record on the way to the base makes the `else:` members nullable.
+  const holder = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["dec", DECISION]]),
+    required: new Set(["dec"]),
+    nullable: true,
+  });
+  const nodes = [node("d"), caseNode("c", "${d.output.dec.action}", [["buy", "b"]], "h"), node("b"), node("h")];
+  const narrowing = compute(nodes, [], produced(new ValueContract(holder)));
+
+  expect(narrowing.environment("h")).toStrictEqual(new Map([["d.output.dec", new Members([HOLD, SELL], true)]]));
+  const restOrNull = new Type({ kind: ValueKind.OBJECT, variants: [HOLD, SELL], nullable: true });
+  expect(typeEquals(viewType(narrowing, "h").fields!.get("dec")!, restOrNull)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "b").fields!.get("dec")!, BUY)).toBe(true);
+});
+
+test("control edges join by union and an edge without facts unconstrains", () => {
+  // Two branches into one node give both members; a fact-free route removes the fact.
+  const nodes = [
+    node("d"),
+    node("z"),
+    caseNode("c", "${d.output.action}", [
+      ["buy", "x"],
+      ["sell", "x"],
+      ["hold", "y"],
+    ]),
+    caseNode("g", null, [["z.output > 0", "y"]]),
+    node("x"),
+    node("y"),
+  ];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(typeEquals(viewType(narrowing, "x"), BUY_OR_SELL)).toBe(true);
+  expect(narrowing.environment("y")).toStrictEqual(new Map());
+  expect(typeEquals(viewType(narrowing, "y"), DECISION)).toBe(true);
+});
+
+test("a required data group joins its producers by union", () => {
+  // A coalesce of the buy and sell branches sees both members.
+  const edges = [data("b", "m", "v"), data("s", "m", "v"), data("b", "o", "v", true)];
+  const narrowing = compute([...branches(), node("m"), node("o")], edges, produced());
+
+  expect(typeEquals(viewType(narrowing, "m"), BUY_OR_SELL)).toBe(true);
+  expect(narrowing.environment("o")).toStrictEqual(new Map());
+});
+
+test("depends_on carries the source environment and runs_after does not", () => {
+  // A co-skipping ordering edge narrows; a pure-order edge does not.
+  const nodes = [...branches(), node("n", { dependsOn: ["b"] }), node("r", { runsAfter: ["b"] })];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(typeEquals(viewType(narrowing, "n"), BUY)).toBe(true);
+  expect(narrowing.environment("r")).toStrictEqual(new Map());
+});
+
+test("contributions intersect", () => {
+  // A data group from both branches and a dependency on one give that one.
+  const edges = [data("b", "m", "v"), data("s", "m", "v")];
+  const narrowing = compute([...branches(), node("m", { dependsOn: ["s"] })], edges, produced());
+
+  expect(typeEquals(viewType(narrowing, "m"), SELL)).toBe(true);
+});
+
+test("two required groups from disjoint branches meet empty", () => {
+  // An empty member set on a non-nullable base leaves the node unnarrowed.
+  const edges = [data("b", "m", "u"), data("s", "m", "v")];
+  const narrowing = compute([...branches(), node("m")], edges, produced());
+
+  expect(narrowing.environment("m")).toStrictEqual(new Map([["d.output", new Members([])]]));
+  expect(typeEquals(viewType(narrowing, "m"), DECISION)).toBe(true);
+});
+
+test("a nested case composes with its own environment", () => {
+  // A CASE inside a branch narrows within that branch's members.
+  const nodes = [
+    node("d"),
+    caseNode(
+      "c",
+      "${d.output.action}",
+      [
+        ["buy", "c2"],
+        ["sell", "c2"],
+      ],
+      "h",
+    ),
+    caseNode("c2", "${d.output.action}", [["buy", "p"]], "q"),
+    node("p"),
+    node("q"),
+    node("h"),
+  ];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(typeEquals(viewType(narrowing, "c2"), BUY_OR_SELL)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "p"), BUY)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "q"), SELL)).toBe(true);
+});
+
+test("a contradictory nested case branch is empty", () => {
+  // A sell branch inside the buy branch never runs, so it stays unnarrowed.
+  const nodes = [
+    node("d"),
+    caseNode("c", "${d.output.action}", [["buy", "c2"]], "h"),
+    caseNode("c2", "${d.output.action}", [["sell", "z"]]),
+    node("z"),
+    node("h"),
+  ];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(narrowing.environment("z")).toStrictEqual(new Map([["d.output", new Members([])]]));
+  expect(typeEquals(viewType(narrowing, "z"), DECISION)).toBe(true);
+});
+
+test("outer bases narrow before inner ones", () => {
+  // Narrowing `d.output` to Buy lets a nested case narrow `d.output.leg`.
+  const nodes = [
+    node("d"),
+    caseNode("c", "${d.output.action}", [["buy", "c2"]], "h"),
+    caseNode("c2", "${d.output.leg.type}", [["limit", "l"]]),
+    node("l"),
+    node("h"),
+  ];
+  const narrowing = compute(nodes, [], produced());
+
+  const seen = viewType(narrowing, "l");
+  expect(typeEquals(seen.fields!.get("leg")!, LIMIT)).toBe(true);
+  expect(typeEquals(seen, BUY.replace({ fields: new Map(BUY.fields).set("leg", LIMIT) }))).toBe(true);
+  expect((narrowing.forNode("l")[0].get("d") as ValueContract).origins).toStrictEqual(decisionContract().origins);
+});
+
+test("flow-input bases narrow the input view", () => {
+  // An `on:` over `input.<name>.<tag>` narrows the flow-input contract.
+  const inputs = new Map([["order", new ValueContract(DECISION)]]);
+  const nodes = [caseNode("c", "${input.order.action}", [["hold", "w"]]), node("w")];
+  const narrowing = compute(nodes, [], new Map(), inputs);
+
+  const [producers, view] = narrowing.forNode("w");
+  expect(producers).toStrictEqual(new Map());
+  expect(typeEquals(view.get("order")!.type, HOLD)).toBe(true);
+});
+
+test("a partial-record producer narrows a proven field", () => {
+  // A proven union field of a partial record narrows inside the record.
+  const contract = new PartialRecordContract([
+    ["dec", new ValueContract(DECISION)],
+    ["raw", null],
+  ]);
+  const nodes = [node("d"), caseNode("c", "${d.output.dec.action}", [["sell", "s"]]), node("s")];
+  const narrowing = compute(nodes, [], produced(contract));
+
+  const expected = new PartialRecordContract([
+    ["dec", new ValueContract(SELL)],
+    ["raw", null],
+  ]);
+  expect(sameOutputContract(narrowing.forNode("s")[0].get("d")!, expected)).toBe(true);
+});
+
+test("bases that are not tagged unions give no facts", () => {
+  // A non-union base, a non-tag field, or a computed `on:` narrows nothing.
+  const producers = new Map<string, OutputContract>([
+    ["d", decisionContract()],
+    ["t", new ValueContract(TEXT)],
+  ]);
+  const nodes = [
+    node("d"),
+    node("t"),
+    caseNode("c1", "${t.output.text}", [["hi", "a"]]),
+    caseNode("c2", "${d.output.qty}", [["1", "b"]]),
+    caseNode("c3", "${d.output.action:-hold}", [["buy", "e"]]),
+    node("a"),
+    node("b"),
+    node("e"),
+  ];
+  const narrowing = compute(nodes, [], producers);
+
+  for (const nodeId of ["a", "b", "e"]) {
+    expect(narrowing.environment(nodeId)).toStrictEqual(new Map());
+  }
+});
+
+// --------------------------------------------------------------------------- //
+// Empty sets
+// --------------------------------------------------------------------------- //
+
+/** `d` routed by `c` on every tag to `b`, with a defensive `else: e`. */
+function everyTag(): Item[] {
+  return [
+    node("d"),
+    caseNode(
+      "c",
+      "${d.output.action}",
+      [
+        ["buy", "b"],
+        ["hold", "b"],
+        ["sell", "b"],
+      ],
+      "e",
+    ),
+    node("b"),
+    node("e"),
+  ];
+}
+
+test("a defensive else after every tag is empty and unnarrowed", () => {
+  // `else:` after listing every tag never runs; a non-nullable base keeps its type.
+  const narrowing = compute(everyTag(), [], produced());
+
+  expect(narrowing.environment("e")).toStrictEqual(new Map([["d.output", new Members([])]]));
+  expect(typeEquals(viewType(narrowing, "e"), DECISION)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "b"), DECISION)).toBe(true);
+});
+
+test("a defensive else over a nullable base sees None", () => {
+  // `else:` after every tag on a nullable base can only see `None`.
+  const narrowing = compute(everyTag(), [], produced(decisionContract(DECISION.replace({ nullable: true }))));
+
+  expect(narrowing.environment("e")).toStrictEqual(new Map([["d.output", new Members([], true)]]));
+  expect(viewType(narrowing, "e").kind).toBe(ValueKind.NONE);
+});
+
+test("a when value that is not a tag narrows its branch to nothing", () => {
+  // Narrowing tolerates a typo'd tag: its branch gets an empty member set.
+  const nodes = [node("d"), caseNode("c", "${d.output.action}", [["buyy", "b"]], "h"), node("b"), node("h")];
+  const narrowing = compute(nodes, [], produced());
+
+  expect(narrowing.environment("b")).toStrictEqual(new Map([["d.output", new Members([])]]));
+});
+
+/** The descriptors `compute` builds from `nodes`, by id. */
+function descriptorsOf(nodes: readonly Item[]): Map<string, NodeDescriptor> {
+  return new Map(nodes.map((item) => (Array.isArray(item) ? item[0] : item)).map((desc) => [desc.id, desc]));
+}
+
+test("a when value that is not a tag is a load error", () => {
+  // A typo'd tag on a union base is rejected with the union's tags.
+  const nodes = [node("d"), caseNode("c", "${d.output.action}", [["buyy", "b"]], "h"), node("b"), node("h")];
+  const producers = produced();
+  const narrowing = compute(nodes, [], producers);
+
+  const message = loadError(() => checkCaseWhenValues(descriptorsOf(nodes), producers, new Map(), { narrowing }))
+    .message;
+
+  expect(message).toStartWith("case node 'c': `when: buyy` is not a tag of `on: ${d.output.action}` (");
+  expect(message).toEndWith("); use one of: buy, hold, sell");
+});
+
+test("the tag error points at the when value", () => {
+  // The error is located at the offending `when:` value's range.
+  const ranges = [new SourceRange(5, 15, 5, 18), new SourceRange(7, 15, 7, 19)];
+  const nodes = [
+    node("d"),
+    caseNode(
+      "c",
+      "${d.output.action}",
+      [
+        ["buy", "b"],
+        ["sel", "s"],
+      ],
+      null,
+      { whenRanges: ranges },
+    ),
+    node("b"),
+    node("s"),
+  ];
+  const producers = produced();
+  const narrowing = compute(nodes, [], producers);
+  const diagnostics = new LoadDiagnostics("flow.yaml", "line\n".repeat(10));
+
+  const error = loadError(() =>
+    checkCaseWhenValues(descriptorsOf(nodes), producers, new Map(), { narrowing, diagnostics }),
+  );
+
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(ranges[1]!);
+});
+
+test("a tag error on a base only the branch view has", () => {
+  // A member-only union field is checked against the union the branch sees.
+  const nodes = [
+    node("d"),
+    caseNode("c", "${d.output.action}", [["buy", "c2"]], "h"),
+    caseNode("c2", "${d.output.leg.type}", [["limt", "l"]]),
+    node("l"),
+    node("h"),
+  ];
+  const producers = produced();
+  const narrowing = compute(nodes, [], producers);
+
+  const message = loadError(() => checkCaseWhenValues(descriptorsOf(nodes), producers, new Map(), { narrowing }))
+    .message;
+
+  expect(message).toStartWith("case node 'c2': `when: limt` is not a tag of `on: ${d.output.leg.type}` (");
+  expect(message).toEndWith("); use one of: limit, market");
+});
+
+// --------------------------------------------------------------------------- //
+// Cycles and unknown ids
+// --------------------------------------------------------------------------- //
+
+test("nodes Kahn cannot order stay unnarrowed", () => {
+  // A branch target on a cycle, and what follows it, are reported unordered.
+  const edges = [data("a", "k", "v"), data("k", "a", "w"), data("k", "after", "v")];
+  const nodes = [...branches(), node("a", { dependsOn: ["b"] }), node("k"), node("after")];
+  const narrowing = compute(nodes, edges, produced());
+
+  expect(narrowing.unordered).toStrictEqual(new Set(["a", "k", "after"]));
+  expect(typeEquals(viewType(narrowing, "a"), DECISION)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "b"), BUY)).toBe(true);
+});
+
+test("unknown ids are ignored", () => {
+  // Edges and dependencies naming unknown nodes neither fail nor contribute.
+  const edges = [data("ghost", "b", "v"), data("b", "nowhere", "v")];
+  const nodes = [...branches(), node("n", { dependsOn: ["b", "ghost"] })];
+  const narrowing = compute(nodes, edges, produced());
+
+  expect(typeEquals(viewType(narrowing, "b"), BUY)).toBe(true);
+  expect(typeEquals(viewType(narrowing, "n"), BUY)).toBe(true);
+  expect(narrowing.unordered).toStrictEqual(new Set());
+});
+
+// --------------------------------------------------------------------------- //
+// narrowContractAt
+// --------------------------------------------------------------------------- //
+
+test("narrowContractAt the root and a nested record field", () => {
+  // The type at the path is replaced and every origin is kept.
+  const contract = decisionContract();
+  expect(sameOutputContract(narrowContractAt(contract, [], BUY), new ValueContract(BUY, contract.origins))).toBe(true);
+
+  const buy = new ValueContract(BUY, contract.origins);
+  const narrowed = narrowContractAt(buy, ["leg"], LIMIT) as ValueContract;
+  expect(typeEquals(narrowed.type, BUY.replace({ fields: new Map(BUY.fields).set("leg", LIMIT) }))).toBe(true);
+  expect(narrowed.origins).toStrictEqual(contract.origins);
+});
+
+test("narrowContractAt does not cross unions or missing fields", () => {
+  // A path through a union, an absent field, or a scalar cannot be narrowed.
+  const contract = decisionContract();
+  expect(narrowContractAt(contract, ["leg"], LIMIT)).toBeNull();
+  expect(narrowContractAt(new ValueContract(BUY), ["nope"], LIMIT)).toBeNull();
+  expect(narrowContractAt(new ValueContract(BUY), ["qty", "x"], LIMIT)).toBeNull();
+});
+
+test("narrowContractAt inside a partial record", () => {
+  // A proven field narrows in place; an opaque one cannot be narrowed by a path.
+  const inner = new ValueContract(DECISION, new ContractOrigins({ default: ROOT }));
+  const contract = new PartialRecordContract([
+    ["dec", inner],
+    ["raw", null],
+  ]);
+
+  const narrowed = narrowContractAt(contract, ["dec"], BUY);
+  const expected = new PartialRecordContract([
+    ["dec", new ValueContract(BUY, inner.origins)],
+    ["raw", null],
+  ]);
+  expect(sameOutputContract(narrowed, expected)).toBe(true);
+  expect(narrowContractAt(contract, ["raw", "x"], BUY)).toBeNull();
+  expect(narrowContractAt(contract, ["missing"], BUY)).toBeNull();
+});
+
+test("narrowContractAt the root of a partial record rebases field origins", () => {
+  // Replacing a whole partial record keeps each field's origins under its name.
+  const inner = new ValueContract(DECISION, new ContractOrigins({ default: ROOT, entries: [[["qty"], QTY]] }));
+  const contract = new PartialRecordContract([
+    ["dec", inner],
+    ["raw", null],
+  ]);
+  const record = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([
+      ["dec", BUY],
+      ["raw", Type.scalar(ValueKind.STRING)],
+    ]),
+    required: new Set(["dec", "raw"]),
+  });
+
+  const narrowed = narrowContractAt(contract, [], record);
+  const expected = new ValueContract(
+    record,
+    new ContractOrigins({
+      entries: [
+        [["dec"], ROOT],
+        [["dec", "qty"], QTY],
+      ],
+    }),
+  );
+  expect(sameOutputContract(narrowed, expected)).toBe(true);
+});
+
+// --------------------------------------------------------------------------- //
 // Unknown check kinds
 // --------------------------------------------------------------------------- //
 
@@ -1131,25 +1872,6 @@ test.each<NarrowingRow>([
     bases: { x: "Optional(AB)" },
   },
   {
-    id: `${NULL_NARROWING}a_null_check_after_isinstance_is_impossible`,
-    at: ["nodes", "route", "cases", 0, "when"],
-    prefix: "case node 'route': `cases[0].when`: ",
-    bases: { "input.x": "Optional(AB)" },
-  },
-  {
-    id: `${NULL_NARROWING}a_null_check_the_routing_rules_out_is_reported`,
-    at: ["nodes", "inner", "cases", 0, "when"],
-    prefix: "case node 'inner': `cases[0].when`: ",
-    bases: { "input.x": "Optional(AB)" },
-    routing: "not isinstance(input.x, A) and not isinstance(input.x, B)",
-  },
-  {
-    id: `${NULL_NARROWING}a_tag_check_after_a_null_check_is_impossible`,
-    at: ["nodes", "route", "cases", 0, "when"],
-    prefix: "case node 'route': `cases[0].when`: ",
-    bases: { "input.x": "Optional(AB)" },
-  },
-  {
     id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read",
     at: ["nodes", "x", "asserts", 0],
     prefix: "  node 'x' assert: ",
@@ -1171,23 +1893,11 @@ test.each<NarrowingRow>([
     read: "d.output.limit",
   },
   {
-    id: `${UNION_NARROWING}a_when_comparing_the_tag_with_a_non_tag_suggests_one`,
-    at: ["nodes", "route", "cases", 1, "when"],
-    prefix: "case node 'route': `cases[1].when`: ",
-    bases: { "d.output": "Decision" },
-  },
-  {
     id: `${UNION_NARROWING}a_when_read_narrowed_only_by_the_routing`,
     at: ["nodes", "inner", "cases", 0, "when"],
     prefix: "  node 'inner' cases[0].when from: ",
     bases: { "d.output": "Decision", "input.o": "Reply" },
     routing: 'd.output.action == "buy"',
     read: "d.output.nosuch",
-  },
-  {
-    id: `${UNION_NARROWING}an_isinstance_that_can_never_be_true`,
-    at: ["nodes", "route", "cases", 1, "when"],
-    prefix: "case node 'route': `cases[1].when`: ",
-    bases: { "d.output": "Decision" },
   },
 ])("narrowing message: $id", runNarrowingRow);

@@ -1,7 +1,8 @@
 /**
  * The one spelling every message uses to print a `Literal` type, a port of
- * `tests/engine/test_literal_label.py`. Later: `test_case_message_prints_the_parenthesized_literal`
- * (with flow loading).
+ * `tests/engine/test_literal_label.py`. `test_case_message_prints_the_parenthesized_literal`
+ * assembles its flow (`assembleText`), where Python loads it; its harvested case is pinned at the
+ * end.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -15,6 +16,7 @@ import {
   typeEquals,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
 
 /** Return the message of the `TypeCheckError` `readTypedefs(raw)` throws. */
 function typedefsError(raw: Readonly<Record<string, unknown>>): string {
@@ -119,4 +121,34 @@ describe("literal labels", () => {
     const union = new Type({ kind: ValueKind.OBJECT, variants });
     expect(canonicalTypeLabel(union)).toBe('Union({"a":Literal(a, z)},{"a":Literal("b c")})');
   });
+});
+
+test("case message prints the parenthesized literal", () => {
+  const flow = `id: f
+name: f
+input:
+  s: !Verdict
+typedefs:
+  Verdict: Literal(go, no_go)
+nodes:
+  route:
+    kind: case
+    on: \${input.s}
+    cases:
+      - when: nogo
+        then: a
+    else: a
+  a:
+    kind: code
+    code: return 1
+output: \${a.output}
+`;
+
+  expect(loadError(() => assembleText(flow)).message).toContain("(`Literal(go, no_go)`); use one of: go, no_go");
+});
+
+// ---------- harvested conformance cases ----------
+
+test("assembled: load-core/engine_literal_label__case_message_prints_the_parenthesized_literal", () => {
+  runCase({ id: "load-core/engine_literal_label__case_message_prints_the_parenthesized_literal", call: assembled });
 });

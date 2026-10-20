@@ -17,34 +17,36 @@
  * `::test_a_null_check_on_any_value_is_not_reported`,
  * `::test_an_isinstance_check_is_still_reported_after_a_null_check`,
  * `::test_a_null_check_the_checks_before_it_prove_null_is_reported`,
- * `::test_a_check_a_null_check_before_it_makes_dead_is_reported` and
- * `::test_a_null_check_the_routing_proves_null_is_reported`. Through `assembleText`:
- * `::test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`, its `need` def built by
- * hand (`handChild`, since def bodies load in T3-22), pinning the whole message where Python
- * matches a fragment.
+ * `::test_a_check_a_null_check_before_it_makes_dead_is_reported`,
+ * `::test_a_null_check_the_routing_proves_null_is_reported`,
+ * `::test_a_when_null_check_impossible_with_the_checks_around_it_is_reported`,
+ * `::test_a_null_check_case_under_a_branch_that_rules_out_every_member_is_reported`,
+ * `::test_a_non_null_field_is_present_in_every_record_around_it`,
+ * `::test_a_nullable_field_leaves_the_records_around_it_alone`,
+ * `::test_a_field_narrowed_to_null_leaves_the_records_around_it_alone`,
+ * `::test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive` and
+ * `::test_a_field_of_an_unchecked_optional_parent_may_still_be_null`. Through `assembleText`, the
+ * rows the CALL type check decides, the `need` def built by hand (`handChild`, since def bodies
+ * load in T3-22): `::test_a_narrowed_optional_field_fills_a_required_input` (4),
+ * `::test_a_narrowed_field_makes_its_parent_non_null` (2) and
+ * `::test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`, pinning the whole
+ * message where Python matches a fragment.
  *
  * Changed: facts and environments compare with `toStrictEqual`, which also compares classes;
  * `Members` takes an array. `declaredImpossible` and `neverValue` are exported for these tests
- * (Python's `_declared_impossible` and `_never_value`). The pinned `compose_null_narrowing__*`
- * cases sit in `narrowing_core.test.ts`'s table, except
- * `compose_null_narrowing__a_null_when_is_no_on_value_even_on_a_narrowed_field`, whose error the
- * CASE build raises: it is pinned at the end (`assemble`), for
- * `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`; and
- * `compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input`, whose error the
- * cross-flow binding check raises: it is pinned at the end (`assembledWith`, the `need` def built
- * by hand).
+ * (Python's `_declared_impossible` and `_never_value`), and `narrowType` from `narrowing.ts`
+ * (Python's `_narrow_type`); its types compare with `typeEquals` and its required sets with
+ * `toStrictEqual`. The flows load with `assembleText` where Python calls `load_flow`. The
+ * pinned `compose_null_narrowing__*` cases are at the end: `…__a_null_when_is_no_on_value_even_on_a_narrowed_field`,
+ * whose error the CASE build raises, for `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`;
+ * `…__an_unnarrowed_optional_field_into_a_required_input`, whose error the cross-flow binding
+ * check raises (`assembledWith`, the `need` def built by hand); the three `checkImpossibleWhens`
+ * raises; and `…__a_field_of_an_unchecked_optional_parent_may_be_null`, whose error the
+ * exhaustiveness check raises. `…__a_node_assert_check_made_impossible_is_reported` sits in
+ * `narrowing_core.test.ts`'s table.
  *
- * Later (T3-20): `test_a_non_null_field_is_present_in_every_record_around_it`,
- * `test_a_nullable_field_leaves_the_records_around_it_alone` and
- * `test_a_field_narrowed_to_null_leaves_the_records_around_it_alone`.
- *
- * Later (T3-22): `test_a_when_null_check_impossible_with_the_checks_around_it_is_reported`,
- * `test_a_node_assert_check_a_null_check_makes_impossible_is_reported`,
- * `test_a_null_check_case_under_a_branch_that_rules_out_every_member_is_reported`,
- * `test_a_narrowed_optional_field_fills_a_required_input`,
- * `test_a_narrowed_field_makes_its_parent_non_null`,
- * `test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive` and
- * `test_a_field_of_an_unchecked_optional_parent_may_still_be_null`.
+ * Later (T3-20): `test_a_node_assert_check_a_null_check_makes_impossible_is_reported` (node
+ * asserts).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -77,13 +79,15 @@ import {
   unresolvedType,
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
+import { narrowType } from "../../src/compose/validate/narrowing.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembledWith,
   assembleText,
+  type CaseRow,
   handChild,
   loadError,
   parametersFromYaml,
@@ -360,30 +364,53 @@ test("a null check the routing proves null is reported", () => {
 
 // ---------- typed CALL arguments ----------
 
-/** A flow whose searched CASE passes `${input.a.b}` to a def `need` taking `!str` when `when`. */
-const nestedFlow = (when: string) =>
+/**
+ * A flow whose searched CASE passes `source` (default `${input.a.b}`) to a def `need` taking
+ * `!<sink>` (default `str`) when `when`; the input `a` is `aType` (default `A`).
+ */
+const nestedFlow = (when: string, aType = "A", source = "${input.a.b}", sink = "str") =>
   "id: p\nname: p\n" +
   "typedefs:\n  A: {b: Optional(str)}\n" +
-  "input:\n  a: !A\n" +
+  `input:\n  a: !${aType}\n` +
   "nodes:\n" +
   "  route:\n    kind: case\n    cases:\n" +
   `      - when: "${when}"\n` +
-  "        then: call(need, v=${input.a.b})\n" +
+  `        then: call(need, v=${source})\n` +
   "    else: e\n" +
   "  e:\n    kind: code\n    code: return 1\n" +
   "output: ${route.output}\n" +
   "defs:\n  need:\n" +
-  "    input:\n      v: !str\n" +
+  `    input:\n      v: !${sink}\n` +
   "    nodes:\n      p:\n        kind: code\n" +
   "        input:\n          o: ${input.v}\n        code: return 1\n" +
   "    output: ${p.output}\n";
 
-/** The `need` def built by hand: input `v: !str`, an untyped `p`, returned. */
-const NEED = handChild({
-  inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),
-  producers: { p: null },
-  output: "${p.output}",
+/** The `need` def built by hand: input `v: !<sink>` (default `str`), an untyped `p`, returned. */
+const need = (sink = "str") =>
+  handChild({
+    inputs: parametersFromYaml(`input:\n  v: !${sink}\n`, readTypedefs({ A: { b: "Optional(str)" } })),
+    producers: { p: null },
+    output: "${p.output}",
+  });
+
+const NEED = need();
+
+describe("a narrowed optional field fills a required input", () => {
+  for (const when of ["isinstance(input.a.b, str)", "input.a.b != null"]) {
+    for (const aType of ["A", "Optional(A)"]) {
+      test(`${when} on ${aType}`, () => {
+        assembleText(nestedFlow(when, aType), "flow.yaml", { children: { need: NEED } });
+      });
+    }
+  }
 });
+
+test.each(["isinstance(input.a.b, str)", "input.a.b != null"])(
+  "a narrowed field makes its parent non-null: %s",
+  (when) => {
+    assembleText(nestedFlow(when, "Optional(A)", "${input.a}", "A"), "flow.yaml", { children: { need: need("A") } });
+  },
+);
 
 test("an unnarrowed optional field still cannot fill a required input", () => {
   const error = loadError(() =>
@@ -393,6 +420,141 @@ test("an unnarrowed optional field still cannot fill a required input", () => {
   expect(error.message).toBe(
     "node 'route' cases[0].then call(need) argument 'v' — child expects 'str', source is 'Optional(str)'",
   );
+});
+
+// --------------------------------------------------------------------------- //
+// Nested optional fields
+// --------------------------------------------------------------------------- //
+
+test("a non-null field is present in every record around it", () => {
+  const narrowed = narrowType(t("Optional(Outer)"), ["h", "b"], STR)!;
+  expect(narrowed.nullable).toBe(false);
+  expect(narrowed.required!.has("h")).toBe(true);
+  const holder = narrowed.fields!.get("h")!;
+  expect(holder.nullable).toBe(false);
+  expect(holder.required!.has("b")).toBe(true);
+  expect(typeEquals(holder.fields!.get("b")!, STR)).toBe(true);
+});
+
+test("a nullable field leaves the records around it alone", () => {
+  const outer = t("Optional(Outer)");
+  const narrowed = narrowType(outer, ["h", "b"], t("Optional(str)"))!;
+  expect(narrowed.nullable).toBe(true);
+  expect(narrowed.required).toStrictEqual(outer.required);
+  expect(narrowed.fields!.get("h")!.required).toStrictEqual(outer.fields!.get("h")!.required);
+  expect(narrowed.fields!.get("h")!.nullable).toBe(true);
+});
+
+test("a field narrowed to null leaves the records around it alone", () => {
+  const holder = t("Optional(Holder)");
+  const narrowed = narrowType(holder, ["b"], NULL)!;
+  expect(narrowed.nullable).toBe(true);
+  expect(narrowed.required).toStrictEqual(holder.required);
+});
+
+// --------------------------------------------------------------------------- //
+// Impossible null checks in a flow
+// --------------------------------------------------------------------------- //
+
+const AB_FLOW_HEAD =
+  "id: p\nname: p\n" +
+  "typedefs:\n" +
+  "  A:\n    kind: Literal(a)\n    n: int\n" +
+  "  B:\n    kind: Literal(b)\n    s: str\n" +
+  "  AB: Union(A, B)\n" +
+  "input:\n  x: !Optional(AB)\n" +
+  "nodes:\n";
+
+/** A CODE node `nodeId` returning `1`. */
+function codeNode(nodeId: string): string {
+  return `  ${nodeId}:\n    kind: code\n    code: return 1\n`;
+}
+
+/** A searched CASE `nodeId` routing to `then` under `when`, else to `else_`. */
+function searched(nodeId: string, when: string, then: string, else_: string): string {
+  return (
+    `  ${nodeId}:\n    kind: case\n    cases:\n` +
+    `      - when: "${when}"\n        then: ${then}\n` +
+    `    else: ${else_}\n`
+  );
+}
+
+/** The message of the `LoadError` assembling `text` throws. */
+const assembleError = (text: string): string => loadError(() => assembleText(text)).message;
+
+describe("a when null check impossible with the checks around it is reported", () => {
+  test.each<[string, string, string]>([
+    [
+      "tags-after-null-check",
+      "input.x != null and input.x.kind != 'a' and input.x.kind != 'b'",
+      '`input.x.kind != "b"` can never be true here: input.x is B, by the checks ' +
+        'before it, so `input.x.kind == "b"` is always true',
+    ],
+    [
+      "null-check-after-isinstance",
+      "isinstance(input.x, A) or isinstance(input.x, B) or input.x != null",
+      "`input.x != null` can never be true here: input.x is None, by the checks before it",
+    ],
+    [
+      "null-check-after-tags",
+      "input.x.kind == 'a' or input.x.kind == 'b' or input.x != null",
+      "`input.x != null` can never be true here: input.x is None, by the checks before it",
+    ],
+  ])("%s", (_id, when, message) => {
+    const text =
+      AB_FLOW_HEAD + searched("route", when, "t", "e") + codeNode("t") + codeNode("e") + "output: ${input.x}\n";
+    expect(assembleError(text)).toContain(`case node 'route': \`cases[0].when\`: ${message}`);
+  });
+});
+
+test("a null check case under a branch that rules out every member is reported", () => {
+  const text =
+    AB_FLOW_HEAD +
+    searched("outer", "not isinstance(input.x, A) and not isinstance(input.x, B)", "inner", "e") +
+    searched("inner", "input.x != null", "t", "e2") +
+    codeNode("t") +
+    codeNode("e") +
+    codeNode("e2") +
+    "output: ${input.x}\n";
+  expect(assembleError(text)).toContain(
+    "case node 'inner': `cases[0].when`: `input.x != null` can never be true here: " +
+      "input.x is None, by the case branch that routes this node",
+  );
+});
+
+/**
+ * A flow whose read CASE routes, under `when`, to an `on:` CASE over the tag `input.a.m` that
+ * lists every tag and has no `else:`; `input.a` is `Optional(A)`.
+ */
+function exhaustiveOnFlow(when: string): string {
+  return (
+    "id: p\nname: p\n" +
+    "typedefs:\n  A:\n    b: Optional(str)\n    m: Literal(p, q)\n" +
+    "input:\n  a: !Optional(A)\n" +
+    "nodes:\n" +
+    "  route:\n    kind: case\n    cases:\n" +
+    `      - when: "${when}"\n        then: inner\n` +
+    "    else: e\n" +
+    "  inner:\n    kind: case\n    on: ${input.a.m}\n    cases:\n" +
+    "      - when: p\n        then: np\n" +
+    "      - when: q\n        then: nq\n" +
+    "  np:\n    kind: code\n    code: return 1\n" +
+    "  nq:\n    kind: code\n    code: return 2\n" +
+    "  e:\n    kind: code\n    code: return 3\n" +
+    "output: ${route.output}\n"
+  );
+}
+
+test.each(["input.a.b != null", "input.a != null"])(
+  "a null check on a field or its parent makes a sibling tag exhaustive: %s",
+  (when) => {
+    // A non-null `input.a.b` means `input.a` is not null, so its required tag `m` is not.
+    assembleText(exhaustiveOnFlow(when));
+  },
+);
+
+test("a field of an unchecked optional parent may still be null", () => {
+  expect(assembleError(exhaustiveOnFlow("input.a == null"))).toContain("${input.a.m} may be null");
 });
 
 // ---------- harvested conformance cases ----------
@@ -411,3 +573,12 @@ test("assembledWith: load-types/compose_null_narrowing__an_unnarrowed_optional_f
     call: assembledWith({ need: NEED }),
   });
 });
+
+test.each<CaseRow>(
+  [
+    "a_null_check_after_isinstance_is_impossible",
+    "a_null_check_the_routing_rules_out_is_reported",
+    "a_tag_check_after_a_null_check_is_impossible",
+    "a_field_of_an_unchecked_optional_parent_may_be_null",
+  ].map((name) => ({ id: `load-types/compose_null_narrowing__${name}`, call: assembled })),
+)("assemble: $id", runCase);

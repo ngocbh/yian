@@ -7,11 +7,12 @@
  * `test_null_default_over_a_coalesce_of_different_types_is_untyped`,
  * `test_null_default_over_a_nullable_head_stays_optional`,
  * `test_null_default_over_a_partial_or_unknown_producer_is_untyped`,
- * `test_other_defaults_stay_untyped` and `test_null_default_over_a_flow_input_is_optional`).
+ * `test_other_defaults_stay_untyped` and `test_null_default_over_a_flow_input_is_optional`), and
+ * `test_on_over_a_null_default_is_checked_for_exhaustiveness`, whose harvested case is pinned at the
+ * end.
  *
- * Changed: producer and flow-input tables are `Map`s.
- *
- * Later (T3-22): `test_on_over_a_null_default_is_checked_for_exhaustiveness`, which loads a flow.
+ * Changed: producer and flow-input tables are `Map`s. The flow assembles (`assembleText`), where
+ * Python loads it.
  */
 
 import { expect, test } from "bun:test";
@@ -26,6 +27,7 @@ import {
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -112,3 +114,44 @@ test("a null default over a flow input is optional", () => {
 
   expect(typeEquals(exact(resolved).type, OPTIONAL_STR)).toBe(true);
 });
+
+const NULL_DEFAULT_ON = `
+id: f
+name: f
+nodes:
+  cls:
+    kind: code
+    output: Literal(a, b, c)
+    code: |
+      return "a"
+  route:
+    kind: case
+    on: \${cls.output :- null}
+    cases:
+      - when: a
+        then: na
+      - when: b
+        then: nb
+  na:
+    kind: code
+    output: str
+    code: |
+      return "A"
+  nb:
+    kind: code
+    output: str
+    code: |
+      return "B"
+output: \${na.output | nb.output}
+`;
+
+test("an on over a null default is checked for exhaustiveness", () => {
+  // `on: ${cls.output :- null}` has the enum's type, so a missing tag is a load error.
+  expect(loadError(() => assembleText(NULL_DEFAULT_ON)).message).toContain("non-exhaustive");
+});
+
+// ---------- harvested conformance cases ----------
+
+test.each<CaseRow>([
+  { id: "load-case/compose_skipped_outputs__on_over_a_null_default_is_checked_for_exhaustiveness", call: assembled },
+])("assemble: $id", runCase);

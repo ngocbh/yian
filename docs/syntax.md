@@ -3428,6 +3428,16 @@ Text from a source the loader can't type, such as an untyped `code` output, is n
 longer converted when the child starts either: it fails with `contract.input`. Type the
 source, or convert the value in the producing node.
 
+Changed (TS yian): an unquoted date or timestamp is text (see [YAML values](#yaml-values)).
+This changes the bullet above that says an unquoted `2026-01-01` fits neither a `date` nor a
+`str` input, the date line of the list above, and the third example line: an unquoted date or
+timestamp, alone, inside a list or record, as an element of a literal `over:` list, or as a
+`loop` seed, is text, so it fits a `str` input, and a `date` or `datetime` input when it
+parses as one. Text for a `float` input gets the hint for the number it reads as: `"5"` gives
+`write 5 without quotes`. Text spelling an int of any length gets the `write ... without
+quotes` hint, since there is no digit limit. Values in these messages are in the text form
+(`[true,"no"]`).
+
 Changed: a literal `loop` seed that doesn't fit a named body's input, such as `n: "1"`
 into an `int` input, used to fail when the body started, or not at all when the loop
 never ran. It now fails at load. So does a `${...}` seed that reads no reference, such

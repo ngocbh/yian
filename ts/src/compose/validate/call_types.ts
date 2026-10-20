@@ -14,9 +14,11 @@
  * `input:` mapping span).
  *
  * Knows about: `compile/validation` (the type comparator), `expr` (the binding-null analysis and
- * escape parsing), `compose/helpers` (shared output-contract inference, the `Any` source hint and
- * load diagnostics), `compose/nodes/loop` (a LOOP body's inputs as its seeds enter them, and its
- * carried field types), and `compose/validate/typed_bindings` (literal and `${item}` helpers).
+ * escape parsing), `compose/helpers` (shared output-contract inference, the `Any` source hint, YAML
+ * 1.1 boolean words and load diagnostics), `compose/nodes/loop` (a LOOP body's inputs as its seeds
+ * enter them, and its carried field types), `compose/validate/typed_bindings` (literal and
+ * `${item}` helpers), and `nodes/binding` (the run boundary's string conversion, named in a hint
+ * only).
  * Never imports: the loader or the compose package facade; only they import this back.
  */
 
@@ -34,6 +36,7 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
+import { coerceParam } from "../../nodes/binding.ts";
 import type { LoopNode } from "../../nodes/loop/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
@@ -42,6 +45,7 @@ import {
   isList,
   isRecord,
   jsTypeName,
+  type Type,
   TypeCheckError,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
@@ -54,7 +58,8 @@ import {
   resolveOutputBindingContract,
   type TypeFn,
 } from "../helpers/output_contracts.ts";
-import { anySourceHint } from "../helpers/tags.ts";
+import { anySourceHint, yamlQuoted } from "../helpers/tags.ts";
+import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
 import type { Narrowing } from "./narrowing.ts";
@@ -282,7 +287,9 @@ function bindingMismatch(src: unknown, decl: Parameter, scope: Scope): string | 
       const kind = tree instanceof Tree ? tree.data : null;
       if (
         (path !== null && path.split(".")[0] === "item") ||
-        ((kind === "default_expr" || kind === "required_expr") && operandPath((tree as Tree).children[0]!) !== null)
+        (tree instanceof Tree &&
+          (tree.data === "default_expr" || tree.data === "required_expr") &&
+          operandPath(tree.children[0]!) !== null)
       ) {
         return operandMismatch(tree, decl, scope, { nonNull: false });
       }
@@ -483,15 +490,71 @@ function valueMismatch(
 }
 
 /**
- * Suggest how to rewrite a literal that doesn't fit `decl`, else `null`; no rewrite is suggested
- * yet.
+ * Suggest how to rewrite a literal that doesn't fit `decl`, else `null`.
+ *
+ * A YAML 1.1 boolean spelling such as `yes` gets the `true`/`false` to write when a boolean fits.
+ * Other text that a run boundary would convert to a finite number or a bool is written unquoted
+ * instead. A value YAML read as a non-text scalar, a boolean or a number, is quoted when its text
+ * would fit.
  *
  * @param value The literal that failed.
  * @param decl The child input, with a declared contract.
  * @param text The literal as written, if known.
- * @param options.yaml Whether YAML read the literal, rather than the `${...}` expression syntax.
+ * @param options.yaml Whether YAML read the literal, rather than the `${...}` expression syntax;
+ *   only a YAML literal gets the note on how YAML reads booleans.
  * @returns The hint, or `null` when rewriting the literal can't help.
  */
 function literalHint(value: unknown, decl: Parameter, text: string | null, options: { yaml: boolean }): string | null {
+  const childType = decl.contract!.type;
+  const fix = formerBooleanFix(value, childType);
+  if (fix !== null) return fix[1];
+  if (typeof value === "string") {
+    let candidate: unknown;
+    try {
+      candidate = coerceParam(
+        new Parameter(decl.name, {
+          contract: decl.contract,
+          required: decl.required,
+          hasDefault: decl.hasDefault,
+          default: decl.default,
+          coerceStrings: true,
+          origin: decl.origin,
+          defaultOrigin: decl.defaultOrigin,
+        }),
+        value,
+      );
+    } catch (error) {
+      // Text spelling a float past the double range, or an int the runtime refuses, fits no
+      // number however it's written.
+      if (error instanceof TypeCheckError) return null;
+      throw error;
+    }
+    if (typeof candidate === "string" || !fits(childType, candidate)) return null;
+    // YAML reads an unquoted `inf` as text, so writing it doesn't help.
+    if (typeof candidate === "number" && !Number.isFinite(candidate)) return null;
+    const written = shownLiteral(buildValueAs(childType, candidate).toObject());
+    return `text is not converted between flows, so write ${written} without quotes`;
+  }
+  if (typeof value === "boolean") {
+    if (!fits(childType, "true")) return null;
+    if (!options.yaml) return "quote it to keep it as text";
+    return "quote it to keep it as text (YAML reads unquoted true/false as booleans)";
+  }
+  if (typeof value === "bigint" || typeof value === "number") {
+    const written = text || shownLiteral(value);
+    if (!fits(childType, written)) return null;
+    return `quote it to keep it as text: ${yamlQuoted(written)}`;
+  }
   return null;
+}
+
+/** Return whether `value` validates against `childType`. */
+function fits(childType: Type, value: unknown): boolean {
+  try {
+    buildValueAs(childType, value);
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
+  return true;
 }

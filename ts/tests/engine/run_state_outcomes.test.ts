@@ -2,8 +2,7 @@
  * Transactional node-outcome tests for the run-state reducer: a port of
  * `tests/engine/test_run_state_outcomes.py`.
  *
- * Ported: `test_route_derives_skip_closure_without_skip_record`,
- * `test_route_takes_every_edge_matching_else_or_named_handle` (2 rows),
+ * Ported: `test_route_takes_every_edge_matching_else_or_named_handle` (2 rows),
  * `test_route_preserves_dfs_observers_and_existing_fifo_readiness`,
  * `test_route_skip_join_matches_control_data_ordering_and_wait_semantics`,
  * `test_route_rejects_a_previously_settled_outgoing_edge` (2 rows),
@@ -13,7 +12,6 @@
  * `test_route_observers_are_fresh_and_isolated_from_prepared_mutation`,
  * `test_route_record_replay_reconstructs_identical_state`,
  * `test_route_scans_each_touched_head_incoming_adjacency_once`,
- * `test_route_skip_flood_is_iterative_for_a_deep_chain`,
  * `test_success_commits_canonical_value_before_fifo_successors`,
  * `test_success_replay_revalidates_partial_record_contract`,
  * `test_success_preserves_sibling_flight_and_appends_new_readiness_fifo`,
@@ -69,6 +67,8 @@
  *   throwing `flow.incoming` and `flow.outgoing` before the commit.
  * - `test_route_derives_skip_closure_without_skip_record`: assigning a delta field is a
  *   `TypeError`.
+ * - `test_route_skip_flood_is_iterative_for_a_deep_chain`: the chain is 100,000 nodes deep, past
+ *   JSC's stack, where Python's 1,500 is past CPython's recursion limit but not JSC's.
  * - `test_success_validates_ordinary_target_against_output_contract_type`: a `float` slot keeps
  *   the int `3n` an int (the value layer's rule), so the test also shows a text output refused
  *   against the target's `float` contract.
@@ -1047,10 +1047,7 @@ test("a route derives its skip closure without a skip record", () => {
   ]);
 });
 
-test.each([
-  [ELSE_HANDLE, ELSE_HANDLE],
-  ["go", "go"],
-])("a route takes every edge matching the else or a named handle: %s", (selected, matching) => {
+test.each([ELSE_HANDLE, "go"])("a route takes every edge matching the else or a named handle: %s", (handle) => {
   const flow = CompiledFlow.fromParts(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
@@ -1062,14 +1059,14 @@ test.each([
     ]),
     [
       new Edge("start-router", START_ID, "router"),
-      new Edge("match-left", "router", "left", { sourceHandle: matching }),
-      new Edge("match-right", "router", "right", { sourceHandle: matching }),
+      new Edge("match-left", "router", "left", { sourceHandle: handle }),
+      new Edge("match-right", "router", "right", { sourceHandle: handle }),
       new Edge("other", "router", "dead", { sourceHandle: "other" }),
     ],
   );
   const { state, log } = routeInFlight(flow);
 
-  commitPrepared(log, state, prepareNodeRouted(state, "router", selected));
+  commitPrepared(log, state, prepareNodeRouted(state, "router", handle));
 
   expect(state.edgeState.get("match-left")).toBe(NodeState.TAKEN);
   expect(state.edgeState.get("match-right")).toBe(NodeState.TAKEN);
@@ -1105,13 +1102,13 @@ test("a route keeps DFS observers and the existing FIFO readiness", () => {
 });
 
 test.each([
-  ["missing", "yes", "NodeRouted node 'missing' does not exist in the flow"],
-  ["chosen", "yes", "NodeRouted node 'chosen' is not in-flight"],
-] as const)("a route refuses an unknown router or frontier: %s", (nodeId, handle, message) => {
+  ["missing", "NodeRouted node 'missing' does not exist in the flow"],
+  ["chosen", "NodeRouted node 'chosen' is not in-flight"],
+] as const)("a route refuses an unknown router or frontier: %s", (nodeId, message) => {
   const { state, log } = routeInFlight();
   const before = snapshot(state);
 
-  expectError(() => prepareNodeRouted(state, nodeId, handle), RangeError, message);
+  expectError(() => prepareNodeRouted(state, nodeId, "yes"), RangeError, message);
 
   expectUnchanged(state, before);
   expect(log.nextSequence).toBe(4);
@@ -1256,7 +1253,7 @@ test("a route commit uses only the materialized delta after append", () => {
 });
 
 test("a route skip flood is iterative for a deep chain", () => {
-  const depth = 1500;
+  const depth = 100_000;
   const nodes = new Map<string, Node>([
     [START_ID, new StartNode(START_ID)],
     ["router", func("router")],
@@ -1375,11 +1372,14 @@ function terminalSkipWithSiblingInFlight(): { state: RunState; log: MemoryRunLog
   return { state, log };
 }
 
+/** The diagnosis of a route that first skips END's `zeta` group. */
+const ZETA = "terminal output 'zeta' skipped";
+
 /** Return the derived failure of a route from `router` that first skips END's `zeta` group. */
 function zetaUnreachable(trace: readonly OriginRef[] = []): Failure {
   return new Failure({
     code: "graph.terminal_unreachable",
-    message: "terminal output 'zeta' skipped",
+    message: ZETA,
     nodeId: "router",
     trace,
   });
@@ -1521,8 +1521,6 @@ test("a noncausal route replay refuses a terminal failure", () => {
   expectUnchanged(state, before);
   expect(log.nextSequence).toBe(state.nextSequence);
 });
-
-const ZETA = "terminal output 'zeta' skipped";
 
 test.each<[string, Failure, string]>([
   [

@@ -476,14 +476,6 @@ export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunSta
   return { state, log };
 }
 
-/** Return a state and log of `flow` with START succeeded as `{seed: true}` and `router` in flight. */
-export function routerInFlight(flow: CompiledFlow): { state: RunState; log: MemoryRunLog } {
-  const { state, log } = initializedAndStarted(flow);
-  commitStartSuccess(state, log, { seed: true });
-  commitPrepared(log, state, prepareNodeStarted(state, "router"));
-  return { state, log };
-}
-
 /**
  * Return a binding capture of `inputs` for `node`: each input a literal route, under the node's
  * execution scope (Python's `_graph_builder._forward_capture`).

@@ -15,8 +15,9 @@
  *
  * Changed: Python's `ValueError` is a `RangeError` here; each rejected row names its one class and
  * full message, where Python matches a part of it or only the class. The `0` target row sets
- * `commitAs` by cast. The state helpers are the shared ones: `routerInFlight` and
- * `callRedirectFlow`, `reducerSnapshot` (a superset of Python's value-only snapshot) for the
+ * `commitAs` by cast. The state helpers are the shared ones: `routeInFlight` (START
+ * commits the default output, where Python's `_router_in_flight` commits `{"seed": True}`, which
+ * no row reads) and `callRedirectFlow`, `reducerSnapshot` (a superset of Python's value-only snapshot) for the
  * unchanged-state checks, and `replayOutcomeLog` for Python's local `_replay`; the run id and
  * fingerprint are the shared fixture's. Each test that commits a route pins `state.ready` after
  * it.
@@ -47,7 +48,7 @@ import {
   FuncNode,
   reducerSnapshot,
   replayOutcomeLog,
-  routerInFlight,
+  routeInFlight,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
@@ -151,7 +152,7 @@ function nestedCallRedirectFlow(): CompiledFlow {
 }
 
 test("a required CALL child END redirect skips the parent's output path", () => {
-  const { state, log } = routerInFlight(callRedirectFlow());
+  const { state, log } = routeInFlight(callRedirectFlow());
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
 
@@ -164,7 +165,7 @@ test("a required CALL child END redirect skips the parent's output path", () => 
 });
 
 test("a redirected skip completes a coalesced fallback and the run", () => {
-  const { state, log } = routerInFlight(callRedirectFlow({ fallback: true }));
+  const { state, log } = routeInFlight(callRedirectFlow({ fallback: true }));
   commitPrepared(log, state, prepareNodeStarted(state, "fallback"));
   commitPrepared(log, state, prepareNodeSucceeded(state, "fallback", "fallback-value"));
 
@@ -188,7 +189,7 @@ test.each<[unknown, new (...args: never[]) => Error, string]>([
   ["", RangeError, "node 'call/__end__' skipped output target must be non-empty"],
   [0, TypeError, "node 'call/__end__' skipped output target must be a string"],
 ])("a malformed skipped output target leaves the state unchanged: %p", (target, cls, message) => {
-  const { state, log } = routerInFlight(callRedirectFlow());
+  const { state, log } = routeInFlight(callRedirectFlow());
   state.flow.nodes.get(CHILD_END)!.commitAs = target as string;
   const before = reducerSnapshot(state);
   const sequence = log.nextSequence;
@@ -221,7 +222,7 @@ test("several redirect owners are refused before the skip", () => {
       new Edge("target-end", "target", END_ID, { inputGroup: "result" }),
     ],
   );
-  const { state, log } = routerInFlight(flow);
+  const { state, log } = routeInFlight(flow);
   const before = reducerSnapshot(state);
   const sequence = log.nextSequence;
 
@@ -254,7 +255,7 @@ test("a live redirect target is refused before the skip", () => {
       new Edge("target-end", "target", END_ID, { inputGroup: "result" }),
     ],
   );
-  const { state, log } = routerInFlight(flow);
+  const { state, log } = routeInFlight(flow);
   expect(state.ready).toEqual(["target"]);
   const before = reducerSnapshot(state);
   const sequence = log.nextSequence;
@@ -275,7 +276,7 @@ test("settled redirect residue doesn't own a future output", () => {
   const residue = func("settled-residue");
   residue.commitAs = "pruned-anchor";
   flow.nodes.set(residue.id, residue);
-  const { state, log } = routerInFlight(flow);
+  const { state, log } = routeInFlight(flow);
   state.nodeState.set(residue.id, NodeState.TAKEN);
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
@@ -287,7 +288,7 @@ test("settled redirect residue doesn't own a future output", () => {
 });
 
 test("a MAP collector redirects its skipped output to the spawner", () => {
-  const { state, log } = routerInFlight(mapRedirectFlow());
+  const { state, log } = routeInFlight(mapRedirectFlow());
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
 
@@ -301,7 +302,7 @@ test("a MAP collector redirects its skipped output to the spawner", () => {
 });
 
 test("a LOOP driver redirects its skipped output to the origin", () => {
-  const { state, log } = routerInFlight(loopRedirectFlow());
+  const { state, log } = routeInFlight(loopRedirectFlow());
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
 
@@ -315,7 +316,7 @@ test("a LOOP driver redirects its skipped output to the origin", () => {
 });
 
 test("nested redirects propagate to the top-level END", () => {
-  const { state, log } = routerInFlight(nestedCallRedirectFlow());
+  const { state, log } = routeInFlight(nestedCallRedirectFlow());
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
 
@@ -330,7 +331,7 @@ test("nested redirects propagate to the top-level END", () => {
 });
 
 test("a redirected skip replays without a terminal record", () => {
-  const live = routerInFlight(nestedCallRedirectFlow());
+  const live = routeInFlight(nestedCallRedirectFlow());
   commitPrepared(live.log, live.state, prepareNodeRouted(live.state, "router", ELSE_HANDLE));
 
   expect(live.log.records().map((envelope) => envelope.record.constructor)).toEqual([

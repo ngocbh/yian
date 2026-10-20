@@ -29,7 +29,7 @@ import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
-import { callRedirectFlow, routerInFlight } from "./run_state_fixtures.ts";
+import { callRedirectFlow, routeInFlight } from "./run_state_fixtures.ts";
 
 test("a case may not take the else handle as a branch", () => {
   expect(() => new Case(ELSE_HANDLE, { when: "True" })).toThrow(RangeError);
@@ -46,7 +46,7 @@ test("a case may not take the else handle as a branch", () => {
 });
 
 test("a route to an unknown handle named default is rejected", () => {
-  const { state } = routerInFlight(callRedirectFlow());
+  const { state } = routeInFlight(callRedirectFlow());
 
   let caught: unknown;
   try {
@@ -62,7 +62,7 @@ test("a route to an unknown handle named default is rejected", () => {
 });
 
 test("the else handle without an edge skips every branch", () => {
-  const { state, log } = routerInFlight(callRedirectFlow());
+  const { state, log } = routeInFlight(callRedirectFlow());
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
 

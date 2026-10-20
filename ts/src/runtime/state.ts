@@ -2334,7 +2334,7 @@ function makeTerminalUnreachableFailure(
 ): Failure {
   return new Failure({
     code: "graph.terminal_unreachable",
-    message: `terminal output ${terminalSkippedOutputText(state, edgeUpdates)} skipped`,
+    message: terminalUnreachableMessage(state, edgeUpdates),
     nodeId: causalNodeId,
     trace: state.flow.nodes.get(causalNodeId)!.failureTrace(),
   });
@@ -2349,7 +2349,7 @@ function validateRecordedTerminalFailure(
   const failure = record.terminalFailure;
   if (failure === null) throw new RangeError("causal NodeRoutedRecord requires a persisted terminal failure");
   if (!isExactly(failure, Failure)) throw new TypeError("NodeRoutedRecord terminal failure must be a Failure");
-  const expectedMessage = `terminal output ${terminalSkippedOutputText(state, edgeUpdates)} skipped`;
+  const expectedMessage = terminalUnreachableMessage(state, edgeUpdates);
   if (failure.code !== "graph.terminal_unreachable") {
     throw new RangeError("route terminal failure has the wrong failure code");
   }
@@ -2361,10 +2361,10 @@ function validateRecordedTerminalFailure(
   return failure;
 }
 
-/** The skipped END group's name as a diagnosis renders it: quoted, or `null`. */
-function terminalSkippedOutputText(state: RunState, edgeUpdates: ReadonlyMap<string, NodeState>): string {
+/** The diagnosis of a skipped END group, naming it quoted, or `null`. */
+function terminalUnreachableMessage(state: RunState, edgeUpdates: ReadonlyMap<string, NodeState>): string {
   const name = terminalSkippedOutputName(state, edgeUpdates);
-  return name === null ? writeAsText(null) : reprText(name);
+  return `terminal output ${name === null ? writeAsText(null) : reprText(name)} skipped`;
 }
 
 /**
@@ -2379,8 +2379,8 @@ function terminalSkippedOutputName(state: RunState, edgeUpdates: ReadonlyMap<str
   for (const edge of state.flow.incoming(state.flow.endId)) {
     if (edge.sourceHandle !== null || edge.ordering) continue;
     const skipped = (edgeUpdates.get(edge.id) ?? state.edgeState.get(edge.id)) === NodeState.SKIPPED;
-    const group = groups.get(edge.inputGroup);
-    groups.set(edge.inputGroup, group === undefined ? [edge.optional, skipped] : [group[0], group[1] && skipped]);
+    const [optional, allSkipped] = groups.get(edge.inputGroup) ?? [edge.optional, true];
+    groups.set(edge.inputGroup, [optional, allSkipped && skipped]);
   }
   for (const [name, [optional, allSkipped]] of groups) {
     if (!optional && allSkipped) return name;
@@ -2450,21 +2450,21 @@ function requireUnambiguousRedirect(options: {
   isExecutable: boolean;
   hasIncoming: boolean;
 }): void {
-  const { ownerId, target, owners, disposition } = options;
+  const { ownerId, target, owners, hasCommittedValue, disposition, isExecutable, hasIncoming } = options;
   if (owners.length !== 1 || owners[0] !== ownerId) {
     throw new RangeError(
       `logical output target ${reprText(target)} has multiple skipped output owners: ${writeAsText([...owners])}`,
     );
   }
-  if (options.hasCommittedValue) {
+  if (hasCommittedValue) {
     throw new RangeError(`logical output target ${reprText(target)} already has a committed value`);
   }
   if (!NODE_STATES.has(disposition)) {
     throw new RangeError(`logical output target ${reprText(target)} has an invalid disposition`);
   }
-  if (options.isExecutable) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+  if (isExecutable) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
   if (disposition === NodeState.UNKNOWN) {
-    if (options.hasIncoming) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+    if (hasIncoming) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
     return;
   }
   if (disposition !== NodeState.EXPANDED) {

@@ -244,8 +244,8 @@ export async function buildMemories(
       throw new MemorySetupError(`flow id ${reprText(flowId)} cannot name a directory under the memory root`);
     }
     // Joined as text, never `path.join`, which folds `..` without looking at symlinks. An empty
-    // root is relative and a trailing `/` is dropped, as Python's `Path` reads them.
-    base = [root === "" ? "." : root.replace(/\/+$/, ""), flowId].join("/");
+    // root adds no segment and a trailing `/` is dropped, as Python's `Path` reads them.
+    base = root === "" ? flowId : [root.replace(/\/+$/, ""), flowId].join("/");
   }
   // Copied into maps so a key such as `toString` never finds `Object.prototype`.
   const paths = new Map<string, unknown>(Object.entries(storage ?? {}));
@@ -269,7 +269,7 @@ export async function buildMemories(
     // Backends take text paths only. Checked here so other values are not reported as a config
     // error, and null does not silently mean RAM.
     if (typeof path !== "string") {
-      throw new MemorySetupError(`storage[${writeAsJson(key)}] must be a string path, not ${jsTypeName(path)}`);
+      throw new MemorySetupError(`storage[${writeAsJson(key)}] must be a string path, not ${path === null ? "null" : jsTypeName(path)}`);
     }
   }
   const shadowed = [...makers.keys()].filter((type) => BUILTIN_MEMORY_CONFIG_KEYS.has(type)).sort(compareCodeUnits);
@@ -371,7 +371,6 @@ async function buildOne(
   try {
     value = builtin(memory.type, memory.config, path, createParent, env);
   } catch (error) {
-    // Checked first: an operation error is an `Error` too.
     if (error instanceof MemoryOperationError) {
       throw setupError(memory, `storage ${reprText(path ?? "")} is not a local file path`, { cause: error });
     }

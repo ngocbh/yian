@@ -42,7 +42,8 @@
  *   loader to resolve a source line.
  *
  * TS-only: a `root` of `""` derives `<flow id>/notes.sqlite` relative to the current directory; a
- * `root` that isn't a string is a `TypeError`; `null` records read as empty; a custom type named `toString` with no factory fails
+ * `root` that isn't a string is a `TypeError`; `null` records read as empty; a custom type named
+ * `toString` with no factory fails
  * "has no factory"; `set`, `delete`, `clear`, `getOrInsert` and `getOrInsertComputed` on the
  * registry and on `types` throw `TypeError`; a host object whose `close()` rejects is awaited and
  * reported like a sync failure; two overlapping `close()` calls close each object once and both
@@ -563,7 +564,7 @@ test.each([
   ["number", "episodic", 123],
   ["Buffer", "profile", Buffer.from("notes.md")],
   ["URL", "episodic", new URL("file:///notes.sqlite")],
-  ["object", "reflective", null],
+  ["null", "reflective", null],
 ] as const)("storage values must be text paths (%s)", async (typeName, type, value) => {
   await setupError(
     () => buildMemories(hostFlow([decl("notes", type)]), { storage: { notes: value as never } }),
@@ -609,7 +610,10 @@ test("a wrapped config failure keeps its cause", async () => {
 test("flow without memory builds an empty registry", async () => {
   await using registry = await buildMemories(hostFlow([], { flowId: "none" }));
   expect(registry.size).toBe(0);
-  // Python's `None` records read as empty.
+});
+
+test("null records read as empty", async () => {
+  // As Python's `None` for these options.
   const options = { storage: null, supplied: null, factories: null };
   await using nulls = await buildMemories(hostFlow([decl("notes", "episodic")]), options);
   expect(nulls.get("notes")).toBeInstanceOf(EpisodicMemory);

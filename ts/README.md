@@ -402,8 +402,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `profile.store_invalid`; lengths count code points; the snapshot's `version` is `1n`; there is
   no `with` form.
 - `src/memory_host.ts` holds `MemoryRegistry` and `buildMemories`, which build the memories a
-  flow declares for one host. It sits beside the package root because it reads the compiled memory
-  table, and nothing under `memory/` imports it. Changed: `buildMemories` and `close()` are async;
+  flow declares for one host. It sits at the top of `src/`, not under `memory/`, because it reads
+  the compiled memory table, and nothing under `memory/` imports it. Changed: `buildMemories` and `close()` are async;
   the registry and its `types` are read-only `Map` subclasses; `storage`, `supplied` and
   `factories` are plain records; a factory gets `toHost(config)` and may be async; `env` reaches
   reflective and profile memory; `await using` closes the registry.

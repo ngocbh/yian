@@ -58,12 +58,9 @@ export function checkWrittenValues(
     }
     if (!BINDING_FIELDS.get(desc.kind)?.includes("inputs") || !isRecord(desc.inputs)) continue;
     for (const [key, value] of Object.entries(desc.inputs)) {
-      checkWrittenValue(
-        value,
-        `node ${reprText(nodeId)} input ${reprText(String(key))}`,
-        desc.fieldRanges.get(siteKey("input", key)) ?? desc.fieldRanges.get(siteKey("field", "inputs")) ?? desc.range,
-        diagnostics,
-      );
+      const range =
+        desc.fieldRanges.get(siteKey("input", key)) ?? desc.fieldRanges.get(siteKey("field", "inputs")) ?? desc.range;
+      checkWrittenValue(value, `node ${reprText(nodeId)} input ${reprText(key)}`, range, diagnostics);
     }
   }
   if (outputsTagged || !isRecord(outputsSection)) {
@@ -71,19 +68,21 @@ export function checkWrittenValues(
     return;
   }
   for (const [key, value] of Object.entries(outputsSection)) {
-    checkWrittenValue(value, `flow output ${reprText(String(key))}`, outputRange(key), diagnostics, {
+    checkWrittenValue(value, `flow output ${reprText(key)}`, outputRange(key), diagnostics, {
       enclosingLevels: 1,
     });
   }
 }
+
+type CaseBranch = [string, unknown, SourceRange | null];
 
 /**
  * List a case's authored `then:` and `else:` branches with their slots and ranges: each branch's
  * slot as messages name it (`"then[0] value"`, `"else value"`), its authored value, and its range,
  * `then:` branches in order and then `else:`.
  */
-function caseValueBranches(desc: CaseDescriptor): [string, unknown, SourceRange | null][] {
-  const branches: [string, unknown, SourceRange | null][] = [];
+function caseValueBranches(desc: CaseDescriptor): CaseBranch[] {
+  const branches: CaseBranch[] = [];
   desc.cases.forEach((case_, index) => {
     if (isRecord(case_) && Object.hasOwn(case_, "then")) {
       branches.push([`then[${index}] value`, case_["then"], desc.thenRanges[index] ?? null]);

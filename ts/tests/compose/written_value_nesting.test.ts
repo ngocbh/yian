@@ -24,16 +24,26 @@
  * would be a `RangeError`, not the `LoadError` the rows expect, so `loadError` fails on it. The
  * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
  *
- * Later (T3-22): the `loop-seed` and `map-over` sites at the limit and every `def-default` row
- * (they load a `defs:` child; past the limit, the first two fail before their child resolves). Later (T4): the run half of
- * `test_binding_at_the_limit_passes_the_nesting_check` and
+ * Later (T3-22): every `def-default` row. Its error comes from loading the `defs:` entry itself,
+ * which the harness doesn't do: `handChild` builds a child from given parameters.
+ *
+ * Later (T4): the run half of `test_binding_at_the_limit_passes_the_nesting_check` and
  * `test_flow_output_at_the_limit_loads_and_runs`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  type ChildFlows,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 
@@ -169,9 +179,21 @@ interface BindingSite {
   where: string;
   /** The start of the located line. */
   line: string;
-  /** Whether the flow loads without a `defs:` child. */
-  loadsAlone: boolean;
+  /** The hand-built `defs:` children the flow calls. */
+  children?: ChildFlows;
 }
+
+/** The LOOP body `loopFlow` calls: carries `s` through. */
+const body = handChild({
+  inputs: parametersFromYaml("input:\n  s: !object\n", new Map()),
+  output: { s: "${input.s}" },
+});
+
+/** The MAP body `mapFlow` calls: returns its item `v`. */
+const wrap = handChild({
+  inputs: parametersFromYaml("input:\n  v: !object\n", new Map()),
+  output: "${input.v}",
+});
 
 const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
   input: {
@@ -180,7 +202,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: listAlias,
     where: "node 'use' input 'topic' at ",
     line: "      topic:",
-    loadsAlone: true,
   },
   "tagged-input": {
     flow: taggedInputFlow,
@@ -188,7 +209,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "node 'use' input 'topic' at ",
     line: "      topic:",
-    loadsAlone: true,
   },
   "loop-seed": {
     flow: loopFlow,
@@ -196,7 +216,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "node 'l' input 's' at ",
     line: "      s: {",
-    loadsAlone: false,
+    children: { body },
   },
   // 100 levels in `over:` means items nesting 99.
   "map-over": {
@@ -205,7 +225,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordListAlias,
     where: "node 'm' field 'over' at ",
     line: "    over:",
-    loadsAlone: false,
+    children: { wrap },
   },
   // A list `until:` isn't a date: at the limit it is a type error at load, and past the limit the
   // nesting error comes first.
@@ -215,7 +235,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: listAlias,
     where: "node 'w' field 'until' at ",
     line: "    until:",
-    loadsAlone: true,
   },
   "value-entry": {
     flow: valueEntryFlow,
@@ -223,7 +242,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "value entry 'v' at ",
     line: "  v:",
-    loadsAlone: true,
   },
   // A default is checked as the binding it fills.
   "flow-default": {
@@ -232,7 +250,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "input 'topic' default at ",
     line: "  topic:",
-    loadsAlone: true,
   },
   "compact-default": {
     flow: compactDefaultFlow,
@@ -240,7 +257,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "input 'topic' default at ",
     line: "  topic:",
-    loadsAlone: true,
   },
   "agent-variable": {
     flow: agentVariableFlow,
@@ -248,7 +264,6 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "variable 't' default at ",
     line: "      t:",
-    loadsAlone: true,
   },
 };
 
@@ -263,10 +278,10 @@ const formRows = (sites: readonly string[]) =>
   sites.flatMap((site) => FORMS.map(([id, aliased]) => [site, id, aliased] as const));
 
 describe("node bindings", () => {
-  test.each(formRows(SITE_NAMES.filter((site) => BINDING_SITES[site]!.loadsAlone)))(
+  test.each(formRows(SITE_NAMES))(
     "at the limit passes the nesting check: %s (%s)",
     (site, _id, aliased) => {
-      const { flow, text, alias } = BINDING_SITES[site]!;
+      const { flow, text, alias, children } = BINDING_SITES[site]!;
       const [header, value] = (aliased ? alias : text)(MAX_VALUE_NESTING);
 
       if (site === "wait-until") {
@@ -275,7 +290,7 @@ describe("node bindings", () => {
         expect(error.message).toContain("`until:` must be a date or datetime, but YAML read it as a list");
         return;
       }
-      assembleText(flow(header, value));
+      assembleText(flow(header, value), "flow.yaml", { children });
     },
   );
 

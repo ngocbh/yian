@@ -8,11 +8,19 @@
  * The values follow the TS number model: pool ints are `bigint`s, and a membership test against
  * `null` fails with the operand-kinds message. An embedded `false` is written `false`.
  *
- * Left for later: the CASE node tests land with the CASE node and the runtime.
+ * The CASE node tests run through `graph` and `engine` (Python's `_branch_graph`):
+ * `test_case_when_routes_high`, `test_case_when_routes_default`, `test_case_string_equality_routes`
+ * and `test_case_case_without_when_errors` (the run rejects with the node's `RangeError`).
+ *
+ * TS-only: a predicate that fails to evaluate fails the run's `NodeFailed` with
+ * `condition.evaluate` at its `when:` origin.
  */
 
 import { expect, test } from "bun:test";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
+import { NodeFailed } from "../../src/events.ts";
 import {
   ExpressionError,
   evaluateWhen,
@@ -22,7 +30,11 @@ import {
   resolveReference,
 } from "../../src/expr/expressions.ts";
 import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
+import { ELSE_HANDLE } from "../../src/nodes/base.ts";
+import { Case, CaseNode } from "../../src/nodes/case/node.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
+import { engine, FuncNode, graph, RecordNode } from "./run_state_fixtures.ts";
 
 /** Return a pool holding each node's value; `${<id>.output}` reads it. */
 function poolWith(outputs: Record<string, unknown>): VariablePool {
@@ -262,4 +274,71 @@ test("evaluateWhenRecord: in with a null operand raises", () => {
     () => evaluateWhenRecord("x not in 'abc'", {}),
     'type error evaluating null not in "abc": unsupported operand kinds for `not in`: `null` and `str`',
   );
+});
+
+// --- the CASE node --- //
+
+/**
+ * Return `START -> <name> -> cond`, `<name>` producing `value` and `cond` routing on it by bare
+ * name: `is_high` to `high`, the else handle to `low`; each of those logs its id.
+ */
+function branchGraph(cases: readonly Case[], name = "score", value: unknown = 0.8) {
+  const log: string[] = [];
+  const cond = new CaseNode("cond", cases);
+  cond.params = [new Parameter(name)];
+  const flow = graph(
+    [new FuncNode(name, () => value), cond, new RecordNode("high", log), new RecordNode("low", log)],
+    [
+      [START_ID, name],
+      [name, "cond"],
+      ["cond", "high", "is_high"],
+      ["cond", "low", ELSE_HANDLE],
+      ["high", END_ID],
+      ["low", END_ID],
+    ],
+    { wiring: { [name]: {}, cond: { [name]: `\${${name}.output}` }, high: {}, low: {} } },
+  );
+  return { flow, log };
+}
+
+test("case when routes high", async () => {
+  const { flow, log } = branchGraph([new Case("is_high", { when: "score >= 0.7" })]);
+  await engine(flow).run();
+  expect(log).toEqual(["high"]);
+});
+
+test("case when routes default", async () => {
+  const { flow, log } = branchGraph([new Case("is_high", { when: "score >= 0.9" })]);
+  await engine(flow).run();
+  expect(log).toEqual(["low"]);
+});
+
+test("case string equality routes", async () => {
+  // The canonical pattern: an upstream node writes a label; the router declares it as an input
+  // and does a pure string comparison on the bare `label`.
+  const { flow, log } = branchGraph([new Case("is_high", { when: "label == 'POSITIVE'" })], "label", "POSITIVE");
+  await engine(flow).run();
+  expect(log).toEqual(["high"]);
+});
+
+test("case case without when errors", async () => {
+  // A validated compiled CASE always has a string predicate. Missing one is malformed setup, not
+  // expected node execution rejection.
+  const { flow } = branchGraph([new Case("is_high")]);
+  await expect(engine(flow).run()).rejects.toThrow("has no `when` expression");
+});
+
+test("a failing predicate fails the run with condition.evaluate at its when: origin", async () => {
+  const origin = new OriginRef("cond/when");
+  const { flow, log } = branchGraph([new Case("is_high", { when: "score / 0 > 0", origin })]);
+
+  const events = await engine(flow).run();
+
+  const failed = events.filter((event) => event instanceof NodeFailed);
+  expect(failed).toHaveLength(1);
+  const { failure } = failed[0] as NodeFailed;
+  expect(failure.code).toBe("condition.evaluate");
+  expect(failure.causeType).toBe("ExpressionError");
+  expect(failure.trace.at(-1)).toEqual(origin);
+  expect(log).toEqual([]);
 });

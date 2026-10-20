@@ -12,12 +12,14 @@
  * The node writes no state: it returns the selected handle on its result, and the engine's
  * branching does the skip-flood.
  *
- * Knows about:   nodes/base, nodes/contracts and diagnostics.
+ * Knows about:   expr, nodes/base, nodes/contracts and diagnostics.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
-import { type OriginRef, reprText } from "../../diagnostics.ts";
-import { ELSE_HANDLE, Node, NodeKind, parseNamedCondition } from "../base.ts";
+import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
+import { evaluateWhenRecord } from "../../expr/expressions.ts";
+import type { ValueRecord } from "../../typesys/values.ts";
+import { ELSE_HANDLE, Node, NodeKind, parseNamedCondition, Route } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
 /**
@@ -54,6 +56,12 @@ export class Case {
     Object.freeze(this);
   }
 }
+
+/**
+ * The `Case` whose `when` threw each predicate evaluation error, so the error itself stays
+ * unchanged. Python reads the active `Case` off the traceback's `forward` frame; JS has no frames.
+ */
+const failedCases = new WeakMap<object, Case>();
 
 /**
  * Deterministic conditional routing, with no LLM decision.
@@ -168,8 +176,50 @@ export class CaseNode extends Node {
     return super.backwardInputNames().filter((name) => name !== "__on" && !/^__r[0-9]+$/.test(name));
   }
 
-  /** The routing body; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (CaseNode) forward is not ported yet (T4-9)`);
+  /**
+   * Return the failure code for one body error: `condition.evaluate` for a predicate that failed
+   * to evaluate, else the base's.
+   */
+  override exceptionCode(error: unknown): FailureCode {
+    return isObject(error) && failedCases.has(error) ? "condition.evaluate" : super.exceptionCode(error);
   }
+
+  /**
+   * Return the exact ordered predicate whose evaluation threw.
+   *
+   * The `Case` is matched by identity, so duplicate predicate text stays independently
+   * locatable. Failures outside predicate evaluation, and source-free predicates, fall back to
+   * the authored node origin.
+   */
+  override exceptionOrigin(error: unknown): OriginRef | null {
+    const failed = isObject(error) ? failedCases.get(error) : undefined;
+    if (failed === undefined || !this.cases.includes(failed)) return super.exceptionOrigin(error);
+    validateOptionalOrigin(failed.origin, "CASE predicate origin");
+    return failed.origin ?? super.exceptionOrigin(error);
+  }
+
+  /**
+   * Route on the bound input record: the first case whose `when` is truthy, else the else handle.
+   * Each `when` reads this node's declared inputs by bare name, not the pool.
+   *
+   * @throws ExpressionError (unchanged) when a `when` fails to evaluate.
+   */
+  override forward(inputs: Record<string, unknown>): Route {
+    for (const branch of this.cases) {
+      try {
+        if (evaluateWhenRecord(branch.when as string, inputs as ValueRecord, this.types)) {
+          return new Route(branch.handle);
+        }
+      } catch (error) {
+        if (isObject(error)) failedCases.set(error, branch);
+        throw error;
+      }
+    }
+    return new Route(ELSE_HANDLE);
+  }
+}
+
+/** Return whether `value` can key a `WeakMap`. */
+function isObject(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
 }

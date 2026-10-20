@@ -10,13 +10,11 @@
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Ported: `test_a_node_starts_with_an_empty_type_table` (the loaded flow through `assembleText`)
- * and `test_loop_respawn_copies_the_type_table`.
+ * Ported: `test_a_node_starts_with_an_empty_type_table` (the loaded flow through `assembleText`),
+ * `test_case_forward_routes_with_its_type_table` and `test_loop_respawn_copies_the_type_table`.
  *
  * Changed: `test_loop_respawn_copies_the_type_table` sets the type table on a hand-built
  * `LoopNode` instead of a loaded flow's driver.
- *
- * Later (T4-9): `test_case_forward_routes_with_its_type_table`.
  *
  * Left for later: the rest of the node, case and loop tests (the run tests) land with `run.ts`.
  */
@@ -49,6 +47,7 @@ import {
   rewriteTemplateRefs,
   scanTemplate,
 } from "../../src/expr/template.ts";
+import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
@@ -390,6 +389,13 @@ test("a node starts with an empty type table", () => {
   const node = new CaseNode("route", [new Case("s", { when: "isinstance(order, Sell)" })]);
   expect(node.types).toEqual(new Map());
   expect(assembleText(ORDER_FLOW).flow.compiled.nodes.get("d")!.types).toEqual(new Map());
+});
+
+test("case forward routes with its type table", () => {
+  const node = new CaseNode("route", [new Case("s", { when: "isinstance(order, Sell)" })]);
+  node.types = new Map(TYPES);
+  expect(node.forward({ order: A_SELL }).handle).toBe("s");
+  expect(node.forward({ order: A_BUY }).handle).toBe(ELSE_HANDLE);
 });
 
 test("loop respawn copies the type table", () => {

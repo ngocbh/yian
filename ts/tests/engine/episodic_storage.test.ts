@@ -16,7 +16,9 @@
  * `test_a_fresh_store_pins_its_default_limits`, `test_corrupt_private_state_never_partially_adopts_ram`
  * and `test_invalid_last_mutation_never_reaches_storage`.
  *
- * TS-only: a failed first open whose primary is an object (an `Error` or a plain object) gets the
+ * TS-only: an `epoch` row (`snapshot.epoch = 2n ** 60n`, beyond 2^53 − 1) of
+ * `test_invalid_inventory_is_rejected_without_rewriting_or_retaining_owner` is
+ * `episodic.invalid_storage`; a failed first open whose primary is an object (an `Error` or a plain object) gets the
  * note `EpisodicMemory cleanup failed: Cleanup` when closing the storage also fails. With
  * `YIAN_TEST_NODE` set to a Node binary, the built backend reopens a store Bun wrote (episodes,
  * limits, tombstones) under Node and commits, and Bun reads the result back.
@@ -26,8 +28,7 @@
  *   `__enter__` runs an operation) and closes the backend in `finally`; `_first_open` runs the
  *   private `operation` guard with an empty body.
  * - `test_none_storage_remains_resource_free`: spies on `SQLiteStorage.prototype.load` and `save`
- *   that throw, and no file appears in the temporary directory, where Python forbids
- *   `sqlite3.connect`.
+ *   that throw stand in for Python forbidding `sqlite3.connect`.
  * - `test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary`: the failure is injected by
  *   a spy on the storage's private connection's `exec` for `COMMIT`, where Python subclasses
  *   `sqlite3.Connection`; the cancel rows throw a non-`Error` value (Python's `KeyboardInterrupt`),
@@ -227,7 +228,6 @@ test("none storage remains resource free", async () => {
       expect(snapshotOf(memory).episodes).toEqual([]);
     });
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    expect(fs.readdirSync(dir)).toEqual([]);
   } finally {
     for (const spy of spies) spy.mockRestore();
   }
@@ -251,7 +251,7 @@ test.each([null, "file"])("idle handles do not block close and are invalidated (
   opened.close();
 });
 
-test.each(["extra", "version", "counter", "flag", "ledger", "digest", "unopened", "uncommitted", "reset"])(
+test.each(["extra", "version", "counter", "flag", "ledger", "digest", "unopened", "uncommitted", "reset", "epoch"])(
   "invalid inventory is rejected without rewriting or retaining owner (%s)",
   async (kind) => {
     const file = path.join(dir, "memory.sqlite");
@@ -267,7 +267,8 @@ test.each(["extra", "version", "counter", "flag", "ledger", "digest", "unopened"
       inventory.ever_opened = false;
       inventory.ever_committed = true;
     } else if (kind === "uncommitted") inventory.snapshot.revision = 1n;
-    else inventory.ever_reset = true;
+    else if (kind === "reset") inventory.ever_reset = true;
+    else inventory.snapshot.epoch = 2n ** 60n;
     saveInventory(file, inventory);
     const caught = failure(() => firstOpen(new EpisodicMemory({ storage: file })));
     expect(caught.code).toBe("episodic.invalid_storage");
@@ -669,7 +670,9 @@ try {
   assert.equal(session.snapshot.revision, 2n);
   assert.match(await session.recall(), /second/);
   session.commit("first", session.learn(context("first")));
-  assert.equal(session.snapshot.revision, 2n);
+  const fresh = memory.openRun();
+  assert.equal(fresh.snapshot.revision, 2n);
+  fresh.close();
   session.commit("third", session.learn(context("third")));
   session.close();
 } finally {

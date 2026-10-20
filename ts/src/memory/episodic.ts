@@ -451,6 +451,13 @@ function parseSnapshot(value: unknown): [string, number, number, State] {
     if (typeof revision !== "bigint" || revision < 0n) {
       throw new RangeError("snapshot.revision must be a non-negative integer");
     }
+    // Counters are `number`s, so one past 2^53 − 1 would lose its increment.
+    if (epoch > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RangeError(`snapshot.epoch must be at most ${Number.MAX_SAFE_INTEGER}`);
+    }
+    if (revision > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RangeError(`snapshot.revision must be at most ${Number.MAX_SAFE_INTEGER}`);
+    }
     const config = copyObject(data.config, "snapshot.config");
     if (!hasFields(config, ["max_episodes", "recall_limit"])) {
       throw new RangeError("snapshot config has invalid fields");
@@ -469,7 +476,6 @@ function parseSnapshot(value: unknown): [string, number, number, State] {
       throw new RangeError("snapshot episode IDs must be unique");
     }
     const state: State = Object.freeze({ limits, episodes: Object.freeze(decoded) });
-    // An epoch or revision past 2^53 − 1 doesn't survive `Number`, so it fails here.
     const result: [string, number, number, State] = [namespace, Number(epoch), Number(revision), state];
     if (logJson(data) !== logJson(snapshotJson(...result))) throw new RangeError("snapshot must be canonical");
     return result;

@@ -1570,7 +1570,8 @@ Changed (TS yian): `new EpisodicMemory({ maxEpisodes, recallLimit, storage,
 createParent })` takes an options object whose limits are integral `number`s or
 `bigint`s; snapshots are deep-frozen rather than detached copies; `recall` is
 async and awaits `rewriteQuery`, which may return a promise; recall text and
-entry ids use yian's canonical JSON; an episode holding `±Infinity` fails `learn`
+entry ids use yian's run-log canonical JSON (`logJson`: ints as digits, floats
+marked `.0`); an episode holding `±Infinity` fails `learn`
 as `episodic.invalid_context`.
 
 ### Building memories with `build_memories`

@@ -10,8 +10,7 @@
  *
  * TS-only: none.
  *
- * Changed: `test_failed_load_can_be_retried` spies on `SQLiteStorage.prototype.load`, where Python
- * patches the module's `SQLiteStorage.load`.
+ * Changed: none.
  *
  * Later: the `session` parametrization (with `memory/session.ts`).
  *

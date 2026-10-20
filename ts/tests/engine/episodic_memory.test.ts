@@ -24,7 +24,9 @@
  * `episodic.invalid_snapshot`, and one holding `-0` reads as `0`; a host mutation whose payload holds
  * `-0` is `episodic.invalid_batch` (not canonical JSON); the base `rewriteQuery` text and its
  * `TypeError`; an async `rewriteQuery` is awaited, a rejecting one is `episodic.invalid_query` with
- * its cause, and a re-entrant `memory.close()` from inside it is `episodic.busy`.
+ * its cause, and a re-entrant `memory.close()` from inside it is `episodic.busy`; a snapshot whose
+ * `revision` is `2n ** 60n` or whose `epoch` is `2n ** 53n` (beyond 2^53 − 1) is
+ * `episodic.invalid_snapshot`.
  *
  * Changed:
  * - `test_constructor_and_protocol_are_exact`: `1.0` is the int 1 in JS, so it's accepted; `1.5`
@@ -307,6 +309,9 @@ describe("snapshot format is strict", () => {
     ["max_episodes 0", (x) => (x.config.max_episodes = 0n)],
     ["config extra", (x) => (x.config.extra = 1n)],
     ["empty episode", (x) => x.episodes.push({})],
+    // TS-only: counters beyond 2^53 − 1 that a double holds exactly.
+    ["revision 2**60", (x) => (x.revision = 2n ** 60n)],
+    ["epoch 2**53", (x) => (x.epoch = 2n ** 53n)],
   ];
   for (const [name, mutate] of rows) {
     test(name, () => {
@@ -362,12 +367,13 @@ test("empty commit idempotency collision and staleness", async () => {
 });
 
 test("commit inputs are exact", async () => {
-  await withRun(new EpisodicMemory(), (session) => {
+  const memory = new EpisodicMemory();
+  await withRun(memory, (session) => {
     for (const commitId of ["", true, 1, null]) {
       expect(failure(() => session.commit(commitId as never, [])).code).toBe("episodic.invalid_commit_id");
     }
     session.commit("id", []);
-    expect(session.snapshot.revision).toBe(0n);
+    expect(snapshotOf(memory).revision).toBe(1n);
     for (const batch of [{}, new Set()]) {
       const error = failure(() => session.commit("other", batch as never));
       expect(error.code).toBe("episodic.invalid_batch");

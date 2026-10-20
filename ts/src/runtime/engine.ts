@@ -21,6 +21,7 @@ import { NodeAttemptResumed, type RunEvent, RunFailed, type StreamChunk, ToolCal
 import { ConversationInvocation } from "../memory/contracts.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
+import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import { jsTypeName, type ValueRecord } from "../typesys/values.ts";
@@ -78,6 +79,10 @@ export interface FlowEngineOptions {
   steering?: Steering | null;
   /** The host's stop: aborting it stops the run with its reason. */
   signal?: AbortSignal | null;
+  /** The clock and sleep node waits run on, passed to every node; `realScheduler` when omitted. */
+  scheduler?: Scheduler | null;
+  /** A draw in [0, 1) for backoff jitter, passed to every node; `Math.random` when omitted. */
+  random?: (() => number) | null;
 }
 
 /** One settled worker: the outcome its evaluation resolved to, or the error it rejected with. */
@@ -195,6 +200,8 @@ export class FlowEngine {
   readonly tools: ToolSet;
   readonly skills: ReadonlyMap<string, Skill> | null;
   readonly steering: Steering | null;
+  readonly scheduler: Scheduler | null;
+  readonly random: (() => number) | null;
   /** The run's stop; single-use, so `run()` runs once. */
   readonly #controller = new AbortController();
   /** The host's stop, linked to the run's while `run()` runs. */
@@ -211,12 +218,13 @@ export class FlowEngine {
    * @throws TypeError when `state` isn't exactly a `RunState`, `log` lacks `append`, `runId` or
    *   `nextSequence`, `growBuilder` or a given callback isn't a function, `numWorkers` isn't a safe
    *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `steering` lacks its
-   *   methods, or `signal` isn't an `AbortSignal`.
+   *   methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now` and `sleep`
+   *   are functions, or `random` isn't a function.
    * @throws RangeError when `numWorkers` is negative.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
     const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
-    const { tools = null, skills = null, steering = null, signal = null } = options;
+    const { tools = null, skills = null, steering = null, signal = null, scheduler = null, random = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
     if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
@@ -232,6 +240,13 @@ export class FlowEngine {
     if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
     if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
     if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
+    if (
+      scheduler !== null &&
+      (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
+    ) {
+      throw new TypeError("scheduler must be a Scheduler or null");
+    }
+    if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
     this.state = state;
     this.log = log;
     this.growBuilder = growBuilder;
@@ -242,6 +257,8 @@ export class FlowEngine {
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
     this.skills = skills;
     this.steering = requireSteering(steering);
+    this.scheduler = scheduler;
+    this.random = random;
     this.#hostSignal = signal;
     const inbox = this.steering;
     this.#steering =
@@ -503,6 +520,8 @@ export class FlowEngine {
         tools: this.tools,
         skills: this.skills,
         steering: this.#steering,
+        scheduler: this.scheduler,
+        random: this.random,
         steps: this.#nodeSteps(nodeId, nodeController.signal),
         // A capability fault ends the run now, not when the node settles, so a node that catches
         // it can't let a later stop replace it. For a failing host callback this is a no-op: the

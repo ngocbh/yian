@@ -246,11 +246,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   every read.
 - `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
-  capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`, and AGENT's
-  fields below). `tools` is the run's `ToolSet`, for a node that declares `needsTools` (TOOL,
-  HUMAN_INPUT and AGENT). `signal` is
+  capabilities are one `NodeCaps` object (`signal`, `scheduler`, `random`, `bindItem`, `steps`,
+  `tools`, and AGENT's fields below). `tools` is the run's `ToolSet`, for a node that declares
+  `needsTools` (TOOL, HUMAN_INPUT and AGENT). `signal` is
   optional in the type; the runtime's evaluator (`src/runtime/eval_node.ts`) gives every node its
-  own.
+  own. `scheduler` (the clock and cancellable sleep a node's waits run on; `realScheduler` when
+  absent) and `random` (a draw in [0, 1) for backoff jitter; `Math.random` when absent) go to
+  every node when `evalNode` or `FlowEngine` is given them.
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
   constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
   which gives a fresh copy per read).
@@ -261,10 +263,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   bound to the original); use TS `private` and prototype methods.
 - Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop, code, tool,
   human_input, wait) as a `Node` subclass; import it from that file. There is no per-kind index,
-  and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's and END's bodies
-  run. The other kinds hold their data, checks and load-time hooks (origins, setup and condition
-  checks, MAP's `over` and WAIT's `until` bindings, HUMAN_INPUT's prompt sites, backward layouts,
-  LOOP `respawn`); their `forward` throws "not ported yet".
+  and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's, END's, TOOL's,
+  HUMAN_INPUT's and WAIT's bodies run. The other kinds hold their data, checks and load-time
+  hooks (origins, setup and condition checks, MAP's `over` binding, backward layouts, LOOP
+  `respawn`); their `forward` throws "not ported yet".
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
   and `backward` are not ported yet. `callTime` is an accessor over an own field, so setting it

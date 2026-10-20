@@ -656,7 +656,10 @@ Changed (TS yian): the check on the returned value refuses NaN but not `Infinity
 a host tool may return `Infinity`, which is a float value. A `tool()` validator's issues
 and the checks on a declared result (see [Tool context](#tool-context)), a throw from the
 output validator included, raise `ToolCheckError`, which is never retried; the result
-checks run inside the call, not after the node returns.
+checks run inside the call, not after the node returns. `ToolAttemptsFailed` is an
+`Error` named `ToolAttemptsFailed` whose `cause` is the last attempt's error. A thrown
+non-`Error` value is recorded by its type name and text, and propagates as thrown
+(unwrapped), or becomes `ToolAttemptsFailed`'s `cause`.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.
@@ -2569,8 +2572,9 @@ asks, a flow whose AGENT grants `ask_user` fails before the run starts, and
 Changed (TS yian): the handler is `(request, ctx) => answer`, always given the call's
 `ToolContext` second, and may return a Promise. `request` is camelCase, `{ question,
 options, questions, answerSchema, title, nodeId }`, with `null` for an absent field;
-`invokeTrusted("ask_user", ...)` takes the same keys. There is no signature check: any
-function is accepted as the handler.
+`invokeTrusted("ask_user", ...)` takes the same keys. Each item of `questions` is a parsed
+spec `{ question, header, options: [{ label, description }], multiSelect }` with defaults
+filled. There is no signature check: any function is accepted as the handler.
 
 CODE nodes cannot ask. A CODE function does not see the run's tools, so
 `invoke_tool("ask_user", ...)` inside it fails. Ask through a `human_input` node,
@@ -2578,7 +2582,8 @@ or pass a per-run tool and call it from a TOOL node.
 
 An authored WAIT needs no host handler. It blocks one worker until its absolute
 UTC `until:` deadline, returns `None`, and can be woken cooperatively when the host
-stops the run.
+stops the run. Changed (TS yian): the wait re-reads the wall clock at least hourly,
+so a deadline survives a sleeping machine.
 
 ## `RunResult`
 

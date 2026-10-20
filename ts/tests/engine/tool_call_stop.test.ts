@@ -17,9 +17,12 @@
  * Not ported: `test_a_langchain_tool_sees_the_stop_event` (TS has no LangChain tools) and
  * `test_the_stop_event_is_cleared_after_a_tool_raises` (no context variable to clear).
  *
- * Later (T4-11): `test_a_tool_node_sees_the_engine_stop_event`,
- * `test_a_tool_node_sees_its_run_stop_event` (TOOL node). Later (T5-11a):
- * `test_an_agent_tool_call_sees_its_run_stop_event` (AGENT node).
+ * Ported (adapted): `test_a_tool_node_sees_the_engine_stop_event`: the TOOL node's call sees a
+ * live signal, serial and with eight workers (no thread names in TS).
+ * `test_a_tool_node_sees_its_run_stop_event`: the call's signal aborts with the host's reason when
+ * the host stops the run, and `run()` rejects with it.
+ *
+ * Later (T5-11a): `test_an_agent_tool_call_sees_its_run_stop_event` (AGENT node).
  */
 
 import { expect, test } from "bun:test";
@@ -27,9 +30,10 @@ import { expect, test } from "bun:test";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { RunSucceeded } from "../../src/events.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { engine, graph } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** Calls the `probe` tool once, naming itself as the calling node, and outputs its answer. */
 class ProbeNode extends Node {
@@ -77,3 +81,55 @@ test("two concurrent runs' nodes and tool calls see their own signals", async ()
   expect(nodes[0]!.signal).not.toBe(nodes[1]!.signal);
   expect([...seen.values(), ...nodes.map((node) => node.signal!)].some((signal) => signal.aborted)).toBe(false);
 });
+
+for (const numWorkers of [0, 8]) {
+  test(`a TOOL node's call sees a live signal (numWorkers ${numWorkers})`, async () => {
+    const seen: [AbortSignal, boolean][] = [];
+    const probe = new FunctionTool({
+      name: "probe",
+      description: "Record the call's signal.",
+      parametersJsonSchema: { type: "object", properties: {} },
+      execute: (_args, ctx) => {
+        seen.push([ctx.signal, ctx.signal.aborted]);
+        return "ok";
+      },
+    });
+    const flow = graph([new ToolNode("probe", { toolId: "probe" })], [
+      [START_ID, "probe"],
+      ["probe", END_ID],
+    ]);
+
+    const events = await engine(flow, { numWorkers, tools: new ToolSet({ probe }) }).run();
+
+    expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+    expect(seen).toEqual([[expect.any(AbortSignal), false]]);
+  });
+
+  test(`a TOOL node's call signal aborts when its run stops (numWorkers ${numWorkers})`, async () => {
+    const host = new AbortController();
+    const reason = new Error("stop now");
+    const entered = Promise.withResolvers<AbortSignal>();
+    const probe = new FunctionTool({
+      name: "probe",
+      description: "Wait for the call's signal to abort.",
+      parametersJsonSchema: { type: "object", properties: {} },
+      execute: async (_args, ctx) => {
+        entered.resolve(ctx.signal);
+        return await aborted(ctx.signal);
+      },
+    });
+    const flow = graph([new ToolNode("probe", { toolId: "probe" })], [
+      [START_ID, "probe"],
+      ["probe", END_ID],
+    ]);
+    const running = engine(flow, { numWorkers, tools: new ToolSet({ probe }), signal: host.signal }).run();
+
+    const signal = await entered.promise;
+    expect(signal.aborted).toBe(false);
+    host.abort(reason);
+
+    expect(await rejected(running)).toBe(reason);
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toBe(reason);
+  });
+}

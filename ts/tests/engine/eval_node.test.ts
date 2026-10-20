@@ -50,28 +50,33 @@
  * plain `Error` (cause type `Error`) and its `ValueError` a `RangeError`. The non-NodeResult
  * message names the JS type (`Object`). In `test_binding_carrier_unwraps_exactly_one_layer` the
  * inner carrier isn't a yian value, so binding refuses it (`binding.evaluate`) where Python passes
- * it through as data. The MAP and WAIT carrier rows check the resolved `over` and `until` through
- * `bindReserved`, not the `Grow` or `Output` the bodies build from them, and the setup faults go
+ * it through as data. The MAP carrier row checks the resolved `over` through `bindReserved`, not
+ * the `Grow` the body builds from it; the WAIT carrier row checks the resolved `until` through
+ * `bindReserved` and the `Output` through the evaluator. The setup faults go
  * through `run`, which rejects with the node's own error; the non-string `when` is a cast. The
  * not-a-list message is pinned as the golden format's text.
  *
  * TS-only: `test_map_over_not_a_list_message_is_byte_identical` also checks the error's `origin`
- * (the carrier's, else `null`); `evalNode`'s argument checks; a node that records steps and whose
- * reserved key fails to bind after an earlier start recorded steps rejects with a `RangeError`,
- * while a node that doesn't read its steps gets the ordinary binding failure.
+ * (the carrier's, else `null`); `evalNode`'s argument checks; `evalNode` gives every node, whatever
+ * its traits, exactly the `scheduler` and `random` it was given as `caps.scheduler` and
+ * `caps.random`, and neither key without them, and refuses a malformed one; `FlowEngine` passes its
+ * `scheduler` and `random` to every node it evaluates and its constructor refuses malformed ones;
+ * a node that records steps and whose reserved key fails to bind after an earlier start recorded
+ * steps rejects with a `RangeError`, while a node that doesn't read its steps gets the ordinary
+ * binding failure.
  *
  * Later (T4-9): `test_case_predicate_failure_selects_the_active_ordered_origin` and
  * `test_source_free_case_predicate_failure_falls_back_to_the_node_origin`.
  *
  * Later (T4-10): the run-result half of `test_map_over_accepts_a_binding_carrier` (the `Grow`
- * through the evaluator). Later (T4-11): the run-result half of
- * `test_wait_until_accepts_a_binding_carrier` (the `Output` through the evaluator).
+ * through the evaluator).
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { START_ID } from "../../src/compile/model.ts";
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { RunSucceeded } from "../../src/events.ts";
 import { ConversationInvocation } from "../../src/memory/contracts.ts";
 import {
   AssertionStageError,
@@ -99,11 +104,12 @@ import {
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
-import { drive, FuncNode, nodeFlow, rejected } from "./run_state_fixtures.ts";
+import { drive, engine, FuncNode, graph, nodeFlow, rejected } from "./run_state_fixtures.ts";
 
 /** Return the failure `drive` resolves to, or fail when it resolves to anything else. */
 async function driveFailure(
@@ -143,13 +149,14 @@ test("map over accepts a binding carrier", () => {
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ over: ["first", "second"] });
 });
 
-test("wait until accepts a binding carrier", () => {
+test("wait until accepts a binding carrier", async () => {
   // WAIT's dedicated resolver accepts the carrier shape it bypasses elsewhere.
   const node = new WaitNode("wait");
   const source = new Binding("2000-01-01T00:00:00+00:00", { origin: new OriginRef("wait-until") });
   const wiring = new Map([["until", source]]);
 
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ until: "2000-01-01T00:00:00+00:00" });
+  expect(await drive(node, { flow: nodeFlow(node, { until: source }) })).toEqual(new Output(null));
 });
 
 for (const [label, make, inputs] of [
@@ -446,6 +453,113 @@ describe("evalNode checks its arguments", () => {
 
     expect((await evalNode(node, null, pool, options)).outcome).toEqual(new Output("unused"));
   });
+});
+
+/** Record the capabilities each run receives, and return `null`. */
+class CapsNode extends Node {
+  readonly kind: NodeKind = NodeKind.CODE;
+  readonly seen: NodeCaps[];
+
+  constructor(nodeId: string, seen: NodeCaps[]) {
+    super(nodeId);
+    this.seen = seen;
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    this.seen.push(caps);
+    return new Output(null);
+  }
+}
+
+/** A `CapsNode` whose traits ask for tools, steps and steering. */
+class TraitCapsNode extends CapsNode {
+  override readonly kind = NodeKind.AGENT;
+  override readonly needsTools = true;
+  override readonly needsSteps = true;
+  override readonly needsSteering = true;
+}
+
+/** The scheduler and random-draw options, malformed, with the error each rejects with. */
+const BAD_WAIT_CAPS = [
+  ["scheduler without sleep", { scheduler: { now: () => 0 } }, new TypeError("scheduler must be a Scheduler or null")],
+  [
+    "scheduler whose now isn't a function",
+    { scheduler: { now: 0, sleep: async () => {} } },
+    new TypeError("scheduler must be a Scheduler or null"),
+  ],
+  ["scheduler that isn't an object", { scheduler: "clock" }, new TypeError("scheduler must be a Scheduler or null")],
+  ["random", { random: 0.5 }, new TypeError("random must be a function or null")],
+] as const;
+
+describe("evalNode gives every node the scheduler and the random draw", () => {
+  const pool = new VariablePool();
+
+  for (const make of [
+    (seen: NodeCaps[]) => new CapsNode("n", seen),
+    (seen: NodeCaps[]) => new TraitCapsNode("n", seen),
+  ]) {
+    test(`exactly the given objects (${make([]).constructor.name})`, async () => {
+      const seen: NodeCaps[] = [];
+      const scheduler = virtualScheduler();
+      const random = (): number => 0.25;
+
+      await evalNode(make(seen), null, pool, { scheduler, random });
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.scheduler).toBe(scheduler);
+      expect(seen[0]!.random).toBe(random);
+    });
+
+    test(`neither key when not given (${make([]).constructor.name})`, async () => {
+      const seen: NodeCaps[] = [];
+
+      await evalNode(make(seen), null, pool, { scheduler: null, random: null });
+      await evalNode(make(seen), null, pool);
+
+      expect(seen).toHaveLength(2);
+      for (const caps of seen) {
+        expect("scheduler" in caps).toBe(false);
+        expect("random" in caps).toBe(false);
+      }
+    });
+  }
+
+  for (const [label, options, error] of BAD_WAIT_CAPS) {
+    test(`a malformed ${label} is refused`, async () => {
+      const node = new CapsNode("n", []);
+      expect(await rejected(evalNode(node, null, pool, options as unknown as EvalNodeOptions))).toEqual(error);
+    });
+  }
+});
+
+describe("FlowEngine gives every node the scheduler and the random draw", () => {
+  test("each evaluated node receives the given objects", async () => {
+    const seen: NodeCaps[] = [];
+    const flow = graph([new CapsNode("a", seen), new TraitCapsNode("b", seen)], [
+      [START_ID, "a"],
+      ["a", "b"],
+      ["b", END_ID],
+    ]);
+    const scheduler = virtualScheduler();
+    const random = (): number => 0.75;
+
+    expect((await engine(flow, { scheduler, random }).run()).at(-1)).toBeInstanceOf(RunSucceeded);
+    expect(seen).toHaveLength(2);
+    for (const caps of seen) {
+      expect(caps.scheduler).toBe(scheduler);
+      expect(caps.random).toBe(random);
+    }
+  });
+
+  for (const [label, options, error] of BAD_WAIT_CAPS) {
+    test(`the constructor refuses a malformed ${label}`, () => {
+      const flow = graph([new CapsNode("a", [])], [
+        [START_ID, "a"],
+        ["a", END_ID],
+      ]);
+      expect(() => engine(flow, options as never)).toThrow(error);
+    });
+  }
 });
 
 /** Throw `error` from its body, after an `await` when `async`. */

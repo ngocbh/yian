@@ -34,9 +34,21 @@
  * `test_competing_success_plans_reject_the_second_sequence_before_append`,
  * `test_success_record_replay_reconstructs_identical_state`,
  * `test_end_output_waits_for_full_quiescence`, `test_newly_ready_successor_prevents_quiescence`,
- * `test_terminal_success_values_are_mutation_isolated`, and the `success` rows of
+ * `test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record`,
+ * `test_route_latches_causal_terminal_failure_until_sibling_quiescence`,
+ * `test_causal_route_canonicalizes_origin_subclass_for_wire` (`SpecialOrigin extends OriginRef`,
+ * checked through `constructor`),
+ * `test_terminal_unreachable_latch_is_installed_only_after_route_append`,
+ * `test_causal_route_replay_requires_its_persisted_terminal_failure`,
+ * `test_noncausal_route_replay_rejects_a_terminal_failure` (its unused message reads `null`),
+ * `test_causal_route_replay_rejects_mismatched_terminal_failure` (5 rows),
+ * `test_quiescence_without_retained_causal_failure_is_a_graph_fault`,
+ * `test_terminal_unreachable_latch_replays_before_and_at_quiescence`,
+ * `test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins` (an instance patch of
+ * `flow.incoming`), `test_terminal_success_values_are_mutation_isolated`, and both rows of
  * `test_terminal_derivation_replays_from_causal_records_only` (the record class names, not
- * Python's type names) and `test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged`.
+ * Python's type names) and `test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged`,
+ * one test per row.
  * Python's `ValueError` is a `RangeError` here, and a type mismatch the value layer's
  * `TypeCheckError`; each rejected row names its one class and full message, where Python matches a
  * part of the message. A rejection Python raises as `_NodeDataError` is a `NodeDataError` whose
@@ -66,8 +78,9 @@
  *   `flow.incoming` and `flow.outgoing`.
  * - `test_typed_none_end_membership_succeeds_at_quiescence`: the terminal output is canonical
  *   text, not bytes, and assigning it is a `TypeError`.
- * - the `success` row of `test_terminal_commit_performs_no_materialization_after_append`: after
- *   the append the log patches only the instance's `flow.incoming` and `flow.outgoing` to throw.
+ * - `test_terminal_commit_performs_no_materialization_after_append` (2 rows, one test each): after
+ *   the append the log patches only the instance's `flow.incoming` and `flow.outgoing` to throw;
+ *   each test pins the full observers where Python counts them.
  * - `test_success_rejects_touched_topology_invariant_breaks` (3 rows): the `incoming` row clears the
  *   public `flow.incomingEdges` entry of `after-baked`.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
@@ -91,19 +104,9 @@
  * `decode_pool`) and of `test_terminal_commit_performs_no_materialization_after_append`
  * (`RunSucceeded`, `RunFailed`, `_materialize_terminal`).
  *
- * Later (T4-4 PR 2), terminal routes and failures: `test_late_sibling_failure_wins`,
- * `test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record`,
- * `test_route_latches_causal_terminal_failure_until_sibling_quiescence`,
- * `test_causal_route_canonicalizes_origin_subclass_for_wire`,
+ * Later (T4-4 PR 2), failures: `test_late_sibling_failure_wins`,
  * `test_explicit_failure_wins_after_terminal_unreachable_is_latched`,
- * `test_terminal_unreachable_latch_is_installed_only_after_route_append`,
- * `test_causal_route_replay_requires_its_persisted_terminal_failure`,
- * `test_noncausal_route_replay_rejects_a_terminal_failure`,
- * `test_causal_route_replay_rejects_mismatched_terminal_failure`,
- * `test_quiescence_without_retained_causal_failure_is_a_graph_fault`,
- * `test_terminal_unreachable_latch_replays_before_and_at_quiescence`,
- * `test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins`, the `route` rows of
- * the three terminal tests above, `test_failure_is_terminal_and_preserves_diagnostics`,
+ * `test_failure_is_terminal_and_preserves_diagnostics`,
  * `test_failure_transition_canonicalizes_origin_subclass_for_wire`,
  * `test_failure_record_replay_reconstructs_identical_state`,
  * `test_failure_append_failure_leaves_every_state_coordinate_unchanged`,
@@ -121,7 +124,8 @@
 import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeRouted, NodeSkipped, NodeSucceeded, type RunEvent, RunSucceeded } from "../../src/events.ts";
+import { Failure, OriginRef } from "../../src/diagnostics.ts";
+import { NodeRouted, NodeSkipped, NodeSucceeded, type RunEvent, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -130,6 +134,7 @@ import { NodeState } from "../../src/runtime/common.ts";
 import {
   encodePool,
   MemoryRunLog,
+  NodeFailedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
   NodeSucceededRecord,
@@ -162,6 +167,7 @@ import {
   routeInFlight,
   RUN_ID,
   snapshot,
+  terminalSkipRouteFlow,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`; return it. */
@@ -1346,4 +1352,327 @@ test("a route scans each touched head's incoming adjacency once", () => {
 
   expect([...scans]).toEqual([["head", 1]]);
   expect(routePlan(prepared).delta.newlyReadyIds).toEqual(["head"]);
+});
+
+/** A valid front-end-specific origin, for testing durable normalization. */
+class SpecialOrigin extends OriginRef {}
+
+/** Return a live run with the terminal-skipping router as its sole work. */
+function terminalSkipRouterInFlight(): { state: RunState; log: MemoryRunLog } {
+  return routeInFlight(terminalSkipRouteFlow());
+}
+
+/** Return a live run with the causal router (origin `router-site`) and `unrelated` in flight. */
+function terminalSkipWithSiblingInFlight(): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = routeInFlight(
+    terminalSkipRouteFlow({ routerOrigin: new OriginRef("router-site"), sibling: true }),
+  );
+  commitPrepared(log, state, prepareNodeStarted(state, "unrelated"));
+  return { state, log };
+}
+
+/** Return the derived failure of a route from `router` that first skips END's `zeta` group. */
+function zetaUnreachable(trace: readonly OriginRef[] = []): Failure {
+  return new Failure({
+    code: "graph.terminal_unreachable",
+    message: "terminal output 'zeta' skipped",
+    nodeId: "router",
+    trace,
+  });
+}
+
+test("a route's terminal skip names the first required END group and adds no record", () => {
+  const { state, log } = terminalSkipRouterInFlight();
+
+  const prepared = prepareNodeRouted(state, "router", "go");
+
+  const expectedFailure = zetaUnreachable();
+  const failure = (prepared.record as NodeRoutedRecord).terminalFailure;
+  expect(failure).toBe(routePlan(prepared).delta.terminalUnreachableFailure);
+  expect(failure).toStrictEqual(expectedFailure);
+  const expectedTerminal = new RunFailed({ failure: expectedFailure });
+  expect(prepared.observers).toStrictEqual([
+    ...routed("router", "go", "dead-optional", "dead-z", END_ID, "dead-a"),
+    expectedTerminal,
+  ]);
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual(prepared.observers);
+  expect(state.result).toStrictEqual(expectedTerminal);
+  expect(state.terminalUnreachableFailure).toStrictEqual(expectedFailure);
+  expect((state.result as RunFailed).failure).toBe(state.terminalUnreachableFailure!);
+  expect(state.ready).toEqual([]);
+  expect([...state.inFlight]).toEqual([]);
+  const records = log.records();
+  expect(records.at(-1)!.record.constructor).toBe(NodeRoutedRecord);
+  expect((records.at(-1)!.record as NodeRoutedRecord).terminalFailure).toStrictEqual(expectedFailure);
+  expect(records.length).toBe(5);
+});
+
+test("a route latches its causal terminal failure until sibling quiescence", () => {
+  const { state, log } = terminalSkipWithSiblingInFlight();
+  const outer = new OriginRef("outer-site");
+  node(state.flow, "router").originContext = [outer];
+
+  const prepared = prepareNodeRouted(state, "router", "go");
+  const failure = routePlan(prepared).delta.terminalUnreachableFailure!;
+
+  expect(failure).toStrictEqual(zetaUnreachable([outer, new OriginRef("router-site")]));
+  expect(failure.trace).toEqual([outer, node(state.flow, "router").origin!]);
+  expect((prepared.record as NodeRoutedRecord).terminalFailure).toBe(failure);
+  expect(routePlan(prepared).terminal).toBeNull();
+  expect(prepared.observers.some((event) => event instanceof RunFailed)).toBe(false);
+  expect(state.terminalUnreachableFailure).toBeNull();
+
+  const routeObservers = commitPrepared(log, state, prepared);
+
+  expect(routeObservers).toStrictEqual(prepared.observers);
+  expect(state.terminalUnreachableFailure).toBe(failure);
+  expect(state.result).toBeNull();
+  expect(state.ready).toEqual([]);
+
+  const final = prepareNodeSucceeded(state, "unrelated", { done: true });
+  expect(successPlan(final).terminal!.failure).toBe(failure);
+  expect(final.observers).toStrictEqual([
+    new NodeSucceeded({ nodeId: "unrelated", output: { done: true } }),
+    new RunFailed({ failure }),
+  ]);
+
+  const observers = commitPrepared(log, state, final);
+
+  expect((observers.at(-1) as RunFailed).failure).toBe(failure);
+  expect((state.result as RunFailed | null)?.failure).toBe(failure);
+  expect(state.terminalUnreachableFailure).toBe(failure);
+  expect(log.records().some((envelope) => envelope.record instanceof NodeFailedRecord)).toBe(false);
+  expect(log.records().slice(-2).map((envelope) => envelope.record.constructor)).toEqual([
+    NodeRoutedRecord,
+    NodeSucceededRecord,
+  ]);
+  expect(state.ready).toEqual([]);
+});
+
+test("a causal route canonicalizes an origin subclass for the wire", () => {
+  const { state, log } = routeInFlight(
+    terminalSkipRouteFlow({ routerOrigin: new SpecialOrigin("special-router-site") }),
+  );
+
+  const prepared = prepareNodeRouted(state, "router", "go");
+  const failure = (prepared.record as NodeRoutedRecord).terminalFailure!;
+
+  expect(failure.trace).toEqual([new OriginRef("special-router-site")]);
+  expect(failure.trace[0]!.constructor).toBe(OriginRef);
+  expect(failure).toBe(routePlan(prepared).delta.terminalUnreachableFailure!);
+
+  commitPrepared(log, state, prepared);
+
+  expect((state.result as RunFailed | null)?.failure).toBe(failure);
+  const logged = (log.records().at(-1)!.record as NodeRoutedRecord).terminalFailure!;
+  expect(logged).toStrictEqual(failure);
+  expect(logged.trace[0]!.constructor).toBe(OriginRef);
+  expect(state.ready).toEqual([]);
+});
+
+test("the terminal-unreachable latch is installed only after the route's append", () => {
+  const { state, log: prior } = terminalSkipWithSiblingInFlight();
+  const prepared = prepareNodeRouted(state, "router", "go");
+  const before = snapshot(state);
+  const log = new FailingLog(RUN_ID, prior.records());
+
+  expectError(() => commitPrepared(log, state, prepared), Error, "disk full");
+
+  expectUnchanged(state, before);
+  expect(state.terminalUnreachableFailure).toBeNull();
+  expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test("a causal route replay requires its persisted terminal failure", () => {
+  const { state, log } = terminalSkipRouterInFlight();
+  const before = snapshot(state);
+
+  expectError(
+    () => prepareRecord(state, new NodeRoutedRecord("router", "go")),
+    RangeError,
+    "causal NodeRoutedRecord requires a persisted terminal failure",
+  );
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test("a noncausal route replay refuses a terminal failure", () => {
+  const { state, log } = routeInFlight();
+  const failure = new Failure({
+    code: "graph.terminal_unreachable",
+    message: "terminal output null skipped",
+    nodeId: "router",
+  });
+  const before = snapshot(state);
+
+  expectError(
+    () => prepareRecord(state, new NodeRoutedRecord("router", "yes", { terminalFailure: failure })),
+    RangeError,
+    "NodeRoutedRecord terminal failure is present on a noncausal route",
+  );
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+const ZETA = "terminal output 'zeta' skipped";
+
+test.each<[string, Failure, string]>([
+  [
+    "code",
+    new Failure({ code: "node.execute", message: ZETA, nodeId: "router" }),
+    "route terminal failure has the wrong failure code",
+  ],
+  [
+    "node",
+    new Failure({ code: "graph.terminal_unreachable", message: ZETA, nodeId: "other" }),
+    "route terminal failure has the wrong causal node ID",
+  ],
+  [
+    "message",
+    new Failure({ code: "graph.terminal_unreachable", message: "wrong", nodeId: "router" }),
+    "route terminal failure has the wrong message",
+  ],
+  [
+    "cause",
+    new Failure({ code: "graph.terminal_unreachable", message: ZETA, nodeId: "router", causeType: "RuntimeError" }),
+    "route terminal failure cannot carry exception diagnostics",
+  ],
+  [
+    "traceback",
+    new Failure({ code: "graph.terminal_unreachable", message: ZETA, nodeId: "router", traceback: "trace" }),
+    "route terminal failure cannot carry exception diagnostics",
+  ],
+])("a causal route replay refuses a mismatched terminal failure: %s", (_name, failure, message) => {
+  const { state, log } = terminalSkipRouterInFlight();
+  const before = snapshot(state);
+
+  expectError(
+    () => prepareRecord(state, new NodeRoutedRecord("router", "go", { terminalFailure: failure })),
+    RangeError,
+    message,
+  );
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+test("quiescence without a retained causal failure is a graph fault", () => {
+  const { state, log } = terminalSkipWithSiblingInFlight();
+  commitPrepared(log, state, prepareNodeRouted(state, "router", "go"));
+  state.terminalUnreachableFailure = null;
+  const before = snapshot(state);
+
+  expectError(
+    () => prepareNodeSucceeded(state, "unrelated", { done: true }),
+    RangeError,
+    "run quiesced without END output or a causal terminal failure",
+  );
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(state.nextSequence);
+});
+
+/** Return the sibling terminal-skip flow with a rebased router origin and ancestry. */
+function rebasedTerminalSkipFlow(): CompiledFlow {
+  const flow = terminalSkipRouteFlow({ routerOrigin: new OriginRef("rebased-router-site"), sibling: true });
+  node(flow, "router").originContext = [new OriginRef("rebased-outer-site")];
+  return flow;
+}
+
+test("the terminal-unreachable latch replays before and at quiescence", () => {
+  const live = terminalSkipWithSiblingInFlight();
+  node(live.state.flow, "router").originContext = [new OriginRef("outer-site")];
+  commitPrepared(live.log, live.state, prepareNodeRouted(live.state, "router", "go"));
+
+  const prefix = replayOutcomeLog(rebasedTerminalSkipFlow(), live.log);
+
+  expect(prefix.observers.at(-1)!.at(-1)).toStrictEqual(new NodeSkipped({ nodeId: "dead-a" }));
+  expect(prefix.state.result).toBeNull();
+  expect(prefix.state.terminalUnreachableFailure).toStrictEqual(live.state.terminalUnreachableFailure);
+  expect(reducerSnapshot(prefix.state)).toEqual(reducerSnapshot(live.state));
+  expect(prefix.log.records()).toEqual(live.log.records());
+  expect(prefix.state.ready).toEqual([]);
+
+  const liveObservers = commitPrepared(
+    live.log,
+    live.state,
+    prepareNodeSucceeded(live.state, "unrelated", { done: true }),
+  );
+  const final = replayOutcomeLog(rebasedTerminalSkipFlow(), live.log);
+
+  expect(final.observers.at(-1)).toStrictEqual(liveObservers);
+  expect(reducerSnapshot(final.state)).toEqual(reducerSnapshot(live.state));
+  expect(final.log.records()).toEqual(live.log.records());
+  const failure = (final.state.result as RunFailed).failure;
+  expect(failure).toBe(final.state.terminalUnreachableFailure!);
+  expect(failure.nodeId).toBe("router");
+  expect(failure.trace).toEqual([new OriginRef("outer-site"), new OriginRef("router-site")]);
+  expect(final.state.ready).toEqual([]);
+});
+
+test("a terminal-skip diagnosis scans only END beyond the touched route joins", () => {
+  const { state } = terminalSkipRouterInFlight();
+  const incoming = state.flow.incoming.bind(state.flow);
+  const scanned: string[] = [];
+  state.flow.incoming = (nodeId) => {
+    scanned.push(nodeId);
+    return incoming(nodeId);
+  };
+
+  prepareNodeRouted(state, "router", "go");
+
+  expect(scanned).toEqual([END_ID, "dead-optional", "dead-z", "dead-a", END_ID]);
+});
+
+test("a terminal derivation replays from the causal records only (route)", () => {
+  const live = terminalSkipRouterInFlight();
+  const expected = commitPrepared(live.log, live.state, prepareNodeRouted(live.state, "router", "go"));
+
+  const replay = replayOutcomeLog(terminalSkipRouteFlow(), live.log);
+
+  expect(replay.observers.at(-1)).toStrictEqual(expected);
+  expect(reducerSnapshot(replay.state)).toEqual(reducerSnapshot(live.state));
+  expect(replay.log.records()).toEqual(live.log.records());
+  expect(replay.state.ready).toEqual([]);
+  expect(
+    replay.log
+      .records()
+      .every(
+        (envelope) =>
+          !envelope.record.constructor.name.startsWith("RunSucceeded") &&
+          !envelope.record.constructor.name.startsWith("RunFailed"),
+      ),
+  ).toBe(true);
+});
+
+test("a terminal append failure leaves the result, the frontier and the pool unchanged (route)", () => {
+  const { state, log: prior } = terminalSkipRouterInFlight();
+  const prepared = prepareNodeRouted(state, "router", "go");
+  const before = snapshot(state);
+  const log = new FailingLog(RUN_ID, prior.records());
+
+  expectError(() => commitPrepared(log, state, prepared), Error, "disk full");
+
+  expectUnchanged(state, before);
+  expect(state.result).toBeNull();
+  expect(log.nextSequence).toBe(prior.nextSequence);
+});
+
+test("a terminal commit does no materialization after append (route)", () => {
+  const { state, log: prior } = terminalSkipRouterInFlight();
+  const prepared = prepareNodeRouted(state, "router", "go");
+  const log = new PoisonAfterAppendLog(prior, state.flow);
+
+  const observers = commitPrepared(log, state, prepared);
+
+  expect(observers).toStrictEqual([
+    ...routed("router", "go", "dead-optional", "dead-z", END_ID, "dead-a"),
+    new RunFailed({ failure: zetaUnreachable() }),
+  ]);
+  expect(state.result).toStrictEqual(new RunFailed({ failure: zetaUnreachable() }));
+  expect(state.ready).toEqual([]);
 });

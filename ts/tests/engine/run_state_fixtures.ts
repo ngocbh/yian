@@ -10,6 +10,7 @@ import { expect } from "bun:test";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import type { OriginRef } from "../../src/diagnostics.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
@@ -122,6 +123,38 @@ export function routeFlow(): CompiledFlow {
     new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
     new Edge("dead-child", "dead-parent", "dead-child"),
   ]);
+}
+
+/**
+ * Return a route whose selected `go` control into END still co-skips two of END's groups: `zeta`
+ * (through `dead-z`) and then `alpha` (through `dead-a`), after an optional group. END is a record
+ * of `zeta` and `alpha`. `routerOrigin` is the router's origin; `sibling` adds a START successor
+ * `unrelated`.
+ */
+export function terminalSkipRouteFlow(
+  options: { routerOrigin?: OriginRef | null; sibling?: boolean } = {},
+): CompiledFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["router", new FuncNode("router", (inputs) => inputs, { origin: options.routerOrigin ?? null })],
+    ...["dead-optional", "dead-z", "dead-a"].map((id) => [id, new FuncNode(id, (inputs) => inputs)] as const),
+    [END_ID, EndNode.record(END_ID, { outputNames: ["zeta", "alpha"] })],
+  ]);
+  const edges = [
+    new Edge("start-router", START_ID, "router"),
+    new Edge("router-end", "router", END_ID, { sourceHandle: "go" }),
+    new Edge("router-dead-optional", "router", "dead-optional", { sourceHandle: "skip-optional" }),
+    new Edge("dead-optional-end", "dead-optional", END_ID, { inputGroup: "optional-first", optional: true }),
+    new Edge("router-dead-z", "router", "dead-z", { sourceHandle: "skip-z" }),
+    new Edge("dead-z-end", "dead-z", END_ID, { inputGroup: "zeta" }),
+    new Edge("router-dead-a", "router", "dead-a", { sourceHandle: "skip-a" }),
+    new Edge("dead-a-end", "dead-a", END_ID, { inputGroup: "alpha" }),
+  ];
+  if (options.sibling) {
+    nodes.set("unrelated", new FuncNode("unrelated", (inputs) => inputs));
+    edges.push(new Edge("start-unrelated", START_ID, "unrelated"));
+  }
+  return CompiledFlow.fromParts(nodes, edges);
 }
 
 /** The id of `callRedirectFlow`'s child END. */

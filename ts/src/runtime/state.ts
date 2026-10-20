@@ -2286,18 +2286,93 @@ function prepareRouteDelta(
     for (let index = children.length - 1; index >= 0; index--) work.push([children[index]!, NodeState.SKIPPED]);
   }
 
-  if (record.terminalFailure !== null) {
+  let causalFailure: Failure | null = null;
+  let terminalUnreachableFailure = state.terminalUnreachableFailure;
+  if (terminalUnreachableFailure === null && skippedNodes.has(state.flow.endId)) {
+    if (deriveTerminalFailure) {
+      if (record.terminalFailure !== null) {
+        throw new RangeError("live route preparation cannot supply a terminal failure");
+      }
+      causalFailure = makeTerminalUnreachableFailure(state, record.nodeId, edgeUpdates);
+    } else {
+      causalFailure = validateRecordedTerminalFailure(state, record, edgeUpdates);
+    }
+    terminalUnreachableFailure = causalFailure;
+  } else if (record.terminalFailure !== null) {
     throw new RangeError("NodeRoutedRecord terminal failure is present on a noncausal route");
   }
+
   const delta: RouteDelta = Object.freeze({
     nodeId: record.nodeId,
     handle: record.handle,
     edgeUpdates: Object.freeze([...edgeUpdates].map((entry) => Object.freeze(entry))),
     skippedNodeIds: Object.freeze(skippedNodeIds),
     newlyReadyIds: Object.freeze(newlyReadyIds),
-    terminalUnreachableFailure: state.terminalUnreachableFailure,
+    terminalUnreachableFailure,
   });
-  return { delta, causalFailure: null };
+  return { delta, causalFailure };
+}
+
+/** Build the source-neutral failure of one causal terminal skip. */
+function makeTerminalUnreachableFailure(
+  state: RunState,
+  causalNodeId: string,
+  edgeUpdates: ReadonlyMap<string, NodeState>,
+): Failure {
+  return new Failure({
+    code: "graph.terminal_unreachable",
+    message: `terminal output ${terminalSkippedOutputText(state, edgeUpdates)} skipped`,
+    nodeId: causalNodeId,
+    trace: state.flow.nodes.get(causalNodeId)!.failureTrace(),
+  });
+}
+
+/** Validate the persisted authority of one structurally causal route, field by field. */
+function validateRecordedTerminalFailure(
+  state: RunState,
+  record: NodeRoutedRecord,
+  edgeUpdates: ReadonlyMap<string, NodeState>,
+): Failure {
+  const failure = record.terminalFailure;
+  if (failure === null) throw new RangeError("causal NodeRoutedRecord requires a persisted terminal failure");
+  if (!isExactly(failure, Failure)) throw new TypeError("NodeRoutedRecord terminal failure must be a Failure");
+  const expectedMessage = `terminal output ${terminalSkippedOutputText(state, edgeUpdates)} skipped`;
+  if (failure.code !== "graph.terminal_unreachable") {
+    throw new RangeError("route terminal failure has the wrong failure code");
+  }
+  if (failure.nodeId !== record.nodeId) throw new RangeError("route terminal failure has the wrong causal node ID");
+  if (failure.message !== expectedMessage) throw new RangeError("route terminal failure has the wrong message");
+  if (failure.causeType !== null || failure.traceback !== null) {
+    throw new RangeError("route terminal failure cannot carry exception diagnostics");
+  }
+  return failure;
+}
+
+/** The skipped END group's name as a diagnosis renders it: quoted, or `null`. */
+function terminalSkippedOutputText(state: RunState, edgeUpdates: ReadonlyMap<string, NodeState>): string {
+  const name = terminalSkippedOutputName(state, edgeUpdates);
+  return name === null ? writeAsText(null) : reprText(name);
+}
+
+/**
+ * Return the first required END group, in stored order, that is fully skipped.
+ *
+ * `edgeUpdates` is the pending route overlay; an edge absent from it reads its live disposition.
+ * Group insertion order keeps the first-occurrence rule, including `null` when that is the
+ * diagnosed input group's name.
+ */
+function terminalSkippedOutputName(state: RunState, edgeUpdates: ReadonlyMap<string, NodeState>): string | null {
+  const groups = new Map<string | null, readonly [boolean, boolean]>();
+  for (const edge of state.flow.incoming(state.flow.endId)) {
+    if (edge.sourceHandle !== null || edge.ordering) continue;
+    const skipped = (edgeUpdates.get(edge.id) ?? state.edgeState.get(edge.id)) === NodeState.SKIPPED;
+    const group = groups.get(edge.inputGroup);
+    groups.set(edge.inputGroup, group === undefined ? [edge.optional, skipped] : [group[0], group[1] && skipped]);
+  }
+  for (const [name, [optional, allSkipped]] of groups) {
+    if (!optional && allSkipped) return name;
+  }
+  return null;
 }
 
 /**

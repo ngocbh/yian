@@ -446,8 +446,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `json.dumps`; see `docs/api.md` for where the two differ.
 - `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*` function
   (`prepareRunStarted`, `prepareNodeStarted`, `prepareNodeStep`, `prepareNodeSucceeded`,
-  `prepareNodeRouted`, `prepareNodeFailed`, `prepareRunResumed`, `prepareRunStopped`,
-  `prepareRecord`) validates one transition without mutating the state and returns a frozen
+  `prepareNodeRouted`, `prepareNodeFailed`, `prepareExpanded`, `prepareRunResumed`,
+  `prepareRunStopped`, `prepareRecord`) validates one transition without mutating the state and returns a frozen
   `PreparedTransition`: the canonical record, the run id and sequence it expects, and a frozen plan.
   `commitPrepared(log, state, prepared)` appends the record, checks what the log returned, then
   applies the plan, with no `await` in between, so nothing interleaves between the append and the
@@ -463,8 +463,16 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   run once nothing is ready or in flight, unless a node failure ends it first; a node failure ends
   the run at once. A bad output, an unknown handle or a bad commit target from a node throws
   `NodeDataError` (`original` holds the underlying error), which fails the node, not the run.
-  Growth, the recovery fold (`replayRecords`) and the backward records throw `not ported yet
-  (T4-5)`.
+  A growth (`prepareExpanded`) copies the spawner with `copyGraph`, calls the injected builder with
+  the canonical seed, copies the fragment it returns, validates it against the live graph (ids,
+  wiring, contracts, edges, reachability, redirects, the node budget, depth) and decides which
+  requested prune ids retire now and which stay deferred until they and their grown subtrees
+  settle; the commit then installs the fragment and retires the pruned nodes in place, after the
+  append. A bad seed, fragment or prune from the node throws `GrowthRejected` (`original` holds the
+  underlying error), which fails the node; a builder or host fault stays raw. Replaying a
+  `NodeExpandedRecord` rebuilds the fragment and requires the recorded digest, and throws the
+  underlying error, never `GrowthRejected`. The recovery fold (`replayRecords`) and the backward
+  records throw `not ported yet (T4-5)`.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

@@ -84,8 +84,9 @@
  * wiring entry or the flow output wrapped in one `Binding` is still checked, and one wrapped twice
  * holds no source text to check.
  *
- * Later (T3-14…T3-22): inline binding type inference
- * (`test_inline_binding_type_inference_reads_one_carrier_layer`).
+ * The inline-inputs row `test_inline_binding_type_inference_reads_one_carrier_layer`, through
+ * `inferInlineBindingType`; its doubly wrapped half pins the whole message, where Python matches
+ * a fragment.
  */
 
 import { expect, test } from "bun:test";
@@ -108,6 +109,7 @@ import {
   templateContract,
 } from "../../src/compose/helpers/output_contracts.ts";
 import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
+import { inferInlineBindingType } from "../../src/compose/build/inline_inputs.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { bindingProducers } from "../../src/compose/edges/producers.ts";
 import { BuildContext, BuildResult, NodeDescriptor } from "../../src/compose/nodes/base.ts";
@@ -420,6 +422,27 @@ function manifestAssertions(assertions: unknown[]): Flow {
 function withFutureField<T extends object>(carrier: T): T {
   return Object.assign(Object.create(Object.getPrototypeOf(carrier)), carrier, { futureSemanticField: true });
 }
+
+test("inline binding type inference reads one carrier layer", () => {
+  // A generated inline parameter keeps the type of a wrapped parent reference.
+  const parentType = Type.scalar(ValueKind.INTEGER);
+  const options = {
+    parentInputTypes: new Map([["count", parentType]]),
+    producerType: () => Type.scalar(ValueKind.NONE),
+    bindingLabel: "call.input.count",
+  };
+
+  const wrapped = new Binding("${input.count}", { origin: origin("inline-count") });
+  expect(inferInlineBindingType(wrapped, options)).toEqual(parentType);
+
+  const inner = new Binding("${input.count}", { origin: origin("inner") });
+  const error = loadError(() => inferInlineBindingType(new Binding(inner, { origin: origin("outer") }), options));
+  expect(error.message).toBe(
+    "cannot infer type for inline binding 'call.input.count': literal at call.input.count has unsupported " +
+      "type 'Binding'; declare its type with a tag (`count: !<type> ...`) or use an explicitly typed named " +
+      "`defs:` body",
+  );
+});
 
 test("wiring identity uses the source and ignores the binding origin", () => {
   // Manifest, fingerprint and expansion identity exclude provenance only.

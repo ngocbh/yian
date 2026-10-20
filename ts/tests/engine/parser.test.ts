@@ -16,8 +16,9 @@
  * TS-only: the messages of the schema rows, whose Python text is pydantic's except for a text
  * field read as non-text, and the tagged recursive-alias row.
  *
- * Held here until T3-22: the harvested cases at the end, whose error `parseSourceDocument` or
- * `parseFile` raises, each group under a comment naming the Python file it comes from.
+ * Pinned at the end (kept beside the conformance runner's `load` kind, which runs them whole):
+ * the harvested cases whose error `parseSourceDocument` or `parseFile` raises, each group under a
+ * comment naming the Python file it comes from.
  */
 
 import { afterEach, expect, test } from "bun:test";

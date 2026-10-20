@@ -16,8 +16,8 @@
  * `tests/engine/test_surface_vocab_golden.py::test_pool_heads_singular`, which reads the same
  * module's pool heads.
  *
- * The load rows assemble the flow (`assembleText`); the mapped call's `dbl` def is built by hand
- * (`handChild`), since def bodies load in T3-22. Hand-built descriptors are `CodeDescriptor`s where
+ * The load rows assemble the flow (`assembleText`); the mapped-call row loads it through
+ * `loadFlow`, its `dbl` def built by the loader. Hand-built descriptors are `CodeDescriptor`s where
  * Python passes a `SimpleNamespace`.
  *
  * Changed: `validateNodeAsserts` takes its options as one object, so the keyword-only row pins that
@@ -38,7 +38,6 @@
 
 import { expect, test } from "bun:test";
 
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
@@ -53,7 +52,14 @@ import {
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, handChild, loadError, parametersFromYaml, runCase } from "../compose/declarations.ts";
+import {
+  assembled,
+  assembleText,
+  loadConformanceFlow,
+  loadError,
+  loadErrorAsync,
+  runCase,
+} from "../compose/declarations.ts";
 
 const DOUBLE = "./fixtures/compose_codefns.ts:double";
 
@@ -321,16 +327,7 @@ test("a dotted field on a scalar output is rejected", () => {
   );
 });
 
-/** The `dbl` def built by hand: an int input `n` and an int output. */
-function dbl(): ComposedFlow {
-  return handChild({
-    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
-    producers: { y: new ValueContract(Type.scalar(ValueKind.INTEGER)) },
-    output: "${y.output}",
-  });
-}
-
-test("node asserts on a mapped call are rejected", () => {
+test("node asserts on a mapped call are rejected", async () => {
   const text = `
 id: nam
 name: nam
@@ -348,7 +345,7 @@ nodes:
       - "output >= 0"
 output: \${m.output}
 `;
-  expect(() => assembleText(text, "flow.yaml", { children: { dbl: dbl() } })).toThrow(/mapped/);
+  expect((await loadErrorAsync(loadConformanceFlow(text))).message).toMatch(/mapped/);
 });
 
 test("a node assert holding a lone surrogate is a located load error", () => {

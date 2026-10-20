@@ -29,17 +29,20 @@
  * as `parseNodes` reads it; so is the ok case
  * `load-agent/engine_memory_authoring__inline_body_agent_memory_loads`, through `assembled`.
  *
- * Later (T3-22): `test_full_root_retains_flow_owned_policy_with_one_origin`,
+ * Ported through `loadFlow` (a CODE reference is `./fixtures/compose_codefns.ts:echo`, loaded
+ * against the conformance dir): `test_full_root_retains_flow_owned_policy_with_one_origin` (2),
  * `test_full_nested_definition_retains_flow_owned_policy_and_semantic_id`,
  * `test_compact_root_projects_policy_to_its_agent`,
  * `test_flat_agent_definition_projects_policy_to_its_agent`,
  * `test_compose_stamps_decl_sites_for_root_def_and_inline_owners`,
- * `test_non_agent_node_rejects_long_term_memory_at_the_authored_value`,
- * `test_malformed_flow_declaration_is_located_at_its_authored_occurrence`,
- * the other rows of `test_retired_memory_policy_is_a_located_migration_error`,
+ * `test_non_agent_node_rejects_long_term_memory_at_the_authored_value` (2),
+ * `test_malformed_flow_declaration_is_located_at_its_authored_occurrence` (7), the other six rows
+ * of `test_retired_memory_policy_is_a_located_migration_error`,
  * `test_inline_body_rejects_flow_policy_but_allows_child_agent_policy`,
- * `test_authored_policy_config_rejects_host_private_fields` and
- * `test_compose_loaded_flow_id_changes_the_previous_memoryless_identity` (they load flows).
+ * `test_authored_policy_config_rejects_host_private_fields` (each config's path and key as in
+ * the decl rows) and `test_compose_loaded_flow_id_changes_the_previous_memoryless_identity`. The
+ * error rows pin the whole message, where Python matches a pattern; config ints are `bigint`; a
+ * node without memories has no own `memories` field, as Python's `__dict__` check reads it.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -47,11 +50,21 @@ import { afterEach, expect, test } from "bun:test";
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { forget } from "../../src/defaults.ts";
-import { OriginRef } from "../../src/diagnostics.ts";
+import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { assembled, type CaseRow, parsedNodes, runCase } from "../compose/declarations.ts";
+import {
+  assembled,
+  type CaseRow,
+  loadConformanceFlow,
+  loadErrorAsync,
+  parsedNodes,
+  runCase,
+} from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -123,6 +136,300 @@ function expectError(fn: () => unknown, cls: typeof Error, message: string): voi
 function flowWith(...memories: MemoryDecl[]): CompiledFlow {
   return new CompiledFlow(new Map(), [], { memories });
 }
+
+/** A full flow named `memory-root` with `policy` inserted at the flow level. */
+function fullFlow(policy: string): string {
+  return (
+    "id: memory-root\n" +
+    "name: memory_root\n" +
+    policy +
+    "nodes:\n" +
+    "  echo:\n" +
+    "    kind: code\n" +
+    "    code: ./fixtures/compose_codefns.ts:echo\n" +
+    "    input: {topic: hello}\n" +
+    "    output: str\n" +
+    "output: ${echo.output}\n"
+  );
+}
+
+/** The baked child flow of CALL `nodeId` in `flow`. */
+const childOf = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as CallNode).child as CompiledFlow;
+
+/** The memories of AGENT `nodeId` in `flow`. */
+const agentMemories = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as AgentNode).memories;
+
+/** Expect the last frame of `error` to start, at line `line` (default: its own), with `prefix`. */
+function expectFrameLine(error: LoadError, prefix: string, line?: number): void {
+  const frame = error.diagnostic.frames.at(-1)!;
+  if (line !== undefined) expect(frame.range.startLine).toBe(line);
+  expect(frame.text.split("\n")[frame.range.startLine - 1]!.trim().startsWith(prefix)).toBe(true);
+}
+
+test.each([
+  ["string", "long_term_memory: reflective\n", {}, 3],
+  [
+    "object",
+    "long_term_memory:\n  reflective:\n    type: reflective\n    config:\n      max_items: 20\n      recall_limit: 5\n",
+    { max_items: 20n, recall_limit: 5n },
+    4,
+  ],
+] as const)("a full root retains its flow-owned policy with one origin (%s)", async (_id, policy, config, line) => {
+  const loaded = await loadConformanceFlow(fullFlow(policy), { sourceLabel: "memory.yaml" });
+
+  expect(loaded.compiled.memories).toHaveLength(1);
+  const decl = loaded.compiled.memories[0]!;
+  expect(loaded.compiled.flowId).toBe("memory-root");
+  expect(decl.constructor).toBe(MemoryDecl);
+  expect([decl.name, decl.type, decl.key]).toEqual(["reflective", "reflective", "reflective"]);
+  expect(decl.site).toEqual(ROOT);
+  expect(decl.config).toEqual(config);
+  expect(decl.origin).toBeInstanceOf(OriginRef);
+  expect("memories" in loaded.compiled.nodes.get("echo")!).toBe(false);
+  const frame = loaded.originResolver!.resolve(decl.origin!)!;
+  expect(frame.label).toBe("memory.yaml");
+  expect(frame.range.startLine).toBe(line);
+});
+
+test("a full nested definition retains its flow-owned policy and semantic id", async () => {
+  const loaded = await loadConformanceFlow(`id: parent
+name: parent
+defs:
+  child:
+    long_term_memory:
+      reflective: {type: reflective, config: {max_items: 8}}
+    nodes:
+      answer:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input: {topic: child}
+        output: str
+    output: \${answer.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`);
+
+  const child = childOf(loaded.compiled, "invoke");
+  expect(child.flowId).toBe("child");
+  expect(child.memories[0]!.name).toBe("reflective");
+  expect(child.memories[0]!.config).toEqual({ max_items: 8n });
+  expect("memories" in child.nodes.get("answer")!).toBe(false);
+});
+
+test("a compact root projects its policy to its agent", async () => {
+  const loaded = await loadFlow(`id: compact_agent
+name: compact_agent
+long_term_memory: reflective
+output: str
+kind: agent
+prompt: answer
+`);
+
+  expect(loaded.compiled.flowId).toBe("compact_agent");
+  expect(loaded.compiled.memories).toEqual([]);
+  const agent = loaded.compiled.nodes.get("compact_agent")!;
+  expect(agent.constructor).toBe(AgentNode);
+  expect(agentMemories(loaded.compiled, "compact_agent")[0]!.name).toBe("reflective");
+});
+
+test("a flat agent definition projects its policy to its agent", async () => {
+  const loaded = await loadFlow(`id: parent
+name: parent
+defs:
+  child:
+    kind: agent
+    long_term_memory: reflective
+    prompt: answer
+    output: str
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`);
+
+  const child = childOf(loaded.compiled, "invoke");
+  expect(child.flowId).toBe("child");
+  expect(child.memories).toEqual([]);
+  expect(agentMemories(child, "child")[0]!.name).toBe("reflective");
+});
+
+test("compose stamps decl sites for root, def and inline owners", async () => {
+  const { compiled } = await loadFlow(`id: parent
+name: parent
+long_term_memory: outer
+defs:
+  child:
+    kind: agent
+    long_term_memory: inner
+    prompt: answer
+    output: str
+nodes:
+  top:
+    kind: agent
+    long_term_memory: local
+    prompt: answer
+    output: str
+  invoke:
+    kind: call
+    call: child
+  wrapper:
+    kind: call
+    nodes:
+      answer:
+        kind: agent
+        long_term_memory: inline
+        prompt: answer
+        output: str
+    output: \${answer.output}
+output: \${top.output}
+`);
+
+  expect(compiled.memories.map((decl) => decl.site)).toEqual([ROOT]);
+  expect(agentMemories(compiled, "top")[0]!.site).toEqual(new DeclSite([], ["root"], "top"));
+  const child = childOf(compiled, "invoke");
+  expect(child.memories).toEqual([]);
+  expect(agentMemories(child, "child")[0]!.site).toEqual(new DeclSite([], ["def", "child"], "child"));
+  const inline = childOf(compiled, "wrapper");
+  expect(agentMemories(inline, "answer")[0]!.site).toEqual(
+    new DeclSite([], ["root", "node", "wrapper", "inline"], "answer"),
+  );
+});
+
+test.each([
+  [
+    "compact",
+    `id: compact_code
+name: compact_code
+long_term_memory: reflective
+output: str
+kind: code
+code: ./fixtures/compose_codefns.ts:echo
+`,
+    "node 'compact_code' (kind=code): field 'long_term_memory' is not allowed (allowed: asserts, code, " +
+      "depends_on, env, input, kind, node_name, output, runs_after)",
+  ],
+  [
+    "ordinary",
+    `id: ordinary-code
+name: ordinary_code
+nodes:
+  echo:
+    kind: code
+    long_term_memory: reflective
+    code: ./fixtures/compose_codefns.ts:echo
+    output: str
+output: \${echo.output}
+`,
+    "node 'echo' (kind=code): field 'long_term_memory' is not allowed (allowed: asserts, code, depends_on, " +
+      "env, input, kind, node_name, output, runs_after)",
+  ],
+])("a non-agent node rejects long_term_memory at the authored value (%s)", async (_id, source, message) => {
+  const error = await loadErrorAsync(loadConformanceFlow(source));
+
+  expect(error.message).toBe(message);
+  expectFrameLine(error, "long_term_memory:");
+});
+
+test.each([
+  ["long_term_memory: ''\n", "long_term_memory '': memory name '' must match [A-Za-z_][A-Za-z0-9_-]*"],
+  ["long_term_memory: {}\n", "long_term_memory: {} declares no memory; remove the key or name one"],
+  ["long_term_memory: {name: reflective}\n", "long_term_memory name 'name' is reserved (reserved: config, name, type)"],
+  [
+    "long_term_memory: {name: reflective, config: {max_items: 3}}\n",
+    "long_term_memory name 'name' is reserved (reserved: config, name, type)",
+  ],
+  ["long_term_memory: {notes: {type: reflective, config: []}}\n", "long_term_memory 'notes' config must be a mapping"],
+  [
+    "long_term_memory: {notes: {type: reflective, extra: true}}\n",
+    'long_term_memory \'notes\' has unknown key(s) ["extra"] (allowed: type, config)',
+  ],
+  [
+    "long_term_memory: {notes: {type: reflective, config: {max_items: 0}}}\n",
+    "long_term_memory 'notes': reflective memory config max_items must be an integer of at least 1, got 0",
+  ],
+])("a malformed flow declaration is located at its authored occurrence: %s", async (surface, message) => {
+  const error = await loadErrorAsync(loadConformanceFlow(fullFlow(surface)));
+
+  expect(error.message).toBe(message);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(3);
+});
+
+const TOP_LEVEL_RENAMED =
+  "unknown top-level key 'memory_policy' — `memory_policy:` was renamed to `long_term_memory:`";
+
+test.each([
+  ["full-root", "id: full\nname: full\nmemory_policy: reflective\nnodes: {}\n", 3, TOP_LEVEL_RENAMED],
+  [
+    "compact-root",
+    "id: compact\nname: compact\nmemory_policy: reflective\nkind: agent\nprompt: answer\noutput: str\n",
+    3,
+    TOP_LEVEL_RENAMED,
+  ],
+  [
+    "multi-node-def",
+    "id: parent\nname: parent\ndefs:\n  child:\n    memory_policy: reflective\n    nodes: {}\nnodes: {}\n",
+    5,
+    "defs entry 'child': field `memory_policy:` was renamed to `long_term_memory:`",
+  ],
+  [
+    "flat-agent-def",
+    "id: parent\nname: parent\ndefs:\n  child:\n    kind: agent\n    memory_policy: reflective\n" +
+      "    prompt: answer\n    output: str\nnodes: {}\n",
+    6,
+    "defs entry 'child': node field `memory_policy:` was renamed to `long_term_memory:`",
+  ],
+  [
+    "both-old-first",
+    "id: both-old-first\nname: both_old_first\nmemory_policy: reflective\nlong_term_memory: episodic\nnodes: {}\n",
+    3,
+    TOP_LEVEL_RENAMED,
+  ],
+  [
+    "both-new-first",
+    "id: both-new-first\nname: both_new_first\nlong_term_memory: episodic\nmemory_policy: reflective\nnodes: {}\n",
+    4,
+    TOP_LEVEL_RENAMED,
+  ],
+])("a retired memory_policy is a located migration error (%s)", async (_id, source, line, message) => {
+  const error = await loadErrorAsync(loadFlow(source));
+
+  expect(error.message).toBe(message);
+  expectFrameLine(error, "memory_policy:", line);
+});
+
+test("an inline body rejects a flow policy but allows a child agent's policy", async () => {
+  const rejected = `id: inline-policy
+name: inline_policy
+nodes:
+  wrapper:
+    kind: call
+    long_term_memory: reflective
+    nodes:
+      answer:
+        kind: agent
+        prompt: answer
+        output: str
+    output: \${answer.output}
+output: \${wrapper.output}
+`;
+  const error = await loadErrorAsync(loadFlow(rejected));
+  expect(error.message).toBe(
+    "node 'wrapper' (kind=call): field 'long_term_memory' is not allowed (allowed: asserts, call, depends_on, " +
+      "env, input, kind, node_name, runs_after)",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(6, 23, 6, 33));
+
+  const allowed = rejected
+    .replace("    long_term_memory: reflective\n", "")
+    .replace("        prompt: answer\n", "        long_term_memory: reflective\n        prompt: answer\n");
+  const child = childOf((await loadFlow(allowed)).compiled, "wrapper");
+  expect(child.memories).toEqual([]);
+  expect(agentMemories(child, "answer")[0]!.name).toBe("reflective");
+});
 
 test("compiled flow constructor defaults and validates authored memory fields", () => {
   const flow = new CompiledFlow(new Map(), []);
@@ -227,6 +534,19 @@ test.each(PRIVATE_CONFIG_CASES)("decl config rejects host private fields (%s %s)
   );
 });
 
+test.each(PRIVATE_CONFIG_CASES)(
+  "authored policy config rejects host private fields (%s %s)",
+  async (where, key, config) => {
+    const source = fullFlow(
+      `long_term_memory:\n  notes:\n    type: reflective\n    config: ${JSON.stringify(config)}\n`,
+    );
+
+    const error = await loadErrorAsync(loadConformanceFlow(source, { sourceLabel: "memory.yaml" }));
+
+    expect(error.message).toBe(`long_term_memory 'notes': ${where} contains forbidden private key '${key}'`);
+  },
+);
+
 test("policy config keeps public behavior options", () => {
   const config = {
     max_items: 20n,
@@ -272,6 +592,15 @@ test("expansion digest excludes flow id and agent memory", () => {
 
   expect(expansionDigest(namedFlow)).toBe(expansionDigest(plainFlow));
   expect(expansionDigest(memoryAgent)).toBe(expansionDigest(plainAgent));
+});
+
+test("a compose-loaded flow id changes the previous memoryless identity", async () => {
+  const first = (await loadFlow("id: first\nname: same\nnodes: {}\n")).compiled;
+  const second = (await loadFlow("id: second\nname: same\nnodes: {}\n")).compiled;
+
+  expect(first.flowId).toBe("first");
+  expect(second.flowId).toBe("second");
+  expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
 });
 
 test("the AGENT constructor defaults and validates authored memory fields", () => {

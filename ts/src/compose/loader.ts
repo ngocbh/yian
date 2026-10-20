@@ -151,7 +151,7 @@ function restoreNodeSurface(nodes: Value): Value {
 }
 
 /** Return the authored def cursor's `nodes:`, or a surface-restored virtual fallback. */
-function defAssemblyCursor(defCursor: SourceCursor | null, normalizedNodes: Value): SourceCursor {
+export function defAssemblyCursor(defCursor: SourceCursor | null, normalizedNodes: Value): SourceCursor {
   if (defCursor !== null) {
     try {
       return defCursor.child("nodes");

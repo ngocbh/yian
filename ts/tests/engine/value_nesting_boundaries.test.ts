@@ -6,7 +6,7 @@
  * `test_bind_params_rejects_a_filled_default_over_the_limit`.
  *
  * Ported at node level, through `evalNode` (`drive`) with a `ScriptedModel` from `models` where
- * Python runs a loaded flow (T3-22, T4-8): the non-session rows of
+ * Python runs a loaded flow (the run is T4-8): the non-session rows of
  * `test_a_structured_agent_over_the_limit_self_corrects_under_retries`,
  * `test_a_deep_native_reply_that_misses_the_schema_retries_on_the_schema_error`,
  * `test_an_exhausted_deep_native_schema_miss_is_located_at_the_field` and
@@ -44,12 +44,17 @@
  * `test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects`; the learning half
  * of `test_tool_arguments_at_the_limit_run_and_are_learned_from`.
  *
- * Later: the other 27 tests run flows, backward or loads and land with the runner (T4-8, T3-22),
- * AGENT backward (T6-6) and the node kinds.
+ * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
+ * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
+ * matches fragments.
+ *
+ * Later: the other tests run flows or backward and land with the runner (T4-8), AGENT backward
+ * (T6-6) and the node kinds.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallFinished, ToolCallStarted } from "../../src/events.ts";
@@ -65,6 +70,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { loadErrorAsync } from "../compose/declarations.ts";
 import { drive } from "./run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -314,4 +320,59 @@ test("an over-deep call on a final reply fails it too", async () => {
 
   expectReplyTooDeep(failureOf(await outcome).message, "tool call 'lookup' arguments");
   expect(calls).toEqual([]);
+});
+
+/** Return a flow-style YAML literal nesting `{a: ...}` `levels` levels deep. */
+const flowLiteral = (levels: number) => "{a: ".repeat(levels) + "1" + "}".repeat(levels);
+
+/** Return the 1-based number of the first line of `text` containing `needle`. */
+const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+// The path of the 101st level of `flowLiteral(101)`, and the nesting refusal.
+const DEEP_PATH = Array(100).fill("a").join(".");
+const TOO_DEEP = "value nests deeper than 100 levels, the limit for a yian value (each record and list is a level)";
+
+// A written-out default past the limit is a load error; `applyDefaults` and `bindParams` above keep
+// the run-time check covered for programmatic defaults.
+test("an agent variable default over the limit fails at load", async () => {
+  const text = `
+id: nesting
+name: nesting
+llm_config: {provider: ollama, model: test}
+nodes:
+  writer:
+    kind: agent
+    variables:
+      t: !object ${flowLiteral(101)}
+    prompt: go
+    output: str
+output: \${writer.output}
+`;
+
+  const error = await loadErrorAsync(loadFlow(text));
+
+  expect(error.diagnostic.message).toBe(`variable 't' default at ${DEEP_PATH}: ${TOO_DEEP}`);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "t: !object"));
+});
+
+test("a START default over the limit fails at load", async () => {
+  const text = `
+id: nesting
+name: nesting
+input:
+  x: !object ${flowLiteral(101)}
+nodes:
+  c:
+    kind: code
+    input:
+      y: \${input.x}
+    code: |
+      return 1
+output: \${c.output}
+`;
+
+  const error = await loadErrorAsync(loadFlow(text));
+
+  expect(error.diagnostic.message).toBe(`input 'x' default at ${DEEP_PATH}: ${TOO_DEEP}`);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "x: !object"));
 });

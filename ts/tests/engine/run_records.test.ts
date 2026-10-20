@@ -114,9 +114,8 @@
  * schema parameter, since schema 10 is the only one).
  *
  * Changed, through the run state (Python reads recorded schema-9 bytes of flows from `load_flow`;
- * schema 10 is the only TS schema and the TS compiler has no `load_flow` yet, so each test records
- * its own live log of a TS flow, replays it through `replayRecords` and compares
- * `_plan.envelopeJson` with the live line):
+ * schema 10 is the only TS schema, so each test records its own live log of a TS flow, replays it
+ * through `replayRecords` and compares `_plan.envelopeJson` with the live line):
  * - `test_historical_frontier_prepares_recorded_schema_bytes` (2 rows): the one-record prefix is
  *   the RunStarted of `flow()` with `startData`.
  * - The `route` row of `test_historical_outcomes_keep_schema_in_trace_bytes`: the live learnable
@@ -124,8 +123,7 @@
  *   occurrence keeps the live line as its `recordJson`.
  *
  * Later (T4-8, they replay through `run.ts`'s log replay): the `success`, `failure` and `growth`
- * rows of `test_historical_outcomes_keep_schema_in_trace_bytes` (`growth` also waits for T3-22's
- * `build_grow`).
+ * rows of `test_historical_outcomes_keep_schema_in_trace_bytes`.
  */
 
 import { expect, test } from "bun:test";

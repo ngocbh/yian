@@ -2,16 +2,29 @@
  * The compiled flow topology model of `compile/model.ts`: a port of `tests/engine/test_graph.py`.
  * Ported: `test_adjacency_and_root`, `test_diamond_incoming`, `test_edge_input_group`,
  * `test_compiled_flow_wiring_field_threads_and_defaults`,
- * `test_flow_base_normalizes_wiring_with_boundary_defaults` and
- * `test_edge_optional_defaults_false_and_roundtrips`.
+ * `test_flow_base_normalizes_wiring_with_boundary_defaults`,
+ * `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal` and
+ * `test_edge_optional_defaults_false_and_roundtrips`; the compose rows
+ * `test_data_edge_optional_reflects_binding_escape`, `test_case_on_escape_marks_optional`, the
+ * searched-case condition rows (`test_searched_case_condition_default_marks_optional`,
+ * `test_searched_case_plain_reference_stays_required`,
+ * `test_searched_case_literal_coalesce_and_required_mark_optional`,
+ * `test_searched_case_default_to_another_reference_also_joins`,
+ * `test_searched_case_plain_and_default_reads_of_one_output`,
+ * `test_searched_case_unparenthesized_default_covers_the_whole_condition`),
+ * `test_searched_case_condition_with_a_nested_span_shows_the_rewrite`,
+ * `test_item_head_ref_yields_no_edge_but_producer_ref_does` and
+ * `test_binding_coskip_sets_edge_optional_per_stance`.
  *
  * Changed: Python's `FuncNode` is a minimal `Node` subclass; node and wiring tables are `Map`s;
- * bindings compare by `source`, `origin` and `contract`.
+ * bindings compare by `source`, `origin` and `contract`. The compose rows assemble their flows
+ * through `assembleText`, where Python calls `load_flow`, and name TS's CODE functions
+ * (`./fixtures/compose_codefns.ts:<fn>`); the item-head row's consumer is a CODE descriptor whose
+ * wiring the row hands to `inferDataEdges`, as Python's does.
  *
  * TS-only: `GrowthRejected` keeps `original` and refuses a non-`Error`; the `CompiledFlow`
  * `flowId` and `memories` checks; `terminalId` is `END_ID` on a hand-built flow holding an END
- * node and `null` once that node is removed (the model half of
- * `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal`); `copyGraph`, the shared graph
+ * node and `null` once that node is removed; `copyGraph`, the shared graph
  * copier that stands in for Python's `copy.deepcopy` of a flow or node: a copied flow and its
  * nodes are distinct instances of their classes with fresh containers, and splicing or pruning the
  * copy leaves the original; a node or child flow reached twice is copied once; a cycle copies to a
@@ -21,10 +34,12 @@
  * fragment passes, and one row per refusal message; `compile/index.ts` exports exactly Python's
  * `yian.compile.__all__`.
  *
- * Later (T3-17/T3-22): `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal` and the
- * compose rows (`test_data_edge_optional_reflects_binding_escape`, the CASE escape rows, the
- * branch gate rows, `test_item_head_ref_yields_no_edge_but_producer_ref_does` and
- * `test_binding_coskip_sets_edge_optional_per_stance`): they load YAML.
+ * Later (T3-20): the branch gate rows, which need the narrowing and the skipped-output checks
+ * (`test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
+ * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it`,
+ * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`,
+ * `test_a_guarded_read_inside_a_default_loads`,
+ * `test_a_co_skipping_default_keeps_the_gate_in_the_branch`).
  */
 
 import { expect, test } from "bun:test";
@@ -43,6 +58,9 @@ import {
   validateGrowthMetadata,
 } from "../../src/compile/model.ts";
 import * as originsModule from "../../src/compile/origins.ts";
+import { inferDataEdges } from "../../src/compose/edges/data.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { SourceCursor } from "../../src/compose/source/index.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -58,6 +76,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { assembleText, loadError } from "../compose/declarations.ts";
 
 /** A minimal concrete node standing in for Python's `FuncNode`. */
 class FuncNode extends Node {
@@ -143,9 +162,246 @@ test("flow base normalizes wiring with boundary defaults", () => {
   expect(spliced.wiring).toEqual(new Map());
 });
 
+test("a compiled flow is a Flow and keeps its boundary and terminal", () => {
+  const compiled = assembleText(OPTIONAL_EDGE_FLOW).flow.compiled;
+  expect(compiled).toBeInstanceOf(Flow);
+  expect(compiled.startId).toBe(START_ID);
+  expect(compiled.endId).toBe(END_ID);
+  // terminalId resolves to END_ID while the synthesized END node is present, null once absent.
+  expect(compiled.terminalId).toBe(END_ID);
+  compiled.nodes.delete(END_ID);
+  expect(compiled.terminalId).toBeNull();
+});
+
 test("edge optional defaults false and roundtrips", () => {
   expect(new Edge("a->b#0", "a", "b", { inputGroup: "x" }).optional).toBe(false);
   expect(new Edge("a->b#0", "a", "b", { inputGroup: "x", optional: true }).optional).toBe(true);
+});
+
+const OPTIONAL_EDGE_FLOW = `
+id: opt
+name: opt
+input:
+  seed: !float
+nodes:
+  a:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:score
+    input:
+      seed: \${input.seed}
+    output: float
+  hard:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      v: \${a.output}
+    output: str
+  soft:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      v: \${a.output:-null}
+    output: str
+output: \${hard.output}
+`;
+
+/** Return the assembled flow's edges in input group `v`, by consumer. */
+function vEdges(text: string): Map<string, Edge> {
+  const edges = assembleText(text).flow.compiled.edges;
+  return new Map(edges.filter((edge) => edge.inputGroup === "v").map((edge) => [edge.to, edge]));
+}
+
+test("a data edge's optional reflects the binding's escape", () => {
+  const byTo = vEdges(OPTIONAL_EDGE_FLOW);
+  expect(byTo.get("hard")!.optional).toBe(false); // plain ref -> required
+  expect(byTo.get("soft")!.optional).toBe(true); // `:-null` escape -> optional
+});
+
+const CASE_ESCAPE_FLOW = `
+id: ce
+name: ce
+input:
+  seed: !float
+nodes:
+  a:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:score
+    input:
+      seed: \${input.seed}
+    output: float
+  gate:
+    kind: case
+<gate>
+    else: cold
+  hot:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      seed: \${input.seed}
+    output: str
+  cold:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      seed: \${input.seed}
+    output: str
+output: \${gate.output}
+`;
+
+/** Return the `a -> gate` edges of `CASE_ESCAPE_FLOW` with `gate`'s body. */
+function aToGateEdges(gate: string): Edge[] {
+  const edges = assembleText(CASE_ESCAPE_FLOW.replace("<gate>", gate)).flow.compiled.edges;
+  return edges.filter((edge) => edge.from === "a" && edge.to === "gate");
+}
+
+/** Return the one `a -> gate` edge of `CASE_ESCAPE_FLOW` with `gate`'s body. */
+function aToGate(gate: string): Edge {
+  const edges = aToGateEdges(gate);
+  expect(edges).toHaveLength(1);
+  return edges[0]!;
+}
+
+/** The `gate` body of `CASE_ESCAPE_FLOW` for one searched case reading `when`. */
+const searchedGate = (when: string) => `    cases:\n      - when: ${when}\n        then: hot`;
+
+test("an on: escape marks the gate input optional", () => {
+  // An `on:` value is a whole binding, so a `:-` escape makes the gate input optional.
+  const gate = "    on: ${a.output :- 0}\n    cases:\n      - when: 1\n        then: hot";
+  expect(aToGate(gate).optional).toBe(true);
+});
+
+test("a searched case condition's default marks the edge optional", () => {
+  // A reference under `:-` takes the edge a binding of that default would: optional.
+  expect(aToGate(searchedGate('"(a.output :- 0) >= 1"')).optional).toBe(true);
+});
+
+test("a searched case's plain reference stays required", () => {
+  expect(aToGate(searchedGate('"a.output >= 1"')).optional).toBe(false);
+});
+
+test.each(['"(a.output | 0) >= 1"', `'(a.output :? "need a") >= 1'`])(
+  "a searched case's literal coalesce or required mark the edge optional: %s",
+  (when) => {
+    expect(aToGate(searchedGate(when)).optional).toBe(true);
+  },
+);
+
+test("a searched case's default to another reference also joins", () => {
+  // `a.output :- input.seed` co-skips as a binding: the value is read optionally, and a required
+  // join `${a.output}` skips the gate with `a`.
+  const edges = aToGateEdges(searchedGate('"(a.output :- input.seed) >= 1"'));
+  expect(edges.map((edge) => edge.optional).sort()).toEqual([false, true]);
+});
+
+test("a searched case's plain and default reads of one output", () => {
+  const edges = aToGateEdges(searchedGate('"a.output > 5 or (a.output :- 0) < 1"'));
+  expect(edges.map((edge) => edge.optional).sort()).toEqual([false, true]);
+});
+
+test("a searched case's unparenthesized default covers the whole condition", () => {
+  // `:-` binds looser than `and`, so this is `(input.seed > 0 and a.output) :- false`: one escape
+  // around the whole condition, whose literal default does not co-skip.
+  const edges = aToGateEdges(searchedGate('"input.seed > 0 and a.output :- false"'));
+  expect(edges.length > 0 && edges.every((edge) => edge.optional)).toBe(true);
+});
+
+test("a searched case condition with a nested span shows the rewrite", () => {
+  const gate = '    cases:\n      - when: "${a.output:-0} >= 1"\n        then: hot';
+  expect(loadError(() => aToGate(gate)).message).toMatch(/write `\(a.output:-0\) >= 1`/);
+});
+
+// An item-headed ref (`${item[.field]}`) in a MAP/LOOP body binding is body-local and yields no
+// data edge (there is no node named `item`), while `${producer.output}` in the same body does.
+
+test("an item-head ref yields no edge but a producer ref does", () => {
+  // A CODE `producer` and a `mapbody` consumer whose wiring binds both `${item.foo}` (body-local)
+  // and `${producer.output}`. `inferDataEdges` gets the hand-built wiring for the consumer (the
+  // leaf/MAP branch reads it verbatim), the producer ref walk a map/loop body input goes through.
+  const descriptors = parseNodes(
+    SourceCursor.virtual({
+      producer: {
+        kind: "code",
+        code: "./fixtures/compose_codefns.ts:score",
+        input: { seed: "${input.seed}" },
+        output: "float",
+      },
+      mapbody: {
+        kind: "code",
+        code: "./fixtures/compose_codefns.ts:cautious",
+        input: { v: "${producer.output}" },
+        output: "str",
+      },
+    }),
+  );
+  const flowWiring = new Map([
+    // `item`-headed refs are body-local (no edge); `producer.output` is a producer ref (an edge).
+    [
+      "mapbody",
+      new Map([
+        ["a", "${item}"],
+        ["b", "${item.foo}"],
+        ["c", "${producer.output}"],
+      ]),
+    ],
+  ]);
+  const edges = inferDataEdges(descriptors, flowWiring);
+  expect(edges.some((edge) => edge.from === "producer" && edge.to === "mapbody")).toBe(true);
+  expect(edges.some((edge) => edge.from === "item")).toBe(false);
+  expect(edges.some((edge) => edge.to === "item")).toBe(false);
+});
+
+// The co-skip contract end to end: a binding whose fallback is a ref (a bare ref, a `.field` walk,
+// or a `:-<ref>` default) may be absent without failing, so it co-skips: a required edge. A binding
+// that pins a concrete value or requires presence (`:-"literal"`, `:-null`, `:?`) does not
+// co-skip: an optional edge.
+
+const COSKIP_STANCE_FLOW = `
+id: coskip_stance
+name: coskip_stance
+input:
+  seed: !float
+nodes:
+  a:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:score
+    input:
+      seed: \${input.seed}
+    output: float
+  bare:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      v: \${a.output}
+    output: str
+  ref_default:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      v: \${a.output:-a.output}
+    output: str
+  lit_default:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      v: \${a.output:-"fallback"}
+    output: str
+  required:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:cautious
+    input:
+      v: \${a.output:?"required"}
+    output: str
+output: \${bare.output}
+`;
+
+test("a binding's co-skip sets the edge's optional per stance", () => {
+  const byTo = vEdges(COSKIP_STANCE_FLOW);
+  // Co-skipping bindings (ref fallback) are required:
+  expect(byTo.get("bare")!.optional).toBe(false); // a bare ref
+  expect(byTo.get("ref_default")!.optional).toBe(false); // `:-<ref>` default (ref fallback)
+  // Non-co-skipping bindings (concrete or required) are optional:
+  expect(byTo.get("lit_default")!.optional).toBe(true); // `:-"literal"` default
+  expect(byTo.get("required")!.optional).toBe(true); // `:?` required
 });
 
 test("growth rejected keeps the original error and refuses a non-Error", () => {

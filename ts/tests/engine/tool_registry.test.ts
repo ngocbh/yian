@@ -5,13 +5,13 @@
  * cleaning, plus `test_injected_arguments_are_not_inputs` and `test_function_tool_types` from
  * `test_tool_types.py`. Not ported: `test_invocation_supports_pydantic_v1_schema` and
  * `test_invocation_rejects_unvalidated_json_schema_tools` (TS has only `FunctionTool`s),
- * `test_install_ask_user_is_removed` (it never existed in TS),
- * `test_tool_node_uses_public_invocation_path` (needs the TOOL node), and the LangChain binding
- * half of `test_ask_user_openai_schema_offers_optional_string_options`.
+ * `test_install_ask_user_is_removed` (it never existed in TS), and the LangChain binding half of
+ * `test_ask_user_openai_schema_offers_optional_string_options`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
@@ -325,6 +325,27 @@ describe("ToolSet lookup", () => {
         "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
       );
     }
+  });
+
+  test("test_tool_node_uses_public_invocation_path", async () => {
+    registerTool(
+      "tool_node_public_probe",
+      new FunctionTool({
+        name: "tool_node_public_probe",
+        description: "Return one public question.",
+        parametersJsonSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
+        execute: (args) => args.question,
+      }),
+    );
+    const node = new ToolNode("probe", { toolId: "tool_node_public_probe" });
+
+    const error = await node.run({ question: "Approve?", node_id: "model-injected" }).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toContain("unsupported argument");
   });
 
   test("a group id is not a tool", () => {

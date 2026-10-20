@@ -3,22 +3,26 @@
  *
  * No LLM in the loop (distinct from an AGENT node's tool loop). The node's `input:` entries are
  * bindings like any other kind's, resolved by the engine's bind seam, so the tool sees only its
- * own record, never the live pool. An optional `output:` declaration sets the node's output
- * contract, which the engine checks against the tool's return value on every call. `retries:`
- * is how many times a failed call may be tried again.
+ * own record, never the live pool. The tool is looked up in the run's `ToolSet` (the global
+ * registry when the run passed none) and invoked through its public schema. The result is taken
+ * in as a yian value, and an optional `output:` declaration sets the node's output contract, which
+ * the engine checks against it on every call.
  *
- * Only the node's shell is here. Its body (the call, its retries with backoff, and each retried
- * attempt recorded as a node step) is not ported yet and comes with `forward`.
+ * With `retries:` the node calls the tool again after a failed attempt, waiting an exponential
+ * backoff with jitter on its scheduler, and records each retried attempt's failure and start as
+ * node steps in the run log, so a resumed run continues the attempt count.
  *
- * Knows about:   nodes/base, nodes/contracts, defaults, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/contracts, defaults, diagnostics, platform, tools and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
-import { isTransientToolError } from "../../tools/errors.ts";
+import { realScheduler } from "../../platform.ts";
+import { isPermanentToolError, isToolCheckError, isTransientToolError } from "../../tools/errors.ts";
+import { ToolSet } from "../../tools/registry.ts";
 import { jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
-import { Node, NodeKind } from "../base.ts";
+import { CapabilityFault, hostOutput, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { HostToolCall, outputContractType } from "../contracts.ts";
 
 /**
@@ -104,9 +108,28 @@ function attemptsMessage(toolId: string, history: readonly ValueRecord[], attemp
 /**
  * A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
  *
- * A failed call is retried up to `retries` times. `inputTypes` maps each input name to the type
- * the loader proved its binding has (a literal's exact type, a typed binding's declared type, or
- * a reference's inferred type); an input whose type is not proven is absent.
+ * The node's bound input record is checked by `ToolSet.validate` and passed to `ToolSet.invoke`;
+ * the tool sees only its own record, never the live pool. The tool's `ToolContext` names this
+ * node, with the call id `"<runId>/<node id>"` on a run's tool set, which a resumed re-run of the
+ * node sees again. The result is taken in as a yian value; when `outputContract` is set (from an
+ * optional authored `output:`), the engine validates every returned value against it.
+ *
+ * The arguments are checked once, before the first attempt. A failed call is retried up to
+ * `retries` times unless the tool threw a permanent error or a check yian runs failed (a
+ * `ToolCheckError`); argument and output checks are never retried. Before a retry the node waits
+ * an exponential backoff (`current().toolRetryDelaySeconds` doubling up to
+ * `current().toolRetryMaxDelaySeconds`, drawn from its upper half), or a transient error's
+ * `retryAfter` up to that cap. Each attempt sees `ToolContext.attempt`; the call id stays the same.
+ *
+ * Through the engine's node steps the node records `{event: "failed", ...}` after each failure it
+ * will retry and `{event: "started", ...}` before the retry, so a resumed run continues the attempt
+ * count; an attempt interrupted by a crash uses up no retry. A failure without a retry propagates
+ * unchanged; after a retry the node rejects with `ToolAttemptsFailed`, whose message lists every
+ * attempt's error.
+ *
+ * `inputTypes` maps each input name to the type the loader proved its binding has (a literal's
+ * exact type, a typed binding's declared type, or a reference's inferred type); an input whose
+ * type is not proven is absent.
  */
 export class ToolNode extends Node {
   readonly kind = NodeKind.TOOL;
@@ -155,8 +178,63 @@ export class ToolNode extends Node {
     );
   }
 
-  /** The tool call and its retries; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (ToolNode) forward is not ported yet (T4-11)`);
+  /**
+   * Call the tool, retrying failed attempts, and return its result.
+   *
+   * `caps.tools` is the run's tool set (`new ToolSet()`, the global registry, when absent); the
+   * backoff waits on `caps.scheduler` (`realScheduler` when absent) with `caps.signal`, and draws
+   * its jitter from `caps.random` (`Math.random` when absent). `caps.steps` is this start's
+   * recorded steps; absent, the node retries in memory, recording nothing, as the first start.
+   *
+   * @throws RangeError, TypeCheckError or ToolCheckError from `ToolSet.validate` when the tool is
+   *   unknown or an argument doesn't fit, before any attempt.
+   * @throws ToolAttemptsFailed when the call fails for good after at least one retry. When no
+   *   retry happened, the tool's own error propagates unchanged.
+   * @throws HostOutputError when the result isn't a yian value; never retried.
+   * @throws The reason of `caps.signal` once it aborts during a wait; a tool's error after a stop
+   *   propagates unchanged, unretried and unrecorded.
+   */
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
+    const tools = caps.tools ?? new ToolSet();
+    const scheduler = caps.scheduler ?? realScheduler;
+    const random = caps.random ?? Math.random;
+    const { signal, steps } = caps;
+    const history: ValueRecord[] = steps === undefined ? [] : [...steps.prior];
+    // The first attempt of each start is the node's start itself; only in-evaluation retries
+    // record a `started` step.
+    let attempt = (steps?.starts ?? 1) + history.filter((step) => step.event === "started").length;
+    let failures = history.filter((step) => step.event === "failed").length;
+    const record = (step: ValueRecord): void => {
+      history.push(step);
+      steps?.record(step);
+    };
+
+    const call = await tools.validate(this.toolId, inputs, { signal });
+    const last = history.at(-1);
+    // The previous start recorded a failure and stopped before the retry finished: wait again.
+    if (last?.event === "failed") await scheduler.sleep(Number(last.retry_in) * 1000, signal);
+    let result: unknown;
+    for (;;) {
+      try {
+        result = await tools.invoke(call, { node: this.id, attempt, signal });
+        break;
+      } catch (error) {
+        // A stop or a host fault is neither retried nor recorded.
+        if (signal?.aborted || error instanceof CapabilityFault) throw error;
+        const retryable = !isPermanentToolError(error) && !isToolCheckError(error);
+        if (retryable) failures += 1;
+        if (!retryable || failures > this.retries) {
+          if (!history.some((step) => step.event === "failed")) throw error;
+          throw new ToolAttemptsFailed(attemptsMessage(this.toolId, history, attempt, error), { cause: error });
+        }
+        const delay = backoff(failures, error, random);
+        record({ event: "failed", attempt: BigInt(attempt), error: errorStep(error), retry_in: delay });
+        await scheduler.sleep(delay * 1000, signal);
+        attempt += 1;
+        record({ event: "started", attempt: BigInt(attempt) });
+      }
+    }
+    // Outside the loop's `try`, so a result that isn't a yian value is never retried.
+    return new Output(hostOutput(result));
   }
 }

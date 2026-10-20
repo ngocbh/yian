@@ -656,7 +656,8 @@ Changed (TS yian): the check on the returned value refuses NaN but not `Infinity
 a host tool may return `Infinity`, which is a float value. A `tool()` validator's issues
 and the checks on a declared result (see [Tool context](#tool-context)), a throw from the
 output validator included, raise `ToolCheckError`, which is never retried; the result
-checks run inside the call, not after the node returns.
+checks run inside the call, not after the node returns. `ToolAttemptsFailed` is an
+`Error` named `ToolAttemptsFailed` whose `cause` is the last attempt's error.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.

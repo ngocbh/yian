@@ -848,7 +848,30 @@ export function attachInputContracts(
   }
 }
 
-/** Python's `compose.build.pipeline._split_typed_outputs`; not ported yet. */
+/**
+ * Split each typed flow output into its value and declared contract.
+ *
+ * A record field written `decision: !Decision ${d.output}` keeps `${d.output}` as its value; a
+ * bare `output: !Size ${size.output}` is the single output named `result`. A tagged whole section
+ * is that single output even when its value is a mapping (`output: !T {a: 1}`), so it comes back
+ * as a `Binding` carrier rather than a record. Recognition and locations follow the retained
+ * cursor exactly as for node inputs.
+ *
+ * An untyped output needs no check that its literals are JSON values, as Python's does: the YAML
+ * reader keeps a date as text and refuses `.nan`, a float too large to read, `!!set`, `!!binary`,
+ * `!!omap` and `!!pairs`, and the source layer refuses a non-text record key.
+ *
+ * @param outputsSection The raw `output:` section: a record, a single value, or `null`.
+ * @param outputsCursor Retained authored `output:` value, or `null` for a generated section.
+ * @param options.registry The file's typedefs the type text resolves against.
+ * @param options.owner Complete lexical owner path for catalog sites.
+ * @param options.catalogBuilder File-owned origin catalog builder.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The section with typed values split (a `Binding` for a tagged whole section), and the
+ *   declared contracts keyed by output name.
+ * @throws LoadError when a typed output's type or value is malformed, an output is in the old
+ *   `Type = value` form, or the retained cursor cannot be traversed.
+ */
 function splitTypedOutputs(
   outputsSection: unknown,
   outputsCursor: SourceCursor | null,
@@ -859,7 +882,48 @@ function splitTypedOutputs(
     diagnostics: LoadDiagnostics;
   },
 ): [outputsSection: unknown, outputTypes: Map<string, ValueContract>] {
-  return [outputsSection, new Map()];
+  const { registry, owner, catalogBuilder, diagnostics } = options;
+  /** Split one output value at its positional catalog site. */
+  const splitOne = (value: unknown, cursor: SourceCursor | null, bindingLabel: string, index: number) =>
+    splitTypedValue(value, cursor, {
+      bindingLabel,
+      sitePath: [...owner, "output", index],
+      registry,
+      catalogBuilder,
+      diagnostics,
+    });
+
+  try {
+    if (outputsCursor?.tag != null) {
+      // A tagged whole section is one typed value, even a mapping: the carrier is not a record,
+      // so every later pass takes it as the single output. A top-level tag always gives the
+      // split its contract.
+      const [value, contract] = splitOne(outputsSection, outputsCursor, "output", 0)!;
+      return [new Binding(value, { contract }), new Map([[SINGLE_OUTPUT_NAME, contract!]])];
+    }
+    if (outputsSection === null) return [null, new Map()];
+    if (!isRecord(outputsSection)) {
+      const typed = splitOne(outputsSection, outputsCursor, "output", 0);
+      if (typed === null) return [outputsSection, new Map()];
+      const [value, contract] = typed;
+      if (contract === null) return [value, new Map()];
+      return [value, new Map([[SINGLE_OUTPUT_NAME, contract]])];
+    }
+    const split: Record<string, unknown> = { ...outputsSection };
+    const outputTypes = new Map<string, ValueContract>();
+    for (const [index, [key, value]] of Object.entries(outputsSection).entries()) {
+      const cursor = outputsCursor !== null && outputsCursor.has(key) ? outputsCursor.child(key) : null;
+      const typed = splitOne(value, cursor, key, index);
+      if (typed === null) continue;
+      const [splitValue, contract] = typed;
+      split[key] = splitValue;
+      if (contract !== null) outputTypes.set(key, contract);
+    }
+    return [split, outputTypes];
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
 /**
@@ -1714,8 +1778,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          splitTypedOutputs (2, with _check_output_names, _reject_non_json_literals and
-//            _raise_if_non_json_literal): returns `[outputsSection, new Map()]`.
 //          synthIdGen (1): returns a minter that throws.
 //          desugarInlineCalls (1): returns `[descriptors, outputsSection, assertsSection]`;
 //            bindingStyle, outputStyle (2): return `null`.

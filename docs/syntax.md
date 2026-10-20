@@ -146,6 +146,10 @@ values; quote it to keep it as text, or tag it (`!date "2026-01-01"`). So is a Y
 `'g': numbers must be finite (got .nan)`, and `g: 1e400` gives `'g': numbers must be
 finite (got 1e400, which YAML reads as .inf)`.
 
+Changed (TS yian): an unquoted date there is text, and so is a date under `!!timestamp`, so
+it loads as text (see below); `.inf` is a value, and `.nan`, `1e400`, `!!set` and `!!binary`
+are refused by the YAML reader before any output check.
+
 Changed (TS yian): in a flow file, `!!binary`, `!!set`, `!!omap`, `!!pairs`, and `!!value`
 are load errors anywhere (`invalid YAML: could not determine a constructor for the tag
 'tag:yaml.org,2002:binary'`); TS values have no bytes, sets, or pairs.

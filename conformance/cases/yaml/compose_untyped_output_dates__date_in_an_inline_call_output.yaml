@@ -1,4 +1,6 @@
+# TS reads the unquoted date as text (rules: dates); Python's error in python_expect.
 kind: load
+rules: [dates]
 flow: |
   id: p
   name: p
@@ -14,6 +16,8 @@ flow: |
         h: ${b.output}
   output: ${c.output}
 expect:
+  load: ok
+python_expect:
   load:
     diagnostics:
     - code: compose.load

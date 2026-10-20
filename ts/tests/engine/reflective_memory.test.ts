@@ -11,11 +11,15 @@
  * `test_snapshot_rejects_noncanonical_scalars_and_circular_json`,
  * `test_reflective_json_rejects_non_utf8_model_and_snapshot_strings`,
  * `test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot` and
- * `test_old_reflective_snapshot_rejects_active_retired_options`.
+ * `test_old_reflective_snapshot_rejects_active_retired_options`. Also ported: the `organization`,
+ * `project` and `headers` rows of `tests/engine/test_run_connection_settings.py::
+ * test_reflective_memory_refuses_connection_settings`, in the constructor test.
  *
  * TS-only: `bigint` limits, `null` limits as unset, a limit one past 2^53 − 1 refused, a `number` int
- * in a host `llm_config` block accepted (host intake gives a `bigint`), and a snapshot whose
- * `revision` is `2n ** 60n` (beyond 2^53 − 1) is `reflective.invalid_snapshot`.
+ * in a host `llm_config` block accepted (host intake gives a `bigint`); in the constructor, a blank
+ * `model`, the exact `api_key` message, a non-object `llmConfig` (`TypeError`) and `createParent: 1`
+ * (`TypeError`); a snapshot whose `revision` is `2n ** 60n` (beyond 2^53 − 1, with its cause
+ * message), whose `epoch` is `-1n` or whose `version` is `1n` is `reflective.invalid_snapshot`.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
@@ -284,7 +288,9 @@ test("unset limits adopt recorded ones and explicit ones must match", () => {
 test("snapshot rejects noncanonical scalars and circular json", () => {
   const circular: Mutable = {};
   circular.value = circular;
-  expect(() => newMemory({ llmConfig: circular })).toThrow(/circular JSON value/);
+  expect(() => newMemory({ llmConfig: circular })).toThrow(
+    new RangeError("llm_config.value contains a circular JSON value"),
+  );
 
   const memory = newMemory({ llmConfig: OLLAMA });
   const version: Mutable = structuredClone(snapshotOf(memory));
@@ -305,7 +311,11 @@ test("snapshot rejects noncanonical scalars and circular json", () => {
   ] as const) {
     const changed: Mutable = structuredClone(snapshotOf(memory));
     changed[field] = value;
-    expect(failure(() => newMemory().openRun({ snapshot: changed })).code).toBe("reflective.invalid_snapshot");
+    const changedError = failure(() => newMemory().openRun({ snapshot: changed }));
+    expect(changedError.code).toBe("reflective.invalid_snapshot");
+    if (field === "revision") {
+      expect((changedError.cause as Error).message).toBe("snapshot.revision must be at most 9007199254740991");
+    }
   }
 });
 

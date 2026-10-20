@@ -57,6 +57,12 @@ interface State {
   readonly lessons: readonly Lesson[];
 }
 
+/** Build the learner's model from the config Python passes to `model_from_config`. */
+type CreateModel = (config: Readonly<Record<string, unknown>>) => ChatModel | Promise<ChatModel>;
+
+/** Observe one retried learner model call. */
+type OnRetry = (retry: RetryInfo) => void | Promise<void>;
+
 /** The inventory flags and commit ledger a publication replaces. */
 interface StateChanges {
   appliedCommits?: ReadonlyMap<string, string>;
@@ -266,6 +272,18 @@ function snapshotError(message: string, cause?: unknown): MemoryOperationError {
 }
 
 /**
+ * Require one recorded positive integer limit: a JSON int is a `bigint`; a `number` is Python's
+ * float, which `_positive_int` refuses.
+ *
+ * @throws TypeError when `value` isn't a `bigint`.
+ * @throws RangeError when it isn't positive or is beyond 2^53 − 1.
+ */
+function intLimit(value: JsonValue | undefined, name: string): number {
+  if (typeof value !== "bigint") throw new TypeError(`${name} must be an integer`);
+  return positiveInt(value, name);
+}
+
+/**
  * Decode the shared semantic state without requiring a model configuration.
  *
  * @returns The namespace, epoch, revision and state.
@@ -293,19 +311,15 @@ function parseState(value: unknown): [string, number, number, State] {
 
   const config = copyObject(data.config, "snapshot.config");
   if (!hasFields(config, ["max_items", "recall_limit"])) throw new RangeError("snapshot.config has invalid fields");
-  // A JSON int is a `bigint`; a `number` is Python's float, which `_positive_int` refuses.
-  for (const field of ["max_items", "recall_limit"]) {
-    if (typeof config[field] !== "bigint") throw new TypeError(`snapshot.config.${field} must be an integer`);
-  }
   const limits: Limits = Object.freeze({
-    maxItems: positiveInt(config.max_items, "snapshot.config.max_items"),
-    recallLimit: positiveInt(config.recall_limit, "snapshot.config.recall_limit"),
+    maxItems: intLimit(config.max_items, "snapshot.config.max_items"),
+    recallLimit: intLimit(config.recall_limit, "snapshot.config.recall_limit"),
   });
   const lessonsRaw = data.lessons;
   if (!Array.isArray(lessonsRaw)) throw new TypeError("snapshot.lessons must be an array");
   const lessons: Lesson[] = [];
   const lessonIds = new Set<string>();
-  (lessonsRaw as readonly JsonValue[]).forEach((rawLesson, lessonIndex) => {
+  for (const [lessonIndex, rawLesson] of (lessonsRaw as readonly JsonValue[]).entries()) {
     const lesson = copyObject(rawLesson, `snapshot.lessons[${lessonIndex}]`);
     if (!hasFields(lesson, ["id", "source", "text"])) throw new RangeError("snapshot lesson has invalid fields");
     const lessonId = nonemptyString(lesson.id, "snapshot lesson id");
@@ -315,7 +329,7 @@ function parseState(value: unknown): [string, number, number, State] {
     lessonIds.add(lessonId);
     const source = sourceFromJson(lesson.source, "snapshot lesson source");
     lessons.push(Object.freeze({ lessonId, text, source }));
-  });
+  }
   if (lessons.length > limits.maxItems) throw new RangeError("snapshot exceeds max_items");
   return [namespace, Number(epoch), Number(revision), Object.freeze({ limits, lessons: Object.freeze(lessons) })];
 }
@@ -446,8 +460,8 @@ export class ReflectiveMemory implements Memory {
   private readonly requested: readonly [number | null, number | null];
   private readonly llmConfig: JsonObject;
   private readonly env: Env;
-  private readonly createModel: (config: Readonly<Record<string, unknown>>) => ChatModel | Promise<ChatModel>;
-  private readonly onRetry: ((retry: RetryInfo) => void | Promise<void>) | null;
+  private readonly createModel: CreateModel;
+  private readonly onRetry: OnRetry | null;
   private storage: SQLiteStorage | null = null;
   private readonly storagePath: string | null;
   private readonly createParent: boolean;
@@ -497,8 +511,8 @@ export class ReflectiveMemory implements Memory {
       storage?: string | null;
       createParent?: boolean | null;
       env?: Env | null;
-      createModel?: ((config: Readonly<Record<string, unknown>>) => ChatModel | Promise<ChatModel>) | null;
-      onRetry?: ((retry: RetryInfo) => void | Promise<void>) | null;
+      createModel?: CreateModel | null;
+      onRetry?: OnRetry | null;
     } = {},
   ) {
     const maxItems = options.maxItems ?? null;

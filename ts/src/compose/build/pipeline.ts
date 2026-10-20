@@ -105,6 +105,8 @@ import {
   type ProducerType,
 } from "./inline_inputs.ts";
 // T3-18 imports
+import { rejectCycles } from "../validate/cycles.ts";
+import { checkCaseHandles } from "../validate/handles.ts";
 // T3-19 imports
 // T3-20 imports
 
@@ -2119,7 +2121,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
-//          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
+//          validateHumanQuestions, checkReservedSources (1).
 //          fillTypeTables (2, with _site_range).
 //   T3-19  attachLlmConfigWiring (2, with _llm_value_types): returns `[]`.
 //          checkTypedInputs, checkCallMapTypes, checkLoopTypeContract, checkTypedOutputs,
@@ -2207,26 +2209,6 @@ function checkReservedSources(
     resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
-): void {}
-
-/** Python's `compose.validate.cycles.reject_cycles`; not ported yet. */
-function rejectCycles(
-  edges: readonly Edge[],
-  nodeIds: ReadonlySet<string>,
-  options: {
-    nodeRanges?: ReadonlyMap<string, SourceRange> | null;
-    diagnostics?: LoadDiagnostics | null;
-    gateIds?: ReadonlySet<string>;
-    synthHosts?: ReadonlyMap<string, string> | null;
-    synthWires?: ReadonlySet<string>;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.handles.check_case_handles`; not ported yet. */
-function checkCaseHandles(
-  nodes: ReadonlyMap<string, Node>,
-  edges: readonly Edge[],
-  options: { diagnostics?: LoadDiagnostics | null } = {},
 ): void {}
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts

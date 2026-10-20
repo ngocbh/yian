@@ -1460,6 +1460,8 @@ Other errors:
   `flow has a cycle involving ['x', 'y']; flows must be acyclic`. When a written-out
   `!object` entry is on the cycle, its record is typed from the others first, so the
   message is `node build dependency cycle: x -> y -> x`.
+- Changed (TS yian): the cycle message writes the node list in the text form:
+  `flow has a cycle involving ["x","y"]; flows must be acyclic`.
 - A tag with no value: ``value entry 'x' needs a value after its tag, e.g. `x: !int ...` ``.
 - A number that is not finite, at any depth, fails at its line:
   `x: !float .inf` gives `'x': numbers must be finite (got .inf)`.
@@ -3256,6 +3258,9 @@ error is `flow has a cycle involving ['ask']`, with the note
 `ask depends on ask (ask.input.proj)`. A model-config error found when a run starts
 names `node 'ask' adaptive_questions.llm_config`, followed by ` in '<call>'` when the
 gate is inside a child flow.
+
+Changed (TS yian): the cycle error writes the node list in the text form:
+`flow has a cycle involving ["ask"]`.
 
 ```yaml
 ask:

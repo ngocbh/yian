@@ -93,6 +93,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   reference resolves against, comes from `BuildContext.baseDir` (`null` by default). WAIT keeps an
   `until:` date or datetime as the text written, after checking it parses.
 
+- `src/compose/validate/` holds the graph-stage passes; only the pipeline imports them (and
+  `references.ts` imports `constructors.ts`).
+
 ## Skills
 
 - `src/skills/` is a leaf: it holds `Skill`, the `load_skill` tool and the system-message

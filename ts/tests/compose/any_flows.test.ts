@@ -53,8 +53,8 @@
  * `test_a_field_read_on_an_any_output_loads_in_a_flow_output`,
  * `test_a_field_read_on_an_any_output_loads_in_a_case_condition`,
  * `test_a_field_read_on_an_any_value_entry_is_not_checked` and
- * `test_a_field_read_on_an_object_value_entry_is_still_checked`. Later (T3-20):
- * `test_a_field_read_on_an_any_output_loads_in_an_assert`. Later (T4):
+ * `test_a_field_read_on_an_object_value_entry_is_still_checked`, and the load half of
+ * `test_a_field_read_on_an_any_output_loads_in_an_assert`. Later (T4): its run half,
  * `test_a_list_of_any_output_returns_mixed_items`, `test_an_any_output_returns_any_json_value` (4),
  * `test_an_any_output_rejects_null`, `test_an_optional_any_output_returns_null`,
  * `test_an_any_flow_input_rejects_null_naming_the_input`,
@@ -305,6 +305,12 @@ test("an int when on an Any value loads and matches (loads)", () => {
 
 test("a text when on an Any value loads and matches (loads)", () => {
   assembleText(onAny("a", '"a"'));
+});
+
+test("a field read on an Any output loads in an assert (loads)", () => {
+  // The node assert reads `output.a` of an `Any` output: the walk lets any field through.
+  const text = flow("Any", "", { code: '{"a": 1}' }).replace("    code: |", "    asserts:\n      - output.a == 1\n    code: |");
+  assembleText(text);
 });
 
 // ---------- child flow output Any ----------

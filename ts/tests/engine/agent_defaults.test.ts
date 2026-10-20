@@ -24,7 +24,7 @@ import { afterEach, expect, test } from "bun:test";
 import { flowManifest } from "../../src/compile/manifest.ts";
 import { Flow } from "../../src/compile/model.ts";
 import { forget, reload } from "../../src/defaults.ts";
-import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
@@ -34,7 +34,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive } from "./run_state_fixtures.ts";
+import { drive, serving, textReply } from "./run_state_fixtures.ts";
 
 afterEach(() => {
   forget();
@@ -71,10 +71,7 @@ const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
  * model replying a bad score, then a good one; return the outcome and the model.
  */
 async function badThenGood(retries?: number) {
-  const replies = ['{"score": "bad"}', '{"score": 1.5}'].map(
-    (text) =>
-      new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" }),
-  );
+  const replies = ['{"score": "bad"}', '{"score": 1.5}'].map(textReply);
   const model = new ScriptedModel(replies, PROMPTED);
   const node = new AgentNode("agent", { prompt: "q", llmConfig: PROMPTED, retries });
   node.outputContract = new ValueContract(
@@ -84,7 +81,7 @@ async function badThenGood(retries?: number) {
       required: new Set(["score"]),
     }),
   );
-  const outcome = await drive(node, { models: { env: () => undefined, createModel: () => model } });
+  const outcome = await drive(node, { models: serving(model) });
   return { outcome, model };
 }
 
@@ -102,11 +99,6 @@ test("authored retries win over the default", async () => {
   expect(outcome).toEqual(new Output({ score: 1.5 }));
   expect(model.requests).toHaveLength(2);
 });
-
-/** An assistant reply holding only `text`. */
-function textReply(text: string): Response {
-  return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
-}
 
 /** A reply calling `lookup` with no arguments as call `id`. */
 function lookupCall(id: string): Response {
@@ -130,8 +122,7 @@ async function looping(replies: Response[], env: Record<string, unknown> = {}) {
     parametersJsonSchema: { type: "object", properties: {} },
     execute: () => "ok",
   });
-  const models = { env: () => undefined, createModel: () => model };
-  const outcome = await drive(node, { models, tools: new ToolSet({ lookup }) });
+  const outcome = await drive(node, { models: serving(model), tools: new ToolSet({ lookup }) });
   return { outcome, model };
 }
 

@@ -19,6 +19,10 @@
  * `test_evaluation_trace_protocol_is_runtime_checkable_and_write_only`: TS has no runtime-checkable
  * protocol; in its place the trace a node receives has `recordPrompt` and `recordInteraction`,
  * no `snapshot` or `evidence` read, and none of the evaluator's `freeze` or `setBoundInputs`.
+ * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture`, through AGENT's tool
+ * loop: a lone surrogate is not a yian value (design 3.2.1), so the tool result fails the node at
+ * commit after the call ran (Python's loop goes on); the failure is the same with capture off and
+ * on, and the evidence holds only the call.
  *
  * TS-only: a second `recordPrompt` throws, also after a refused prompt (which is ignored), and a
  * write after the evaluation settled throws.
@@ -45,11 +49,9 @@
  * are `[]`) and `test_tool_structured_output_retains_discovery_and_generation_order` (2 rows; the
  * native row runs OpenAI's `json_schema` plan, where Python's runs Anthropic's).
  * `test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture`: the 2000-deep
- * arguments arrive unparsed (a parsed `ToolCallPart` refuses them), so the node fails on the
- * arguments' depth before the grant check, the same with capture off and on.
- * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture`: text holding a lone
- * surrogate is not a yian value, so the result fails the node after the call ran (Python's loop
- * goes on); the failure is the same with capture off and on, and the evidence holds only the call.
+ * arguments arrive unparsed (a parsed `ToolCallPart` refuses them); as in Python, the reply's
+ * argument check fails the node on their depth before the grant check, the same with capture off
+ * and on.
  *
  * Not ported: `test_visible_string_subclass_has_capture_off_on_behavioral_parity` and
  * `test_tool_name_subclass_has_capture_off_on_behavioral_parity` (TS has no string subclasses);
@@ -112,6 +114,7 @@ import {
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, TypeCheckError, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import {
   aborted,
@@ -691,7 +694,11 @@ describe("through AGENT", () => {
   });
 
   /** A run tool set holding `name`, which runs `execute` on its arguments, `properties` its schema's. */
-  function toolSet(name: string, execute: (args: Record<string, unknown>) => unknown, properties = {}): ToolSet {
+  function toolSet(
+    name: string,
+    execute: (args: Record<string, unknown>) => unknown,
+    properties: JsonObject = {},
+  ): ToolSet {
     const parametersJsonSchema = { type: "object", properties };
     return new ToolSet({ [name]: new FunctionTool({ name, description: `The ${name} tool.`, parametersJsonSchema, execute }) });
   }
@@ -791,6 +798,7 @@ describe("through AGENT", () => {
     expect(off.outcome).toBeInstanceOf(EvaluationFailure);
     expect(failure(on.outcome)).toEqual(failure(off.outcome));
     expect(failure(on.outcome).message).toContain("lone surrogate");
+    expect(failure(on.outcome).code).toBe("node.execute");
     expect(on.evidence!.interactions).toEqual([new ToolCallInteraction("lookup", {})]);
   });
 

@@ -25,11 +25,11 @@
  * name.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
@@ -50,11 +50,14 @@ import { drive, nodeFlow, serving, textReply } from "./run_state_fixtures.ts";
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
-// The `review` skill's directory, with one bundled file.
-const ROOT = mkdtempSync(join(tmpdir(), "yian-skills-"));
+// The `review` skill's directory, with one bundled file; the path is fixed here, the files exist
+// only while this file's tests run.
+const ROOT = join(tmpdir(), `yian-skills-${crypto.randomUUID()}`);
 const REVIEW_DIR = join(ROOT, "review");
-mkdirSync(join(REVIEW_DIR, "references"), { recursive: true });
-writeFileSync(join(REVIEW_DIR, "references", "style.md"), "Prefer small diffs.\n");
+beforeAll(() => {
+  mkdirSync(join(REVIEW_DIR, "references"), { recursive: true });
+  writeFileSync(join(REVIEW_DIR, "references", "style.md"), "Prefer small diffs.\n");
+});
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };

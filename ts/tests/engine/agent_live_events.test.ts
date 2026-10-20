@@ -488,7 +488,8 @@ test("the structured fallback reports usage and streams nothing", async () => {
   expect((outcome as Output).value).toBe(3n);
   expect(chunks).toEqual([]);
   expect(observed.map((event) => event.constructor)).toEqual([ModelCallStarted, ModelCallFinished]);
-  expect(new Set(observed.map((event) => (event as ModelCallStarted).purpose))).toEqual(new Set(["structured_fallback"]));
+  const modelEvents = observed.filter((event) => event instanceof ModelCallStarted || event instanceof ModelCallFinished);
+  expect(new Set(modelEvents.map((event) => event.purpose))).toEqual(new Set(["structured_fallback"]));
   expect(lastFinished(observed).usage).toEqual(new TokenUsage({ inputTokens: 9, outputTokens: 1, totalTokens: 10 }));
 });
 

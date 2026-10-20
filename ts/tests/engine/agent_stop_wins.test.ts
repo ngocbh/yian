@@ -193,10 +193,17 @@ test("a stop during a failing tool call stops the node", async () => {
   expect(await rejected(outcome)).toBe(stop.signal.reason);
 });
 
+// Each row: the tool's body, then the finished event's `error`; its `result` is `null` in both.
 test.each([
-  ["a failed tool call", "Error", null],
-  ["a tool result that can't be written", null, null],
-] as const)("a stop raised while observing %s wins", async (label, error, result) => {
+  [
+    "a failed tool call",
+    () => {
+      throw new Error("boom");
+    },
+    "Error",
+  ],
+  ["a tool result that can't be written", () => new Date(0), null],
+] as const)("a stop raised while observing %s wins", async (_label, execute, error) => {
   const stop = new AbortController();
   const observed: [string | null, string | null][] = [];
   const emitEvent = (event: unknown) => {
@@ -205,13 +212,10 @@ test.each([
       stop.abort(new Error("stopped"));
     }
   };
-  const tools = lookupTools(() => {
-    if (label === "a failed tool call") throw new Error("boom");
-    return new Date(0);
-  });
+  const tools = lookupTools(execute);
   const outcome = evaluate(lookupModel(), { node: toolAgent(), tools, signal: stop.signal, emitEvent });
   expect(await rejected(outcome)).toBe(stop.signal.reason);
-  expect(observed).toEqual([[error, result]]);
+  expect(observed).toEqual([[error, null]]);
 });
 
 test("a stop failing a tool call is the node's rejection, with no finished event", async () => {

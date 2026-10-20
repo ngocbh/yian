@@ -12,24 +12,28 @@
  *
  * The conductor: the input representation guards
  * (`test_resolved_parameters_reject_both_input_representations`,
- * `test_resolved_parameters_reject_missing_input_representation`). TS-only conductor rows: a cursor
- * with resolved parameters, the memory declaration check, the errors `parseNodes`, the `uses:`
- * alias check and the value-entry reader raise through `assemble`, and one happy path over stand-in
- * nodes (its data edges; no boundary edges until T3-17). Later (T3-17): the value-entry rows of
+ * `test_resolved_parameters_reject_missing_input_representation`) and the resolved parameter
+ * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
+ * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`). TS-only conductor rows: a
+ * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
+ * `uses:` alias check and the value-entry reader raise through `assemble`, and one happy path over
+ * stand-in nodes (its data and boundary edges). Later (T3-17): the value-entry rows of
  * `stampNodeWiringOrigins` (a value entry's input owns its parameter and binding at the entry
  * itself) and `splitTypedInputs`
- * (a value entry is returned unchanged), once `isValueEntry` is real; the resolved parameter
- * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
- * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`), the seed edge and boundary
- * rows (`test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
- * `test_seed02_coalesce_both_producers_terminal`, `test_seed05_*`, `test_seed06_*`,
- * `test_seed18_*`, `test_terminal_edge_ids_unique`, `test_assembled_edges_have_start_and_end`,
- * `test_boundary_end_record_flag_picks_the_mode`).
+ * (a value entry is returned unchanged), once `isValueEntry` is real.
  * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).
  *
- * `test_seed02_branch_target_has_control_edge` reads the edges of seed 02's built `gate`
- * (`load-case/seed_02_case`), where Python's `_all_edges` also infers the data edges, which hold no
- * control edge.
+ * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
+ * `test_seed02_branch_target_has_control_edge`, `test_seed02_coalesce_both_producers_terminal`,
+ * `test_seed05_*`, `test_seed06_*`, `test_seed18_*`, `test_terminal_edge_ids_unique`,
+ * `test_assembled_edges_have_start_and_end` and `test_boundary_end_record_flag_picks_the_mode`.
+ * Python's `_all_edges`, `_end_edges` and `_bare_roots` are local helpers over the seed cases
+ * (`load-agent/seed_01_structured_agent`, `load-case/seed_02_case`, `load-map-call/seed_05_call_map`,
+ * `load-case/seed_06_case_on`, `load-core/seed_18_research_pipeline`); they call
+ * `synthesizeBoundaryGraph` over the parsed nodes, so seed 05's MAP child needn't resolve.
+ * `test_seed02_branch_target_has_control_edge` reads the edges of seed 02's built `gate`, where
+ * Python's `_all_edges` also infers the data edges, which hold no control edge. Python's
+ * `ValueError` for two outputs of a value-mode END is a `RangeError`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -49,13 +53,18 @@ import {
   stampFlowOutputOrigins,
   stampNodeWiringOrigins,
 } from "../../src/compose/build/pipeline.ts";
+import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
+import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, BuildResult, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
+import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { CompiledFlow, Edge, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import {
   DiagnosticFrame,
@@ -66,10 +75,19 @@ import {
 } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { TypeRegistry } from "../../src/typesys/types.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { caseRegistry, caseText, cursorAt, loadError, nodesOf, runTextCase } from "../compose/declarations.ts";
+import { isRecord, Type, ValueKind } from "../../src/typesys/values.ts";
+import {
+  caseDocument,
+  caseRegistry,
+  caseText,
+  cursorAt,
+  loadError,
+  nodesOf,
+  runTextCase,
+} from "../compose/declarations.ts";
 import { StandInCode, withKinds } from "../compose/stand_ins.ts";
 
 afterEach(() => forget());
@@ -724,6 +742,41 @@ describe("assemble", () => {
     expect(error.message).toBe("assemble requires exactly one of inputsSection or inputParameters");
   });
 
+  test("resolved parameters keep their structural contract identity", () => {
+    const elementType = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["label", new Type({ kind: ValueKind.STRING, nullable: true })]]),
+      required: new Set(),
+    });
+    const structuralType = new Type({ kind: ValueKind.LIST_OBJECT, element: elementType });
+    const parameter = new Parameter("items", {
+      contract: new ValueContract(structuralType),
+      required: true,
+      coerceStrings: true,
+    });
+
+    const flow = assemble({ ...bare(), inputParameters: [parameter] });
+    const start = flow.compiled.nodes.get(START_ID)!;
+
+    expect(flow.input).toBe(start.params!);
+    expect(flow.input[0]).toBe(parameter);
+    expect(flow.input[0]!.contract).not.toBe(null);
+    expect(flow.input[0]!.contract!.type).toBe(structuralType);
+  });
+
+  test("zero resolved parameters wire an empty START", () => {
+    const flow = assemble({ ...bare(), inputParameters: [] });
+    const start = flow.compiled.nodes.get(START_ID)!;
+
+    expect(flow.input).toBe(start.params!);
+    expect(start.params).toEqual([]);
+    expect(flow.compiled.wiring.get(START_ID)).toEqual(new Map());
+
+    const rawFlow = assemble({ ...bare(), inputsSection: {} });
+    expect(rawFlow.input).toEqual([]);
+    expect(rawFlow.compiled.wiring.get(START_ID)).toEqual(new Map());
+  });
+
   test("resolved parameters can't carry an inputs cursor", () => {
     const error = thrown(() =>
       assemble({ ...bare(), inputParameters: [], inputsCursor: SourceCursor.virtual({}) }),
@@ -836,12 +889,14 @@ output:
     const flow = assembleText(text, { scope, usesAliases: ["helper"] });
 
     const compiled = flow.compiled;
-    expect([...compiled.nodes.keys()]).toEqual(["a", "b"]);
-    // The data edges of the wiring (`${input.n}` reads START); no boundary edges until
-    // `synthesizeBoundaryGraph` is ported.
+    expect([...compiled.nodes.keys()]).toEqual(["a", "b", START_ID, END_ID]);
+    // The data edges of the wiring (`${input.n}` reads START), then END's producer edges; every
+    // body node has an incoming edge, so there is no root edge.
     expect(compiled.edges).toStrictEqual([
       new Edge("__start__->a#0", START_ID, "a", { inputGroup: "qty" }),
       new Edge("a->b#0", "a", "b", { inputGroup: "note" }),
+      new Edge("b->__end__#0", "b", END_ID, { inputGroup: "total" }),
+      new Edge("a->__end__#0", "a", END_ID, { inputGroup: "first" }),
     ]);
     expect(scope.resolved).toEqual(["helper"]);
     expect([flow.version, flow.name, flow.description, compiled.flowId]).toEqual(["1", "f", "two steps", "f"]);
@@ -874,6 +929,78 @@ output:
   });
 });
 
+/** Return END_ID's producer edges, synthesized from the flow `output:` bindings. */
+function endEdges(outputs: unknown, nodeIds: ReadonlySet<string>, edges: readonly Edge[]): Edge[] {
+  const [, allEdges] = synthesizeBoundaryGraph([], flowOutputs(outputs), nodeIds, edges, null, {
+    record: isRecord(outputs),
+  });
+  return allEdges.filter((edge) => edge.to === END_ID);
+}
+
+/**
+ * Return seed case `id`'s node ids, its data edges reconciled with the case builds' control edges,
+ * and its `output:` section. Leaf wiring is built for the data-edge inference; a CASE's own build
+ * emits its reconciled data and control edges, appended after the leaf data edges, as the loader
+ * does. A CASE builds to a `CaseNode` under the same id, so the node ids are the descriptors'.
+ */
+function allEdges(id: string): { nodeIds: Set<string>; edges: Edge[]; outputs: unknown } {
+  const { document } = caseDocument(id);
+  const file = parseFile(document);
+  const registry = caseRegistry(document);
+  const descriptors = parseNodes(flowNodesCursor(document, file.nodes));
+  const wiring = new Map(
+    [...descriptors]
+      .filter(([, descriptor]) => descriptor instanceof AgentDescriptor || descriptor instanceof CodeDescriptor)
+      .map(([nodeId, descriptor]) => [nodeId, descriptor.build(new BuildContext({ registry })).wiring]),
+  );
+  const caseEdges = [...descriptors.values()]
+    .filter((descriptor) => descriptor instanceof CaseDescriptor)
+    .flatMap((descriptor) => descriptor.build(new BuildContext({ registry })).edges);
+  return {
+    nodeIds: new Set(descriptors.keys()),
+    edges: [...inferDataEdges(descriptors, wiring), ...caseEdges],
+    outputs: file.outputs,
+  };
+}
+
+/**
+ * Return the body nodes `synthesizeBoundaryGraph` marks as bare roots: its `START_ID -> nodeId`
+ * edges with no `inputGroup` (a data-producer edge carries one; a control edge a `sourceHandle`).
+ */
+function bareRoots(nodeIds: ReadonlySet<string>, edges: readonly Edge[]): Set<string> {
+  const [, allEdges] = synthesizeBoundaryGraph([], [], nodeIds, edges, null, { record: false });
+  return new Set(
+    allEdges
+      .filter((edge) => edge.from === START_ID && edge.to !== END_ID && edge.inputGroup === null)
+      .map((edge) => edge.to),
+  );
+}
+
+const SEED_01 = "load-agent/seed_01_structured_agent";
+const SEED_02 = "load-case/seed_02_case";
+const SEED_05 = "load-map-call/seed_05_call_map";
+const SEED_06 = "load-case/seed_06_case_on";
+const SEED_18 = "load-core/seed_18_research_pipeline";
+
+// Roots and input-producer edges: an `${input.X}` reader gets a `START_ID -> reader` data edge,
+// not a bare root; a case branch target stays control-gated.
+
+test("seed 01's score is an input producer, not a bare root", () => {
+  const { nodeIds, edges } = allEdges(SEED_01);
+  // `score` reads `${input.topic}`: a START_ID->score data edge (inputGroup set), no bare root edge.
+  expect(edges.some((edge) => edge.from === START_ID && edge.to === "score" && edge.inputGroup !== null)).toBe(true);
+  expect(bareRoots(nodeIds, edges).has("score")).toBe(false);
+});
+
+test("seed 02's case targets are not bare roots", () => {
+  // positive/cautious are control-gated branch targets (gate->positive/cautious); neither is a bare
+  // root, though both also read `${input.topic}` (a START_ID data edge).
+  const { nodeIds, edges } = allEdges(SEED_02);
+  const roots = bareRoots(nodeIds, edges);
+  expect(roots.has("positive") || roots.has("cautious")).toBe(false);
+  expect(roots.has("gate")).toBe(false); // gate has the score->gate data edge
+});
+
 test("seed 02's branch target has a control edge", () => {
   const { text, label } = caseText("load-case/seed_02_case");
   const edges = nodesOf(text, [], label).get("gate")!.build(new BuildContext({ registry: EMPTY })).edges;
@@ -882,4 +1009,70 @@ test("seed 02's branch target has a control edge", () => {
   expect(control).toHaveLength(1);
   expect(control[0]!.from).toBe("gate");
   expect(control[0]!.sourceHandle).toBe("positive");
+});
+
+test("seed 06's notes are not bare roots", () => {
+  const { nodeIds, edges } = allEdges(SEED_06);
+  const roots = bareRoots(nodeIds, edges);
+  for (const note of ["pro_note", "con_note", "choppy_note"]) expect(roots.has(note)).toBe(false);
+});
+
+// Terminals from the flow `output:` bindings.
+
+/** Return the producers of seed `id`'s END edges, checking each edge ends at END. */
+function terminalProducers(id: string): Set<string> {
+  const { nodeIds, edges, outputs } = allEdges(id);
+  const ends = endEdges(outputs, nodeIds, edges);
+  for (const edge of ends) expect(edge.to).toBe(END_ID);
+  return new Set(ends.map((edge) => edge.from));
+}
+
+test("seed 01's multi-output terminals", () => {
+  // output: {rating: ${score.output.rating}, verdict: ${verdict.output}}
+  expect(terminalProducers(SEED_01)).toEqual(new Set(["score", "verdict"]));
+});
+
+test("seed 02's coalesce gives both producers a terminal edge", () => {
+  // output: ${positive.output | cautious.output}: both get an END edge.
+  expect(terminalProducers(SEED_02)).toEqual(new Set(["positive", "cautious"]));
+});
+
+test("seed 18's multi-output with a coalesce", () => {
+  // stance/confidence from synth; note from pro_note | con_note | neutral_note.
+  expect(terminalProducers(SEED_18)).toEqual(new Set(["synth", "pro_note", "con_note", "neutral_note"]));
+});
+
+test("seed 05's multi-output terminals", () => {
+  // report from compare; briefs from research_each.
+  expect(terminalProducers(SEED_05)).toEqual(new Set(["compare", "research_each"]));
+});
+
+test("terminal edge ids are unique", () => {
+  const { nodeIds, edges, outputs } = allEdges(SEED_18);
+  const ids = endEdges(outputs, nodeIds, edges).map((edge) => edge.id);
+  expect(new Set(ids).size).toBe(ids.length);
+});
+
+// The assembled edge set starts at START and ends at END.
+
+test("the assembled edges have START and END", () => {
+  const { nodeIds, edges, outputs } = allEdges(SEED_02);
+  const [, boundaryEdges] = synthesizeBoundaryGraph([], flowOutputs(outputs), nodeIds, edges, null, {
+    record: isRecord(outputs),
+  });
+  const full = [...edges, ...boundaryEdges];
+  expect(full.some((edge) => edge.from === START_ID)).toBe(true);
+  expect(full.some((edge) => edge.to === END_ID)).toBe(true);
+});
+
+test("the boundary's record flag picks END's mode", () => {
+  const one = [new FlowOutput("order", "${x.output}")];
+  const endOf = (outputs: FlowOutput[], record: boolean) =>
+    synthesizeBoundaryGraph([], outputs, new Set(["x"]), [], null, { record })[0].get(END_ID) as EndNode;
+
+  expect(endOf(one, true).returnsRecord).toBe(true);
+  expect(endOf(one, false).returnsRecord).toBe(false);
+  expect(endOf([], false).returnsRecord).toBe(false);
+  const two = [new FlowOutput("a", "${x.output}"), new FlowOutput("b", "${x.output}")];
+  expect(() => endOf(two, false)).toThrow(new RangeError("EndNode value mode takes at most one output name"));
 });

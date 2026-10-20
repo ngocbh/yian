@@ -81,8 +81,10 @@ import { HumanInputDescriptor } from "../nodes/human_input.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
+import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
+import { synthesizeBoundaryGraph } from "./boundary.ts";
 // T3-18 imports
 // T3-19 imports
 // T3-20 imports
@@ -1703,9 +1705,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //
 // Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
 // the stub and imports the port under its import slot, keeping the sub-block header. A local type
-// alias is replaced by a `type` import of the same name under that slot, never just deleted, since
-// other owners' stubs use the shared one: `LoweredAsserts` (T3-20). `TypeFn` is imported from
-// compose/helpers/output_contracts.ts.
+// alias is replaced by a `type` import of the same name under that slot, never just deleted.
+// `TypeFn` is imported from compose/helpers/output_contracts.ts.
 // Kind 2 is a pipeline helper stubbed at its Python position: the owner ports its body in place,
 // adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
@@ -1727,9 +1728,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
 //          stampInlineCallOrigins (2).
-//          synthesizeBoundaryGraph (1, `lowered` positional with a default, then `{ record }`):
-//            returns `[new Map(), [], new Map()]`, so `ComposedFlow.input` throws until it is
-//            ported.
 //          synthWires (3, `ReadonlySet<string>`, reads `QPARAM`): `new Set()`.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
@@ -1743,7 +1741,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //          computeNarrowing (1): returns an empty `Narrowing` over the given maps.
 //          checkCaseWhenValues, checkImpossibleWhens, checkCaseExhaustive, validateNodeAsserts,
 //          checkSkippedArithmetic (1).
-//          lowerFlowAsserts (1): returns `null`.
+//          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
 //          exhaustiveCases (1): returns `new Set()`; skipModel (1, Python's `SkipModel` class):
 //            returns `null`; nullSkippedOutputs (1): returns the outputs.
 //          searchedWhens (3, `ReadonlyMap<string, readonly SearchedWhen[]>`): `new Map()`.
@@ -1849,18 +1847,6 @@ function expandCaseOutputs(
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
   return [new Map(descriptors), outputsSection];
-}
-
-/** Python's `compose.build.boundary.synthesize_boundary_graph`; not ported yet. */
-function synthesizeBoundaryGraph(
-  inputParameters: readonly Parameter[],
-  outputs: readonly FlowOutput[],
-  nodeIds: ReadonlySet<string>,
-  bodyEdges: readonly Edge[],
-  lowered: LoweredAsserts | null = null,
-  options: { record: boolean },
-): [nodes: Map<string, Node>, edges: Edge[], wiring: Map<string, Map<string, unknown>>] {
-  return [new Map(), [], new Map()];
 }
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
@@ -2040,8 +2026,6 @@ function checkLlmConfigSources(
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
 
-/** Python's `compose.validate.asserts.LoweredAsserts`; not ported yet. */
-type LoweredAsserts = unknown;
 /** Python's `compose.validate.skips.SkipModel`; not ported yet. */
 type SkipModel = unknown;
 /** One searched `when:` as authored: its index, text, origin and range. */
@@ -2126,7 +2110,7 @@ function lowerFlowAsserts(
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): LoweredAsserts {
-  return null;
+  return new LoweredAsserts();
 }
 
 /** Python's `compose.validate.case_exhaustive.exhaustive_cases`; not ported yet. */

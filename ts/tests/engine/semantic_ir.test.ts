@@ -34,7 +34,9 @@
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract` (the LOOP count is `1n`,
  * as YAML reads it); the CASE edge row `test_case_edge_inference_reads_wrapped_lowered_wiring`; and
  * the edge inference rows `test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
- * `test_producer_scan_unwraps_exactly_one_carrier_layer`.
+ * `test_producer_scan_unwraps_exactly_one_carrier_layer`; the compose rows
+ * `test_loaded_compose_flow_has_only_canonical_binding_storage` and
+ * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring`.
  *
  * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
  * `literalType` (an int, a float, ±Infinity, text, empty text, a bool, null, a record, a value
@@ -63,16 +65,17 @@
  * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
  *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
  * - The data-edge row's sink is a base `NodeDescriptor`, where Python passes a bare `object()`.
+ * - The canonical-storage row assembles its flow through `assembleText`, where Python calls
+ *   `load_flow`, and also checks that START and END have wiring; its CODE reference is TS's
+ *   (`./fixtures/compose_codefns.ts:echo`).
  * - Binding, Assertion and FlowOutput are frozen, so `object.__setattr__(carrier, ...)` is a forged
  *   carrier (`Object.assign(Object.create(prototype), carrier, {futureSemanticField: true})`); the
  *   raw-output row sets a forged `FlowOutput` whose binding is a string. Python's `ValueError` is a
  *   `RangeError`, and each error row checks the exact message (a nested binding is refused as an
  *   unsupported non-JSON value of type `Binding`). Python's `repr(manifest)` is `JSON.stringify`.
  *
- * Later (T3-14…T3-22): the compose/load rows
- * (`test_loaded_compose_flow_has_only_canonical_binding_storage`,
- * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
- * `test_reference_validation_checks_a_wrapped_flow_output`); the CALL/LOOP type-check rows
+ * Later (T3-14…T3-22): the compose/load row `test_reference_validation_checks_a_wrapped_flow_output`;
+ * the CALL/LOOP type-check rows
  * (`test_call_type_*` and `test_loop_type_check_*`); inline binding type inference
  * (`test_inline_binding_type_inference_reads_one_carrier_layer`).
  */
@@ -96,6 +99,7 @@ import {
   resolveOutputBindingContract,
   templateContract,
 } from "../../src/compose/helpers/output_contracts.ts";
+import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { bindingProducers } from "../../src/compose/edges/producers.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
@@ -123,7 +127,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { handChild } from "../compose/declarations.ts";
+import { assembleText, handChild } from "../compose/declarations.ts";
 
 /** A minimal concrete node; the base fields are the subject. */
 class BareNode extends Node {
@@ -1094,6 +1098,29 @@ test("composite builders preserve or deliberately wrap the child contract", () =
   expect(listed.origins).toStrictEqual(new ContractOrigins({ default: origin("child-root") }));
 });
 
+test("a loaded compose flow has only canonical binding storage", () => {
+  // The YAML front end crosses into one uniform compiled representation.
+  const { flow } = assembleText(`
+id: canonical-bindings
+name: Canonical bindings
+input:
+  topic: !str
+nodes:
+  emit:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+output: \${emit.output}
+`);
+
+  const wiring = [...flow.compiled.wiring.values()].flatMap((nodeWiring) => [...nodeWiring.values()]);
+  expect(flow.compiled.wiring.has(START_ID) && flow.compiled.wiring.has(END_ID)).toBe(true);
+  expect(wiring.every((binding) => isExactly(binding, Binding))).toBe(true);
+  expect(flow.compiled.outputs.every((output) => isExactly(output.binding, Binding))).toBe(true);
+});
+
 test("data edge inference is identical for raw and wrapped sources", () => {
   // Carrier provenance must not change producers, groups, or optionality.
   const source = "${producer.output}";
@@ -1115,4 +1142,19 @@ test("the producer scan unwraps exactly one carrier layer", () => {
   const inner = new Binding("${producer.output}", { origin: origin("inner") });
 
   expect(bindingProducers(new Binding(inner, { origin: origin("outer") }))).toEqual([]);
+});
+
+test("the boundary reads a wrapped output but preserves it in END's wiring", () => {
+  // Boundary dependencies use source semantics without discarding provenance.
+  const wrapped = new Binding("${producer.output}", { origin: origin("flow-output") });
+  const output = new FlowOutput("result", wrapped);
+
+  const [, edges, wiring] = synthesizeBoundaryGraph([], [output], new Set(["producer"]), [], null, { record: false });
+
+  expect(
+    edges.some(
+      (edge) => edge.from === "producer" && edge.to === END_ID && edge.inputGroup === "result" && edge.optional === false,
+    ),
+  ).toBe(true);
+  expect(wiring.get(END_ID)!.get("result")).toBe(wrapped);
 });

@@ -1201,6 +1201,70 @@ describe("AuthStore", () => {
     expect(fs.existsSync(join(tmp, "missing"))).toBe(false);
   });
 
+  test("delete removes the saved store and keeps its lock file", async () => {
+    const store = new AuthStore(file);
+    await store.save("openai", new ApiKeyCredentials("k-open"), "gpt");
+    await store.delete();
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+    expect(store.read().selections).toEqual([]);
+    await store.delete();
+    expect(fs.readdirSync(join(tmp, "auth"))).toEqual(["auth.json.lock"]);
+  });
+
+  test("delete without a store or lock file creates nothing", async () => {
+    const missing = join(tmp, "missing");
+    await new AuthStore(join(missing, "auth.json")).delete();
+    expect(fs.existsSync(missing)).toBe(false);
+
+    const empty = join(tmp, "empty");
+    fs.mkdirSync(empty, { mode: 0o700 });
+    await new AuthStore(join(empty, "auth.json")).delete();
+    expect(fs.readdirSync(empty)).toEqual([]);
+  });
+
+  test("delete removes a store without its lock file", async () => {
+    await new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model");
+    fs.unlinkSync(`${file}.lock`);
+    await new AuthStore(file).delete();
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+  });
+
+  test("delete removes a symlink without following it", async () => {
+    await new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model");
+    const other = join(tmp, "auth", "other.json");
+    fs.renameSync(file, other);
+    fs.symlinkSync(other, file);
+    await new AuthStore(file).delete();
+    expect(() => fs.lstatSync(file)).toThrow();
+    expect(fs.existsSync(other)).toBe(true);
+  });
+
+  for (const saved of [false, true]) {
+    test(`delete refuses a directory others can read: ${saved ? "saved" : "empty"}`, async () => {
+      if (saved) {
+        await new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model");
+      } else {
+        fs.mkdirSync(join(tmp, "auth"), { mode: 0o700 });
+      }
+      fs.chmodSync(join(tmp, "auth"), 0o755);
+      const error = await rejected(new AuthStore(file).delete());
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe("Credential storage must be private to its owner");
+      expect(fs.existsSync(file)).toBe(saved);
+    });
+  }
+
+  test("an aborted signal stops delete before it touches storage", async () => {
+    await new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model");
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    controller.abort(reason);
+    expect(await rejected(new AuthStore(file, { signal: controller.signal }).delete())).toBe(reason);
+    expect(fs.existsSync(file)).toBe(true);
+  });
+
   test("the store saves connection settings with a login", async () => {
     const store = new AuthStore(file);
     const selection = await store.save("openai", gateway(), "gpt", { organization: "org-1", project: "proj-1" });
@@ -1333,8 +1397,12 @@ describe("AuthStore", () => {
     expect(store.selection()).toEqual(selection);
   });
 
-  for (const cancel of [false, true]) {
-    test(`the lock wait is bounded and cancellable: ${cancel ? "cancel" : "timeout"}`, async () => {
+  const lockedOperations: [string, (store: AuthStore) => Promise<unknown>][] = [
+    ["save", (store) => store.save("openai", new ApiKeyCredentials("new"), "model-new")],
+    ["delete", (store) => store.delete()],
+  ];
+  for (const [name, operation] of lockedOperations) for (const cancel of [false, true]) {
+    test(`the lock wait is bounded and cancellable: ${name} ${cancel ? "cancel" : "timeout"}`, async () => {
       await new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model");
       const scheduler = virtualScheduler(1_000_000);
       const controller = new AbortController();
@@ -1343,7 +1411,7 @@ describe("AuthStore", () => {
       const holder = lockFile(`${file}.lock`);
       try {
         const store = new AuthStore(file, { scheduler, signal: controller.signal, lockTimeoutMs: 500 });
-        const error = await rejected(store.save("openai", new ApiKeyCredentials("new"), "model-new"));
+        const error = await rejected(operation(store));
         if (cancel) {
           expect(error).toBe(reason);
           expect(scheduler.now()).toBe(1_000_200);

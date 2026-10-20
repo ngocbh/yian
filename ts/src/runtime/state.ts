@@ -14,7 +14,7 @@
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
-import { CompiledFlow, Edge, type Flow } from "../compile/model.ts";
+import { CompiledFlow, copyGraph, Edge, Flow, GrowthRejected } from "../compile/model.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
@@ -38,7 +38,7 @@ import {
   type MemoryStack,
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
-import { ELSE_HANDLE, type Grow, Node } from "../nodes/base.ts";
+import { ELSE_HANDLE, Grow, Node } from "../nodes/base.ts";
 import {
   type Binding,
   comparePaths,
@@ -204,6 +204,11 @@ export class NodeDataError extends Error {
     this.original = original;
     this.origin = origin;
   }
+}
+
+/** Mark one explicit live node-produced growth rejection. */
+function raiseGrowthRejected(original: Error): never {
+  throw new GrowthRejected(original);
 }
 
 /**
@@ -1145,7 +1150,20 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
  * Prepare a live expansion: validate `grow` against the expanding node and build its fragment
  * with `growBuilder`, without mutating `state`.
  *
- * Not ported yet: it always throws.
+ * Not fully ported yet: after the builder returns it throws.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight.
+ * @param nodeId The exact executing spawner id, including a dynamic LOOP driver clone id.
+ * @param grow The seed-first expansion description and its dynamic-overlay prune set.
+ * @param growBuilder The injected compile-owned interpreter from a copy of the spawner and the
+ *   canonical seed to one self-contained `Flow` fragment.
+ * @param options.evidence Frozen visible evidence captured during this exact evaluation.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @throws GrowthRejected when the node-produced prune set or seed is invalid; `original` holds
+ *   the exact error.
+ * @throws TypeError when a carrier or the builder has the wrong type, or the builder doesn't
+ *   return a `Flow`.
+ * @throws RangeError when the state or the spawner is invalid.
  */
 export function prepareExpanded(
   state: RunState,
@@ -1154,7 +1172,32 @@ export function prepareExpanded(
   growBuilder: GrowBuilder,
   options: OutcomeCarriers = {},
 ): PreparedTransition {
-  throw new Error("not ported yet (T4-5)");
+  if (!isExactly(state, RunState)) throw new TypeError("prepareExpanded expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!nodeId) throw new RangeError("node_id must be non-empty");
+  if (!isExactly(grow, Grow)) throw new TypeError("grow must be a Grow");
+  if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
+  // Python's frozenset check has no counterpart: `Grow` always copies `prune` into a new `Set`.
+  for (const pruneId of grow.prune as ReadonlySet<unknown>) {
+    if (typeof pruneId !== "string") raiseGrowthRejected(new TypeError("Grow.prune must contain only strings"));
+  }
+  for (const pruneId of grow.prune) {
+    if (!pruneId) raiseGrowthRejected(new RangeError("Grow.prune node IDs must be non-empty"));
+  }
+  requireInitializedNonterminal(state);
+  requireExpandingNode(state, nodeId);
+
+  let builderSeed: JsonValue;
+  try {
+    // Live seeds only, like steps: replay folds a recorded seed without the process limit.
+    rejectDeepNesting(grow.seed, "growth seed");
+    [, builderSeed] = canonicalSeed(grow.seed);
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
+    throw error;
+  }
+  buildGrowthFragment(state.flow.nodes.get(nodeId)!, builderSeed, growBuilder);
+  throw new Error("growth preparation after the builder is not ported yet");
 }
 
 /** Prepare a recorded expansion by rebuilding its fragment. Not ported yet: it always throws. */
@@ -2050,6 +2093,25 @@ function requireFailingNode(state: RunState, nodeId: string): void {
     throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
+}
+
+/** Require an existing unknown spawner in the ordered in-flight frontier. */
+function requireExpandingNode(state: RunState, nodeId: string): void {
+  if (!nodeId) throw new RangeError("NodeExpanded node_id must be non-empty");
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} does not exist in the flow`);
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeExpanded node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not in-flight`);
+  if (node.isSpawner !== true) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
+}
+
+/** Call the injected builder with a copy of the spawner and return a copy of its fragment. */
+function buildGrowthFragment(spawner: Node, builderSeed: JsonValue, growBuilder: GrowBuilder): Flow {
+  const built: unknown = growBuilder(copyGraph(spawner), builderSeed);
+  if (!(built instanceof Flow)) throw new TypeError("grow_builder must return a Flow");
+  return copyGraph(built);
 }
 
 /** Validate a replayed route's exact scalar carriers and its executing router. */

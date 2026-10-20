@@ -36,8 +36,8 @@
  * - `test_committed_state_does_not_alias_old_containers_or_prepared_payloads`: the prepared record
  *   is deep-frozen, so each change to its payload is a `TypeError`.
  *
- * TS-only, for the part-2 stubs: `prepareExpanded` and `replayRecords` throw `not ported yet
- * (T4-5)`; a hand-built backward plan with no trace change is refused by the post-terminal trace
+ * TS-only, for the part-2 stubs: `prepareExpanded` refuses an uninitialized state, and
+ * `replayRecords` throws `not ported yet (T4-5)`; a hand-built backward plan with no trace change is refused by the post-terminal trace
  * check before anything else; a backward plan with a sequence-only trace change and a growth plan
  * reach their commit stubs, so the log stays empty.
  *
@@ -612,11 +612,11 @@ test("a mismatched append return leaves the advanced log as recovery authority",
   expect(retained[0]!.record).toBeInstanceOf(RunStartedRecord);
 });
 
-test("the growth and replay entry points aren't ported yet", () => {
+test("growth refuses an uninitialized state; the replay entry point isn't ported yet", () => {
   const owned = flow();
   const state = new RunState(owned);
   const builder = () => owned;
-  expectError(() => prepareExpanded(state, "work", new Grow({}), builder), Error, /^not ported yet \(T4-5\)$/);
+  expectError(() => prepareExpanded(state, "work", new Grow({}), builder), RangeError, /^run state is not initialized$/);
   expectError(() => replayRecords(state, [], { growBuilder: builder }), Error, /^not ported yet \(T4-5\)$/);
 });
 

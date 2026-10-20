@@ -357,6 +357,18 @@ describe("parseCommand", () => {
     });
   });
 
+  test("an optional positional, given and omitted", () => {
+    const auth: CommandSpec = {
+      name: "auth",
+      summary: "Saved logins.",
+      positionals: [{ name: "provider", help: "Provider.", optional: true }],
+      options: [],
+    };
+    expect(parseCommand(auth, ["openai"])).toEqual({ help: false, args: { provider: "openai" }, options: {} });
+    expect(parseCommand(auth, [])).toEqual({ help: false, args: {}, options: {} });
+    expect(helpText(auth).startsWith("Usage: yian auth [OPTIONS] [PROVIDER]\n")).toBe(true);
+  });
+
   test("a missing positional", () => {
     expect(usage(RUN, ["-q"])).toBe("Missing argument 'FLOW'.");
     expect(usage(CHECK, ["--json"])).toBe("Missing argument 'FLOWS...'.");

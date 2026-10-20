@@ -373,6 +373,7 @@ describe("main", () => {
     for (const [argv, name] of [
       [["providers"], "providers"],
       [["config", "check"], "config check"],
+      [["auth", "openai"], "auth"],
     ] as const) {
       const { io, stdout, stderr } = testIo();
       expect(await main(argv, io)).toBe(1);
@@ -393,6 +394,7 @@ const CLI_ENTRY = fileURLToPath(
   new URL(`../../src/cli/index.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url),
 );
 
+// Guards truncation at exit through the real entry, not `flush` itself, which progress writes need.
 test("the entry writes a large --json document whole to piped stdout", () => {
   const dirs = Array.from({ length: 3000 }, (_, i) => `missing-skill-directory-${String(i).padStart(4, "0")}`);
   const runtime = process.versions.bun !== undefined ? ["--no-install"] : [];

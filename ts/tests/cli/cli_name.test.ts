@@ -55,7 +55,7 @@ const STALE = /\bac (?:(?:run|chat|auth)\b|--help\b|\.\.\.)|`ac`|\bThe ac CLI\b/
 
 /** Return every file under `dir`, recursively. */
 function files(dir: string): string[] {
-  return (readdirSync(dir, { recursive: true, withFileTypes: true }) as import("node:fs").Dirent[])
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name));
 }

@@ -162,6 +162,8 @@ export interface PositionalSpec {
   name: string;
   help: string;
   variadic?: boolean;
+  /** May be omitted; then absent from `args`. */
+  optional?: boolean;
   path?: PathCheck;
 }
 
@@ -186,7 +188,8 @@ export type ParsedCommand =
 
 /** Return `positional`'s name as the usage text shows it. */
 function metavar(positional: PositionalSpec): string {
-  return positional.name.toUpperCase() + (positional.variadic ? "..." : "");
+  const name = positional.name.toUpperCase() + (positional.variadic ? "..." : "");
+  return positional.optional ? `[${name}]` : name;
 }
 
 /** Return the parameter hint Click's messages show for `option`. */
@@ -282,7 +285,10 @@ export function parseCommand(spec: CommandSpec, argv: readonly string[]): Parsed
   const rest = [...parsed.positionals];
   const args: Record<string, string | string[]> = {};
   for (const positional of spec.positionals) {
-    if (rest.length === 0) throw new UsageError(`Missing argument '${metavar(positional)}'.`);
+    if (rest.length === 0) {
+      if (positional.optional) continue;
+      throw new UsageError(`Missing argument '${metavar(positional)}'.`);
+    }
     const taken = positional.variadic ? rest.splice(0) : rest.splice(0, 1);
     if (positional.path) for (const value of taken) checkPath(`'${metavar(positional)}'`, value, positional.path);
     args[positional.name] = positional.variadic ? taken : taken[0]!;

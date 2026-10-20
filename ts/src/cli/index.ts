@@ -31,7 +31,7 @@ import {
 type Handler = (command: Extract<ParsedCommand, { help: false }>, io: CliIo) => Promise<number>;
 
 /** A command: its spec, and a loader importing its handler. */
-export interface Command {
+interface Command {
   spec: CommandSpec;
   load: () => Promise<Handler>;
 }
@@ -40,7 +40,7 @@ const JSON_HELP = "Print one yian.cli.v1 JSON document on stdout.";
 const JSON_OPTION: OptionSpec = { name: "json", type: "boolean", help: JSON_HELP };
 
 /** The commands by name, in the order the root help lists them. */
-export const COMMANDS: Readonly<Record<string, Command>> = {
+const COMMANDS: Readonly<Record<string, Command>> = {
   run: {
     spec: {
       name: "run",
@@ -136,8 +136,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "auth",
       summary: "List, set up, choose the default among, or remove saved provider logins.",
-      // PROVIDER, an optional positional, waits for the parser to take optional positionals.
-      positionals: [],
+      positionals: [
+        {
+          name: "provider",
+          help: "Provider to set up, make the default, or remove; omit to list logins.",
+          optional: true,
+        },
+      ],
       options: [
         { name: "method", type: "string", help: "OpenAI only: subscription or api-key; prompts when omitted." },
         { name: "login", type: "string", help: "OpenAI subscription sign-in: browser or device (for SSH)." },

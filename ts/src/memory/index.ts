@@ -32,13 +32,14 @@
  * `conversation.ts` owns the pure conversation fold, strict codecs and digests; `summary.ts` owns
  * whole-turn selection and summary prefix proofs. `storage/sqlite.ts` and `storage/markdown.ts`
  * are the storage adapters below the backends. The facade re-exports none of these modules, as
- * Python's `memory/__init__.py` doesn't import them. `episodic.ts`, `reflective.ts` and `session.ts`
- * hold `EpisodicMemory`, `ReflectiveMemory` and `SessionMemory`; the profile backend is not ported yet.
+ * Python's `memory/__init__.py` doesn't import them. `episodic.ts`, `reflective.ts`, `session.ts`
+ * and `profile.ts` hold `EpisodicMemory`, `ReflectiveMemory`, `SessionMemory` and `ProfileMemory`.
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `conversation.ts` and
  * `summary.ts` also know `typesys`; `storage/` also knows `platform` and `typesys`; the backends
- * `episodic.ts`, `session.ts` and `reflective.ts` also know `typesys`, and `reflective.ts` also
- * knows `llm` and `llm_clients`.
+ * `episodic.ts`, `session.ts`, `reflective.ts` and `profile.ts` also know `typesys`;
+ * `reflective.ts` and `profile.ts` also know `llm` and `llm_clients`; `profile.ts` also knows
+ * `reflective.ts`, `storage/markdown.ts` and `storage/sqlite.ts`.
  * Never imports (this facade and `contracts.ts`): `nodes`, `compile`, `compose`, `runtime`, `run`,
  * the CLI, `llm`, or persistence frameworks.
  */

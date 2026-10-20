@@ -32,7 +32,9 @@
  * and during learn; recall rejects a context that isn't a `RecallContext`; commit's batch
  * messages; two concurrent commits of one id write once; a failed commit (version mismatch) then a
  * good one in the same session, whose `2n` feedback is written as Python's int `2`; the reply
- * parser's messages; feedback holding `Infinity` is `profile.invalid_context` after the model call.
+ * parser's messages; feedback holding `Infinity` is `profile.invalid_context` after the model call;
+ * with `YIAN_TEST_NODE` set to a Node binary, the built backend opens a document Bun seeded, learns
+ * with a scripted model and commits under Node, and Bun reads the new document and its write log.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
@@ -65,11 +67,13 @@
  *   async; `with` blocks are `try`/`finally` around `close()`.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { BUILTIN, DefaultsError, type Env, forget, install } from "../../src/defaults.ts";
 import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
@@ -891,4 +895,101 @@ test("feedback holding Infinity is profile.invalid_context after the model call"
   ]);
   expect(error.cause).toBeInstanceOf(RangeError);
   expect(model.requests.length).toBe(1);
+});
+
+/** The `ts/` directory. */
+const ROOT = join(import.meta.dir, "../..");
+const BUILT = join(ROOT, "dist/src/memory/profile.js");
+
+/** This process's environment without `YIAN_*` keys, so a child reads no ambient yian settings. */
+function childEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("YIAN_")));
+}
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/memory_storage.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+describe.skipIf(!NODE)("the built backend on Node", () => {
+  test(
+    "Node opens a document Bun seeded, learns, commits, and Bun reads it back",
+    async () => {
+      const file = join(home, "ada.md");
+      const seeded = await newMemory("# Ada\n");
+      const seen = (await seeded.read())[1];
+      const load = (name: string) => JSON.stringify(pathToFileURL(join(ROOT, `dist/src/${name}.js`)).href);
+      const script = `
+const assert = (await import("node:assert/strict")).default;
+const { ProfileMemory } = await import(${load("memory/profile")});
+const { FileMarkdownStore } = await import(${load("memory/storage/markdown")});
+const c = await import(${load("memory/contracts")});
+const { Message, Response, TextPart } = await import(${load("llm/messages")});
+const { ScriptedModel } = await import(${load("llm/testing")});
+const vars = new Map([["YIAN_AUTH_FILE", ${JSON.stringify(join(home, "auth.json"))}]]);
+const createModel = (config) =>
+  new ScriptedModel(
+    [new Response({ message: new Message({ role: "assistant", parts: [new TextPart("<profile># Ada\\nCite sources.</profile>")] }) })],
+    { provider: String(config.provider), model: String(config.model) },
+  );
+const memory = new ProfileMemory(new FileMarkdownStore(${JSON.stringify(file)}), {
+  llmConfig: ${JSON.stringify(CONFIG)},
+  env: (name) => vars.get(name),
+  createModel,
+});
+try {
+  const session = await memory.openRun();
+  try {
+    assert.equal(session.recall(), "# Ada\\n");
+    const feedback = [{ channel: "output", target_name: null, value: "Cite sources.", owner_static_path: null, execution_seq: null }];
+    const batch = await session.learn(new c.LearnContext("run-node", "profile", [], feedback));
+    assert.equal(batch.length, 1);
+    await session.commit("commit-node", batch);
+  } finally {
+    session.close();
+  }
+} finally {
+  memory.close();
+}
+console.log("ok");
+`;
+      const result = spawnSync(NODE!, ["--input-type=module", "-e", script], {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: childEnv(),
+      });
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("ok\n");
+      expect(result.status).toBe(0);
+      const [text, version] = await new FileMarkdownStore(file).read();
+      expect(text).toBe("# Ada\nCite sources.\n");
+      const line = JSON.parse(writeLog().at(-1)!);
+      expect([line.base_version, line.version]).toEqual([seen, version]);
+      expect(line.provenance).toEqual({
+        commit_id: "commit-node",
+        run_id: "run-node",
+        seen_version: seen,
+        feedback: ["Cite sources."],
+      });
+    },
+    30_000,
+  );
 });

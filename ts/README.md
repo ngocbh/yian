@@ -376,7 +376,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `onRetry`); `createModel(config)` builds the learner's model (default `chatModelFromConfig`);
   `recall` and `learn` are async, and `rewriteQuery` may be async; snapshot and stored ints are
   `bigint`s; there is no `with` form and no fork check.
-- The profile backend is not ported yet.
+- `src/memory/profile.ts` holds `ProfileMemory`, which keeps one markdown document in a
+  `MarkdownStore` and asks one plain model call to rewrite it from feedback. Changed: the
+  constructor takes the store and an options object (`llmConfig`, `maxChars`, `inputBudgetChars`,
+  `env`, `createModel`, `onRetry`); `openRun`, `read`, `write`, `learn` and `commit` are async;
+  a Node system error from the store is `profile.store_unavailable` and a `RangeError`
+  `profile.store_invalid`; lengths count code points; the snapshot's `version` is `1n`; there is
+  no `with` form.
 
 ## Runtime
 

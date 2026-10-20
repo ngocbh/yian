@@ -43,7 +43,7 @@ const SNAPSHOT_VERSION = 2n;
 
 const EPISODE_STATUSES: readonly unknown[] = Object.values(MemoryEpisodeStatus);
 const OCCURRENCE_KINDS: readonly unknown[] = Object.values(MemoryOccurrenceKind);
-const EPISODE_FIELDS = [
+const EPISODE_FIELDS: readonly string[] = [
   "base_system_prompt",
   "execution_seq",
   "failure",
@@ -153,6 +153,7 @@ function resolveLimits(
   });
 }
 
+// Local copy of memory/contracts.ts's requireString, which that module keeps private.
 /**
  * Require one exact string with a canonical UTF-8 representation.
  *
@@ -340,8 +341,9 @@ function episodeFromJson(value: JsonValue | undefined, name: string): MemoryEpis
   if (executionSeq !== null && (typeof executionSeq !== "bigint" || executionSeq < 0n)) {
     throw new RangeError(`${name}.execution_seq is invalid`);
   }
-  const basePrompt = data.base_system_prompt;
-  const prompt = data.prompt;
+  const basePrompt =
+    data.base_system_prompt === null ? null : jsonString(data.base_system_prompt, `${name}.base_system_prompt`);
+  const prompt = data.prompt === null ? null : jsonString(data.prompt, `${name}.prompt`);
   return new MemoryEpisode(
     jsonString(data.run_id, `${name}.run_id`, true),
     occurrencePathFromJson(data.occurrence_path, `${name}.occurrence_path`),
@@ -354,8 +356,8 @@ function episodeFromJson(value: JsonValue | undefined, name: string): MemoryEpis
       interactions: (interactionsRaw as readonly JsonValue[]).map((item, index) =>
         interactionFromJson(item, `${name}.interactions[${index}]`),
       ),
-      baseSystemPrompt: basePrompt === null ? null : jsonString(basePrompt, `${name}.base_system_prompt`),
-      prompt: prompt === null ? null : jsonString(prompt, `${name}.prompt`),
+      baseSystemPrompt: basePrompt,
+      prompt,
       memorySections: sections,
       executionSeq: executionSeq === null ? null : Number(executionSeq),
     },
@@ -382,14 +384,6 @@ function validateEntry(value: JsonValue | undefined, name: string): JsonObject {
   return data;
 }
 
-/** Defensively copy one immutable instance state. */
-function copyState(state: State): State {
-  return Object.freeze({
-    limits: state.limits,
-    episodes: Object.freeze(state.episodes.map((episode) => copyObject(episode, "episode"))),
-  });
-}
-
 /** Encode one canonical episodic-memory snapshot, deep-frozen, ints as `bigint`s. */
 function snapshotJson(namespace: string, epoch: number, revision: number, state: State): JsonObject {
   return Object.freeze({
@@ -397,7 +391,8 @@ function snapshotJson(namespace: string, epoch: number, revision: number, state:
       max_episodes: BigInt(state.limits.maxEpisodes),
       recall_limit: BigInt(state.limits.recallLimit),
     }),
-    episodes: Object.freeze(state.episodes.map((episode) => copyObject(episode, "episode"))),
+    // Retained entries are deep-frozen, so the snapshot shares them (Python copies each).
+    episodes: state.episodes,
     epoch: BigInt(epoch),
     format: SNAPSHOT_FORMAT,
     namespace,
@@ -455,7 +450,7 @@ function parseSnapshot(value: unknown): [string, number, number, State] {
     if (logJson(data) !== logJson(snapshotJson(...result))) throw new RangeError("snapshot must be canonical");
     return result;
   } catch (error) {
-    if (error instanceof MemoryOperationError) throw error;
+    if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
     throw snapshotError({ cause: error });
   }
 }
@@ -600,12 +595,10 @@ export class EpisodicMemory implements Memory {
       const snapshot = options.snapshot ?? null;
       const parsed = snapshot === null ? null : parseSnapshot(snapshot);
       if (parsed !== null) resolveLimits(this.requested, parsed[3].limits, "open_run");
+      // The state is frozen, so a session pins it without Python's defensive copy.
+      const [namespace, epoch, revision, state] = parsed ?? [this.namespace, this.epoch, this.revision, this.state];
       let adopt = false;
-      let [namespace, epoch, revision, state] = [this.namespace, this.epoch, this.revision, this.state];
-      if (parsed === null) {
-        state = copyState(this.state);
-      } else {
-        [namespace, epoch, revision, state] = parsed;
+      if (parsed !== null) {
         if (namespace !== this.namespace) {
           const pristine =
             !this.everOpened &&
@@ -628,7 +621,6 @@ export class EpisodicMemory implements Memory {
         }
       }
       if (adopt || !this.everOpened) {
-        const adoptedState = adopt ? copyState(state) : this.state;
         const candidate = adopt
           ? snapshotJson(namespace, epoch, revision, state)
           : snapshotJson(this.namespace, this.epoch, this.revision, this.state);
@@ -640,7 +632,7 @@ export class EpisodicMemory implements Memory {
           this.namespace = namespace;
           this.epoch = epoch;
           this.revision = revision;
-          this.state = adoptedState;
+          this.state = state;
           this.everCommitted = revision > 0;
         }
         this.everOpened = true;
@@ -786,20 +778,23 @@ export class EpisodicSession implements MemorySession {
         throw operationError("learn", "episodic.invalid_context", "learning context is invalid");
       }
       this.assertCurrent("learn");
-      try {
-        return context.episodes.map((episode, ordinal) => {
-          const identity = {
-            episode: episodeJson(episode),
-            memory: context.memory,
-            ordinal: BigInt(ordinal),
-            run_id: context.runId,
-          };
-          const entryId = crypto.createHash("sha256").update(logJson(identity)).digest("hex");
+      return context.episodes.map((episode, ordinal) => {
+        const identity = {
+          episode: episodeJson(episode),
+          memory: context.memory,
+          ordinal: BigInt(ordinal),
+          run_id: context.runId,
+        };
+        const entryId = crypto.createHash("sha256").update(logJson(identity)).digest("hex");
+        // An episode holding `±Infinity` can't be a mutation payload, so it fails as a learning
+        // context Python can't build.
+        try {
           return new MemoryMutation(entryId, { entry: storedEntry(entryId, episode), operation: "append" });
-        });
-      } catch (error) {
-        throw operationError("learn", "episodic.invalid_context", "learning context is invalid", { cause: error });
-      }
+        } catch (error) {
+          if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+          throw operationError("learn", "episodic.invalid_context", "learning context is invalid", { cause: error });
+        }
+      });
     });
   }
 
@@ -844,6 +839,7 @@ export class EpisodicSession implements MemorySession {
     try {
       material = logJson(encoded);
     } catch (error) {
+      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
       throw operationError("commit", "episodic.invalid_batch", "mutation batch is not canonical JSON", {
         cause: error,
       });
@@ -867,6 +863,7 @@ export class EpisodicSession implements MemorySession {
       try {
         id = jsonString(commitId, "commit_id", true);
       } catch (error) {
+        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         throw operationError("commit", "episodic.invalid_commit_id", "commit id is invalid", { cause: error });
       }
       const digest = this.batchDigest(mutations);
@@ -876,7 +873,7 @@ export class EpisodicSession implements MemorySession {
         throw operationError("commit", "episodic.commit_collision", "commit id collision with a different batch");
       }
       this.assertCurrent("commit");
-      let state = copyState(memory["state"]);
+      let state = memory["state"];
       if (
         state.limits.maxEpisodes !== this.state.limits.maxEpisodes ||
         state.limits.recallLimit !== this.state.limits.recallLimit
@@ -903,6 +900,7 @@ export class EpisodicSession implements MemorySession {
         const retained = [...state.episodes, ...additions].slice(-state.limits.maxEpisodes);
         state = Object.freeze({ limits: state.limits, episodes: Object.freeze(retained) });
       } catch (error) {
+        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         throw operationError("commit", "episodic.invalid_batch", "mutation batch is invalid", { cause: error });
       }
       const commits = new Map(memory["appliedCommits"]).set(id, digest);

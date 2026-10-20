@@ -265,7 +265,7 @@ test("snapshot is closed canonical and defensive", async () => {
       (snapshot.config as Mutable).max_episodes = 99n;
     }).toThrow(TypeError);
     expect((session.snapshot.config as JsonObject).max_episodes).toBe(4n);
-    logJson(session.snapshot);
+    expect(() => logJson(session.snapshot)).not.toThrow();
   });
 });
 
@@ -277,20 +277,20 @@ test("snapshot restore rules and recorded defaults", async () => {
   await withRun(new EpisodicMemory(), (session) => expect(session.snapshot).toEqual(recorded), recorded);
   const nonpristine = new EpisodicMemory();
   await withRun(nonpristine, () => {});
-  failure(() => nonpristine.openRun({ snapshot: recorded }));
+  expect(failure(() => nonpristine.openRun({ snapshot: recorded })).code).toBe("episodic.invalid_snapshot");
   for (const [field, value] of [
     ["revision", 2n],
     ["epoch", 1n],
   ] as const) {
     const changed: Mutable = structuredClone(recorded);
     changed[field] = value;
-    failure(() => original.openRun({ snapshot: changed }));
+    expect(failure(() => original.openRun({ snapshot: changed })).code).toBe("episodic.invalid_snapshot");
   }
   const changed: Mutable = structuredClone(recorded);
   changed.config.recall_limit = 3n;
-  failure(() => original.openRun({ snapshot: changed }));
+  expect(failure(() => original.openRun({ snapshot: changed })).code).toBe("episodic.config_conflict");
   original.reset();
-  failure(() => original.openRun({ snapshot: recorded }));
+  expect(failure(() => original.openRun({ snapshot: recorded })).code).toBe("episodic.invalid_snapshot");
 });
 
 describe("snapshot format is strict", () => {
@@ -377,13 +377,16 @@ test("commit inputs are exact", async () => {
 });
 
 test("closed session rejects every operation", async () => {
-  const session = new EpisodicMemory().openRun();
+  const memory = new EpisodicMemory();
+  const session = memory.openRun();
   session.close();
   session.close();
   for (const operation of [() => session.snapshot, () => session.commit("x", []), () => session.learn(context())]) {
     expect(failure(operation).code).toBe("episodic.session_closed");
   }
   expect((await rejection(session.recall())).code).toBe("episodic.session_closed");
+  // The failed recall released its operation, so the backend isn't busy.
+  memory.close();
 });
 
 test("module imports only stdlib and lower memory modules", () => {
@@ -514,11 +517,14 @@ test("rewrite query is overridable and must return text", async () => {
       return 1 as never;
     }
   }
-  await withRun(new InvalidQueryMemory(), async (session) => {
+  const invalid = new InvalidQueryMemory();
+  await withRun(invalid, async (session) => {
     const error = await rejection(session.recall(new RecallContext("", "", {}, ["root", "agent"])));
     expect(error.code).toBe("episodic.invalid_query");
     expect(error.message).toBe("query rewriting must return text");
   });
+  // The failed recall released its operation, so the backend isn't busy.
+  invalid.close();
 });
 
 test("nonempty snapshot rejects malformed episode and duplicate identity", async () => {
@@ -527,10 +533,10 @@ test("nonempty snapshot rejects malformed episode and duplicate identity", async
   const snapshot = snapshotOf(memory);
   const malformed: Mutable = structuredClone(snapshot);
   malformed.episodes[0].episode.status = "unknown";
-  failure(() => new EpisodicMemory().openRun({ snapshot: malformed }));
+  expect(failure(() => new EpisodicMemory().openRun({ snapshot: malformed })).code).toBe("episodic.invalid_snapshot");
   const duplicate: Mutable = structuredClone(snapshot);
   duplicate.episodes.push(duplicate.episodes[0]);
-  failure(() => new EpisodicMemory().openRun({ snapshot: duplicate }));
+  expect(failure(() => new EpisodicMemory().openRun({ snapshot: duplicate })).code).toBe("episodic.invalid_snapshot");
 });
 
 test("session recalls and learns under the memory key", async () => {
@@ -592,6 +598,24 @@ describe("TS-only", () => {
     );
   });
 
+  test("an error that isn't a TypeError or RangeError escapes snapshot parsing unchanged", () => {
+    const boom = new Error("boom");
+    const snapshot: Mutable = structuredClone(snapshotOf(new EpisodicMemory()));
+    Object.defineProperty(snapshot, "namespace", {
+      enumerable: true,
+      get() {
+        throw boom;
+      },
+    });
+    let caught: unknown = null;
+    try {
+      new EpisodicMemory().openRun({ snapshot });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(boom);
+  });
+
   test("a host mutation payload holding -0 is not canonical JSON", async () => {
     await withRun(new EpisodicMemory(), (session) => {
       const error = failure(() => session.commit("zero", [new MemoryMutation("m", { x: -0 })]));
@@ -629,12 +653,15 @@ describe("TS-only", () => {
         throw cause;
       }
     }
-    await withRun(new RejectingQueryMemory(), async (session) => {
+    const rejecting = new RejectingQueryMemory();
+    await withRun(rejecting, async (session) => {
       const error = await rejection(session.recall(new RecallContext("", "", {}, ["root", "agent"])));
       expect(error.code).toBe("episodic.invalid_query");
       expect(error.message).toBe("query rewriting failed");
       expect(error.cause).toBe(cause);
     });
+    // The failed recall released its operation, so the backend isn't busy.
+    rejecting.close();
   });
 
   test("a re-entrant close from inside an async rewriteQuery is busy", async () => {

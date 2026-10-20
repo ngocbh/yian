@@ -11,10 +11,15 @@
  * `step` def built by hand; the LOOP build raises it), and
  * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (the load half of
  * `test_binding_with_a_nested_span_fails_to_load_with_the_rewrite`; `assemble`, whose inline-call
- * desugar raises it).
+ * desugar raises it). `test_node_assert_with_a_nested_span_fails_to_load_with_the_rewrite` and
+ * `test_flow_assert_with_a_nested_span_fails_to_load_with_the_rewrite` are ported through
+ * `assembleText`, pinning the whole message, and their cases
+ * `load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite` and
+ * `load-core/engine_nested_span_rejected__flow_assert_shows_the_rewrite` (`assemble`, whose
+ * node-assert check and flow-assert lowering raise them) are pinned at the end.
  *
- * Left for later: the case, assert, loop and prompt load tests and the run tests land with compose
- * and `run.ts`.
+ * Left for later: the case, loop and prompt load tests and the run tests land with compose and
+ * `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -30,7 +35,15 @@ import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/ex
 import { scanTemplate } from "../../src/expr/template.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
-import { assembled, assembledWith, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
+import {
+  assembled,
+  assembledWith,
+  assembleText,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
 
@@ -152,6 +165,41 @@ test("the rewrite only needs to parse, not pass the later checks", () => {
   );
 });
 
+// --- assert loading --- //
+
+const ASSERTS = `
+id: f
+name: f
+input:
+  n: !int
+nodes:
+  n:
+    kind: code
+    code: "return inputs['n']"
+    input: {n: '\${input.n}'}
+    output: int
+    asserts:
+      - <node_assert>
+output: \${n.output}
+asserts:
+  - <flow_assert>
+`;
+
+test("a flow assert with a nested span fails to load with the rewrite", () => {
+  const text = ASSERTS.replace("<node_assert>", "output >= 0").replace("<flow_assert>", "${input.n} > 0");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    `assert '\${input.n} > 0' is not a valid boolean expression: ${NESTED}; write \`input.n > 0\``,
+  );
+});
+
+test("a node assert with a nested span fails to load with the rewrite", () => {
+  const text = ASSERTS.replace("<node_assert>", "${output} < 0").replace("<flow_assert>", "input.n > 0");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    "flow has invalid node asserts:\n" +
+      `  node 'n' assert '\${output} < 0': not a valid boolean expression (${NESTED}; write \`output < 0\`)`,
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
 test("assembled: load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite", () => {
@@ -180,4 +228,12 @@ test("assembled: load-core/engine_nested_span_rejected__loop_predicate_shows_the
 
 test("assembled: load-core/engine_nested_span_rejected__binding_shows_the_rewrite", () => {
   runCase({ id: "load-core/engine_nested_span_rejected__binding_shows_the_rewrite", call: assembled });
+});
+
+test("assembled: load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite", () => {
+  runCase({ id: "load-core/engine_nested_span_rejected__node_assert_shows_the_rewrite", call: assembled });
+});
+
+test("assembled: load-core/engine_nested_span_rejected__flow_assert_shows_the_rewrite", () => {
+  runCase({ id: "load-core/engine_nested_span_rejected__flow_assert_shows_the_rewrite", call: assembled });
 });

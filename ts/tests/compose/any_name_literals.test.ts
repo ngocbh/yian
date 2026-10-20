@@ -4,8 +4,10 @@
  * `tests/compose/test_any_name_literals.py` the cross-flow binding check takes part in,
  * assembling each flow with `assembleText` where Python calls `load_flow`.
  *
- * Ported: `test_a_value_entry_call_argument_under_a_credential_name_loads` and
- * `test_a_map_over_literal_under_a_credential_name_loads`.
+ * Ported: `test_a_value_entry_call_argument_under_a_credential_name_loads`,
+ * `test_a_map_over_literal_under_a_credential_name_loads` and
+ * `test_an_inline_call_in_a_node_assert_shows_the_assert_under_any_keyword` (the node-assert check
+ * refuses the call before the `g` def is resolved).
  *
  * Changed: the `g` and `leaf` defs are built by hand (`handChild`: the def's parameters read from
  * its `input:` text, its typed node as a producer with its output contract), since def bodies load
@@ -28,7 +30,6 @@
  * `test_a_malformed_call_with_a_credential_keyword_quotes_its_text` (pinned in
  * `inline_calls.test.ts`).
  *
- * Later (T3-20): `test_an_inline_call_in_a_node_assert_shows_the_assert_under_any_keyword`.
  * Later (T3-22): the multi-node-def and single-node-def params of
  * `test_a_def_env_literal_under_a_credential_name_loads` and
  * `test_a_def_input_default_under_a_credential_name_loads` (def loading).
@@ -39,7 +40,7 @@ import { expect, test } from "bun:test";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, handChild, parametersFromYaml } from "./declarations.ts";
+import { assembleText, handChild, loadError, parametersFromYaml } from "./declarations.ts";
 
 const STR = new ValueContract(Type.scalar(ValueKind.STRING));
 
@@ -82,4 +83,17 @@ test("a map over literal under a credential name loads", () => {
 
   expect(flowFingerprint(first)).not.toBe(flowFingerprint(load("hunter3")));
   expect(JSON.stringify(flowManifest(first))).toContain("hunter2");
+});
+
+test("an inline call in a node assert shows the assert under any keyword", () => {
+  const text =
+    "id: f\nname: f\n" +
+    "defs:\n  g:\n    input:\n      password: !Optional(str) null\n    nodes:\n" +
+    "      run:\n        kind: code\n        output: str\n        code: |\n          return 'x'\n" +
+    "    output: ${run.output}\n" +
+    "nodes:\n  b:\n    kind: code\n    output: str\n    code: |\n      return 'x'\n" +
+    "    asserts:\n      - call(g, password=x)\n" +
+    "output: ${b.output}\n";
+
+  expect(loadError(() => assembleText(text)).message).toContain("assert 'call(g, password=x)'");
 });

@@ -42,11 +42,10 @@
  * `…__an_unnarrowed_optional_field_into_a_required_input`, whose error the cross-flow binding
  * check raises (`assembledWith`, the `need` def built by hand); the three `checkImpossibleWhens`
  * raises; and `…__a_field_of_an_unchecked_optional_parent_may_be_null`, whose error the
- * exhaustiveness check raises. `…__a_node_assert_check_made_impossible_is_reported` sits in
- * `narrowing_core.test.ts`'s table.
- *
- * Later (T3-20): `test_a_node_assert_check_a_null_check_makes_impossible_is_reported` (node
- * asserts).
+ * exhaustiveness check raises; and `…__a_node_assert_check_made_impossible_is_reported`, whose
+ * error the node-assert check raises, for
+ * `test_a_node_assert_check_a_null_check_makes_impossible_is_reported` (ported above it, pinning
+ * the whole message).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -465,9 +464,9 @@ const AB_FLOW_HEAD =
   "input:\n  x: !Optional(AB)\n" +
   "nodes:\n";
 
-/** A CODE node `nodeId` returning `1`. */
-function codeNode(nodeId: string): string {
-  return `  ${nodeId}:\n    kind: code\n    code: return 1\n`;
+/** A CODE node `nodeId` returning `1`, with `extra` lines added to its body. */
+function codeNode(nodeId: string, extra = ""): string {
+  return `  ${nodeId}:\n    kind: code\n    code: return 1\n${extra}`;
 }
 
 /** A searched CASE `nodeId` routing to `then` under `when`, else to `else_`. */
@@ -519,6 +518,17 @@ test("a null check case under a branch that rules out every member is reported",
   expect(assembleError(text)).toContain(
     "case node 'inner': `cases[0].when`: `input.x != null` can never be true here: " +
       "input.x is None, by the case branch that routes this node",
+  );
+});
+
+test("a node assert check a null check makes impossible is reported", () => {
+  const assertion = "x != null and not isinstance(x, A) and not isinstance(x, B)";
+  const body = `    input:\n      x: \${input.x}\n    asserts:\n      - "${assertion}"\n`;
+  const text = AB_FLOW_HEAD + codeNode("c", body) + "output: ${c.output}\n";
+  expect(assembleError(text)).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'c' assert: `not isinstance(x, B)` can never be true here: x is B, by the checks " +
+      "before it, so `isinstance(x, B)` is always true",
   );
 });
 
@@ -580,5 +590,6 @@ test.each<CaseRow>(
     "a_null_check_the_routing_rules_out_is_reported",
     "a_tag_check_after_a_null_check_is_impossible",
     "a_field_of_an_unchecked_optional_parent_may_be_null",
+    "a_node_assert_check_made_impossible_is_reported",
   ].map((name) => ({ id: `load-types/compose_null_narrowing__${name}`, call: assembled })),
 )("assemble: $id", runCase);

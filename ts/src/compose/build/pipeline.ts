@@ -93,7 +93,6 @@ import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";
 import { MapDescriptor } from "../nodes/map.ts";
 import type { ScalarStyle } from "../source/common.ts";
-import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
 import { synthesizeBoundaryGraph } from "./boundary.ts";
@@ -140,6 +139,7 @@ import {
   localInputContracts,
 } from "../validate/typed_bindings.ts";
 // T3-20 imports
+import { lowerFlowAsserts, validateNodeAsserts } from "../validate/asserts.ts";
 import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
@@ -2431,8 +2431,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  validateReferences (1).
-//   T3-20  validateNodeAsserts (1).
-//          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 
@@ -2462,35 +2460,3 @@ function validateReferences(
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
 
 // T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts
-
-/** Python's `compose.validate.asserts.validate_node_asserts`; not ported yet. */
-function validateNodeAsserts(
-  nodes: ReadonlyMap<string, Node>,
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  options: {
-    assertionSiteAt?:
-      | ((nodeId: string, index: number) => readonly [OriginRef | null, SourceRange | null] | null)
-      | null;
-    typeNames?: ReadonlySet<string>;
-    localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
-    partialUnionNodes?: ReadonlySet<string>;
-    registry?: TypeRegistry | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
-
-/** Python's `compose.validate.asserts.lower_flow_asserts`; not ported yet. */
-function lowerFlowAsserts(
-  assertList: readonly Assertion[],
-  flowInputs: ReadonlySet<string>,
-  validTargets: ReadonlySet<string>,
-  producers: ReadonlyMap<string, OutputContract>,
-  assertRanges: readonly (SourceRange | null)[] | null = null,
-  options: {
-    inputContracts?: ReadonlyMap<string, ValueContract> | null;
-    registry?: TypeRegistry | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): LoweredAsserts {
-  return new LoweredAsserts();
-}

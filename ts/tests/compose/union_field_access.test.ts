@@ -20,7 +20,13 @@
  * `load-types/compose_union_field_access__loop_carrying_a_union_keeps_the_non_record_error` is
  * pinned at the end. The non-exhaustive row loads Python's flow with `assembleText` (without the
  * unused `Text`, `Num` and `Reply` typedefs); the uncovered tags are written as JSON text,
- * `["hold"]` (Python `['hold']`).
+ * `["hold"]` (Python `['hold']`). `::test_member_only_field_in_a_node_assert_is_a_load_error`,
+ * `::test_shared_field_in_a_node_assert_loads` and
+ * `::test_member_only_field_in_a_flow_assert_is_a_load_error` load Python's flow the same way, the
+ * first and the last pinning the whole message; their harvested cases
+ * `load-types/compose_union_field_access__member_only_field_in_a_node_assert`,
+ * `__shared_field_in_a_node_assert_loads` and `__member_only_field_in_a_flow_assert` are pinned at
+ * the end.
  *
  * TS-only: the member-only fix hints, which Python checks only through flows the loader builds
  * (a tag comparison hint read from the local path, through a union root and below a shared
@@ -331,8 +337,51 @@ test("a loop carrying a union keeps the non-record error", () => {
   );
 });
 
+/** A flow with one CODE node `d` typed `Decision`, plus `rest` (YAML tail). */
+function decisionFlow(rest: string): string {
+  return (
+    "id: p\nname: p\n" +
+    "typedefs:\n" +
+    "  Buy: {action: 'Literal(buy)', qty: int, note: str}\n" +
+    "  Hold: {action: 'Literal(hold)', note: str}\n" +
+    "  Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}\n" +
+    "  Decision: Union(Buy, Hold, Sell)\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  d:\n    kind: code\n    input:\n      x: ${input.s}\n    output: Decision\n    code: return null\n" +
+    rest
+  );
+}
+
+/** A flow whose CODE node `d` outputs a `Decision` and asserts `assertion`. */
+const decisionAssertFlow = (assertion: string) =>
+  decisionFlow(`    asserts:\n      - ${assertion}\noutput: \${d.output}\n`);
+
+test("a member-only field in a node assert is a load error", () => {
+  expect(loadError(() => assembleText(decisionAssertFlow("output.qty > 0"))).message).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'd' assert: reference ${output.qty} reads field 'qty', which only union members with " +
+      "action buy, sell have; check the member first with `isinstance(output, <Type>) and ...`",
+  );
+});
+
+test("a shared field in a node assert loads", () => {
+  assembleText(decisionAssertFlow("output.note != ''"));
+});
+
+test("a member-only field in a flow assert is a load error", () => {
+  const text = decisionFlow("asserts:\n  - d.output.qty > 0\noutput: ${d.output}\n");
+  expect(loadError(() => assembleText(text)).message).toBe(
+    "assert 'd.output.qty > 0': reference ${d.output.qty} reads field 'qty', which only union members with " +
+      "action buy, sell have; check the member first with `isinstance(d.output, <Type>) and ...`",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
   { id: "load-types/compose_union_field_access__loop_carrying_a_union_keeps_the_non_record_error", call: assembled },
+  { id: "load-types/compose_union_field_access__member_only_field_in_a_flow_assert", call: assembled },
+  { id: "load-types/compose_union_field_access__member_only_field_in_a_node_assert", call: assembled },
+  { id: "load-types/compose_union_field_access__shared_field_in_a_node_assert_loads", call: assembled },
 ])("assemble: $id", runCase);

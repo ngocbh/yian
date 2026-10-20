@@ -12,19 +12,18 @@
  * `test_isinstance_in_a_human_input_question_is_a_located_load_error`; and the load halves (the
  * type tables) of `test_isinstance_in_a_node_input`,
  * `test_isinstance_in_a_searched_case_is_first_true_wins`, `test_isinstance_in_a_node_assert`,
- * `test_isinstance_in_a_flow_output`, `test_isinstance_in_a_loop_while_runs_several_iterations`,
+ * `test_isinstance_in_flow_asserts_fills_start_and_end`, `test_isinstance_in_a_flow_output`,
+ * `test_isinstance_in_a_loop_while_runs_several_iterations`,
  * `test_isinstance_in_defs_and_nested_inline_children` (the inline child),
  * `test_isinstance_in_a_map_per_item_input`, `test_isinstance_in_a_call_directive_argument`,
- * `test_isinstance_in_a_loop_seed_and_until` and `test_isinstance_in_a_case_on`. A `defs:` entry
- * a row calls is a hand-built child (`handChild`) with the def's signature.
+ * `test_isinstance_in_a_loop_seed_and_until` and `test_isinstance_in_a_case_on`; and
+ * `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error` and
+ * `test_isinstance_in_a_loop_nodes_asserts_is_a_load_error` (the node-assert check). A `defs:`
+ * entry a row calls is a hand-built child (`handChild`) with the def's signature.
  *
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
  * `isinstanceMembers` test is ported with the narrowing tests).
- *
- * Later (T3-20): `test_isinstance_in_flow_asserts_fills_start_and_end` (START/END take their
- * tables from the lowered flow asserts); `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error`
- * and `test_isinstance_in_a_loop_nodes_asserts_is_a_load_error` (the node-assert check).
  *
  * Later (T3-22): the `defs child` site of `test_an_unknown_type_name_is_a_located_load_error` and
  * the `defs:` half of `test_isinstance_in_defs_and_nested_inline_children` (both need the child's
@@ -40,7 +39,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { type CompiledFlow, END_ID } from "../../src/compile/model.ts";
+import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import {
   collectConstructorNames,
@@ -506,6 +505,12 @@ describe("type tables (load halves)", () => {
     expectTypes(loadedNodes(NODE_ASSERT_FLOW).get("step"), { Buy: BUY, Order: ORDER });
   });
 
+  test("test_isinstance_in_flow_asserts_fills_start_and_end", () => {
+    const nodes = loadedNodes(FLOW_ASSERT_FLOW);
+    expectTypes(nodes.get(START_ID), { Order: ORDER });
+    expectTypes(nodes.get(END_ID), { Buy: BUY });
+  });
+
   test("test_isinstance_in_a_flow_output", () => {
     expectTypes(loadedNodes(FLOW_OUTPUT_FLOW).get(END_ID), { Buy: BUY });
   });
@@ -674,6 +679,29 @@ output: \${each.output}
   expect(errorLine(error)).toBe(lineOf(text, "over:"));
 });
 
+test("isinstance in a call node's asserts is a located load error", () => {
+  const text = CHILD_FLOWS.replace("    call: classify\n", "    call: classify\n    asserts:\n      - isinstance(output, bool)\n");
+
+  const error = loadError(() => loadedNodes(text, CLASSIFY));
+
+  expect(error.message).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'named' assert 'isinstance(output, bool)': isinstance in a call node's asserts is not " +
+      "supported; assert inside the child flow",
+  );
+  expect(errorLine(error)).toBe(lineOf(text, "isinstance(output, bool)"));
+});
+
+test("isinstance in a loop node's asserts is a load error", () => {
+  const text = LOOP_FLOW.replace("    max: 10\n", "    max: 10\n    asserts:\n      - isinstance(output, Buy)\n");
+
+  expect(loadError(() => loadedNodes(text, BUMP)).message).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'loop' assert 'isinstance(output, Buy)': isinstance in a loop node's asserts is not " +
+      "supported; assert inside the child flow",
+  );
+});
+
 test("isinstance in a human input question is a located load error", () => {
   // The human-input node's own build refuses the question before any type table is filled.
   const text =
@@ -710,4 +738,6 @@ test.each<CaseRow>([
     id: "load-types/compose_isinstance_load__isinstance_in_map_over",
     call: assembledWith({ one: def("  x: !int\n", null) }),
   },
+  { id: "load-types/compose_isinstance_load__isinstance_in_a_call_nodes_asserts", call: assembledWith(CLASSIFY) },
+  { id: "load-types/compose_isinstance_load__isinstance_in_a_loop_nodes_asserts", call: assembledWith(BUMP) },
 ])("assemble: $id", runCase);

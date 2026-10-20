@@ -86,15 +86,14 @@
  * `load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list`, and the ok
  * cases `load-map-call/engine_inline_composite_bodies__private_prefix_in_a_node_id_loads` and
  * `load-map-call/engine_templates_load__inline_composites_template_loads` (no mirror of
- * `tests/engine/test_templates_load.py` yet).
+ * `tests/engine/test_templates_load.py` yet), and the node-assert check's
+ * `load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts`.
  *
  * Later (T3-18, reference validation):
  * `test_inline_child_scope_is_closed_and_redacts_private_identity`,
  * `test_inline_map_child_keeps_item_namespace_closed`,
  * `test_inline_sibling_keeps_outer_bad_binding_range`,
  * `test_inline_child_bad_output_uses_retained_output_range`.
- *
- * Later (T3-20): `test_inline_map_rejects_outer_asserts_without_private_identity`.
  *
  * Later (T3-22, the callable scope and def assembly):
  * `test_def_assembly_cursor_fallback_restores_only_node_surfaces`,
@@ -2058,6 +2057,40 @@ output: \${each.output}
   );
 });
 
+test("an inline MAP rejects outer asserts without private identity", () => {
+  const error = loadError(() =>
+    assembleText(`id: inline-map-asserts
+name: inline_map_asserts
+input:
+  items: !list(str)
+nodes:
+  each:
+    kind: map
+    over: \${input.items}
+    input:
+      value: \${item}
+    asserts:
+      - output != null
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.value}
+        output: str
+    output: \${echo.output}
+output: \${each.output}
+`),
+  );
+
+  expect(error.message).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'each': `asserts:` is not allowed on a mapped call (`kind: map`) — assert inside the def, " +
+      "or on a downstream node",
+  );
+  expect(error.message).not.toContain(INLINE_FLOW_PREFIX);
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -2078,4 +2111,5 @@ test.each<CaseRow>([
   { id: "load-map-call/engine_inline_composite_bodies__inline_signature_self_cycle", call: assembled },
   { id: "load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list", call: assembled },
   { id: "load-map-call/engine_templates_load__inline_composites_template_loads", call: assembled },
+  { id: "load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts", call: assembled },
 ])("assemble: $id", runCase);

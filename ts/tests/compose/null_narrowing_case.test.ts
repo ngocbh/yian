@@ -14,41 +14,53 @@
  * `::test_an_on_case_over_an_optional_union_narrows_its_branch_as_before` (3),
  * `::test_a_null_check_keeps_an_isinstance_narrowing_of_the_branch` (4),
  * `::test_a_null_check_keeps_a_nullable_isinstance_narrowing_of_the_branch` (8),
- * `::test_a_null_check_case_under_an_isinstance_branch_keeps_its_narrowing` (2) and
- * `::test_a_null_check_alone_does_not_prove_a_type`.
+ * `::test_a_null_check_case_under_an_isinstance_branch_keeps_its_narrowing` (2),
+ * `::test_a_null_check_alone_does_not_prove_a_type`,
+ * `::test_an_assert_read_after_a_null_check_is_guarded_by_it`,
+ * `::test_a_node_assert_read_after_a_null_check_names_the_non_null_type` and
+ * `::test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
  *
  * Changed: the guard and the facts compare with `toStrictEqual`, which also compares classes, and
  * types with `typeEquals`. The `take` and `take_each` defs are built by hand (`handChild`: the def's
  * parameters read from its `input:` text with the flow's typedefs, its node `d` with its output
  * contract), since def bodies load in T3-22; the CODE references are TS's
- * (`./fixtures/compose_codefns.ts:echo`). The pinned `compose_null_narrowing_case__*` case sits in
- * `narrowing_core.test.ts`'s table.
+ * (`./fixtures/compose_codefns.ts:echo`).
  *
- * Later (T3-20, the asserts validators): `test_an_assert_read_after_a_null_check_is_guarded_by_it`
- * (`narrows` and root base types), `test_a_node_assert_read_after_a_null_check_names_the_non_null_type`
- * and `test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
+ * TS-only: the harvested `load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read`
+ * and `load-types/compose_null_narrowing_case__a_flow_assert_null_check_narrows_its_read`, pinned at
+ * the end.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { Holds, NOTHING, NotNullCheck } from "../../src/compose/helpers/condition_guards.ts";
-import { type BaseTypeOf, checkedRefs, Exact, guardEnv } from "../../src/compose/helpers/narrowing_facts.ts";
+import {
+  type BaseTypeOf,
+  checkedRefs,
+  Exact,
+  guardedReadTypes,
+  guardEnv,
+} from "../../src/compose/helpers/narrowing_facts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
+import { narrows, rootBaseType } from "../../src/compose/validate/asserts.ts";
 import { computeNarrowing } from "../../src/compose/validate/narrowing.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import {
+  assembled,
   assembleText,
+  type CaseRow,
   caseRegistry,
   type ChildFlows,
   handChild,
   loadError,
   parametersFromYaml,
+  runCase,
 } from "./declarations.ts";
 
 const ECHO = "./fixtures/compose_codefns.ts:echo";
@@ -363,3 +375,82 @@ test("a case param read after a null check sees the value as not null", () => {
   expect(narrowing.paramEnv("gate", after)).toStrictEqual(new Map([["x.output", notNull]]));
   expect(narrowing.paramEnv("gate", before)).toStrictEqual(new Map());
 });
+
+// --------------------------------------------------------------------------- //
+// Asserts
+// --------------------------------------------------------------------------- //
+
+test("an assert read after a null check is guarded by it", () => {
+  const registry = readTypedefs({ Item: { qty: "int" } });
+  const contract = new ValueContract(readType("Optional(Item)", registry));
+  const check = new NotNullCheck("output");
+  expect(narrows(check, "output", [contract])).toBe(true);
+  expect(narrows(check, "output", [new ValueContract(readType("Item", registry))])).toBe(false);
+  // A root that may be skipped is nullable whatever its contract says.
+  expect(narrows(check, "output", [new ValueContract(readType("Item", registry))], true)).toBe(true);
+
+  const baseTypeOf = rootBaseType(new Map([["output", contract]]));
+  const tree = parseCondition("output.qty > 0 or output != null and output.qty > 1");
+  const [[unguarded], , [guarded, guard]] = checkedRefs(tree, baseTypeOf, registry) as [
+    [string, unknown],
+    unknown,
+    [string, Holds],
+  ];
+  expect(unguarded).toBe("output.qty");
+  expect(guarded).toBe("output.qty");
+  expect(guard).toStrictEqual(new Holds(check, true));
+  const candidates = guardedReadTypes(guarded, guard, baseTypeOf, registry);
+  expect(candidates.length).toBe(1);
+  const [narrowed, fields, base] = candidates[0]!;
+  expect(typeEquals(narrowed, readType("Item", registry))).toBe(true);
+  expect([fields, base]).toEqual([["qty"], "output"]);
+});
+
+test("a node assert read after a null check names the non-null type", () => {
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n  Item:\n    qty: int\n" +
+    "input:\n  s: !Optional(str)\n" +
+    "nodes:\n" +
+    `  x:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: Optional(Item)\n" +
+    '    asserts:\n      - "output != null and output.nosuch > 0"\n' +
+    "output: ${x.output}\n";
+  expect(loadMessage(text, {})).toBe(
+    "flow has invalid node asserts:\n" +
+      "  node 'x' assert: reference ${output.nosuch} reads field 'nosuch', which Item doesn't " +
+      "have; output is Item here, by the checks before this read",
+  );
+});
+
+test("a flow assert null check narrows a skippable producer of a non-null type", () => {
+  // `d` declares `Item`, but it may be skipped, so the assert can read it as null.
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n  Item:\n    qty: int\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  route:\n    kind: case\n    cases:\n" +
+    "      - when: \"input.s == 'go'\"\n        then: d\n" +
+    "    else: e\n" +
+    `  d:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: Item\n" +
+    `  e:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: str\n" +
+    "output: ${input.s}\n" +
+    'asserts:\n  - "d.output != null and d.output.nosuch > 0"\n';
+  expect(loadMessage(text, {})).toBe(
+    "assert 'd.output != null and d.output.nosuch > 0': reference ${d.output.nosuch} reads " +
+      "field 'nosuch', which Item doesn't have; d.output is Item here, by the checks before " +
+      "this read",
+  );
+});
+
+// --------------------------------------------------------------------------- //
+// Harvested conformance cases
+// --------------------------------------------------------------------------- //
+
+test.each<CaseRow>([
+  { id: "load-types/compose_null_narrowing_case__a_flow_assert_null_check_narrows_its_read", call: assembled },
+  { id: "load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read", call: assembled },
+])("assemble: $id", runCase);

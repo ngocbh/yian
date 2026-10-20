@@ -447,6 +447,48 @@ test("a call after an unsafe one is validated only once the unsafe call ran", as
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ToolCheckError"]);
 });
 
+test("a reported error from the argument check is the call's error result, and the loop goes on", async () => {
+  const log: string[] = [];
+  const validator: StandardSchemaV1 = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () => {
+        throw new ReportedToolError("no such file");
+      },
+    },
+  };
+  const a = gated("a", log, { safe: false, parametersValidator: validator });
+  const model = new ScriptedModel([callsReply(["a"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool }), ["a"]);
+
+  expect((await run.running).value).toBe("done");
+  expect(log).toEqual([]);
+  expect(toolResults(model, 1)).toEqual([result(0, "a", "no such file", true)]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a ReportedToolError"]);
+  expect(run.interactions.slice(0, 2)).toEqual([
+    new ToolCallInteraction("a", {}),
+    new ToolResultInteraction("a", "no such file"),
+  ]);
+});
+
+test("nothing in a group starts until the group is formed", async () => {
+  const log: string[] = [];
+  const a = gated("a", log);
+  const b = gated("b", log, { parametersValidator: refusing("b", log) });
+  const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"]);
+
+  await a.entered;
+  // B's check ran before A started; it failed, so A runs as its own group.
+  expect(log).toEqual(["b validate", "a start"]);
+  a.resolve("a result");
+
+  expect(await rejected(run.running)).toBeInstanceOf(ToolCheckError);
+  expect(log).toEqual(["b validate", "a start", "a end"]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ToolCheckError"]);
+});
+
 test("a failing call aborts its siblings, and the node rejects with it once all settled", async () => {
   const log: string[] = [];
   const failure = new Error("b boom");
@@ -492,6 +534,46 @@ test("a failing call aborts its siblings, and the node rejects with it once all 
     "finished c Error",
     "finished a TypeError",
   ]);
+  expect(model.requests).toHaveLength(1);
+});
+
+test.each([
+  ["the context's signal", (stop: AbortSignal) => ({ toolset: (tools: ToolSet) => tools, signal: stop })],
+  [
+    "the tool set's run signal",
+    (stop: AbortSignal) => ({ toolset: (tools: ToolSet) => tools.forRun("r1", { signal: stop }), signal: undefined }),
+  ],
+] as const)("a stop after a group's first failure wins over it (%s)", async (_label, wiring) => {
+  const log: string[] = [];
+  const stop = new AbortController();
+  const failure = new Error("b boom");
+  const reason = new Error("stop now");
+  const release = Promise.withResolvers<void>();
+  const aAborted = Promise.withResolvers<void>();
+  const a = gated("a", log, {
+    onAbort: async (signal) => {
+      aAborted.resolve();
+      await release.promise;
+      throw signal.reason;
+    },
+  });
+  const b = gated("b", log);
+  const { toolset, signal } = wiring(stop.signal);
+  const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, toolset(new ToolSet({ a: a.tool, b: b.tool })), ["a", "b"], { signal });
+
+  await a.entered;
+  await b.entered;
+  b.reject(failure);
+  await aAborted.promise;
+  // `a` is still pending, aborted by the failure, when the node stops.
+  stop.abort(reason);
+  await flush();
+  expect(run.isSettled()).toBe(false);
+  release.resolve();
+
+  expect(await rejected(run.running)).toBe(reason);
+  expect(run.interactions).toEqual([new ToolCallInteraction("a", {}), new ToolCallInteraction("b", {})]);
   expect(model.requests).toHaveLength(1);
 });
 

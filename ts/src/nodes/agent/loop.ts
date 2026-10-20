@@ -179,10 +179,9 @@ type CallCheck =
  *   ungranted `AgentLoopError`, or a failed argument check.
  */
 async function runToolCalls(turn: ToolTurn, calls: readonly ToolCallPart[]): Promise<void> {
-  const { ctx } = turn;
   let group: PlannedCall[] = [];
   for (const [index, call] of calls.entries()) {
-    checkStopped(ctx);
+    checkNodeStopped(turn);
     // A host interrupt is checked here once steering is ported, after the stop (Python's per-call
     // position); nothing of `group` has started yet, so it is skipped whole.
     const checked = await checkCall(turn, call, index);
@@ -203,7 +202,9 @@ async function runToolCalls(turn: ToolTurn, calls: readonly ToolCallPart[]): Pro
 
 /**
  * Check one call before it may start: its grant, then its arguments and whether it is safe to run
- * beside others. A check the stop cut short throws the stop's reason.
+ * beside others. A check the stop cut short throws the stop's reason. A `ReportedToolError` from
+ * the argument check plans an unsafe call that rejects with it, so it runs alone and the model
+ * reads it as the call's error result.
  */
 async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Promise<CallCheck> {
   const { ctx, toolset, skills } = turn;
@@ -224,7 +225,11 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     checked = await toolset.validate(call.name, args, { signal: ctx.signal });
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
-    checkStopped(ctx);
+    checkNodeStopped(turn);
+    // Python checks the arguments inside the call, where a reported error is the call's result.
+    if (isReportedToolError(error)) {
+      return { planned: { call, index, invoke: () => Promise.reject(error) }, safe: false };
+    }
     return { error, granted: true };
   }
   // Unlike a TOOL node's id, this one is not stable across resume: a resumed AGENT asks its model
@@ -250,7 +255,7 @@ async function failCall(
   failed: { readonly error: unknown; readonly granted: boolean },
 ): Promise<never> {
   const { ctx, live } = turn;
-  checkStopped(ctx);
+  checkNodeStopped(turn);
   // A host interrupt is checked here too once steering is ported, as for any call not started.
   recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
   if (failed.granted) {
@@ -273,14 +278,15 @@ async function failCall(
 async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<void> {
   if (group.length === 0) return;
   const { ctx, live } = turn;
-  checkStopped(ctx);
+  checkNodeStopped(turn);
   // A host interrupt is checked here once steering is ported: it skips from the group's first call.
   const signal = nodeSignal(turn);
   const controller = new AbortController();
   const relay = () => controller.abort(signal!.reason);
-  if (signal?.aborted) relay();
   // Removed once the group settles, so a long loop leaves no listeners on the node's signal.
   signal?.addEventListener("abort", relay, { once: true });
+  // Set in a callback, so declared wide: a `null` initializer would narrow it for good.
+  let failure = null as { error: unknown } | null;
   try {
     for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
     const outcomes: Promise<{ value: unknown; reported: boolean } | null>[] = [];
@@ -302,7 +308,8 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
           (value) => ({ value, reported: false }),
           (error) => {
             if (isReportedToolError(error)) return { value: error, reported: true };
-            // Only the first failure in time aborts; aborting again changes nothing.
+            // Only the first failure in time is kept and aborts; aborting again changes nothing.
+            failure ??= { error };
             controller.abort(error);
             return null;
           },
@@ -313,10 +320,9 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
       if (!started) break;
     }
     const settled = await Promise.all(outcomes);
-    // A stop pending when the calls settle wins over their results, a reported error included.
-    checkStopped(ctx);
-    // Aborted by the first failure, or by the tool set's run signal when the context has none.
-    controller.signal.throwIfAborted();
+    // A stop pending when the calls settle wins over the first failure and over their results.
+    checkNodeStopped(turn);
+    if (failure !== null) throw failure.error;
     for (const [position, outcome] of settled.entries()) {
       const { call } = group[position]!;
       const { value, reported } = outcome!;
@@ -333,6 +339,11 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
 /** The node's stop signal: the context's, else the tool set's run signal. */
 function nodeSignal(turn: ToolTurn): AbortSignal | undefined {
   return turn.ctx.signal ?? turn.toolset.signal;
+}
+
+/** Throw the node's stop reason if it stopped, whichever signal carries the stop. */
+function checkNodeStopped(turn: ToolTurn): void {
+  nodeSignal(turn)?.throwIfAborted();
 }
 
 /** One call's identity on its brackets. */

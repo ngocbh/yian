@@ -7,29 +7,33 @@
  * Ported: `test_a_tag_does_not_fill_in_a_missing_field`,
  * `test_tagged_parameters_read_required_and_default_from_the_value`,
  * `test_source_free_inputs_accept_the_parenthesized_spelling`, and the declarations of
- * `test_a_tagged_default_must_fit_its_tag`, read once rather than at each placement. An unquoted
- * date is text (rule `dates`), so `d: !str 2026-01-01` loads where Python asks for quotes.
+ * `test_a_tagged_default_must_fit_its_tag`, read once. An unquoted date is text (rule `dates`), so
+ * `d: !str 2026-01-01` loads where Python asks for quotes.
+ *
+ * Ported through `loadFlow`: the placements of `test_a_tagged_default_must_fit_its_tag`,
+ * `test_a_tagged_default_with_a_non_string_key_is_a_load_error` (TS reads `{true: 1}`'s key as
+ * `"true"` and records it in `document.nonTextKey`, which the loader refuses),
+ * `test_tagged_parameter_origins_point_at_the_declaration` and
+ * `test_a_single_node_input_list_shows_the_tagged_spelling`.
  *
  * TS-only: the harvested-case table, which makes the loader's call on the `input:` declarations
  * of the conformance cases these readers decide, comparing the message and the last frame.
  *
- * Later (T3-22): the `load_flow` placements and runs
- * (`test_tagged_inputs_load_and_run_with_their_defaults`,
- * `test_a_tagged_input_without_a_value_is_required`), the origins
- * (`test_tagged_parameter_origins_point_at_the_declaration`), the single-node `input:` list
- * (`test_a_single_node_input_list_shows_the_tagged_spelling`), and
- * `test_a_tagged_default_with_a_non_string_key_is_a_load_error`: TS reads `{true: 1}`'s key as
- * `"true"` and records it in `document.nonTextKey`, which the loader refuses, so
- * `readSourceParameters` alone accepts it.
+ * Later (T4-8): `test_tagged_inputs_load_and_run_with_their_defaults` and
+ * `test_a_tagged_input_without_a_value_is_required` (they run the flow).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { readFlowInputs } from "../../src/compose/helpers/types.ts";
+import { START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import type { StartNode } from "../../src/nodes/start/node.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { isListKind } from "../../src/typesys/values.ts";
-import { type CaseRow, inputsAt, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import { type CaseRow, inputsAt, loadError, loadErrorAsync, parametersFromYaml, runCase } from "./declarations.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -50,9 +54,46 @@ cfg: !Cfg {kind: cfg, a: 1}
 s: !str \${x}
 `;
 
-/** Indent each line of `text` by two spaces. */
-function indented(text: string): string {
-  return text.replace(/^(?=.)/gm, "  ");
+/** Indent each line of `text` by `by` (default two spaces). */
+function indented(text: string, by = "  "): string {
+  return text.replace(/^(?=.)/gm, by);
+}
+
+const HEADER = `\
+id: tagged_inputs
+name: tagged_inputs
+typedefs:
+  Cfg: {kind: Literal(cfg), a: int}
+  Message: {role: str, content: str}
+`;
+
+const WORKER = "kind: code\noutput: object\ncode: return dict(inputs)\n";
+
+/** Bind every declared input by name, as a multi-node body must. */
+function workerBindings(declarations: string): string {
+  const names = declarations.split("\n").filter((line) => line !== "").map((line) => line.split(":")[0]);
+  return "input:\n" + names.map((name) => `  ${name}: \${input.${name}}\n`).join("");
+}
+
+const PLACEMENTS = ["root", "definition", "flat-definition", "compact"] as const;
+
+/** Spell one flow whose `input:` holds `declarations` at `placement`. */
+function flowAt(placement: (typeof PLACEMENTS)[number], declarations: string): string {
+  const block = indented(declarations);
+  if (placement === "root") {
+    const worker = WORKER + workerBindings(declarations);
+    return `${HEADER}input:\n${block}nodes:\n  worker:\n${indented(worker, "    ")}output: \${worker.output}\n`;
+  }
+  if (placement === "compact") return `${HEADER}input:\n${block}${WORKER}`;
+  const caller =
+    "input:\n  qty: !int\nnodes:\n  invoke:\n    kind: call\n    call: child\n" +
+    "    input:\n      qty: ${input.qty}\noutput: ${invoke.output}\n";
+  const child =
+    placement === "definition"
+      ? `input:\n${block}nodes:\n  worker:\n${indented(WORKER + workerBindings(declarations), "    ")}` +
+        "output: ${worker.output}\n"
+      : `input:\n${block}${WORKER}`;
+  return `${HEADER}defs:\n  child:\n${indented(child, "    ")}${caller}`;
 }
 
 describe("tagged declarations", () => {
@@ -100,6 +141,50 @@ describe("tagged declarations", () => {
   ])("a tagged default must fit its tag: %p", (declaration, fragment) => {
     const text = `input:\n  qty: !int\n  ${declaration}\n`;
     expect(loadError(() => parametersFromYaml(text, REG)).message).toContain(fragment);
+  });
+
+  describe.each(PLACEMENTS)("at the %s placement", (placement) => {
+    test.each([
+      ["cfg: !Cfg {a: 1}", "'cfg': the value is not a valid Cfg: record missing required fields: [\"kind\"]"],
+      ["n: !int(1..12) 13", "'n': `13` is not a valid int(1..12)"],
+    ])("a tagged default must fit its tag: %p", async (declaration, fragment) => {
+      const error = await loadErrorAsync(loadFlow(flowAt(placement, `qty: !int\n${declaration}\n`)));
+      expect(error.message).toContain(fragment);
+    });
+
+    test("a tagged default with a non-string key is a load error", async () => {
+      const error = await loadErrorAsync(loadFlow(flowAt(placement, "qty: !int\nflags: !object {true: 1}\n")));
+      expect(error.message).toContain("the key `true` was read by YAML as a boolean");
+    });
+  });
+
+  test("tagged parameter origins point at the declaration", async () => {
+    const text = `${HEADER}input:\n  qty: !int\n  history: !list(Message) []\n`;
+    const flow = await loadFlow(text + WORKER);
+    const cursor = SourceDocument.parse(text).root.child("input");
+    const resolver = flow.originResolver!;
+    const start = flow.compiled.nodes.get(START_ID) as StartNode;
+    const parameters = new Map(start.params!.map((parameter) => [parameter.name, parameter]));
+    const history = parameters.get("history")!;
+    expect(resolver.resolve(history.origin!)!.range).toEqual(cursor.keyRangeOf("history")!);
+    for (const origin of [history.contract!.origins.default, history.defaultOrigin]) {
+      expect(resolver.resolve(origin!)!.range).toEqual(cursor.child("history").range!);
+    }
+    const qty = parameters.get("qty")!;
+    expect(resolver.resolve(qty.contract!.origins.default!)!.range).toEqual(cursor.child("qty").range!);
+    expect(qty.defaultOrigin).toBeNull();
+  });
+
+  test.each([
+    ["compact", `id: f\nname: f\ninput: [topic]\n${WORKER}`, "compact (single-node) flow: "],
+    [
+      "flat-definition",
+      `id: f\nname: f\ndefs:\n  child:\n    input: [topic]\n${indented(WORKER, "    ")}nodes: {}\n`,
+      "defs entry 'child': single-node ",
+    ],
+  ])("a single-node input list shows the tagged spelling: %s", async (_placement, text, prefix) => {
+    const error = await loadErrorAsync(loadFlow(text));
+    expect(error.message).toContain(prefix + "`input:` must be a param map (`name: !TYPE`, e.g. `topic: !str`)");
   });
 
   test("an unquoted date fits a str tag, as text", () => {

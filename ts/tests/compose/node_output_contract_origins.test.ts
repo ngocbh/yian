@@ -23,26 +23,31 @@
  * type precedes a CODE syntax error`: the CODE check runs after assembly, so `build`
  * throws the output-type error and compiles nothing.
  *
- * Later (T3-22, T4-8):
- * `test_nested_output_failure_selects_the_exact_contract_field`,
- * `test_root_output_failure_selects_the_contract_root` and
- * `test_scalar_list_output_failure_falls_back_to_the_contract_root`.
- * Later (T3-22): `test_multi_node_def_output_contract_uses_the_nested_node_site`,
+ * Ported through `loadFlow` (origins resolve through `loaded.originResolver`):
+ * `test_multi_node_def_output_contract_uses_the_nested_node_site`,
  * `test_flat_def_output_contract_uses_the_projected_def_output_site`,
  * `test_external_alias_rebases_every_output_contract_origin` and the fingerprint half of the
  * formatting row.
- * Later (T3-16, T3-22, T4):
+ *
+ * Later (T4-8):
+ * `test_nested_output_failure_selects_the_exact_contract_field`,
+ * `test_root_output_failure_selects_the_contract_root` and
+ * `test_scalar_list_output_failure_falls_back_to_the_contract_root`.
+ * Later (T3-16, T4-8):
  * `test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field`.
  */
 
 import { expect, spyOn, test } from "bun:test";
 
+import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { OriginRef } from "../../src/diagnostics.ts";
+import { OriginRef, type OriginResolver } from "../../src/diagnostics.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
@@ -80,10 +85,17 @@ function contractOf(
   return { contract: contract as ValueContract, builder };
 }
 
+/** Where an origin resolves: an assembly's catalog builder or a loaded flow's resolver. */
+type Sites = SourceCatalogBuilder | OriginResolver;
+
+/** Resolve `origin` through `sites`. */
+const resolveIn = (sites: Sites, origin: OriginRef) =>
+  "resolveRegistered" in sites ? sites.resolveRegistered(origin) : sites.resolve(origin);
+
 /** Expect `origin` to resolve to exactly `cursor`'s value occurrence. */
-function expectSite(builder: SourceCatalogBuilder, origin: OriginRef | null | undefined, cursor: SourceCursor): void {
+function expectSite(sites: Sites, origin: OriginRef | null | undefined, cursor: SourceCursor): void {
   expect(origin).toBeInstanceOf(OriginRef);
-  const frame = builder.resolveRegistered(origin!);
+  const frame = resolveIn(sites, origin!);
   expect(frame).not.toBeNull();
   expect(frame!.text).toBe(cursor.document!.text);
   expect(frame!.range).toEqual(cursor.range!);
@@ -95,12 +107,22 @@ function entriesOf(contract: ValueContract): Map<string, OriginRef> {
 }
 
 /** Expect the declaration root and the nested profile fields to keep their sites. */
-function expectProfileSites(builder: SourceCatalogBuilder, contract: ValueContract, output: SourceCursor): void {
+function expectProfileSites(sites: Sites, contract: ValueContract, output: SourceCursor): void {
   const entries = entriesOf(contract);
-  expectSite(builder, contract.origins.default, output);
-  expectSite(builder, entries.get("profile"), output.child("profile"));
-  expectSite(builder, entries.get("profile.age"), output.child("profile").child("age"));
+  expectSite(sites, contract.origins.default, output);
+  expectSite(sites, entries.get("profile"), output.child("profile"));
+  expectSite(sites, entries.get("profile.age"), output.child("profile").child("age"));
 }
+
+/** Return `node`'s exact output contract. */
+function exactContract(node: { outputContract: unknown }): ValueContract {
+  expect((node.outputContract as object | null)?.constructor).toBe(ValueContract);
+  return node.outputContract as ValueContract;
+}
+
+/** Return the child flow CALL node `nodeId` of `loaded` bakes in. */
+const childOf = (loaded: ComposedFlow, nodeId: string) =>
+  (loaded.compiled.nodes.get(nodeId) as CallNode).child as CompiledFlow;
 
 test("full code output compiles root and nested contract origins", () => {
   const output = SourceDocument.parse(NESTED_OUTPUT_FLOW, "nested.yaml")
@@ -228,7 +250,7 @@ output: \${ask.output}
   }
 });
 
-test("formatting-only relocation preserves output origins", () => {
+test("formatting-only relocation preserves output origins and fingerprint", async () => {
   const relocatedText = `id: nested-output-contract
 name: nested-output-contract
 
@@ -255,6 +277,9 @@ output: \${emit.output}
   const relocatedOutput = outputOf(relocatedText);
 
   expect(relocated.contract.origins).toEqual(baseline.contract.origins);
+  const fingerprint = async (text: string) =>
+    flowFingerprint((await loadFlow(text, { sourceLabel: "relocated.yaml" })).compiled);
+  expect(await fingerprint(relocatedText)).toBe(await fingerprint(NESTED_OUTPUT_FLOW));
   expectProfileSites(baseline.builder, baseline.contract, baselineOutput);
   expectProfileSites(relocated.builder, relocated.contract, relocatedOutput);
   expect(relocatedOutput.range).not.toEqual(baselineOutput.range);
@@ -293,6 +318,113 @@ output: \${invoke.output}
 
   expect(contract?.constructor).toBe(ValueContract);
   expectProfileSites(builder, contract as ValueContract, output);
+});
+
+test("a multi-node def's output contract uses the nested node site", async () => {
+  // A full definition keeps its leaf node's physical output declaration.
+  const text = `id: full-def-output-contract
+name: full-def-output-contract
+defs:
+  child:
+    nodes:
+      emit:
+        kind: code
+        code: |-
+          return {"profile": {"age": 7}}
+        output:
+          profile:
+            age: int
+    output: \${emit.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`;
+  const output = SourceDocument.parse(text, "full-def.yaml")
+    .root.child("defs")
+    .child("child")
+    .child("nodes")
+    .child("emit")
+    .child("output");
+  const loaded = await loadFlow(text, { sourceLabel: "full-def.yaml" });
+  const emit = childOf(loaded, "invoke").nodes.get("emit")!;
+
+  expectProfileSites(loaded.originResolver!, exactContract(emit), output);
+});
+
+test("a flat def's output contract uses the projected def output site", async () => {
+  // A compact definition projects its leaf contract to the def's output field.
+  const text = `id: flat-def-output-contract
+name: flat-def-output-contract
+defs:
+  child:
+    kind: code
+    code: |-
+      return {"profile": {"age": 7}}
+    output:
+      profile:
+        age: int
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`;
+  const output = SourceDocument.parse(text, "flat-def.yaml").root.child("defs").child("child").child("output");
+  const loaded = await loadFlow(text, { sourceLabel: "flat-def.yaml" });
+  const child = childOf(loaded, "invoke").nodes.get("child")!;
+
+  expectProfileSites(loaded.originResolver!, exactContract(child), output);
+});
+
+test("an external alias rebases every output contract origin", async () => {
+  // An alias view owns distinct output keys resolving to canonical child sites.
+  const childText = `id: external-output-child
+name: external-output-child
+nodes:
+  emit:
+    kind: code
+    code: |-
+      return {"profile": {"age": 7}}
+    output:
+      profile:
+        age: int
+output: \${emit.output}
+`;
+  const childDocument = SourceDocument.parse(childText, "child.yaml");
+  const child = await loadFlow(childText, { sourceLabel: "child.yaml" });
+  const parentText = `id: external-output-parent
+name: external-output-parent
+uses:
+  imported: child
+nodes:
+  invoke:
+    kind: call
+    call: imported
+output: \${invoke.output}
+`;
+  const parent = await loadFlow(parentText, { sourceLabel: "parent.yaml", childResolver: () => child });
+  const canonical = exactContract(child.compiled.nodes.get("emit")!);
+  const invoke = parent.compiled.nodes.get("invoke")!;
+  const rebased = exactContract(childOf(parent, "invoke").nodes.get("emit")!);
+  const originsOf = (contract: ValueContract) => [
+    contract.origins.default,
+    ...contract.origins.entries.map(([, origin]) => origin),
+  ];
+  const canonicalOrigins = originsOf(canonical);
+  const rebasedOrigins = originsOf(rebased);
+
+  expect(exactContract(invoke).origins).toEqual(rebased.origins);
+  expect(rebasedOrigins).toHaveLength(canonicalOrigins.length);
+  canonicalOrigins.forEach((canonicalOrigin, index) => {
+    const rebasedOrigin = rebasedOrigins[index];
+    expect(canonicalOrigin).toBeInstanceOf(OriginRef);
+    expect(rebasedOrigin).toBeInstanceOf(OriginRef);
+    expect(rebasedOrigin).not.toEqual(canonicalOrigin);
+    expect(parent.originResolver!.resolve(rebasedOrigin!)).toEqual(child.originResolver!.resolve(canonicalOrigin!));
+  });
+  expectProfileSites(parent.originResolver!, rebased, childDocument.root.child("nodes").child("emit").child("output"));
 });
 
 test("non-string nested output key reports the key site", () => {

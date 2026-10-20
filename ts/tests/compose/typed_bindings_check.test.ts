@@ -22,12 +22,11 @@
  * `test_disjoint_reference_into_a_call_reports_the_binding_not_the_child`,
  * `test_disjoint_item_binding_on_a_named_map_fails_at_its_line`,
  * `test_disjoint_item_binding_on_an_inline_map_fails`, `test_fitting_item_binding_loads`,
- * `test_disjoint_item_field_binding_fails` and `test_item_binding_over_an_untyped_list_loads`.
+ * `test_disjoint_item_field_binding_fails`, `test_item_binding_over_an_untyped_list_loads` and
+ * `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry` prefix comes from the
+ * scope's def loading).
  *
- * Changed: a row whose Python flow calls a `defs:` entry gives `assembleText` that child built by
- * hand (`handChild`: the def's parameters read from its `input:` text, its typed nodes as producers
- * with their output contracts), since def bodies load in T3-22. The error rows pin the whole
- * message where Python matches its start, and the last frame's label and range where Python
+ * Changed: the error rows pin the whole message where Python matches its start, and the last frame's label and range where Python
  * checks the first frame's line. CODE bodies are written in TS and code refs name
  * `./fixtures/compose_codefns.ts`, as the harvested cases write them; load doesn't run them.
  *
@@ -52,8 +51,6 @@
  * block, then those from test files whose mirrors don't exist yet (`test_nested_template_types.py`,
  * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
  *
- * Later (T3-22): `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry`
- * prefix comes from the loader's def loading).
  * Later (T4): `test_unquoted_yes_or_no_literal_for_str_is_text` (2),
  * `test_escaped_template_binds_its_text`, and the run half of
  * `test_optional_into_non_optional_loads_and_fails_at_runtime`.
@@ -72,13 +69,9 @@ import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
-  type ChildFlows,
-  handChild,
   loadError,
-  parametersFromYaml,
   runCase,
 } from "./declarations.ts";
 
@@ -109,13 +102,12 @@ function producer(nodeId: string, value: string, output: string | null): string 
   return `  ${nodeId}:\n    kind: code\n    code: |\n      return ${value}\n${declared}`;
 }
 
-/** Load `text` (with `children` built by hand), expecting a load error, and return it. */
-const loadErrorOf = (text: string, children: ChildFlows = {}): LoadError =>
-  loadError(() => assembleText(text, "flow.yaml", { children }));
+/** Load `text`, expecting a load error, and return it. */
+const loadErrorOf = (text: string): LoadError => loadError(() => assembleText(text));
 
-/** Load `text` with `children` built by hand. */
-const load = (text: string, children: ChildFlows = {}): void => {
-  assembleText(text, "flow.yaml", { children });
+/** Load `text`. */
+const load = (text: string): void => {
+  assembleText(text);
 };
 
 /** Return the last frame of a load error as `[label, [startLine, startCol, endLine, endCol]]`. */
@@ -309,30 +301,35 @@ defs:
     output: \${up.output}
 `;
 
-/** `shout`, built by hand: takes `y: str` and returns its `up` producer's `str`. */
-const shout = () =>
-  handChild({
-    inputs: parametersFromYaml("input:\n  y: !str\n", new Map()),
-    producers: { up: STR },
-    output: "${up.output}",
-  });
-
-test("an inline call source that returns str is disjoint from int", () => {
+test("a disjoint binding inside a defs body names the body", () => {
   const text = `
 id: checked
 name: checked
-${STR_CHILD}nodes:
-  use:
-    kind: code
-    code: ./fixtures/compose_codefns.ts:echo_x
-    input:
-      x: !int call(shout, y=hi)
-output: \${use.output}
+defs:
+  child:
+    nodes:
+      note:
+        kind: code
+        output: str
+        code: |
+          return "hi"
+      use:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: !int \${note.output}
+    output: \${use.output}
+nodes:
+  run:
+    kind: call
+    call: child
+output: \${run.output}
 `;
-  const error = loadErrorOf(text, { shout: shout() });
+  const error = loadErrorOf(text);
 
-  expect(error.message).toBe("node 'use' input 'x': declared int, but the value is str");
-  expect(lastFrame(error)).toEqual(valueFrame(text, "      x: !int call(shout, y=hi)"));
+  expect(error.diagnostic.message).toBe("defs entry 'child': node 'use' input 'x': declared int, but the value is str");
+  // The first frame is the enclosing definition; the last is the binding.
+  expect(lastFrame(error)).toEqual(valueFrame(text, "          x: !int ${note.output}"));
 });
 
 test("a disjoint binding into an inline body fails", () => {
@@ -401,16 +398,8 @@ output: \${loop.output}
 `;
 }
 
-/** `bump`, built by hand: takes `n: int` and returns `{n: <its step's int>}`. */
-const bump = () =>
-  handChild({
-    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
-    producers: { step: INT },
-    output: { n: "${step.output}" },
-  });
-
 test("a disjoint loop seed fails", () => {
-  const error = loadErrorOf(loopFlow("!int ${note.output}"), { bump: bump() });
+  const error = loadErrorOf(loopFlow("!int ${note.output}"));
 
   expect(error.message).toBe("node 'loop' input 'n': declared int, but the value is str");
 });
@@ -438,7 +427,7 @@ output: \${run.output}
 }
 
 test("a disjoint reference into a call reports the binding, not the child", () => {
-  const error = loadErrorOf(callStrChild("!int ${a.output}"), { shout: shout() });
+  const error = loadErrorOf(callStrChild("!int ${a.output}"));
 
   expect(error.message).toBe("node 'run' input 'y': declared int, but the value is str");
 });
@@ -482,18 +471,10 @@ output: \${m.output}
 `;
 }
 
-/** `child`, built by hand: takes `t` of `paramType` and returns its untyped `echo`'s output. */
-const child = (paramType: string) =>
-  handChild({
-    inputs: parametersFromYaml(`input:\n  t: ${paramType}\n`, new Map()),
-    producers: { echo: null },
-    output: "${echo.output}",
-  });
-
 test("a disjoint item binding on a named map fails at its line", () => {
   const text = namedMapFlow("!str ${item}", { over: "${input.words}", paramType: "!str" });
 
-  const error = loadErrorOf(text, { child: child("!str") });
+  const error = loadErrorOf(text);
 
   expect(error.message).toBe("node 'm' input 't': declared str, but the value is int");
   expect(lastFrame(error)).toEqual(valueFrame(text, "      t: !str ${item}"));
@@ -526,7 +507,7 @@ output: \${m.output}
 });
 
 test("a fitting item binding loads", () => {
-  load(namedMapFlow("!int ${item}", { over: "${input.words}", paramType: "!int" }), { child: child("!int") });
+  load(namedMapFlow("!int ${item}", { over: "${input.words}", paramType: "!int" }));
 });
 
 test("a disjoint item field binding fails", () => {
@@ -537,13 +518,13 @@ test("a disjoint item field binding fails", () => {
     input: "recs: !list(Rec)",
   });
 
-  const error = loadErrorOf(text, { child: child("!int") });
+  const error = loadErrorOf(text);
 
   expect(error.message).toBe("node 'm' input 't': declared int, but the value is str");
 });
 
 test("an item binding over an untyped list loads", () => {
-  load(namedMapFlow("!str ${item}", { over: "${opaque.output}", paramType: "!str" }), { child: child("!str") });
+  load(namedMapFlow("!str ${item}", { over: "${opaque.output}", paramType: "!str" }));
 });
 
 // ---------- shownLiteral (TS-only) ----------
@@ -669,9 +650,7 @@ test.each<CaseRow>([
 test.each<CaseRow>([
   {
     id: "load-types/compose_nested_template_types__nested_item_read_is_typed_from_the_map_element",
-    call: assembledWith({
-      child: handChild({ inputs: parametersFromYaml("input:\n  v: !object\n", new Map()), output: "${input.v}" }),
-    }),
+    call: assembled,
   },
   ...["tagged_template_with_a_disjoint_field_fails", "wrong_literal_value_under_a_tag_fails_at_load"].map((name) => ({
     id: `load-types/compose_nested_template_types__${name}`,

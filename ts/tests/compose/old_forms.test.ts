@@ -16,13 +16,18 @@
  * message and the last frame: its flow-input rows read the declarations, and its agent-variable
  * and flow-output rows assemble the flow as the loader calls `assemble`.
  *
- * Later (T3-22): the `load_flow` tests: the bracket typedef and node output, the typed binding
- * text, text without a type that stays plain text, and the untagged definition input.
+ * Ported through `loadFlow`: `test_bracket_typedef_shows_the_parenthesized_spelling`,
+ * `test_bracket_node_output_shows_the_parenthesized_spelling`,
+ * `test_typed_binding_text_shows_the_tag`, `test_typed_binding_text_that_reads_as_words_offers_quoting`
+ * and `test_untagged_input_in_a_definition_shows_the_tag`.
+ *
+ * Later (T4-8): `test_text_without_a_type_on_the_left_is_plain_text` (it runs the flow).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { readFlowInputs, readVariables } from "../../src/compose/helpers/types.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import {
@@ -31,6 +36,7 @@ import {
   type CaseRow,
   inputsAt,
   loadError,
+  loadErrorAsync,
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
@@ -54,7 +60,105 @@ function errorAt(
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(text.split("\n").indexOf(line) + 1);
 }
 
+/** Load `text` with `loadFlow`, expecting `message` located at the line spelled `line`. */
+async function loadErrorAt(text: string, message: string, line: string): Promise<void> {
+  const error = await loadErrorAsync(loadFlow(text));
+  expect(error.message).toContain(message);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(text.split("\n").indexOf(line) + 1);
+}
+
+const NODE_HEADER = "id: old_forms\nname: old_forms\ninput:\n  n: !int\n";
+
+// ---------- bracket types ----------
+
+test("a bracket typedef shows the parenthesized spelling", async () => {
+  const text =
+    "id: f\nname: f\ntypedefs:\n  Buy:\n    action: Literal[buy]\n" +
+    "input:\n  b: !Buy\nkind: code\ncode: return inputs['b']\noutput: Buy\n";
+  await loadErrorAt(text, "types use parentheses: `Literal(buy)`", "    action: Literal[buy]");
+});
+
+test.each([
+  ["Optional[str]", "Optional(str)"],
+  ["int[1, 12]", "int(1..12)"],
+  ["dict[str, int]", "object"],
+])("a bracket node output %p shows the parenthesized spelling", async (declared, spelled) => {
+  const text =
+    NODE_HEADER +
+    "nodes:\n  step:\n    kind: code\n    code: return null\n" +
+    `    output: ${declared}\noutput: \${step.output}\n`;
+  await loadErrorAt(text, `types use parentheses: \`${spelled}\``, `    output: ${declared}`);
+});
+
+// ---------- `name: T = value` bindings ----------
+
+/** A flow whose `use` node binds `name` to `value`. */
+const bindingFlow = (name: string, value: string) => `\
+id: old_bindings
+name: old_bindings
+typedefs:
+  Buy: {action: Literal(buy)}
+  Sell: {action: Literal(sell)}
+input:
+  n: !int
+nodes:
+  size:
+    kind: code
+    code: "return {'qty': inputs['n']}"
+    input:
+      n: \${input.n}
+    output: {qty: int}
+  use:
+    kind: code
+    code: return inputs['${name}']
+    input:
+      ${name}: ${value}
+    output: str
+output: \${use.output}
+`;
+
+/** The advice a binding error ends with, for text meant literally. */
+const quoteHint = (name: string, text: string) => `. If you meant the text, quote it: \`${name}: ${text}\``;
+
+test.each([
+  ["qty", "int = ${size.output.qty}", "`qty: !int ${size.output.qty}`"],
+  ["q", "Optional[int] = ${size.output.qty}", "`q: !Optional(int) ${size.output.qty}`"],
+  ["d", "Union[Buy, Sell] = ${size.output}", "name `Union(Buy, Sell)` in `typedefs:` and tag with its name"],
+  ["s", 'str = "30"', '`s: !str "30"`'],
+  ["s", "str = 30", '`s: !str "30"`'],
+  ["b", "bool = yes", "`b: !bool true` (`yes` is text; write `true`)"],
+  ["n", "int = 5", "`n: !int 5`"],
+  ["b", "Buy = ${size.output}", "`b: !Buy ${size.output}`"],
+  ["e", "int =", "`e: !int ${...}`"],
+  ["t", "int = call(f, x = 1)", "`t: !int call(f, x = 1)`"],
+])("the typed binding text %p: %p shows the tag", async (name, value, spelled) => {
+  await loadErrorAt(
+    bindingFlow(name, value),
+    `binding '${name}': write the type as a tag: ${spelled}` +
+      quoteHint(name, value.includes('"') ? `'${value}'` : `"${value}"`),
+    `      ${name}: ${value}`,
+  );
+});
+
+test("typed binding text that reads as words offers quoting", async () => {
+  await loadErrorAt(
+    bindingFlow("note", "date = tomorrow"),
+    "binding 'note': write the type as a tag: `note: !date tomorrow`" +
+      '. If you meant the text, quote it: `note: "date = tomorrow"`',
+    "      note: date = tomorrow",
+  );
+});
+
 // ---------- flow inputs and agent variables ----------
+
+test("an untagged input in a definition shows the tag", async () => {
+  const text =
+    "id: f\nname: f\ndefs:\n  child:\n    input:\n      qty: int\n" +
+    "    kind: code\n    code: return 1\n    output: int\n" +
+    "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      qty: 1\n" +
+    "output: ${c.output}\n";
+  await loadErrorAt(text, "flow input 'qty': write the type as a tag: `qty: !int`", "      qty: int");
+});
 
 const MESSAGE_REGISTRY = readTypedefs({ Message: { role: "str", content: "str" } });
 
@@ -190,31 +294,8 @@ describe("source-free declarations", () => {
 // ---------- typed flow outputs ----------
 
 /** A flow whose `use` node binds `v` to `${input.n}`, with the flow `output:` lines `output`. */
-function outputFlow(output: string): string {
-  return `\
-id: old_bindings
-name: old_bindings
-typedefs:
-  Buy: {action: Literal(buy)}
-  Sell: {action: Literal(sell)}
-input:
-  n: !int
-nodes:
-  size:
-    kind: code
-    code: "return {'qty': inputs['n']}"
-    input:
-      n: \${input.n}
-    output: {qty: int}
-  use:
-    kind: code
-    code: return inputs['v']
-    input:
-      v: \${input.n}
-    output: str
-${output}
-`;
-}
+const outputFlow = (output: string) =>
+  bindingFlow("v", "${input.n}").replace("output: ${use.output}\n", `${output}\n`);
 
 describe("typed flow outputs", () => {
   test("a typed flow output field's text shows the tag", () => {

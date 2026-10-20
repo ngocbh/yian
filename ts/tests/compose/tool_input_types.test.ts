@@ -5,18 +5,18 @@
  *
  * Ported: `test_a_proven_input_is_stamped_with_its_inferred_type` (11),
  * `test_a_non_finite_number_literal_is_absent`, `test_an_unproven_input_is_absent`,
- * `test_a_case_narrowed_input_is_stamped_with_the_member_record` and
- * `test_a_map_body_tool_reads_the_element_type` (an inline body, registered by the scope).
+ * `test_a_case_narrowed_input_is_stamped_with_the_member_record`,
+ * `test_a_map_body_tool_reads_the_element_type` (an inline body, registered by the scope) and
+ * `test_a_tool_in_a_child_flow_is_stamped` (a `defs:` entry, resolved by the scope).
  *
  * Changed: CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
- *
- * Later (T3-22): `test_a_tool_in_a_child_flow_is_stamped` (the child's own assembly).
  */
 
 import { expect, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { Node } from "../../src/nodes/base.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
@@ -77,6 +77,36 @@ test("a non-finite number literal is absent", () => {
 
 test("an unproven input is absent", () => {
   expect(labels(loadedNodes(toolFlow("${c.output}")).get("t"))).toEqual({});
+});
+
+test("a tool in a child flow is stamped", () => {
+  const nodes = loadedNodes(`
+id: outer
+name: outer
+input:
+  n: !int
+defs:
+  sub:
+    input:
+      m: !int
+    nodes:
+      t:
+        kind: tool
+        tool_id: place_order
+        input:
+          v: \${input.m}
+    output: \${t.output}
+nodes:
+  use:
+    kind: call
+    call: sub
+    input:
+      m: \${input.n}
+output: \${use.output}
+`);
+
+  const child = (nodes.get("use") as CallNode).child as CompiledFlow;
+  expect(labels(child.nodes.get("t"))).toEqual({ v: "int" });
 });
 
 test("a case-narrowed input is stamped with the member record", () => {

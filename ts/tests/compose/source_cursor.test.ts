@@ -9,12 +9,14 @@
  * cases read keys as written, and the wide projection refuses occurrence walks rather than
  * counting key comparisons.
  *
- * Later (T3-22): `test_scalar_style_survives_the_single_node_def_projection`.
+ * Changed: `test_scalar_style_survives_the_single_node_def_projection` calls the loader's
+ * `singleNodeDefCursor`, exported for it (Python's `_single_node_def_cursor`).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { extractInlineBodies } from "../../src/compose/desugar/inline_bodies.ts";
+import { singleNodeDefCursor } from "../../src/compose/loader.ts";
 import { normalizeNodeSignatureCursor } from "../../src/compose/parse/nodes.ts";
 import {
   type ArcSequence,
@@ -1291,6 +1293,14 @@ describe("scalar facts", () => {
 
     expect(inputs.child("plain").scalarStyle).toBe("plain");
     expect(inputs.child("quoted").scalarStyle).toBe("single");
+  });
+
+  test("scalar style survives the single-node def projection", () => {
+    const root = SourceDocument.parse("kind: llm\ninputs: {x: int}\nprompt: 'x = 1'\n").root;
+
+    const node = singleNodeDefCursor("only", root.value as ValueRecord, root).child("only");
+
+    expect(node.child("prompt").scalarStyle).toBe("single");
   });
 
   test("scalarText, keyText and sourceKeyValue read the authored source", () => {

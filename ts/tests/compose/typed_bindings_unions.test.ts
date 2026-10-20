@@ -6,7 +6,8 @@
  * Ported: `test_a_member_over_the_union_loads`, `test_a_declared_union_accepts_one_member`,
  * `test_a_union_disjoint_from_the_declared_type_fails`,
  * `test_a_member_over_another_branchs_member_fails_in_that_branch`,
- * `test_the_else_branch_reads_the_unlisted_members`, `test_each_branch_may_name_its_own_member` and
+ * `test_the_else_branch_reads_the_unlisted_members`, `test_each_branch_may_name_its_own_member`,
+ * `test_a_flow_output_narrows_to_a_member_and_a_call_parent_sees_it` (through `loadFlow`) and
  * `test_an_isinstance_branch_narrows_the_typed_binding_too`; the harvested cases
  * `load-types/compose_typed_bindings_unions__a_union_disjoint_from_the_declared_type_fails`,
  * `…__a_declared_union_accepts_one_member`, `…__a_member_over_another_branchs_member_fails`,
@@ -15,15 +16,13 @@
  *
  * Changed: `test_a_union_disjoint_from_the_declared_type_fails` pins the whole message and its line,
  * where Python matches a fragment.
- *
- * Later (T3-22): `test_a_flow_output_narrows_to_a_member_and_a_call_parent_sees_it` (the def's
- * own output check and its output contract come from def loading).
  */
 
 import { afterEach, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
-import type { Binding } from "../../src/nodes/contracts.ts";
+import type { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, typeEquals } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
@@ -146,6 +145,33 @@ test("each branch may name its own member", () => {
         consumer("on_hold", "hold: !Hold ${decide.output}"),
     ),
   );
+});
+
+test("a flow output narrows to a member and a call parent sees it", async () => {
+  const text =
+    "id: parent\nname: parent\n" +
+    TYPEDEFS +
+    "defs:\n" +
+    "  pick:\n" +
+    "    input:\n      decision: !object\n" +
+    "    nodes:\n" +
+    "      decide:\n" +
+    "        kind: code\n" +
+    "        input:\n          decision: ${input.decision}\n" +
+    "        code: return inputs['decision']\n" +
+    "        output: Decision\n" +
+    "    output: !Buy ${decide.output}\n" +
+    "nodes:\n" +
+    "  use:\n    kind: call\n    call: pick\n" +
+    "    input:\n      decision: {action: buy, qty: 1}\n" +
+    "  qty:\n    kind: code\n    input:\n      q: ${use.output.qty}\n" +
+    "    code: return inputs['q']\n" +
+    "output: ${qty.output}\n";
+
+  const loaded = await loadFlow(text);
+
+  const contract = loaded.compiled.nodes.get("use")!.outputContract as ValueContract;
+  expect(typeEquals(contract.type, typeFor("Buy", REGISTRY))).toBe(true);
 });
 
 test("an isinstance branch narrows the typed binding too", () => {

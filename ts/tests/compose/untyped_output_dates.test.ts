@@ -20,16 +20,17 @@
  * `test_a_nested_or_core_tagged_non_finite_number_is_a_load_error`, whose `!!omap [{a: .nan}]` row
  * is refused as `!!omap`, and `test_a_non_finite_number_as_the_whole_output_is_a_load_error`), and
  * `!float .nan`, which Python refuses at run (the load half of
- * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`). So do the inline CALL, MAP and LOOP
- * rows of `test_untagged_date_in_a_body_output_is_a_load_error`: the date in the child's output
- * binding is text.
+ * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`), and the `.nan` of
+ * `test_a_non_finite_number_in_a_body_output_is_a_load_error` (through `loadFlow`, located at the
+ * value as Python locates it). So do the inline CALL, MAP and LOOP rows of
+ * `test_untagged_date_in_a_body_output_is_a_load_error`: the date in the child's output binding is
+ * text; its named CALL and LOOP rows load through `loadFlow` the same way, so
+ * `test_a_body_output_date_is_located_at_the_value` has no error to locate and checks the
+ * named CALL's text instead.
  *
  * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
  * `any_tag_on_a_date` is pinned in `tags.test.ts`.
  *
- * Later (T3-22): the `defs:` body rows of `test_untagged_date_in_a_body_output_is_a_load_error`,
- * `test_a_body_output_date_is_located_at_the_value` and
- * `test_a_non_finite_number_in_a_body_output_is_a_load_error`.
  * Later (T4): the runs of `test_quoted_or_tagged_dates_keep_their_behavior`,
  * `test_other_untagged_literals_in_untyped_outputs_still_load` and
  * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`.
@@ -39,11 +40,20 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase, runTextCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  loadError,
+  loadErrorAsync,
+  runCase,
+  runTextCase,
+} from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -174,6 +184,91 @@ output: \${l.output}
     expect(Object.fromEntries(child.outputs.map((output) => [output.name, output.binding.source]))).toStrictEqual(
       expected,
     );
+  });
+});
+
+describe("defs body outputs", () => {
+  const namedCall = `id: p
+name: p
+defs:
+  body:
+    nodes:
+      b:
+        kind: code
+        code: return 1
+    output:
+      d: 2026-01-01
+      h: \${b.output}
+nodes:
+  c:
+    kind: call
+    call: body
+output: \${c.output}
+`;
+  const namedLoop = `id: p
+name: p
+defs:
+  step:
+    input:
+      n: !int
+      d: !Any
+    nodes:
+      b:
+        kind: code
+        input:
+          n: \${input.n}
+        code: return inputs['n'] + 1n
+    output:
+      n: \${b.output}
+      d: 2026-01-01
+nodes:
+  l:
+    kind: loop
+    times: 1
+    call: step
+    input:
+      n: 0
+      d: !Any "x"
+output: \${l.output}
+`;
+  const nanBody = `id: p
+name: p
+defs:
+  sub:
+    nodes:
+      a:
+        kind: code
+        code: return 1
+      b:
+        kind: code
+        code: return 2
+    output:
+      g: .nan
+      h: \${b.output}
+nodes:
+  c:
+    kind: call
+    call: sub
+output: \${c.output}
+`;
+
+  test.each([
+    ["named-call", namedCall, "c", { d: "2026-01-01", h: "${b.output}" }],
+    ["named-loop", namedLoop, "l", { n: "${b.output}", d: "2026-01-01" }],
+  ])("an unquoted date in a defs body's untyped output is text: %s", async (_name, text, nodeId, expected) => {
+    const loaded = await loadFlow(text);
+    const child = (loaded.compiled.nodes.get(nodeId) as CallNode | LoopNode).child as CompiledFlow;
+
+    expect(Object.fromEntries(child.outputs.map((output) => [output.name, output.binding.source]))).toStrictEqual(
+      expected,
+    );
+  });
+
+  test("a NaN in a defs body's untyped output is refused by the YAML reader, at the value", async () => {
+    const error = await loadErrorAsync(loadFlow(nanBody));
+
+    expect(error.message).toBe(NAN);
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(nanBody.split("\n").indexOf("      g: .nan") + 1);
   });
 });
 

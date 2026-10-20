@@ -14,11 +14,12 @@
  * Ported through `assembleText`: `test_inline_loop_whole_reference_keeps_its_message` (inline
  * body extraction refuses the `input:` before any node parses), with its harvested case
  * `inline_loop_whole_reference_keeps_its_message` (`assembled`). Its flow drops Python's unused
- * `defs:` entry (`defs:` bodies are T3-22).
+ * `defs:` entry.
  *
- * Later (T3-22): `test_non_mapping_input_in_a_defs_body_is_located` (the `defs entry` prefix)
- * and the load half of `test_null_or_empty_mapping_input_still_loads`. Later (T3-22, T4):
- * `test_listed_carried_fields_load_and_run`.
+ * Ported through `loadFlow`: `test_non_mapping_input_in_a_defs_body_is_located` and the load half
+ * of `test_null_or_empty_mapping_input_still_loads`.
+ *
+ * Later (T4-8): `test_listed_carried_fields_load_and_run`.
  */
 
 import { expect, test } from "bun:test";
@@ -32,8 +33,17 @@ import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
-import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  loadError,
+  loadErrorAsync,
+  parsedNodes,
+  runCase,
+} from "./declarations.ts";
 
 const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, DescriptorClass>([
   ["loop", LoopDescriptor],
@@ -140,6 +150,83 @@ test.each([
 ])("a CODE node with %s input still parses", (_label, inputText) => {
   const text = `nodes:\n  c:\n    kind: code\n    code: return 1\n    input:${inputText}\n`;
   expect(parseNode(text, "c").inputs).toEqual({});
+});
+
+/** Python's shared flow: a `defs:` entry `step`, a CODE node `seed`, then `node` (YAML lines). */
+const sharedFlow = (node: string) => `id: input-shape
+name: input_shape
+input:
+  z: !int
+defs:
+  step:
+    input:
+      n: !int
+    nodes:
+      b:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: \${b.output}
+nodes:
+  seed:
+    kind: code
+    input:
+      z: \${input.z}
+    output:
+      n: int
+    code: |
+      return {"n": inputs["z"]}
+${node}
+`;
+
+test.each([
+  ["null", ""],
+  ["an empty mapping", " {}"],
+])("a CODE node with %s input still loads", async (_label, inputText) => {
+  await loadFlow(sharedFlow(`  c:\n    kind: code\n    code: return 1\n    input:${inputText}`));
+});
+
+const DEFS_FLOW = `id: input-shape-defs
+name: input_shape_defs
+input:
+  z: !int
+defs:
+  step:
+    input:
+      n: !int
+    nodes:
+      b:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+      c:
+        kind: code
+        input: \${b.output}
+        code: return 1
+    output: \${b.output}
+nodes:
+  run:
+    kind: call
+    call: step
+    input:
+      n: \${input.z}
+output: \${run.output}
+`;
+
+test("a non-mapping input in a defs body is located", async () => {
+  const error = await loadErrorAsync(loadFlow(DEFS_FLOW));
+  expect(error.message).toContain("defs entry 'step': ");
+  expect(error.message).toContain("node 'c' (kind=code): `input:` must be a mapping");
+  const line = DEFS_FLOW.split("\n").indexOf("        input: ${b.output}") + 1;
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
 });
 
 const INLINE_LOOP_FLOW = `id: input-shape

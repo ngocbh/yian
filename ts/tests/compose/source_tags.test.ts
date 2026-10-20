@@ -8,11 +8,13 @@
  * `test_parse_leaves_the_composed_node_tags_unchanged` have no counterpart: the TS build walks
  * with an explicit stack and keeps no composed tree.
  *
- * Later (T3-22): `test_single_node_def_generated_binding_has_no_tag`.
+ * Changed: `test_single_node_def_generated_binding_has_no_tag` calls the loader's
+ * `singleNodeDefCursor`, exported for it (Python's `_single_node_def_cursor`).
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { singleNodeDefCursor } from "../../src/compose/loader.ts";
 import { flowNodesCursor } from "../../src/compose/parse/file.ts";
 import { normalizeNodeSignatureCursor } from "../../src/compose/parse/nodes.ts";
 import { type MapStep, type TaggedNode } from "../../src/compose/source/common.ts";
@@ -161,6 +163,16 @@ describe("the node signature projection", () => {
     expect(entry.tag).toBe(tag);
     expect(entry.withValue(structuredClone(entry.value)).tag).toBe(tag);
     expect(entry.withValue({ other: 2n }).tag).toBeNull();
+  });
+
+  test("a single-node def's generated binding has no tag", () => {
+    const defCursor = SourceDocument.parse("f:\n  kind: code\n  input:\n    p: !int\n").root.child("f");
+    const body = { kind: "code", inputs: { p: null } };
+    const binding = singleNodeDefCursor("f", body, defCursor).child("f").child("input").child("p");
+
+    expect(binding.value).toBe("${input.p}");
+    expect(binding.tag).toBeNull();
+    expect(binding.hasValue).toBe(true);
   });
 
   test("a compact flow's generated binding has no tag", () => {

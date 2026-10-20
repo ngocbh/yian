@@ -21,10 +21,7 @@
  * `::test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
  *
  * Changed: the guard and the facts compare with `toStrictEqual`, which also compares classes, and
- * types with `typeEquals`. The `take` and `take_each` defs are built by hand (`handChild`: the def's
- * parameters read from its `input:` text with the flow's typedefs, its node `d` with its output
- * contract), since def bodies load in T3-22; the CODE references are TS's
- * (`./fixtures/compose_codefns.ts:echo`).
+ * types with `typeEquals`. The CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
  *
  * TS-only: the harvested `load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read`
  * and `load-types/compose_null_narrowing_case__a_flow_assert_null_check_narrows_its_read`, pinned at
@@ -44,22 +41,17 @@ import {
 import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
-import { SourceDocument } from "../../src/compose/source/index.ts";
 import { narrows, rootBaseType } from "../../src/compose/validate/asserts.ts";
 import { computeNarrowing } from "../../src/compose/validate/narrowing.ts";
 import { parseCondition } from "../../src/expr/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
-import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
+import { readTypedefs } from "../../src/typesys/types.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
-  caseRegistry,
-  type ChildFlows,
-  handChild,
   loadError,
-  parametersFromYaml,
   runCase,
 } from "./declarations.ts";
 
@@ -167,28 +159,11 @@ function crossNodeFlow(outer: string, inner: string, xType: string): string {
   );
 }
 
-const INPUT_REGISTRY = caseRegistry(SourceDocument.parse(TYPEDEFS));
+/** Assemble `text`. */
+const load = (text: string) => assembleText(text);
 
-/**
- * A `take` def built by hand: the def's `input:` lines read with `registry`, its node `d` typed
- * `output`, returned.
- */
-const take = (input: string, output: string, registry: TypeRegistry = INPUT_REGISTRY) =>
-  handChild({
-    inputs: parametersFromYaml(`input:\n${input}`, registry),
-    producers: { d: new ValueContract(readType(output, registry)) },
-    output: "${d.output}",
-  });
-
-/** `producerFlow`'s defs built by hand. */
-const PRODUCER_DEFS = { take: take("  v: !str\n", "str"), take_each: take("  i: !int\n  v: !str\n", "str") };
-
-/** Assemble `text` with `children` as its defs. */
-const load = (text: string, children: ChildFlows = PRODUCER_DEFS) => assembleText(text, "flow.yaml", { children });
-
-/** The message of the `LoadError` assembling `text` with `children` throws. */
-const loadMessage = (text: string, children: ChildFlows = PRODUCER_DEFS) =>
-  loadError(() => load(text, children)).message;
+/** The message of the `LoadError` assembling `text` throws. */
+const loadMessage = (text: string) => loadError(() => load(text)).message;
 
 // --------------------------------------------------------------------------- //
 // A branch under a null check
@@ -204,7 +179,7 @@ test.each([
   ["input.x.b != null", "Optional(A)", "str", "${input.x.b}"],
   ["input.x != null", "Optional(Any)", "Any", "${input.x}"],
 ])("a branch under a null check on an input passes it as not null: %s on %s", (when, xType, sinkType, source) => {
-  load(inputFlow(when, xType, sinkType, source), { take: take(`  v: !${sinkType}\n`, "Any") });
+  load(inputFlow(when, xType, sinkType, source));
 });
 
 test("a negated is-null check narrows the branch", () => {
@@ -287,16 +262,13 @@ function onFlow(sinkType: string): string {
 test.each(["A", "Optional(A)", "AB"])(
   "an on case over an optional union narrows its branch as before: %s",
   (sinkType) => {
-    const registry = caseRegistry(SourceDocument.parse(ON_TYPEDEFS));
-    load(onFlow(sinkType), { take: take(`  v: !${sinkType}\n`, "int", registry) });
+    load(onFlow(sinkType));
   },
 );
 
 // --------------------------------------------------------------------------- //
 // Null checks meet isinstance checks
 // --------------------------------------------------------------------------- //
-
-const ITEM_TAKE = { take: take("  v: !Item\n", "Any") };
 
 describe("a null check keeps an isinstance narrowing of the branch", () => {
   for (const when of [
@@ -305,7 +277,7 @@ describe("a null check keeps an isinstance narrowing of the branch", () => {
   ]) {
     for (const xType of ["Optional(Any)", "Optional(Wide)"]) {
       test(`${when} on ${xType}`, () => {
-        load(inputFlow(when, xType), ITEM_TAKE);
+        load(inputFlow(when, xType));
       });
     }
   }
@@ -319,25 +291,23 @@ describe("a null check keeps a nullable isinstance narrowing of the branch", () 
     for (const xType of ["Optional(Any)", "Optional(Wide)"]) {
       for (const sinkType of ["Optional(Item)", "Item"]) {
         test(`${when} on ${xType} into ${sinkType}`, () => {
-          load(inputFlow(when, xType, sinkType), { take: take(`  v: !${sinkType}\n`, "Any") });
+          load(inputFlow(when, xType, sinkType));
         });
       }
     }
   }
 });
 
-const CROSS_TAKE = { take: take("  v: !Item\n", "int") };
-
 test.each(["Optional(Any)", "Optional(Wide)"])(
   "a null check case under an isinstance branch keeps its narrowing: %s",
   (xType) => {
-    load(crossNodeFlow("isinstance(input.x, Item)", "input.x != null", xType), CROSS_TAKE);
+    load(crossNodeFlow("isinstance(input.x, Item)", "input.x != null", xType));
   },
 );
 
 test("a null check alone does not prove a type", () => {
   const text = crossNodeFlow("input.x != null", "input.x != null", "Optional(Any)");
-  expect(loadMessage(text, CROSS_TAKE)).toBe(
+  expect(loadMessage(text)).toBe(
     `call node 'use': binding 'v' — child expects '{"qty":int}', source is 'Any'; tag the slot ` +
       "(`v: !Item ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
   );
@@ -416,7 +386,7 @@ test("a node assert read after a null check names the non-null type", () => {
     "    input:\n      topic: ${input.s}\n    output: Optional(Item)\n" +
     '    asserts:\n      - "output != null and output.nosuch > 0"\n' +
     "output: ${x.output}\n";
-  expect(loadMessage(text, {})).toBe(
+  expect(loadMessage(text)).toBe(
     "flow has invalid node asserts:\n" +
       "  node 'x' assert: reference ${output.nosuch} reads field 'nosuch', which Item doesn't " +
       "have; output is Item here, by the checks before this read",
@@ -439,7 +409,7 @@ test("a flow assert null check narrows a skippable producer of a non-null type",
     "    input:\n      topic: ${input.s}\n    output: str\n" +
     "output: ${input.s}\n" +
     'asserts:\n  - "d.output != null and d.output.nosuch > 0"\n';
-  expect(loadMessage(text, {})).toBe(
+  expect(loadMessage(text)).toBe(
     "assert 'd.output != null and d.output.nosuch > 0': reference ${d.output.nosuch} reads " +
       "field 'nosuch', which Item doesn't have; d.output is Item here, by the checks before " +
       "this read",

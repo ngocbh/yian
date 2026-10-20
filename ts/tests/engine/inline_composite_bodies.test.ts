@@ -35,7 +35,12 @@
  * `test_inline_composites_reject_outer_llm_config_without_private_identity`,
  * `test_inline_loop_contract_diagnostics_are_friendly_and_redacted`,
  * `test_inline_wrapper_bad_input_uses_outer_binding_range`,
- * `test_inline_map_output_error_uses_friendly_child_label`, and the load halves of
+ * `test_inline_map_output_error_uses_friendly_child_label`, the node-assert check's
+ * `test_inline_map_rejects_outer_asserts_without_private_identity`, the reference validator's
+ * `test_inline_child_scope_is_closed_and_redacts_private_identity`,
+ * `test_inline_map_child_keeps_item_namespace_closed`,
+ * `test_inline_sibling_keeps_outer_bad_binding_range` and
+ * `test_inline_child_bad_output_uses_retained_output_range`, and the load halves of
  * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` (the flow id, no child inputs),
  * `test_typed_inline_call_preserves_nullable_parent_scalar`,
  * `test_typed_inline_call_canonicalizes_literal_record_and_retains_input_order`,
@@ -82,18 +87,14 @@
  * inline_body_missing_output,named_call_with_output,neither_call_nor_nodes,
  * non_mapping_inline_nodes}`, the child-building cases
  * `load-map-call/engine_inline_composite_bodies__{inline_map_body_without_output,
- * inline_loop_body_returns_an_uncarried_field,inline_signature_self_cycle}` and
+ * inline_loop_body_returns_an_uncarried_field,inline_signature_self_cycle}`, the reference cases
+ * `load-map-call/engine_inline_composite_bodies__{inline_child_scope_is_closed,
+ * inline_child_unknown_output_ref_is_located,inline_map_child_keeps_item_namespace_closed}` and
  * `load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list`, and the ok
  * cases `load-map-call/engine_inline_composite_bodies__private_prefix_in_a_node_id_loads` and
  * `load-map-call/engine_templates_load__inline_composites_template_loads` (no mirror of
  * `tests/engine/test_templates_load.py` yet), and the node-assert check's
  * `load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts`.
- *
- * Later (T3-18, reference validation):
- * `test_inline_child_scope_is_closed_and_redacts_private_identity`,
- * `test_inline_map_child_keeps_item_namespace_closed`,
- * `test_inline_sibling_keeps_outer_bad_binding_range`,
- * `test_inline_child_bad_output_uses_retained_output_range`.
  *
  * Later (T3-22, the callable scope and def assembly):
  * `test_def_assembly_cursor_fallback_restores_only_node_surfaces`,
@@ -2091,6 +2092,137 @@ output: \${each.output}
   expect(error.message).not.toContain(INLINE_FLOW_PREFIX);
 });
 
+// ---------- reference validation ----------
+
+test.each([
+  [
+    "parent-node",
+    "  parent:\n    kind: code\n    code: |\n      return 'parent'\n    output: str\n",
+    "${parent.output}",
+    "parent",
+  ],
+  ["item", "", "${item}", "item"],
+])("an inline child's scope is closed and redacts its private identity: %s", (_id, outerNodes, badRef, namespace) => {
+  const source =
+    "id: inline-closed-scope\n" +
+    "name: inline_closed_scope\n" +
+    "nodes:\n" +
+    outerNodes +
+    "  wrapper:\n" +
+    "    kind: call\n" +
+    "    nodes:\n" +
+    "      leak:\n" +
+    "        kind: code\n" +
+    "        code: ./fixtures/compose_codefns.ts:echo_x\n" +
+    "        input:\n" +
+    `          x: ${badRef}\n` +
+    "        output: str\n" +
+    "    output: ${leak.output}\n" +
+    "output: ${wrapper.output}\n";
+  const expected = SourceDocument.parse(source)
+    .root.child("nodes")
+    .child("wrapper")
+    .child("nodes")
+    .child("leak")
+    .mappingValueRanges("input")
+    .get("x");
+
+  const error = loadError(() => assembleText(source));
+
+  expect(error.message).toContain(`unknown namespace '${namespace}'`);
+  expect(error.message).not.toContain(INLINE_FLOW_PREFIX);
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected!);
+});
+
+test("an inline MAP child keeps the item namespace closed", () => {
+  const source = `id: inline-map-closed-child
+name: inline_map_closed_child
+input:
+  items: !list(str)
+nodes:
+  each:
+    kind: map
+    over: \${input.items}
+    input:
+      value: \${item}
+    nodes:
+      leak:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${item}
+        output: str
+    output: \${leak.output}
+output: \${each.output}
+`;
+  const expected = SourceDocument.parse(source)
+    .root.child("nodes")
+    .child("each")
+    .child("nodes")
+    .child("leak")
+    .mappingValueRanges("input")
+    .get("x");
+
+  const error = loadError(() => assembleText(source));
+
+  expect(error.message).toContain("unknown namespace 'item'");
+  expect(error.message).not.toContain(INLINE_FLOW_PREFIX);
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected!);
+});
+
+test("an inline sibling keeps the outer bad binding's range", () => {
+  const source = `id: inline-outer-bad-binding
+name: inline_outer_bad_binding
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ready
+        output: str
+    output: \${constant.output}
+  broken:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo_x
+    input:
+      x: \${missing.output}
+    output: str
+output: \${broken.output}
+`;
+
+  const error = loadError(() => assembleText(source));
+
+  expect(error.message).toContain("unknown namespace 'missing'");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(inputRange(source, "broken", "x"));
+});
+
+test("an inline child's bad output uses the retained output range", () => {
+  const source = `id: inline-child-output-range
+name: inline_child_output_range
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ready
+        output: str
+    output: \${missing.output}
+output: \${wrapper.output}
+`;
+  const expected = SourceDocument.parse(source).root.child("nodes").child("wrapper").rangeOf("output")!;
+
+  const error = loadError(() => assembleText(source));
+
+  expect(error.message).toContain("unknown namespace 'missing'");
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected);
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -2109,6 +2241,9 @@ test.each<CaseRow>([
   { id: "load-map-call/engine_inline_composite_bodies__inline_map_body_without_output", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_loop_body_returns_an_uncarried_field", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_signature_self_cycle", call: assembled },
+  { id: "load-map-call/engine_inline_composite_bodies__inline_child_scope_is_closed", call: assembled },
+  { id: "load-map-call/engine_inline_composite_bodies__inline_child_unknown_output_ref_is_located", call: assembled },
+  { id: "load-map-call/engine_inline_composite_bodies__inline_map_child_keeps_item_namespace_closed", call: assembled },
   { id: "load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list", call: assembled },
   { id: "load-map-call/engine_templates_load__inline_composites_template_loads", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts", call: assembled },

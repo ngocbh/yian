@@ -104,14 +104,11 @@ import {
   type ProducerType,
 } from "./inline_inputs.ts";
 // T3-18 imports
-import { rejectCycles } from "../validate/cycles.ts";
-import { checkCaseHandles } from "../validate/handles.ts";
-import { validateHumanQuestions } from "../validate/human_questions.ts";
-import { checkReservedSources } from "../validate/reserved_sources.ts";
-import { stampToolInputTypes } from "../validate/tool_inputs.ts";
-import { checkWrittenValues } from "../validate/value_nesting.ts";
-import { checkWiringParity } from "../validate/wiring_parity.ts";
-import { builtinFieldErrors, constructorErrors } from "../validate/constructors.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
+import { NodeKind } from "../../nodes/base.ts";
+import { CaseNode } from "../../nodes/case/node.ts";
+import { LoopNode } from "../../nodes/loop/node.ts";
+import { TypeCheckError } from "../../typesys/values.ts";
 import {
   collectConstructorNames,
   collectIsinstanceNames,
@@ -120,11 +117,15 @@ import {
   resolveIsinstanceType,
 } from "../helpers/isinstance_types.ts";
 import { nth } from "../helpers/source.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
-import { NodeKind } from "../../nodes/base.ts";
-import { CaseNode } from "../../nodes/case/node.ts";
-import { LoopNode } from "../../nodes/loop/node.ts";
-import { TypeCheckError } from "../../typesys/values.ts";
+import { builtinFieldErrors, constructorErrors } from "../validate/constructors.ts";
+import { rejectCycles } from "../validate/cycles.ts";
+import { checkCaseHandles } from "../validate/handles.ts";
+import { validateHumanQuestions } from "../validate/human_questions.ts";
+import { validateReferences } from "../validate/references.ts";
+import { checkReservedSources } from "../validate/reserved_sources.ts";
+import { stampToolInputTypes } from "../validate/tool_inputs.ts";
+import { checkWrittenValues } from "../validate/value_nesting.ts";
+import { checkWiringParity } from "../validate/wiring_parity.ts";
 // T3-19 imports
 import { ExpressionError } from "../../expr/index.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
@@ -2429,8 +2430,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
-//
-//   T3-18  validateReferences (1).
 
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 
@@ -2438,24 +2437,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts
-
-/** Python's `compose.validate.references.validate_references`; not ported yet. */
-function validateReferences(
-  buildResults: ReadonlyMap<string, BuildResult>,
-  flowInputs: ReadonlySet<string>,
-  producers: ReadonlyMap<string, OutputContract>,
-  outputs: unknown,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-  options: {
-    inputContracts?: ReadonlyMap<string, ValueContract> | null;
-    outputsRange?: SourceRange | null;
-    narrowing?: Narrowing | null;
-    localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
-    registry?: TypeRegistry | null;
-    resolveOrigin?: OriginPresenter | null;
-    diagnostics?: LoadDiagnostics | null;
-  } = {},
-): void {}
 
 // T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
 

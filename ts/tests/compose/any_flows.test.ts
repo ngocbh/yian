@@ -1,7 +1,7 @@
 /**
- * Flows that use `Any`: the rows the cross-flow binding check and the loop type contract decide, a
- * port of rows of `tests/compose/test_any_flows.py`, assembling each flow with `assembleText` where
- * Python calls `load_flow`.
+ * Flows that use `Any`: the rows the cross-flow binding check, the loop type contract and the
+ * reference check decide, a port of rows of `tests/compose/test_any_flows.py`, assembling each
+ * flow with `assembleText` where Python calls `load_flow`.
  *
  * `Any` is any JSON value except null; `Optional(Any)` adds null. Wiring an `Any` into a narrower
  * child input is a load error unless a tag or an `isinstance` branch narrows it.
@@ -12,14 +12,16 @@
  * `test_a_map_over_a_list_of_optional_any_into_a_child_any_input_is_a_load_error`,
  * `test_a_map_over_a_mixed_literal_list_still_checks_each_element_at_load`,
  * `test_a_child_any_output_into_a_parent_int_input_is_a_load_error_with_the_hint`,
- * `test_an_untyped_seed_into_an_any_body_input_rejects_an_optional_any_body_field`; the load halves
+ * `test_an_untyped_seed_into_an_any_body_input_rejects_an_optional_any_body_field`,
+ * `test_a_field_read_on_an_any_value_entry_is_not_checked`,
+ * `test_a_field_read_on_an_object_value_entry_is_still_checked`; the load halves
  * of `test_a_tagged_any_binding_into_a_child_str_input_fails_at_runtime_for_an_int`,
  * `test_a_tagged_any_binding_into_a_child_str_input_runs_for_text`,
  * `test_a_str_output_into_a_child_any_input_loads_and_runs`,
  * `test_a_map_over_a_list_of_any_runs_items_into_a_child_any_input`,
  * `test_a_map_over_a_list_of_optional_any_into_a_child_optional_any_input_runs`,
  * `test_a_map_over_a_mixed_literal_list_into_a_child_any_input_runs`,
- * `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value` and
+ * `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value`,
  * `test_a_child_any_output_into_a_parent_any_consumer_runs`,
  * `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs`,
  * `test_a_typed_loop_seed_accepts_an_optional_any_body_field`,
@@ -27,7 +29,11 @@
  * `test_an_int_when_on_an_any_value_loads_and_matches` and
  * `test_a_text_when_on_an_any_value_loads_and_matches`;
  * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag`, which the case-branch check
- * decides (its whole message pinned where Python checks two fragments); and the harvested cases
+ * decides (its whole message pinned where Python checks two fragments);
+ * `test_a_field_read_on_an_any_output_loads_in_a_binding`,
+ * `test_a_field_read_on_an_any_output_loads_in_a_flow_output` and
+ * `test_a_field_read_on_an_any_output_loads_in_a_case_condition`; the load half of
+ * `test_a_field_read_on_an_any_output_loads_in_an_assert`; and the harvested cases
  * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element` and
  * `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`.
  *
@@ -49,12 +55,7 @@
  * `case_on_typed.test.ts`) and `test_an_unquoted_date_any_literal_gets_the_quote_hint` (TS loads
  * it, as `tags.test.ts` notes).
  *
- * Later (T3-18): `test_a_field_read_on_an_any_output_loads_in_a_binding`,
- * `test_a_field_read_on_an_any_output_loads_in_a_flow_output`,
- * `test_a_field_read_on_an_any_output_loads_in_a_case_condition`,
- * `test_a_field_read_on_an_any_value_entry_is_not_checked` and
- * `test_a_field_read_on_an_object_value_entry_is_still_checked`, and the load half of
- * `test_a_field_read_on_an_any_output_loads_in_an_assert`. Later (T4): its run half,
+ * Later (T4):
  * `test_a_list_of_any_output_returns_mixed_items`, `test_an_any_output_returns_any_json_value` (4),
  * `test_an_any_output_rejects_null`, `test_an_optional_any_output_returns_null`,
  * `test_an_any_flow_input_rejects_null_naming_the_input`,
@@ -119,6 +120,44 @@ const call = (binding: string, nodeId = "c", callee = "child") =>
 
 /** Assemble `text` with `children` as its defs. */
 const load = (text: string, children: Record<string, ComposedFlow>) => assembleText(text, "flow.yaml", { children });
+
+// ---------- field reads on Any ----------
+
+test("a field read on an Any output loads in a binding (loads)", () => {
+  const rest = "  use:\n    kind: code\n    input:\n      v: ${mk.output.a.b}\n    code: return inputs['v']\n";
+
+  assembleText(flow("Any", rest, { code: '{"a": {"b": 2}}', out: "${use.output}" }));
+});
+
+test("a field read on an Any output loads in a flow output (loads)", () => {
+  assembleText(flow("Any", "", { code: '{"a": 1}', out: "\n  a: ${mk.output.a}" }));
+});
+
+test("a field read on an Any output loads in a case condition (loads)", () => {
+  const rest =
+    "  route:\n    kind: case\n    cases:\n" +
+    "      - when: ${mk.output.a == 1}\n        then: hit\n" +
+    "    else: miss\n" +
+    "  hit:\n    kind: code\n    output: str\n    code: return 'hit'\n" +
+    "  miss:\n    kind: code\n    output: str\n    code: return 'miss'\n";
+
+  assembleText(flow("Any", rest, { code: '{"a": 1}', out: "${hit.output | miss.output}" }));
+});
+
+/** A flow with value entry `entry` and a CODE node reading `read`. */
+const entryFlow = (entry: string, read: string) =>
+  `id: p\nname: p\nnodes:\n  ${entry}\n  use:\n    kind: code\n    input:\n      v: ${read}\n` +
+  "    code: return inputs['v']\noutput: ${use.output}\n";
+
+test("a field read on an Any value entry is not checked", () => {
+  assembleText(entryFlow("v: !Any {a: 1}", "${v.output.zz}"));
+});
+
+test("a field read on an object value entry is still checked", () => {
+  const error = loadError(() => assembleText(entryFlow("w: !object {a: 1}", "${w.output.zz}")));
+
+  expect(error.message).toContain("reads unknown field 'zz'");
+});
 
 // ---------- CALL wiring ----------
 

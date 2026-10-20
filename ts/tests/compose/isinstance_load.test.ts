@@ -8,7 +8,8 @@
  * `test_a_flow_assert_error_is_located_by_its_own_assert`,
  * `test_list_is_not_an_isinstance_type_name`,
  * `test_isinstance_in_wait_until_is_a_located_load_error`,
- * `test_isinstance_in_map_over_is_a_located_load_error` and
+ * `test_isinstance_in_map_over_is_a_located_load_error`,
+ * `test_isinstance_in_an_agent_prompt_is_a_located_load_error` and
  * `test_isinstance_in_a_human_input_question_is_a_located_load_error`; and the load halves (the
  * type tables) of `test_isinstance_in_a_node_input`,
  * `test_isinstance_in_a_searched_case_is_first_true_wins`, `test_isinstance_in_a_node_assert`,
@@ -29,9 +30,6 @@
  * the `defs:` half of `test_isinstance_in_defs_and_nested_inline_children` (both need the child's
  * own assembly); `test_a_parent_cannot_use_a_childs_typedef` and
  * `test_a_uses_child_resolves_names_against_its_own_typedefs` (`uses:`).
- *
- * Later (T3-18 PR 3): `test_isinstance_in_an_agent_prompt_is_a_located_load_error` and its case
- * (the reference validator).
  *
  * Later (T4): the run halves of the type-table rows above,
  * `test_a_failing_flow_input_assert_fails_at_start` and `test_a_run_that_used_isinstance_replays`.
@@ -702,6 +700,28 @@ test("isinstance in a loop node's asserts is a load error", () => {
   );
 });
 
+test("isinstance in an agent prompt is a located load error", () => {
+  const text =
+    "id: a\nname: a\n" +
+    TYPEDEFS +
+    `input:
+  order: !object
+nodes:
+  ask:
+    kind: agent
+    input:
+      order: \${input.order}
+    prompt: "Is it a buy? \${isinstance(order, Buy)}"
+    output: str
+output: \${ask.output}
+`;
+
+  const error = loadError(() => loadedNodes(text));
+
+  expect(error.message).toContain("isinstance is not a prompt function; compute it in an input binding");
+  expect(errorLine(error)).toBe(lineOf(text, "prompt:"));
+});
+
 test("isinstance in a human input question is a located load error", () => {
   // The human-input node's own build refuses the question before any type table is filled.
   const text =
@@ -734,6 +754,7 @@ test.each<CaseRow>([
   // The inline body assembles through the harness's private-child registry.
   { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_an_inline_body", call: assembledWith(CLASSIFY) },
   { id: "load-types/compose_isinstance_load__isinstance_in_wait_until", call: assembled },
+  { id: "load-types/compose_isinstance_load__isinstance_in_an_agent_prompt", call: assembled },
   {
     id: "load-types/compose_isinstance_load__isinstance_in_map_over",
     call: assembledWith({ one: def("  x: !int\n", null) }),

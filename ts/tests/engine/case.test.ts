@@ -41,13 +41,14 @@
  *
  * TS-only: the seed `e38` row (`load-case/seed_e38_case_when_ref_locates_node_header`): the build
  * locates each `__rN` at the whole value of its `cases[N].when` (`__r1` on line 36) and labels it
- * so; the conformance case's full error comes from the reference check (T3-18). The missing-`then:`
- * rows: a searched entry without a `then:` ("each searched case needs a `then:`") is located at
- * its `then:` range when the descriptor has one (a parsed entry's is null, so no frame), else at
- * `cases:`, else at the node; an `on:` entry with a `when:` and no `then:` ("each on:-form case
- * needs a `when:` value and a `then:`") at `cases:`, else at the node.
+ * so; the conformance case's full error comes from the reference check (pinned in
+ * `errors.test.ts`). The missing-`then:` rows: a searched entry without a `then:` ("each searched
+ * case needs a `then:`") is located at its `then:` range when the descriptor has one (a parsed
+ * entry's is null, so no frame), else at `cases:`, else at the node; an `on:` entry with a `when:`
+ * and no `then:` ("each on:-form case needs a `when:` value and a `then:`") at `cases:`, else at
+ * the node.
  *
- * Later (T3-18): the `validate_references` half of
+ * Pinned in `validate_refs.test.ts`: the `validate_references` half of
  * `test_case_node_local_ref_does_not_error`.
  */
 

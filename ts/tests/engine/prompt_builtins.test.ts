@@ -9,8 +9,11 @@
  * The values follow the TS number model (ints are `bigint`s). Python's `_mkrec`, registered for
  * good, is a stand-in registered for one test each.
  *
- * Left for later: the loader tests land with compose, and
- * `test_prompt_default_fires_in_a_running_flow` with `run.ts`.
+ * The loader rows (`test_loader_accepts_builtin_call_over_declared_input`,
+ * `test_loader_rejects_undeclared_input_inside_call`, `test_loader_rejects_unknown_builtin`) load
+ * with `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`.
+ *
+ * Later (T4): `test_prompt_default_fires_in_a_running_flow`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -26,6 +29,7 @@ import { evalExpr, ResolveMode, resolveInRecord } from "../../src/expr/expressio
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ExpressionError, evalBinding, promptRefs, RequiredError, renderTemplateRecord } from "../../src/expr/index.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
+import { assembleText, loadError } from "../compose/declarations.ts";
 
 const REC: ValueRecord = { briefs: ["ab", "adf"], name: "zeta", sig: { value: 0.8 } };
 
@@ -212,6 +216,38 @@ test("promptRefs skips literals", () => {
 
 test("promptRefs rejects an unknown builtin", () => {
   expect(() => promptRefs("${frobnicate(name)}")).toThrow(ExpressionError);
+});
+
+// --- loader: prompt scope is call-aware --- //
+
+/** A flow whose AGENT `brief` reads `topic` and renders `call` in its prompt. */
+const loaderFlow = (call: string) => `
+id: pb
+name: pb
+input:
+  topic: !str
+nodes:
+  brief:
+    kind: agent
+    input:
+      topic: \${input.topic}
+    output: str
+    prompt: "Render ${call}"
+output: \${brief.output}
+`;
+
+test("the loader accepts a builtin call over a declared input", () => {
+  expect(assembleText(loaderFlow("${render_as_json(topic, 2)}")).flow).toBeDefined();
+});
+
+test("the loader rejects an undeclared input inside a call", () => {
+  expect(loadError(() => assembleText(loaderFlow("${render_as_json(ghost)}"))).message).toContain(
+    "is not a declared input",
+  );
+});
+
+test("the loader rejects an unknown builtin", () => {
+  expect(loadError(() => assembleText(loaderFlow("${frobnicate(topic)}"))).message).toContain("frobnicate");
 });
 
 // --- mode interaction for call-result dotted misses --- //

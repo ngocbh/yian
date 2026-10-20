@@ -23,41 +23,37 @@
  * `test_a_nested_binding_loads`, `test_fingerprint_is_stable_and_tracks_the_literal`,
  * `test_an_object_entry_with_an_empty_key_is_rejected`,
  * `test_an_empty_key_outside_a_written_out_record_loads` (the load only),
- * `test_a_flow_call_inside_a_span_keeps_its_error`, and the rows the build-cache reader decides
- * (it types a span or nested tag in a written-out record):
- * `test_entries_reading_each_other_are_rejected`, `test_an_entry_reading_itself_is_rejected`,
- * `test_a_span_from_an_untyped_producer_is_opaque`,
- * the span row of `test_a_nested_untagged_mapping_keeps_its_fields` and
- * `test_a_nested_tagged_object_is_opaque`.
+ * `test_a_flow_call_inside_a_span_keeps_its_error`,
+ * `test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader`,
+ * `test_a_span_record_rejects_an_unknown_field`, `test_a_nested_untagged_mapping_keeps_its_fields`,
+ * and the rows the build-cache reader decides (it types a span or nested tag in a written-out
+ * record): `test_entries_reading_each_other_are_rejected`, `test_an_entry_reading_itself_is_rejected`,
+ * `test_a_span_from_an_untyped_producer_is_opaque` and `test_a_nested_tagged_object_is_opaque`.
  *
  * Changed: the CODE node runs the built-in identity `{builtin: "identity", field: <id>}`, not
  * generated code. A mismatched text value is JSON-quoted (rule `messages`), and a missing-field
  * list is written in the text form (`["action"]`).
  * `test_a_number_that_is_not_finite_is_rejected_at_the_entry`: infinity is a float value in TS
  * (rule `infinity`), so the `.inf` and `-.inf` entries load, and the YAML reader refuses `.nan` at
- * the scalar before any entry is read. The written-out record rows
- * (`test_a_written_out_object_entry_keeps_its_fields`,
- * `test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader`,
- * the span-free row of `test_a_nested_untagged_mapping_keeps_its_fields`) check the built node's
- * output contract, the record `literalContract` spells, where Python checks the reader's error;
+ * the scalar before any entry is read. `test_a_written_out_object_entry_keeps_its_fields` also checks
+ * the built node's output contract, the record `literalContract` spells;
  * `test_a_literal_field_takes_its_literal_type` and
  * `test_an_escaped_span_in_an_object_entry_is_text` check the typed reader's error, as Python
  * does, and also the record `literalContract` spells;
  * `test_an_object_entry_over_an_outside_value_stays_object` and
  * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` (its `call(...)` row with the
- * `g` def built by hand) check that the contract is the tag. The span row of
- * `test_a_nested_untagged_mapping_keeps_its_fields`, `test_a_nested_tagged_object_is_opaque`
- * and `test_a_span_record_rejects_an_unknown_field` check the built entry node's output contract,
- * which the reader types (an untyped producer leaves its field opaque in a partial record).
+ * `g` def built by hand) check that the contract is the tag, and
+ * `test_a_nested_tagged_object_is_opaque` that it is opaque.
+ * `test_a_nested_untagged_mapping_keeps_its_fields` and
+ * `test_a_span_record_rejects_an_unknown_field` also have rows that read a field the record has;
+ * those check the output contract the reader gives the built entry node. A field from an untyped
+ * producer stays opaque in that partial record.
  *
  * TS-only: the descriptor refusing node-only fields, a `RangeError` (a compiler bug) where Python
  * raises `ValueError`; and the harvested `load-case/compose_value_entries_load__*` cases this
- * reader, the build-cache reader and the typed-binding check decide (`tags.test.ts` pins the
- * ones `readTaggedValue` decides).
+ * reader, the build-cache reader, the typed-binding check and the reference validator decide
+ * (`tags.test.ts` pins the ones `readTaggedValue` decides).
  *
- * Later (T3-18): the reference checks, which turn a read of a field the record lacks into a load
- * error in the record rows above (the error half of `test_a_span_record_rejects_an_unknown_field`
- * among them).
  * Later (T4): the run of `test_an_empty_key_outside_a_written_out_record_loads`.
  */
 
@@ -332,6 +328,18 @@ describe("the record a written-out object keeps", () => {
     expect(contractOf(text, "exit_result")).toStrictEqual(literalContract({ exited: true, reply: "" }));
   });
 
+  test("a written-out object entry rejects an unknown field at the reader", () => {
+    const text = recordFlow('  exit_result: !object {exited: true, reply: ""}\n', "${exit_result.output.zz}");
+
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe(
+      "flow has unresolved references:\n" +
+        "  node 'use' input 'c' from: reference ${exit_result.output.zz} reads unknown field 'zz' on record",
+    );
+    expect(errorLine(error)).toBe(lineOf(text, "c: ${exit_result"));
+  });
+
   test.each([
     ["[1, 2]", [1n, 2n], "list(int)"],
     ["true", true, "bool"],
@@ -448,14 +456,14 @@ describe("the build-cache reader", () => {
   });
 
   test("a span record from a typed producer keeps its fields", () => {
-    const contract = contractOf(recordFlow(producer("str") + SPAN_RECORD, "${r.output.c}"), "r");
+    const contract = contractOf(recordFlow(producer("str") + SPAN_RECORD, "${r.output.a}"), "r");
 
     expect(contract?.constructor).toBe(ValueContract);
     expect(labelOf(contract)).toBe('{"a":str,"b":int}');
   });
 
   test("a span record from an untyped producer keeps its fields", () => {
-    const contract = contractOf(recordFlow(producer("") + SPAN_RECORD, "${r.output.c}"), "r");
+    const contract = contractOf(recordFlow(producer("") + SPAN_RECORD, "${r.output.a}"), "r");
 
     // An untyped producer leaves its field opaque beside the typed literal one.
     expect(contract?.constructor).toBe(PartialRecordContract);
@@ -466,6 +474,18 @@ describe("the build-cache reader", () => {
     ]);
   });
 
+  test.each(["str", ""])("a span record rejects an unknown field: %j", (output) => {
+    const text = recordFlow(producer(output) + SPAN_RECORD, "${r.output.c}");
+
+    const error = loadErrorOf(text);
+
+    expect(error.message).toBe(
+      "flow has unresolved references:\n" +
+        "  node 'use' input 'c' from: reference ${r.output.c} reads unknown field 'c' on record",
+    );
+    expect(errorLine(error)).toBe(lineOf(text, "c: ${r.output.c}"));
+  });
+
   test("a span from an untyped producer is opaque", () => {
     expect(() => load(recordFlow(producer("") + SPAN_RECORD, "!int ${r.output.a}"))).not.toThrow();
   });
@@ -473,10 +493,25 @@ describe("the build-cache reader", () => {
   test("a nested untagged mapping beside a span keeps its fields", () => {
     const entry = "  r: !object\n    a: ${p.output}\n    p: {q: 1}\n";
 
-    const contract = contractOf(recordFlow(producer("str") + entry, "${r.output.p.zz}"), "r");
+    const contract = contractOf(recordFlow(producer("str") + entry, "${r.output.p.q}"), "r");
 
     expect(labelOf(contract)).toBe('{"a":str,"p":{"q":int}}');
   });
+
+  test.each(["  r: !object\n    a: ${p.output}\n    p: {q: 1}\n", "  r: !object\n    p: {q: 1}\n"])(
+    "a nested untagged mapping rejects an unknown field: %j",
+    (entry) => {
+      const text = recordFlow(producer("str") + entry, "${r.output.p.zz}");
+
+      const error = loadErrorOf(text);
+
+      expect(error.message).toBe(
+        "flow has unresolved references:\n" +
+          "  node 'use' input 'c' from: reference ${r.output.p.zz} reads unknown field 'zz' on record",
+      );
+      expect(errorLine(error)).toBe(lineOf(text, "c: ${r.output.p.zz}"));
+    },
+  );
 
   test.each([
     ["  r: !object\n    a: ${p.output}\n    p: !object {q: 1}\n", '{"a":str,"p":object}'],
@@ -579,6 +614,8 @@ describe("harvested cases", () => {
       "a_named_type_entry_rejects_a_disjoint_producer",
       "a_span_field_takes_its_producer_type",
       "a_literal_field_takes_its_literal_type",
+      "a_span_record_rejects_an_unknown_field",
+      "a_written_out_object_rejects_an_unknown_field",
       // The inline-call desugar raises it before the `f` callee resolves.
       "a_flow_call_inside_a_span_keeps_its_error",
     ].map((name) => ({ id: `load-case/compose_value_entries_load__${name}`, call: assembled })),

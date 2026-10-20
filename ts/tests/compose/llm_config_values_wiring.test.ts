@@ -15,23 +15,20 @@
  * `test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle`,
  * `test_an_llm_config_value_reading_a_skippable_node_lets_the_agent_skip`,
  * `test_a_shielded_flow_value_reading_a_skippable_node_does_not`,
- * `test_skipped_arithmetic_in_a_value_names_the_llm_config_field`; the `bindingLabels`
- * halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field` and
+ * `test_skipped_arithmetic_in_a_value_names_the_llm_config_field`,
+ * `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`,
+ * `test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field` and
  * `test_a_composer_value_error_names_the_gate_field`; the node and flow-layer halves of
  * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer`.
  *
  * Pinned in kind_agent_parse.test.ts: `test_an_authored_input_named_like_the_reserved_key_fails`.
  *
- * The harvested `load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader`
- * is pinned at the end with `full` (every frame and the notes); its cycle message writes the node
- * list in the text form (`["pick"]`, rule `messages`). The harvested
- * `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value` is pinned after it.
+ * The harvested cases are pinned at the end with `full` (every frame and the notes):
+ * `load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader`, whose cycle
+ * message writes the node list in the text form (`["pick"]`, rule `messages`), the two
+ * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
  *
  * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
- *
- * Later (T3-18 PR 3): the error halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`
- * and `test_a_composer_value_error_names_the_gate_field`, and
- * `test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field` (references).
  * Later (T3-22): `test_clone_child_renamespaces_the_reserved_key` (a loaded `defs:` child;
  * `compile/expand.ts`), and the `resolve_llm_cascade` half of
  * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer`.
@@ -42,12 +39,22 @@ import { expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { SkipModel } from "../../src/compose/validate/skips.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
 
 const compiled = (text: string): CompiledFlow => assembleText(text, "f.yaml").flow.compiled;
+
+/** Return the 1-based line of the error's last frame. */
+const lineOf = (error: LoadError) => error.diagnostic.frames.at(-1)!.range.startLine;
+
+/** Return the 1-based line of the first line of `text` holding `needle`. */
+const lineHolding = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+/** Return the `LoadError` assembling flow `text` raises. */
+const loadFails = (text: string) => loadError(() => assembleText(text, "f.yaml"));
 
 /** The producers of `consumer`'s edges that feed its reserved `llm_config` input. */
 function llmEdges(flow: CompiledFlow, consumer: string): Set<string> {
@@ -257,8 +264,19 @@ test("skipped arithmetic in a value names the llm_config field", () => {
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
 });
 
-test("an unknown node in a value is named at the llm_config field (the binding label)", () => {
+test("an unknown node in a value is named at the llm_config field", () => {
+  const text = NODE_LEVEL.replace("'${pick.output}'", "'${nope.output}'");
+  const error = loadFails(text);
+  expect(error.diagnostic.message).toContain("\n  node 'chat' llm_config: reference ${nope.output}");
   expect(compiled(NODE_LEVEL).nodes.get("chat")!.bindingLabels.get(LLM_CONFIG_KEY)).toBe("node 'chat' llm_config");
+  expect(lineOf(error)).toBe(lineHolding(text, "${nope.output}"));
+});
+
+test("an unknown input in a flow value is located at the flow field", () => {
+  const text = FLOW_LEVEL.replace("'${pick.output}'}\nnodes", "'${input.nope}'}\nnodes");
+  const error = loadFails(text);
+  expect(error.diagnostic.message).toContain("\n  node 'open' llm_config: reference ${input.nope}");
+  expect(lineOf(error)).toBe(lineHolding(text, "${input.nope}"));
 });
 
 const ASK = `id: f
@@ -270,12 +288,16 @@ nodes:
     input: {proj: '\${input.proj}'}
     adaptive_questions:
       prompt: "Q \${proj}"
-      llm_config: {model: '\${input.proj}'}
+      llm_config: {model: '\${nope.output}'}
 output: \${ask.output}
 `;
 
-test("a composer value error names the gate field (the binding label)", () => {
-  expect(compiled(ASK).nodes.get("ask__compose")!.bindingLabels.get(LLM_CONFIG_KEY)).toBe(
+test("a composer value error names the gate field", () => {
+  const error = loadFails(ASK);
+  expect(error.diagnostic.message).toContain("\n  node 'ask' adaptive_questions.llm_config: reference ${nope.output}");
+  expect(lineOf(error)).toBe(lineHolding(ASK, "${nope.output}"));
+  const composer = compiled(ASK.replace("${nope.output}", "${input.proj}"));
+  expect(composer.nodes.get("ask__compose")!.bindingLabels.get(LLM_CONFIG_KEY)).toBe(
     "node 'ask' adaptive_questions.llm_config",
   );
 });
@@ -300,13 +322,10 @@ test("a layer of only tagged literals is wired as a literal layer", () => {
 
 // ---------- harvested conformance cases ----------
 
-test("assembled: load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader", () => {
-  runCase({
-    id: "load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader",
-    call: assembled,
-    full: true,
-  });
-});
+test.each(["flow_value_read_from_its_own_reader", "unknown_flow_input_named_on_the_agent", "unknown_node_in_a_value"])(
+  "assembled: load-agent/compose_llm_config_values_wiring__%s",
+  (name) => runCase({ id: `load-agent/compose_llm_config_values_wiring__${name}`, call: assembled, full: true }),
+);
 
 test("assembled: load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value", () => {
   runCase({ id: "load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value", call: assembled });

@@ -16,8 +16,15 @@
  * narrowing and the skipped-arithmetic check decide (the `${a.output + 1}` case of
  * `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
  * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`),
- * `test_item_head_ref_yields_no_edge_but_producer_ref_does` and
- * `test_binding_coskip_sets_edge_optional_per_stance`.
+ * `test_item_head_ref_yields_no_edge_but_producer_ref_does`,
+ * `test_binding_coskip_sets_edge_optional_per_stance` and the branch gate rows the reference
+ * check decides by reading a union field under the gate: the `${d.output.limit}` case of
+ * `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
+ * `test_a_co_skipping_default_keeps_the_gate_in_the_branch` and
+ * `test_a_guarded_read_inside_a_default_loads` (the gate's targets are narrowed to Buy), and
+ * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it` (they aren't, since the default
+ * read lets the gate run outside the branch), with its case
+ * `load-core/engine_graph__a_default_read_of_a_branch_lets_the_gate_run_outside_it`.
  *
  * Changed: Python's `FuncNode` is a minimal `Node` subclass; node and wiring tables are `Map`s;
  * bindings compare by `source`, `origin` and `contract`. The compose rows assemble their flows
@@ -39,15 +46,7 @@
  *
  * The harvested `load-core/engine_graph__a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`
  * is pinned at the end, with the `ok` case `load-core/engine_graph__a_guarded_read_inside_a_default_loads`,
- * which only checks for now that no ported pass rejects its guarded `when:`.
- *
- * Later (T3-18 PR 3), decided by the reference check reading a union field under the gate: the
- * `${d.output.limit}` case of `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
- * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it` (and its harvested case) and
- * `test_a_co_skipping_default_keeps_the_gate_in_the_branch` and
- * `test_a_guarded_read_inside_a_default_loads` (its `when:` reads a union field under an
- * `isinstance` guard; no ported pass can reject it yet); until then they load whatever the
- * narrowing gives.
+ * which checks that the reference check accepts its guarded `when:`.
  */
 
 import { expect, test } from "bun:test";
@@ -365,8 +364,8 @@ output: \${hot.output | cold.output | e.output}
 
 const branchGate = (when: string, hot: string) => BRANCH_GATE_FLOW.replace("<when>", when).replace("<hot>", hot);
 
-test("a plain read of a branch keeps the gate in the branch (arithmetic on the branch)", () => {
-  assembleText(branchGate('"a.output >= 1"', "${a.output + 1}"));
+test.each(["${d.output.limit}", "${a.output + 1}"])("a plain read of a branch keeps the gate in the branch (%s)", (hot) => {
+  assembleText(branchGate('"a.output >= 1"', hot));
 });
 
 test("a default read of a branch rejects arithmetic on it downstream", () => {
@@ -375,6 +374,15 @@ test("a default read of a branch rejects arithmetic on it downstream", () => {
     "node 'hot' input 'v': ${a.output + 1} does arithmetic on a.output, which is null when node 'a' is skipped; " +
       "give it a default with :-, e.g. (a.output :- <default>)",
   );
+});
+
+test("a guarded read inside a default loads", () => {
+  assembleText(branchGate('"isinstance(d.output, Buy) and (d.output.limit :- 0) > 1"', "${input.s}"));
+});
+
+test("a co-skipping default keeps the gate in the branch", () => {
+  // The required join `${a.output}` still skips the gate with `a`, so `hot` sees only Buy.
+  assembleText(branchGate('"(a.output :- input.s) == 1"', "${d.output.limit}"));
 });
 
 test("a searched case condition with a nested span shows the rewrite", () => {
@@ -474,6 +482,17 @@ test("a binding's co-skip sets the edge's optional per stance", () => {
   // Non-co-skipping bindings (concrete or required) are optional:
   expect(byTo.get("lit_default")!.optional).toBe(true); // `:-"literal"` default
   expect(byTo.get("required")!.optional).toBe(true); // `:?` required
+});
+
+test("a default read of a branch lets the gate run outside it", () => {
+  // The gate now runs when `a` is skipped, so its targets no longer see only Buy.
+  const error = loadError(() => assembleText(branchGate('"(a.output :- 0) >= 1"', "${d.output.limit}")));
+
+  expect(error.message).toBe(
+    "flow has unresolved references:\n" +
+      "  node 'hot' input 'v' from: reference ${d.output.limit} reads field 'limit', which " +
+      "only union members with action buy have; read it inside a case on ${d.output.action}",
+  );
 });
 
 test("growth rejected keeps the original error and refuses a non-Error", () => {
@@ -937,4 +956,5 @@ test("compile/index.ts exports exactly Python's yian.compile.__all__", () => {
 test.each<CaseRow>([
   { id: "load-core/engine_graph__a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream", call: assembled },
   { id: "load-core/engine_graph__a_guarded_read_inside_a_default_loads", call: assembled },
+  { id: "load-core/engine_graph__a_default_read_of_a_branch_lets_the_gate_run_outside_it", call: assembled },
 ])("assembled: $id", runCase);

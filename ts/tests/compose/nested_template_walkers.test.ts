@@ -3,9 +3,6 @@
  * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
- * Later (T3-18 PR 3): `test_dangling_nested_reference_fails_at_its_own_line`,
- * `test_dangling_nested_output_reference_fails_at_its_own_line` and
- * `test_nested_reference_field_is_checked` (reference checks).
  * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
  * Later (T3-22, T4): `test_map_over_literal_list_without_spans_still_loads` and
  * `test_nested_references_in_a_map_child_run_after_growth` (loads and runs).
@@ -71,6 +68,39 @@ test("a flow output field reads as a template", () => {
 
   expect(compiled.outputs.map((output) => output.name)).toEqual(["r"]);
   expect(compiled.outputs[0]!.binding.source).toBeInstanceOf(ValueTemplate);
+});
+
+test("dangling nested reference fails at its own line", () => {
+  const text = codeFlow("\n        a: ${p.output}\n        b: ${nope.output}");
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.diagnostic.message).toContain(
+    "node 'c' input 'x' from: reference ${nope.output} uses unknown namespace 'nope'",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "        b: ${nope.output}"));
+});
+
+test("dangling nested output reference fails at its own line", () => {
+  const text = codeFlow("${p.output}").replace(
+    "output: ${c.output}",
+    "output:\n  r:\n    a: ${c.output}\n    b:\n      - ${nope.output}",
+  );
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.diagnostic.message).toContain("flow output from: reference ${nope.output} uses unknown namespace 'nope'");
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "      - ${nope.output}"));
+});
+
+test("nested reference field is checked", () => {
+  const text =
+    "typedefs:\n  Rec: {a: str}\n" +
+    codeFlow("{a: '${p.output.zz}'}").replace("  p:\n    kind: code\n", "  p:\n    kind: code\n    output: Rec\n");
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.diagnostic.message).toContain("reference ${p.output.zz} reads unknown field 'zz' on record");
 });
 
 test("a nested reference orders its consumer after the producer", () => {
@@ -218,6 +248,14 @@ test.each<CaseRow>([
   { id: "load-core/compose_nested_template_walkers__nested_case_output_in_a_default_fails", call: assembled },
   { id: "load-core/compose_nested_template_walkers__retired_inline_flow_call_in_an_output", call: assembled },
 ])("assembled: $id", runCase);
+
+// The reference check raises the dangling reference.
+test("assembled: load-core/compose_nested_template_walkers__dangling_nested_reference_fails_at_its_own_line", () => {
+  runCase({
+    id: "load-core/compose_nested_template_walkers__dangling_nested_reference_fails_at_its_own_line",
+    call: assembled,
+  });
+});
 
 // The type-table pass raises the unknown name.
 test("assembled: load-core/compose_nested_template_walkers__unknown_nested_isinstance_name_fails", () => {

@@ -19,8 +19,9 @@
  * `test_the_issue_flow_is_a_load_error_at_until`, `test_fitting_or_unproven_sources_load` (13),
  * `test_call_directive_over_with_a_str_output_is_a_load_error`, `test_isinstance_keeps_its_own_error`,
  * the first half of `test_tagged_wrong_reference_reports_the_type_first`,
- * `test_record_typedef_is_named`, `test_none_typed_source_is_a_load_error`,
- * `test_type_error_comes_before_the_cycle_error` and `test_a_case_branch_narrows_the_source`.
+ * `test_dangling_reference_keeps_its_error`, `test_record_typedef_is_named`,
+ * `test_none_typed_source_is_a_load_error`, `test_type_error_comes_before_the_cycle_error` and
+ * `test_a_case_branch_narrows_the_source`.
  *
  * Changed: TS YAML reads an unquoted date or timestamp as text, so `over: 2026-01-01` and
  * `over: 2026-01-01T10:00:00` are read as text (Python: "a date", "a date and time"), and the
@@ -32,10 +33,10 @@
  * integer_until_literal,month_13_text_until_is_not_a_date,null_until_is_empty,
  * literal_until_check_in_an_inline_body}`).
  *
- * Later (T3-18 PR 3): `test_dangling_reference_keeps_its_error` (the reference validator).
  * Later (T3-22): the `defs` half of `test_literal_check_reaches_defs_and_inline_bodies` and
- * `test_reference_check_reaches_defs` (the def's own assembly); the last third of `test_tagged_wrong_literal_reports_the_type_first` and the second
- * half of `test_tagged_wrong_reference_reports_the_type_first` ("a tag types a value",
+ * `test_reference_check_reaches_defs` (the def's own assembly); the last third of
+ * `test_tagged_wrong_literal_reports_the_type_first` and the second half of
+ * `test_tagged_wrong_reference_reports_the_type_first` ("a tag types a value",
  * `reject_unread_tags`).
  */
 
@@ -502,6 +503,13 @@ test("a tagged wrong reference reports the type first", () => {
   const error = errorOf(text);
   expect(error.diagnostic.message).toBe(untilRefMessage("int"));
   expect(startLine(error)).toBe(lineOf(text, "until: "));
+});
+
+test("a dangling reference keeps its error", () => {
+  expect(errorOf(mapRef("${input.nope}"), MAP_REF_DEFS).diagnostic.message).toBe(
+    "flow has unresolved references:\n" +
+      "  node 'm' map over: reference ${input.nope} points to unknown flow input 'nope'",
+  );
 });
 
 test("a record typedef is named", () => {

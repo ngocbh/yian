@@ -37,16 +37,10 @@
  * `test_an_opaque_object_outside_isinstance_does_not_fit_a_record`,
  * `test_an_isinstance_branch_narrows_a_nullable_base_to_the_member`,
  * `test_a_partly_shared_union_branch_passes_the_shared_members_to_a_call` and the call half of
- * `test_a_member_that_only_overlaps_the_checked_union_keeps_the_checked_type`.
- *
- * Changed: a compared tag and its close match are spelled `"biy"` / `did you mean "buy"?` (Python
- * `'biy'` / `did you mean 'buy'?`), and the cycle's nodes and the uncovered tags as JSON text,
- * `["b","c"]` and `["hold","sell"]` (Python `['b', 'c']` and `['hold', 'sell']`).
- *
- * Later (T3-18): the rows whose error the reference validator raises, or that load only once it
- * reads the narrowed views: `test_a_buy_branch_reads_a_member_field`,
- * `test_a_nested_inline_call_in_a_branch_target_is_narrowed` (its flow loads unrouted too until the
- * reference validator checks `${d.output.qty}`),
+ * `test_a_member_that_only_overlaps_the_checked_union_keeps_the_checked_type`. The rows whose
+ * error the reference validator raises on the narrowed views, or that load only under them:
+ * `test_a_buy_branch_reads_a_member_field`,
+ * `test_a_nested_inline_call_in_a_branch_target_is_narrowed`,
  * `test_a_hold_branch_reading_qty_reads_an_unknown_field_on_hold`,
  * `test_a_plain_reference_chain_is_narrowed`, `test_a_join_of_buy_and_sell_branches_narrows_to_both`,
  * `test_depends_on_propagates_the_branch`, `test_runs_after_does_not_propagate_the_branch`,
@@ -56,6 +50,7 @@
  * `test_a_node_routed_by_two_narrowing_cases_on_different_bases_is_not_narrowed`,
  * `test_a_node_routed_by_a_narrowing_case_and_a_searched_case_is_not_narrowed`,
  * `test_an_inner_searched_case_in_a_buy_branch_keeps_the_narrowing`,
+ * `test_a_nested_on_case_over_a_union_field_narrows_outer_then_inner` (its member-field read),
  * `test_a_nested_on_case_outside_the_outer_branch_is_a_rule_one_error`,
  * `test_a_flow_input_base_narrows`, `test_a_path_base_narrows`,
  * `test_on_over_a_coalesce_does_not_narrow`, `test_on_over_embedded_text_does_not_narrow`,
@@ -89,12 +84,16 @@
  * `test_a_searched_else_is_not_narrowed`, `test_isinstance_on_a_flow_input_narrows`,
  * `test_isinstance_inside_an_on_branch_composes`,
  * `test_isinstance_of_a_partly_shared_union_reads_the_shared_fields`,
- * `test_a_partly_shared_union_check_lines_up_with_an_on_else` and
- * `test_a_conjunct_after_a_partly_shared_union_check_reads_the_shared_fields`; the member-field
- * read of `test_a_nested_on_case_over_a_union_field_narrows_outer_then_inner` (its
- * `${d.output.leg.price}` loads only under both cases' narrowing; until the reference validator
- * runs, the same read loads unrouted too, so the TS load proves nothing about it); and the
- * reference half of `test_a_member_that_only_overlaps_the_checked_union_keeps_the_checked_type`.
+ * `test_a_partly_shared_union_check_lines_up_with_an_on_else`,
+ * `test_a_conjunct_after_a_partly_shared_union_check_reads_the_shared_fields` and the reference
+ * half of `test_a_member_that_only_overlaps_the_checked_union_keeps_the_checked_type`; the
+ * harvested cases `…__a_misspelled_read_in_a_when_names_the_narrowed_type`,
+ * `…__a_read_in_a_when_of_a_field_the_narrowed_members_lack` and
+ * `…__a_when_read_narrowed_only_by_the_routing`, each pinned whole.
+ *
+ * Changed: a compared tag and its close match are spelled `"biy"` / `did you mean "buy"?` (Python
+ * `'biy'` / `did you mean 'buy'?`), and the cycle's nodes and the uncovered tags as JSON text,
+ * `["b","c"]` and `["hold","sell"]` (Python `['b', 'c']` and `['hold', 'sell']`).
  *
  * Later (T4): `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` and
  * `test_a_partly_shared_union_branch_runs` (runs).
@@ -145,6 +144,9 @@ const TYPEDEFS =
 const QTY_ERROR =
   "reference ${d.output.qty} reads field 'qty', which only union members with action " +
   "buy, sell have; read it inside a case on ${d.output.action}";
+const LIMIT_ERROR =
+  "reference ${d.output.limit} reads field 'limit', which only union members with " +
+  "action buy have; read it inside a case on ${d.output.action}";
 
 const DEFS =
   "defs:\n" +
@@ -224,11 +226,11 @@ function flow(...nodes: string[]): string {
 }
 
 /**
- * A flow as `flow` builds it, with producer `d` typed `dType` (default `Decision`) and an `input:`
- * section holding `inputs` (default `s: !str`).
+ * A flow as `flow` builds it, with producer `d` typed `dType` (default `Decision`), an `input:`
+ * section holding `inputs` (default `s: !str`) and the flow `output` (default `${d.output.action}`).
  */
-function flowWith(options: { inputs?: string; dType?: string }, ...nodes: string[]): string {
-  const { inputs = "  s: !str\n", dType = "Decision" } = options;
+function flowWith(options: { inputs?: string; dType?: string; output?: string }, ...nodes: string[]): string {
+  const { inputs = "  s: !str\n", dType = "Decision", output = "${d.output.action}" } = options;
   return (
     "id: p\nname: p\n" +
     TYPEDEFS +
@@ -236,7 +238,7 @@ function flowWith(options: { inputs?: string; dType?: string }, ...nodes: string
     "nodes:\n" +
     producer("d", dType) +
     nodes.join("") +
-    "output: ${d.output.action}\n" +
+    `output: ${output}\n` +
     DEFS
   );
 }
@@ -287,6 +289,252 @@ function searched(...cases: (readonly [string, string])[]): string {
 /** The message of the `LoadError` assembling `text` throws. */
 const assembleError = (text: string): string => loadError(() => load(text)).message;
 
+// --- narrowed reads --- //
+
+test("a buy branch reads a member field", () => {
+  load(
+    flow(
+      caseNode("route", ON, [
+        ["buy", "b"],
+        ["sell", "s"],
+        ["hold", "h"],
+      ]),
+      code("b", { q: "${d.output.qty}", l: "${d.output.limit}" }),
+      code("s", { p: "${d.output.price}" }),
+      code("h", { n: "${d.output.note}" }),
+    ),
+  );
+});
+
+test("a hold branch reading qty reads an unknown field on hold", () => {
+  const message = assembleError(
+    flow(
+      caseNode(
+        "route",
+        ON,
+        [
+          ["buy", "b"],
+          ["hold", "h"],
+        ],
+        "b",
+      ),
+      code("b", { q: "${d.output.qty}" }),
+      code("h", { q: "${d.output.qty}" }),
+    ),
+  );
+  expect(message).toContain("node 'h' input 'q' from: reference ${d.output.qty} reads unknown field 'qty'");
+  expect(message).not.toContain("node 'b'");
+});
+
+// --- chains --- //
+
+test("a plain reference chain is narrowed", () => {
+  load(
+    flow(
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      code("b", { o: "${d.output}" }),
+      code("e"),
+      code("c", { y: "${b.output}", l: "${d.output.limit}" }),
+    ),
+  );
+});
+
+describe("a join of buy and sell branches narrows to both", () => {
+  test.each(["${b.output | s.output}", "${b.output :- s.output}"])("%s", (join) => {
+    const branches = [
+      caseNode(
+        "route",
+        ON,
+        [
+          ["buy", "b"],
+          ["sell", "s"],
+        ],
+        "e",
+      ),
+      code("b"),
+      code("s"),
+      code("e"),
+    ];
+    load(flow(...branches, code("c", { y: join, q: "${d.output.qty}" })));
+    const message = assembleError(flow(...branches, code("c", { y: join, l: "${d.output.limit}" })));
+    expect(message).toContain(
+      "node 'c' input 'l' from: reference ${d.output.limit} reads field 'limit', which only " +
+        "union members with action buy have",
+    );
+  });
+});
+
+test("depends_on propagates the branch", () => {
+  load(
+    flow(
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      code("b"),
+      code("e"),
+      code("c", { l: "${d.output.limit}" }, { depends_on: "[b]" }),
+    ),
+  );
+});
+
+test("runs_after does not propagate the branch", () => {
+  const message = assembleError(
+    flow(
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      code("b"),
+      code("e"),
+      code("c", { l: "${d.output.limit}" }, { runs_after: "[b]" }),
+    ),
+  );
+  expect(message).toContain(`node 'c' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("an optional group does not propagate the branch", () => {
+  const message = assembleError(
+    flow(
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      code("b"),
+      code("e"),
+      code("c", { y: "${b.output:-0}", l: "${d.output.limit}" }),
+    ),
+  );
+  expect(message).toContain(`node 'c' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("a nested inline call in a branch target is narrowed", () => {
+  // `inner` is lifted out of the routed `outer`, so it carries the same route.
+  load(
+    flow(caseNode("route", ON, [["buy", "call(outer, x=call(inner, y=${d.output.qty}))"]], "e"), code("e")),
+  );
+});
+
+// --- routing --- //
+
+test("two whens to one node give a two-member union", () => {
+  const branches = [
+    caseNode(
+      "route",
+      ON,
+      [
+        ["buy", "b"],
+        ["sell", "b"],
+      ],
+      "e",
+    ),
+    code("e"),
+  ];
+  load(flow(...branches, code("b", { q: "${d.output.qty}" })));
+  const message = assembleError(flow(...branches, code("b", { l: "${d.output.limit}" })));
+  expect(message).toContain("reads field 'limit', which only union members with action buy have");
+});
+
+test("else gives the remaining member", () => {
+  const branches = [
+    caseNode(
+      "route",
+      ON,
+      [
+        ["buy", "b"],
+        ["sell", "s"],
+      ],
+      "e",
+    ),
+    code("b"),
+    code("s"),
+  ];
+  load(flow(...branches, code("e", { n: "${d.output.note}" })));
+  const message = assembleError(flow(...branches, code("e", { q: "${d.output.price}" })));
+  expect(message).toContain("reads unknown field 'price' on record");
+});
+
+test("else gives the remaining union", () => {
+  const branches = [caseNode("route", ON, [["buy", "b"]], "e"), code("b")];
+  load(flow(...branches, code("e", { n: "${d.output.note}" })));
+  const message = assembleError(flow(...branches, code("e", { p: "${d.output.price}" })));
+  expect(message).toContain(
+    "reference ${d.output.price} reads field 'price', which only union members with action sell have",
+  );
+});
+
+// --- control edges --- //
+
+test("a node routed by two narrowing cases on different bases is not narrowed", () => {
+  const message = assembleError(
+    flow(
+      producer("d2", "Decision"),
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      caseNode("route2", "${d2.output.action}", [["buy", "b"]], "e"),
+      code("b", { l: "${d.output.limit}" }),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(`node 'b' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("a node routed by a narrowing case and a searched case is not narrowed", () => {
+  const message = assembleError(
+    flow(
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      caseNode("gate", null, [["input.s == 'x'", "b"]], "e"),
+      code("b", { l: "${d.output.limit}" }),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(`node 'b' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+// --- case of case --- //
+
+test("an inner searched case in a buy branch keeps the narrowing", () => {
+  load(
+    flow(
+      caseNode("route", ON, [["buy", "inner"]], "e"),
+      caseNode("inner", null, [["${d.output.limit > 5}", "t"]], "t2"),
+      code("t", { l: "${d.output.limit}" }),
+      code("t2", { q: "${d.output.qty}" }),
+      code("e"),
+    ),
+  );
+});
+
+// --- not narrowed --- //
+
+test("on over a coalesce does not narrow", () => {
+  const message = assembleError(
+    flow(
+      producer("d2", "Decision"),
+      caseNode("route", "${d.output.action | d2.output.action}", [["buy", "b"]], "e"),
+      code("b", { l: "${d.output.limit}" }),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(`node 'b' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("on over embedded text does not narrow", () => {
+  const message = assembleError(
+    flow(
+      caseNode("route", "'x${d.output.action}'", [["xbuy", "b"]], "e"),
+      code("b", { l: "${d.output.limit}" }),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(`node 'b' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("nodes outside the branch and the flow output are not narrowed", () => {
+  const message = assembleError(
+    flowWith(
+      { output: "${d.output.limit}" },
+      caseNode("route", ON, [["buy", "b"]], "e"),
+      code("b", { l: "${d.output.limit}" }),
+      code("e"),
+      code("o", { l: "${d.output.limit}" }),
+    ),
+  );
+  expect(message).toContain(`node 'o' input 'l' from: ${LIMIT_ERROR}`);
+  expect(message).toContain(`flow output from: ${LIMIT_ERROR}`);
+  expect(message).not.toContain("node 'b'");
+});
+
 // --- robustness --- //
 
 test("a cycle through a branch reports the cycle", () => {
@@ -306,6 +554,13 @@ test("a member-only field on a cycle reports the cycle", () => {
     flow(code("b", { y: "${c.output}", l: "${d.output.limit}" }), code("c", { y: "${b.output}" })),
   );
   expect(message).toContain('flow has a cycle involving ["b","c"]');
+});
+
+test("a field no member has on a cycle is still an unknown field", () => {
+  const message = assembleError(
+    flow(code("b", { y: "${c.output}", z: "${d.output.zzz}" }), code("c", { y: "${b.output}" })),
+  );
+  expect(message).toContain("reads unknown field 'zzz' on record");
 });
 
 test("an unknown depends_on still reports the unknown node", () => {
@@ -457,6 +712,63 @@ test("a nullable union defensive else sees None", () => {
   expect(message).toBe(`node 'route' else ${PLACE_REST_EXPECTS}, source is 'None'`);
 });
 
+// --- empty narrowing sets --- //
+
+test("a defensive else after every tag loads and is not narrowed", () => {
+  const branches = [
+    caseNode(
+      "route",
+      ON,
+      [
+        ["buy", "b"],
+        ["sell", "b"],
+        ["hold", "b"],
+      ],
+      "e",
+    ),
+    code("b"),
+  ];
+  load(flow(...branches, code("e", { a: "${d.output.action}" })));
+  const message = assembleError(flow(...branches, code("e", { l: "${d.output.limit}" })));
+  expect(message).toContain(`node 'e' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("a contradictory nested case target is not narrowed", () => {
+  const branches = [
+    caseNode("route", ON, [["buy", "inner"]], "e"),
+    caseNode("inner", ON, [
+      ["buy", "t1"],
+      ["sell", "t"],
+    ]),
+    code("t1"),
+    code("e"),
+  ];
+  load(flow(...branches, code("t", { a: "${d.output.action}" })));
+  const message = assembleError(flow(...branches, code("t", { l: "${d.output.limit}" })));
+  expect(message).toContain(`node 't' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("required groups from buy and sell branches meet empty", () => {
+  const message = assembleError(
+    flow(
+      caseNode(
+        "route",
+        ON,
+        [
+          ["buy", "b"],
+          ["sell", "s"],
+        ],
+        "e",
+      ),
+      code("b"),
+      code("s"),
+      code("e"),
+      code("c", { x: "${b.output}", y: "${s.output}", q: "${d.output.qty}" }),
+    ),
+  );
+  expect(message).toContain(`node 'c' input 'q' from: ${QTY_ERROR}`);
+});
+
 // --- on: cases over a narrowed tag --- //
 
 test("a nested on case over a union field narrows outer then inner", () => {
@@ -472,6 +784,21 @@ test("a nested on case over a union field narrows outer then inner", () => {
       code("e"),
     ),
   );
+});
+
+test("a nested on case outside the outer branch is a rule one error", () => {
+  const message = assembleError(
+    flow(
+      caseNode("inner", "${d.output.leg.type}", [
+        ["limit", "t"],
+        ["market", "m"],
+      ]),
+      code("t"),
+      code("m"),
+    ),
+  );
+  expect(message).toContain("node 'inner'");
+  expect(message).toContain("reads field 'leg', which only union members");
 });
 
 test("an inner on case is exhaustive over its narrowed tag", () => {
@@ -498,6 +825,33 @@ test("an inner on case over a flow input is exhaustive over its narrowed tag", (
 });
 
 // --- other bases --- //
+
+test("a flow input base narrows", () => {
+  const inputFlow = (...extra: string[]) =>
+    flowWith(
+      { inputs: "  s: !str\n  d: !Decision\n" },
+      caseNode("route", "${input.d.action}", [["buy", "b"]], "e"),
+      code("b", { l: "${input.d.limit}" }),
+      code("e", { n: "${input.d.note}" }),
+      ...extra,
+    );
+
+  load(inputFlow());
+  const message = assembleError(inputFlow(code("o", { l: "${input.d.limit}" })));
+  expect(message).toContain("node 'o' input 'l' from: reference ${input.d.limit} reads field 'limit'");
+  expect(message).not.toContain("node 'b'");
+});
+
+test("a path base narrows", () => {
+  load(
+    flow(
+      producer("r", "Wrap"),
+      caseNode("route", "${r.output.decision.action}", [["buy", "b"]], "e"),
+      code("b", { l: "${r.output.decision.limit}" }),
+      code("e", { n: "${r.output.decision.note}" }),
+    ),
+  );
+});
 
 test("a path base through an optional record keeps nullability in else", () => {
   const wrapped = (callee: string) =>
@@ -558,12 +912,277 @@ test("a partly shared union branch passes the shared members to a call", () => {
   load(flowWith({ dType: "Optional(Decision)" }, branch, code("e")));
 });
 
-test("a member that only overlaps the checked union keeps the checked type (call half)", () => {
+test("a member that only overlaps the checked union keeps the checked type", () => {
   const call = "call(place_sell_or_narrow, order=${d.output})";
   load(flow(searched(["isinstance(d.output, SellOrNarrow)", call]), code("e")));
+  const message = assembleError(
+    flow(searched(["isinstance(d.output, SellOrNarrow)", "b"]), code("b", { p: "${d.output.price}" }), code("e")),
+  );
+  expect(message).toContain("which only union members with action sell have");
 });
 
 // --- isinstance --- //
+
+test("a target under isinstance reads a member field", () => {
+  load(
+    flow(
+      searched(["isinstance(d.output, Buy)", "b"]),
+      code("b", { q: "${d.output.qty}", l: "${d.output.limit}" }),
+      code("e"),
+    ),
+  );
+});
+
+describe("an isinstance and conjunct narrows", () => {
+  test.each([
+    "isinstance(d.output, Buy) and input.s == 'x'",
+    "input.s == 'x' and isinstance(d.output, Buy)",
+    "${isinstance(d.output, Buy) and input.s == 'x'}",
+  ])("%s", (when) => {
+    load(flow(searched([`"${when}"`, "b"]), code("b", { l: "${d.output.limit}" }), code("e")));
+  });
+});
+
+describe("isinstance under or narrows only what the when proves", () => {
+  test.each([
+    "isinstance(d.output, Buy) or input.s == 'x'",
+    "not (isinstance(d.output, Buy) and input.s == 'x')",
+    "not isinstance(d.output, Hold)",
+  ])("%s", (when) => {
+    // The check may not hold when `input.s` decides, and `Sell` passes `not Hold` too.
+    const message = assembleError(
+      flow(searched([`"${when}"`, "b"]), code("b", { l: "${d.output.limit}" }), code("e")),
+    );
+    expect(message).toContain(`node 'b' input 'l' from: ${LIMIT_ERROR}`);
+  });
+});
+
+describe("a branch sees a tag comparison", () => {
+  test.each(["d.output.action == 'buy'", "'buy' == d.output.action"])("%s", (when) => {
+    load(flow(searched([`"${when}"`, "b"]), code("b", { l: "${d.output.limit}" }), code("e")));
+  });
+});
+
+describe("a branch reads the fields the members its when proves share", () => {
+  test.each([
+    "not isinstance(d.output, Hold)",
+    "isinstance(d.output, Buy) or isinstance(d.output, Sell)",
+    "d.output.action != 'hold'",
+  ])("%s", (when) => {
+    load(flow(searched([`"${when}"`, "b"]), code("b", { q: "${d.output.qty}" }), code("e")));
+    const message = assembleError(
+      flow(searched([`"${when}"`, "b"]), code("b"), code("e", { l: "${d.output.limit}" })),
+    );
+    expect(message).toContain(`node 'e' input 'l' from: ${LIMIT_ERROR}`);
+  });
+});
+
+describe("a read in a when is narrowed through and, or and not", () => {
+  test.each([
+    "not isinstance(d.output, Buy) or d.output.limit > 5",
+    "d.output.action == 'buy' and d.output.limit > 5",
+    "d.output.action != 'buy' or d.output.limit > 5",
+    "not (isinstance(d.output, Buy) and d.output.limit > 5)",
+    "(isinstance(d.output, Buy) and d.output.limit > 5) or d.output.action == 'hold'",
+    "isinstance(d.output, Rest) or d.output.limit > 5",
+  ])("%s", (when) => {
+    load(flow(searched([`"${when}"`, "b"]), code("b"), code("e")));
+  });
+});
+
+describe("a read in a when of a field the narrowed members lack is an error", () => {
+  test.each<[string, string]>([
+    ["isinstance(d.output, Buy) or d.output.limit > 5", "Hold | Sell"],
+    // `Buy` is no `Rest`, so only the shared `Hold` and `Sell` reach the read.
+    ["not isinstance(d.output, Rest) or d.output.limit > 5", "Hold | Sell"],
+  ])("%s", (when, narrowed) => {
+    const message = assembleError(flow(searched([`"${when}"`, "b"]), code("b"), code("e")));
+    expect(message).toContain(
+      "node 'route' cases[0].when from: reference ${d.output.limit} reads field 'limit', " +
+        `which ${narrowed} doesn't have; d.output is ${narrowed} here, by the checks before this read`,
+    );
+  });
+});
+
+test("a misspelled read in a when names the narrowed type", () => {
+  const message = assembleError(
+    flow(searched(['"isinstance(d.output, Buy) and d.output.limt > 5"', "b"]), code("b"), code("e")),
+  );
+  expect(message).toContain(
+    "node 'route' cases[0].when from: reference ${d.output.limt} reads field 'limt', " +
+      "which Buy doesn't have; d.output is Buy here, by the checks before this read; " +
+      "did you mean 'limit'?",
+  );
+});
+
+test("a branch of a negated partly shared check keeps the overlapping member", () => {
+  const when = '"not isinstance(d.output, SellOrNarrow)"';
+  let message = assembleError(flow(searched([when, "b"]), code("b", { l: "${d.output.limit}" }), code("e")));
+  expect(message).toContain(
+    "node 'b' input 'l' from: reference ${d.output.limit} reads field 'limit', which only " +
+      "union members with action buy have",
+  );
+  message = assembleError(flow(searched([when, "b"]), code("b", { p: "${d.output.price}" }), code("e")));
+  expect(message).toContain("node 'b' input 'p' from: reference ${d.output.price} reads unknown field 'price'");
+});
+
+test("a read after a check the routing decides is checked against the routing", () => {
+  const routed = (when: string) =>
+    flow(
+      caseNode("route", ON, [["buy", "inner"]], "e"),
+      caseNode("inner", null, [[`"${when}"`, "t"]], "m"),
+      code("t"),
+      code("m"),
+      code("e"),
+    );
+
+  load(routed("isinstance(d.output, Buy) or d.output.limit > 5"));
+  const message = assembleError(routed("isinstance(d.output, Decision) or d.output.nosuch > 5"));
+  expect(message).toContain("reads unknown field 'nosuch'");
+});
+
+test("a when read narrowed only by the routing credits the routing", () => {
+  // The check on `input.o` says nothing about `d.output`: the routing makes it Buy.
+  const message = assembleError(
+    flowWith(
+      { inputs: "  s: !str\n  o: !Reply\n" },
+      caseNode("route", ON, [["buy", "inner"]], "e"),
+      caseNode("inner", null, [['"isinstance(input.o, Text) and d.output.nosuch > 0"', "t"]], "m"),
+      code("t"),
+      code("m"),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(
+    "reference ${d.output.nosuch} reads field 'nosuch', which Buy doesn't have; d.output " +
+      "is Buy here, by the case branch that routes this node",
+  );
+});
+
+test("a when read past a check the checks before it decide is checked under them", () => {
+  let when = "isinstance(d.output, Buy) and (isinstance(d.output, Buy) or d.output.limit > 0)";
+  load(flow(searched([`"${when}"`, "b"]), code("b"), code("e")));
+  when =
+    "isinstance(d.output, Buy) or isinstance(d.output, Hold) or isinstance(d.output, Sell) " +
+    "or d.output.limit > 5";
+  const message = assembleError(flow(searched([`"${when}"`, "b"]), code("b"), code("e")));
+  expect(message).toContain(
+    "reference ${d.output.limit} reads field 'limit', which Sell doesn't have; d.output is " +
+      "Sell here, by the checks before this read",
+  );
+});
+
+test("overlapping checks narrow each branch by its own check", () => {
+  const overlapping = (bsRead: string) =>
+    flow(
+      searched(["isinstance(d.output, Buy)", "b"], ["isinstance(d.output, BuyOrSell)", "bs"]),
+      code("b", { l: "${d.output.limit}" }),
+      code("bs", { x: bsRead }),
+      code("e"),
+    );
+
+  load(overlapping("${d.output.qty}"));
+  const message = assembleError(overlapping("${d.output.limit}"));
+  expect(message).toContain(
+    "node 'bs' input 'x' from: reference ${d.output.limit} reads field 'limit', which " +
+      "only union members with action buy have",
+  );
+});
+
+test("a conjunct after isinstance reads the narrowed base", () => {
+  load(flow(searched(['"isinstance(d.output, Buy) and d.output.limit > 5"', "b"]), code("b"), code("e")));
+});
+
+test("a conjunct before isinstance is a rule one error", () => {
+  const message = assembleError(
+    flow(searched(['"d.output.limit > 5 and isinstance(d.output, Buy)"', "b"]), code("b"), code("e")),
+  );
+  expect(message).toContain(`node 'route' cases[0].when from: ${LIMIT_ERROR}`);
+});
+
+test("a read guarded in one case and unguarded in another is an error", () => {
+  const message = assembleError(
+    flow(
+      searched(['"isinstance(d.output, Buy) and d.output.limit > 5"', "b"], ['"d.output.limit > 1"', "b"]),
+      code("b"),
+      code("e"),
+    ),
+  );
+  // The guarded read in cases[0] is fine; the unguarded one in cases[1] is the error.
+  expect(message).toContain(`node 'route' cases[1].when from: ${LIMIT_ERROR}`);
+});
+
+test("an unguarded read error points at its own when", () => {
+  const text = flow(
+    searched(
+      ['"isinstance(d.output, Buy) and d.output.limit > 5"', "b"],
+      ["input.s == 'x'", "b"],
+      ['"d.output.limit > 1"', "b"],
+    ),
+    code("b"),
+    code("e"),
+  );
+  const error = loadError(() => load(text));
+  expect(error.message).toContain(`node 'route' cases[2].when from: ${LIMIT_ERROR}`);
+  const line = text.split("\n").findIndex((row) => row.includes("d.output.limit > 1")) + 1;
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
+});
+
+test("a read unguarded first points at the first when", () => {
+  const message = assembleError(
+    flow(
+      searched(['"d.output.limit > 1"', "b"], ['"isinstance(d.output, Buy) and d.output.limit > 5"', "b"]),
+      code("b"),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(`node 'route' cases[0].when from: ${LIMIT_ERROR}`);
+});
+
+describe("isinstance of a type the base already fits does not narrow", () => {
+  test.each(["object", "Decision"])("%s", (typeName) => {
+    const message = assembleError(
+      flow(searched([`isinstance(d.output, ${typeName})`, "b"]), code("b", { q: "${d.output.qty}" }), code("e")),
+    );
+    expect(message).toContain(`node 'b' input 'q' from: ${QTY_ERROR}`);
+  });
+});
+
+test("a read guarded by different members reads their shared fields", () => {
+  const guarded = (field: string) =>
+    flow(
+      searched(
+        [`"isinstance(d.output, Buy) and d.output.${field} > 5"`, "b"],
+        [`"isinstance(d.output, Sell) and d.output.${field} > 1"`, "s"],
+      ),
+      code("b"),
+      code("s"),
+      code("e"),
+    );
+
+  load(guarded("qty"));
+  const message = assembleError(guarded("limit"));
+  expect(message).toContain("reads field 'limit', which only union members with action buy have");
+});
+
+test("isinstance narrows an untagged union to the member", () => {
+  const untagged = (...extra: string[]) =>
+    flowWith(
+      { dType: "Reply", output: "${d.output}" },
+      searched(["isinstance(d.output, Text)", "b"]),
+      code("b", { t: "${d.output.text}" }),
+      code("e"),
+      ...extra,
+    );
+
+  load(untagged());
+  const message = assembleError(untagged(code("o", { t: "${d.output.text}" })));
+  expect(message).toContain(
+    "node 'o' input 't' from: reference ${d.output.text} reads field 'text', which only " +
+      "1 of 2 union members have",
+  );
+  expect(message).not.toContain("node 'b'");
+});
 
 test("isinstance narrows an opaque object to the checked type", () => {
   const opaque = (when: string) =>
@@ -595,6 +1214,40 @@ test("an opaque object outside isinstance does not fit a record", () => {
   expect(message).toBe(`node 'route' cases[0].then ${PLACE_EXPECTS}, source is 'object'`);
 });
 
+test("a target routed by two isinstance cases gets their union", () => {
+  const routed = (read: string) =>
+    flow(
+      searched(["isinstance(d.output, Buy)", "b"], ["isinstance(d.output, Sell)", "b"]),
+      code("b", { x: read }),
+      code("e"),
+    );
+
+  load(routed("${d.output.qty}"));
+  const message = assembleError(routed("${d.output.limit}"));
+  expect(message).toContain("reads field 'limit', which only union members with action buy have");
+});
+
+test("a target routed by isinstance and a plain case is not narrowed", () => {
+  const message = assembleError(
+    flow(
+      searched(["isinstance(d.output, Buy)", "b"], ["input.s == 'x'", "b"]),
+      code("b", { l: "${d.output.limit}" }),
+      code("e"),
+    ),
+  );
+  expect(message).toContain(`node 'b' input 'l' from: ${LIMIT_ERROR}`);
+});
+
+test("a searched else is not narrowed", () => {
+  const message = assembleError(
+    flow(searched(["isinstance(d.output, Buy)", "b"]), code("b"), code("e", { n: "${d.output.note}" })),
+  );
+  expect(message).toContain(
+    "node 'e' input 'n' from: reference ${d.output.note} reads field 'note', which only " +
+      "union members with action hold, sell have",
+  );
+});
+
 test("an isinstance branch narrows a nullable base to the member", () => {
   load(
     flowWith(
@@ -605,9 +1258,59 @@ test("an isinstance branch narrows a nullable base to the member", () => {
   );
 });
 
+test("isinstance on a flow input narrows", () => {
+  load(
+    flowWith(
+      { inputs: "  s: !str\n  d: !Decision\n" },
+      searched(["isinstance(input.d, Buy)", "b"]),
+      code("b", { l: "${input.d.limit}" }),
+      code("e"),
+    ),
+  );
+});
+
+test("isinstance inside an on branch composes", () => {
+  load(
+    flow(
+      caseNode("route", ON, [["buy", "inner"]], "e"),
+      caseNode("inner", null, [["isinstance(d.output.leg, Limit)", "t"]], "m"),
+      code("t", { p: "${d.output.leg.price}" }),
+      code("m"),
+      code("e"),
+    ),
+  );
+});
+
 test("an unknown isinstance type keeps its own error", () => {
   const message = assembleError(flow(searched(["isinstance(d.output, Nope)", "b"]), code("b"), code("e")));
   expect(message).toContain("unknown type 'Nope'");
+});
+
+// --- isinstance against a partly shared union --- //
+
+test("isinstance of a partly shared union reads the shared fields", () => {
+  load(flow(searched(["isinstance(d.output, Rest)", "b"]), code("b", { n: "${d.output.note}" }), code("e")));
+  const message = assembleError(
+    flow(searched(["isinstance(d.output, Rest)", "b"]), code("b", { n: "${d.output.reason}" }), code("e")),
+  );
+  expect(message).toContain("node 'b' input 'n' from: reference ${d.output.reason} reads unknown field 'reason'");
+  expect(message).not.toContain("cancel");
+});
+
+test("a partly shared union check lines up with an on else", () => {
+  load(
+    flow(
+      caseNode("route", ON, [["buy", "b"]], "inner"),
+      caseNode("inner", null, [["isinstance(d.output, Rest)", "t"]], "m"),
+      code("b"),
+      code("t", { n: "${d.output.note}" }),
+      code("m"),
+    ),
+  );
+});
+
+test("a conjunct after a partly shared union check reads the shared fields", () => {
+  load(flow(searched([`"isinstance(d.output, Rest) and d.output.note == 'x'"`, "b"]), code("b"), code("e")));
 });
 
 // ---------- harvested conformance cases ----------
@@ -619,6 +1322,14 @@ test.each<CaseRow>(
     "a_defensive_else_after_every_tag_loads",
   ].map((name) => ({ id: `load-types/compose_union_narrowing__${name}`, call: assembled })),
 )("assemble: $id", runCase);
+
+test.each<CaseRow>(
+  [
+    "a_misspelled_read_in_a_when_names_the_narrowed_type",
+    "a_read_in_a_when_of_a_field_the_narrowed_members_lack",
+    "a_when_read_narrowed_only_by_the_routing",
+  ].map((name) => ({ id: `load-types/compose_union_narrowing__${name}`, call: assembled, full: true })),
+)("assemble (full): $id", runCase);
 
 test("assembledWith: load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none", () => {
   // Its `source is 'None'` is the CASE narrowing's: the defensive `else:` sees only null.

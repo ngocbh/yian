@@ -1,14 +1,29 @@
 /**
- * Load-time field-read checks in node and flow asserts, and the type-table pass's builtin-result
- * reads: a port of the assert rows of `tests/compose/test_field_read_sites.py`:
+ * Load-time field-read checks in prompts, bindings, node and flow asserts and on builtin results: a
+ * port of `tests/compose/test_field_read_sites.py`.
+ *
+ * Ported, the prompt and binding rows the reference validator decides:
+ * `::test_agent_prompt_reads_unknown_field`, `::test_agent_system_prompt_reads_unknown_field`,
+ * `::test_typed_input_field_read_errors_only_when_every_alternative_rejects`,
+ * `::test_typed_union_input_reads_the_narrowed_member_inside_a_branch`,
+ * `::test_typed_record_binding_reads_its_tagged_member` (2), `::test_optional_binding_field_reads`,
+ * `::test_adaptive_brief_field_read_is_reported_on_the_gate`, `::test_literal_input_field_read`,
+ * `::test_null_literal_input_field_read`, `::test_field_read_inside_a_builtin_argument`,
+ * `::test_agent_variable_field_read`, `::test_human_input_prompt_field_read`,
+ * `::test_human_input_question_field_read`, `::test_prompt_field_error_is_reported_once_per_ref`,
+ * `::test_readable_fields_still_load` (6), `::test_narrowed_input_reads_the_branch_member`,
+ * `::test_defaulted_union_binding_hint_names_the_bound_source` and
+ * `::test_transformed_union_binding_hint_names_no_bound_source`.
+ *
+ * Ported, the assert rows the node-assert check and the flow-assert lowering decide:
  * `::test_node_assert_reads_unknown_input_field` (2),
  * `::test_node_assert_field_error_is_reported_once_per_ref`,
  * `::test_call_node_assert_reads_a_field_its_binding_lacks` (2),
  * `::test_loop_assert_reads_a_field_neither_seed_nor_carried_has` (2),
  * `::test_node_assert_literal_input_field_read`, `::test_node_assert_open_input_field_reads_load` (2),
- * `::test_node_assert_reads_the_narrowed_member_inside_a_branch`, the `untagged-assert` and
- * `shared-assert` rows of `::test_isinstance_branch_reads_the_narrowed_member`,
- * `::test_node_assert_reads_are_narrowed_by_the_checks_before_them` (9),
+ * `::test_node_assert_reads_the_narrowed_member_inside_a_branch`,
+ * `::test_isinstance_branch_reads_the_narrowed_member` (5, its prompt rows decided by the reference
+ * validator), `::test_node_assert_reads_are_narrowed_by_the_checks_before_them` (9),
  * `::test_node_assert_reads_the_checks_do_not_cover_are_rejected` (3),
  * `::test_node_assert_read_under_two_guards_is_checked_under_each`,
  * `::test_agent_node_assert_reads_are_narrowed`, `::test_node_assert_output_reads_are_narrowed`,
@@ -25,8 +40,6 @@
  * `::test_node_assert_over_many_locals_with_two_alternatives_loads`,
  * `::test_call_node_assert_member_only_hint_compares_the_tag`,
  * `::test_call_node_assert_member_only_hint_on_an_untagged_union_names_a_case`,
- * `::test_node_assert_reads_a_field_on_a_builtin_result`, the `assert` row of
- * `::test_builtin_results_without_a_field_read_load`,
  * `::test_unparsable_condition_keeps_its_located_parse_error`,
  * `::test_flow_assert_reads_are_narrowed_by_the_checks_before_them` (5),
  * `::test_flow_post_assert_producer_reads_are_narrowed`, `::test_flow_assert_read_before_its_check_is_rejected`,
@@ -34,47 +47,41 @@
  * `::test_flow_assert_check_impossible_even_on_null_is_reported` (2),
  * `::test_flow_assert_read_error_names_the_declared_type` (6),
  * `::test_flow_assert_shorthand_check_is_reported_as_written`, `::test_flow_assert_reads_unknown_input_field` (2),
- * `::test_flow_assert_readable_input_fields_load` (2),
- * `::test_flow_assert_reads_a_field_on_a_builtin_result` and
- * `::test_loop_while_reads_a_field_on_a_builtin_result` (the type-table pass); and the load halves of
+ * `::test_flow_assert_readable_input_fields_load` (2); and the load halves of
  * `::test_loop_assert_reads_the_carried_field` (2), `::test_node_assert_known_input_field_loads_and_runs`,
  * `::test_loop_node_assert_tag_checks_narrow_its_local` (with its two load errors),
  * `::test_partial_record_local_root_reads` (with its load error),
  * `::test_flow_assert_on_a_skippable_producer_reads_null` (2) and
  * `::test_flow_assert_known_input_field_loads_and_runs`.
  *
- * The flows assemble with `assembleText` where Python calls `load_flow`. Each `defs:` entry a CALL
- * or LOOP calls is built by hand (`handChild`, since def bodies load in T3-22): `child` with the
- * def's `v` parameter, `body` with `st: !Rec3` returning `{st: Rec3}`, and the partial `child`
- * with a typed `a` and an opaque `b`. Inline LOOP bodies assemble through the harness's
- * private-child registry.
+ * Ported, the builtin-result rows: `::test_binding_reads_a_field_on_a_builtin_result`,
+ * `::test_flow_output_reads_a_field_on_a_builtin_result`, `::test_prompt_reads_a_field_on_a_builtin_result`,
+ * `::test_case_when_reads_a_field_on_a_builtin_result`, `::test_node_assert_reads_a_field_on_a_builtin_result`,
+ * `::test_flow_assert_reads_a_field_on_a_builtin_result`, `::test_loop_while_reads_a_field_on_a_builtin_result`
+ * (the last three decided by the type-table pass),
+ * `::test_scanned_sites_read_a_field_on_a_builtin_result_once` (3),
+ * `::test_builtin_results_without_a_field_read_load` (3) and `::test_host_builtin_field_reads_load`
+ * (its builtins registered with `registerTemplateFn` and put back in a `finally`, as Python's
+ * `monkeypatch.setitem` does).
+ *
+ * The flows assemble with `assembleText` where Python calls `load_flow`. Each `defs:` entry a CALL,
+ * MAP or LOOP calls is built by hand (`handChild`, since def bodies load in T3-22): `child` with the
+ * def's `v` parameter, the map `child` with its `x` parameter, `body` with `st: !Rec3` returning
+ * `{st: Rec3}`, and the partial `child` with a typed `a` and an opaque `b`. Inline LOOP bodies
+ * assemble through the harness's private-child registry.
  *
  * Changed: the CODE bodies are TS's, as the harvested cases spell them. A compared tag and its
  * close match are spelled `"byu"` / `did you mean "buy"?` (Python `'byu'` / `did you mean 'buy'?`),
  * as is the compared `"hold"` (Python `'hold'`), and the cycle's nodes `["b","c"]` (Python
  * `['b', 'c']`).
  *
- * TS-only: the harvested node-assert and flow-assert cases and the type-table pass's
- * builtin-result case, pinned at the end.
+ * TS-only: the harvested `load-core/compose_field_read_sites__*` cases the reference validator, the
+ * node-assert check, the flow-assert lowering and the type-table pass decide, pinned at the end,
+ * with `full` (every frame and the notes) for `loop_while_reads_a_field_on_a_builtin_result`.
  *
- * Later (T3-18, the reference validator's prompt, binding, `case when`, flow output and scanned
- * sites): `test_agent_prompt_reads_unknown_field`, `test_agent_system_prompt_reads_unknown_field`,
- * `test_typed_input_field_read_errors_only_when_every_alternative_rejects`,
- * `test_typed_union_input_reads_the_narrowed_member_inside_a_branch`,
- * `test_typed_record_binding_reads_its_tagged_member`, `test_optional_binding_field_reads`,
- * `test_adaptive_brief_field_read_is_reported_on_the_gate`, `test_prompt_inside_a_def_reads_unknown_field`,
- * `test_literal_input_field_read`, `test_null_literal_input_field_read`,
- * `test_field_read_inside_a_builtin_argument`, `test_agent_variable_field_read`,
- * `test_human_input_prompt_field_read`, `test_human_input_question_field_read`,
- * `test_prompt_field_error_is_reported_once_per_ref`, `test_readable_fields_still_load`,
- * `test_narrowed_input_reads_the_branch_member`, `test_defaulted_union_binding_hint_names_the_bound_source`,
- * `test_transformed_union_binding_hint_names_no_bound_source`, the prompt rows of
- * `test_isinstance_branch_reads_the_narrowed_member`, `test_binding_reads_a_field_on_a_builtin_result`,
- * `test_flow_output_reads_a_field_on_a_builtin_result`, `test_prompt_reads_a_field_on_a_builtin_result`,
- * `test_case_when_reads_a_field_on_a_builtin_result`,
- * `test_scanned_sites_read_a_field_on_a_builtin_result_once`, the `upper` and `join` rows of
- * `test_builtin_results_without_a_field_read_load`, and `test_host_builtin_field_reads_load` (its
- * binding reads a field of the host builtin's result); and their cases.
+ * Later (T3-22): `test_prompt_inside_a_def_reads_unknown_field`, with its case
+ * `load-core/compose_field_read_sites__prompt_inside_a_def_reads_unknown_field` (a def body's own
+ * assembly).
  *
  * Later (T4): `test_guarded_node_assert_runs`, `test_guarded_flow_assert_runs`, and the run halves
  * of the rows above.
@@ -83,6 +90,7 @@
 import { expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -119,6 +127,9 @@ const STEP =
 const ASSERT_QTY_HINT =
   "reads field 'qty', which only union members with action buy have; " +
   "check the member first with `isinstance(v, <Type>) and ...`";
+
+const QTY_HINT =
+  "reads field 'qty', which only union members with action buy have; read it inside a case on ${d.output.action}";
 
 const UNION_TYPES =
   "  Short: {action: 'Literal(short)', qty: int}\n" +
@@ -240,6 +251,149 @@ function childText(typ: string): string {
     "    output: ${inner.output}\n"
   );
 }
+
+// ---------- prompts ----------
+
+test("agent prompt reads unknown field", () => {
+  expect(loadMessage(flow(agent({ v: "${step.output}" }, "hi ${v.b}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("agent system_prompt reads unknown field", () => {
+  const nodes = agent({ v: "${step.output}" }, "hi", { extra: '    system_prompt: "sys ${v.b}"\n' });
+  expect(loadMessage(flow(nodes, "${ag.output}"))).toContain(
+    "node 'ag' system_prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("typed input field read errors only when every alternative rejects", () => {
+  expect(loadMessage(flow(agent({ w: "!Rec ${step.output}" }, "${w.b}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${w.b} reads unknown field 'b' on record",
+  );
+  load(flow(agent({ w: "!Rec3 ${step.output}" }, "${w.b}"), "${ag.output}"));
+});
+
+test("typed union input reads the narrowed member inside a branch", () => {
+  load(flow(routed(agent({ v: "!Order ${d.output}" }, "${v.qty}")), "${ag.output | other.output}"));
+  const outside = producer("d", "Order") + agent({ v: "!Order ${d.output}" }, "${v.qty}");
+  expect(loadMessage(flow(outside, "${ag.output}"))).toContain(`node 'ag' prompt: reference \${v.qty} ${QTY_HINT}`);
+});
+
+test.each([
+  ["template", "!Order {action: buy, qty: '${n.output}'}"],
+  ["literal", "!Order {action: buy, qty: 1}"],
+])("typed record binding reads its tagged member: %s", (_id, source) => {
+  load(flow(producer("n", "int") + agent({ v: source }, "${v.qty}"), "${ag.output}"));
+});
+
+test("optional binding field reads", () => {
+  expect(loadMessage(flow(agent({ v: "${step.output :- null}" }, "${v.b}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+  load(flow(agent({ v: "${step.output :- null}" }, "${v.a}"), "${ag.output}"));
+});
+
+test("adaptive brief field read is reported on the gate", () => {
+  const gate =
+    "  h:\n" +
+    "    kind: human_input\n" +
+    "    input:\n      v: ${step.output}\n" +
+    '    prompt: "Pick for ${v.a}"\n' +
+    "    adaptive_questions:\n" +
+    '      prompt: "${v.b}"\n';
+  expect(loadMessage(flow(gate, "${h.output}"))).toContain(
+    "node 'h' adaptive_questions.prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("literal input field read", () => {
+  expect(loadMessage(flow(agent({ mode: "fast" }, "${mode.x}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${mode.x} reads field 'x' on type str, which has no fields",
+  );
+});
+
+test("null literal input field read", () => {
+  expect(loadMessage(flow(agent({ v: "null" }, "${v.x}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${v.x} reads field 'x' on type None, which has no fields",
+  );
+});
+
+test("field read inside a builtin argument", () => {
+  expect(loadMessage(flow(agent({ v: "${step.output}" }, "${render_as_json(v.b)}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("agent variable field read", () => {
+  const nodes = agent({}, "${cfg.b}", { extra: "    variables:\n      cfg: !Rec {a: x}\n" });
+  expect(loadMessage(flow(nodes, "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${cfg.b} reads unknown field 'b' on record",
+  );
+});
+
+test("human_input prompt field read", () => {
+  const gate = '  h:\n    kind: human_input\n    input:\n      v: ${step.output}\n    prompt: "${v.b}"\n';
+  expect(loadMessage(flow(gate, "${h.output}"))).toContain(
+    "node 'h' prompt: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("human_input question field read", () => {
+  const gate =
+    "  h:\n" +
+    "    kind: human_input\n" +
+    "    input:\n      v: ${step.output}\n" +
+    '    prompt: "Pick for ${v.a}"\n' +
+    "    questions:\n" +
+    '      - question: "${v.b}"\n' +
+    "        header: Pick\n" +
+    "        options:\n" +
+    "          - label: one\n" +
+    "            description: the first\n";
+  expect(loadMessage(flow(gate, "${h.output}"))).toContain(
+    "node 'h' questions[0].question: reference ${v.b} reads unknown field 'b' on record",
+  );
+});
+
+test("a prompt field error is reported once per ref", () => {
+  const message = loadMessage(flow(agent({ v: "${step.output}" }, "${v.b} and ${v.b}"), "${ag.output}"));
+  expect(count(message, "reference ${v.b} reads unknown field 'b'")).toBe(1);
+});
+
+test.each([
+  ["field", agent({ v: "${step.output}" }, "${v.a}")],
+  ["default", agent({ v: "${step.output}" }, "${v.a :- 'n'}")],
+  ["object", producer("o", "object") + agent({ v: "${o.output}" }, "${v.anything}")],
+  ["any", agent({ v: "!Any ${step.output}" }, "${v.anything}")],
+  [
+    "untyped",
+    "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    code: return 1\n" +
+      agent({ v: "${u.output}" }, "${v.x}"),
+  ],
+  ["optional-record", producer("m", "Optional(Rec)") + agent({ v: "${m.output}" }, "${v.a}")],
+])("readable fields still load: %s", (_id, nodes) => {
+  load(flow(nodes, "${ag.output}"));
+});
+
+test("narrowed input reads the branch member", () => {
+  load(flow(routed(agent({ v: "${d.output}" }, "${v.qty}")), "${ag.output | other.output}"));
+  const outside = producer("d", "Order") + agent({ v: "${d.output}" }, "${v.qty}");
+  expect(loadMessage(flow(outside, "${ag.output}"))).toContain(`node 'ag' prompt: reference \${v.qty} ${QTY_HINT}`);
+});
+
+test("a defaulted union binding hint names the bound source", () => {
+  const nodes = producer("d", "Order") + agent({ v: '"${d.output :- null}"' }, "${v.qty}");
+  expect(loadMessage(flow(nodes, "${ag.output}"))).toContain(`node 'ag' prompt: reference \${v.qty} ${QTY_HINT}`);
+});
+
+test("a transformed union binding hint names no bound source", () => {
+  // A constructor wraps the value, so the hint can't name a path below its source.
+  const nodes = producer("d", "Order") + agent({ v: "${Wrap(o=d.output)}" }, "${v.o.qty}");
+  const message = loadMessage(flow(nodes, "${ag.output}", { typedefs: "  Wrap: {o: Order}\n" }));
+  expect(message).toContain("read it inside a case on ${v.o.action}");
+  expect(message).not.toContain("d.output.o");
+});
 
 // ---------- node asserts ----------
 
@@ -374,7 +528,10 @@ function isinstanceRouted(produced: string, member: string, node: string): strin
 }
 
 test.each([
+  ["untagged-prompt", "AB", "A", agent({ v: "${d.output}" }, "${v.x}")],
   ["untagged-assert", "AB", "A", code({ v: "${d.output}" }, ["v.x > 0"], "ag")],
+  ["tagged-prompt", "Order", "Buy", agent({ v: "${d.output}" }, "${v.qty}")],
+  ["shared-prompt", "Trade", "Sized", agent({ v: "${d.output}" }, "${v.qty}")],
   ["shared-assert", "Trade", "Sized", code({ v: "${d.output}" }, ["v.qty > 0"], "ag")],
 ])("an isinstance branch reads the narrowed member: %s", (_id, produced, member, node) => {
   load(flow(isinstanceRouted(produced, member, node), "${ag.output | other.output}", { typedefs: UNION_TYPES }));
@@ -843,6 +1000,36 @@ test.each([
 
 const TEXT_FIELD = (name: string) => `reference \${${name}(...).f} reads field 'f' on type str, which has no fields`;
 
+/** CODE nodes `a` and `b`, the targets of the CASE rows. */
+const CASE_TARGETS = `  a: {kind: code, code: "return 'a'", output: str}
+  b: {kind: code, code: "return 'b'", output: str}
+`;
+
+test("a binding reads a field on a builtin result", () => {
+  const nodes =
+    "  c:\n    kind: code\n    input:\n      v: ${upper(input.s).f}\n    output: str\n    code: return 'x'\n";
+  expect(loadMessage(flow(nodes, "${c.output}"))).toContain(`node 'c' input 'v' from: ${TEXT_FIELD("upper")}`);
+});
+
+test("a flow output reads a field on a builtin result", () => {
+  expect(loadMessage(flow("", "\n  o: ${lower(input.s).f}"))).toContain(`flow output from: ${TEXT_FIELD("lower")}`);
+});
+
+test("a prompt reads a field on a builtin result", () => {
+  expect(loadMessage(flow(agent({ v: "${step.output}" }, "${upper(v.a).x}"), "${ag.output}"))).toContain(
+    "node 'ag' prompt: reference ${upper(...).x} reads field 'x' on type str, which has no fields",
+  );
+});
+
+test("a case when reads a field on a builtin result", () => {
+  const nodes =
+    "  g:\n    kind: case\n    cases:\n" +
+    "      - when: \"upper(input.s).f == 'x'\"\n        then: a\n" +
+    "    else: b\n" +
+    CASE_TARGETS;
+  expect(loadMessage(flow(nodes, "${g.output}"))).toContain(`case node 'g' cases[0].when: ${TEXT_FIELD("upper")}`);
+});
+
 test("a node assert reads a field on a builtin result", () => {
   expect(loadMessage(flow(code({ v: "${step.output}" }, ["upper(v.a).f == 'x'"]), "${c.output}"))).toContain(
     `node 'c' assert "upper(v.a).f == 'x'": ${TEXT_FIELD("upper")}`,
@@ -865,8 +1052,80 @@ test("a loop while reads a field on a builtin result", () => {
   );
 });
 
-test("a builtin result without a field read loads: assert", () => {
-  load(flow(code({ v: "${input.s}" }, ["upper(v) == 'X'"]), "${c.output}"));
+const MAP_CHILD_TEXT =
+  "defs:\n" +
+  "  child:\n" +
+  "    input:\n      x: !str\n" +
+  "    nodes:\n" +
+  "      inner:\n" +
+  "        kind: code\n" +
+  "        input:\n          x: ${input.x}\n" +
+  "        output: str\n" +
+  "        code: return 'x'\n" +
+  "    output: ${inner.output}\n";
+
+/** The hand-built map `child`: `x: !str` into `inner`, whose `str` it returns. */
+const MAP_CHILD = {
+  child: handChild({
+    inputs: parametersFromYaml("input:\n  x: !str\n", new Map()),
+    producers: { inner: new ValueContract(Type.scalar(ValueKind.STRING)) },
+    output: "${inner.output}",
+  }),
+};
+
+test.each([
+  [
+    "map-over",
+    "  m:\n    kind: map\n    call: child\n    over: ${upper(input.s).f}\n    input:\n      x: ${item}\n",
+    "${m.output}",
+    "node 'm' map over",
+  ],
+  [
+    "case-on",
+    "  g:\n    kind: case\n    on: ${upper(input.s).f}\n    cases:\n      - when: x\n        then: a\n    else: b\n" +
+      CASE_TARGETS,
+    "${g.output}",
+    "node 'g' on",
+  ],
+  [
+    "inline-call-arg",
+    "  c:\n    kind: code\n    input:\n      v: call(child, x=${upper(input.s).f})\n" +
+      "    output: str\n    code: return 'x'\n",
+    "${c.output}",
+    "node 'c' input 'v' call(child) argument 'x' from",
+  ],
+])("scanned sites read a field on a builtin result once: %s", (_id, nodes, output, site) => {
+  const message = loadMessage(flow(nodes, output, { defs: MAP_CHILD_TEXT }), MAP_CHILD);
+  expect(message).toContain(site);
+  expect(count(message, TEXT_FIELD("upper"))).toBe(1);
+});
+
+test.each([
+  ["upper", agent({ v: "${upper(input.s)}" }, "${v}"), "${ag.output}"],
+  ["join", agent({ v: "!list(str) [a, b]" }, "${join(v, ',')}"), "${ag.output}"],
+  ["assert", code({ v: "${input.s}" }, ["upper(v) == 'X'"]), "${c.output}"],
+])("builtin results without a field read load: %s", (_id, nodes, output) => {
+  load(flow(nodes, output));
+});
+
+test("host builtin field reads load", () => {
+  const saved = ["mkrec", "upper"].map((name) => [name, TEMPLATE_FNS.get(name)] as const);
+  try {
+    for (const [name] of saved) registerTemplateFn(name, { params: [{ name: "s" }], call: (s) => ({ f: s }) });
+    for (const [name] of saved) {
+      const nodes =
+        "  c:\n    kind: code\n" +
+        `    input:\n      v: \${${name}(input.s).f}\n` +
+        "    output: str\n    code: return 'x'\n" +
+        `    asserts:\n      - "${name}(v).f == v"\n`;
+      load(flow(nodes, "${c.output}"));
+    }
+  } finally {
+    for (const [name, fn] of saved) {
+      if (fn === undefined) TEMPLATE_FNS.delete(name);
+      else TEMPLATE_FNS.set(name, fn);
+    }
+  }
 });
 
 test("an unparsable condition keeps its located parse error", () => {
@@ -880,6 +1139,14 @@ test("an unparsable condition keeps its located parse error", () => {
 const CASES = "load-core/compose_field_read_sites__";
 
 test.each<CaseRow>([
+  ...[
+    "adaptive_questions_prompt_reads_unknown_field",
+    "agent_prompt_reads_unknown_field",
+    "flow_output_reads_a_field_on_a_builtin_result",
+    "human_input_question_reads_unknown_field",
+    "transformed_union_binding_hint_names_no_bound_source",
+    "union_member_field_read_outside_a_branch",
+  ].map((name) => ({ id: `${CASES}${name}`, call: assembled })),
   { id: `${CASES}call_node_assert_reads_a_field_its_binding_lacks`, call: assembledWith({ child: childOf("Rec") }) },
   { id: `${CASES}flow_assert_compares_with_a_non_tag`, call: assembled },
   { id: `${CASES}flow_assert_read_before_its_check`, call: assembled },

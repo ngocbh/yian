@@ -2462,6 +2462,14 @@ worker:
   interrupted by the user."). Without streaming, an interrupt during a model
   call takes effect when that call returns. An interrupt for a node that has
   already finished is ignored.
+  Changed (TS yian): every model call streams, with or without a host stream
+  sink, so an interrupt during a call is read before each later text chunk, and a
+  reply whose text had all arrived is kept whole. In place of before each tool
+  call, the node checks before each call's check (its grant and arguments) and
+  before each group of calls that run together (see [API](api.md#tool-context));
+  a group of concurrency-safe calls that started finishes. An interrupt during
+  the wait before retrying a failed model call ends the wait at once, and the
+  node succeeds with `""`.
 - Session memory records steers with the model request that carried them, and
   closes an interrupted turn as `interrupted`.
 - An AGENT without `tools:` or `skills:` makes one model call. Steers queued

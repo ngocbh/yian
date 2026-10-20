@@ -292,7 +292,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   model errors fail with their `provider.*` code, spent `retries:` corrections with
   `agent.output_invalid`. With tools or skills it runs the tool loop: consecutive calls whose tool
   is concurrency-safe (`isConcurrencySafe`, and `load_skill`) run together as a group, and an
-  unsafe call runs alone. A steering inbox or a memory transcript still throws "not ported yet".
+  unsafe call runs alone. A memory transcript still throws "not ported yet".
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.

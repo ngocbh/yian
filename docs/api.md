@@ -1521,6 +1521,14 @@ awaits it between its effects. Nothing runs on a worker thread, so the inbox nee
 lock. The `Steering` interface lives in `nodes/base.ts`; the run entry point will
 re-export it once it is ported.
 
+TS yian streams every model call, so the interrupt is read before each later text chunk
+of every call, and a host without `onStream` can cut a reply too; a reply whose text had
+all arrived is kept whole. An interrupt during the wait before retrying a failed model
+call ends the wait at once, and the node succeeds with no new text (`""`, the cut call's
+empty reply). Steers are awaited at the top of each iteration only. A reply's tool calls
+are checked for an interrupt before each call's check and before each group (see
+[Tool context](#tool-context)), and a group that is running finishes.
+
 ## Injecting agent memory
 
 YAML names each memory and its type without importing an implementation:

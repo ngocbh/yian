@@ -7,15 +7,22 @@
 // covered by cli_utils.test.ts and the `cli` cases.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { type AuthDeps, configCheck, configErrors, EXTRA_FIELD, models, providers } from "../../src/cli/auth.ts";
+import { auth, type AuthDeps, configCheck, configErrors, EXTRA_FIELD, models, providers } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
-import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS } from "../../src/llm_clients/config.ts";
+import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
+import {
+  OPENAI_REFUSED_HEADER_NAMES,
+  REFUSED_HEADER_NAMES,
+  validateHeaderName,
+  validateHeaderValue,
+  validateOrganization,
+} from "../../src/llm_clients/connection_settings.ts";
 import { ModelListError } from "../../src/llm_clients/model_list.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 
@@ -478,5 +485,197 @@ describe("models --auth-file", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     await scheduler.sleep(1);
     expect(scheduler.now()).toBe(1);
+  });
+});
+
+/** The `ParsedArgs` of `yian auth [provider]` with `options`: flags absent are `false`, `--header` absent `[]`. */
+function authArgs(provider?: string, options: Record<string, OptionValue> = {}): ParsedArgs {
+  return {
+    help: false,
+    args: provider === undefined ? {} : { provider },
+    options: { header: [], default: false, remove: false, json: false, ...options },
+  };
+}
+
+/** Python's `Service`: a fake OpenAI authentication service recording each call. */
+function fakeService() {
+  const calls: string[] = [];
+  const credentials = () =>
+    new OAuthCredentials({
+      accessToken: "private-access",
+      refreshToken: "private-refresh",
+      expiresAt: 9999999999,
+      accountId: "test-account",
+    });
+  const service = {
+    deviceLogin: async (display: (url: string, code: string) => void | Promise<void>) => {
+      calls.push("device");
+      await display("https://example.invalid/device", "TEST-CODE");
+      return credentials();
+    },
+    browserLogin: async () => {
+      calls.push("browser");
+      return credentials();
+    },
+    refresh: async (old: OAuthCredentials) => {
+      calls.push("refresh");
+      return old;
+    },
+    subscriptionModels: async () => {
+      calls.push("subscription_models");
+      return ["gpt-test", "gpt-other"];
+    },
+    apiModels: async () => {
+      calls.push("api_models");
+      return ["embedding-test", "gpt-test", "gpt-other"];
+    },
+  };
+  return { calls, openAIAuth: () => service };
+}
+
+/**
+ * Python's `setup_auth`: a store path in `YIAN_AUTH_FILE`, `OPENAI_API_KEY=private-key`, the
+ * environment defaults the Python suite sets for every test, and a fake service. The store's
+ * directory is private (`storeOpen`, the default), or 0755, so any store read fails with
+ * "Credential storage must be private to its owner".
+ */
+function setupAuth({ storeOpen = true }: { storeOpen?: boolean } = {}) {
+  const directory = join(tmp, "auth");
+  const mode = storeOpen ? 0o700 : 0o755;
+  mkdirSync(directory, { mode });
+  chmodSync(directory, mode);
+  const path = join(directory, "auth.json");
+  const env: Record<string, string> = {
+    YIAN_AUTH_FILE: path,
+    OPENAI_API_KEY: "private-key",
+    YIAN_DEFAULT_PROVIDER: "openai",
+    YIAN_DEFAULT_MODEL: "gpt-5.5",
+  };
+  const service = fakeService();
+  const deps: AuthDeps = { openAIAuth: service.openAIAuth };
+  return { path, store: new AuthStore(path), env, service, deps };
+}
+
+/** The message of the `RangeError` `check` throws. */
+function rangeMessage(check: () => unknown): string {
+  try {
+    check();
+  } catch (error) {
+    if (error instanceof RangeError) return error.message;
+  }
+  throw new Error("no RangeError");
+}
+
+describe("auth option checks", () => {
+  const unsupported = (name: string) => `Unsupported provider '${name}'; choose one of: ${SUPPORTED_LLM_PROVIDERS.join(", ")}`;
+  const subscriptionOnly = "--login applies to subscription authentication";
+  const azure = "https://x.openai.azure.com/";
+  const refused = (name: string, reason: string) => `Invalid --header: header ${name} is refused: ${reason}`;
+
+  /** Run `yian auth` on a store any read of which fails; expect exit 1 and `message` alone. */
+  async function refuses(provider: string | undefined, options: Record<string, OptionValue>, message: string, env: Record<string, string> = {}) {
+    const setup = setupAuth({ storeOpen: false });
+    const io = fakeIo({ env: { ...setup.env, ...env } });
+    const result = await run(auth, authArgs(provider, options), io, setup.deps);
+    expect(result).toEqual({ code: 1, out: "", err: `${message}\n` });
+    expect(result.err).not.toContain("private");
+    expect(setup.service.calls).toEqual([]);
+    expect(existsSync(setup.path)).toBe(false);
+  }
+
+  // Python: test_invalid_setup_options_fail_before_external_requests.
+  test.each<[string | undefined, Record<string, OptionValue>, string]>([
+    ["unknown", {}, unsupported("unknown")],
+    ["openai", { method: "unknown" }, "Choose --method subscription or --method api-key"],
+    ["openai", { method: "subscription", login: "unknown" }, "Choose --login browser or --login device"],
+    ["openai", { method: "api-key", login: "device" }, subscriptionOnly],
+  ])("invalid setup option: %p %j", async (provider, options, message) => {
+    await refuses(provider, options, message);
+  });
+
+  // Python: test_option_combinations_fail_before_any_request.
+  test.each<[string | undefined, Record<string, OptionValue>, string]>([
+    ["codex", {}, unsupported("codex")],
+    ["codex", { default: true }, unsupported("codex")],
+    ["anthropic", { method: "api-key" }, "--method and --login apply only to openai"],
+    ["anthropic", { login: "device" }, "--method and --login apply only to openai"],
+    ["openai", { endpoint: azure }, "--endpoint applies only to azure"],
+    ["ollama", { "api-key-env": "X" }, "ollama takes no API key; omit --api-key-env"],
+    ["anthropic", { "api-key-env": "" }, "--api-key-env needs an environment variable name"],
+    ["openai", { remove: true, model: "x" }, "--remove does not take --model"],
+    ["azure", { default: true, endpoint: azure }, "--default does not take --endpoint"],
+    ["openai", { default: true, remove: true }, "Use either --default or --remove, not both"],
+  ])("option combination: %p %j", async (provider, options, message) => {
+    await refuses(provider, options, message);
+  });
+
+  // Python: test_azure_options_are_checked_before_the_store.
+  test.each<[string | undefined, string, string]>([
+    [undefined, "https://r.openai.azure.com/", "Azure needs OPENAI_API_VERSION set to its API version (runs read it too)"],
+    [
+      "2025-03-01-preview",
+      "http://r.example.com",
+      `Invalid Azure endpoint: ${rangeMessage(() => validateBaseUrl("http://r.example.com"))}`,
+    ],
+  ])("azure options: version %p, endpoint %p", async (version, endpoint, message) => {
+    const env: Record<string, string> = version === undefined ? {} : { OPENAI_API_VERSION: version };
+    await refuses("azure", { endpoint, model: "dep" }, message, env);
+  });
+
+  // Python: test_connection_settings_are_refused_before_any_request.
+  const settingsEnv = { GW_TOKEN: "private-gw", EMPTY_TOKEN: "", BAD_TOKEN: " private-bad" };
+  const subscription = { method: "subscription" };
+  const apiKey = { method: "api-key" };
+  test.each<[string | undefined, Record<string, OptionValue>, string]>([
+    ["anthropic", { organization: "org-1" }, "--organization and --project apply only to openai"],
+    ["anthropic", { project: "proj-1" }, "--organization and --project apply only to openai"],
+    ["openai", { ...subscription, organization: "org-1" }, "--organization and --project apply to API-key authentication"],
+    ["openai", { ...subscription, project: "proj-1" }, "--organization and --project apply to API-key authentication"],
+    ["openai", { ...subscription, header: ["X-G=GW_TOKEN"] }, "--header applies to API-key authentication"],
+    [
+      "openai",
+      { ...apiKey, organization: "org 1" },
+      `Invalid --organization: ${rangeMessage(() => validateOrganization("org 1", "organization"))}`,
+    ],
+    ["ollama", { header: ["X-G=GW_TOKEN"] }, "ollama takes no API key, so it takes no --header"],
+    ["anthropic", { header: ["Authorization=GW_TOKEN"] }, refused("Authorization", REFUSED_HEADER_NAMES["authorization"]!)],
+    ["anthropic", { header: ["Content-Type=GW_TOKEN"] }, refused("Content-Type", REFUSED_HEADER_NAMES["content-type"]!)],
+    [
+      "openai",
+      { ...apiKey, header: ["OpenAI-Project=GW_TOKEN"] },
+      refused("OpenAI-Project", OPENAI_REFUSED_HEADER_NAMES["openai-project"]!),
+    ],
+    ["anthropic", { header: ["X G=GW_TOKEN"] }, `Invalid --header: ${rangeMessage(() => validateHeaderName("X G", "anthropic"))}`],
+    ["anthropic", { header: ["X-G=UNSET_TOKEN"] }, "The environment variable given for --header X-G is not set"],
+    ["anthropic", { header: ["X-G=EMPTY_TOKEN"] }, "The environment variable given for --header X-G is not set"],
+    [
+      "anthropic",
+      { header: ["X-G=BAD_TOKEN"] },
+      `Invalid --header: ${rangeMessage(() => validateHeaderValue("X-G", " private-bad"))}`,
+    ],
+    ["anthropic", { header: ["X-G="] }, "--header X-G=VARIABLE needs an environment variable name"],
+    ["anthropic", { header: ["X-G=GW_TOKEN", "x-g=GW_TOKEN"] }, "--header x-g is given more than once (names ignore case)"],
+    ["anthropic", { default: true, header: ["X-G=GW_TOKEN"] }, "--default does not take --header"],
+    ["openai", { remove: true, organization: "org-1" }, "--remove does not take --organization"],
+    [undefined, { project: "proj-1" }, "Name a provider: yian auth <provider> [options]"],
+  ])("connection settings: %p %j", async (provider, options, message) => {
+    await refuses(provider, options, message, settingsEnv);
+  });
+
+  test("an unset header variable is not echoed", async () => {
+    await refuses(
+      "anthropic",
+      { header: ["X-G=sk_private_typed_value"], model: "m" },
+      "The environment variable given for --header X-G is not set",
+    );
+  });
+
+  test("a bare header without a terminal names the variable form", async () => {
+    await refuses(
+      "anthropic",
+      { header: ["X-G"], model: "m1" },
+      "--header X-G reads its value from a hidden prompt, which needs a terminal; use --header NAME=VARIABLE to read it from a variable",
+      { ANTHROPIC_API_KEY: "private-key" },
+    );
   });
 });

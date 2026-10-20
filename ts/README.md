@@ -417,6 +417,19 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   is a float there.
 - Changed: `memoryCommitId` digests the `logJson` text of its input, not Python's sorted compact
   `json.dumps`; see `docs/api.md` for where the two differ.
+- `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*`
+  function (`prepareRunStarted`, `prepareNodeStarted`, `prepareNodeStep`, `prepareNodeSucceeded`,
+  `prepareRunResumed`, `prepareRunStopped`, `prepareRecord`) validates one transition without
+  mutating the state and returns a frozen `PreparedTransition`: the canonical record, the run id
+  and sequence it expects, and a frozen plan. `commitPrepared(log, state, prepared)` appends the
+  record, checks what the log returned, then applies the plan, with no `await` in between, so
+  nothing interleaves between the append and the apply. Frontier order: START is ready after
+  `RunStarted`; a success appends its target's successors in outgoing-edge order, each once its
+  join is ready; a resume puts the retried nodes first, in dispatch order, ahead of what was
+  ready; a stop changes nothing but the sequence. An output its target's contract refuses throws
+  `NodeDataError` (`original` holds the value layer's error), which fails the node, not the run.
+  Routes and failures land in PR 2; growth, the recovery fold (`replayRecords`) and the backward
+  records throw `not ported yet (T4-5)`.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

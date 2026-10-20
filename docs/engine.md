@@ -244,6 +244,10 @@ until the node settles, so a resumed node reads them back. The runtime gives a s
 no meaning and publishes no observer for it. A log holding one can't be read by a
 yian version from before the record existed.
 
+Changed (TS yian): the reducer also accepts `RunStoppedRecord`, whose `node_ids` must be
+the in-flight nodes in dispatch order; it changes no frontier, start count or step, so a
+resume after a stop retries those nodes first.
+
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
 evidence is separate. There is no separate forward terminal record: success is derived

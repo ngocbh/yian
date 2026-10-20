@@ -3,11 +3,9 @@
  * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
- * Later (T3-18): `test_dangling_nested_reference_fails_at_its_own_line`,
- * `test_dangling_nested_output_reference_fails_at_its_own_line`,
- * `test_nested_reference_field_is_checked` (reference checks), `test_nested_isinstance_name_resolves`
- * and `test_unknown_nested_isinstance_name_fails` (type tables; its case is pinned in
- * `isinstance_load.test.ts`).
+ * Later (T3-18 PR 3): `test_dangling_nested_reference_fails_at_its_own_line`,
+ * `test_dangling_nested_output_reference_fails_at_its_own_line` and
+ * `test_nested_reference_field_is_checked` (reference checks).
  * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
  * Later (T3-22, T4): `test_map_over_literal_list_without_spans_still_loads` and
  * `test_nested_references_in_a_map_child_run_after_growth` (loads and runs).
@@ -79,6 +77,20 @@ test("a nested reference orders its consumer after the producer", () => {
   const { compiled } = assembleText(codeFlow("{a: ['${p.output}']}")).flow;
 
   expect(compiled.edges.map((edge) => [edge.from, edge.to])).toContainEqual(["p", "c"]);
+});
+
+test("nested isinstance name resolves", () => {
+  const text = "typedefs:\n  Rec: {a: str}\n" + codeFlow("{ok: '${isinstance(p.output, Rec)}'}");
+
+  const { compiled } = assembleText(text).flow;
+
+  expect([...compiled.nodes.get("c")!.types.keys()]).toEqual(["Rec"]);
+});
+
+test("unknown nested isinstance name fails", () => {
+  const error = loadError(() => assembleText(codeFlow("{ok: '${isinstance(p.output, Nope)}'}")));
+
+  expect(error.diagnostic.message).toContain("unknown type 'Nope'");
 });
 
 test("wait until container with a span fails at the container", () => {
@@ -206,3 +218,8 @@ test.each<CaseRow>([
   { id: "load-core/compose_nested_template_walkers__nested_case_output_in_a_default_fails", call: assembled },
   { id: "load-core/compose_nested_template_walkers__retired_inline_flow_call_in_an_output", call: assembled },
 ])("assembled: $id", runCase);
+
+// The type-table pass raises the unknown name.
+test("assembled: load-core/compose_nested_template_walkers__unknown_nested_isinstance_name_fails", () => {
+  runCase({ id: "load-core/compose_nested_template_walkers__unknown_nested_isinstance_name_fails", call: assembled });
+});

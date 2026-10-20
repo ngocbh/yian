@@ -10,16 +10,15 @@
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Ported: the CASE half of `test_a_node_starts_with_an_empty_type_table`, and
- * `test_loop_respawn_copies_the_type_table`.
+ * Ported: `test_a_node_starts_with_an_empty_type_table` (the loaded flow through `assembleText`)
+ * and `test_loop_respawn_copies_the_type_table`.
  *
  * Changed: `test_loop_respawn_copies_the_type_table` sets the type table on a hand-built
  * `LoopNode` instead of a loaded flow's driver.
  *
  * Later (T4-9): `test_case_forward_routes_with_its_type_table`.
  *
- * Left for later: the rest of the node, case and loop tests (the loaded-flow half of
- * `test_a_node_starts_with_an_empty_type_table` and the run tests) land with compose and `run.ts`.
+ * Left for later: the rest of the node, case and loop tests (the run tests) land with `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -54,6 +53,7 @@ import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
+import { assembleText } from "../compose/declarations.ts";
 
 /** Build a closed record tagged by a single-value `action` Literal. */
 function member(tag: string, fields: Record<string, ValueKind>): Type {
@@ -345,9 +345,51 @@ test("traced isinstance records one route over the first argument", () => {
 
 // --- nodes --- //
 
+const ORDER_FLOW = `
+id: orders
+name: orders
+typedefs:
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', price: float}
+  Order: Union(Buy, Sell)
+input:
+  order: !object
+nodes:
+  d:
+    kind: code
+    input:
+      order: \${input.order}
+    code: |
+      return inputs["order"]
+  check:
+    kind: code
+    input:
+      ok: \${isinstance(d.output, Buy)}
+    code: |
+      return inputs["ok"]
+  route:
+    kind: case
+    cases:
+      - when: isinstance(d.output, Sell)
+        then: s
+    else: b
+  s:
+    kind: code
+    code: |
+      return "sell"
+  b:
+    kind: code
+    code: |
+      return "buy"
+output:
+  ok: \${check.output}
+  side: \${s.output | b.output}
+`;
+
 test("a node starts with an empty type table", () => {
   const node = new CaseNode("route", [new Case("s", { when: "isinstance(order, Sell)" })]);
   expect(node.types).toEqual(new Map());
+  expect(assembleText(ORDER_FLOW).flow.compiled.nodes.get("d")!.types).toEqual(new Map());
 });
 
 test("loop respawn copies the type table", () => {

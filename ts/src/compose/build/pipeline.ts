@@ -119,6 +119,7 @@ import {
   resolveIsinstanceType,
 } from "../helpers/isinstance_types.ts";
 import { nth } from "../helpers/source.ts";
+import type { ExprNode } from "../../expr/grammar.ts";
 import { NodeKind } from "../../nodes/base.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
@@ -1375,7 +1376,8 @@ function fillTypeTables(
       }
     }
     for (const name of constructors) {
-      if (resolved.has(name) && registry.has(name)) continue; // a typedef name resolves the same for isinstance and constructors
+      // A typedef name resolves the same for isinstance and constructors.
+      if (resolved.has(name) && registry.has(name)) continue;
       try {
         resolved.set(name, resolveConstructorType(name, registry));
       } catch (error) {
@@ -1407,7 +1409,7 @@ function fillTypeTables(
    */
   const checked = (names: TypeNames, source: unknown, where: string, range: SourceRange | null): Map<string, Type> => {
     const resolvedNames = table(names, where, range);
-    let trees;
+    let trees: ExprNode[];
     try {
       trees = expressionTrees(source, { condition: true });
     } catch (error) {
@@ -1424,7 +1426,7 @@ function fillTypeTables(
   };
 
   /** The `isinstance` and constructor names `source` uses; earlier passes report a source that won't parse. */
-  const namesIn = (source: unknown, condition = false): TypeNames => {
+  const namesIn = (source: unknown, { condition = false }: { condition?: boolean } = {}): TypeNames => {
     try {
       return [collectIsinstanceNames(source, { condition }), collectConstructorNames(source, { condition })];
     } catch (error) {
@@ -1437,7 +1439,8 @@ function fillTypeTables(
   // START/END asserts below use the same names.
   flowAsserts.forEach((assertion, index) => {
     const where = `flow assert ${reprText(assertion.display)}`;
-    checked(namesIn(assertion.expression, true), assertion.expression, where, flowAssertionRanges[index] ?? null);
+    const names = namesIn(assertion.expression, { condition: true });
+    checked(names, assertion.expression, where, flowAssertionRanges[index] ?? null);
   });
 
   for (const [nodeId, node] of nodes) {
@@ -1473,17 +1476,19 @@ function fillTypeTables(
       for (const [name, typ] of table(names, where, range)) types.set(name, typ);
     }
     // Not every descriptor has `asserts` (MAP and WAIT don't), and a stand-in's may be null.
-    const authored = (desc !== undefined && "asserts" in desc ? (desc.asserts as readonly string[] | null) : null) ?? [];
+    const authored =
+      (desc !== undefined && "asserts" in desc ? (desc.asserts as readonly string[] | null) : null) ?? [];
     const assertRanges = desc?.assertRanges ?? [];
     authored.forEach((expression, index) => {
       const where = `node ${reprText(nodeId)} assert ${reprText(expression)}`;
       const range = siteRange(nth(assertRanges, index), fieldRanges, "asserts", nodeRange);
-      for (const [name, typ] of checked(namesIn(expression, true), expression, where, range)) types.set(name, typ);
+      const names = namesIn(expression, { condition: true });
+      for (const [name, typ] of checked(names, expression, where, range)) types.set(name, typ);
     });
     if (node.kind === NodeKind.START || node.kind === NodeKind.END) {
       // START/END evaluate the lowered flow asserts, whose names were located above.
       for (const assertion of [...node.preAsserts, ...node.postAsserts]) {
-        const names = namesIn(assertion.expression, true);
+        const names = namesIn(assertion.expression, { condition: true });
         for (const [name, typ] of table(names, `flow assert ${reprText(assertion.display)}`, null)) {
           types.set(name, typ);
         }
@@ -1494,16 +1499,16 @@ function fillTypeTables(
       node.cases.forEach((branch, index) => {
         const where = `case node ${reprText(nodeId)} cases[${index}].when`;
         const range = siteRange(nth(whenRanges, index), fieldRanges, "cases", nodeRange);
-        for (const [name, typ] of checked(namesIn(branch.when, true), branch.when, where, range)) types.set(name, typ);
+        const names = namesIn(branch.when, { condition: true });
+        for (const [name, typ] of checked(names, branch.when, where, range)) types.set(name, typ);
       });
     }
     if (node instanceof LoopNode && typeof node.predicate === "string") {
       const keyword = node.predicateKind;
       const where = `loop node ${reprText(nodeId)} ${keyword}`;
       const range = siteRange(null, fieldRanges, keyword, nodeRange);
-      for (const [name, typ] of checked(namesIn(node.predicate, true), node.predicate, where, range)) {
-        types.set(name, typ);
-      }
+      const names = namesIn(node.predicate, { condition: true });
+      for (const [name, typ] of checked(names, node.predicate, where, range)) types.set(name, typ);
     }
     node.types = types;
   }

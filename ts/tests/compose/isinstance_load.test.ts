@@ -20,9 +20,7 @@
  *
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
- * `isinstanceMembers` test is ported with the narrowing tests), and the pinned-name table, which
- * makes the resolution call a site makes on six conformance cases of other files and checks that
- * the case's message is the row's site prefix plus the resolver's message.
+ * `isinstanceMembers` test is ported with the narrowing tests).
  *
  * Later (T3-20): `test_isinstance_in_flow_asserts_fills_start_and_end` (START/END take their
  * tables from the lowered flow asserts); `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error`
@@ -33,8 +31,8 @@
  * own assembly); `test_a_parent_cannot_use_a_childs_typedef` and
  * `test_a_uses_child_resolves_names_against_its_own_typedefs` (`uses:`).
  *
- * Later (T3-18 PR 3): `test_isinstance_in_an_agent_prompt_is_a_located_load_error` (the reference
- * validator).
+ * Later (T3-18 PR 3): `test_isinstance_in_an_agent_prompt_is_a_located_load_error` and its case
+ * (the reference validator).
  *
  * Later (T4): the run halves of the type-table rows above,
  * `test_a_failing_flow_input_assert_fails_at_start` and `test_a_run_that_used_isinstance_replays`.
@@ -60,16 +58,12 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
-import type { Case } from "../conformance.ts";
 import {
   assembled,
   assembledWith,
   assembleText,
   type CaseRow,
-  caseDocument,
-  caseRegistry,
   type ChildFlows,
-  cursorAt,
   handChild,
   loadError,
   parametersFromYaml,
@@ -184,89 +178,6 @@ describe("resolution", () => {
     expect(isinstanceMembers(BUY, BUY)).toBeNull();
   });
 });
-
-// ---------- pinned names of other files' cases ----------
-
-/** One harvested case whose names one site resolves. */
-interface NameRow {
-  /** The case, `group/name`. */
-  id: string;
-  /** The path from the document root to the source. */
-  at: (string | number)[];
-  /** The site's prefix on the expected message. */
-  prefix: string;
-  /** The source is one condition expression. */
-  condition?: boolean;
-  /** The source is a record or list read as a value template. */
-  template?: boolean;
-  /** Which resolver the site calls. */
-  kind: "isinstance" | "constructor";
-}
-
-/**
- * Collect the names at `row.at` as the site does and check that resolving them throws the
- * `TypeCheckError` whose message, after the row's prefix, is the case's.
- */
-function runNameRow(row: NameRow): void {
-  const { case_, document } = caseDocument(row.id);
-  const registry = caseRegistry(document);
-  const raw = cursorAt(document, row.at).value;
-  const source = row.template ? new ValueTemplate(raw as Record<string, unknown>) : raw;
-  const condition = row.condition ?? false;
-  const isinstance = row.kind === "isinstance";
-  const collect = isinstance ? collectIsinstanceNames : collectConstructorNames;
-  const names = collect(source, { condition });
-  expect(names.length).toBeGreaterThan(0);
-  const resolve = isinstance ? resolveIsinstanceType : resolveConstructorType;
-  const error = typeCheckError(() => names.map((name) => resolve(name, registry)));
-  const expected = (case_["expect"] as Case)["load"] as Case;
-  const caseMessage = (expected["diagnostics"] as Case[])[0]!["message"] as string;
-  expect(caseMessage).toBe(row.prefix + error.message);
-}
-
-test.each<NameRow>([
-  {
-    id: "load-core/compose_nested_template_walkers__unknown_nested_isinstance_name_fails",
-    at: ["nodes", "c", "input", "x"],
-    prefix: "node 'c' input 'x': ",
-    template: true,
-    kind: "isinstance",
-  },
-  {
-    id: "load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output",
-    at: ["output"],
-    prefix: "flow output: ",
-    kind: "isinstance",
-  },
-  {
-    id: "load-loop/engine_loop_build__predicate_isinstance_with_an_unknown_type",
-    at: ["nodes", "ask", "until"],
-    prefix: "loop node 'ask' until: ",
-    condition: true,
-    kind: "isinstance",
-  },
-  {
-    id: "load-case/engine_condition_calls__unknown_function_in_a_node_assert",
-    at: ["nodes", "x", "asserts", 0],
-    prefix: "node 'x' assert 'nosuchfn(n) > 0': ",
-    condition: true,
-    kind: "constructor",
-  },
-  {
-    id: "load-case/engine_condition_calls__unknown_function_in_a_flow_assert",
-    at: ["asserts", 0],
-    prefix: "flow assert 'nosuchfn(input.v) > 0': ",
-    condition: true,
-    kind: "constructor",
-  },
-  {
-    id: "load-case/engine_condition_calls__unknown_function_in_a_loop_while",
-    at: ["nodes", "repeat", "while"],
-    prefix: "loop node 'repeat' while: ",
-    condition: true,
-    kind: "constructor",
-  },
-])("resolve names: $id", runNameRow);
 
 // ---------- type tables ----------
 

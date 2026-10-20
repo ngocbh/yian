@@ -25,7 +25,7 @@
  * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read), which
  * Python checks only at binding sites.
  *
- * Later (T3-18 PR 3): the reference validator's binding and prompt sites:
+ * Later (T3-18 PR 3): the reference validator's binding and prompt sites and their cases:
  * `test_a_malformed_constructor_call_is_a_load_error` (the `binding` site),
  * `test_a_constructor_in_an_agent_prompt_is_a_located_load_error`,
  * `test_a_field_read_on_a_constructor_result_type_checks`, `test_a_disjoint_argument_is_a_load_error`,
@@ -37,7 +37,9 @@
  * (`test_a_value_lacking_a_field_fails_with_binding_type_naming_it`,
  * `test_a_bad_built_field_fails_with_binding_type`, `test_a_nested_constructor_failure_is_binding_type`,
  * `test_downstream_sees_the_constructed_type`, `test_a_call_argument_is_checked_with_the_constructed_type`,
- * `test_an_inline_body_parameter_takes_the_constructed_type`).
+ * `test_an_inline_body_parameter_takes_the_constructed_type`);
+ * `compose/typed_bindings_check.test.ts` pins the case
+ * `load-types/compose_constructor_load__downstream_sees_the_constructed_type`.
  *
  * Later (T3-20): `test_a_constructor_in_a_call_nodes_asserts_is_a_located_load_error` (the
  * node-assert check).
@@ -53,12 +55,20 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, handChild, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  type ChildFlows,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 install(BUILTIN);
 beforeEach(() => install(BUILTIN));
@@ -120,7 +130,7 @@ const errorLine = (error: { diagnostic: { frames: readonly { range: { startLine:
   error.diagnostic.frames.at(-1)!.range.startLine;
 
 /** Assemble `text` as the root flow, its `defs:` entries standing in as `children`; return its nodes. */
-const loadedNodes = (text: string, children: Readonly<Record<string, ComposedFlow>> = {}) =>
+const loadedNodes = (text: string, children: ChildFlows = {}) =>
   assembleText(text, "flow.yaml", { children }).flow.compiled.nodes;
 
 /** Check that `node`'s type table holds exactly `expected`, in any order. */

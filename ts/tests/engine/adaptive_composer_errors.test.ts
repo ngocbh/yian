@@ -4,7 +4,8 @@
  *
  * Ported: `test_bad_llm_config_is_named_and_located_at_the_llm_config`,
  * `test_block_llm_config_error_is_located_at_its_first_key`, `test_valid_llm_config_loads`,
- * `test_typed_input_mismatch_names_the_gate`, `test_literal_inputs_still_load`, and the cycle rows
+ * `test_typed_input_mismatch_names_the_gate`, `test_isinstance_unknown_type_names_the_gate`,
+ * `test_literal_inputs_still_load`, and the cycle rows
  * (`test_self_reading_gate_cycle_names_only_the_gate`,
  * `test_cycle_through_a_gate_names_only_authored_nodes`,
  * `test_ordering_cycle_through_a_gate_names_only_authored_nodes`,
@@ -18,15 +19,15 @@
  * Changed: the flows assemble with `assembleText`, where Python loads them. A text value reads
  * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
  * message ("Extra inputs are not permitted") where pydantic adds its `extra_forbidden` type. Each
- * bad-config row and the typed-input row pin the whole message where Python matches fragments.
+ * bad-config row, the typed-input row and the unknown-type row pin the whole message where Python
+ * matches fragments.
  * The cycle message writes its node list in the text form (`["ask","b"]`, rule `messages`), and
  * each cycle row pins the whole message where Python checks its start. The inline CODE body is TypeScript.
  *
  * Later (T3-18): `test_bad_input_is_reported_once_on_the_gate`,
  * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
  * `test_bad_brief_and_bad_input_are_each_reported_once`,
- * `test_bad_input_is_listed_before_a_bad_gate_prompt` (the reference validator),
- * `test_isinstance_unknown_type_names_the_gate` (the type-table pass, `fillTypeTables`).
+ * `test_bad_input_is_listed_before_a_bad_gate_prompt` (the reference validator).
  * Later (T3-20): `test_skipped_operand_arithmetic_names_the_gate`.
  * Later (T3-22): `test_compact_flow_llm_config_error_names_the_flow_node`,
  * `test_defs_body_input_error_names_the_gate` and `test_defs_child_cycle_names_only_the_gate`.
@@ -113,6 +114,15 @@ output: \${ask.output}
 test("typed input mismatch names the gate", () => {
   const error = loadError(() => assembleText(inputFlow("      proj: !list(int) ${input.proj}\n", "Q ${proj}")));
   expect(error.message).toBe("node 'ask' input 'proj': declared list(int), but the value is str");
+  expect(lineOf(error)).toBe(12);
+});
+
+test("isinstance unknown type names the gate", () => {
+  const error = loadError(() => assembleText(inputFlow("      proj: ${isinstance(input.proj, Nope)}\n", "Q ${proj}")));
+  expect(error.message).toBe(
+    "node 'ask' input 'proj': unknown type 'Nope'; isinstance takes a typedefs: name or one of str, int, float, " +
+      "bool, date, datetime, object",
+  );
   expect(lineOf(error)).toBe(12);
 });
 

@@ -1,18 +1,29 @@
 /**
- * A condition may call only a builtin, with arguments it takes, or a typedef constructor: the
- * `parseCondition` tests of `tests/engine/test_condition_calls.py`, and the builtin registry's
- * argument binder (`bindArguments`) and `registerTemplateFn`.
+ * A condition may call only a builtin, with arguments it takes, or a typedef constructor: a port of
+ * `tests/engine/test_condition_calls.py`, and the builtin registry's argument binder
+ * (`bindArguments`) and `registerTemplateFn`.
  *
- * Left for later: the `load_flow`/`run_flow` half (from `_load_error` on) lands with compose and
- * `run.ts`. `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no
- * counterpart: every registered function declares its `params`.
+ * Ported: the `parseCondition` tests; `test_unknown_function_in_a_condition_fails_to_load` and
+ * `test_a_constructor_naming_no_typedef_in_a_condition_fails_to_load`, through `assembleText`
+ * where Python loads the flow (the loop sites' `step` def a hand-built child, `handChild`).
+ * `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no counterpart: every
+ * registered function declares its `params`.
  *
- * The harvested `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when` is
- * pinned at the end (`assemble`, whose CASE build raises it), and so is
- * `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_loop_while` (`assembledWith`, the
- * `step` def built by hand; the LOOP build raises it), and
- * `load-case/engine_condition_calls__whole_span_call_in_a_flow_assert` (`assemble`, whose
- * inline-call desugar raises it).
+ * Changed: the CODE references and code are TS's (`./fixtures/compose_codefns.ts:double`).
+ *
+ * Later (T3-20): `test_builtin_with_the_wrong_arguments_in_a_condition_fails_to_load` and
+ * `test_whole_span_unknown_call_in_an_assert_keeps_the_inline_call_message`.
+ * Later (T4): `test_a_condition_calling_a_builtin_correctly_loads_and_runs`,
+ * `test_python_built_assert_calling_an_unknown_function_fails_before_the_run`,
+ * `test_python_built_case_when_with_the_wrong_arguments_fails_before_the_run` and
+ * `test_a_typedef_constructor_in_a_condition_loads_and_runs` (runs).
+ *
+ * The harvested cases are pinned at the end: `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when`
+ * (`assemble`, whose CASE build raises it), `__wrong_builtin_arguments_in_a_loop_while`
+ * (`assembledWith`, the `step` def built by hand; the LOOP build raises it),
+ * `__whole_span_call_in_a_flow_assert` (`assemble`, whose inline-call desugar raises it), and
+ * `__unknown_function_in_a_node_assert`, `__unknown_function_in_a_flow_assert` and
+ * `__unknown_function_in_a_loop_while` (the type-table pass raises them).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -29,7 +40,16 @@ import { ExpressionError, parseCondition } from "../../src/expr/expressions.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { assembled, assembledWith, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
+import {
+  assembled,
+  assembledWith,
+  assembleText,
+  type CaseRow,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
@@ -192,6 +212,115 @@ describe("registerTemplateFn", () => {
   });
 });
 
+// ---------- loading ----------
+
+const NODE_ASSERT = `
+id: f
+name: f
+input:
+  v: !int
+nodes:
+  x:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:double
+    input:
+      n: \${input.v}
+    output: int
+    asserts:
+      - "<cond>"
+output: \${x.output}
+`;
+
+const FLOW_ASSERT = `
+id: f
+name: f
+input:
+  v: !int
+asserts:
+  - "<cond>"
+nodes:
+  x:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:double
+    input:
+      n: \${input.v}
+    output: int
+output: \${x.output}
+`;
+
+const CASE = `
+id: f
+name: f
+input:
+  v: !int
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "<cond>"
+        then: hot
+    else: cold
+  hot: {kind: code, code: "return 'hot'", output: str}
+  cold: {kind: code, code: "return 'cold'", output: str}
+output: \${hot.output | cold.output}
+`;
+
+const LOOP = `
+id: f
+name: f
+defs:
+  step:
+    input: {n: !int , exited: !bool }
+    nodes:
+      s:
+        kind: code
+        code: "return {n: inputs['n'] + 1n, exited: inputs['n'] >= 2n}"
+        input:
+          n: \${input.n}
+        output:
+          n: int
+          exited: bool
+    output: \${s.output}
+nodes:
+  repeat:
+    kind: loop
+    call: step
+    input:
+      n: 0
+      exited: false
+    <keyword>: "<cond>"
+    max: 5
+output: \${repeat.output}
+`;
+
+/** Assemble `text` (its `step` def built by hand) and return the located `LoadError` it throws. */
+function loadErrorOf(text: string) {
+  const error = loadError(() => assembleText(text, "flow.yaml", { children: { step: stepBody() } }));
+  expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
+  return error;
+}
+
+test.each<[string, string]>([
+  ["node-pre", NODE_ASSERT.replace("<cond>", "nosuchfn(n) > 0")],
+  ["node-post", NODE_ASSERT.replace("<cond>", "nosuchfn(output) > 0")],
+  ["flow-boundary", FLOW_ASSERT.replace("<cond>", "nosuchfn(input.v) > 0")],
+  ["flow-post", FLOW_ASSERT.replace("<cond>", "nosuchfn(x.output) > 0")],
+  ["case", CASE.replace("<cond>", "nosuchfn(input.v) > 0")],
+  ["case-short-circuit", CASE.replace("<cond>", "true or nosuchfn(input.v)")],
+  ["loop-while", LOOP.replace("<keyword>", "while").replace("<cond>", "not nosuchfn(exited)")],
+  ["loop-until", LOOP.replace("<keyword>", "until").replace("<cond>", "nosuchfn(exited)")],
+])("unknown function in a condition fails to load: %s", (_site, text) => {
+  expect(loadErrorOf(text).message).toContain("unknown expression function 'nosuchfn'");
+});
+
+test("a constructor naming no typedef in a condition fails to load", () => {
+  const text = CASE.replace("name: f\n", "name: f\ntypedefs:\n  Small: int(0..9)\n").replace(
+    "<cond>",
+    "Nope(input.v) > 4",
+  );
+  expect(loadErrorOf(text).message).toContain("unknown expression function 'Nope'");
+});
+
 // ---------- harvested conformance cases ----------
 
 test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when", () => {
@@ -221,3 +350,12 @@ test("assembled: load-case/engine_condition_calls__wrong_builtin_arguments_in_a_
 test("assembled: load-case/engine_condition_calls__whole_span_call_in_a_flow_assert", () => {
   runCase({ id: "load-case/engine_condition_calls__whole_span_call_in_a_flow_assert", call: assembled });
 });
+
+test.each<CaseRow>([
+  { id: "load-case/engine_condition_calls__unknown_function_in_a_node_assert", call: assembled },
+  { id: "load-case/engine_condition_calls__unknown_function_in_a_flow_assert", call: assembled },
+  {
+    id: "load-case/engine_condition_calls__unknown_function_in_a_loop_while",
+    call: assembledWith({ step: stepBody() }),
+  },
+])("assembled: $id", runCase);

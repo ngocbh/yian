@@ -11,7 +11,8 @@
  * `test_wiring_keys_equal_params_plus_the_reserved_key`,
  * `test_two_loads_of_the_same_text_have_the_same_fingerprint`,
  * `test_changing_which_lower_value_is_dropped_changes_the_wiring_identity`,
- * `test_a_flow_value_read_from_an_agent_that_always_sets_the_field_is_not_a_cycle` (3); the edge
+ * `test_a_flow_value_read_from_an_agent_that_always_sets_the_field_is_not_a_cycle` (3),
+ * `test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle`; the edge
  * half of `test_a_shielded_flow_value_reading_a_skippable_node_does_not`; the `bindingLabels`
  * halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field` and
  * `test_a_composer_value_error_names_the_gate_field`; the node and flow-layer halves of
@@ -19,8 +20,11 @@
  *
  * Pinned in kind_agent_parse.test.ts: `test_an_authored_input_named_like_the_reserved_key_fails`.
  *
- * Later (T3-18): `test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle`
- * (cycles); the error halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`
+ * The harvested `load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader`
+ * is pinned at the end with `full` (every frame and the notes); its cycle message writes the node
+ * list in the text form (`["pick"]`, rule `messages`).
+ *
+ * Later (T3-18 PR 3): the error halves of `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`
  * and `test_a_composer_value_error_names_the_gate_field`, and
  * `test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field` (references).
  * Later (T3-20): `test_an_llm_config_value_reading_a_skippable_node_lets_the_agent_skip`, the
@@ -38,7 +42,7 @@ import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
-import { assembleText } from "./declarations.ts";
+import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
 
 const compiled = (text: string): CompiledFlow => assembleText(text, "f.yaml").flow.compiled;
 
@@ -191,6 +195,10 @@ test.each(["m0", "'${input.m}'", "'x${input.n}'"])(
   },
 );
 
+test("a flow value read from an agent whose own value may be null is a cycle", () => {
+  expect(loadError(() => compiled(SELF.replace("PICK_MODEL", "'${input.n}'"))).message).toContain("cycle");
+});
+
 const CASE = `id: f
 name: f
 input: {go: !bool }
@@ -265,4 +273,14 @@ test("a layer of only tagged literals is wired as a literal layer", () => {
   expect(flow.wiring.get("chat")!.has(LLM_CONFIG_KEY)).toBe(false);
   expect(flow.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set());
   expect(flow.flowLlmConfig).toEqual({ provider: "openai" });
+});
+
+// ---------- harvested conformance cases ----------
+
+test("assembled: load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader", () => {
+  runCase({
+    id: "load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader",
+    call: assembled,
+    full: true,
+  });
 });

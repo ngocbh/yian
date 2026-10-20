@@ -44,8 +44,9 @@
  * `test_predicate_reports_only_the_impossible_check` (4),
  * `test_predicate_read_past_a_check_the_checks_before_it_decide_is_checked_under_them`,
  * `test_predicate_read_after_a_value_that_is_no_tag_is_not_checked`,
- * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` (3) and
- * `test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field`. Through
+ * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` (3),
+ * `test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field` and
+ * `test_predicate_isinstance_check_with_an_unknown_type_reports_the_type`. Through
  * `assembleText`: `test_inline_loop_body_may_return_a_subset`,
  * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`,
  * `test_loop_seeded_from_partial_loop_sees_merged_type` and
@@ -84,6 +85,7 @@
  * `load-loop/engine_loop_build__{inline_body_condition_that_never_changes_is_rejected,
  * predicate_isinstance_of_a_disjoint_type_is_rejected,
  * predicate_isinstance_on_an_object_checks_reads,
+ * predicate_isinstance_with_an_unknown_type,
  * predicate_isinstance_ruled_out_by_an_earlier_check,
  * predicate_negated_isinstance_of_the_declared_type_is_rejected,
  * predicate_read_of_a_field_the_checked_member_lacks,predicate_tag_comparison_with_a_non_tag,
@@ -93,9 +95,8 @@
  * by hand) `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located`.
  *
  * Later (T3-18):
- * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load`, the downstream half of
- * `test_merged_contract_types_omitted_field_from_its_seed` and
- * `test_predicate_isinstance_check_with_an_unknown_type_reports_the_type`. Later (T3-19):
+ * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load` and the downstream half of
+ * `test_merged_contract_types_omitted_field_from_its_seed`. Later (T3-19):
  * `test_returned_field_type_mismatch_still_rejected_in_partial_body`,
  * `test_body_output_types_must_equal_carried`,
  * `test_opaque_body_field_does_not_erase_proven_sibling_type_mismatch`,
@@ -1355,6 +1356,14 @@ test("a predicate's isinstance of a partly shared union rejects a member-only fi
   );
 });
 
+test("a predicate's isinstance check with an unknown type reports the type", () => {
+  // A typo in the checked type is reported as that typo, not as an unguarded read.
+  expect(askError(UNION_STATE, "until: isinstance(r, Dnoe) and r.answer == 'ok'")).toBe(
+    "loop node 'ask' until: unknown type 'Dnoe'; isinstance takes a typedefs: name or one of str, int, float, " +
+      "bool, date, datetime, object",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
@@ -1399,6 +1408,7 @@ test.each<CaseRow>(
     "predicate_isinstance_of_a_disjoint_type_is_rejected",
     "predicate_isinstance_on_an_object_checks_reads",
     "predicate_isinstance_ruled_out_by_an_earlier_check",
+    "predicate_isinstance_with_an_unknown_type",
     "predicate_negated_isinstance_of_the_declared_type_is_rejected",
     "predicate_read_of_a_field_the_checked_member_lacks",
     "predicate_tag_comparison_with_a_non_tag",

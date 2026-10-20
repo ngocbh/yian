@@ -32,13 +32,10 @@ import { outputContractFieldError, ValueContract } from "../../nodes/contracts.t
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, type Type } from "../../typesys/values.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { literalType } from "../helpers/output_contracts.ts";
+import { literalType, type TypeFn } from "../helpers/output_contracts.ts";
 
 /** Resolves a reference path to its proven type, or `null` when it is unknown. */
 export type RefType = (path: string) => Type | null;
-
-/** Resolves a constructor name to its type, or `null` for a name that is no constructor. */
-type TypeFn = (name: string) => Type | null;
 
 /**
  * Return why each constructor call in one parsed expression can never succeed.

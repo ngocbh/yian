@@ -16,7 +16,8 @@
  * `test_prepare_node_step_rejects_an_uninitialized_state`,
  * `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`,
  * `test_node_starts_count_started_records`, `test_resume_keeps_steps_and_a_resumed_start_counts_two`,
- * `test_success_deletes_the_nodes_steps_and_starts` and
+ * `test_success_deletes_the_nodes_steps_and_starts`,
+ * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta` and
  * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
  * class and full message, where Python matches a part of the message or accepts either class.
  *
@@ -44,8 +45,6 @@
  *
  * Later (T4-4 PR 2): `test_prepare_node_step_rejects_a_terminal_state`,
  * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`.
- *
- * Later (T4-4 task 3c): `test_learnable_run_accepts_a_step_with_an_empty_trace_delta`.
  *
  * Later (T4-5): `test_expansion_deletes_the_spawners_steps_and_starts`,
  * `test_replay_reproduces_steps_and_starts`, `test_learnable_replay_reproduces_steps_starts_and_trace`,
@@ -76,7 +75,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { FileRef, TypeCheckError } from "../../src/typesys/index.ts";
 import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
-import { commitStartSuccess, fanoutFlow, initializedAndStarted } from "./run_state_fixtures.ts";
+import { commitStartSuccess, fanoutFlow, forwardCapture, initializedAndStarted } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): unknown {
@@ -207,8 +206,8 @@ test("a node step too deep for Python is accepted", () => {
 });
 
 /** Return a state and log with START done and node `first` in flight. */
-function firstInFlight(): { state: RunState; log: MemoryRunLog } {
-  const { state, log } = initializedAndStarted(fanoutFlow());
+function firstInFlight(options: { learnable?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(fanoutFlow(), options);
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
   return { state, log };
@@ -341,6 +340,30 @@ test("a success deletes the node's steps and starts", () => {
 
   expect(state.nodeSteps).toEqual(new Map([["second", [FAILED]]]));
   expect(state.nodeStarts).toEqual(new Map([["second", 1]]));
+});
+
+test("a learnable run accepts a step with an empty trace delta", () => {
+  const { state, log } = firstInFlight({ learnable: true });
+  expect(state.trace).not.toBeNull();
+
+  const prepared = prepareNodeStep(state, "first", FAILED);
+  const delta = prepared._plan.traceDelta;
+  expect(delta).not.toBeNull();
+  expect(delta!.started).toBeNull();
+  expect(delta!.resumed).toBe(false);
+  expect(delta!.occurrence).toBeNull();
+  commitPrepared(log, state, prepared);
+  expect(state.nodeSteps).toEqual(new Map([["first", [FAILED]]]));
+  expect(state.trace!.nextSequence).toBe(state.nextSequence);
+
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, "first", { done: true }, {
+      forwardCapture: forwardCapture(state.flow.nodes.get("first")!, {}),
+    }),
+  );
+  expect(state.nodeSteps).toEqual(new Map());
 });
 
 test("a frontier commit refuses a step record with a start delta", () => {

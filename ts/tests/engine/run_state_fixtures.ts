@@ -13,8 +13,14 @@ import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/comp
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { Parameter } from "../../src/nodes/contracts.ts";
-import type { MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
+import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
+import {
+  DeclSite,
+  type MemoryScope,
+  MemorySnapshotEnvelope,
+  MemorySpec,
+  MemoryStack,
+} from "../../src/memory/index.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
@@ -28,6 +34,7 @@ import {
   type RunRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
+import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitPrepared,
   prepareNodeStarted,
@@ -374,6 +381,116 @@ export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: 
         : null,
     }),
   );
+}
+
+/**
+ * Return a binding capture of `inputs` for `node`: each input a literal route, under the node's
+ * execution scope (Python's `_graph_builder._forward_capture`).
+ */
+export function forwardCapture(node: Node, inputs: Readonly<Record<string, unknown>> | null): ForwardCapture {
+  const route = ValueRoute.record(
+    Object.entries(inputs ?? {}).map(([name, value]) => [name, ValueRoute.literal(value)] as const),
+  );
+  return new ForwardCapture(inputs, route, { scope: node.executionScope });
+}
+
+/** The root flow's declaration site. */
+const ROOT_SITE = new DeclSite([], ["root"]);
+
+/** Return the sorted key table for `keys`, all owned by the root flow. */
+function table(keys: readonly string[]): MemorySpec[] {
+  return [...keys].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT_SITE], false));
+}
+
+/** Return the recorded stacks of `scopes`, one per static path, sorted by locator. */
+export function stacks(...scopes: readonly MemoryScope[]): MemoryStack[] {
+  const byLocator = new Map(scopes.map((scope) => [JSON.stringify(scope.staticPath), scope] as const));
+  return [...byLocator.values()]
+    .sort((a, b) => comparePaths(a.staticPath, b.staticPath))
+    .map((scope) => new MemoryStack(scope.staticPath, scope.memories));
+}
+
+/**
+ * Return a state of `START -> node -> END` after its committed RunStarted, with START ready, and
+ * its log. `keys: null` disables memory; otherwise the table holds `keys`, each snapshot is
+ * `{epoch: 4}`, and the stacks default to the node's own scope (none without one).
+ */
+function newState(
+  node: Node,
+  options: { keys: readonly string[] | null; learnable: boolean; stacks?: readonly MemoryStack[] },
+): { state: RunState; log: MemoryRunLog } {
+  const built = graph([node], [
+    [START_ID, node.id],
+    [node.id, END_ID],
+  ]);
+  const state = new RunState(built);
+  const initialPool = new VariablePool(built.startId);
+  initialPool.set(built.startId, {});
+  initialPool.addSystem("run_id", RUN_ID);
+  let memories: MemorySpec[] | null = null;
+  let snapshots: MemorySnapshotEnvelope[] | null = null;
+  let recordedStacks: readonly MemoryStack[] | null = null;
+  if (options.keys !== null) {
+    memories = table(options.keys);
+    snapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, { epoch: 4n }));
+    recordedStacks = options.stacks ?? (node.memoryScope === null ? [] : stacks(node.memoryScope));
+  }
+  const log = new MemoryRunLog(RUN_ID);
+  commitPrepared(
+    log,
+    state,
+    prepareRunStarted(state, {
+      runId: RUN_ID,
+      flowFingerprint: FINGERPRINT,
+      initialPool,
+      startWiringOverride: {},
+      effectiveLlmByStaticPath: {},
+      numWorkers: 0,
+      memorySnapshots: snapshots,
+      learnable: options.learnable,
+      memories,
+      memoryStacks: recordedStacks,
+    }),
+  );
+  return { state, log };
+}
+
+/**
+ * Return a state of `START -> node -> END` (as `newState` builds it) with START succeeded and
+ * `node` the sole in-flight node, and its log.
+ */
+export function startTraceNode(
+  node: Node,
+  options: { keys: readonly string[] | null; learnable: boolean; stacks?: readonly MemoryStack[] },
+): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = newState(node, options);
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitStartSuccess(state, log, {});
+  commitPrepared(log, state, prepareNodeStarted(state, node.id));
+  return { state, log };
+}
+
+/**
+ * Return every retained-trace field in a form `toEqual` compares: entries, occurrences and
+ * boundaries as arrays, and the backward handlers by reference.
+ */
+export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
+  return {
+    endId: trace.endId,
+    rootInputNames: [...trace.rootInputNames],
+    rootStartSource: trace.rootStartSource,
+    terminal: trace.terminal,
+    rootWriter: trace.rootWriter,
+    causalRouteSource: trace.causalRouteSource,
+    occurrences: [...trace.occurrences],
+    sources: [...trace.sources],
+    currentWriters: [...trace.currentWriters],
+    started: [...trace.started],
+    nextSequence: trace.nextSequence,
+    boundaries: [...trace.boundaries],
+    pendingConnections: [...trace.pendingConnections],
+    backwardHandlers: [...trace.backwardHandlers],
+  };
 }
 
 /**

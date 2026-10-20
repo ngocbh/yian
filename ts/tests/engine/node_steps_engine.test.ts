@@ -2,20 +2,20 @@
  * The durable steps a node records: a port of `tests/engine/test_node_steps_engine.py`.
  *
  * Ported: `test_node_steps_checks_its_fields` (`NodeSteps` checks `starts`, `prior` and `record`),
- * the serial rows of `test_steps_are_durable_before_record_returns`,
- * `test_a_node_without_the_trait_receives_no_steps` and
- * `test_a_kept_recorder_is_closed_after_its_evaluation`.
+ * `test_steps_are_durable_before_record_returns`, `test_a_node_without_the_trait_receives_no_steps`,
+ * `test_a_kept_recorder_is_closed_after_its_evaluation` (each serial and with two workers) and
+ * `test_pooled_nodes_interleave_their_own_steps` (the turns are promises).
  *
  * Ported (adapted): `test_eval_node_passes_steps_only_to_opted_in_nodes_and_checks_the_type`: the
  * nodes are evaluated with no flow (empty wiring), the check's message is pinned, and the opted-in
  * node receives the evaluator's own `NodeSteps` over the same `starts` and `prior`, whose `record`
- * calls the given one (so a recorder fault is the evaluation's capability fault). The serial rows
- * of `test_a_recorder_log_fault_escapes_as_a_host_error` (the log's `append` is replaced on the
+ * calls the given one (so a recorder fault is the evaluation's capability fault).
+ * `test_a_recorder_log_fault_escapes_as_a_host_error` (the log's `append` is replaced on the
  * instance) and `test_an_invalid_step_is_a_host_error` (a `Date` for Python's `object()`, so the
- * rows are `RangeError`, `RangeError` and `TypeError`). `test_resume_hands_detached_prior_steps`
- * and the live-state half of `test_resume_sees_the_second_start_and_the_prior_steps`: the crash
- * is a throwing `onStream`, a host fault that escapes the first run, and the resume is
- * `prepareRunResumed` on the live state.
+ * rows are `RangeError`, `RangeError` and `TypeError`), each serial and with two workers.
+ * `test_resume_hands_detached_prior_steps` and `test_resume_sees_the_second_start_and_the_prior_steps`
+ * (serial and with two workers, each resumed on the live state and on a state replayed with
+ * `replayRecords`): the crash is a throwing `onStream`, a host fault that escapes the first run.
  *
  * Changed: `ValueError` is `RangeError`; `True` for `starts` is `true`.
  * `test_pooled_workers_never_read_the_step_authority` checks a thread name; in its place `prior` is
@@ -27,24 +27,20 @@
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
  * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
  *
- * Later (T4-5): the replay half of `test_resume_sees_the_second_start_and_the_prior_steps`.
- *
- * Later (pooled mode), they run the pooled engine: the pooled parameter rows and
- * `test_pooled_nodes_interleave_their_own_steps`.
- *
- * Later (the engine's stop rule), it needs the pooled engine's stop: the replacement of
+ * Later (the engine's stop rule): the replacement of
  * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step` (after a sibling failure,
  * `record` throws and appends nothing).
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
- * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: replaced as above.
- * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step, since
- * `record` is synchronous; `test_serial_skips_a_step_once_stop_is_set` covers a step after a stop.
+ * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its
+ * step, since `record` is synchronous; replaced as above.
+ * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: likewise; `test_serial_skips_a_step_once_stop_is_set`
+ * covers a step after a stop.
  */
 
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeStarted, NodeSucceeded, type RunEvent, RunSucceeded, StreamChunk } from "../../src/events.ts";
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
@@ -57,7 +53,7 @@ import {
   NodeSucceededRecord,
   type RunRecord,
 } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareRunResumed } from "../../src/runtime/state.ts";
+import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 import { engine, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
@@ -170,6 +166,19 @@ function single(node: Node, options: Parameters<typeof engine>[1] = {}): FlowEng
   ]), options);
 }
 
+/** Return an engine running `first` and `second` side by side after START. */
+function pair(first: Node, second: Node, options: Parameters<typeof engine>[1] = {}): FlowEngine {
+  return engine(graph([first, second], [
+    [START_ID, first.id],
+    [START_ID, second.id],
+    [first.id, END_ID],
+    [second.id, END_ID],
+  ]), options);
+}
+
+/** Each worker count Python parametrizes: serial and two workers. */
+const WORKERS = [0, 2];
+
 /** Return the records about `nodeId`, in log order. */
 function records(built: FlowEngine, nodeId: string): RunRecord[] {
   return built.log
@@ -183,7 +192,7 @@ function logged(built: FlowEngine, kind: abstract new (...args: never[]) => unkn
   return built.log.records().some((envelope) => envelope.record instanceof kind);
 }
 
-test("steps are durable before record returns", async () => {
+test.each(WORKERS)("steps are durable before record returns (numWorkers %p)", async (numWorkers) => {
   const seen: unknown[] = [];
   let built!: FlowEngine;
   const node = new StepNode("work", (caps) => {
@@ -196,7 +205,7 @@ test("steps are durable before record returns", async () => {
     }
     return new Output("done");
   });
-  built = single(node);
+  built = single(node, { numWorkers });
   const events = await built.run();
 
   expect(seen).toEqual([
@@ -219,13 +228,14 @@ test("steps are durable before record returns", async () => {
   expect(workEvents.map((event) => event.constructor)).toEqual([NodeStarted, NodeSucceeded]);
 });
 
-test("a node without the trait receives no steps", async () => {
+test.each(WORKERS)("a node without the trait receives no steps (numWorkers %p)", async (numWorkers) => {
   const seen: boolean[] = [];
   const built = single(
     new PlainNode("work", (caps) => {
       seen.push(caps.steps !== undefined);
       return new Output("done");
     }),
+    { numWorkers },
   );
   await built.run();
   expect(seen).toEqual([false]);
@@ -266,37 +276,48 @@ function crashingNode(later: (steps: NodeSteps) => NodeResult): StepNode {
 const CRASH = new Error("crash");
 
 /** Return an engine for `START -> node -> END` whose `onStream` throws `CRASH`. */
-function crashing(node: StepNode): FlowEngine {
+function crashing(node: StepNode, numWorkers = 0): FlowEngine {
   return single(node, {
+    numWorkers,
     onStream: () => {
       throw CRASH;
     },
   });
 }
 
-/** Run `first`, which crashes, then resume its live state serially and return the resumed engine. */
-async function crashAndResume(first: FlowEngine): Promise<FlowEngine> {
+/**
+ * Run `first`, which crashes, then resume it with `numWorkers` and return the resumed engine: on
+ * its live state, or with `replay` on a fresh state replayed from its log.
+ */
+async function crashAndResume(first: FlowEngine, numWorkers = 0, replay = false): Promise<FlowEngine> {
   expect(await rejected(first.run())).toBe(CRASH);
-  const { state, log } = first;
-  expect([...state.inFlight]).toEqual(["work"]);
-  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
-  const resumed = new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 });
+  const { log } = first;
+  const state = replay
+    ? replayRecords(new RunState(copyGraph(first.state.flow)), log.records(), { growBuilder: noGrowth })
+    : first.state;
+  expect([...state.inFlight.keys()]).toEqual(["work"]);
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers }));
+  const resumed = new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers });
   await resumed.run();
   return resumed;
 }
 
-test("resume sees the second start and the prior steps", async () => {
-  const seen: unknown[] = [];
-  const node = crashingNode((steps) => {
-    seen.push([steps.starts, steps.prior]);
-    return new Output("done");
-  });
-  const resumed = await crashAndResume(crashing(node));
-  const failed = { attempt: 1n, event: "failed", nested: { retry_in: 1n } };
-  expect(seen).toEqual([[2, [failed]]]);
-  expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
-  const steps = records(resumed, "work").filter((record) => record instanceof NodeStepRecord);
-  expect(steps.map((record) => (record as NodeStepRecord).step)).toEqual([failed]);
+describe.each(WORKERS)("resume sees the second start and the prior steps (numWorkers %p)", (numWorkers) => {
+  for (const replay of [false, true]) {
+    test(replay ? "replayed state" : "live state", async () => {
+      const seen: unknown[] = [];
+      const node = crashingNode((steps) => {
+        seen.push([steps.starts, steps.prior]);
+        return new Output("done");
+      });
+      const resumed = await crashAndResume(crashing(node, numWorkers), numWorkers, replay);
+      const failed = { attempt: 1n, event: "failed", nested: { retry_in: 1n } };
+      expect(seen).toEqual([[2, [failed]]]);
+      expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+      const steps = records(resumed, "work").filter((record) => record instanceof NodeStepRecord);
+      expect(steps.map((record) => (record as NodeStepRecord).step)).toEqual([failed]);
+    });
+  }
 });
 
 test("resume hands detached prior steps", async () => {
@@ -313,7 +334,7 @@ test("resume hands detached prior steps", async () => {
   expect(kept).toEqual([[{ attempt: 1n, event: "failed", nested: { retry_in: 1n } }]]);
 });
 
-test("a recorder log fault escapes as a host error", async () => {
+test.each(WORKERS)("a recorder log fault escapes as a host error (numWorkers %p)", async (numWorkers) => {
   const after: string[] = [];
   const built = single(
     new StepNode("work", (caps) => {
@@ -321,6 +342,7 @@ test("a recorder log fault escapes as a host error", async () => {
       after.push("continued");
       return new Output("done");
     }),
+    { numWorkers },
   );
   const fault = new Error("disk full");
   const append = built.log.append.bind(built.log);
@@ -361,18 +383,22 @@ const invalidSteps: [string, unknown, ErrorConstructor][] = [
   ["list", ["x"], TypeError],
 ];
 
-test.each(invalidSteps)("an invalid step is a host error: %s", async (_, step, kind) => {
-  const built = single(
-    new StepNode("work", (caps) => {
-      caps.steps!.record(step as ValueRecord);
-      return new Output("done");
-    }),
-  );
-  expect(await rejected(built.run())).toBeInstanceOf(kind);
-  expect(logged(built, NodeFailedRecord)).toBe(false);
-  expect(logged(built, NodeStepRecord)).toBe(false);
-  expect(built.state.result).toBeNull();
-});
+test.each(WORKERS.flatMap((numWorkers) => invalidSteps.map((row) => [numWorkers, ...row] as const)))(
+  "an invalid step is a host error (numWorkers %p): %s",
+  async (numWorkers, _, step, kind) => {
+    const built = single(
+      new StepNode("work", (caps) => {
+        caps.steps!.record(step as ValueRecord);
+        return new Output("done");
+      }),
+      { numWorkers },
+    );
+    expect(await rejected(built.run())).toBeInstanceOf(kind);
+    expect(logged(built, NodeFailedRecord)).toBe(false);
+    expect(logged(built, NodeStepRecord)).toBe(false);
+    expect(built.state.result).toBeNull();
+  },
+);
 
 test("serial skips a step once stop is set", async () => {
   const stop = new Error("host listener failed");
@@ -398,7 +424,7 @@ test("serial skips a step once stop is set", async () => {
   expect(logged(built, NodeStepRecord)).toBe(false);
 });
 
-test("a kept recorder is closed after its evaluation", async () => {
+test.each(WORKERS)("a kept recorder is closed after its evaluation (numWorkers %p)", async (numWorkers) => {
   const kept: NodeSteps[] = [];
   const late: unknown[] = [];
   const keeper = new StepNode("keeper", (caps) => {
@@ -418,7 +444,7 @@ test("a kept recorder is closed after its evaluation", async () => {
     [START_ID, "keeper"],
     ["keeper", "later"],
     ["later", END_ID],
-  ]));
+  ]), { numWorkers });
   await built.run();
 
   expect(built.state.result).toBeInstanceOf(RunSucceeded);
@@ -431,4 +457,39 @@ test("a kept recorder is closed after its evaluation", async () => {
   expect(() => kept[0]!.record({ event: "late" })).toThrow(CapabilityFault);
   expect(built.log.nextSequence).toBe(size);
   expect(logged(built, NodeStepRecord)).toBe(false);
+});
+
+test("pooled nodes interleave their own steps", async () => {
+  // The nodes take turns: a records, then b, then a, then b.
+  const turns = new Map([
+    ["a", Promise.withResolvers<void>()],
+    ["b", Promise.withResolvers<void>()],
+  ]);
+  const bodyFor = (nodeId: string, other: string) => async (caps: NodeCaps): Promise<NodeResult> => {
+    for (const attempt of [1n, 2n]) {
+      if (nodeId === "b" || attempt === 2n) {
+        await turns.get(nodeId)!.promise;
+        turns.set(nodeId, Promise.withResolvers<void>());
+      }
+      caps.steps!.record({ node: nodeId, attempt });
+      turns.get(other)!.resolve();
+    }
+    return new Output(nodeId);
+  };
+  const built = pair(new StepNode("a", bodyFor("a", "b")), new StepNode("b", bodyFor("b", "a")), { numWorkers: 2 });
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  const steps = built.log
+    .records()
+    .map((envelope) => envelope.record)
+    .filter((record) => record instanceof NodeStepRecord)
+    .map((record) => [(record as NodeStepRecord).nodeId, (record as NodeStepRecord).step]);
+  expect(steps).toEqual([
+    ["a", { attempt: 1n, node: "a" }],
+    ["b", { attempt: 1n, node: "b" }],
+    ["a", { attempt: 2n, node: "a" }],
+    ["b", { attempt: 2n, node: "b" }],
+  ]);
 });

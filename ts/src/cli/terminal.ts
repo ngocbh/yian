@@ -7,6 +7,8 @@ import { emitKeypressEvents } from "node:readline";
 
 import { reprText } from "../diagnostics.ts";
 import type { Parameter } from "../nodes/contracts.ts";
+import type { ToolContext } from "../tools/context.ts";
+import type { AskUserRequest } from "../tools/registry.ts";
 import { type JsonValue, JSONDecodeError, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
@@ -272,6 +274,60 @@ function confirmWidget(label: string): Widget<boolean> {
   };
 }
 
+/**
+ * A multi-select over `titles`, answering the chosen indices in choice order: SPACE toggles the
+ * marked row, `a` selects all (or none when all are selected), `i` inverts, ENTER submits.
+ */
+function checkboxWidget(options: { label: string; titles: readonly string[] }): Widget<number[]> {
+  const count = options.titles.length;
+  let index = 0;
+  const selected = new Set<number>();
+  const row = (title: string, i: number): string => {
+    const pointer = i === index ? ` ${style("1;36", "»")} ` : "   ";
+    if (selected.has(i)) return pointer + style("32", `● ${title}`);
+    return `${pointer}○ ${i === index ? style("36", title) : title}`;
+  };
+  // questionary's answer line: "done", the one title in brackets, or the count.
+  const summary = (picked: readonly number[]): string => {
+    if (picked.length === 0) return "done";
+    if (picked.length === 1) return `[${options.titles[picked[0]!]}]`;
+    return `done (${picked.length} selections)`;
+  };
+  return {
+    lines: () => [
+      `${style("1;36", "?")} ${style("1", options.label)} ${style(
+        "2",
+        "(Use arrow keys to move, <space> to select, <a> to toggle, <i> to invert)",
+      )}`,
+      ...options.titles.map(row),
+    ],
+    cursor: () => null,
+    key(key) {
+      // A paste reaches questionary's checkbox as one paste event, which it ignores.
+      if (key.paste) return undefined;
+      if (key.name === "return" || key.name === "enter") {
+        return { value: options.titles.map((_, i) => i).filter((i) => selected.has(i)) };
+      }
+      if (key.ctrl && key.name === "q") return { stop: "interrupt" };
+      if (key.ctrl || key.meta) return undefined;
+      if (key.name === "space") {
+        if (!selected.delete(index)) selected.add(index);
+      } else if (key.str === "a") {
+        const all = selected.size === count;
+        for (let i = 0; i < count; i++) {
+          if (all) selected.delete(i);
+          else selected.add(i);
+        }
+      } else if (key.str === "i") {
+        for (let i = 0; i < count; i++) if (!selected.delete(i)) selected.add(i);
+      } else if (key.name === "up" || key.name === "k") index = (index - 1 + count) % count;
+      else if (key.name === "down" || key.name === "j") index = (index + 1) % count;
+      return undefined;
+    },
+    done: (outcome) => collapsed("?", options.label, "value" in outcome ? summary(outcome.value) : ""),
+  };
+}
+
 /** One prompt turn: its signal, how it ended without an answer, and the active widget's wakeup. */
 interface Turn {
   signal: AbortSignal | undefined;
@@ -380,6 +436,24 @@ export class Terminal {
     });
     return "value" in ended ? ended.value : null;
   }
+
+  /**
+   * The run's ask_user handler (an `AskUserHandler` from tools/registry.ts): asks `request` in one
+   * turn and returns the answer. A question set answers a record keyed by header; `options` a
+   * single choice; otherwise a free-text prompt. `answerSchema` isn't used.
+   *
+   * @throws `ctx.signal.reason` when the signal aborts first, or when Ctrl-C or a closed terminal
+   *   ends the call after the signal aborted (an `onStop` that aborts it, say).
+   * @throws TerminalStopped `"interrupt"` for Ctrl-C, `"eof"` for the end of input (even when the
+   *   signal then aborted), `"closed"` when the terminal is closed.
+   */
+  readonly askUser = async (request: AskUserRequest, ctx: ToolContext): Promise<unknown> => {
+    const signal = ctx.signal;
+    const ended = await this.#runTurn(signal, (run) => promptRequest(run, this.#output, request));
+    if ("value" in ended) return ended.value;
+    if (ended.stop !== "eof" && signal.aborted) throw signal.reason;
+    throw new TerminalStopped(ended.stop);
+  };
 
   /**
    * Close the terminal: the active prompt ends, queued and later prompts are refused, listeners
@@ -831,4 +905,102 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
   }
 
   return promptOpenValue(run, decl, type, label);
+}
+
+/** One human_input question, as the HUMAN_INPUT node sends it. */
+interface Question {
+  question: string;
+  header: string;
+  options?: { label: string; description?: string }[] | null;
+  multi_select?: boolean;
+}
+
+const OTHER = "✎ Other (write your own)";
+
+/** The columns `text` takes on a terminal, ANSI sequences not counted. */
+function cells(text: string): number {
+  let width = 0;
+  for (const char of text.replace(ANSI, "")) width += isWide(char.codePointAt(0)!) ? 2 : 1;
+  return width;
+}
+
+/**
+ * Write the box that opens a question set: who needs the input (`title`), the prompt when there is
+ * one, and how many questions follow. Rich's `Panel` look, with no wrapping.
+ */
+function writePanel(output: Output, title: string, prompt: string, count: number): void {
+  const body = [
+    style("1", "Your input is needed for ") + style("1;36", title),
+    ...(prompt ? prompt.split("\n") : []),
+    "",
+    style("2", `${count} ${count === 1 ? "question" : "questions"} to answer.`),
+  ];
+  const head = " human input ";
+  const inner = Math.max(cells(head), ...body.map(cells)) + 2;
+  const left = Math.floor((inner - cells(head)) / 2);
+  const lines = [
+    style("36", `╭${"─".repeat(left)}${head}${"─".repeat(inner - cells(head) - left)}╮`),
+    ...body.map((line) => `${style("36", "│")} ${line}${" ".repeat(inner - 2 - cells(line))} ${style("36", "│")}`),
+    style("36", `╰${"─".repeat(inner)}╯`),
+  ];
+  output.write(lines.join("\r\n") + "\r\n");
+}
+
+/** Write a blank line and the `Question i of N · <header>` rule across the terminal. */
+function writeRule(output: Output, index: number, total: number, header: string): void {
+  const title = style("1", `Question ${index} of ${total}`) + (header ? ` ${style("2", `· ${header}`)}` : "");
+  const fill = Math.max(0, (output.columns || 80) - cells(title) - 1);
+  output.write(`\r\n${title} ${style("36", "─".repeat(fill))}\r\n`);
+}
+
+/**
+ * Ask one question: free text without options; else a choice over `label  —  description` rows
+ * and an Other row (a checkbox for `multi_select`), answering the bare labels. Other asks for the
+ * text that takes its place.
+ */
+async function askQuestion(run: RunWidget, question: Question): Promise<unknown> {
+  const options = question.options ?? [];
+  if (options.length === 0) return run(textWidget({ label: question.question }));
+  const titles = options.map((option) =>
+    option.description ? `${option.label}  —  ${option.description}` : option.label,
+  );
+  titles.push(OTHER);
+  const other = (): Promise<string> => run(textWidget({ label: "Your answer", mark: "✎" }));
+  if (question.multi_select) {
+    const labels: string[] = [];
+    for (const i of await run(checkboxWidget({ label: question.question, titles }))) {
+      labels.push(i === options.length ? await other() : options[i]!.label);
+    }
+    return labels;
+  }
+  const chosen = await run(selectWidget({ label: question.question, titles, indicator: true }));
+  return chosen === options.length ? other() : options[chosen]!.label;
+}
+
+/**
+ * Answer one ask_user request inside a turn: a question set opens with the panel and asks each
+ * question under its rule, answering a record keyed by header; `options` are one choice; otherwise
+ * a text prompt labelled with the question.
+ */
+async function promptRequest(run: RunWidget, output: Output, request: AskUserRequest): Promise<unknown> {
+  const questions = (request.questions ?? []) as Question[];
+  if (questions.length > 0) {
+    writePanel(output, request.title || request.nodeId || "this step", request.question, questions.length);
+    const record: Record<string, unknown> = {};
+    for (const [i, question] of questions.entries()) {
+      writeRule(output, i + 1, questions.length, question.header);
+      const value = await askQuestion(run, question);
+      // Defined, not assigned, so a header `__proto__` is an own key.
+      Object.defineProperty(record, question.header, { value, enumerable: true, writable: true, configurable: true });
+    }
+    return record;
+  }
+  if (request.options && request.options.length > 0) {
+    return askQuestion(run, {
+      question: request.question,
+      header: "",
+      options: request.options.map((label) => ({ label })),
+    });
+  }
+  return run(textWidget({ label: request.question || `input for ${request.nodeId}` }));
 }

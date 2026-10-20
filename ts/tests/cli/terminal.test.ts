@@ -2,21 +2,41 @@
  * Ports the terminal checks of `tests/cli/test_terminal_broker.py` and the prompt checks of
  * `tests/engine/test_cli_prompt.py` that drive a real widget: the scenarios of
  * `terminal_both_runtimes.ts`, run here on Bun. Also ports the pure prompt helpers' checks of
- * `tests/engine/test_cli_prompt.py` (`test_input_label_*`, `test_parse_structured_input_*`) and
+ * `tests/engine/test_cli_prompt.py` (`test_input_label_*`, `test_parse_structured_input_*`),
  * `tests/cli/test_run_long_ints.py::test_structured_prompt_rejects_a_long_int`, which TS turns
- * around: an int has no digit limit.
+ * around: an int has no digit limit, and
+ * `test_terminal_broker.py::test_terminal_module_imports_only_the_standard_library`.
  */
+
+import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { inputLabel, parseStructuredInput } from "../../src/cli/terminal.ts";
+import { inputLabel, parseStructuredInput, Terminal } from "../../src/cli/terminal.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import type { AskUserHandler } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { SCENARIOS } from "./terminal_both_runtimes.ts";
 
 describe("the terminal scenarios", () => {
   for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 30_000);
+});
+
+test("askUser is an ask_user handler", () => {
+  const handler: AskUserHandler = new Terminal().askUser;
+  expect(typeof handler).toBe("function");
+});
+
+test("terminal.ts imports only node: modules and relative yian modules", () => {
+  const source = readFileSync(new URL("../../src/cli/terminal.ts", import.meta.url), "utf8");
+  const specifiers = Array.from(
+    source.matchAll(/^\s*(?:import|export)\s[^;]*?\sfrom\s+"([^"]+)"|^\s*import\s+"([^"]+)"/gm),
+    (match) => match[1] ?? match[2]!,
+  );
+  expect(specifiers).toContain("node:readline");
+  for (const specifier of specifiers) expect(specifier).toMatch(/^(node:|\.\.?\/)/);
+  expect(source).not.toMatch(/\bimport\(|\brequire\(/);
 });
 
 /** One source-free flow parameter of type `type`. */

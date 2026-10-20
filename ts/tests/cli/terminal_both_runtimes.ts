@@ -12,8 +12,10 @@ import { getEventListeners } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { Terminal, type TerminalOptions } from "../../src/cli/terminal.ts";
+import { Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { ToolContext } from "../../src/tools/context.ts";
+import type { AskUserRequest } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 export const UP = "\x1b[A";
@@ -1359,6 +1361,506 @@ async function aFailingOutputFailsTheCall(): Promise<void> {
   assertRestored(input, output, exitHooks, false);
 }
 
+// The `askUser` scenarios port `_prompt_request`, `_ask_question` and `assemble_question_answers`
+// of `src/yian/cli/run.py` (`tests/engine/test_cli_questions_render.py`, `tests/cli/test_run.py`'s
+// `test_prompt_request_offers_model_options_as_a_choice`) and the broker checks of
+// `tests/cli/test_terminal_broker.py` and `tests/cli/test_terminal_controller.py` named above
+// each scenario.
+
+/** An `ask_user` request: `fields` over the absent ones (null). */
+function request(fields: Partial<AskUserRequest>): AskUserRequest {
+  return { question: "", options: null, questions: null, answerSchema: null, title: null, nodeId: null, ...fields };
+}
+
+/** An `ask_user` call's context over `signal` (a fresh, never-aborted one by default). */
+function toolContext(signal: AbortSignal = new AbortController().signal): ToolContext {
+  return new ToolContext({
+    callId: "run-1/ask",
+    attempt: 1,
+    toolName: "ask_user",
+    runId: "run-1",
+    node: "ask",
+    context: undefined,
+    signal,
+  });
+}
+
+/**
+ * What `promise` threw, or `{ resolved }` when it resolved. The rejection is handled at once, so a
+ * call that is checked later never counts as unhandled.
+ */
+function thrown(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    (resolved) => ({ resolved }),
+    (error: unknown) => error,
+  );
+}
+
+/** `error` is a `TerminalStopped` for `reason`. */
+function assertStopped(error: unknown, reason: "interrupt" | "eof" | "closed"): void {
+  assert.ok(error instanceof TerminalStopped, `not a TerminalStopped: ${String(error)}`);
+  assert.equal(error.reason, reason);
+}
+
+/** A `Question i of N` rule as the screen shows it, `columns` wide. */
+function rule(title: string, columns = 80): string {
+  return `${title} ${"─".repeat(columns - Array.from(title).length - 1)}`;
+}
+
+const OTHER = "✎ Other (write your own)";
+const CHECKBOX_HELP = "(Use arrow keys to move, <space> to select, <a> to toggle, <i> to invert)";
+
+// test_multi_select_assembly, test_structured_prompt_metadata_reaches_handler_unchanged
+async function aQuestionSetShowsThePanelAndARulePerQuestion(): Promise<void> {
+  const active: boolean[] = [];
+  const { input, output, terminal, view, exitHooks } = setup({ columns: 120, onActive: (on) => active.push(on) });
+  const answer = terminal.askUser(
+    request({
+      question: "Complete the review",
+      questions: [
+        { question: "Choose areas", header: "Areas", options: [{ label: "API" }, { label: "UI" }], multi_select: true },
+        { question: "Notes?", header: "Notes", options: [], multi_select: false },
+      ],
+      answerSchema: [
+        { name: "Areas", type: "list[str]" },
+        { name: "Notes", type: "str" },
+      ],
+      title: "Release review",
+      nodeId: "review/approval",
+    }),
+    toolContext(),
+  );
+  await tick();
+  const panel = [
+    "╭────────────── human input ──────────────╮",
+    "│ Your input is needed for Release review │",
+    "│ Complete the review                     │",
+    "│                                         │",
+    "│ 2 questions to answer.                  │",
+    "╰─────────────────────────────────────────╯",
+  ];
+  assert.deepEqual(view().rows, [
+    ...panel,
+    "",
+    rule("Question 1 of 2 · Areas", 120),
+    `? Choose areas ${CHECKBOX_HELP}`,
+    " » ○ API",
+    "   ○ UI",
+    `   ○ ${OTHER}`,
+  ]);
+  input.write(SPACE + DOWN + SPACE);
+  await tick();
+  assert.deepEqual(view().rows.slice(-3), ["   ● API", " » ● UI", `   ○ ${OTHER}`]);
+  input.write(ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(panel.length), [
+    "",
+    rule("Question 1 of 2 · Areas", 120),
+    "? Choose areas done (2 selections)",
+    "",
+    rule("Question 2 of 2 · Notes", 120),
+    "? Notes?",
+  ]);
+  input.write("ship it" + ENTER);
+  assert.deepEqual(await answer, { Areas: ["API", "UI"], Notes: "ship it" });
+  assert.deepEqual(view().rows.slice(-1), ["? Notes? ship it"]);
+  assert.deepEqual(active, [true, false]);
+  assertRestored(input, output, exitHooks);
+}
+
+// test_single_select_assembly
+async function aSingleSelectShowsDescriptionsAndReturnsTheBareLabel(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askUser(
+    request({
+      questions: [
+        {
+          question: "Which framework?",
+          header: "Framework",
+          options: [{ label: "React", description: "A UI library" }, { label: "Vue", description: "" }],
+          multi_select: false,
+        },
+      ],
+      nodeId: "pick/framework",
+    }),
+    toolContext(),
+  );
+  await tick();
+  assert.deepEqual(view().rows, [
+    "╭────────────── human input ──────────────╮",
+    "│ Your input is needed for pick/framework │",
+    "│                                         │",
+    "│ 1 question to answer.                   │",
+    "╰─────────────────────────────────────────╯",
+    "",
+    rule("Question 1 of 1 · Framework"),
+    "? Which framework? (Use arrow keys)",
+    " » ● React  —  A UI library",
+    "   ○ Vue",
+    `   ○ ${OTHER}`,
+  ]);
+  input.write(DOWN + DOWN + DOWN + ENTER);
+  assert.deepEqual(await answer, { Framework: "React" });
+  assert.deepEqual(view().rows.slice(-1), ["? Which framework? React  —  A UI library"]);
+}
+
+async function otherAndTextQuestionsFillARecordKeyedByHeader(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.askUser(
+    request({
+      questions: [
+        { question: "Why?", header: "__proto__", options: [], multi_select: false },
+        { question: "Pick", header: "", options: [{ label: "A" }], multi_select: false },
+        { question: "Anything else?", header: "Extra" },
+      ],
+    }),
+    toolContext(),
+  );
+  await tick();
+  assert.deepEqual(view().rows.slice(0, 2), [
+    "╭─────────── human input ────────────╮",
+    "│ Your input is needed for this step │",
+  ]);
+  assert.deepEqual(view().rows.slice(-1), ["? Why?"]);
+  input.write("because" + ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(-5), [
+    "",
+    rule("Question 2 of 3"),
+    "? Pick (Use arrow keys)",
+    " » ● A",
+    `   ○ ${OTHER}`,
+  ]);
+  input.write(DOWN + ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), [`? Pick ${OTHER}`, "✎ Your answer"]);
+  input.write("mine" + ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(-1), ["? Anything else?"]);
+  input.write(ENTER);
+  const record = (await answer) as Record<string, unknown>;
+  assert.deepEqual(Object.entries(record), [
+    ["__proto__", "because"],
+    ["", "mine"],
+    ["Extra", ""],
+  ]);
+  assert.equal(Object.getPrototypeOf(record), Object.prototype);
+  assert.deepEqual(view().rows.slice(5), [
+    "",
+    rule("Question 1 of 3 · __proto__"),
+    "? Why? because",
+    "",
+    rule("Question 2 of 3"),
+    `? Pick ${OTHER}`,
+    "✎ Your answer mine",
+    "",
+    rule("Question 3 of 3 · Extra"),
+    "? Anything else?",
+  ]);
+}
+
+async function aCheckboxTogglesInvertsAndReturnsChoiceOrder(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 120 });
+  const ask = (): Promise<unknown> =>
+    terminal.askUser(
+      request({
+        questions: [
+          { question: "Pick", header: "P", options: [{ label: "API" }, { label: "UI" }], multi_select: true },
+        ],
+      }),
+      toolContext(),
+    );
+  const rows = (): string[] => view().rows.slice(-3);
+
+  let answer = ask();
+  await tick();
+  input.write(SPACE);
+  await tick();
+  assert.deepEqual(rows(), [" » ● API", "   ○ UI", `   ○ ${OTHER}`]);
+  input.write("a");
+  await tick();
+  assert.deepEqual(rows(), [" » ● API", "   ● UI", `   ● ${OTHER}`]);
+  input.write("a");
+  await tick();
+  assert.deepEqual(rows(), [" » ○ API", "   ○ UI", `   ○ ${OTHER}`]);
+  input.write("i");
+  await tick();
+  assert.deepEqual(rows(), [" » ● API", "   ● UI", `   ● ${OTHER}`]);
+  input.write(SPACE + UP);
+  await tick();
+  assert.deepEqual(rows(), ["   ○ API", "   ● UI", ` » ● ${OTHER}`]);
+  input.write("j" + "k" + ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), ["? Pick done (2 selections)", "✎ Your answer"]);
+  input.write("mine" + ENTER);
+  assert.deepEqual(await answer, { P: ["UI", "mine"] });
+
+  // Picked in reverse, the answer still follows the choice order, Other's text in its place.
+  answer = ask();
+  await tick();
+  input.write(UP + SPACE + DOWN + SPACE + ENTER + "typed" + ENTER);
+  assert.deepEqual(await answer, { P: ["API", "typed"] });
+
+  answer = ask();
+  await tick();
+  input.write(DOWN + SPACE + ENTER);
+  assert.deepEqual(await answer, { P: ["UI"] });
+  assert.deepEqual(view().rows.slice(-1), ["? Pick [UI]"]);
+
+  answer = ask();
+  await tick();
+  input.write(ENTER);
+  assert.deepEqual(await answer, { P: [] });
+  assert.deepEqual(view().rows.slice(-1), ["? Pick done"]);
+}
+
+async function ctrlQInterruptsACheckbox(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = thrown(
+    terminal.askUser(
+      request({ questions: [{ question: "Pick", header: "P", options: [{ label: "A" }], multi_select: true }] }),
+      toolContext(),
+    ),
+  );
+  await tick();
+  input.write(CTRL_Q);
+  assertStopped(await answer, "interrupt");
+  assert.deepEqual(stops, ["interrupt"]);
+  assertRestored(input, output, exitHooks);
+}
+
+// test_prompt_request_offers_model_options_as_a_choice, test_ask_user_options_reach_the_prompt_request
+async function optionsAreOneSelectWithOtherAndNoPanel(): Promise<void> {
+  const { input, output, terminal, view } = setup();
+  let answer = terminal.askUser(request({ question: "Which?", options: ["A", "B"] }), toolContext());
+  await tick();
+  assert.deepEqual(view().rows, ["? Which? (Use arrow keys)", " » ● A", "   ○ B", `   ○ ${OTHER}`]);
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, "B");
+  assert.deepEqual(view().rows, ["? Which? B"]);
+  answer = terminal.askUser(request({ question: "Which?", options: ["A", "B"] }), toolContext());
+  input.write(UP + ENTER + "C" + ENTER);
+  assert.equal(await answer, "C");
+  assert.deepEqual(view().rows, ["? Which? B", `? Which? ${OTHER}`, "✎ Your answer C"]);
+  assert.ok(!output.text.includes("human input"));
+  assert.ok(!output.text.includes("Question"));
+}
+
+async function aPlainAskIsATextPrompt(): Promise<void> {
+  const { input, terminal, view } = setup();
+  let answer = terminal.askUser(request({ question: "Name?", options: [], questions: [] }), toolContext());
+  input.write(ENTER);
+  assert.equal(await answer, "");
+  answer = terminal.askUser(request({ nodeId: "ask/name" }), toolContext());
+  input.write("Ann" + ENTER);
+  assert.equal(await answer, "Ann");
+  assert.deepEqual(view().rows, ["? Name?", "? input for ask/name Ann"]);
+}
+
+// test_stop_event_wakes_active_prompt_and_discards_its_late_answer,
+// test_stop_event_set_before_prompt_completion_discards_late_answer
+async function anAbortedAskUserThrowsTheReasonAndLeavesLaterKeysBuffered(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext(controller.signal)));
+  input.write("ear");
+  await tick();
+  controller.abort(reason);
+  assert.equal(await answer, reason);
+  assertRestored(input, output, exitHooks);
+  input.write("late" + ENTER);
+  await tick();
+  assert.equal(await terminal.askText("Next:"), "late");
+  assert.deepEqual(stops, []);
+}
+
+// test_stop_event_wakes_queued_waiter_without_serving_prompt
+async function aQueuedAskUserWhoseSignalAbortsNeverDraws(): Promise<void> {
+  const { input, output, terminal } = setup();
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const first = terminal.askUser(request({ question: "First?" }), toolContext());
+  const queued = thrown(terminal.askUser(request({ question: "Queued?" }), toolContext(controller.signal)));
+  await tick();
+  controller.abort(reason);
+  assert.equal(await queued, reason);
+  input.write("1" + ENTER);
+  assert.equal(await first, "1");
+  assert.ok(!output.text.includes("Queued"));
+  await assert.rejects(
+    terminal.askUser(request({ question: "Again?" }), toolContext(controller.signal)),
+    (error) => error === reason,
+  );
+  assert.ok(!output.text.includes("Again"));
+}
+
+async function aQuestionSetAbortedMidwayDiscardsThePartialRecord(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup();
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const answer = thrown(
+    terminal.askUser(
+      request({
+        questions: [
+          { question: "A?", header: "a", options: [] },
+          { question: "B?", header: "b", options: [] },
+        ],
+      }),
+      toolContext(controller.signal),
+    ),
+  );
+  input.write("x" + ENTER);
+  await tick();
+  assert.deepEqual(view().rows.slice(-1), ["? B?"]);
+  controller.abort(reason);
+  assert.equal(await answer, reason);
+  assertRestored(input, output, exitHooks);
+}
+
+// test_non_eof_failure_after_a_stop_is_still_discarded
+async function aFailingWriteAfterAnAbortStillThrowsTheReason(): Promise<void> {
+  // Write 1 sets the modes, write 2 draws the frame; after the abort, write 3 collapses the frame
+  // and write 4 restores the modes.
+  for (const throwOn of [3, 4]) {
+    const { input, output, terminal, exitHooks } = setup({ throwOn });
+    const controller = new AbortController();
+    const reason = new Error("stopped");
+    const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext(controller.signal)));
+    await tick();
+    controller.abort(reason);
+    assert.equal(await answer, reason, `write ${throwOn}`);
+    assert.equal(output.writes, 4);
+    assertRestored(input, output, exitHooks, false);
+  }
+}
+
+async function aFailingOutputFailsAQuestionSet(): Promise<void> {
+  const { input, output, terminal, exitHooks } = setup({ throwOn: 1 });
+  const answer = terminal.askUser(
+    request({ questions: [{ question: "A?", header: "a", options: [] }] }),
+    toolContext(),
+  );
+  await assert.rejects(answer, (error) => error === output.failure);
+  assertRestored(input, output, exitHooks);
+}
+
+// test_ctrl_c_during_active_prompt_preserves_keyboard_interrupt_and_joins,
+// test_cancel_all_wakes_queued_waiters_and_rejects_later_prompt
+async function ctrlCThrowsTheReasonOnStopAbortedAndRefusesQueuedCalls(): Promise<void> {
+  const stops: string[] = [];
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const { input, output, terminal, view, exitHooks } = setup({
+    onStop: (stop) => {
+      stops.push(stop);
+      controller.abort(reason);
+    },
+  });
+  const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext(controller.signal)));
+  const queued = thrown(terminal.askUser(request({ question: "Queued?" }), toolContext(controller.signal)));
+  const plain = thrown(terminal.askUser(request({ question: "Plain?" }), toolContext()));
+  await tick();
+  input.write(CTRL_C);
+  assert.equal(await answer, reason);
+  assert.equal(await queued, reason);
+  assertStopped(await plain, "closed");
+  assert.deepEqual(stops, ["interrupt"]);
+  assert.deepEqual(view().rows, ["? Name?"]);
+  assertRestored(input, output, exitHooks);
+  assert.equal(await thrown(terminal.askUser(request({ question: "Later?" }), toolContext(controller.signal))), reason);
+  assertStopped(await thrown(terminal.askUser(request({ question: "Later?" }), toolContext())), "closed");
+  assert.deepEqual(view().rows, ["? Name?"]);
+}
+
+async function ctrlCWithoutAnAbortThrowsInterrupt(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup();
+  const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext()));
+  const queued = thrown(terminal.askUser(request({ question: "Queued?" }), toolContext()));
+  await tick();
+  input.write(CTRL_C);
+  assertStopped(await answer, "interrupt");
+  assertStopped(await queued, "closed");
+  assert.deepEqual(view().rows, ["? Name?"]);
+  assertRestored(input, output, exitHooks);
+}
+
+// test_generic_eof_fails_current_prompt_and_cancels_queued_prompts,
+// test_eof_that_closed_the_broker_outranks_a_stop_seen_later, test_pooled_prompt_eof_outranks_cancelled_sibling
+async function theEndOfInputOutranksTheAbortItCausesAndRefusesQueuedCalls(): Promise<void> {
+  const stops: string[] = [];
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const { input, output, terminal, exitHooks } = setup({
+    onStop: (stop) => {
+      stops.push(stop);
+      controller.abort(reason);
+    },
+  });
+  const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext(controller.signal)));
+  const queued = thrown(terminal.askUser(request({ question: "Queued?" }), toolContext(controller.signal)));
+  const plain = thrown(terminal.askUser(request({ question: "Plain?" }), toolContext()));
+  await tick();
+  input.end();
+  assertStopped(await answer, "eof");
+  assert.equal(await queued, reason);
+  assertStopped(await plain, "closed");
+  assert.deepEqual(stops, ["eof"]);
+  assert.ok(!output.text.includes("Queued") && !output.text.includes("Plain"));
+  assertRestored(input, output, exitHooks);
+}
+
+async function closeEndsAnActiveAskUserAndRefusesLaterOnes(): Promise<void> {
+  const { input, output, terminal, exitHooks } = setup();
+  const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext()));
+  await tick();
+  terminal.close();
+  assertStopped(await answer, "closed");
+  assertRestored(input, output, exitHooks);
+  const drawn = output.text;
+  const reason = new Error("stopped");
+  const aborted = toolContext(AbortSignal.abort(reason));
+  assert.equal(await thrown(terminal.askUser(request({ question: "Later?" }), aborted)), reason);
+  assertStopped(await thrown(terminal.askUser(request({ question: "Later?" }), toolContext())), "closed");
+  assert.equal(output.text, drawn);
+}
+
+// test_cancel_all_invokes_every_hook_and_ignores_callback_failures
+async function throwingHooksStillRestoreAndRefuseQueuedCalls(): Promise<void> {
+  const calls: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({
+    onStop: (stop) => {
+      calls.push(stop);
+      throw new Error("onStop broke");
+    },
+    onActive: (on) => {
+      calls.push(String(on));
+      throw new Error("onActive broke");
+    },
+  });
+  const answer = thrown(terminal.askUser(request({ question: "Name?" }), toolContext()));
+  const queued = thrown(terminal.askUser(request({ question: "Queued?" }), toolContext()));
+  await tick();
+  input.write(CTRL_C);
+  assertStopped(await answer, "interrupt");
+  assertStopped(await queued, "closed");
+  assert.deepEqual(calls, ["true", "false", "interrupt"]);
+  assertRestored(input, output, exitHooks);
+}
+
+// test_concurrent_prompts_are_served_in_fifo_order
+async function concurrentAskUserCallsAreServedInFifoOrder(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answers = ["first", "second", "third"].map((question) =>
+    terminal.askUser(request({ question }), toolContext()),
+  );
+  input.write("1" + ENTER + "2" + ENTER + "3" + ENTER);
+  assert.deepEqual(await Promise.all(answers), ["1", "2", "3"]);
+  assert.deepEqual(view().rows, ["? first 1", "? second 2", "? third 3"]);
+}
+
 /** A spawned child's exit, waited for at most 10 s with its stdin kept open; what it printed. */
 async function runChild(send: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   // No execArgv forwarded: Node 22.18+ strips types by default, and Bun's execArgv isn't safe to pass on.
@@ -1490,6 +1992,27 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an optional string's blank is Python's whitespace": anOptionalStringBlankIsPythonsWhitespace,
   "a closed terminal prompts nothing": aClosedTerminalPromptsNothing,
   "a failing output fails the call": aFailingOutputFailsTheCall,
+  "a question set shows the panel and a rule per question": aQuestionSetShowsThePanelAndARulePerQuestion,
+  "a single select shows descriptions and returns the bare label": aSingleSelectShowsDescriptionsAndReturnsTheBareLabel,
+  "Other and text questions fill a record keyed by header": otherAndTextQuestionsFillARecordKeyedByHeader,
+  "a checkbox toggles, inverts and returns choice order": aCheckboxTogglesInvertsAndReturnsChoiceOrder,
+  "Ctrl-Q interrupts a checkbox": ctrlQInterruptsACheckbox,
+  "options are one select with Other and no panel": optionsAreOneSelectWithOtherAndNoPanel,
+  "a plain ask is a text prompt": aPlainAskIsATextPrompt,
+  "an aborted askUser throws the reason and leaves later keys buffered":
+    anAbortedAskUserThrowsTheReasonAndLeavesLaterKeysBuffered,
+  "a queued askUser whose signal aborts never draws": aQueuedAskUserWhoseSignalAbortsNeverDraws,
+  "a question set aborted midway discards the partial record": aQuestionSetAbortedMidwayDiscardsThePartialRecord,
+  "a failing write after an abort still throws the reason": aFailingWriteAfterAnAbortStillThrowsTheReason,
+  "a failing output fails a question set": aFailingOutputFailsAQuestionSet,
+  "Ctrl-C throws the reason onStop aborted and refuses queued calls":
+    ctrlCThrowsTheReasonOnStopAbortedAndRefusesQueuedCalls,
+  "Ctrl-C without an abort throws interrupt": ctrlCWithoutAnAbortThrowsInterrupt,
+  "the end of input outranks the abort it causes and refuses queued calls":
+    theEndOfInputOutranksTheAbortItCausesAndRefusesQueuedCalls,
+  "close ends an active askUser and refuses later ones": closeEndsAnActiveAskUserAndRefusesLaterOnes,
+  "throwing hooks still restore and refuse queued calls": throwingHooksStillRestoreAndRefuseQueuedCalls,
+  "concurrent askUser calls are served in FIFO order": concurrentAskUserCallsAreServedInFifoOrder,
   "a child exits on its own after an answer with stdin open": aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen,
   "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
 };

@@ -512,6 +512,9 @@ host input stream, and the answer returns into that same live node call. A
 to. When the model passes `options`, the prompt is a choice list with an "Other"
 entry for a typed answer.
 
+Changed (TS yian): these prompts draw on stderr too, as the
+[interactive prompt's note](#the-interactive-prompt) says.
+
 ```console
 yian run examples/human-approval.yaml --input task="Plan a team offsite"
 #   → draft is written

@@ -1890,8 +1890,9 @@ test("an append result of the wrong schema is a protocol fault", () => {
 
 test.each(["started", "resumed"])("a historical frontier prepares the recorded schema's line: %s", (kind) => {
   const live = new RunState(flow());
-  const log = new MemoryRunLog(startData(live.flow).runId);
-  commitPrepared(log, live, prepareRunStarted(live, startData(live.flow)));
+  const data = startData(live.flow);
+  const log = new MemoryRunLog(data.runId);
+  commitPrepared(log, live, prepareRunStarted(live, data));
 
   const state = replayRecords(new RunState(flow()), log.records().slice(0, 1), { growBuilder: fragmentBuilder });
   const record = kind === "resumed" ? new RunResumedRecord([], 0) : new NodeStartedRecord(state.flow.startId);
@@ -1913,7 +1914,7 @@ test("a historical route keeps the schema in its trace line", () => {
     live.state,
     prepareNodeRouted(live.state, "router", "go", { forwardCapture: forwardCapture(router, {}) }),
   );
-  const wires = live.log.records().map((envelope) => encodeRecord(envelope));
+  const wires = live.log.records().map(encodeRecord);
   const last = wires.at(-1)!;
 
   const state = replayRecords(new RunState(original), live.log.records().slice(0, -1), {

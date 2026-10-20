@@ -21,13 +21,13 @@
  * `test_expansion_deletes_the_spawners_steps_and_starts` (on the shared `initializedSpawner` and
  * `fragment`),
  * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta` and
- * `test_broken_step_state_is_rejected_before_append` (4 rows).
+ * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
+ * class and full message, where Python matches a part of the message or accepts either class.
  *
  * Ported, the replay tests (through `replayRecords` on a fresh `fanoutFlow()`; the log never
  * grows, so the builder is never called): `test_replay_reproduces_steps_and_starts`,
  * `test_learnable_replay_reproduces_steps_starts_and_trace`,
- * `test_replay_without_steps_has_no_steps`. Each rejected row names its one
- * class and full message, where Python matches a part of the message or accepts either class.
+ * `test_replay_without_steps_has_no_steps`.
  *
  * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused; a wire step keeps
  * yian's infinity tag as `Infinity`.

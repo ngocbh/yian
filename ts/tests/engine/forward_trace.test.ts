@@ -2265,7 +2265,7 @@ function copiedTerminal(terminal: TraceTerminal): TraceTerminal {
   return new TraceTerminal(terminal.succeeded, copiedSource(terminal.source), terminal.outputJson, failure);
 }
 
-/** Replay `log` over a fresh state of `original`. */
+/** Replay `envelopes` over a fresh state of `original`. */
 function replayed(original: CompiledFlow, envelopes: readonly RecordEnvelope[]): RunState {
   return replayRecords(new RunState(original), envelopes, { growBuilder: fragmentBuilder });
 }
@@ -2700,11 +2700,8 @@ test.each(OUTCOME_KINDS.flatMap((kind) => [true, false].map((scoped) => [kind, s
             occurrencePath: [...scope.occurrencePath],
           });
 
-    commitPrepared(
-      log,
-      state,
-      withTrace(prepared, changedDelta(delta, { occurrence: changedOccurrence(delta.occurrence!, { memoryScope: copied }) })),
-    );
+    const detached = changedOccurrence(delta.occurrence!, { memoryScope: copied });
+    commitPrepared(log, state, withTrace(prepared, changedDelta(delta, { occurrence: detached })));
 
     const occurrence = state.trace!.occurrences.at(-1)!;
     expect(occurrence.memoryScope).toEqual(node.memoryScope);

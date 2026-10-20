@@ -13,8 +13,9 @@
  * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows), and the `success`,
  * `route` and `growth` rows of
  * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (the growth into the
- * shared `fragment`), and `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack`
- * (through `replayRecords` over `copyGraph` copies of the flow taken before the outcome).
+ * shared `fragment`), and
+ * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (through
+ * `replayRecords` over `copyGraph` copies of the flow taken before the outcome).
  *
  * Ported, after rewrite: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow`
  * and `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site`, with the root result

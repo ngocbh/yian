@@ -4,7 +4,8 @@
  *
  * Ported: `test_forged_resume_plan_cannot_change_the_retry_frontier` (the forged transition
  * spreads the frozen plan and its delta; the error is the `RangeError` `frontier resume delta
- * disagrees with its record`, and the state is checked with the shared `snapshot` and `expectUnchanged`),
+ * disagrees with its record`, and the state is checked with the shared `snapshot`
+ * and `expectUnchanged`),
  * `test_resume_allows_memory_free_unfinished_invocations` and
  * `test_resume_retries_every_unfinished_invocation` (2 rows). Python's local `_replay` is the
  * local `expectReplays`: `replayRecords` over a fresh flow, compared through the shared
@@ -106,7 +107,7 @@ function started(
   return { state, log };
 }
 
-/** Return `state`'s reducer values (`reducerSnapshot`) with its memory, learning and backward state. */
+/** Return `reducerSnapshot(state)` with the memory, learning and backward state. */
 function replaySnapshot(state: reducer.RunState): Record<string, unknown> {
   return {
     ...reducerSnapshot(state),

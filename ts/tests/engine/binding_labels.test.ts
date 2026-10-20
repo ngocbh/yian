@@ -1,20 +1,20 @@
 /**
  * A node's binding labels replace a param's name in its binding errors: a port of
- * `test_label_replaces_the_param_name`, `test_without_a_label_the_default_text_stays` and
- * `test_fresh_node_has_no_binding_labels` of `tests/engine/test_binding_labels.py`. Without a
- * label each message keeps its default `input '<p>'` / `binding '<p>'` text.
+ * `test_label_replaces_the_param_name`, `test_without_a_label_the_default_text_stays`,
+ * `test_fresh_node_has_no_binding_labels` and `test_eval_node_uses_the_node_binding_labels` of
+ * `tests/engine/test_binding_labels.py`. Without a label each message keeps its default
+ * `input '<p>'` / `binding '<p>'` text.
  *
  * Changed (rule: infinity is a float value, NaN is not a yian value): the `nonfinite` and
  * `nonfinite-at-path` cases computed infinity (`${input.x * 10}` with `1e308`), which now binds;
  * they keep failing at the same check with a literal NaN source, reading
- * `input 'p': NaN is not a yian value` and `input 'p' at [1]: NaN is not a yian value`. Changed
- * (values in messages use the text form): `"x" does not match declared type int` and
- * `division by zero: 1 / 0`.
+ * `input 'p': NaN is not a yian value` and `input 'p' at [1]: NaN is not a yian value`; for the
+ * same reason `test_eval_node_uses_the_node_binding_labels` reads a literal NaN source and expects
+ * `X: NaN is not a yian value`. Changed (values in messages use the text form):
+ * `"x" does not match declared type int` and `division by zero: 1 / 0`.
  *
  * TS-only: `${input.x * 10}` with `1e308` delivers `Infinity`, and a function label passed to
  * `resolveSource` names a failing template leaf by its path.
- *
- * Later (T4-6): `test_eval_node_uses_the_node_binding_labels` lands with the runtime's `evalNode`.
  */
 
 import { expect, test } from "bun:test";
@@ -22,7 +22,9 @@ import { expect, test } from "bun:test";
 import { BindingError, bindParams, resolveSource } from "../../src/nodes/binding.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { Type, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { drive, FuncNode } from "./run_state_fixtures.ts";
 
 const START_ID = "__start__";
 const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
@@ -163,4 +165,14 @@ test("a function label names a failing template leaf by its path", () => {
   expect(error).toBeInstanceOf(BindingError);
   const failure = error as BindingError;
   expect([failure.message, failure.failureCode]).toEqual(["field a.b: division by zero: 1 / 0", "binding.evaluate"]);
+});
+
+test("eval node uses the node binding labels", async () => {
+  const node = new FuncNode("work", (inputs) => inputs.p, { reads: { p: NaN } });
+  node.bindingLabels = new Map([["p", "X"]]);
+
+  const outcome = await drive(node);
+
+  expect(outcome).toBeInstanceOf(EvaluationFailure);
+  expect((outcome as EvaluationFailure).failure.message).toBe("X: NaN is not a yian value");
 });

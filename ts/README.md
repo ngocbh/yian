@@ -244,8 +244,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   capabilities are one `NodeCaps` object (`signal`, `bindItem`, `steps`, `tools`, and AGENT's
   fields below). `tools` is the run's `ToolSet`, for a node that declares `needsTools` (TOOL,
   HUMAN_INPUT and AGENT). `signal` is
-  optional in the type; the runtime's evaluator gives every node its own (the evaluator is not
-  ported yet).
+  optional in the type; the runtime's evaluator (`src/runtime/eval_node.ts`) gives every node its
+  own.
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
   constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
   which gives a fresh copy per read).
@@ -265,8 +265,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   and `backward` are not ported yet. `callTime` is an accessor over an own field, so setting it
   also sets `needsSteps`, and a shallow copy carries both. `llmValueTypes` is an array of
   `[path, type]` entries, not a map keyed by path. AGENT is the node the remaining `NodeCaps`
-  fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`, and `steering`, a `Steering`
-  inbox given only to an agent authored `steerable: true`).
+  fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`, `evaluationTrace`,
+  `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent authored
+  `steerable: true`).
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.
@@ -479,6 +480,23 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   the underlying `RangeError` or `TypeError`, never `NodeDataError`. After the terminal, the
   backward and memory-commit records reduce through `reduceBackwardRecord`
   (`sameRuntimeBackwardState` compares the prepared and recomputed attempt state at commit).
+- `src/runtime/eval_node.ts` holds the evaluator. `evalNode(node, flow, pool, options)` binds the
+  node's inputs from the pool through the flow's wiring (or a per-run override), builds the
+  capabilities the node's traits ask for, runs it, and resolves to an `EvaluatedOutcome`: one
+  `Output`, `Route`, `Grow` or `EvaluationFailure` (a `Failure` classified by the stage that threw:
+  binding, assertion, body, result), with the evidence and captures a learnable run asks for. A stop
+  (the node's aborted signal), a capability's host fault (the first one wins, even if the node caught
+  it), an unexpected binder fault and malformed setup reject instead. `MemoryContextOpener` is the
+  memory runtime's admission callback, `(scope, request, { signal }) => Promise<MemoryContext>`.
+- `src/runtime/engine.ts` holds `FlowEngine`, the only writer of a `RunState` while it runs. `new
+  FlowEngine(state, log, { growBuilder, numWorkers, onEvent, onStream, memoryContextOpener, tools,
+  skills, steering })` borrows a state and log already initialized to the same sequence; `run()`
+  starts the head of `ready`, evaluates it, commits the outcome (a refused output, route or growth
+  becomes a `contract.*` failure) and publishes each record's observers to `onEvent`, until the state
+  has a result, and resolves to those observers. A node failure is a result; any other error aborts
+  the run signal and rejects `run()`, as does a promise a callback returns that rejects before the
+  result. A `needsSteps` node's `record` appends and applies each step before it returns. Serial mode
+  (`numWorkers: 0`) only for now; pooled mode follows.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

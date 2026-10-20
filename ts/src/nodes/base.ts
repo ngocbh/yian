@@ -37,7 +37,7 @@ import {
 } from "../expr/index.ts";
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
-import type { MemoryScope } from "../memory/contracts.ts";
+import type { EvaluationTrace, JsonObject, MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -640,10 +640,10 @@ export class NodeAssertFailed extends Error {
 }
 
 /**
- * Return a stage marker's message: an `Error`'s own message, else the thrown value as text, else
- * its type name when it has no text.
+ * @internal Return a stage marker's message: an `Error`'s own message, else the thrown value as
+ * text, else its type name when it has no text. The evaluator uses it for a failure's message.
  */
-function markerMessage(original: unknown): string {
+export function markerMessage(original: unknown): string {
   if (original instanceof Error) return original.message;
   // A body may throw a value with no text (a null-prototype object, a throwing `toString`); the
   // marker must still wrap it.
@@ -758,6 +758,21 @@ export interface NodeCaps {
   readonly emitStream?: (chunk: StreamChunk) => void;
   /** The transient model and tool call observer sink; supplied with `needsLiveEvents`. */
   readonly emitEvent?: (event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished) => void;
+  /**
+   * The invocation's write-only evidence sink; supplied to a node that declares
+   * `needsEvaluationTrace` while evidence capture is on.
+   */
+  readonly evaluationTrace?: EvaluationTrace;
+  /**
+   * Opens the invocation's memory context once, from the visible base system prompt, the rendered
+   * prompt and the transcript compatibility descriptor; supplied to a node that declares
+   * `needsMemoryContext`. The evaluator closes the context's transcript when the evaluation ends.
+   */
+  readonly openMemoryContext?: (
+    baseSystemPrompt: string,
+    renderedPrompt: string,
+    compatibility: JsonObject,
+  ) => Promise<MemoryContext>;
   /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
   readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */

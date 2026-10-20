@@ -7,7 +7,9 @@
  * `test_end_value_without_a_name_has_no_params_and_returns_none`,
  * `test_end_value_captures_the_whole_output_path`, `test_end_record_returns_record`,
  * `test_end_list_joins_in_over_order`, `test_end_list_n_zero_returns_empty_list`,
- * `test_end_list_params_are_e0_to_en`.
+ * `test_end_list_params_are_e0_to_en`, `test_end_post_asserts_fire_record_scoped_through_eval_node`
+ * and `test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param` (integers are
+ * bigints).
  *
  * Changed: `test_end_value_rejects_more_than_one_name` passes the constructor an options object
  * and expects a `RangeError` (Python's `ValueError`); the factories take an options object, and
@@ -16,15 +18,24 @@
  * TS-only: the constructor's "exactly one of outputNames or n" `RangeError`, with neither and with
  * both; a record missing a declared input rejects with a `RangeError` (Python's `KeyError`); an
  * output named `constructor` reads its own value, not `Object.prototype`'s.
- *
- * Later (T4-6): `test_end_post_asserts_fire_record_scoped_through_eval_node`,
- * `test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param`.
  */
 
 import { expect, test } from "bun:test";
 
 import { NodeKind, Output } from "../../src/nodes/base.ts";
+import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
+import { drive, nodeFlow } from "./run_state_fixtures.ts";
+
+/** A value END named `n` whose post-assert `expression` reads the synth param `param`. */
+function endWithSynthAssert(param: string, expression: string, display: string): EndNode {
+  const node = EndNode.value("__end__", { outputName: "n" });
+  node.postAsserts = [new Assertion(expression, display)];
+  node.params = [...node.params!, new Parameter(param)];
+  return node;
+}
 
 test("end kind", () => {
   expect(EndNode.record("__end__", { outputNames: ["a"] }).kind).toBe(NodeKind.END);
@@ -118,4 +129,36 @@ test("end list n zero returns empty list", async () => {
 test("end list params are e0 to en", () => {
   const node = EndNode.list("__end__", { n: 2 });
   expect(node.params!.map((p) => p.name)).toEqual(["e0", "e1"]);
+});
+
+test("end post asserts fire record scoped through eval node", async () => {
+  // The producer ref is lowered to a synth param fed by a `${emit.output.n:-null}` wiring, so
+  // binding puts it into the record and the assert reads it node-locally.
+  const pool = new VariablePool();
+  pool.set("emit", { n: 4n });
+  const wiring = { n: "${emit.output.n}", __assert_emit: "${emit.output.n:-null}" };
+
+  const node = endWithSynthAssert("__assert_emit", "__assert_emit > 0", "emit must be positive");
+  expect(await drive(node, { pool, flow: nodeFlow(node, wiring) })).toEqual(new Output(4n));
+
+  const bad = endWithSynthAssert("__assert_emit", "__assert_emit > 100", "emit must exceed 100");
+  const failed = await drive(bad, { pool, flow: nodeFlow(bad, wiring) });
+  expect(failed).toBeInstanceOf(EvaluationFailure);
+  expect((failed as EvaluationFailure).failure.message).toContain("post-assert failed");
+});
+
+test("end post asserts resolve namespaced cross node ref via synth param", async () => {
+  // A namespaced cross-node ref (the shape expansion gives a fanned-in child END) is lowered the
+  // same way: the assert holds or fails record-scoped, with no END special case.
+  const pool = new VariablePool();
+  pool.set("each#0/n", { score: 7n });
+  const wiring = { n: "${each#0/n.output.score}", __assert_score: "${each#0/n.output.score:-null}" };
+
+  const okNode = endWithSynthAssert("__assert_score", "__assert_score > 0", "score must be positive");
+  expect(await drive(okNode, { pool, flow: nodeFlow(okNode, wiring) })).toEqual(new Output(7n));
+
+  const badNode = endWithSynthAssert("__assert_score", "__assert_score > 100", "score must exceed 100");
+  const failed = await drive(badNode, { pool, flow: nodeFlow(badNode, wiring) });
+  expect(failed).toBeInstanceOf(EvaluationFailure);
+  expect((failed as EvaluationFailure).failure.message).toContain("post-assert failed");
 });

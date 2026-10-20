@@ -391,6 +391,22 @@ instead of the `needs_stop_event` trait, and no node returns a streaming generat
 streaming-generator cleanup in [the loop](#the-loop-read-eval-record-reduce) is Python only;
 see [the node contract](nodes.md#the-contract).
 
+Changed (TS yian): the evaluator (`evalNode` in `ts/src/runtime/eval_node.ts`) resolves to an
+`EvaluatedOutcome` and never touches the run state. When a node rejects after its signal
+aborted, the evaluation rejects with the signal's reason, whatever the node threw, instead of
+classifying it as a failure.
+When a capability fails with a host fault (a stream or event sink, steering, the memory opener,
+render capture, `steps.record`), the first such fault is what the evaluation rejects with once
+the node settles, even if the node caught it and returned; capability promises the node
+started are awaited first. A node declaring `needsEvaluationTrace` gets a write-only
+`evaluationTrace` (`recordPrompt`, `recordInteraction`), and one declaring `needsMemoryContext`
+gets `openMemoryContext(baseSystemPrompt, renderedPrompt, compatibility)`; the memory opener the
+engine is given takes `(scope, request, { signal })` and resolves to a `MemoryContext`, and the
+evaluator awaits the admitted transcript's `close(error)` before the evaluation settles (with the
+failure's error, the signal's reason for a stop, or nothing on success). Cleanup notes travel
+on the error's `notes` and are appended to the failure's `traceback`. The steps capability and
+render capture refuse calls once the outcome is decided.
+
 The pattern is a small set of traits and hooks around the shared run/body pair.
 Runtime may read `NodeKind` for diagnostic text, but behavior and scheduling never
 branch on it.

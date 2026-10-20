@@ -4,8 +4,11 @@
  * converting only its file and object representation, and fails with `binding.type`; the
  * receiving parameter's own contract still runs afterwards.
  *
- * Later: `test_binding_type_failure_keeps_the_route_without_usable_inputs` waits for the
- * runtime's `evalNode`; the three run tests
+ * Ported (adapted): `test_binding_type_failure_keeps_the_route_without_usable_inputs` passes
+ * Python's `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a
+ * JSON record and this one holds a `Binding`; Python's bare `Node` is a minimal subclass.
+ *
+ * Later: the three run tests
  * (`test_run_fails_the_consumer_with_binding_type`, `test_map_run_fails_an_item_with_binding_type`,
  * `test_run_fails_a_typed_flow_output_with_binding_type`) land with compose and the runner.
  */
@@ -13,13 +16,21 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
+import { Node, NodeKind } from "../../src/nodes/base.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { nodeFlow } from "./run_state_fixtures.ts";
 
 const INTEGER = Type.scalar(ValueKind.INTEGER);
 const NUMBER = Type.scalar(ValueKind.NUMBER);
 const OPTIONAL_INTEGER = new Type({ kind: ValueKind.INTEGER, nullable: true });
+
+/** A minimal concrete node; it fails before its body here. */
+class CodeNode extends Node {
+  readonly kind: NodeKind = NodeKind.CODE;
+}
 
 /** Return a pool holding each entry of `outputs` as that node's output. */
 function poolOf(outputs: Record<string, unknown> = {}): VariablePool {
@@ -159,6 +170,25 @@ test("a typed binding checks a non-string literal", () => {
   expect(error.failureCode).toBe("binding.type");
 
   expect(bind(30n, new ValueContract(INTEGER), poolOf())).toEqual({ qty: 30n });
+});
+
+test("a binding type failure keeps the route without usable inputs", async () => {
+  const origin = new OriginRef("contract:bad");
+  const node = new CodeNode("node");
+  node.params = [new Parameter("ok"), new Parameter("bad")];
+  const wiring = {
+    ok: { safe: [1n] },
+    bad: new Binding("wrong", { contract: new ValueContract(INTEGER, new ContractOrigins({ default: origin })) }),
+  };
+
+  const evaluated = await evalNode(node, nodeFlow(node, wiring), poolOf(), { captureBindings: true });
+
+  expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
+  const { failure } = evaluated.outcome as EvaluationFailure;
+  expect(failure.code).toBe("binding.type");
+  expect(failure.trace).toEqual([origin]);
+  expect(evaluated.bindings!.boundInputs).toBeNull();
+  expect(evaluated.bindings!.route.names).toEqual(["ok", "bad"]);
 });
 
 test("an untyped binding and raw sources are unchanged", () => {

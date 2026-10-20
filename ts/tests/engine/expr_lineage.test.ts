@@ -26,11 +26,18 @@
  * their opaque route by hand (`ValueRoute.literal(x).with({kind: "opaque"})`, the route the
  * evaluator records for a builtin call), so they don't check Python's single builtin call.
  *
+ * Ported (adapted): `test_reserved_map_over_uses_the_same_capture_path` doesn't check the outcome:
+ * MAP's `forward` isn't ported yet, so the evaluation fails after binding, and the capture
+ * survives that failure.
+ *
+ * Later (T4-10): `test_equal_map_items_get_distinct_recorded_indices` waits for MAP's `forward`.
+ * Later (T4-11): the outcome half of `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
+ * waits for WAIT's `forward`.
+ *
  * Not ported:
- * - The MAP and WAIT capture tests (`test_reserved_map_over_uses_the_same_capture_path`,
- *   `test_equal_map_items_get_distinct_recorded_indices`,
- *   `test_wait_capture_retains_the_delivered_iso_value_after_normalization`) wait for the
- *   runtime.
+ * - The capture half of `test_wait_capture_retains_the_delivered_iso_value_after_normalization`:
+ *   TS WAIT delivers the resolved string unchanged (no `isoformat` object), so nothing is
+ *   normalized; the reserved capture path is `test_reserved_map_over_uses_the_same_capture_path`.
  * - Temporaries `fromHost` refuses, so a builtin can't return them: the NaN row of
  *   `test_nonfinite_temporary_keeps_a_valid_final_interpolation`, the lone-surrogate
  *   `test_noncanonical_unicode_temporary_preserves_comparison_and_partial_snapshot`,
@@ -65,8 +72,10 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { validateRoute } from "../../src/runtime/contracts.ts";
-import { FileRef, isRecord, type Value, type ValueRecord } from "../../src/typesys/index.ts";
+import { evalNode } from "../../src/runtime/eval_node.ts";
+import { FileRef, isRecord, type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
 const FILE = new FileRef({ uri: "file:///tmp/x" });
@@ -623,6 +632,23 @@ test("an infinite temporary keeps a valid final interpolation", () => {
   expect(calls).toEqual(["score"]);
   const stopped = routeFeedback(traced.route, "Check the score.", () => null).stopped;
   expect(stopped[0]!.context.at(-1)!.result).toBe(Infinity);
+});
+
+test("reserved MAP over uses the same capture path", async () => {
+  const sources = new Sources({ items: [] });
+  const node = new MapNode("map", { flowId: "child", child: {} });
+  const evaluated = await evalNode(node, null, new VariablePool(), {
+    wiringOverride: { over: "${items}" },
+    captureBindings: true,
+    sourceResolver: sources.resolve,
+  });
+  expect(evaluated.evidence).toBeNull();
+  expect(evaluated.bindings!.boundInputs).toEqual({ over: [] });
+  expect(evaluated.bindings!.evaluatedKeys).toEqual(new Set(["over"]));
+  expect(sources.reads).toEqual(["items"]);
+  expect(messages(routeFeedback(evaluated.bindings!.route, { over: "Add an item." }, sources.lookup))).toEqual([
+    [sources.identities.items!, "Add an item."],
+  ]);
 });
 
 test("direct projection lifts feedback into source shape", () => {

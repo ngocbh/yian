@@ -11,10 +11,13 @@
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
  * as text).
  *
+ * Ported through `assembleText`: `test_inline_loop_whole_reference_keeps_its_message` (inline
+ * body extraction refuses the `input:` before any node parses), with its harvested case
+ * `inline_loop_whole_reference_keeps_its_message` (`assembled`).
+ *
  * Later (T3-22): `test_non_mapping_input_in_a_defs_body_is_located` (the `defs entry` prefix)
  * and the load half of `test_null_or_empty_mapping_input_still_loads`. Later (T3-22, T4):
- * `test_listed_carried_fields_load_and_run`. Later (T3-17):
- * `test_inline_loop_whole_reference_keeps_its_message`.
+ * `test_listed_carried_fields_load_and_run`.
  */
 
 import { expect, test } from "bun:test";
@@ -29,7 +32,7 @@ import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
-import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, DescriptorClass>([
   ["loop", LoopDescriptor],
@@ -137,6 +140,47 @@ test.each([
   const text = `nodes:\n  c:\n    kind: code\n    code: return 1\n    input:${inputText}\n`;
   expect(parseNode(text, "c").inputs).toEqual({});
 });
+
+const INLINE_LOOP_FLOW = `id: input-shape
+name: input_shape
+input:
+  z: !int
+nodes:
+  seed:
+    kind: code
+    input:
+      z: \${input.z}
+    output:
+      n: int
+    code: |
+      return {"n": inputs["z"]}
+  repeat:
+    kind: loop
+    times: 2
+    input: \${seed.output}
+    nodes:
+      b:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1n}
+    output: \${b.output}
+output: \${repeat.output}
+`;
+
+test("an inline LOOP's whole-reference input keeps the inline-body message", () => {
+  const error = loadError(() => assembleText(INLINE_LOOP_FLOW));
+
+  expect(error.message).toBe("node 'repeat' (kind=loop): inline `input:` must be a mapping with string keys");
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(17);
+});
+
+test.each<CaseRow>([
+  { id: "load-core/compose_node_input_shape__inline_loop_whole_reference_keeps_its_message", call: assembled },
+])("assemble: $id", runCase);
 
 test.each<CaseRow>([
   { id: "load-core/compose_node_input_shape__empty_list_loop_seed", call: parsedNodes },

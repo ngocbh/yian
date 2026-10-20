@@ -81,6 +81,7 @@ import { HumanInputDescriptor } from "../nodes/human_input.ts";
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
 import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
+import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
@@ -88,6 +89,7 @@ import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { CallDescriptor } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
+import { LoopDescriptor } from "../nodes/loop.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import { LoweredAsserts } from "../validate/asserts.ts";
 import { Narrowing } from "../validate/narrowing.ts";
@@ -362,17 +364,69 @@ export interface CallableScope extends PrivateRegistrar {
   resolve(flowId: string, version?: string | null): ComposedFlow;
 }
 
-/** Python's `compose.build.pipeline._register_inline_bodies`; not ported yet. */
-function registerInlineBodies(
+/**
+ * Associate retained inline bodies with descriptors and register lazy builders.
+ *
+ * Every association is validated before the registrar is touched. The returned map replaces only
+ * matching frozen descriptors with copies carrying an author-facing child label; the input
+ * descriptors remain unchanged. Child construction stays lazy until the registrar invokes a
+ * captured zero-argument builder.
+ *
+ * @param descriptors The final node descriptors by id.
+ * @param bodies The retained inline bodies by node id.
+ * @param options.registrar Where each body's lazy builder is registered.
+ * @param options.diagnostics Factory for located load errors (default: from the first body's
+ *   `nodes:` cursor).
+ * @param options.buildChild Builds one body's child flow under its labelled descriptor.
+ * @returns A new descriptor map with each inline composite labelled.
+ * @throws LoadError when a body has no descriptor, its descriptor is not a CALL, MAP or LOOP, or
+ *   the descriptor does not call the body's private id.
+ */
+export function registerInlineBodies(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   bodies: ReadonlyMap<string, InlineBody>,
   options: {
     registrar: PrivateRegistrar;
     diagnostics?: LoadDiagnostics | null;
-    buildChild: (body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow;
+    buildChild: (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor) => ComposedFlow;
   },
 ): Map<string, NodeDescriptor> {
-  return new Map(descriptors);
+  const { registrar, buildChild } = options;
+  let { diagnostics = null } = options;
+  if (diagnostics === null) {
+    const firstBody = bodies.values().next().value;
+    diagnostics = LoadDiagnostics.fromCursor(firstBody === undefined ? null : firstBody.nodesCursor);
+  }
+  const associated = new Map(descriptors);
+  const registrations: [InlineBody, CallDescriptor | LoopDescriptor, string][] = [];
+
+  for (const body of bodies.values()) {
+    const label = `inline body of node ${reprText(body.nodeId)}`;
+    const descriptor = descriptors.get(body.nodeId);
+    if (descriptor === undefined) {
+      throw diagnostics.error(`${label}: no matching composite node descriptor`, { range: body.nodesCursor.range });
+    }
+    if (!(descriptor instanceof CallDescriptor || descriptor instanceof LoopDescriptor)) {
+      throw diagnostics.error(`${label}: final node descriptor is not CALL, MAP, or LOOP`, {
+        range: body.nodesCursor.range,
+      });
+    }
+    if (descriptor.call !== body.flowId) {
+      throw diagnostics.error(`${label}: final node descriptor does not target its retained inline body`, {
+        range: body.nodesCursor.range,
+      });
+    }
+
+    const labelledDescriptor = descriptor.replace({ childLabel: label });
+    associated.set(body.nodeId, labelledDescriptor);
+    registrations.push([body, labelledDescriptor, label]);
+  }
+
+  for (const [body, labelledDescriptor, label] of registrations) {
+    registrar.registerPrivate(body.flowId, body.owner, label, () => buildChild(body, labelledDescriptor));
+  }
+
+  return associated;
 }
 
 /**
@@ -1951,11 +2005,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
-//   T3-17  extractInlineBodies (1): returns `[nodesCursor, new Map()]`.
-//          buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
+//   T3-17  buildInlineChild (3, `(body: InlineBody, descriptor: NodeDescriptor) => ComposedFlow`):
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
-//          registerInlineBodies (2): returns the descriptors.
 //   T3-18  checkWrittenValues, stampToolInputTypes, checkWiringParity, validateReferences,
 //          validateHumanQuestions, checkReservedSources, rejectCycles, checkCaseHandles (1).
 //          fillTypeTables (2, with _site_range).
@@ -1976,17 +2028,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
 
 // T3-17: compose/desugar/*.ts, compose/edges/*.ts, compose/build/{boundary,inline_inputs}.ts
-
-/** Python's `compose.desugar.inline_bodies.InlineBody`; not ported yet. */
-type InlineBody = unknown;
-
-/** Python's `compose.desugar.inline_bodies.extract_inline_bodies`; not ported yet. */
-function extractInlineBodies(
-  nodesCursor: SourceCursor,
-  options: { owner: readonly string[] },
-): [nodesCursor: SourceCursor, inlineBodies: Map<string, InlineBody>] {
-  return [nodesCursor, new Map()];
-}
 
 // T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
 // reserved_sources,cycles,handles}.ts

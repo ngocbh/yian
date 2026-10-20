@@ -9,12 +9,12 @@
  * cases read keys as written, and the wide projection refuses occurrence walks rather than
  * counting key comparisons.
  *
- * Later (T3-17): `test_scalar_style_survives_inline_body_masking`.
  * Later (T3-22): `test_scalar_style_survives_the_single_node_def_projection`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { extractInlineBodies } from "../../src/compose/desugar/inline_bodies.ts";
 import { normalizeNodeSignatureCursor } from "../../src/compose/parse/nodes.ts";
 import {
   type ArcSequence,
@@ -1243,6 +1243,35 @@ describe("scalar facts", () => {
 
     expect(inputs.child("plain").scalarStyle).toBe("plain");
     expect(inputs.child("quoted").scalarStyle).toBe("single");
+  });
+
+  test("scalar style survives inline body masking", () => {
+    const nodes = SourceDocument.parse(
+      "nodes:\n" +
+        "  outer:\n" +
+        "    kind: call\n" +
+        "    input:\n" +
+        "      a: x = 1\n" +
+        '      b: "x = 1"\n' +
+        "    nodes:\n" +
+        "      inner:\n" +
+        "        kind: tool\n" +
+        "        input:\n" +
+        "          c: y = 2\n" +
+        "          d: >\n" +
+        "            y = 2\n" +
+        "    output: ${inner.out}\n",
+    ).root.child("nodes");
+
+    const [masked, bodies] = extractInlineBodies(nodes, { owner: ["flow"] });
+
+    const outerInputs = normalizeNodeSignatureCursor(masked.child("outer")).child("inputs");
+    expect(outerInputs.child("a").scalarStyle).toBe("plain");
+    expect(outerInputs.child("b").scalarStyle).toBe("double");
+    const inner = bodies.get("outer")!.nodesCursor.child("inner");
+    const innerInputs = normalizeNodeSignatureCursor(inner).child("inputs");
+    expect(innerInputs.child("c").scalarStyle).toBe("plain");
+    expect(innerInputs.child("d").scalarStyle).toBe("folded");
   });
 
   test("scalar style of a def node input", () => {

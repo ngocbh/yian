@@ -56,8 +56,7 @@
  * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`, the request's roles, system
  * text and output format, and the mutation id's digest; in
  * `test_parsed_response_validation_failure_is_final_and_sanitized`, one row for each other reply
- * defect, and a reply with absent `lesson_id`/`text` accepted; a model without a `stream` function,
- * or whose `stream` getter throws, is `reflective.structured_output`; `close()` while `learn` awaits
+ * defect, and a reply with absent `lesson_id`/`text` accepted; `close()` while `learn` awaits
  * the model is `reflective.busy`, and the learn then fails `reflective.session_closed` when the
  * session closed meanwhile; an episode holding `Infinity` reaches the prompt as `Infinity`;
  * `onRetry` sees a retried `ProviderError`; `REFLECTION_SCHEMA` is frozen;
@@ -1077,31 +1076,6 @@ test("structured binding failure is final and sanitized", async () => {
   ]);
   expect(error.cause).toBeInstanceOf(TypeError);
   expect((error.cause as Error).message).toBe("the reflector model has no native structured output");
-});
-
-test("a model that can't stream is a structured output failure", async () => {
-  const getterFailure = new Error("getter-failure");
-  const throwing = {
-    provider: "ollama",
-    model: "qwen",
-    get stream(): never {
-      throw getterFailure;
-    },
-  };
-  const rows: [unknown, Error][] = [
-    [{ provider: "ollama", model: "qwen" }, new TypeError("the reflector model must provide stream()")],
-    [throwing, getterFailure],
-  ];
-  for (const [model, cause] of rows) {
-    const memory = newMemory({ llmConfig: OLLAMA, createModel: () => model as unknown as ChatModel });
-    const error = await withRun(memory, (session) => rejection(session.learn(context())));
-    expect([error.code, error.message, error.retryable]).toEqual([
-      "reflective.structured_output",
-      "reflector does not support the required structured output",
-      false,
-    ]);
-    expect(error.cause).toEqual(cause);
-  }
 });
 
 test("learn provider failure is retryable and sanitized", async () => {

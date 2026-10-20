@@ -1,6 +1,7 @@
 /**
  * Built-in SQLite backends open storage on first use, never in the constructor: a port of
- * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory` and `SessionMemory`.
+ * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory`, `ReflectiveMemory` and
+ * `SessionMemory`.
  *
  * Ported: `test_construction_touches_no_file`, `test_bad_path_shape_fails_at_construction_without_io`,
  * `test_reset_also_opens_storage`, `test_missing_parent_fails_at_first_open_without_create_parent`,
@@ -10,9 +11,8 @@
  *
  * TS-only: none.
  *
- * Changed: none.
- *
- * Later (T6-5): the `reflective` parametrization (with the reflective backend).
+ * Changed: the `reflective` backend gets an environment map standing in for Python's
+ * `conftest.py` variables, beside Python's `_REFLECTIVE_LLM`.
  *
  * Not ported: `test_pid_ownership_starts_at_construction` and `test_ram_backend_ignores_pid` (JS
  * can't fork a live process, so there is no fork guard); `test_concurrent_first_open_constructs_storage_once`
@@ -25,10 +25,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { BUILTIN, type Env, install } from "../../src/defaults.ts";
 import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
+
+const REFLECTIVE_LLM = { provider: "ollama", model: "current" };
 
 /** The surface every backend shares. */
 interface Backend {
@@ -40,18 +44,39 @@ interface Backend {
 /** A backend's name (its closed code's prefix) and its factory over a storage path. */
 const BACKENDS: [string, (file: string, options?: { createParent?: boolean }) => Backend][] = [
   ["episodic", (file, options = {}) => new EpisodicMemory({ storage: file, ...options })],
+  [
+    "reflective",
+    (file, options = {}) =>
+      new ReflectiveMemory({ llmConfig: REFLECTIVE_LLM, storage: file, env: baseEnv(), ...options }),
+  ],
   ["session", (file, options = {}) => new SessionMemory({ storage: file, ...options })],
 ];
 
 let dir: string;
+// Apart from `dir`, whose listing the tests check.
+let home: string;
 
 beforeEach(() => {
+  install(BUILTIN);
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "yian-lazy-"));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "yian-lazy-home-"));
 });
 
 afterEach(() => {
+  install(BUILTIN);
   fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
 });
+
+/** Python's `conftest.py` environment: an empty private store and an explicit model default. */
+function baseEnv(): Env {
+  const vars = new Map([
+    ["YIAN_AUTH_FILE", path.join(home, "auth.json")],
+    ["YIAN_DEFAULT_PROVIDER", "openai"],
+    ["YIAN_DEFAULT_MODEL", "gpt-5.5"],
+  ]);
+  return (name) => vars.get(name);
+}
 
 /** Return the `MemoryOperationError` `fn` throws. */
 function failure(fn: () => unknown): MemoryOperationError {

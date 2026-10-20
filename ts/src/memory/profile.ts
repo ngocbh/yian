@@ -5,8 +5,8 @@
  * and, on backward, asks one model call to rewrite the whole document from that run's feedback.
  * Commits are compare-and-set writes to a `MarkdownStore` and never call a model.
  *
- * Knows about: `memory/contracts`, `memory/storage/markdown`, `memory/storage/sqlite`, `defaults`,
- * `typesys/json`, `typesys/values`, `llm`, `llm_clients`.
+ * Knows about: `memory/contracts`, `memory/reflective`, `memory/storage/markdown`,
+ * `memory/storage/sqlite`, `defaults`, `typesys/json`, `typesys/values`, `llm`, `llm_clients`.
  * Never imports: the `memory` facade, nodes, runtime.
  */
 
@@ -14,14 +14,17 @@ import { createHash } from "node:crypto";
 
 import { current, type Env, processEnv } from "../defaults.ts";
 import type { ChatModel } from "../llm/events.ts";
-import type { RetryInfo } from "../llm/executor.ts";
+import { callWithRetries, type RetryInfo, RouteModel } from "../llm/executor.ts";
+import { Message, Request, type Response, TextPart } from "../llm/messages.ts";
 import { type HostConnection, popHostCredentials } from "../llm_clients/config.ts";
+import { resolveModelConfig, scrubCallCredentials } from "../llm_clients/connection.ts";
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
-import type { JsonObject as StoreObject } from "../typesys/json.ts";
-import { fromHost, isList, isRecord } from "../typesys/values.ts";
+import { logJson, type JsonObject as StoreObject } from "../typesys/json.ts";
+import { fromHost, isList, isRecord, type Value, writeAsJson } from "../typesys/values.ts";
 import {
   type JsonObject,
-  type LearnContext,
+  type JsonValue,
+  LearnContext,
   type Memory,
   MemoryMutation,
   MemoryOperationError,
@@ -30,6 +33,7 @@ import {
   sameMemoryMutation,
 } from "./contracts.ts";
 import { type MarkdownStore, MarkdownVersionMismatch } from "./storage/markdown.ts";
+import { boundedJsonMaterial, visibleInteractionJson } from "./reflective.ts";
 import { isSystemError } from "./storage/sqlite.ts";
 
 const SNAPSHOT_FORMAT = "yian.profile_memory";
@@ -85,6 +89,68 @@ function readError(stage: string, cause: unknown): MemoryOperationError {
     return error(stage, "profile.store_invalid", "profile store returned an unreadable document", { cause });
   }
   throw cause;
+}
+
+/** The number of code points in `text` (Python's `len`). */
+function codePoints(text: string): number {
+  return Array.from(text).length;
+}
+
+/**
+ * @internal Extract and bound the document the learner wrote between the profile tags. The
+ * reply's text parts are joined with `""`; a reply without text parts reads as `""`.
+ *
+ * @param currentText Current document; a blank reply may not erase it.
+ * @param maxChars Largest allowed document, in code points.
+ * @returns The new document with one trailing newline, or `""`.
+ * @throws MemoryOperationError `profile.contract` for a reply without tags or a blank reply over a
+ *   non-empty document, `profile.over_budget` for a document longer than `maxChars`.
+ */
+export function parseReply(response: Response, currentText: string, maxChars: number): string {
+  const content = response.message.parts
+    .filter((part) => part instanceof TextPart)
+    .map((part) => part.text)
+    .join("");
+  const start = content.indexOf(OPEN_TAG);
+  const end = content.lastIndexOf(CLOSE_TAG);
+  if (start < 0 || end < start) {
+    throw error("learn", "profile.contract", `profile learner reply must wrap the document in ${OPEN_TAG} tags`);
+  }
+  const text = content.slice(start + OPEN_TAG.length, end).trim();
+  if (!text && currentText.trim()) {
+    throw error("learn", "profile.contract", "profile learner returned an empty document");
+  }
+  const length = codePoints(text);
+  if (length > maxChars) {
+    throw error(
+      "learn",
+      "profile.over_budget",
+      `profile learner returned ${length} characters; the limit is ${maxChars}`,
+    );
+  }
+  return text ? `${text}\n` : "";
+}
+
+/** Whether one feedback entry is a record (Python's `dict`), not an array or a scalar. */
+function isEntryRecord(entry: JsonValue): entry is JsonObject {
+  return isRecord(entry);
+}
+
+/** One key of a feedback record, `null` when absent (Python's `entry.get`). */
+function entryGet(entry: JsonObject, key: string): JsonValue {
+  return Object.hasOwn(entry, key) ? entry[key]! : null;
+}
+
+/** The `value` of one feedback entry: a record's `value`, else the entry itself. */
+function feedbackValue(entry: JsonValue): JsonValue {
+  return isEntryRecord(entry) ? entryGet(entry, "value") : entry;
+}
+
+/** Whether `value` holds a non-finite number at any depth. */
+function hasNonFinite(value: JsonValue): boolean {
+  if (typeof value === "number") return !Number.isFinite(value);
+  if (value === null || typeof value !== "object") return false;
+  return Object.values(value).some(hasNonFinite);
 }
 
 // Local copy of memory/contracts.ts's isExactly, which that module keeps private.
@@ -343,9 +409,162 @@ export class ProfileSession implements MemorySession {
     return this.text;
   }
 
-  /** Propose one full-document rewrite from the run's feedback. */
-  learn(_context: LearnContext): readonly MemoryMutation[] {
-    throw new Error("not implemented");
+  /**
+   * Propose one full-document rewrite from the run's feedback, through one call of the learner's
+   * model; a run without feedback calls no model.
+   *
+   * @returns One document mutation, or an empty array for runs without feedback and unchanged
+   *   documents.
+   * @throws MemoryOperationError `profile.invalid_context` for a context that isn't exactly a
+   *   `LearnContext`, or feedback holding a non-finite number; `profile.store_unavailable`
+   *   (retryable) or `profile.store_invalid` when the store can't be read;
+   *   `profile.model_construction` when the model can't be built; `profile.provider` (retryable)
+   *   when the call fails; `profile.contract` or `profile.over_budget` for a bad reply; the session
+   *   or backend is closed. Causes are scrubbed of the call's credentials. Other store errors pass
+   *   through unchanged.
+   */
+  async learn(context: LearnContext): Promise<MemoryMutation[]> {
+    this.ensureOpen("learn");
+    if (!isExactly(context, LearnContext)) {
+      throw error("learn", "profile.invalid_context", "context must be a LearnContext");
+    }
+    if (context.feedback.length === 0) return [];
+    const memory = this.memory;
+    let currentText: string;
+    let currentVersion: string;
+    try {
+      [currentText, currentVersion] = await memory["store"].read(null);
+    } catch (cause) {
+      throw readError("learn", cause);
+    }
+    const request = new Request({
+      messages: [
+        new Message({ role: "system", parts: [new TextPart(SYSTEM)] }),
+        new Message({ role: "user", parts: [new TextPart(this.material(context, currentText, currentVersion))] }),
+      ],
+    });
+    const config: Record<string, unknown> = { ...memory["llmConfig"] };
+    const host = memory["host"];
+    const hostFields: [string, unknown][] = [
+      ["api_key", host.apiKey],
+      ["base_url", host.baseUrl],
+      ["organization", host.organization],
+      ["project", host.project],
+      ["headers", host.headers === null ? null : { ...host.headers }],
+    ];
+    for (const [name, value] of hostFields) {
+      if (value !== null) config[name] = value;
+    }
+    const env = memory["env"];
+    let model: ChatModel;
+    try {
+      model = await memory["createModel"](resolveModelConfig(config, { env }));
+    } catch (cause) {
+      throw error("learn", "profile.model_construction", "profile learner model construction failed", {
+        cause: scrubCallCredentials(cause, config, { env }),
+      });
+    }
+    let response: Response;
+    try {
+      response = await callWithRetries(model, request, { onRetry: memory["onRetry"] });
+    } catch (cause) {
+      // Providers may echo any credential the call sent; the chained cause must not carry it.
+      let sent: readonly string[] = [];
+      try {
+        if (model instanceof RouteModel) sent = model.route.auth.credentials();
+      } catch {
+        // A failing read leaves `sent` empty rather than replacing the error being mapped.
+      }
+      throw error("learn", "profile.provider", "profile learner invocation failed", {
+        retryable: true,
+        cause: scrubCallCredentials(cause, config, { env, sent }),
+      });
+    }
+    const text = parseReply(response, currentText, memory.maxChars);
+    if (text.trim() === currentText.trim()) return [];
+    const feedback: JsonValue[] = [];
+    const seen = new Set<string>();
+    for (const entry of context.feedback) {
+      const value = feedbackValue(entry);
+      const key = logJson(value);
+      if (!seen.has(key)) {
+        seen.add(key);
+        feedback.push(value);
+      }
+    }
+    const payload = {
+      base_version: currentVersion,
+      text,
+      seen_version: this.version,
+      run_id: context.runId,
+      feedback,
+    };
+    try {
+      return [new MemoryMutation(`profile:${sha256(text)}`, payload)];
+    } catch (cause) {
+      // Feedback may hold infinity, which a mutation payload can't; Python's json would write it.
+      if (cause instanceof RangeError && feedback.some(hasNonFinite)) {
+        throw error("learn", "profile.invalid_context", "feedback must be finite JSON", { cause });
+      }
+      throw cause;
+    }
+  }
+
+  /**
+   * Return the learner's JSON input with the newest episodes that fit the budget.
+   *
+   * The newest episode is always sent; if it alone is over the budget, it is cut to a prefix and a
+   * suffix the way ReflectiveMemory trims its material. Older episodes are added whole, newest
+   * first, until one does not fit.
+   */
+  private material(context: LearnContext, currentText: string, currentVersion: string): string {
+    const feedback = context.feedback.map((entry): JsonValue =>
+      isEntryRecord(entry)
+        ? {
+            channel: entryGet(entry, "channel"),
+            owner_static_path: entryGet(entry, "owner_static_path"),
+            target_name: entryGet(entry, "target_name"),
+            value: entryGet(entry, "value"),
+          }
+        : { value: entry },
+    );
+    const budget = this.memory.inputBudgetChars;
+    const agentEpisodes = context.episodes.filter((episode) => episode.baseSystemPrompt !== null);
+    const kept: JsonValue[] = [];
+    let used = 0;
+    for (const episode of [...agentEpisodes].reverse()) {
+      const item: JsonObject = {
+        failure: episode.failure,
+        inputs: episode.inputs,
+        interactions: episode.interactions.map(visibleInteractionJson),
+        output: episode.output,
+        owner_static_path: [...episode.ownerStaticPath],
+        prompt: episode.prompt,
+        status: episode.status,
+      };
+      let encoded = writeAsJson(item as Value);
+      let keptItem: JsonValue = item;
+      if (kept.length === 0) {
+        const bounded = boundedJsonMaterial(item, budget);
+        // A trimmed summary holds only strings, booleans and small ints, so JSON.parse reads it exactly.
+        if (bounded !== encoded) keptItem = JSON.parse(bounded) as JsonObject;
+        encoded = bounded;
+      } else if (used + codePoints(encoded) > budget) {
+        break;
+      }
+      used += codePoints(encoded);
+      kept.push(keptItem);
+    }
+    kept.reverse();
+    const material: JsonObject = {
+      current_profile: currentText,
+      episodes: kept,
+      feedback,
+      max_chars: BigInt(this.memory.maxChars),
+      omitted_episodes: BigInt(agentEpisodes.length - kept.length),
+      ...(currentVersion !== this.version ? { seen_profile: this.text } : {}),
+    };
+    return writeAsJson(material as Value, 2);
   }
 
   /**

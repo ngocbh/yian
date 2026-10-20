@@ -1,7 +1,7 @@
 /**
- * Flows that use `Any`: the rows the cross-flow binding check decides, a port of rows of
- * `tests/compose/test_any_flows.py`, assembling each flow with `assembleText` where Python calls
- * `load_flow`.
+ * Flows that use `Any`: the rows the cross-flow binding check and the loop type contract decide, a
+ * port of rows of `tests/compose/test_any_flows.py`, assembling each flow with `assembleText` where
+ * Python calls `load_flow`.
  *
  * `Any` is any JSON value except null; `Optional(Any)` adds null. Wiring an `Any` into a narrower
  * child input is a load error unless a tag or an `isinstance` branch narrows it.
@@ -12,7 +12,8 @@
  * the node),
  * `test_a_map_over_a_list_of_optional_any_into_a_child_any_input_is_a_load_error`,
  * `test_a_map_over_a_mixed_literal_list_still_checks_each_element_at_load`,
- * `test_a_child_any_output_into_a_parent_int_input_is_a_load_error_with_the_hint`; the load halves
+ * `test_a_child_any_output_into_a_parent_int_input_is_a_load_error_with_the_hint`,
+ * `test_an_untyped_seed_into_an_any_body_input_rejects_an_optional_any_body_field`; the load halves
  * of `test_a_tagged_any_binding_into_a_child_str_input_fails_at_runtime_for_an_int`,
  * `test_a_tagged_any_binding_into_a_child_str_input_runs_for_text`,
  * `test_a_str_output_into_a_child_any_input_loads_and_runs`,
@@ -20,8 +21,12 @@
  * `test_a_map_over_a_list_of_optional_any_into_a_child_optional_any_input_runs`,
  * `test_a_map_over_a_mixed_literal_list_into_a_child_any_input_runs`,
  * `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value` and
- * `test_a_child_any_output_into_a_parent_any_consumer_runs`; and the harvested case
- * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element`.
+ * `test_a_child_any_output_into_a_parent_any_consumer_runs`,
+ * `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs`,
+ * `test_a_typed_loop_seed_accepts_an_optional_any_body_field` and
+ * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn`; and the harvested cases
+ * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element` and
+ * `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`.
  *
  * Changed: the `child` and `mk_any` defs are built by hand (`handChild`: the def's parameters read
  * from its `input:` text, its nodes as producers with their output contracts, `mk_any`'s output a
@@ -46,11 +51,6 @@
  * `test_a_field_read_on_an_any_output_loads_in_a_case_condition`,
  * `test_a_field_read_on_an_any_value_entry_is_not_checked` and
  * `test_a_field_read_on_an_object_value_entry_is_still_checked`.
- * Later (T3-19 loop_types): `test_an_untyped_seed_into_an_any_body_input_rejects_an_optional_any_body_field`
- * and its case `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`;
- * the load halves of `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs`,
- * `test_a_typed_loop_seed_accepts_an_optional_any_body_field` and
- * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn`.
  * Later (T3-20): `test_a_field_read_on_an_any_output_loads_in_an_assert`,
  * `test_an_int_when_on_an_any_value_loads_and_matches`,
  * `test_a_text_when_on_an_any_value_loads_and_matches`,
@@ -70,7 +70,15 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembledWith, assembleText, handChild, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import {
+  assembled,
+  assembledWith,
+  assembleText,
+  handChild,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -214,6 +222,38 @@ test("a map over a mixed literal list still checks each element at load", () => 
   );
 });
 
+// ---------- LOOP carried Any ----------
+
+/** A flow with an inline loop carrying `acc`, seeded `seed`, from a body node typed `bodyOutput`. */
+const inlineLoop = (seed: string, bodyOutput: string, code: string) =>
+  "id: p\nname: p\nnodes:\n" +
+  `  loop:\n    kind: loop\n    times: 2\n    input:\n      acc: ${seed}\n    nodes:\n` +
+  "      step:\n        kind: code\n        input:\n          acc: ${input.acc}\n" +
+  `        output: ${bodyOutput}\n        code: |\n          return ${code}\n` +
+  "    output:\n      acc: ${step.output}\noutput: ${loop.output}\n";
+
+test.each([
+  ["a loop carrying an Any seed with an Any body field runs", "Any", "[inputs['acc']]"],
+  ["a typed loop seed accepts an optional Any body field", "Optional(Any)", "inputs['acc'] + 1n"],
+  ["a null from an optional Any body field fails the next turn", "Optional(Any)", "null"],
+])("%s (loads)", (_name, bodyOutput, code) => {
+  assembleText(inlineLoop("!Any 0", bodyOutput, code));
+});
+
+test("an untyped seed into an Any body input rejects an optional Any body field", () => {
+  const text = inlineLoop("${mk.output}", "Optional(Any)", "inputs['acc']").replace(
+    "nodes:\n",
+    "nodes:\n  mk:\n    kind: code\n    output: Any\n    code: return 0\n",
+  );
+
+  const error = loadError(() => assembleText(text));
+
+  expect(error.message).toBe(
+    "loop node 'loop': the body returns 'acc' as Optional(Any), but the carried field is typed Any from its seed; " +
+      "declare the seed's type: `acc: !Optional(Any) ${mk.output}`",
+  );
+});
+
 // ---------- CASE output Any over branches of different types ----------
 
 test("a reader tagging a case result Any gets the taken branch value (loads)", () => {
@@ -270,4 +310,8 @@ test("assembledWith: load-types/compose_any_flows__a_map_over_a_mixed_literal_li
     id: "load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element",
     call: assembledWith({ child: child("str") }),
   });
+});
+
+test("assembled: load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field", () => {
+  runCase({ id: "load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field", call: assembled });
 });

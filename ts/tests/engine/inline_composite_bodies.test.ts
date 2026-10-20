@@ -33,7 +33,7 @@
  * `test_inline_map_missing_list_element_fails_at_item_binding`,
  * `test_inline_outer_env_stays_on_driver_and_child_env_stays_inner`,
  * `test_inline_composites_reject_outer_llm_config_without_private_identity`,
- * `test_inline_loop_contract_diagnostics_are_friendly_and_redacted` (but `field-type`),
+ * `test_inline_loop_contract_diagnostics_are_friendly_and_redacted`,
  * `test_inline_wrapper_bad_input_uses_outer_binding_range`,
  * `test_inline_map_output_error_uses_friendly_child_label`, and the load halves of
  * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` (the flow id, no child inputs),
@@ -93,10 +93,6 @@
  * `test_inline_map_child_keeps_item_namespace_closed`,
  * `test_inline_sibling_keeps_outer_bad_binding_range`,
  * `test_inline_child_bad_output_uses_retained_output_range`.
- *
- * Later (T3-19): the `field-type` param of
- * `test_inline_loop_contract_diagnostics_are_friendly_and_redacted` (`validate/loop_types`'
- * message).
  *
  * Later (T3-20): `test_inline_map_rejects_outer_asserts_without_private_identity`.
  *
@@ -1966,6 +1962,19 @@ test.each([
 `,
     'body output field(s) ["value"] are not carried record fields ["n"] (a body returns a subset of the ' +
       "carried record)",
+  ],
+  [
+    "field-type",
+    `      step:
+        kind: code
+        code: |
+          return {"n": String(inputs["n"])}
+        input:
+          n: \${input.n}
+        output:
+          n: str
+`,
+    "carried field 'n' — body output is 'str', carried source is 'int' (a returned field must keep its carried type)",
   ],
 ])("an inline LOOP's contract error is friendly and redacted: %s", (_name, step, message) => {
   const source = `id: inline-loop-bad-contract

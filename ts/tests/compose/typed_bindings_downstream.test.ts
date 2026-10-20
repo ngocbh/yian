@@ -10,9 +10,15 @@
  * Ported: `test_untyped_nullable_source_into_strict_child_fails_to_load`,
  * `test_typed_nullable_binding_into_strict_child_fails_to_load`,
  * `test_declared_float_does_not_fit_a_strict_int_child`, `test_map_binding_uses_the_declared_type`,
- * `test_declared_seed_type_is_checked_against_the_body_input`, and the load halves of
- * `test_typed_binding_narrows_a_nullable_source_into_a_strict_child` and
- * `test_typed_binding_rejects_a_null_at_runtime`.
+ * `test_declared_seed_type_is_checked_against_the_body_input`,
+ * `test_declared_seed_type_is_compared_with_the_returned_field`, and the load halves of
+ * `test_typed_binding_narrows_a_nullable_source_into_a_strict_child`,
+ * `test_typed_binding_rejects_a_null_at_runtime`, `test_declared_seed_type_types_an_opaque_producer`,
+ * `test_declared_seed_type_is_checked_on_the_loop_node` (both flows),
+ * `test_typed_inline_loop_seed_types_the_body_parameter` and
+ * `test_typed_inline_loop_seed_types_an_opaque_producer` (each reading the inline body's parameters
+ * from the LOOP node's `childInputs`, where Python reads the child's START parameters); and the
+ * harvested case `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`.
  *
  * Changed: the `child` and `bump` defs are built by hand (`handChild`: the def's parameters read
  * from its `input:` text, its typed node as a producer with its output contract), since def bodies
@@ -25,12 +31,6 @@
  * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load` (its case is pinned in
  * `engine/inline_composite_bodies.test.ts`) and `test_typed_inline_map_item_binding_runs`.
  *
- * Later (T3-19 loop_types): `test_declared_seed_type_is_compared_with_the_returned_field` and its
- * case `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`;
- * the load halves of `test_declared_seed_type_types_an_opaque_producer`,
- * `test_declared_seed_type_is_checked_on_the_loop_node`,
- * `test_typed_inline_loop_seed_types_the_body_parameter` and
- * `test_typed_inline_loop_seed_types_an_opaque_producer`.
  * Later (T4): the run halves of the rows above.
  */
 
@@ -38,9 +38,11 @@ import { afterEach, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
+import { type Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import type { LoopNode } from "../../src/nodes/loop/node.ts";
+import { typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, handChild, loadError, parametersFromYaml } from "./declarations.ts";
+import { assembledWith, assembleText, handChild, loadError, parametersFromYaml, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -185,3 +187,103 @@ test("a declared seed type is checked against the body input", () => {
 
   expect(error.message).toBe("loop node 'loop': binding 'n' — child expects 'int', source is 'str'");
 });
+
+test("a declared seed type is compared with the returned field", () => {
+  // The producer is untyped, so only the declaration gives the seed a type: the same seed written
+  // without one loads. The body takes `n: Any`, so both the seed and the returned `int` fit its input.
+  load(loopFlow("${opaque.output}", opaque("1n"), "!Any"), { bump: bump("!Any") });
+
+  const error = loadError(() => load(loopFlow("!str ${opaque.output}", opaque("1n"), "!Any"), { bump: bump("!Any") }));
+
+  expect(error.message).toBe(
+    "loop node 'loop': carried field 'n' — body output is 'int', carried source is 'str' " +
+      "(a returned field must keep its carried type)",
+  );
+});
+
+test("a declared seed type types an opaque producer (loads)", () => {
+  load(loopFlow("!int ${opaque.output}", opaque("1n")), { bump: bump() });
+});
+
+test.each([
+  ["untyped", "${opaque.output}"],
+  ["declared int", "!int ${opaque.output}"],
+])("a declared seed type is checked on the loop node (loads): %s", (_name, seed) => {
+  load(loopFlow(seed, opaque('"1"')), { bump: bump() });
+});
+
+// ---------- inline bodies ----------
+
+/** The parameters of the inline body of LOOP `nodeId` in `flow`, keyed by name. */
+function startParams(flow: ComposedFlow, nodeId: string): Map<string, Parameter> {
+  const node = flow.compiled.nodes.get(nodeId) as LoopNode;
+  return new Map(node.childInputs.map((param) => [param.name, param]));
+}
+
+test("a typed inline loop seed types the body parameter (loads)", () => {
+  // A `float` seed lets an inline body carry a float past its int literal seed.
+  const { flow } = assembleText(`id: inline-float-loop
+name: inline_float_loop
+nodes:
+  loop:
+    kind: loop
+    times: 2
+    input:
+      r: !float 0
+    nodes:
+      half:
+        kind: code
+        input:
+          r: \${input.r}
+        output: float
+        code: |
+          return inputs["r"] + 0.5
+    output:
+      r: \${half.output}
+output: \${loop.output}
+`);
+
+  expect(startParams(flow, "loop").get("r")!.contract!.type).toStrictEqual(typeFor("float", new Map()));
+});
+
+test("a typed inline loop seed types an opaque producer (loads)", () => {
+  // An `Optional(str)` seed over an untyped producer loads.
+  const { flow } = assembleText(`id: inline-optional-seed
+name: inline_optional_seed
+nodes:
+  p:
+    kind: code
+    code: |
+      return "seed"
+  loop:
+    kind: loop
+    times: 2
+    input:
+      n: 0
+      label: !Optional(str) \${p.output}
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: |
+          return inputs["n"] + 1n
+    output:
+      n: \${step.output}
+output: \${loop.output}
+`);
+
+  const param = startParams(flow, "loop").get("label")!;
+  expect(param.contract!.type).toStrictEqual(typeFor("Optional(str)", new Map()));
+  expect(param.required).toBe(false);
+});
+
+// ---------- harvested conformance cases ----------
+
+test.each([
+  {
+    id: "load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field",
+    call: assembledWith({ bump: bump("!Any") }),
+  },
+])("assembledWith: $id", runCase);

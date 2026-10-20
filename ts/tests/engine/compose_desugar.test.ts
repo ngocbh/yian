@@ -37,8 +37,7 @@ output: \${ask.output}
 
 test("adaptive questions lowers to agent plus gate", () => {
   const nodes = assembleText(AUTO).flow.compiled.nodes;
-  expect([...nodes.keys()]).toContain("ask");
-  expect([...nodes.keys()]).toContain("ask__compose");
+  expect([...nodes.keys()]).toEqual(["ask__compose", "ask", "__start__", "__end__"]);
   const gate = nodes.get("ask") as HumanInputNode;
   const agent = nodes.get("ask__compose") as AgentNode;
   expect(agent.kind).toBe(NodeKind.AGENT);

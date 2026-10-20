@@ -9,7 +9,8 @@
  *
  * Changed: the flows assemble with `assembleText`, where Python loads them. A text value reads
  * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
- * message ("Extra inputs are not permitted") where pydantic adds its `extra_forbidden` type.
+ * message ("Extra inputs are not permitted") where pydantic adds its `extra_forbidden` type. Each
+ * bad-config row pins the whole message where Python matches fragments.
  *
  * Later (T3-18): `test_bad_input_is_reported_once_on_the_gate`,
  * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
@@ -54,28 +55,34 @@ ${llmConfig}output: \${ask.output}
 const lineOf = (error: LoadError) => error.diagnostic.frames.at(-1)!.range.startLine;
 
 test.each([
-  ["inherit", "{inherit: 'false'}", ["adaptive_questions.llm_config `inherit:` must be true or false, got \"false\""]],
+  ["inherit", "{inherit: 'false'}", `${LLM_SITE} \`inherit:\` must be true or false, got "false"`],
   [
     "model-type",
     "{model: 5}",
-    ["adaptive_questions.llm_config: `model:` must be text, but YAML read it as an integer"],
+    `${LLM_SITE}: \`model:\` must be text, but YAML read it as an integer; put it in quotes`,
   ],
-  ["unknown-key", "{temparature: 1}", ["temparature", "Extra inputs are not permitted"]],
-  ["not-mapping", "5", ["adaptive_questions.llm_config must be a mapping"]],
-  ["api-key", "{api_key: x}", ["adaptive_questions.llm_config.api_key is a host credential"]],
-])("bad llm config is named and located at the llm config: %s", (_id, config, fragments) => {
+  [
+    "unknown-key",
+    "{temparature: 1}",
+    `${LLM_SITE}: 1 validation error for LLMConfig\ntemparature\n  Extra inputs are not permitted`,
+  ],
+  ["not-mapping", "5", `${LLM_SITE} must be a mapping`],
+  [
+    "api-key",
+    "{api_key: x}",
+    `${LLM_SITE}.api_key is a host credential; pass it in the run's llm_config, not in a flow file`,
+  ],
+])("bad llm config is named and located at the llm config: %s", (_id, config, message) => {
   const error = loadError(() => assembleText(flow(`      llm_config: ${config}\n`)));
-  expect(error.message).toStartWith(LLM_SITE);
-  for (const fragment of fragments) expect(error.message).toContain(fragment);
-  expect(error.message).not.toContain("ask__compose");
+  expect(error.message).toBe(message);
   expect(lineOf(error)).toBe(10);
 });
 
 test("block llm config error is located at its first key", () => {
   const error = loadError(() => assembleText(flow("      llm_config:\n        model: m\n        bogus: 1\n")));
-  expect(error.message).toStartWith(LLM_SITE);
-  expect(error.message).toContain("bogus");
-  expect(error.message).not.toContain("ask__compose");
+  expect(error.message).toBe(
+    `${LLM_SITE}: 1 validation error for LLMConfig\nbogus\n  Extra inputs are not permitted`,
+  );
   expect(lineOf(error)).toBe(11);
 });
 

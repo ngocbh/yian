@@ -216,7 +216,7 @@ test("case ref in assert is located", () => {
       diagnostics,
     }),
   );
-  expect(error.diagnostic.frames[0]!.range.startLine).toBe(42);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(42);
 });
 
 const OTHER_CONDITION = `case node 'other' condition: \${gate.output} — ${REJECTED}`;

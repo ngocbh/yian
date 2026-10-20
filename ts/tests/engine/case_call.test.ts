@@ -13,6 +13,9 @@
  * message; the scope's resolver throws a plain `Error` for any callee, so a private callee that
  * reached resolution would fail the row without a monkeypatch.
  *
+ * Merged: `test_inline_binding_and_then_call_directive_share_minter_no_collision` into
+ * `test_inline_binding_and_then_call_share_minter_no_collision`; both assemble the same flow.
+ *
  * TS-only: the harvested `load-case/engine_case_call__a_private_callee_branch_is_rejected`,
  * pinned at the end.
  *
@@ -32,6 +35,7 @@
 
 import { expect, test } from "bun:test";
 
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "../../src/compose/desugar/inline_bodies.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
@@ -78,7 +82,7 @@ const load = (text: string, children: Record<string, ComposedFlow> = { take: TAK
   assembleText(text, "flow.yaml", { children }).flow.compiled;
 
 /** The ids of the synth call nodes of a compiled flow. */
-const synthIds = (compiled: ReturnType<typeof load>) =>
+const synthIds = (compiled: CompiledFlow) =>
   [...compiled.nodes.keys()].filter((nodeId) => nodeId.startsWith("__call_"));
 
 // An inline-binding call(...) AND a then: call(...) in one flow: the two share one minter.
@@ -159,12 +163,7 @@ test("then else call directive desugars to synth branch nodes", () => {
   const controlTargets = compiled.edges
     .filter((edge) => edge.sourceHandle !== null && edge.from === "gate")
     .map((edge) => edge.to);
-  expect(new Set(controlTargets)).toEqual(new Set(synth));
-});
-
-test("inline binding and then call directive share minter no collision", () => {
-  const synth = synthIds(load(BOTH, { take: TAKE, enrich: def("  topic: !str\n") }));
-  expect(new Set(synth).size).toBe(2); // distinct ids, no collision
+  expect(controlTargets).toEqual(["__call_0", "__call_1"]);
 });
 
 test("nested then call directive lifts two synth nodes", () => {

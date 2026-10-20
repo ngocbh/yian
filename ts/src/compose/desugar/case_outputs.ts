@@ -19,26 +19,28 @@
  * Runs AFTER `desugarCaseCallTargets` (so a `then:/else: call(...)` synth id is a leaf target
  * here) and, like the other desugars, BEFORE the build loop.
  *
- * Knows about: diagnostics, `expr` (the ref walk), node contracts, the compose helpers (errors),
- * the kind-blind binding-field walk, the CASE descriptor and the inline-call desugar (the
- * `output:` walk — a within-phase peer).
+ * Knows about: diagnostics, `expr` (the ref walk), node contracts, the compose helpers (errors,
+ * positional metadata), the kind-blind binding-field walk, the CASE descriptor and the inline-call
+ * desugar (the `output:` walk — a within-phase peer).
  * Never imports: compose/parse, edges, validate, build, the loader, or the runtime; only the
  * pipeline imports this back.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { conditionRefs, ExpressionError } from "../../expr/expressions.ts";
+import { findSpanEnd } from "../../expr/grammar.ts";
 import { exprRefsOf } from "../../expr/template.ts";
 import { Assertion, iterSourceStrings } from "../../nodes/contracts.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { nth } from "../helpers/source.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import { mapBindingStrings } from "../nodes/bindings.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { mapOutputsStrings } from "./inline_calls.ts";
 
 // A clean whole-span case-output ref INTERIOR. Singular only: `<id>.output[.<seg>…]` (group 1 =
-// id, group 2 = dotted rest). Path segments are reference-path style — letter/underscore then
-// alnum/underscore, no `-`.
+// id, group 2 = dotted rest). The id and each path segment are reference-path style — a
+// letter/underscore, then letters, digits, `_`, `#` or `/`; no `-`.
 const CASE_OUTPUT_INTERIOR = /^([A-Za-z_][A-Za-z0-9_#/]*)\.output((?:\.[A-Za-z_][A-Za-z0-9_#/]*)*)$/;
 
 /**
@@ -98,20 +100,20 @@ export function expandCaseOutputs(
     if (!(d instanceof CaseDescriptor)) continue;
     const where = `case node ${reprText(nodeId)} condition`;
     if (d.on !== null) {
-      rejectCaseRefs([d.on], caseIds, where, { range: fieldRange(d, "on"), diagnostics });
+      rejectCaseRefs(d.on, caseIds, where, { range: fieldRange(d, "on"), diagnostics });
       // An `on:` case's `when:` values are match values (text), not conditions.
       for (const [index, spec] of d.cases.entries()) {
-        rejectCaseRefs([spec["when"]], caseIds, where, { range: whenRange(d, index), diagnostics });
+        rejectCaseRefs(spec["when"], caseIds, where, { range: whenRange(d, index), diagnostics });
       }
       continue;
     }
     for (const [index, spec] of d.cases.entries()) {
-      rejectCaseRefs([spec["when"]], caseIds, where, { range: whenRange(d, index), diagnostics, condition: true });
+      rejectCaseRefs(spec["when"], caseIds, where, { range: whenRange(d, index), diagnostics, condition: true });
     }
   }
   for (const [index, assertion] of assertsSection.entries()) {
     const range = assertionRangeAt !== null ? assertionRangeAt(index) : null;
-    rejectCaseRefs([assertion], caseIds, "assert", { range, diagnostics, condition: true });
+    rejectCaseRefs(assertion, caseIds, "assert", { range, diagnostics, condition: true });
   }
 
   return [newDescriptors, newOutputs];
@@ -171,7 +173,7 @@ function topLevelSpans(value: string): string[] {
     if (value[i] === "$" && value[i + 1] === "$") {
       i += 2;
     } else if (value[i] === "$" && value[i + 1] === "{") {
-      const j = spanEnd(value, i + 2);
+      const j = findSpanEnd(value, i + 2);
       if (j === null) break;
       spans.push(value.slice(i, j + 1));
       i = j + 1;
@@ -198,7 +200,7 @@ function fieldRange(descriptor: NodeDescriptor, name: string): SourceRange | nul
 
 /** Return a case item's positional `when:` range with progressively coarser fallbacks. */
 function whenRange(descriptor: CaseDescriptor, index: number): SourceRange | null {
-  return descriptor.whenRanges[index] ?? fieldRange(descriptor, "cases");
+  return nth(descriptor.whenRanges, index) ?? fieldRange(descriptor, "cases");
 }
 
 /**
@@ -225,7 +227,7 @@ function expander(
         out.push("$$"); // a literal `$` — never a span start
         i += 2;
       } else if (value[i] === "$" && value[i + 1] === "{") {
-        const j = spanEnd(value, i + 2);
+        const j = findSpanEnd(value, i + 2);
         if (j === null) {
           // An unbalanced `${`: leave the rest for the binding parser.
           out.push(value.slice(i));
@@ -278,61 +280,36 @@ function expandSpan(
       return "${" + leaves.map((target) => `${String(target)}.output${suffix}`).join(" | ") + "}";
     }
   }
-  rejectCaseRefs(["${" + interior + "}"], caseIds, host, { range, diagnostics }); // a non-clean read is loud
+  rejectCaseRefs("${" + interior + "}", caseIds, host, { range, diagnostics }); // a non-clean read is loud
   return "${" + interior + "}";
 }
 
 /**
- * Return the index of the `}` closing a `${…}` span whose interior begins at `start` (brace-depth
- * and quote aware), or `null` when it is unbalanced. Mirrors `expr/template.ts`.
- */
-function spanEnd(s: string, start: number): number | null {
-  let depth = 1;
-  let quote: string | null = null;
-  for (let i = start; i < s.length; i++) {
-    const c = s[i]!;
-    if (quote !== null) {
-      if (c === quote) quote = null;
-    } else if (c === "'" || c === '"') {
-      quote = c;
-    } else if (c === "{") {
-      depth += 1;
-    } else if (c === "}") {
-      depth -= 1;
-      if (depth === 0) return i;
-    }
-  }
-  return null;
-}
-
-/**
- * Throw a located `LoadError` when any string reads a `<case>.output` value.
+ * Throw a located `LoadError` when `value` reads a `<case>.output` value.
  *
  * `<case>` is a case node id; this is the floor for the non-clean / condition / assert positions
- * where the value-case is not supported. With `options.condition`, each string is a condition
+ * where the value-case is not supported. With `options.condition`, a string `value` is a condition
  * (bare or one whole `${...}`); otherwise it is a binding template.
  *
  * @throws LoadError naming the first case value read.
  */
 function rejectCaseRefs(
-  strings: readonly unknown[],
+  value: unknown,
   caseIds: ReadonlySet<string>,
   where: string,
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics; condition?: boolean },
 ): void {
   const { range, diagnostics, condition = false } = options;
-  for (const value of strings) {
-    const source = value instanceof Assertion ? value.expression : value;
-    for (const ref of sourceRefs(source, condition)) {
-      const parts = ref.split(".");
-      // Singular only: a case id in head position of `<id>.output`.
-      if (parts.length >= 2 && parts[1] === "output" && caseIds.has(parts[0]!)) {
-        throw diagnostics.error(
-          `${where}: \${${parts[0]}.output} — a case value can't be read in a coalesce operand, a ` +
-            "default, an expression, a condition, or an assert; read it as a whole binding or inside text",
-          { range },
-        );
-      }
+  const source = value instanceof Assertion ? value.expression : value;
+  for (const ref of sourceRefs(source, condition)) {
+    const parts = ref.split(".");
+    // Singular only: a case id in head position of `<id>.output`.
+    if (parts.length >= 2 && parts[1] === "output" && caseIds.has(parts[0]!)) {
+      throw diagnostics.error(
+        `${where}: \${${parts[0]}.output} — a case value can't be read in a coalesce operand, a ` +
+          "default, an expression, a condition, or an assert; read it as a whole binding or inside text",
+        { range },
+      );
     }
   }
 }
@@ -384,7 +361,7 @@ function caseLeafTargets(
     raw.set(nodeId, direct);
   }
 
-  const leaves = (caseId: string, seen: ReadonlySet<unknown>): unknown[] => {
+  const leaves = (caseId: string, seen: ReadonlySet<string>): unknown[] => {
     const out: unknown[] = [];
     for (const target of raw.get(caseId) ?? []) {
       if (typeof target === "string" && caseIds.has(target)) {
@@ -396,10 +373,5 @@ function caseLeafTargets(
     return out;
   };
 
-  return new Map([...caseIds].map((caseId) => [caseId, dedup(leaves(caseId, new Set([caseId])))]));
-}
-
-/** Return `items` without repeats, in first-seen order. */
-function dedup(items: readonly unknown[]): unknown[] {
-  return [...new Set(items)];
+  return new Map([...caseIds].map((caseId) => [caseId, [...new Set(leaves(caseId, new Set([caseId])))]]));
 }

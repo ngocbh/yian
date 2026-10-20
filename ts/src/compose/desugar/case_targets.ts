@@ -135,35 +135,34 @@ function liftCaseTarget(
   // directive carries no `${` and would otherwise look like a bare node id. The loader's
   // `checkCaseBranches` rejects a malformed branch call first, with the value entry to write for
   // the text; this keeps a direct caller's error located too.
-  let newValue: string;
   let calls: InlineCall[];
   try {
-    [newValue, calls] = desugarCallDirectives(target, mint);
+    [, calls] = desugarCallDirectives(target, mint);
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
     throw diagnostics.error(`${host}: ${error.message}`, { range, cause: error });
   }
+  // With calls, the new value is always the outer call's `${<id>.output}` (a non-directive
+  // raises above), so the outer id is the branch target with no further check.
   if (calls.length > 0) {
     // Inner-first: the OUTER call is the last one and names the branch target.
     const outer = calls.at(-1)!;
-    if (newValue.trim() === `\${${outer.id}.output}`) {
-      for (const call of calls) {
-        // The outer call is the route target and gets the route edge; each inner call only feeds
-        // it, so the outer call is its host and passes that route on.
-        synth.set(
-          call.id,
-          toCallDescriptor(call, {
-            host,
-            site,
-            callSite,
-            hostId: call === outer ? null : outer.id,
-            range,
-            diagnostics,
-          }),
-        );
-      }
-      return outer.id;
+    for (const call of calls) {
+      // The outer call is the route target and gets the route edge; each inner call only feeds
+      // it, so the outer call is its host and passes that route on.
+      synth.set(
+        call.id,
+        toCallDescriptor(call, {
+          host,
+          site,
+          callSite,
+          hostId: call === outer ? null : outer.id,
+          range,
+          diagnostics,
+        }),
+      );
     }
+    return outer.id;
   }
   // Not a directive and no span: a plain node id. Text starting with `call(` never gets here; the
   // recognizer above lifts it or raises.

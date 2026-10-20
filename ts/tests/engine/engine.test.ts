@@ -25,7 +25,7 @@
  * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
  * also checks that a failed run aborts its signal.
  *
- * Later (cycle 5a): `test_num_workers_0_and_4_same_terminal`, with the pooled engine.
+ * Later (pooled mode): `test_num_workers_0_and_4_same_terminal`, with the pooled engine.
  *
  * Not ported: `test_parallel_module_and_export_are_gone`; TS never had `ParallelFlowEngine`.
  */

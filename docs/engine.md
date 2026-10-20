@@ -392,8 +392,9 @@ streaming-generator cleanup in [the loop](#the-loop-read-eval-record-reduce) is 
 see [the node contract](nodes.md#the-contract).
 
 Changed (TS yian): the evaluator (`evalNode` in `ts/src/runtime/eval_node.ts`) resolves to an
-`EvaluatedOutcome` and never touches the run state. A node that stops rejects with its signal's
-reason, whatever it threw, and the evaluator passes that reason on instead of classifying it.
+`EvaluatedOutcome` and never touches the run state. When a node rejects after its signal
+aborted, the evaluation rejects with the signal's reason, whatever the node threw, instead of
+classifying it as a failure.
 When a capability fails with a host fault (a stream or event sink, steering, the memory opener,
 render capture, `steps.record`), the first such fault is what the evaluation rejects with once
 the node settles, even if the node caught it and returned; capability promises the node

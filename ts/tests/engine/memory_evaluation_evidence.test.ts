@@ -45,7 +45,7 @@
  * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture` and
  * `test_tool_structured_output_retains_discovery_and_generation_order`.
  *
- * Later (cycle 6a), through the engine: `test_dispatcher_contract_failures_retain_the_same_evidence`
+ * Later (pooled mode), through the engine: `test_dispatcher_contract_failures_retain_the_same_evidence`
  * and `test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome`.
  */
 

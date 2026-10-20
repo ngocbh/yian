@@ -29,10 +29,10 @@
  *
  * Later (T4-5): the replay half of `test_resume_sees_the_second_start_and_the_prior_steps`.
  *
- * Later (cycle 5b), they run the pooled engine: the pooled parameter rows and
+ * Later (pooled mode), they run the pooled engine: the pooled parameter rows and
  * `test_pooled_nodes_interleave_their_own_steps`.
  *
- * Later (cycle 7c), it needs the pooled engine's stop: the replacement of
+ * Later (the engine's stop rule), it needs the pooled engine's stop: the replacement of
  * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step` (after a sibling failure,
  * `record` throws and appends nothing).
  *

@@ -33,8 +33,8 @@
  * opener result that isn't a `MemoryContext`, and sections outside the scope's memories or without
  * text are recall failures.
  *
- * Later (cycle 6a): `test_dispatch_binds_accepted_identity_before_worker_submission`, through the
- * engine.
+ * Later (pooled mode): `test_dispatch_binds_accepted_identity_before_worker_submission`, through the
+ * engine with and without workers.
  * Later (T4-7), with `MemoryRuntime.openContext`:
  * `test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure`,
  * `test_real_backend_cleanup_note_survives_node_error_unwrapping` and
@@ -44,7 +44,8 @@
  * Not ported: TS has no `_HostStop` (a stop is the node's aborted signal) and no `add_note` hook:
  * `test_callback_primary_stop_marks_signal_before_turn_unwind` and
  * `test_broken_cleanup_note_hook_does_not_replace_primary_host_error`.
- * Later (cycle 7b): `test_primary_stop_is_set_before_turn_cleanup_and_keeps_identity` (the turn
+ *
+ * Later (the engine's stop rule): `test_primary_stop_is_set_before_turn_cleanup_and_keeps_identity` (the turn
  * closes with the signal's reason after the node's signal aborted) and the `host_stop=True` cells
  * of `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`.
  */

@@ -12,16 +12,16 @@
  * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`; through `assembleText`, the
  * load halves of `test_flow_result_follows_the_output_shape` (the END's mode and names),
  * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
- * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type). Changed: Python's
- * three rows check only the run output, so the TS load halves check the END's mode and names, or
- * the driver's output type, instead.
+ * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type).
  *
- * Changed: the child-signature rows build the child with `handChild` (a `step` producer typed
- * `str`), where Python loads a flow; the empty-record row compares with `sameOutputContract`
- * (Python's dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP rows build a
- * `MapDescriptor` over that hand-built child, where Python loads a flow whose def is the child,
- * and pin the whole message, where Python matches a fragment. The LOOP rows load Python's flows
- * and pin the whole message; the re-export row's `empty` def is built by hand.
+ * Changed: Python's three rows above check only the run output, so the TS load halves check the
+ * END's mode and names, or the driver's output type, instead. The child-signature rows build the
+ * child with `handChild` (a `step` producer typed `str`), where Python loads a flow; the
+ * empty-record row compares with `sameOutputContract` (Python's dataclass `==`). Python's
+ * `ValueError` is a `RangeError`. The MAP rows build a `MapDescriptor` over that hand-built child,
+ * where Python loads a flow whose def is the child, and pin the whole message, where Python
+ * matches a fragment. The LOOP rows load Python's flows and pin the whole message; the re-export
+ * row's `empty` def is built by hand.
  *
  * Pinned at the end: (`assembledWith`, the def built by hand)
  * `load-core/engine_flow_output_shape__map_over_a_def_without_output` and
@@ -269,7 +269,7 @@ output: \${lp.output}
 });
 
 test("a loop value body re-exporting an empty record is rejected", () => {
-  const empty = handChild({ producers: { step: new ValueContract(INT) }, output: {} });
+  const empty = shapeChild({});
 
   const error = loadError(() =>
     assembleText(
@@ -380,6 +380,6 @@ test.each<CaseRow>([
   { id: "load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output", call: assembled },
   {
     id: "load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record",
-    call: assembledWith({ empty: handChild({ producers: { step: new ValueContract(INT) }, output: {} }) }),
+    call: assembledWith({ empty: shapeChild({}) }),
   },
 ])("assemble: $id", runCase);

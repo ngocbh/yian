@@ -253,7 +253,7 @@ nodes:
         input:
           k: \${input.k}
         output: int
-        code: return inputs["k"] + 1
+        code: return inputs["k"] + 1n
     output:
       page: \${input.page}
       k: \${step.output}

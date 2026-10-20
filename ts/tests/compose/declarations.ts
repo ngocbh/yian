@@ -263,9 +263,9 @@ function resolveFrom(children: ChildFlows = {}): CallableScope["resolve"] {
 /**
  * Return a scope whose catalog is `builder` and which registers private (inline body) children:
  * `resolve` builds a registered child and memoizes only a successful build; any other callable
- * goes to `resolve`. A repeated registration keeps the first builder.
+ * goes to `fallback`. A repeated registration keeps the first builder.
  */
-function scopeOf(builder: SourceCatalogBuilder, resolve: CallableScope["resolve"]): CallableScope {
+function scopeOf(builder: SourceCatalogBuilder, fallback: CallableScope["resolve"]): CallableScope {
   const builders = new Map<string, () => ComposedFlow>();
   const built = new Map<string, ComposedFlow>();
   return {
@@ -277,7 +277,7 @@ function scopeOf(builder: SourceCatalogBuilder, resolve: CallableScope["resolve"
       const flow = built.get(flowId);
       if (flow !== undefined) return flow;
       const build = builders.get(flowId);
-      if (build === undefined) return resolve(flowId, version);
+      if (build === undefined) return fallback(flowId, version);
       const child = build();
       built.set(flowId, child);
       return child;

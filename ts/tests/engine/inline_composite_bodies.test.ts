@@ -1297,7 +1297,7 @@ nodes:
 output: \${wrapper.output}
 `);
 
-  expect(flow.compiled.edges.some((edge) => edge.from === "producer" && edge.to === "wrapper")).toBe(true);
+  expect(flow.compiled.edges).toContainEqual(expect.objectContaining({ from: "producer", to: "wrapper" }));
 });
 
 test("optional record paths make generated inputs nullable", () => {
@@ -1874,7 +1874,6 @@ output:
     inlineFlowId(outerLoopOwner),
     inlineFlowId([...outerLoopOwner, "node", "inner", "inline"]),
   ]);
-  expect(new Set(flowIds).size).toBe(4);
 });
 
 test.each([

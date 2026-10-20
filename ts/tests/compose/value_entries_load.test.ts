@@ -72,7 +72,6 @@ import { forget } from "../../src/defaults.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import {
-  isExactly,
   type OutputContract,
   PartialRecordContract,
   ValueContract,
@@ -364,18 +363,18 @@ describe("the build-cache reader", () => {
     expect(labelOf(contract)).toBe('{"a":str,"b":int}');
   });
 
-  test.each([
-    ["str", '{"a":str,"b":int}'],
-    ["", null],
-  ])("a span record keeps its fields, the producer declaring %p", (output, label) => {
-    const contract = contractOf(recordFlow(producer(output) + SPAN_RECORD, "${r.output.c}"), "r");
+  test("a span record from a typed producer keeps its fields", () => {
+    const contract = contractOf(recordFlow(producer("str") + SPAN_RECORD, "${r.output.c}"), "r");
 
-    if (label !== null) {
-      expect(labelOf(contract)).toBe(label);
-      return;
-    }
+    expect(contract?.constructor).toBe(ValueContract);
+    expect(labelOf(contract)).toBe('{"a":str,"b":int}');
+  });
+
+  test("a span record from an untyped producer keeps its fields", () => {
+    const contract = contractOf(recordFlow(producer("") + SPAN_RECORD, "${r.output.c}"), "r");
+
     // An untyped producer leaves its field opaque beside the typed literal one.
-    expect(isExactly(contract, PartialRecordContract)).toBe(true);
+    expect(contract?.constructor).toBe(PartialRecordContract);
     const fields = (contract as PartialRecordContract).fields;
     expect(fields.map(([name, field]) => [name, field === null ? null : canonicalTypeLabel(field.type)])).toEqual([
       ["a", null],
@@ -384,7 +383,7 @@ describe("the build-cache reader", () => {
   });
 
   test("a span from an untyped producer is opaque", () => {
-    load(recordFlow(producer("") + SPAN_RECORD, "!int ${r.output.a}"));
+    expect(() => load(recordFlow(producer("") + SPAN_RECORD, "!int ${r.output.a}"))).not.toThrow();
   });
 
   test("a nested untagged mapping beside a span keeps its fields", () => {

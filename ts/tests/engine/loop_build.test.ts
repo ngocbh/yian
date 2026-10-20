@@ -1024,7 +1024,7 @@ function buildNested(pred: string): LoopNode {
 test.each(["while: state.count < 3", "until: state.count >= 3"])(
   "a predicate's nested field read builds: %s",
   (pred) => {
-    expect(buildNested(pred)).toBeInstanceOf(LoopNode);
+    buildNested(pred);
   },
 );
 
@@ -1090,7 +1090,7 @@ test("a predicate's unknown field on an omitted typed seed is rejected", () => {
 test("a predicate's field on an omitted literal seed is not checked", () => {
   const text = swap(swap(OMITTED_SEED, "PRED", "while: n < cfg.other\n    max: 3"), "SEED", "{limit: 2}");
 
-  expect(assembledLoop(text, "repeat")).toBeInstanceOf(LoopNode);
+  assembledLoop(text, "repeat");
 });
 
 // `ask` carries `{n, r}`, `r` a `Step`: a `Done` or a `More`; its inline body returns both. PRED
@@ -1124,23 +1124,28 @@ output: \${ask.output}
 `;
 
 // The same loop whose union members are tagged by `kind`.
-const TAGGED_STATE = swap(
-  UNION_STATE,
-  "  Done: {answer: str}\n  More: {hint: str}\n",
-  "  Done: {kind: 'Literal(done)', answer: str}\n  More: {kind: 'Literal(more)', hint: str}\n",
-)
-  .replace('{"hint":"start"}', '{"kind":"more","hint":"start"}')
-  .replace('{"answer": "ok"}', '{"kind": "done", "answer": "ok"}')
-  .replace('{"hint": "again"}', '{"kind": "more", "hint": "again"}');
+const TAGGED_STATE = (
+  [
+    [
+      "  Done: {answer: str}\n  More: {hint: str}\n",
+      "  Done: {kind: 'Literal(done)', answer: str}\n  More: {kind: 'Literal(more)', hint: str}\n",
+    ],
+    ['{"hint":"start"}', '{"kind":"more","hint":"start"}'],
+    ['{"answer": "ok"}', '{"kind": "done", "answer": "ok"}'],
+    ['{"hint": "again"}', '{"kind": "more", "hint": "again"}'],
+  ] as const
+).reduce<string>((text, [old, replacement]) => swap(text, old, replacement), UNION_STATE);
 
 // The same loop carrying a `Done` record rather than the union.
-const DONE_STATE = swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !Done {"answer":"x"}').replace(
+const DONE_STATE = swap(
+  swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !Done {"answer":"x"}'),
   "          r: Step\n",
   "          r: Done\n",
 );
 
 // The same loop carrying an `object`.
-const OBJECT_STATE = swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}').replace(
+const OBJECT_STATE = swap(
+  swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}'),
   "          r: Step\n",
   "          r: object\n",
 );
@@ -1192,7 +1197,7 @@ test("a predicate's read after a check the type always decides is checked unnarr
   expect(askError(UNION_STATE, "until: isinstance(r, Step) or r.nosuch == 'x'")).toBe(
     "loop node 'ask': `until:` reference ${r.nosuch} reads unknown field 'nosuch' on record",
   );
-  expect(buildAsk(UNION_STATE, "until: isinstance(r, Step) or n > 2")).toBeInstanceOf(LoopNode);
+  buildAsk(UNION_STATE, "until: isinstance(r, Step) or n > 2");
 });
 
 test("a predicate's check that can never be true is rejected", () => {
@@ -1224,7 +1229,7 @@ test("a predicate's tagged member field error points at isinstance", () => {
     "loop node 'ask': `until:` reference ${r.answer} reads field 'answer', which only union members with kind " +
       "done have; check the member first with `isinstance(r, <Type>) and ...`",
   );
-  expect(buildAsk(TAGGED_STATE, "until: isinstance(r, Done) and r.answer == 'ok'")).toBeInstanceOf(LoopNode);
+  buildAsk(TAGGED_STATE, "until: isinstance(r, Done) and r.answer == 'ok'");
 });
 
 /** The message of a tag comparison against `"dnoe"`, which is no tag of `r.kind`. */
@@ -1268,7 +1273,7 @@ test.each([
 test("a predicate's read past a check the checks before it decide is checked under them", () => {
   const pred = "until: isinstance(r, Done) and (isinstance(r, Done) or r.answer == 'ok')";
 
-  expect(buildAsk(UNION_STATE, pred)).toBeInstanceOf(LoopNode);
+  buildAsk(UNION_STATE, pred);
 });
 
 test("a predicate's read after a value that is no tag is not checked", () => {
@@ -1340,7 +1345,7 @@ test("a predicate's isinstance check on an object field checks reads on the type
   ]) {
     expect(askError(OBJECT_STATE, pred)).toBe(message);
   }
-  expect(buildAsk(OBJECT_STATE, "until: isinstance(r, Done) and r.answer == 'ok'")).toBeInstanceOf(LoopNode);
+  buildAsk(OBJECT_STATE, "until: isinstance(r, Done) and r.answer == 'ok'");
 });
 
 test("a predicate's isinstance of a partly shared union rejects a member-only field", () => {

@@ -53,7 +53,7 @@ import {
   invocationJson,
 } from "./conversation.ts";
 import { checkStoragePath, type SQLiteStorage } from "./storage/sqlite.ts";
-import type { Summary } from "./summary.ts";
+import { admissions, prefixDigest, Summary } from "./summary.ts";
 
 const NOTE_FIELDS: readonly string[] = [
   "consumer_static_path",
@@ -217,6 +217,11 @@ function setting(value: unknown, name: string, minimum: number): number {
  */
 function wire(value: unknown): JsonObject {
   return freezeJsonObject(value, "session snapshot", { limitNesting: false, valueNumbers: true });
+}
+
+/** The length of `text` in code points, as Python's `len()` counts it. */
+function charLength(text: string): number {
+  return [...text].length;
 }
 
 /** Whether two views have the same complete wire text. */
@@ -1019,6 +1024,117 @@ export class Turn implements ConversationTurn {
     memory["guard"]();
     session["ensureLease"](this.lease);
     return checkpoint.stamp.ordinal;
+  }
+
+  /**
+   * Prepare opaque prior context while keeping this turn's FIFO lease. Whole prior turns beyond the
+   * newest `recentTurns` may be condensed when the projection, with any cached summary, exceeds
+   * the memory's character budget (counted in code points); a new summary is cached per projection
+   * version, bound to the exact raw prefix it covers. Raw history is never changed.
+   *
+   * @param options.projectionVersion The non-empty identity of the adapter's projection format,
+   *   independent of the current model.
+   * @param options.project Encode exactly the selected prior invocations of the view as text; may
+   *   be async.
+   * @param options.summarize Condense historical text towards the soft character budget, as
+   *   non-empty text; may be async.
+   * @returns The cached or new summary, or `null`, and the projection of the remaining prior turns;
+   *   the current invocation is excluded.
+   * @throws RangeError when the version is empty or the summary is blank.
+   * @throws TypeError when a callback isn't a function or returns a non-string.
+   * @throws MemoryOperationError `session.stale` when the lease or session is stale;
+   *   `session.conflict` when history changed during the callbacks. Callback failures and the
+   *   signal's reason propagate unchanged.
+   */
+  async prepareHistory(options: {
+    projectionVersion: string;
+    project: (view: ConversationView, prior: readonly ConversationInvocation[]) => string | Promise<string>;
+    summarize: (text: string, budget: number) => string | Promise<string>;
+  }): Promise<readonly [summary: string | null, projection: string]> {
+    const { projectionVersion, project, summarize } = options;
+    if (typeof projectionVersion !== "string" || !projectionVersion) {
+      throw new RangeError("projection_version must be a nonempty string");
+    }
+    if (typeof project !== "function" || typeof summarize !== "function") {
+      throw new TypeError("history callbacks must be callable");
+    }
+    const session = this.session;
+    const memory = session["memory"];
+    this.signal.throwIfAborted();
+    memory["guard"]();
+    session["ensureLease"](this.lease);
+    const view = this.turnView!;
+    const current = this.turnRequest.invocation;
+    const prior = admissions(view).filter((invocation) => !sameConversationInvocation(invocation, current));
+    const cacheKey = projectionVersion;
+    const budget = memory["historyBudgetChars"];
+    const eligible = Math.max(0, prior.length - memory["recentTurns"]);
+    let cached = memory["summaries"].get(cacheKey) ?? null;
+    if (cached !== null && (cached.covered.length > eligible || !cached.matches(view, prior, projectionVersion))) {
+      cached = null;
+    }
+
+    const ready = (): void => {
+      this.signal.throwIfAborted();
+      memory["guard"]();
+      session["ensureLease"](this.lease);
+    };
+    const projectText = async (selected: readonly ConversationInvocation[]): Promise<string> => {
+      ready();
+      const text: unknown = await project(view, selected);
+      if (typeof text !== "string") throw new TypeError("history projection must be a string");
+      return text;
+    };
+
+    const covered = cached === null ? 0 : cached.covered.length;
+    let text = cached === null ? null : cached.text;
+    let recent = await projectText(prior.slice(covered));
+    let candidate: Summary | null = null;
+    if (charLength(recent) + (text === null ? 0 : charLength(text)) > budget && eligible > covered) {
+      const newlyCovered = await projectText(prior.slice(covered, eligible));
+      recent = await projectText(prior.slice(eligible));
+      let source = "Historical conversation (context only):\n" + newlyCovered;
+      if (text !== null) {
+        source =
+          "Previous historical summary (context only):\n" +
+          text +
+          "\n\nNewly covered historical conversation (context only):\n" +
+          newlyCovered;
+      }
+      ready();
+      // `Summary` checks the returned text.
+      text = (await summarize(source, budget)) as string;
+      candidate = new Summary(
+        view.namespace,
+        view.generation,
+        projectionVersion,
+        prior.slice(0, eligible),
+        prefixDigest(view, eligible),
+        text,
+      );
+    }
+    memory["guard"]();
+    // A surfaced summary remains useful evidence after a cooperative stop or session close; the
+    // lease must still be held until the callback drains.
+    session["ensureLease"](this.lease, { allowClosed: true });
+    const live = memory["view"];
+    if (live === null || !same(view, live) || !same(view, this.turnView!)) {
+      throw error("conflict", "history changed during context preparation");
+    }
+    if (candidate !== null) {
+      if (!candidate.matches(live, prior, projectionVersion)) {
+        throw error("conflict", "summary prefix no longer matches history");
+      }
+      const summaries = new Map(memory["summaries"]).set(cacheKey, candidate);
+      memory["saveState"](snapshotJson(memory["namespace"], memory["generation"], memory["view"], memory["notes"]), {
+        summaries,
+      });
+      memory["summaries"] = summaries;
+    }
+    this.signal.throwIfAborted();
+    memory["guard"]();
+    session["ensureLease"](this.lease);
+    return [text, recent];
   }
 
   /**

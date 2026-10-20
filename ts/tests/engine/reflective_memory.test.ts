@@ -6,11 +6,23 @@
  * `test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them`,
  * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned` (the open half),
  * `test_snapshot_is_defensive_and_foreign_restore_is_conservative`,
- * `test_pristine_restore_keeps_recorded_limits` (the snapshot half),
+ * `test_pristine_restore_keeps_recorded_limits`,
  * `test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match`,
+ * `test_same_object_restore_accepts_recorded_snapshot`, `test_populated_memory_rejects_foreign_snapshot`,
  * `test_snapshot_rejects_noncanonical_scalars_and_circular_json`,
  * `test_reflective_json_rejects_non_utf8_model_and_snapshot_strings`,
- * `test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot` and
+ * `test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot`,
+ * `test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources`,
+ * `test_session_idempotency_and_closed_session_operations` (the recall and commit rows),
+ * `test_sessions_of_one_instance_share_one_lesson_list_and_limit`,
+ * `test_recall_all_and_context_ranking_are_deterministic`, `test_subclass_controls_query_rewriting`,
+ * `test_query_rewriting_failure_is_sanitized`,
+ * `test_commit_is_atomic_idempotent_and_empty_batches_advance_revision`,
+ * `test_revise_and_remove_are_learned_and_committed`,
+ * `test_learn_and_commit_enforce_final_max_items` (the commit half),
+ * `test_multi_mutation_commit_failure_has_no_partial_effect`,
+ * `test_concurrent_same_generation_commits_have_one_winner`,
+ * `test_reset_preserves_commit_ledger_ordering_and_old_recall` and
  * `test_old_reflective_snapshot_rejects_active_retired_options`. Also ported: the `organization`,
  * `project` and `headers` rows of `tests/engine/test_run_connection_settings.py::
  * test_reflective_memory_refuses_connection_settings`, in the constructor test.
@@ -19,7 +31,11 @@
  * in a host `llm_config` block accepted (host intake gives a `bigint`); in the constructor, a blank
  * `model`, the exact `api_key` message, a non-object `llmConfig` (`TypeError`) and `createParent: 1`
  * (`TypeError`); a snapshot whose `revision` is `2n ** 60n` (beyond 2^53 − 1, with its cause
- * message), whose `epoch` is `-1n` or whose `version` is `1n` is `reflective.invalid_snapshot`.
+ * message), whose `epoch` is `-1n` or whose `version` is `1n` is `reflective.invalid_snapshot`; one
+ * row for each of commit's batch, commit-id and mutation messages; an async `rewriteQuery` is
+ * awaited; a re-entrant `memory.close()` from inside it is `reflective.busy`; a host mutation whose
+ * payload holds `-0` is `reflective.invalid_batch` "mutation batch cannot be encoded canonically",
+ * with a `TypeError` cause.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
@@ -39,16 +55,19 @@
  * - `test_old_reflective_snapshot_rejects_active_retired_options`: TS reads no Python-era snapshot,
  *   so every row fails on the `sandbox: null`/`cwd: null` keys before its own field; each row is
  *   still `reflective.invalid_snapshot`.
- * - JSON ints written into snapshots are `bigint`s; `with` blocks are `try`/`finally` around
- *   `close()`.
+ * - `test_commit_is_atomic_idempotent_and_empty_batches_advance_revision`,
+ *   `test_revise_and_remove_are_learned_and_committed`,
+ *   `test_recall_all_and_context_ranking_are_deterministic`, `test_subclass_controls_query_rewriting`,
+ *   `test_reset_preserves_commit_ledger_ordering_and_old_recall`,
+ *   `test_concurrent_same_generation_commits_have_one_winner` and the replacement row of
+ *   `test_learn_and_commit_enforce_final_max_items` commit hand-built mutations where Python learns
+ *   them.
+ * - `test_concurrent_same_generation_commits_have_one_winner`: JS commits are synchronous, so two
+ *   sessions of one generation commit in turn and the second is stale.
+ * - JSON ints written into snapshots are `bigint`s; `recall` is async; `with` blocks are
+ *   `try`/`finally` around `close()`.
  *
  * Later (in this PR): `test_reflective_episode_material_retains_the_physical_execution_sequence`,
- * `test_same_object_restore_accepts_recorded_snapshot`, `test_populated_memory_rejects_foreign_snapshot`,
- * `test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources`,
- * `test_session_idempotency_and_closed_session_operations`,
- * `test_sessions_of_one_instance_share_one_lesson_list_and_limit`,
- * `test_recall_all_and_context_ranking_are_deterministic`, `test_subclass_controls_query_rewriting`,
- * `test_query_rewriting_failure_is_sanitized`,
  * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`,
  * `test_learn_rejects_malformed_or_conflicting_actions`,
  * `test_model_construction_failure_is_final_and_sanitized`,
@@ -60,15 +79,12 @@
  * `test_episode_material_is_capped_in_one_model_call`,
  * `test_huge_current_lessons_cannot_displace_new_episode_evidence`,
  * `test_learning_is_propose_only_and_rejects_a_stale_generation`,
- * `test_commit_is_atomic_idempotent_and_empty_batches_advance_revision`,
- * `test_revise_and_remove_are_learned_and_committed`, `test_learn_and_commit_enforce_final_max_items`,
- * `test_multi_mutation_commit_failure_has_no_partial_effect`,
- * `test_concurrent_same_generation_commits_have_one_winner`,
- * `test_reset_preserves_commit_ledger_ordering_and_old_recall`,
  * `test_reflective_memory_implements_protocol_and_imports_only_lower_layers`,
- * `test_session_reflects_under_the_memory_key`, and the learn half of
- * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned` and the recall half of
- * `test_pristine_restore_keeps_recorded_limits`.
+ * `test_session_reflects_under_the_memory_key`, the learn half of
+ * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned`, the learn row of
+ * `test_session_idempotency_and_closed_session_operations`, the learn half of
+ * `test_learn_and_commit_enforce_final_max_items`, and the learned versions of the hand-built
+ * commit tests above.
  *
  * Not ported: `test_old_api_snapshot_keeps_digest_and_api_semantics` (TS reads no Python-era
  * snapshot, so there is no retired-key branch).
@@ -80,8 +96,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BUILTIN, type Env, install } from "../../src/defaults.ts";
-import { isMemory, type JsonObject, MemoryMutation, MemoryOperationError } from "../../src/memory/contracts.ts";
-import { ReflectiveMemory } from "../../src/memory/reflective.ts";
+import {
+  isMemory,
+  type JsonObject,
+  MemoryMutation,
+  MemoryOperationError,
+  RecallContext,
+} from "../../src/memory/contracts.ts";
+import { ReflectiveMemory, type ReflectiveSession } from "../../src/memory/reflective.ts";
 
 // Cloned snapshots and nested test values are edited freely.
 type Mutable = any;
@@ -124,6 +146,20 @@ function snapshotOf(memory: ReflectiveMemory, snapshot?: JsonObject): JsonObject
   }
 }
 
+/** Open a run, await `fn` with it and close it (Python's `with memory.open_run() as session`). */
+async function withRun<T>(
+  memory: ReflectiveMemory,
+  fn: (session: ReflectiveSession) => T | Promise<T>,
+  snapshot?: JsonObject,
+): Promise<T> {
+  const session = memory.openRun({ snapshot });
+  try {
+    return await fn(session);
+  } finally {
+    session.close();
+  }
+}
+
 /** A hand-built reflective mutation attributed to `run-1`. */
 function mutation(mutationId: string, action: string, lessonId: string, text?: string): MemoryMutation {
   const payload: Record<string, unknown> = { action, lesson_id: lessonId, source: { run_id: "run-1" } };
@@ -135,6 +171,17 @@ function mutation(mutationId: string, action: string, lessonId: string, text?: s
 function failure(fn: () => unknown): MemoryOperationError {
   try {
     fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(MemoryOperationError);
+    return error as MemoryOperationError;
+  }
+  throw new Error("expected a MemoryOperationError");
+}
+
+/** Return the `MemoryOperationError` `promise` rejects with. */
+async function rejection(promise: Promise<unknown>): Promise<MemoryOperationError> {
+  try {
+    await promise;
   } catch (error) {
     expect(error).toBeInstanceOf(MemoryOperationError);
     return error as MemoryOperationError;
@@ -267,9 +314,16 @@ test("snapshot is defensive and foreign restore is conservative", () => {
   expect(failure(() => reset.openRun({ snapshot: recorded })).message).toContain("namespace");
 });
 
-test("pristine restore keeps recorded limits", () => {
+test("pristine restore keeps recorded limits", async () => {
   const snapshot = snapshotOf(newMemory({ llmConfig: OLLAMA, maxItems: 4, recallLimit: 2 }));
-  expect(snapshotOf(newMemory(), snapshot)).toEqual(snapshot);
+  await withRun(
+    newMemory(),
+    async (session) => {
+      expect(await session.recall()).toBe("");
+      expect(session.snapshot).toEqual(snapshot);
+    },
+    snapshot,
+  );
 });
 
 test("unset limits adopt recorded ones and explicit ones must match", () => {
@@ -353,3 +407,382 @@ for (const [field, value] of [
     expect(failure(() => newMemory().openRun({ snapshot: old })).code).toBe("reflective.invalid_snapshot");
   });
 }
+
+test("same object restore accepts recorded snapshot", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "one", "first")]));
+  const snapshot = snapshotOf(memory);
+  await withRun(
+    memory,
+    async (restored) => {
+      expect(await restored.recall()).toBe("[one] first");
+      expect(restored.snapshot).toEqual(snapshot);
+    },
+    snapshot,
+  );
+});
+
+test("populated memory rejects foreign snapshot", async () => {
+  const snapshot = snapshotOf(newMemory({ llmConfig: OLLAMA }));
+  const populated = newMemory({ llmConfig: OLLAMA });
+  await withRun(populated, (session) => session.commit("populate", [mutation("populate", "add", "one", "first")]));
+  expect(failure(() => populated.openRun({ snapshot })).message).toContain("namespace");
+});
+
+test("snapshot rejects malformed foreign and extra lesson sources", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "one", "first")]));
+  const base = snapshotOf(memory);
+  const validSource = { run_id: "run-1" };
+  for (const malformed of [
+    "not-an-object",
+    {},
+    { run_id: "" },
+    { ...validSource, frame_ref: {} },
+    { ...validSource, extra: "source-secret" },
+  ]) {
+    const snapshot: Mutable = structuredClone(base);
+    snapshot.lessons[0].source = malformed;
+    const error = failure(() => newMemory().openRun({ snapshot }));
+    expect(error.code).toBe("reflective.invalid_snapshot");
+    expect(error.message).not.toContain("source-secret");
+  }
+});
+
+test("session idempotency and closed session operations", async () => {
+  const memory = newMemory();
+  const session = memory.openRun();
+  session.close();
+  session.close();
+  expect((await rejection(session.recall())).message).toContain("closed");
+  expect(failure(() => session.commit("commit", [])).message).toContain("closed");
+  // The failed recall released its operation, so the backend isn't busy.
+  memory.close();
+});
+
+test("sessions of one instance share one lesson list and limit", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA, maxItems: 2, recallLimit: 1 });
+  await withRun(memory, (session) =>
+    session.commit("seed", [
+      mutation("one", "add", "one", "first lesson"),
+      mutation("two", "add", "two", "second lesson"),
+    ]),
+  );
+  await withRun(memory, async (session) => {
+    const snapshot = session.snapshot;
+    expect(snapshot.version).toBe(2n);
+    expect(Object.keys(snapshot).toSorted()).toEqual([
+      "config",
+      "epoch",
+      "format",
+      "lessons",
+      "llm_config",
+      "namespace",
+      "revision",
+      "version",
+    ]);
+    expect(snapshot.config).toEqual({ max_items: 2n, recall_limit: 1n });
+    expect((snapshot.lessons as JsonObject[]).map((lesson) => lesson.source)).toEqual([
+      { run_id: "run-1" },
+      { run_id: "run-1" },
+    ]);
+    expect(await session.recall()).toBe("[one] first lesson\n[two] second lesson");
+    const error = failure(() => session.commit("overflow", [mutation("three", "add", "three", "third")]));
+    expect(error.code).toBe("reflective.max_items");
+  });
+});
+
+test("recall all and context ranking are deterministic", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA, recallLimit: 2 });
+  await withRun(memory, (session) =>
+    session.commit("seed", [
+      mutation("b", "add", "b", "red apple"),
+      mutation("a", "add", "a", "blue berry"),
+      mutation("c", "add", "c", "red berry"),
+    ]),
+  );
+  await withRun(memory, async (session) => {
+    expect(await session.recall()).toBe("[b] red apple\n[a] blue berry\n[c] red berry");
+    const recalled = await session.recall(new RecallContext("", "RED berry", { tone: "BLUE" }, ["root", "user"]));
+    expect(recalled).toBe("[a] blue berry\n[c] red berry");
+  });
+});
+
+test("subclass controls query rewriting", async () => {
+  class AppleMemory extends ReflectiveMemory {
+    override rewriteQuery(): string {
+      return "apple";
+    }
+  }
+  const memory = new AppleMemory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1 });
+  await withRun(memory, (session) =>
+    session.commit("seed", [
+      mutation("berry", "add", "berry", "fresh berry"),
+      mutation("apple", "add", "apple", "green apple"),
+    ]),
+  );
+  await withRun(memory, async (session) => {
+    expect(await session.recall(new RecallContext("", "berry", {}, ["root"]))).toBe("[apple] green apple");
+  });
+});
+
+test("query rewriting failure is sanitized", async () => {
+  const cause = new Error("query-secret");
+  class FailingMemory extends ReflectiveMemory {
+    override rewriteQuery(): string {
+      throw cause;
+    }
+  }
+  const memory = new FailingMemory({ env: baseEnv(), llmConfig: OLLAMA });
+  const error = await withRun(memory, (session) =>
+    rejection(session.recall(new RecallContext("", "hello", {}, ["root"]))),
+  );
+  expect(error.code).toBe("reflective.query");
+  expect(error.message).toBe("memory query rewriting failed");
+  expect(error.message).not.toContain("query-secret");
+  expect(error.cause).toBe(cause);
+
+  class NumberMemory extends ReflectiveMemory {
+    override rewriteQuery(): string {
+      return 1 as never;
+    }
+  }
+  const numeric = new NumberMemory({ env: baseEnv(), llmConfig: OLLAMA });
+  const typeError = await withRun(numeric, (session) =>
+    rejection(session.recall(new RecallContext("", "hello", {}, ["root"]))),
+  );
+  expect([typeError.code, typeError.message]).toEqual(["reflective.query", "rewrite_query() must return a string"]);
+  const context = await withRun(numeric, (session) => rejection(session.recall({} as never)));
+  expect([context.stage, context.code, context.message]).toEqual([
+    "recall",
+    "reflective.invalid_context",
+    "context must be a RecallContext or None",
+  ]);
+  // The failed recalls released their operations, so the backend isn't busy.
+  numeric.close();
+});
+
+test("commit is atomic idempotent and empty batches advance revision", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  const add = [mutation("one", "add", "one", "first")];
+  await withRun(memory, (session) => {
+    session.commit("add", add);
+    session.commit("add", add);
+    expect(failure(() => session.commit("add", [])).message).toContain("collision");
+  });
+  const before = snapshotOf(memory).revision as bigint;
+  await withRun(memory, (session) => session.commit("empty", []));
+  expect(snapshotOf(memory).revision).toBe(before + 1n);
+});
+
+test("revise and remove are learned and committed", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  await withRun(memory, (session) => session.commit("add", [mutation("add", "add", "one", "first")]));
+  await withRun(memory, (session) => session.commit("revise", [mutation("revise", "revise", "one", "revised")]));
+  await withRun(memory, async (session) => expect(await session.recall()).toBe("[one] revised"));
+  await withRun(memory, (session) => session.commit("remove", [mutation("remove", "remove", "one")]));
+  await withRun(memory, async (session) => expect(await session.recall()).toBe(""));
+});
+
+test("learn and commit enforce final max items (commit half)", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA, maxItems: 1 });
+  await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "old", "old lesson")]));
+  await withRun(memory, (session) =>
+    session.commit("replace", [mutation("new", "add", "new", "new lesson"), mutation("old", "remove", "old")]),
+  );
+  await withRun(memory, async (session) => expect(await session.recall()).toBe("[new] new lesson"));
+
+  const empty = newMemory({ llmConfig: OLLAMA, maxItems: 1 });
+  const error = await withRun(empty, async (session) => {
+    const commitError = failure(() =>
+      session.commit("too-many", [mutation("two", "add", "two", "two"), mutation("three", "add", "three", "three")]),
+    );
+    expect(await session.recall()).toBe("");
+    expect(session.snapshot.revision).toBe(0n);
+    return commitError;
+  });
+  expect([error.code, error.message]).toEqual(["reflective.max_items", "mutation batch exceeds max_items"]);
+});
+
+test("multi mutation commit failure has no partial effect", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  const error = await withRun(memory, async (session) => {
+    const commitError = failure(() =>
+      session.commit("atomic", [
+        mutation("left", "add", "one", "first"),
+        mutation("right", "revise", "missing", "bad"),
+      ]),
+    );
+    expect(await session.recall()).toBe("");
+    expect(session.snapshot.revision).toBe(0n);
+    return commitError;
+  });
+  expect(error.code).toBe("reflective.invalid_mutation");
+  await withRun(memory, async (session) => expect(await session.recall()).toBe(""));
+});
+
+test("concurrent same generation commits have one winner", () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  const left = memory.openRun();
+  const right = memory.openRun();
+  left.commit("left", [mutation("one", "add", "one", "first")]);
+  const error = failure(() => right.commit("right", [mutation("two", "add", "two", "second")]));
+  expect([error.stage, error.code, error.message, error.retryable]).toEqual([
+    "commit",
+    "reflective.stale_generation",
+    "memory session is stale",
+    false,
+  ]);
+  left.close();
+  right.close();
+});
+
+test("reset preserves commit ledger ordering and old recall", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  const add = [mutation("one", "add", "one", "first")];
+  await withRun(memory, (seed) => seed.commit("applied", add));
+  const old = memory.openRun();
+  expect(await old.recall()).toBe("[one] first");
+  memory.reset();
+
+  expect(await old.recall()).toBe("[one] first");
+  old.commit("applied", add);
+  expect(failure(() => old.commit("applied", [])).message).toContain("collision");
+  expect(failure(() => old.commit("not-applied", add)).message).toContain("stale");
+  await withRun(memory, async (fresh) => expect(await fresh.recall()).toBe(""));
+  old.close();
+});
+
+test("commit rejects invalid batches, commit ids and mutations with Python's messages", async () => {
+  const memory = newMemory({ llmConfig: OLLAMA });
+  await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "kept", "kept lesson")]));
+  const source = { run_id: "run-1" };
+  const rows: [string, unknown, unknown, string][] = [
+    ["reflective.invalid_commit_id", "", [], "commit id must be a nonempty string"],
+    ["reflective.invalid_commit_id", 1, [], "commit id must be a nonempty string"],
+    ["reflective.invalid_batch", "c", {}, "mutations must be an exact array"],
+    ["reflective.invalid_batch", "c", [{}], "mutation batch contains an invalid value"],
+    [
+      "reflective.invalid_batch",
+      "c",
+      [mutation("m", "add", "a", "x"), mutation("m", "add", "b", "y")],
+      "mutation ids must be unique within a batch",
+    ],
+    ["reflective.invalid_mutation", "c", [new MemoryMutation("m", [])], "mutation payload must be an object"],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [new MemoryMutation("m", { action: "add", lesson_id: "a" })],
+      "mutation payload has invalid fields",
+    ],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [new MemoryMutation("m", { action: "add", lesson_id: "a", source, text: "x", extra: 1 })],
+      "mutation payload has invalid fields",
+    ],
+    ["reflective.invalid_mutation", "c", [mutation("m", "merge", "a", "x")], "mutation action is invalid"],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [new MemoryMutation("m", { action: "add", lesson_id: "", source, text: "x" })],
+      "mutation identity or source is invalid",
+    ],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [new MemoryMutation("m", { action: "add", lesson_id: "a", source: { run_id: "r", extra: 1 }, text: "x" })],
+      "mutation identity or source is invalid",
+    ],
+    ["reflective.invalid_mutation", "c", [mutation("m", "add", "a")], "mutation text is invalid"],
+    ["reflective.invalid_mutation", "c", [mutation("m", "add", "a", "  ")], "text must not be blank"],
+    ["reflective.invalid_mutation", "c", [mutation("m", "remove", "kept", "x")], "remove mutations cannot carry text"],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [mutation("m1", "add", "a", "x"), mutation("m2", "revise", "a", "y")],
+      "a batch cannot target one lesson more than once",
+    ],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [mutation("m", "add", "kept", "x")],
+      "add mutation targets an existing lesson",
+    ],
+    [
+      "reflective.invalid_mutation",
+      "c",
+      [mutation("m", "revise", "a", "x")],
+      "revise mutation targets a missing lesson",
+    ],
+    ["reflective.invalid_mutation", "c", [mutation("m", "remove", "a")], "remove mutation targets a missing lesson"],
+  ];
+  await withRun(memory, async (session) => {
+    for (const [code, commitId, mutations, message] of rows) {
+      const error = failure(() => session.commit(commitId as never, mutations as never));
+      expect([error.stage, error.code, error.message, error.retryable]).toEqual(["commit", code, message, false]);
+    }
+    expect(await session.recall()).toBe("[kept] kept lesson");
+    expect(session.snapshot.revision).toBe(1n);
+  });
+});
+
+test("a host mutation payload holding -0 cannot be encoded canonically", async () => {
+  await withRun(newMemory({ llmConfig: OLLAMA }), (session) => {
+    const zero = new MemoryMutation("m", { action: "add", lesson_id: "a", source: { run_id: "r" }, text: "x", n: -0 });
+    const error = failure(() => session.commit("zero", [zero]));
+    expect([error.code, error.message]).toEqual([
+      "reflective.invalid_batch",
+      "mutation batch cannot be encoded canonically",
+    ]);
+    expect(error.cause).toBeInstanceOf(TypeError);
+  });
+});
+
+test("an async rewriteQuery is awaited", async () => {
+  class AsyncQueryMemory extends ReflectiveMemory {
+    override async rewriteQuery(): Promise<string> {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return "apple";
+    }
+  }
+  const memory = new AsyncQueryMemory({ env: baseEnv(), llmConfig: OLLAMA, recallLimit: 1 });
+  await withRun(memory, (session) =>
+    session.commit("seed", [
+      mutation("berry", "add", "berry", "fresh berry"),
+      mutation("apple", "add", "apple", "green apple"),
+    ]),
+  );
+  await withRun(memory, async (session) => {
+    expect(await session.recall(new RecallContext("", "berry", {}, ["root"]))).toBe("[apple] green apple");
+  });
+});
+
+test("a re-entrant close from inside an async rewriteQuery is busy", async () => {
+  let closeError: unknown = null;
+  class ClosingQueryMemory extends ReflectiveMemory {
+    override async rewriteQuery(): Promise<string> {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      try {
+        this.close();
+      } catch (error) {
+        closeError = error;
+      }
+      return "query";
+    }
+  }
+  const memory = new ClosingQueryMemory({ env: baseEnv(), llmConfig: OLLAMA });
+  await withRun(memory, async (session) => {
+    expect(await session.recall(new RecallContext("", "", {}, ["root"]))).toBe("");
+  });
+  expect(closeError).toBeInstanceOf(MemoryOperationError);
+  const busy = closeError as MemoryOperationError;
+  expect([busy.stage, busy.code, busy.message, busy.retryable]).toEqual([
+    "close",
+    "reflective.busy",
+    "memory backend is active",
+    true,
+  ]);
+  memory.close();
+  expect(failure(() => memory.openRun()).code).toBe("reflective.closed");
+});

@@ -215,6 +215,12 @@ function copyObject(value: unknown, name: string): JsonObject {
   return copy;
 }
 
+/** Split text into case-insensitive retrieval words (Python's `\w+` over `casefold()`). */
+function words(text: string): Set<string> {
+  // Upper then lower case is the design's stand-in for Python's `casefold`, as in `episodic.ts`.
+  return new Set(text.toUpperCase().toLowerCase().match(/[\p{L}\p{N}_]+/gu));
+}
+
 /** Return stable source metadata for one proposed lesson mutation, frozen. */
 function sourceJson(runId: string): JsonObject {
   return Object.freeze({ run_id: runId });
@@ -847,18 +853,226 @@ export class ReflectiveSession implements MemorySession {
     }
   }
 
-  /** Return all pinned lessons or a deterministic lexical ranking. */
+  /**
+   * Compute a canonical digest before generation-dependent validation: the SHA-256 of the log JSON
+   * of each mutation's id and payload.
+   *
+   * @throws MemoryOperationError `reflective.invalid_batch` for a non-array, an item that isn't
+   *   exactly a `MemoryMutation`, or a payload log JSON refuses (`-0`).
+   */
+  private batchDigest(mutations: unknown): string {
+    if (!Array.isArray(mutations) || Object.getPrototypeOf(mutations) !== Array.prototype) {
+      throw operationError("commit", "reflective.invalid_batch", "mutations must be an exact array");
+    }
+    const encoded = (mutations as unknown[]).map((mutation) => {
+      if (!isExactly(mutation, MemoryMutation)) {
+        throw operationError("commit", "reflective.invalid_batch", "mutation batch contains an invalid value");
+      }
+      return { mutation_id: mutation.mutationId, payload: mutation.payload };
+    });
+    let material: string;
+    try {
+      material = logJson(encoded);
+    } catch (error) {
+      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+      throw operationError("commit", "reflective.invalid_batch", "mutation batch cannot be encoded canonically", {
+        cause: error,
+      });
+    }
+    return crypto.createHash("sha256").update(material).digest("hex");
+  }
+
+  /**
+   * Validate that mutation ids are unique within one commit batch.
+   *
+   * @throws MemoryOperationError `reflective.invalid_batch` otherwise.
+   */
+  private validateBatchIds(mutations: readonly MemoryMutation[]): void {
+    const mutationIds = new Set<string>();
+    for (const mutation of mutations) {
+      if (mutationIds.has(mutation.mutationId)) {
+        throw operationError("commit", "reflective.invalid_batch", "mutation ids must be unique within a batch");
+      }
+      mutationIds.add(mutation.mutationId);
+    }
+  }
+
+  /**
+   * Validate one persisted reflective mutation payload exactly.
+   *
+   * @returns The action, lesson id, text (`null` for a removal) and canonical source.
+   * @throws MemoryOperationError `reflective.invalid_mutation` for any defect.
+   */
+  private validatedAction(mutation: MemoryMutation): [string, string, string | null, JsonObject] {
+    const invalid = (message: string, cause?: unknown) =>
+      operationError("commit", "reflective.invalid_mutation", message, cause === undefined ? {} : { cause });
+    const payload = mutation.payload;
+    if (!isObject(payload)) throw invalid("mutation payload must be an object");
+    const allowed = ["action", "lesson_id", "source", "text"];
+    if (
+      Object.keys(payload).some((key) => !allowed.includes(key)) ||
+      !["action", "lesson_id", "source"].every((key) => Object.hasOwn(payload, key))
+    ) {
+      throw invalid("mutation payload has invalid fields");
+    }
+    const action = payload.action;
+    if (action !== "add" && action !== "revise" && action !== "remove") throw invalid("mutation action is invalid");
+    let lessonId: string;
+    let source: JsonObject;
+    try {
+      lessonId = nonemptyString(payload.lesson_id, "lesson_id");
+      source = sourceFromJson(payload.source, "source");
+    } catch (error) {
+      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+      throw invalid("mutation identity or source is invalid", error);
+    }
+    let text: string | null = null;
+    if (action === "add" || action === "revise") {
+      try {
+        text = nonemptyString(payload.text, "text");
+      } catch (error) {
+        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+        throw invalid("mutation text is invalid", error);
+      }
+      if (!text.trim()) throw invalid("text must not be blank");
+    } else if (Object.hasOwn(payload, "text")) {
+      throw invalid("remove mutations cannot carry text");
+    }
+    return [action, lessonId, text, source];
+  }
+
+  /**
+   * Atomically apply one exact batch, with ledger lookup before generation: a repeated commit id
+   * with the same batch is a no-op; an empty batch still advances the revision.
+   *
+   * @throws MemoryOperationError `reflective.invalid_commit_id`, `reflective.invalid_batch`,
+   *   `reflective.commit_collision`, `reflective.stale_generation`, `reflective.invalid_mutation`,
+   *   `reflective.max_items`; the session or backend is closed; durable state can't be saved.
+   */
+  commit(commitId: string, mutations: readonly MemoryMutation[]): void {
+    const memory = this.memory;
+    memory["operation"](() => {
+      this.ensureOpen();
+      let id: string;
+      try {
+        id = nonemptyString(commitId, "commit_id");
+      } catch (error) {
+        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+        throw operationError("commit", "reflective.invalid_commit_id", "commit id must be a nonempty string", {
+          cause: error,
+        });
+      }
+      const digest = this.batchDigest(mutations);
+      const applied = memory["appliedCommits"].get(id);
+      if (applied !== undefined) {
+        if (applied === digest) return;
+        throw operationError("commit", "reflective.commit_collision", "commit id collision with a different batch");
+      }
+
+      this.validateBatchIds(mutations);
+      this.assertCurrent("commit");
+      const limits = memory["state"].limits;
+      const lessons = [...memory["state"].lessons];
+      const touched = new Set<string>();
+      for (const mutation of mutations) {
+        const [action, lessonId, text, source] = this.validatedAction(mutation);
+        if (touched.has(lessonId)) {
+          throw operationError(
+            "commit",
+            "reflective.invalid_mutation",
+            "a batch cannot target one lesson more than once",
+          );
+        }
+        touched.add(lessonId);
+        const position = lessons.findIndex((lesson) => lesson.lessonId === lessonId);
+        if (action === "add") {
+          if (position !== -1) {
+            throw operationError("commit", "reflective.invalid_mutation", "add mutation targets an existing lesson");
+          }
+          lessons.push(Object.freeze({ lessonId, text: text!, source }));
+        } else if (action === "revise") {
+          if (position === -1) {
+            throw operationError("commit", "reflective.invalid_mutation", "revise mutation targets a missing lesson");
+          }
+          lessons[position] = Object.freeze({ lessonId, text: text!, source });
+        } else {
+          if (position === -1) {
+            throw operationError("commit", "reflective.invalid_mutation", "remove mutation targets a missing lesson");
+          }
+          lessons.splice(position, 1);
+        }
+      }
+
+      const state: State = Object.freeze({ limits, lessons: Object.freeze(lessons) });
+      if (state.lessons.length > limits.maxItems) {
+        throw operationError("commit", "reflective.max_items", "mutation batch exceeds max_items");
+      }
+
+      const commits = new Map(memory["appliedCommits"]).set(id, digest);
+      const revision = memory["revision"] + 1;
+      memory["saveState"](stateJson(memory["namespace"], memory["epoch"], revision, state), {
+        appliedCommits: commits,
+        everCommitted: true,
+      });
+      memory["state"] = state;
+      memory["appliedCommits"] = commits;
+      memory["revision"] = revision;
+      memory["everCommitted"] = true;
+    });
+  }
+
+  /** Render atomic ids and text without an outer section header: one ``[id] text`` line each. */
+  private static format(lessons: readonly Lesson[]): string {
+    return lessons.map((lesson) => `[${lesson.lessonId}] ${lesson.text}`).join("\n");
+  }
+
+  /**
+   * Return all pinned lessons, or the `recallLimit` lessons sharing the most words with
+   * `memory.rewriteQuery(context)`, earliest first among equals.
+   *
+   * @throws MemoryOperationError `reflective.invalid_context` for a context that isn't exactly a
+   *   `RecallContext`; `reflective.query` when rewriting fails or returns a non-string; the session
+   *   or backend is closed.
+   */
   async recall(context: RecallContext | null = null): Promise<string> {
-    throw new Error("not implemented");
+    // The operation spans the awaited rewrite, so `close()` stays busy until recall returns.
+    this.memory["begin"]();
+    try {
+      this.ensureOpen();
+      const lessons = this.state.lessons;
+      if (context === null) return ReflectiveSession.format(lessons);
+      if (!isExactly(context, RecallContext)) {
+        throw operationError("recall", "reflective.invalid_context", "context must be a RecallContext or None");
+      }
+      let query: unknown;
+      try {
+        query = await this.memory.rewriteQuery(context);
+      } catch (error) {
+        throw operationError("recall", "reflective.query", "memory query rewriting failed", { cause: error });
+      }
+      // No session check after the await: recall reads only this session's pinned state.
+      if (typeof query !== "string") {
+        throw operationError("recall", "reflective.query", "rewrite_query() must return a string");
+      }
+      const queryWords = words(query);
+      const selected = lessons
+        .map((lesson, index) => {
+          let overlap = 0;
+          for (const word of words(lesson.text)) if (queryWords.has(word)) overlap += 1;
+          return { lesson, index, overlap };
+        })
+        // Indexes are unique, so Python's final lesson-id key never decides.
+        .toSorted((a, b) => b.overlap - a.overlap || a.index - b.index)
+        .slice(0, this.state.limits.recallLimit)
+        .map((ranked) => ranked.lesson);
+      return ReflectiveSession.format(selected);
+    } finally {
+      this.memory["end"]();
+    }
   }
 
   /** Propose, but do not apply, one exact array of lesson mutations. */
   async learn(context: LearnContext): Promise<MemoryMutation[]> {
-    throw new Error("not implemented");
-  }
-
-  /** Atomically apply one exact batch, with ledger lookup before generation. */
-  commit(commitId: string, mutations: readonly MemoryMutation[]): void {
     throw new Error("not implemented");
   }
 }

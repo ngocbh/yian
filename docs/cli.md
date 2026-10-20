@@ -480,7 +480,7 @@ so the example is dropped. An explicit null default is shown as `[default: None]
 Changed (TS yian): choice and default values are in the text form: `true` / `false`,
 `[default: null]`, `Infinity`. The JSON editor reads JSON in yian's codec form: infinity is
 `{"$float": "inf"}` and bare `NaN` or `Infinity` is refused; an object whose literal value has
-that shape, or `{"$record": …}`, needs the `$record` escape. Error paths keep non-ASCII keys as
+that shape, or `{"$record": {…}}`, needs the `$record` escape. Error paths keep non-ASCII keys as
 written (`["é"]`). Prompts draw on stderr, not stdout. Escape doesn't cancel (Ctrl-C does), and
 the end of input cancels.
 

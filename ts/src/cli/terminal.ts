@@ -83,7 +83,7 @@ interface Widget<T> {
   /** The cursor's line in the frame and that line's text before it, or null to hide the cursor. */
   cursor(): { row: number; before: string } | null;
   /** Apply one key; an outcome ends the widget. */
-  key(key: Key): { value: T } | { stop: "eof" } | undefined;
+  key(key: Key): { value: T } | { stop: "interrupt" | "eof" } | undefined;
   /** The one line the frame collapses to once the widget has ended. */
   done(outcome: Outcome<T>): string;
 }
@@ -237,6 +237,8 @@ function selectWidget(options: {
     cursor: () => null,
     key(key) {
       if (key.name === "return" || key.name === "enter") return { value: index };
+      // questionary binds Ctrl-Q like Ctrl-C in its pickers.
+      if (key.ctrl && key.name === "q") return { stop: "interrupt" };
       if (key.ctrl || key.meta) return undefined;
       if (key.name === "up" || key.name === "k") index = (index - 1 + count) % count;
       else if (key.name === "down" || key.name === "j") index = (index + 1) % count;
@@ -246,14 +248,21 @@ function selectWidget(options: {
   };
 }
 
-/** A yes/no question: `y` or `n` answers at once (questionary's auto-enter), ENTER answers no. */
+/**
+ * A yes/no question: `y` or `n` answers at once (questionary's auto-enter), ENTER answers no. A
+ * paste never answers it, as in questionary, where pasted text goes to a hidden buffer.
+ */
 function confirmWidget(label: string): Widget<boolean> {
   const line = `${style("1;36", "?")} ${style("1", label)} ${style("2", "(y/N)")} `;
   return {
     lines: () => [line],
     cursor: () => ({ row: 0, before: line }),
     key(key) {
+      if (key.paste) return undefined;
       if (key.name === "return" || key.name === "enter") return { value: false };
+      // questionary's buffer stays empty, so Ctrl-D is always the end of input; Ctrl-Q is Ctrl-C.
+      if (key.ctrl && key.name === "d") return { stop: "eof" };
+      if (key.ctrl && key.name === "q") return { stop: "interrupt" };
       if (key.ctrl || key.meta) return undefined;
       if (key.str === "y" || key.str === "Y") return { value: true };
       if (key.str === "n" || key.str === "N") return { value: false };
@@ -363,8 +372,8 @@ export class Terminal {
       const gathered: [string, unknown][] = [];
       for (const decl of missing) {
         const value = await promptInput(run, decl);
-        if (value === OMIT) continue;
-        gathered.push([decl.name, value === SET_NULL ? null : value]);
+        if (value === OMIT_INPUT) continue;
+        gathered.push([decl.name, value === NULL_INPUT ? null : value]);
       }
       // `fromEntries` defines each key as data, so an input named `__proto__` stays an entry.
       return Object.fromEntries(gathered);
@@ -679,9 +688,12 @@ export function parseStructuredInput(raw: string, type: Type, name: string): Jso
 }
 
 /** The prompt controls: leave the input absent, give it a present null, open its editor. */
-const OMIT = Symbol("omit input");
-const SET_NULL = Symbol("set null");
-const ENTER = Symbol("enter value");
+const OMIT_INPUT = Symbol("omit input");
+const NULL_INPUT = Symbol("set null");
+const ENTER_INPUT = Symbol("enter value");
+
+// Python's `str.isspace()` set: a text of only these is blank to `str.strip()`.
+const PY_BLANK = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
 
 /** One select choice: its title and the value choosing it gives. */
 interface Choice {
@@ -719,17 +731,21 @@ function controlChoices(
   const choices: Choice[] = [];
   let initial: number | undefined;
   if (!decl.required) {
-    initial = choices.push({ title: decl.hasDefault ? "↩ Use declared default" : "↩ Omit input", value: OMIT }) - 1;
+    choices.push({ title: decl.hasDefault ? "↩ Use declared default" : "↩ Omit input", value: OMIT_INPUT });
+    initial = 0;
   }
-  if (acceptsNull(type)) choices.push({ title: "Set null", value: SET_NULL });
+  if (acceptsNull(type)) choices.push({ title: "Set null", value: NULL_INPUT });
   if (withEnter) {
-    const enter = choices.push({ title: "Enter value", value: ENTER }) - 1;
-    initial ??= enter;
+    choices.push({ title: "Enter value", value: ENTER_INPUT });
+    initial ??= choices.length - 1;
   }
   return { choices, initial };
 }
 
-/** Run a select over `choices` (no indicator) and return the chosen one's value. */
+/**
+ * Run a select over `choices` (no indicator), preselecting `initial` (the first choice when
+ * undefined), and return the chosen one's value.
+ */
 async function choose(run: RunWidget, label: string, choices: readonly Choice[], initial = 0): Promise<unknown> {
   const index = await run(selectWidget({ label, titles: choices.map((choice) => choice.title), initial }));
   return choices[index]!.value;
@@ -738,7 +754,7 @@ async function choose(run: RunWidget, label: string, choices: readonly Choice[],
 /**
  * Run the text editor for one open input. A list/object editor validates JSON in place and returns
  * the native value; a scalar editor returns the raw text, coerced later at the run boundary. An
- * optional blank answer is `OMIT`.
+ * optional blank answer is `OMIT_INPUT`.
  */
 async function promptOpenValue(
   run: RunWidget,
@@ -746,7 +762,7 @@ async function promptOpenValue(
   type: Type | undefined,
   label: string,
 ): Promise<unknown> {
-  const blankOmits = (text: string): boolean => !decl.required && text.trim() === "";
+  const blankOmits = (text: string): boolean => !decl.required && PY_BLANK.test(text);
   if (type !== undefined && (isListKind(type.kind) || type.kind === ValueKind.OBJECT)) {
     const value = await run(
       textWidget({
@@ -764,17 +780,17 @@ async function promptOpenValue(
         },
       }),
     );
-    return blankOmits(value) ? OMIT : parseStructuredInput(value, type, decl.name);
+    return blankOmits(value) ? OMIT_INPUT : parseStructuredInput(value, type, decl.name);
   }
   const value = await run(textWidget({ label }));
-  return blankOmits(value) ? OMIT : value;
+  return blankOmits(value) ? OMIT_INPUT : value;
 }
 
 /**
- * Ask for one declared input: its value, `OMIT` or `SET_NULL`; a stop throws through `run`. A
- * required non-nullable bool confirms; other bools and Literals select among the allowed controls
- * and their values; a null-capable open input first selects omit, null or Enter, and an optional
- * blank in its editor returns to a fresh palette; other inputs open their editor directly.
+ * Ask for one declared input: its value, `OMIT_INPUT` or `NULL_INPUT`; a stop throws through
+ * `run`. A required non-nullable bool confirms; other bools and Literals select among the allowed
+ * controls and their values; a null-capable open input first selects omit, null or Enter, and an
+ * optional blank in its editor returns to the palette; other inputs open their editor directly.
  */
 async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
   const label = inputLabel(decl);
@@ -782,9 +798,12 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
 
   if (type?.kind === ValueKind.BOOLEAN) {
     if (decl.required && !acceptsNull(type)) return run(confirmWidget(label));
-    const { choices, initial } = controlChoices(decl, type);
-    choices.push({ title: "true", value: true }, { title: "false", value: false });
-    return choose(run, label, choices, decl.required ? choices.length - 1 : initial);
+    const { choices: controls, initial } = controlChoices(decl, type);
+    const values = [
+      { title: "true", value: true },
+      { title: "false", value: false },
+    ];
+    return choose(run, label, [...controls, ...values], decl.required ? controls.length + 1 : initial);
   }
 
   if (type?.tags !== undefined && type.tags.size > 0) {
@@ -792,22 +811,22 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
     const values = Array.from(type.tags)
       .sort(compareCodePoints)
       .map((tag) => ({ title: decl.required && !nullCapable ? tag : `Set value: ${tag}`, value: tag }));
-    const { choices, initial } = controlChoices(decl, type);
-    return choose(run, label, [...choices, ...values], decl.required && nullCapable ? choices.length : initial);
+    const { choices: controls, initial } = controlChoices(decl, type);
+    return choose(run, label, [...controls, ...values], decl.required && nullCapable ? controls.length : initial);
   }
 
   if (type?.kind === ValueKind.NONE) {
-    const { choices, initial } = controlChoices(decl, type);
-    return choose(run, label, choices, initial);
+    const { choices: controls, initial } = controlChoices(decl, type);
+    return choose(run, label, controls, initial);
   }
 
   if (acceptsNull(type)) {
+    const { choices: controls, initial } = controlChoices(decl, type, true);
     while (true) {
-      const { choices, initial } = controlChoices(decl, type, true);
-      const action = await choose(run, label, choices, initial);
-      if (action !== ENTER) return action;
+      const action = await choose(run, label, controls, initial);
+      if (action !== ENTER_INPUT) return action;
       const value = await promptOpenValue(run, decl, type, label);
-      if (value !== OMIT) return value;
+      if (value !== OMIT_INPUT) return value;
     }
   }
 

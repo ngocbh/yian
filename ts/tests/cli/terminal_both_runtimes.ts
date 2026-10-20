@@ -28,6 +28,7 @@ export const CTRL_A = "\x01";
 export const CTRL_C = "\x03";
 export const CTRL_D = "\x04";
 export const CTRL_E = "\x05";
+export const CTRL_Q = "\x11";
 export const CTRL_U = "\x15";
 export const BACKSPACE = "\x7f";
 export const SPACE = " ";
@@ -739,8 +740,11 @@ const COUNT_RECORD = new Type({
   required: new Set(["count"]),
 });
 
-/** The active select's choice titles and the marked one, read off the screen. */
-function frame(view: () => Screen): { label: string; titles: string[]; marked: number } {
+/** A select as the screen shows it: its label, its choice titles and the marked one. */
+type Picker = { label: string; titles: string[]; marked: number };
+
+/** The active select, read off the screen. */
+function frame(view: () => Screen): Picker {
   const rows = view().rows;
   const head = rows.findLastIndex((row) => row.endsWith(" (Use arrow keys)"));
   assert.ok(head >= 0, `no select on the screen: ${JSON.stringify(rows)}`);
@@ -754,15 +758,14 @@ function frame(view: () => Screen): { label: string; titles: string[]; marked: n
 
 /** Wait for the active select, move its marker to `title` and press ENTER. */
 async function choose(input: FakeInput, view: () => Screen, title: string): Promise<void> {
-  await tick();
-  const { titles, marked } = frame(view);
+  const { titles, marked } = await select(view);
   const target = titles.indexOf(title);
   assert.ok(target >= 0, `no choice ${title} in ${JSON.stringify(titles)}`);
   input.write((target > marked ? DOWN : UP).repeat(Math.abs(target - marked)) + ENTER);
 }
 
 /** Wait for the active select and return its frame. */
-async function select(view: () => Screen): Promise<{ label: string; titles: string[]; marked: number }> {
+async function select(view: () => Screen): Promise<Picker> {
   await tick();
   return frame(view);
 }
@@ -799,6 +802,7 @@ async function aRequiredBoolConfirmsWithYOrNAtOnceAndEnterSaysNo(): Promise<void
     ["n", false, "No"],
     ["N", false, "No"],
     [ENTER, false, "No"],
+    [PASTE_START + "y" + PASTE_END + ENTER, false, "No"],
   ];
   for (const [keys, expected, shown] of cases) {
     const { input, terminal, view } = setup();
@@ -979,9 +983,7 @@ async function setNullInThePaletteOpensNoEditor(): Promise<void> {
     const { input, terminal, view } = setup();
     const answer = terminal.promptInputs([decl("value", type, { required })], {});
     await choose(input, view, "Set null");
-    const gathered = await answer;
-    assert.deepEqual(gathered, { value: null });
-    assert.ok(Object.hasOwn(gathered!, "value"));
+    assert.deepEqual(await answer, { value: null });
     assert.equal(view().rows.length, 1);
     assert.ok(view().rows[0]!.endsWith(" Set null"));
   }
@@ -1299,6 +1301,48 @@ async function theEndOfInputInAConfirmReturnsNull(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
+async function ctrlDInAConfirmIsTheEndOfInput(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.promptInputs([decl("ok", BOOL, { required: true })], {});
+  input.write("x" + CTRL_D);
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["eof"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function ctrlQInterruptsAConfirm(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.promptInputs([decl("ok", BOOL, { required: true })], {});
+  input.write(CTRL_Q);
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["interrupt"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function ctrlQInterruptsASelectButNotATextEditor(): Promise<void> {
+  const stops: string[] = [];
+  const { input, terminal, view } = setup({ onStop: (reason) => stops.push(reason) });
+  const text = terminal.askText("Name:");
+  input.write("a" + CTRL_Q + "b" + ENTER);
+  assert.equal(await text, "ab");
+  const answer = terminal.promptInputs([decl("flag", nullable(ValueKind.BOOLEAN))], {});
+  await select(view);
+  input.write(CTRL_Q);
+  assert.equal(await answer, null);
+  assert.deepEqual(stops, ["interrupt"]);
+  assert.deepEqual(input.rawCalls, [true, false, true, false]);
+}
+
+// Python's `str.strip()` blank set: U+0085 is blank, U+FEFF is not.
+async function anOptionalStringBlankIsPythonsWhitespace(): Promise<void> {
+  const { input, terminal } = setup();
+  const answer = terminal.promptInputs([decl("kept", STR), decl("omitted", STR)], {});
+  input.write("\uFEFF" + ENTER + "\x85 " + ENTER);
+  assert.deepEqual(await answer, { kept: "\uFEFF" });
+}
+
 async function aClosedTerminalPromptsNothing(): Promise<void> {
   const { output, terminal } = setup();
   terminal.close();
@@ -1440,6 +1484,10 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an Any input is free text that stays text": anAnyInputIsFreeTextThatStaysText,
   "an untyped input is free text": anUntypedInputIsFreeText,
   "the end of input in a confirm returns null": theEndOfInputInAConfirmReturnsNull,
+  "Ctrl-D in a confirm is the end of input": ctrlDInAConfirmIsTheEndOfInput,
+  "Ctrl-Q interrupts a confirm": ctrlQInterruptsAConfirm,
+  "Ctrl-Q interrupts a select but not a text editor": ctrlQInterruptsASelectButNotATextEditor,
+  "an optional string's blank is Python's whitespace": anOptionalStringBlankIsPythonsWhitespace,
   "a closed terminal prompts nothing": aClosedTerminalPromptsNothing,
   "a failing output fails the call": aFailingOutputFailsTheCall,
   "a child exits on its own after an answer with stdin open": aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen,

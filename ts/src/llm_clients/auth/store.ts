@@ -237,9 +237,9 @@ function parseStore(text: string): [string | null, Providers] {
  * `openai`, an organization and project id. The store is a JSON file in a directory that, like
  * the file, must be private to its owner and not a symbolic link. Reading a missing store never
  * creates a directory or lock file. Selection and credentials are committed together by `save`;
- * `remove` and `setDefault` change a saved store and never create one. Writes and refreshes hold
- * the `<path>.lock` file lock; a refresh reloads under it and cannot replace a newer connection.
- * The store is POSIX-only.
+ * `remove`, `setDefault` and `delete` change a saved store and never create one. Writes and
+ * refreshes hold the `<path>.lock` file lock; a refresh reloads under it and cannot replace a newer
+ * connection. The store is POSIX-only.
  *
  * The path is `path`, else `YIAN_AUTH_FILE`, else `<XDG_CONFIG_HOME or ~/.config>/yian/auth.json`,
  * with `~` and a leading `~/` expanded from `HOME` (or the account's home directory) and made
@@ -582,6 +582,52 @@ export class AuthStore {
    */
   setDefault(provider: string): Promise<void> {
     return this.#update(provider, false);
+  }
+
+  /**
+   * Delete the whole saved store under its lock, keeping the lock file.
+   *
+   * Creates nothing when neither the store nor its lock file exists. A symbolic link at the
+   * store's path is removed, never followed.
+   *
+   * @throws AuthError The directory is not private, the lock wait times out, or storage fails.
+   */
+  async delete(): Promise<void> {
+    this.#signal?.throwIfAborted();
+    const directory = this.#openDirectory();
+    if (directory === null) return;
+    try {
+      const exists = (path: string) => {
+        try {
+          fs.lstatSync(path);
+          return true;
+        } catch (error) {
+          if (isMissing(error)) return false;
+          throw accessError();
+        }
+      };
+      if (!exists(this.path) && !exists(`${this.path}.lock`)) {
+        // Missing files in a swapped-in directory say nothing about the checked one.
+        this.#checkSameDirectory(directory);
+        return;
+      }
+      // Unlinking the lock file would let a waiter and a newcomer lock different files, so only
+      // the store goes.
+      await this.#locked(() => {
+        // The unlink goes by path, not through the checked directory's descriptor (Python's
+        // `dir_fd`), so check the path still names that directory, as `#write` does.
+        this.#checkSameDirectory(directory);
+        try {
+          fs.unlinkSync(this.path);
+        } catch (error) {
+          if (isMissing(error)) return;
+          throw accessError();
+        }
+        access(() => fs.fsyncSync(directory.fd));
+      });
+    } finally {
+      closeFd(directory.fd);
+    }
   }
 
   /** Start the refresh flight `key` running `locked`, registered until it settles. */

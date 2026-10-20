@@ -17,6 +17,8 @@ import {
   flush,
   helpText,
   JSON_FORMAT,
+  type OptionSpec,
+  type ParsedArgs,
   parseCommand,
   printJson,
   streamWriter,
@@ -25,6 +27,7 @@ import {
   type Writer,
 } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
+import { reprText } from "../../src/diagnostics.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 
 // Each test's environment: a private home and auth store, so no real login is read.
@@ -347,6 +350,40 @@ describe("parseCommand", () => {
     }
     // parseArgs refuses a value starting with `-` written as a separate word.
     expect(usage(RUN, [flow, "-w", "-1"])).toBe("Option '-w' requires an argument.");
+  });
+
+  test("float options take Python's float() syntax", () => {
+    const timeout: OptionSpec = { name: "timeout", type: "float", metavar: "FLOAT", help: "Seconds." };
+    const spec: CommandSpec = { name: "models", summary: "Models.", positionals: [], options: [timeout] };
+    const value = (text: string) => (parseCommand(spec, [`--timeout=${text}`]) as ParsedArgs).options["timeout"];
+    const accepted: [string, number][] = [
+      ["0.5", 0.5],
+      [" 2 ", 2],
+      [".5", 0.5],
+      ["5.", 5],
+      ["+1.5", 1.5],
+      ["1_0.5", 10.5],
+      ["1e3", 1000],
+      ["1E3", 1000],
+      ["1e1_0", 1e10],
+      ["\t.5\n", 0.5],
+      ["-1", -1],
+      ["inf", Infinity],
+      ["-Infinity", -Infinity],
+      ["nan", NaN],
+      ["NaN", NaN],
+      ["+nan", NaN],
+    ];
+    for (const [text, expected] of accepted) expect(value(text)).toBe(expected);
+    expect(parseCommand(spec, ["--timeout", "8"])).toEqual({ help: false, args: {}, options: { timeout: 8 } });
+    expect(parseCommand(spec, [])).toEqual({ help: false, args: {}, options: {} });
+    for (const text of ["x", "", "1__0", "_1", "1_", "1_.5", "1._5", "1e", "0x10", "infinit", "\x1c1"]) {
+      expect(usage(spec, [`--timeout=${text}`])).toBe(`Invalid value for '--timeout': ${reprText(text)} is not a valid float.`);
+    }
+    expect(usage(spec, ["--timeout", "x"])).toBe("Invalid value for '--timeout': 'x' is not a valid float.");
+    expect(helpText(spec)).toContain("  --timeout FLOAT  Seconds.\n");
+    const { metavar: _, ...bare } = timeout;
+    expect(helpText({ ...spec, options: [bare] })).toContain("  --timeout FLOAT  Seconds.\n");
   });
 
   test("variadic positionals, and -- ends the options", () => {

@@ -1,7 +1,8 @@
 /**
  * A MAP `over:` or WAIT `until:` of the wrong type is a load error at that value: a port of
  * `tests/compose/test_map_wait_source_types.py`, loading each flow with `assembleText` where
- * Python calls `load_flow`.
+ * Python calls `load_flow`; a `defs:` entry a flow calls is a hand-built child (`handChild`) with
+ * the def's signature.
  *
  * Literals are checked where the node is parsed; references and expressions by their inferred type
  * once the graph is built.
@@ -18,13 +19,10 @@
  * `test_the_issue_flow_is_a_load_error_at_until`, `test_fitting_or_unproven_sources_load` (13),
  * `test_call_directive_over_with_a_str_output_is_a_load_error`, `test_isinstance_keeps_its_own_error`,
  * the first half of `test_tagged_wrong_reference_reports_the_type_first`,
- * `test_reference_check_reaches_defs`, `test_record_typedef_is_named`,
+ * `test_record_typedef_is_named`,
  * `test_none_typed_source_is_a_load_error` and `test_type_error_comes_before_the_cycle_error`.
  *
- * Changed: a `defs:` entry a flow calls is a hand-built child (`handChild`) with the def's
- * signature, since def bodies load in T3-22; `test_reference_check_reaches_defs` therefore
- * assembles the def's body as a flow of its own, with no `defs entry` prefix. TS YAML reads an
- * unquoted date or timestamp as text, so `over: 2026-01-01` and `over: 2026-01-01T10:00:00` are
+ * Changed: TS YAML reads an unquoted date or timestamp as text, so `over: 2026-01-01` and `over: 2026-01-01T10:00:00` are
  * read as text (Python: "a date", "a date and time"), and the unquoted `until:` dates load as text
  * that parses as a date.
  *
@@ -36,8 +34,8 @@
  *
  * Later (T3-18 PR 3): `test_dangling_reference_keeps_its_error` (the reference validator).
  * Later (T3-20): `test_a_case_branch_narrows_the_source` (`computeNarrowing`).
- * Later (T3-22): the `defs` half of `test_literal_check_reaches_defs_and_inline_bodies` (the def's
- * own assembly); the last third of `test_tagged_wrong_literal_reports_the_type_first` and the second
+ * Later (T3-22): the `defs` half of `test_literal_check_reaches_defs_and_inline_bodies` and
+ * `test_reference_check_reaches_defs` (the def's own assembly); the last third of `test_tagged_wrong_literal_reports_the_type_first` and the second
  * half of `test_tagged_wrong_reference_reports_the_type_first` ("a tag types a value",
  * `reject_unread_tags`).
  */
@@ -504,29 +502,6 @@ test("a tagged wrong reference reports the type first", () => {
   const text = waitRef("!list(str) ${input.n}", "  n: !int\n");
   const error = errorOf(text);
   expect(error.diagnostic.message).toBe(untilRefMessage("int"));
-  expect(startLine(error)).toBe(lineOf(text, "until: "));
-});
-
-test("the reference check reaches defs", () => {
-  // The `pause` def's body, assembled as the loader assembles a def.
-  const text = `id: pause
-name: pause
-input:
-  n: !int
-nodes:
-  w:
-    kind: wait
-    until: \${input.n}
-  after:
-    kind: code
-    depends_on: [w]
-    output: int
-    code: |
-      return 1
-output: \${after.output}
-`;
-  const error = errorOf(text);
-  expect(error.message).toContain(untilRefMessage("int"));
   expect(startLine(error)).toBe(lineOf(text, "until: "));
 });
 

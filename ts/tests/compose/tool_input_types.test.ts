@@ -13,17 +13,14 @@
  * Later (T3-22): `test_a_tool_in_a_child_flow_is_stamped` (the child's own assembly).
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
-import { forget } from "../../src/defaults.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { assembleText } from "./declarations.ts";
-
-afterEach(() => forget());
 
 /** Return the nodes of flow `text`'s root, assembled as the loader does. */
 const loadedNodes = (text: string) => assembleText(text).flow.compiled.nodes;

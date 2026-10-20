@@ -270,7 +270,7 @@ test("registry is a read-only mapping with types", () => {
   ];
   for (const write of writes) {
     expect(() => write(registry.types as Map<string, unknown>)).toThrow(TypeError);
-    expect(() => write(registry as Map<string, unknown>)).toThrow("MemoryRegistry is read-only");
+    expect(() => write(registry as Map<string, unknown>)).toThrow("the memory registry and its types are read-only");
   }
   expect(registry.size).toBe(2);
   expect(registry.types.size).toBe(2);
@@ -637,7 +637,7 @@ test("an empty root derives paths relative to the current directory", async () =
   process.chdir(tmp);
   try {
     await using registry = await buildMemories(hostFlow([decl("notes", "episodic")]), { root: "" });
-    registry.get("notes")!.openRun();
+    await registry.get("notes")!.openRun();
     expect(fs.statSync(path.join(tmp, "host-flow", "notes.sqlite")).isFile()).toBe(true);
   } finally {
     process.chdir(before);
@@ -657,7 +657,7 @@ test("explicit storage overrides root and needs an existing parent", async () =>
     await using registry = await buildMemories(importFlow(), options);
     expect(await operationCode(() => registry.get("notes")!.openRun())).toBe("storage.io");
     expect(fs.existsSync(path.dirname(explicit))).toBe(false);
-    registry.get("lib.notes")!.openRun();
+    await registry.get("lib.notes")!.openRun();
   }
   expect(fs.statSync(path.join(tmp, "mem", "app", "lib", "notes.sqlite")).isFile()).toBe(true);
 });
@@ -689,7 +689,7 @@ test("no root means RAM and no flow id is needed", async () => {
   try {
     const flow = hostFlow([decl("notes", "episodic"), decl("about", "profile")], { flowId: null });
     await using registry = await buildMemories(flow);
-    registry.get("notes")!.openRun();
+    await registry.get("notes")!.openRun();
     await registry.get("about")!.openRun();
   } finally {
     process.chdir(before);
@@ -738,13 +738,12 @@ test("factory result that is not a memory is closed", async () => {
 
 test("second registry on one root is busy until the first closes", async () => {
   const flow = hostFlow([decl("notes", "episodic")]);
-  const first = await buildMemories(flow, { root: tmp });
-  first.get("notes")!.openRun();
-  const second = await buildMemories(flow, { root: tmp });
+  await using first = await buildMemories(flow, { root: tmp });
+  await first.get("notes")!.openRun();
+  await using second = await buildMemories(flow, { root: tmp });
   expect(await operationCode(() => second.get("notes")!.openRun())).toBe("storage.busy");
   await first.close();
-  second.get("notes")!.openRun();
-  await second.close();
+  await second.get("notes")!.openRun();
 });
 
 test.each([["episodic"], ["reflective"], ["profile"]] as const)(

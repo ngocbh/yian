@@ -1655,7 +1655,8 @@ YAML `config` keys in camelCase (`max_episodes` is `maxEpisodes`). A factory is 
 constructor that throws `TypeError` or `RangeError` "rejected its config", and the setup error
 keeps it as `cause`. `await registry.close()` awaits each owned object's `close()`, which may
 return a promise; a call made while a close is in flight returns that close's promise. Use
-`await using registry = await buildMemories(flow)`: when the body throws and the close fails too,
+`await using registry = await buildMemories(flow)` where the runtime or compiler supports it
+(else `try`/`finally` with `await registry.close()`): when the body throws and the close fails too,
 JS throws a `SuppressedError` whose `error` is the close failure and whose `suppressed` is the
 body's error, where Python notes the cleanup failure on the primary. Messages show lists and
 quoted keys in the text form (`memory key(s) ["other"]`, `storage["notes"]`) and drop Python's

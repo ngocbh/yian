@@ -64,7 +64,7 @@ export function userMcpConfig(env: Env): string {
  * @param options `reserved` names no enabled server may take, such as the run's other tool ids
  *   (default none); `warn` receives each unknown-key warning (default `process.emitWarning`).
  * @returns The enabled servers by name, in a null-prototype record, each labelled with its name
- *   and not yet open.
+ *   and not yet open. As in any JS record, integer-like names come first, then the rest in file order.
  * @throws {McpConfigError} When a file can't be read or isn't JSON, has no `mcpServers` object,
  *   or an entry isn't an object, has both or neither of `command` and `url`, has a value of the
  *   wrong type, a `type` that is unknown, `"sse"`, or disagrees with `command`/`url`, references an
@@ -73,7 +73,7 @@ export function userMcpConfig(env: Env): string {
  *
  * @example
  * const user = userMcpConfig(processEnv);
- * const servers = loadMcpConfig(existsSync(user) ? [user] : [], processEnv);
+ * const servers = loadMcpConfig(statSync(user, { throwIfNoEntry: false })?.isFile() ? [user] : [], processEnv);
  */
 export function loadMcpConfig(
   paths: readonly string[],

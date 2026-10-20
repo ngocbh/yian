@@ -87,7 +87,7 @@ class ReadonlyTable<K, V> extends Map<K, V> {
     throw this.readOnly();
   }
 
-  // The runtimes ship `Map`'s upsert methods, which write through the internal slot, not `set`.
+  // Bun ships `Map`'s upsert methods, which write through the internal slot, not `set`.
   /** @throws TypeError always. */
   getOrInsert(_key: K, _value: V): V {
     throw this.readOnly();
@@ -99,7 +99,7 @@ class ReadonlyTable<K, V> extends Map<K, V> {
   }
 
   private readOnly(): TypeError {
-    return new TypeError(`${jsTypeName(this)} is read-only`);
+    return new TypeError("the memory registry and its types are read-only");
   }
 }
 

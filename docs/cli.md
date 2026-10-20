@@ -336,7 +336,8 @@ optional; when given it is `stdio`, `http`, or `streamable-http` and must agree 
 stderr. The server's name is its label in errors.
 
 Changed (TS yian): a file with a duplicate key or a `NaN` or `Infinity` token is
-not valid JSON, which Python yian's reader accepted.
+not valid JSON, which Python yian's reader accepted. An empty `HOME` reads the account's home directory
+for `~/.yian/mcp.json`.
 
 In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
 `${VAR}` expands to the environment variable `VAR`, `${VAR:-default}` to `default`

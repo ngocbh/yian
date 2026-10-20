@@ -32,7 +32,7 @@ import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, SkillError } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import { FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
-import { type CliIo, printJson, UsageError, type Writer } from "./utils.ts";
+import { type CliIo, osReason, printJson, UsageError, type Writer } from "./utils.ts";
 
 // The TS loader and run inspection aren't ported yet; each throws until its module lands.
 async function loadFlow(text: string, options: { searchPaths?: string[]; sourceLabel: string }): Promise<ComposedFlow> {
@@ -555,20 +555,6 @@ function readFlowText(path: string): string {
     throw error;
   }
   return text.replace(/\r\n?/g, "\n");
-}
-
-/**
- * Return a system error's reason as Python's `strerror` words it: Node's message without its
- * `CODE: ` prefix and `, <syscall> '<path>'` suffix, first letter capitalised
- * (`No such file or directory`).
- */
-function osReason(error: NodeJS.ErrnoException): string {
-  let reason = error.message;
-  const prefix = `${error.code}: `;
-  if (reason.startsWith(prefix)) reason = reason.slice(prefix.length);
-  const at = error.syscall === undefined ? -1 : reason.indexOf(`, ${error.syscall}`);
-  if (at !== -1) reason = reason.slice(0, at);
-  return reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 
 /** The options `run` reads; an absent option is `undefined`, no `--input` an empty list. */

@@ -244,6 +244,10 @@ yian run flow.yaml --resume ./run.jsonl --memory-root ./mem
   Build such a flow from Python with `build_memories(..., factories=...)` or
   `supplied=...`.
 
+Changed (TS yian): the custom-type error points to the TS API, `buildMemories(flow, { factories })`
+or `{ supplied }`, then `runFlow(flow, inputs, { memory })`, and writes the custom keys in the text
+form (`["vec"]`).
+
 Nothing is opened before the run starts. Each `.sqlite` file has one owner at
 a time: a second `yian run` on the same file fails with `storage.busy`
 until the first exits. A profile's `.md` file has no single owner; writers take
@@ -330,6 +334,10 @@ optional; when given it is `stdio`, `http`, or `streamable-http` and must agree 
 `command` or `url`. The SSE transport (`"type": "sse"`) is not supported.
 `"disabled": true` drops the server. Any other key is ignored with a warning on
 stderr. The server's name is its label in errors.
+
+Changed (TS yian): a file with a duplicate key or a `NaN` or `Infinity` token is
+not valid JSON, which Python yian's reader accepted. An empty `HOME` reads the account's home directory
+for `~/.yian/mcp.json`.
 
 In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
 `${VAR}` expands to the environment variable `VAR`, `${VAR:-default}` to `default`

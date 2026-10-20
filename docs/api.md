@@ -1645,6 +1645,23 @@ memory = build_memories(
 )
 ```
 
+Changed (TS yian): `await buildMemories(flow, { root, storage, supplied, factories, env })` is
+async and resolves to a `MemoryRegistry`, a read-only `Map` subclass whose `types` is a read-only
+`Map` too (`set`, `delete`, `clear` and the upserts throw `TypeError`). `storage`, `supplied` and
+`factories` are plain records, and a `storage` value must be a string. `env` (default
+`processEnv`) reaches the reflective and profile backends the call builds. A built-in gets its
+YAML `config` keys in camelCase (`max_episodes` is `maxEpisodes`). A factory is called with
+`toHost(config)` (safe ints as `number`) and may return a promise, which is awaited; a factory or
+constructor that throws `TypeError` or `RangeError` "rejected its config", and the setup error
+keeps it as `cause`. `await registry.close()` awaits each owned object's `close()`, which may
+return a promise; a call made while a close is in flight returns that close's promise. Use
+`await using registry = await buildMemories(flow)` where the runtime or compiler supports it
+(else `try`/`finally` with `await registry.close()`): when the body throws and the close fails too,
+JS throws a `SuppressedError` whose `error` is the close failure and whose `suppressed` is the
+body's error, where Python notes the cleanup failure on the primary. Messages show lists and
+quoted keys in the text form (`memory key(s) ["other"]`, `storage["notes"]`) and drop Python's
+`=` from keyword names (`use supplied to replace one built-in instance`).
+
 Changed (TS yian): `new ReflectiveMemory({ llmConfig, maxItems, recallLimit, storage,
 createParent, env, createModel, onRetry })` takes an options object. `env` is where
 the learner's model defaults and credentials are read (default `processEnv`).

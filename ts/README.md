@@ -401,6 +401,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   a Node system error from the store is `profile.store_unavailable` and a `RangeError`
   `profile.store_invalid`; lengths count code points; the snapshot's `version` is `1n`; there is
   no `with` form.
+- `src/memory_host.ts` holds `MemoryRegistry` and `buildMemories`, which build the memories a
+  flow declares for one host. It sits at the top of `src/`, not under `memory/`, because it reads
+  the compiled memory table, and nothing under `memory/` imports it. Changed: `buildMemories` and `close()` are async;
+  the registry and its `types` are read-only `Map` subclasses; `storage`, `supplied` and
+  `factories` are plain records; a factory gets `toHost(config)` and may be async; `env` reaches
+  reflective and profile memory; `await using` closes the registry.
 
 ## Runtime
 
@@ -623,7 +629,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, the
   diagnostic boxes, the banner, progress on stderr and `stopOnSignals` (SIGINT, SIGTERM and SIGHUP
   stop a run; exit 130). `run`, `check` and `status` stop at the loader and run inspection until
-  those are ported. `src/cli/{auth,memory,mcp_config}.ts` are stubs with their final exports.
+  those are ported. `src/cli/mcp_config.ts` reads `mcpServers` files into unopened MCP servers
+  (`userMcpConfig`, `loadMcpConfig`). `src/cli/memory.ts` builds the memory registry from
+  `--memory-root` and `--memory-storage` (`parseMemoryStorage`, `buildCliMemories`).
+  `src/cli/auth.ts` is a stub with its final exports.
 - The conformance runner runs `cli` cases by spawning `src/cli/index.ts` (built: `dist/src/cli/
   index.js`) with a preloaded hook that routes `fetch` to a stub server.
 

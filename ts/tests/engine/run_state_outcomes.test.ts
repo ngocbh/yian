@@ -101,8 +101,8 @@
  *   `flow.incoming` and `flow.outgoing` before the commit, and the log that patches them again
  *   after its append.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
- *   Python's `id()` values; it compares the pool as its wire object and adds the start counts and
- *   steps.
+ *   Python's `id()` values; it compares the pool as its wire object and adds the start counts,
+ *   steps, interrupted-attempt counts and last stop sequence.
  *
  * TS-only: NaN in a typed and in an opaque field of a partial-record output each give a
  * `NodeDataError` whose `original` is the value layer's `TypeCheckError` at the field; `Infinity`

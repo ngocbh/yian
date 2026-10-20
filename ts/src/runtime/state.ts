@@ -261,6 +261,14 @@ export class RunState {
    * go when the node's outcome is applied.
    */
   nodeSteps = new Map<string, readonly JsonObject[]>();
+  /**
+   * The number of accepted starts of each node that a later `RunResumed` retried with no
+   * `RunStopped` covering them. Log history by node id: never decremented, and kept after the
+   * node's outcome and after a prune.
+   */
+  interruptedAttempts = new Map<string, number>();
+  /** The sequence of the last `RunStopped` since the last `RunResumed`, or `null` when none. */
+  lastStopSequence: number | null = null;
   /** The derived terminal result, or `null` while the run is live. */
   result: RunSucceeded | RunFailed | null = null;
   /**
@@ -1494,6 +1502,15 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       state.nodeStarts.set(delta.nodeId, (state.nodeStarts.get(delta.nodeId) ?? 0) + 1);
       break;
     case "resumed":
+      // A stop names every in-flight node, and an attempt stays in flight until its outcome or the
+      // next resume, so an attempt retried here was covered exactly when it started before the
+      // segment's last stop.
+      for (const nodeId of delta.retryNodeIds) {
+        if (state.lastStopSequence === null || state.acceptedStarts.get(nodeId)! >= state.lastStopSequence) {
+          state.interruptedAttempts.set(nodeId, (state.interruptedAttempts.get(nodeId) ?? 0) + 1);
+        }
+      }
+      state.lastStopSequence = null;
       // Steps and start counts outlive the segment: a retried node reads them back. One `unshift`
       // per id, last first, puts the retries ahead in order without spreading a wide list.
       for (let index = delta.retryNodeIds.length - 1; index >= 0; index--) {
@@ -1510,6 +1527,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       );
       break;
     case "stopped":
+      state.lastStopSequence = prepared.expectedSequence;
       break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
@@ -1802,6 +1820,7 @@ function requireInitialized(state: RunState): void {
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
+    isExactly(state.interruptedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
@@ -1838,6 +1857,17 @@ function requireInitialized(state: RunState): void {
     )
   ) {
     throw new RangeError("node starts and steps must match the unsettled invocations");
+  }
+  if (
+    [...state.interruptedAttempts].some(
+      ([nodeId, count]) => typeof nodeId !== "string" || !Number.isSafeInteger(count) || count < 1,
+    )
+  ) {
+    throw new RangeError("interrupted attempt counts must be positive integers by node");
+  }
+  const lastStop = state.lastStopSequence;
+  if (lastStop !== null && !(Number.isSafeInteger(lastStop) && 1 <= lastStop && lastStop < state.nextSequence)) {
+    throw new RangeError("last stop sequence must be null or an earlier accepted sequence");
   }
   if (!Number.isSafeInteger(state.numWorkers) || state.numWorkers < 0) {
     throw new RangeError("run state has an invalid worker count");
@@ -2737,6 +2767,7 @@ function requirePristine(state: RunState): void {
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
+    isExactly(state.interruptedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
@@ -2762,6 +2793,8 @@ function requirePristine(state: RunState): void {
     state.acceptedStarts.size === 0 &&
     state.nodeStarts.size === 0 &&
     state.nodeSteps.size === 0 &&
+    state.interruptedAttempts.size === 0 &&
+    state.lastStopSequence === null &&
     state.result === null &&
     state.terminalUnreachableFailure === null &&
     state.depth.size === 0 &&

@@ -39,6 +39,7 @@ import {
 import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitPrepared,
+  type GrowBuilder,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
@@ -379,6 +380,7 @@ export function roots(state: RunState): unknown[] {
     state.ready,
     state.inFlight,
     state.acceptedStarts,
+    state.interruptedAttempts,
     state.depth,
     state.wiringOverrides,
     state.input,
@@ -392,7 +394,10 @@ export interface Snapshot {
   roots: unknown[];
 }
 
-/** Return `state`'s snapshot: `stateSnapshot` with the latch, start counts and steps as well. */
+/**
+ * Return `state`'s snapshot: `stateSnapshot` with the latch, start counts, steps,
+ * interrupted-attempt counts and last stop sequence as well.
+ */
 export function snapshot(state: RunState): Snapshot {
   return {
     values: {
@@ -400,6 +405,8 @@ export function snapshot(state: RunState): Snapshot {
       terminalUnreachableFailure: state.terminalUnreachableFailure,
       nodeStarts: [...state.nodeStarts],
       nodeSteps: [...state.nodeSteps],
+      interruptedAttempts: [...state.interruptedAttempts],
+      lastStopSequence: state.lastStopSequence,
     },
     roots: roots(state),
   };
@@ -600,12 +607,13 @@ export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
 
 /**
  * Replay `source`'s records over a fresh state of `flow` through `prepareRunStarted` (from the
- * recorded RunStarted fields) and `prepareRecord`; return the state, the new log and each
- * transition's observers.
+ * recorded RunStarted fields) and `prepareRecord`, which gets `growBuilder`; return the state, the
+ * new log and each transition's observers.
  */
 export function replayOutcomeLog(
   flow: CompiledFlow,
   source: MemoryRunLog,
+  options: { growBuilder?: GrowBuilder | null } = {},
 ): { state: RunState; log: MemoryRunLog; observers: (readonly RunEvent[])[] } {
   const records = source.records().map((envelope) => envelope.record);
   const started = records[0];
@@ -626,7 +634,9 @@ export function replayOutcomeLog(
       }),
     ),
   ];
-  for (const record of records.slice(1)) observers.push(commitPrepared(log, state, prepareRecord(state, record)));
+  for (const record of records.slice(1)) {
+    observers.push(commitPrepared(log, state, prepareRecord(state, record, { growBuilder: options.growBuilder })));
+  }
   return { state, log, observers };
 }
 

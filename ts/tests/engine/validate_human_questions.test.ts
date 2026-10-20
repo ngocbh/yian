@@ -5,6 +5,8 @@
  * Ported: `test_rejects_bad_literal`, `test_rejects_ref_to_undeclared_input` and
  * `test_rejects_pool_ref_in_questions_field`, through `assembleText` where Python calls
  * `load_flow`. The last is refused by the human_input reader before the check runs, as in Python.
+ * Changed: its CODE reference is a TS fixture (`./fixtures/compose_codefns.ts:make_plan`), not
+ * Python's `tests.seeds.fns:questions_seed`; the reader refuses the flow before the code matters.
  *
  * The harvested cases from this file, pinned at the end:
  * `load-leaves/engine_validate_human_questions__duplicate_question_headers` and
@@ -42,7 +44,7 @@ const POOL_REF_IN_FIELD = `
 id: f
 name: f
 nodes:
-  a: {kind: code, output: list(object), code: tests.seeds.fns:questions_seed, input: {seed: "\${input.s}"}}
+  a: {kind: code, output: list(object), code: ./fixtures/compose_codefns.ts:make_plan, input: {seed: "\${input.s}"}}
   ask: {kind: human_input, questions: "\${a.output}"}
 input:
   s: !str

@@ -387,8 +387,6 @@ export interface TextCaseRow {
   prefix?: string;
   /** The TS message, where the case leaves it out but the text is yian's. */
   message?: string;
-  /** Compare every frame and the notes too, as `CaseRow.full` does. */
-  full?: boolean;
 }
 
 /** Make `row.call` on its case's text and compare the result as `runCase` does. */

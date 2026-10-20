@@ -23,7 +23,7 @@
  * before the first start with the log unchanged; nothing is recorded after a terminal result, after
  * an earlier stop in the segment (also one a previous engine recorded over the same state), for a
  * host fault (an invalid step, a malformed contract, an opener fault), or for a late rejection after
- * `run()` settled. A refused step or an opener fault the node catches ends the run at once, so a
+ * `run()` settled; an opener's `MemoryRecallError` is the node's failure, a `RunFailed`. A refused step or an opener fault the node catches ends the run at once, so a
  * host abort after it records nothing and `run()` rejects with the fault. Pooled
  * only: a host abort or a late `onEvent` rejection during a host fault's drain changes nothing; a
  * host abort during a `RunFailed`'s drain is ignored and `run()` returns normally; an outcome
@@ -34,12 +34,13 @@
  * (`{ settled: true }`) is still appended after the `RunStopped` and a `ToolCallFinished` still
  * published; another step throws the node signal's reason and appends nothing, and another event or
  * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended. Pooled only:
- * after a terminal `RunFailed`, the settled step and the `ToolCallFinished` are refused too.
+ * after a sibling's host fault, the settled step and the `ToolCallFinished` are still kept; after a
+ * terminal `RunFailed`, they are refused.
  *
  * TS-only, a poisoned log (serial and pooled, a `JsonlRunLog` whose sync fails): a failing append
  * during an outcome, or during a step the node catches before a host abort, ends the run as a host
  * error with the log's error and no `RunStopped`; a failing rollback rejects with the
- * `AggregateError`; a step refused before any write leaves the log accepting appends.
+ * `AggregateError`; a step refused before reaching the log leaves the log accepting appends.
  *
  * TS-only, the per-node signals (serial and pooled): over 50 nodes, each node's link to the run
  * signal is removed when it settles, even for nodes that leave listeners on their own signal; the
@@ -63,7 +64,7 @@ import {
   ToolCallFinished,
   ToolCallStarted,
 } from "../../src/events.ts";
-import { MemoryScope } from "../../src/memory/contracts.ts";
+import { MemoryRecallError, MemoryScope } from "../../src/memory/contracts.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import type { OutputContract } from "../../src/nodes/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
@@ -589,6 +590,27 @@ describe.each(MODES)("host faults record no stop (%s)", (_, numWorkers) => {
     expect(stops(built)).toEqual([]);
     expect(built.signal.reason).toBe(error);
   });
+
+  test("an opener's MemoryRecallError is the node's failure, not a host fault", async () => {
+    const error = new MemoryRecallError("recall failed");
+    const node = new MemoryScriptNode("work", async (caps) => {
+      await caps.openMemoryContext!("system", "prompt", {});
+      return "done";
+    });
+    node.memoryScope = new MemoryScope(["work"], { memories: ["session"] });
+    const opener: MemoryContextOpener = async () => {
+      throw error;
+    };
+    const built = fanEngine([node], { numWorkers, memoryContextOpener: opener });
+
+    const terminal = (await built.run()).at(-1);
+    expect(terminal).toBeInstanceOf(RunFailed);
+    expect((terminal as RunFailed).failure.causeType).toBe("MemoryRecallError");
+    expect(stops(built)).toEqual([]);
+    // The run signal aborted with its default reason after the `RunFailed`, not with the error.
+    expect(built.signal.reason).not.toBe(error);
+    expect((built.signal.reason as Error).name).toBe("AbortError");
+  });
 });
 
 describe("the pooled drain", () => {
@@ -793,6 +815,33 @@ test("a settled step and a ToolCallFinished are refused after a terminal result"
   expect(seen.some((event) => event instanceof ToolCallFinished)).toBe(false);
 });
 
+test("a settled step and a ToolCallFinished are still recorded after a sibling's host fault", async () => {
+  const seen: RunEvent[] = [];
+  const blocked = waiter("work", (signal, caps) => {
+    caps.steps!.record({ call: "call-1" }, { settled: true });
+    caps.emitEvent!(new ToolCallFinished({ ...callFields, result: "ok" }));
+    throw signal.reason;
+  });
+  let refusal: unknown;
+  const step = new ScriptNode("step", async (caps) => {
+    await blocked.entered;
+    try {
+      caps.steps!.record({ when: new Date() } as never);
+    } catch (error) {
+      refusal = (error as { original?: unknown }).original;
+      throw error;
+    }
+    return "done";
+  });
+  const built = fanEngine([blocked.node, step], { numWorkers: 2, onEvent: (event) => void seen.push(event) });
+
+  expect(await rejected(built.run())).toBe(refusal);
+  expect(refusal).toBeInstanceOf(Error);
+  expect(stops(built)).toEqual([]);
+  expect(lastRecord(built)).toEqual(new NodeStepRecord("work", { call: "call-1" }));
+  expect(seen.at(-1)).toEqual(new ToolCallFinished({ ...callFields, result: "ok" }));
+});
+
 /**
  * Track the abort listeners added to `signal` and not removed since; `added` counts every add. A
  * listener that fired with `{ once: true }` stays counted as live.
@@ -946,7 +995,8 @@ describe.each(MODES)("a poisoned log (%s)", (_, numWorkers) => {
     expect(stops(built)).toEqual([]);
   });
 
-  test("a record refused before any write doesn't poison the log", async () => {
+  test("a step refused before reaching the log leaves the log accepting appends", async () => {
+    // The `NodeStepRecord` constructor refuses the step, so `JsonlRunLog.append` is never called.
     const node = new ScriptNode("work", (caps) => {
       caps.steps!.record({ when: new Date() } as never);
       return "done";

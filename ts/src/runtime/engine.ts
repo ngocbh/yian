@@ -16,7 +16,7 @@
 import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
-import { ConversationInvocation, MemoryRecallError } from "../memory/contracts.ts";
+import { ConversationInvocation } from "../memory/contracts.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Skill } from "../skills/catalog.ts";
@@ -154,8 +154,8 @@ function isRunLog(log: unknown): log is RunLog {
  * the run signal's reason and unlinked from it when the node settles. A host stop (the `signal`
  * option aborting) or a failing host callback is recorded as one `RunStopped` naming the
  * in-flight nodes, appended when the stop is requested and before the drain; any other host
- * fault, and a `RunFailed`, ends the run with no such record. A refused step and an opener fault
- * end it at once, even when the node catches them.
+ * fault, and a `RunFailed`, ends the run with no such record. A capability fault (a refused step,
+ * an opener fault) ends it at once, even when the node catches it.
  *
  * A `RunLog`'s `append` must not call back into the run: the engine appends synchronously, so a
  * callback from inside an append would interleave records.
@@ -180,8 +180,6 @@ export class FlowEngine {
   readonly #hostSignal: AbortSignal | null;
   /** The steering nodes receive: the host inbox, whose failures stop the run. */
   readonly #steering: Steering | null;
-  /** The opener nodes receive: the host's, whose faults end the run when they happen. */
-  readonly #memoryContextOpener: MemoryContextOpener | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
   #ran = false;
@@ -231,21 +229,6 @@ export class FlowEngine {
         : {
             interruptSignal: (nodeId) => this.#callHost((id: string) => inbox.interruptSignal(id), nodeId),
             drain: (nodeId) => this.#callHost((id: string) => inbox.drain(id), nodeId),
-          };
-    this.#memoryContextOpener =
-      memoryContextOpener === null
-        ? null
-        : async (scope, request, openOptions) => {
-            try {
-              return await memoryContextOpener(scope, request, openOptions);
-            } catch (error) {
-              // A recall error fails the node; any other rejection is a host fault, which ends
-              // the run now, as a refused step does.
-              if (!(error instanceof MemoryRecallError)) {
-                this.#fail(error instanceof CapabilityFault ? error.original : error);
-              }
-              throw error;
-            }
           };
   }
 
@@ -390,10 +373,7 @@ export class FlowEngine {
       try {
         commitPrepared(log, state, prepareNodeStep(state, nodeId, step));
       } catch (error) {
-        // A refused or unrecorded step is a host fault, never the node's failure. It ends the run
-        // now, not when the node settles, so a node that catches it can't let a later stop
-        // replace it.
-        this.#fail(error);
+        // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
     });
@@ -488,12 +468,16 @@ export class FlowEngine {
         captureBindings: state.learnable,
         effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
         sourceResolver: trace === null ? null : (path) => trace.resolve(path),
-        memoryContextOpener: this.#memoryContextOpener,
+        memoryContextOpener: this.memoryContextOpener,
         memoryInvocation: invocation,
         tools: this.tools,
         skills: this.skills,
         steering: this.#steering,
         steps: this.#nodeSteps(nodeId, nodeController.signal),
+        // A capability fault ends the run now, not when the node settles, so a node that catches
+        // it can't let a later stop replace it. A failing host callback has stopped the run
+        // already, so this is a no-op for it.
+        onFault: (original) => void this.#fail(original),
       });
     } finally {
       runSignal.removeEventListener("abort", relay);

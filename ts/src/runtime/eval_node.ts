@@ -618,6 +618,11 @@ export interface EvalNodeOptions {
    * capability fault of this evaluation. The node's `record` closes when the outcome is decided.
    */
   steps?: NodeSteps | null;
+  /**
+   * Sees the original error of the evaluation's first capability fault when it is raised, before
+   * the node settles, so a host can end its run even when the node catches the fault.
+   */
+  onFault?: ((original: unknown) => void) | null;
 }
 
 /**
@@ -674,6 +679,7 @@ export async function evalNode(
     tools = null,
     steering = null,
     steps = null,
+    onFault = null,
   } = options;
   requireSteering(steering);
   if (typeof captureEvidence !== "boolean") throw new TypeError("capture_evidence must be a bool");
@@ -693,6 +699,7 @@ export async function evalNode(
   if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
   if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
   if (steps !== null && !isExactly(steps, NodeSteps)) throw new TypeError("steps must be a NodeSteps or null");
+  if (onFault !== null && typeof onFault !== "function") throw new TypeError("on_fault must be callable or null");
   if (memoryInvocation !== null && !isExactly(memoryInvocation, ConversationInvocation)) {
     throw new TypeError("memory_invocation must be a ConversationInvocation or null");
   }
@@ -816,6 +823,7 @@ export async function evalNode(
       tools,
       steering,
       steps,
+      onFault,
     });
   } finally {
     // The escape paths (a binder fault, a failing input capture) never reach the evaluator's close.
@@ -853,6 +861,8 @@ async function evaluateNode(
     tools: ToolSet | null;
     steering: Steering | null;
     steps: NodeSteps | null;
+    /** Sees the original of the first capability fault when it is raised. */
+    onFault: ((original: unknown) => void) | null;
   },
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
@@ -941,7 +951,9 @@ async function evaluateNode(
   // evaluator keeps it to throw when the node settles.
   const faults: { first: CapabilityFault | null } = { first: null };
   const onFault = (fault: CapabilityFault): void => {
-    faults.first ??= fault;
+    if (faults.first !== null) return;
+    faults.first = fault;
+    context.onFault?.(fault.original);
   };
   // The capability promises handed to the node. A node may settle without awaiting one, so the
   // evaluator awaits their settlement before it settles, and a late fault is still the first.

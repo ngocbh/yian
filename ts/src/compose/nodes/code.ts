@@ -212,7 +212,7 @@ interface CheckedFlow {
  * Check every CODE node of a composed flow and of its child flows, in node order.
  *
  * A node's child flows (`originChildren()`) are checked right after it; a flow reached twice is
- * checked once. `loadFlow` awaits this once after assembly.
+ * checked once. The loader awaits this once after assembly.
  *
  * @throws LoadError at the first CODE node whose check fails.
  */

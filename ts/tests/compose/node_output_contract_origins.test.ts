@@ -154,6 +154,7 @@ output: \${broken.output}
 `;
   const document = SourceDocument.parse(text, "precedence.yaml");
   const outputCursor = document.root.child("nodes").child("broken").child("output");
+  // Nothing in assembly calls `check` today; this guards the order once the loader awaits it.
   const check = spyOn(CodeNode.prototype, "check");
 
   try {

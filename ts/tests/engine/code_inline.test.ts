@@ -42,7 +42,8 @@
  * reference returning an int commits an int; a reference returning `undefined` rejects with the
  * no-value error; a missing export rejects with a `TypeError`, not a `CodeError`; a module that
  * throws while loading rejects with a `CodeError`; a `../` reference resolves against `baseDir`;
- * the load check refuses a wrapper escape without running it, a body redeclaring `inputs` (the
+ * the load check refuses a wrapper escape without running it (at stripping, a `TypeStripError`, and
+ * one that strips cleanly by the constructor, a `SyntaxError`), a body redeclaring `inputs` (the
  * constructor's `SyntaxError`), a Python-style `module:function` value and a reference to a
  * missing file, and passes an existing file (`../` included, never imported), a body that would
  * throw (never called) and a built-in.
@@ -569,10 +570,20 @@ test("the runtime's function header is 2 lines", () => {
 
 // --- the awaited load check --- //
 
-test("the load check refuses a wrapper escape and runs none of it", async () => {
+test("the load check refuses a wrapper escape at stripping and runs none of it", async () => {
   const node = new CodeNode("n", { code: "}); globalThis.yianEscaped = true; (function () {" });
 
-  expect(await rejected(node.check())).toBeInstanceOf(SyntaxError);
+  expect(await rejected(node.check())).toBeInstanceOf(TypeStripError);
+  expect("yianEscaped" in globalThis).toBe(false);
+});
+
+test("the load check refuses a wrapper escape that strips cleanly, by the constructor", async () => {
+  // Closes the strip wrapper cleanly, so only the function constructor stands in its way.
+  const node = new CodeNode("n", { code: "}\nglobalThis.yianEscaped = true\nfunction f() {" });
+
+  const error = await rejected(node.check());
+
+  expect((error as Error).constructor).toBe(SyntaxError);
   expect("yianEscaped" in globalThis).toBe(false);
 });
 

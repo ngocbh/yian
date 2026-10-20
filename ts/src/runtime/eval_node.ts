@@ -609,7 +609,7 @@ export interface EvalNodeOptions {
   /**
    * This start's steps from the engine, delivered only to a node declaring `needsSteps` as a
    * `NodeSteps` over the same `starts` and `prior`; a `CapabilityFault` its `record` throws is a
-   * capability fault of this evaluation.
+   * capability fault of this evaluation. The node's `record` closes when the outcome is decided.
    */
   steps?: NodeSteps | null;
 }
@@ -1008,10 +1008,14 @@ async function evaluateNode(
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
   if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault, pending);
+  // Closed with the captures, so a step the node's dropped code records after the outcome is
+  // decided is refused rather than committed with no evaluation left to fail.
+  let stepsClosed = false;
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the
     // evaluator keeps it as it keeps the other capabilities' faults.
     caps.steps = new NodeSteps(steps.starts, steps.prior, (step) => {
+      if (stepsClosed) throw new CapabilityFault(new Error("node steps capability is closed"));
       try {
         steps.record(step);
       } catch (error) {
@@ -1038,6 +1042,7 @@ async function evaluateNode(
     settled = pending.length;
     await Promise.allSettled(batch);
   }
+  stepsClosed = true;
   closeCaptures();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever

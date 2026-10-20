@@ -21,28 +21,31 @@
  * `test_pooled_workers_never_read_the_step_authority` checks a thread name; in its place `prior` is
  * a snapshot taken at the start: a step the node records doesn't change it.
  *
+ * Ported (adapted): `test_serial_skips_a_step_once_stop_is_set`: the stop is an `onEvent` promise
+ * for the node's start that rejects, and `record` throws the run signal's reason, the stop's error.
+ *
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
- * run, with the fault's original.
+ * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
  *
  * Later (T4-5): the replay half of `test_resume_sees_the_second_start_and_the_prior_steps`.
  *
  * Later (cycle 5b), they run the pooled engine: the pooled parameter rows and
  * `test_pooled_nodes_interleave_their_own_steps`.
  *
- * Later (cycle 7c), they need the engine's stop: `test_serial_skips_a_step_once_stop_is_set` and the
- * replacement of `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step` (after a
- * sibling failure, `record` throws and appends nothing).
+ * Later (cycle 7c), it needs the pooled engine's stop: the replacement of
+ * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step` (after a sibling failure,
+ * `record` throws and appends nothing).
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
  * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: replaced as above.
  * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step, since
- * `record` is synchronous; the cycle 7c row covers a step after a stop.
+ * `record` is synchronous; `test_serial_skips_a_step_once_stop_is_set` covers a step after a stop.
  */
 
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeStarted, NodeSucceeded, RunSucceeded, StreamChunk } from "../../src/events.ts";
+import { NodeStarted, NodeSucceeded, type RunEvent, RunSucceeded, StreamChunk } from "../../src/events.ts";
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
@@ -64,14 +67,14 @@ class StepNode extends Node {
   readonly kind = NodeKind.CODE;
   override readonly needsSteps: boolean = true;
   override readonly needsLiveEvents = true;
-  readonly body: (caps: NodeCaps) => NodeResult;
+  readonly body: (caps: NodeCaps) => NodeResult | Promise<NodeResult>;
 
-  constructor(nodeId: string, body: (caps: NodeCaps) => NodeResult) {
+  constructor(nodeId: string, body: (caps: NodeCaps) => NodeResult | Promise<NodeResult>) {
     super(nodeId);
     this.body = body;
   }
 
-  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult | Promise<NodeResult> {
     return this.body(caps);
   }
 }
@@ -110,10 +113,14 @@ test("eval node passes steps only to opted in nodes and checks the type", async 
   expect(seen.slice(1)).toEqual([undefined, undefined]);
   const recorded: ValueRecord[] = [];
   const recording = new NodeSteps(2, [{ attempt: 1n }], (step) => recorded.push(step));
-  await evalNode(new StepNode("e", body), null, pool, { steps: recording });
+  const recordingBody = (caps: NodeCaps): NodeResult => {
+    seen.push(caps.steps);
+    caps.steps!.record({ attempt: 2n });
+    return new Output("done");
+  };
+  await evalNode(new StepNode("e", recordingBody), null, pool, { steps: recording });
   const passed = seen.at(-1) as NodeSteps;
   expect([passed.starts, passed.prior]).toEqual([2, [{ attempt: 1n }]]);
-  passed.record({ attempt: 2n });
   expect(recorded).toEqual([{ attempt: 2n }]);
   await expect(evalNode(new StepNode("d", body), null, pool, { steps: { starts: 1 } as never })).rejects.toThrow(
     new TypeError("steps must be a NodeSteps or null"),
@@ -132,6 +139,27 @@ test("a node that catches the recorder's fault still rejects evalNode with its o
     return new Output("done");
   });
   expect(await rejected(evalNode(node, null, new VariablePool(), { steps }))).toBe(fault);
+});
+
+test("a kept steps capability is closed once evalNode resolves", async () => {
+  const recorded: ValueRecord[] = [];
+  const steps = new NodeSteps(1, [], (step) => recorded.push(step));
+  const kept: NodeSteps[] = [];
+  const node = new StepNode("a", (caps) => {
+    kept.push(caps.steps!);
+    return new Output("done");
+  });
+  await evalNode(node, null, new VariablePool(), { steps });
+
+  let late: unknown;
+  try {
+    kept[0]!.record({ event: "late" });
+  } catch (error) {
+    late = error;
+  }
+  expect(late).toBeInstanceOf(CapabilityFault);
+  expect(((late as CapabilityFault).original as Error).message).toBe("node steps capability is closed");
+  expect(recorded).toEqual([]);
 });
 
 /** Return an engine for `START -> node -> END`; the other options go to the fixture. */
@@ -344,6 +372,30 @@ test.each(invalidSteps)("an invalid step is a host error: %s", async (_, step, k
   expect(logged(built, NodeFailedRecord)).toBe(false);
   expect(logged(built, NodeStepRecord)).toBe(false);
   expect(built.state.result).toBeNull();
+});
+
+test("serial skips a step once stop is set", async () => {
+  const stop = new Error("host listener failed");
+  const raised: unknown[] = [];
+  const node = new StepNode("work", async (caps) => {
+    const signal = caps.signal!;
+    if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+    try {
+      caps.steps!.record({ event: "started", attempt: 2n });
+    } catch (error) {
+      raised.push(error);
+      throw error;
+    }
+    return new Output("done");
+  });
+  // The rejected promise is the stop: the engine aborts the run signal with its error.
+  const onEvent = (event: RunEvent): Promise<void> | undefined =>
+    event instanceof NodeStarted && event.nodeId === "work" ? Promise.reject(stop) : undefined;
+  const built = single(node, { onEvent });
+
+  expect(await rejected(built.run())).toBe(stop);
+  expect(raised).toEqual([stop]);
+  expect(logged(built, NodeStepRecord)).toBe(false);
 });
 
 test("a kept recorder is closed after its evaluation", async () => {

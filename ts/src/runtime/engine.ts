@@ -110,6 +110,7 @@ class StepRecorder {
  * capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
  * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
  * before `record` returns, with no observer, and its recorder closes when the evaluation ends.
+ * Once the run stops, `record` throws the run signal's reason and appends nothing.
  *
  * A `RunLog`'s `append` must not call back into the run: the engine appends synchronously, so a
  * callback from inside an append would interleave records.
@@ -131,7 +132,6 @@ export class FlowEngine {
   /** The run's stop; single-use, so `run()` runs once. */
   readonly #controller = new AbortController();
   #ran = false;
-  #settled = false;
 
   /**
    * Borrow a prepared state and log and configure one drive.
@@ -194,17 +194,13 @@ export class FlowEngine {
   async run(): Promise<readonly RunEvent[]> {
     if (this.#ran) throw new Error("FlowEngine.run() was already called");
     this.#ran = true;
-    try {
-      this.#validateAuthority();
-      if (this.state.result !== null) return [];
-      if (this.state.inFlight.size > 0) {
-        throw new RangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
-      }
-      if (this.numWorkers > 0) throw new Error("FlowEngine pooled execution is not ported yet");
-      return await this.#runSerial();
-    } finally {
-      this.#settled = true;
+    this.#validateAuthority();
+    if (this.state.result !== null) return [];
+    if (this.state.inFlight.size > 0) {
+      throw new RangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
     }
+    if (this.numWorkers > 0) throw new Error("FlowEngine pooled execution is not ported yet");
+    return await this.#runSerial();
   }
 
   /** Execute each durably started node inline. */
@@ -243,6 +239,8 @@ export class FlowEngine {
     // The recorded steps are frozen; the node gets copies it may change.
     const prior = structuredClone(state.nodeSteps.get(nodeId) ?? []) as ValueRecord[];
     return new StepRecorder(state.nodeStarts.get(nodeId)!, prior, (step) => {
+      // A stopping run takes no more steps; the stop is control flow, not a host fault.
+      this.#controller.signal.throwIfAborted();
       try {
         commitPrepared(log, state, prepareNodeStep(state, nodeId, step));
       } catch (error) {
@@ -368,8 +366,9 @@ export class FlowEngine {
     const returned = callback(item);
     if (returned instanceof Promise) {
       returned.then(undefined, (error: unknown) => {
-        // Nothing is left to stop once the run has a result or `run()` settled.
-        if (!this.#settled && this.state.result === null) this.#controller.abort(error);
+        // Nothing is left to stop once the run has a result; after an error the run is already
+        // aborted, and a second abort is a no-op.
+        if (this.state.result === null) this.#controller.abort(error);
       });
     }
   }

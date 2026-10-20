@@ -22,7 +22,8 @@
  * int in TS, so the stored value is the int 3 with storage kind `int`, where Python coerces it to
  * the float 3.0.
  *
- * TS-only: nothing ready before a terminal result is nonterminal quiescence.
+ * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
+ * also checks that a failed run aborts its signal.
  *
  * Later (cycle 5a): `test_num_workers_0_and_4_same_terminal`, with the pooled engine.
  *
@@ -315,9 +316,14 @@ test("node failure produces graph failed", async () => {
     ["b", "c"],
     ["c", END_ID],
   ]);
-  const event = await last(flow);
+  const built = engine(flow);
+  const event = (await built.run()).at(-1);
   expect(event).toBeInstanceOf(RunFailed);
   expect((event as RunFailed).failure.message).toBe("nope");
+  // A failed run stops: its signal aborts with the default reason.
+  expect(built.signal.aborted).toBe(true);
+  expect(built.signal.reason).toBeInstanceOf(DOMException);
+  expect((built.signal.reason as DOMException).name).toBe("AbortError");
 });
 
 // --- write-boundary output enforcement ---

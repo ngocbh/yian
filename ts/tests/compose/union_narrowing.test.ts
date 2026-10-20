@@ -20,8 +20,8 @@
  * `test_a_non_exhaustive_on_over_a_union_node_output_still_errors` and
  * `test_an_on_inside_a_partly_shared_union_branch_covers_the_shared_tags`; the harvested cases
  * `load-types/compose_union_narrowing__a_when_comparing_the_tag_with_a_non_tag_suggests_one`,
- * `…__an_isinstance_that_can_never_be_true` and `…__a_defensive_else_after_every_tag_loads`
- * (`…__a_nullable_union_defensive_else_sees_none` is pinned in `call_binding_types.test.ts`). The
+ * `…__an_isinstance_that_can_never_be_true`, `…__a_defensive_else_after_every_tag_loads` and
+ * `…__a_nullable_union_defensive_else_sees_none` (its `place_rest` def built by hand). The
  * rows the CALL type check decides, each error pinned whole where Python matches fragments:
  * `test_a_call_target_under_buy_passes_a_buy_order`,
  * `test_a_call_target_under_sell_fails_the_call_type_check`,
@@ -107,6 +107,7 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
+  assembledWith,
   assembleText,
   type CaseRow,
   caseRegistry,
@@ -622,3 +623,18 @@ test.each<CaseRow>(
     "a_defensive_else_after_every_tag_loads",
   ].map((name) => ({ id: `load-types/compose_union_narrowing__${name}`, call: assembled })),
 )("assemble: $id", runCase);
+
+test("assembledWith: load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none", () => {
+  // Its `source is 'None'` is the CASE narrowing's: the defensive `else:` sees only null.
+  runCase({
+    id: "load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none",
+    call: (document, registry, diagnostics, builder) => {
+      const placeRest = handChild({
+        inputs: parametersFromYaml("input:\n  order: !HoldOrSell\n", registry),
+        producers: { p: null },
+        output: "${p.output}",
+      });
+      return assembledWith({ place_rest: placeRest })(document, registry, diagnostics, builder);
+    },
+  });
+});

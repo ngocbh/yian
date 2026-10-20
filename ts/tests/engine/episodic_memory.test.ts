@@ -26,7 +26,7 @@
  * `TypeError`; an async `rewriteQuery` is awaited, a rejecting one is `episodic.invalid_query` with
  * its cause, and a re-entrant `memory.close()` from inside it is `episodic.busy`; a snapshot whose
  * `revision` is `2n ** 60n` or whose `epoch` is `2n ** 53n` (beyond 2^53 − 1) is
- * `episodic.invalid_snapshot`.
+ * `episodic.invalid_snapshot`; `reset()` at epoch 2^53 − 1 is a `RangeError` that changes nothing.
  *
  * Changed:
  * - `test_constructor_and_protocol_are_exact`: `1.0` is the int 1 in JS, so it's accepted; `1.5`
@@ -114,6 +114,16 @@ async function withRun<T>(
   } finally {
     session.close();
   }
+}
+
+/** Return whatever `fn` throws. */
+function caughtError(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
 }
 
 /** The pinned snapshot of a fresh run of `memory`. */
@@ -574,6 +584,17 @@ test("session recalls and learns under the memory key", async () => {
 });
 
 describe("TS-only", () => {
+  test("reset refuses to move the epoch past 2^53 - 1", () => {
+    const recorded: Mutable = structuredClone(snapshotOf(new EpisodicMemory()));
+    recorded.epoch = BigInt(Number.MAX_SAFE_INTEGER);
+    const memory = new EpisodicMemory();
+    memory.openRun({ snapshot: recorded }).close();
+    const error = caughtError(() => memory.reset());
+    expect(Object.getPrototypeOf(error)).toBe(RangeError.prototype);
+    expect((error as Error).message).toBe("epoch must be at most 9007199254740991");
+    expect(snapshotOf(memory)).toEqual(recorded);
+  });
+
   test("an infinite episode input fails learning as an invalid context", async () => {
     const item = new MemoryEpisode("run", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { x: Infinity }, {
       output: "ok",

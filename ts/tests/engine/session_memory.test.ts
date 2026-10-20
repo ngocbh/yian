@@ -53,19 +53,23 @@
  * invocation again on its session is `session.conflict` at once; `close(error)` never throws
  * `error` (a stop seen meanwhile is noted on it); `close()` after an abort records `interrupted`,
  * releases, then throws `signal.reason`; `interrupt()` closes a normal return as `interrupted`; a
- * second `close()` does nothing.
+ * second `close()` does nothing; once queued turns finish or abort, no waiter or abort listener
+ * is left behind; `reset()` at generation 2^53 − 1 is a `RangeError` that changes nothing;
+ * `session.ts` imports only `node:crypto` and the lower memory, defaults and JSON modules.
  *
  * Changed:
  * - `test_session_backend_implements_the_protocol`: `isMemory` and the session's methods stand in
  *   for the runtime-checkable protocol `isinstance` checks.
  * - `test_snapshot_getter_is_detached`: a snapshot is deep-frozen, not a detached mutable copy, so
- *   the assignment throws `TypeError` and the snapshot is unchanged.
+ *   the assignment throws `TypeError` and the snapshot is unchanged; a populated snapshot is frozen
+ *   at nested levels too.
  * - `test_pristine_backend_adopts_snapshot_namespace`: the restored value is a `structuredClone` of
  *   the frozen export, edited after the open.
  * - `test_session_learn_and_commit_accept_empty_batches`: an array is the valid batch type, so
  *   `commit("same", [])` commits; a non-array (a `Set`) is the `TypeError`.
  * - `test_snapshot_rejects_invalid_container_or_nonfinite_json`: the `tuple` row is a `Map`; the
- *   `cycle` row adds the cycle to a `structuredClone`d copy; the `deep` row still fails because a
+ *   `cycle` row adds the cycle to a `structuredClone`d copy; the `infinity` row fails because
+ *   `version` isn't `3n` (snapshots keep `±Infinity`); the `deep` row still fails because a
  *   130-level object isn't a view wire (TS has no memory nesting limit).
  * - `test_malformed_request_never_publishes_partial_evidence` and
  *   `test_malformed_observation_leaves_pending_evidence_unchanged`: an array is the valid items
@@ -113,6 +117,7 @@
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { current } from "../../src/defaults.ts";
 import * as contracts from "../../src/memory/contracts.ts";
@@ -144,6 +149,7 @@ import {
   withHarness,
   withTurn,
 } from "./session_fakes.ts";
+import { importStatements } from "./source_scan.ts";
 
 const STALE_SESSION = "memory session is closed or belongs to an old generation";
 const STALE_LEASE = "conversation lease is no longer active";
@@ -213,6 +219,18 @@ test("snapshot getter is detached", () => {
   } finally {
     session.close();
   }
+});
+
+test("snapshot getter is detached at nested levels", async () => {
+  const memory = new SessionMemory();
+  await withHarness((h) => withTurn(h.frame, request(), (turn) => appendReply(turn, "one", "hello")), memory);
+  const populated: Mutable = snapshot(memory);
+  expect(() => {
+    populated.conversation.items[0].payload.content = "changed";
+  }).toThrow(TypeError);
+  expect(() => populated.conversation.items.push(null)).toThrow(TypeError);
+  expect(snapshot(memory)).toEqual(populated);
+  expect(populated.conversation.items[0].payload.content).toBe("hello");
 });
 
 test("uncontended lease reservation does not change history", async () => {
@@ -1321,6 +1339,60 @@ describe("an invocation identity cannot be reused", () => {
 });
 
 describe("TS-only", () => {
+  test("queued turns leave no waiter or abort listener behind", async () => {
+    await withHarness(async (h) => {
+      const finishing = new AbortController();
+      const aborting = new AbortController();
+      const spies = [finishing.signal, aborting.signal].flatMap((signal) => [
+        spyOn(signal, "addEventListener"),
+        spyOn(signal, "removeEventListener"),
+      ]);
+      const first = await h.frame.openTurn(request(), { signal: NEVER });
+      const finished = settle(withTurn(h.frame, request("b"), () => {}, finishing.signal));
+      const aborted = settle(h.frame.openTurn(request("c"), { signal: aborting.signal }));
+      await macrotask();
+      expect(h.memory["queue"].length).toBe(2);
+      expect(h.memory["waiters"].size).toBe(2);
+      const reason = new Error("stop waiting");
+      aborting.abort(reason);
+      expect(await rejected(aborted.promise)).toBe(reason);
+      first.close();
+      await finished.promise;
+      expect(finished.error).toBeUndefined();
+      expect(h.memory["waiters"].size).toBe(0);
+      for (const index of [0, 2]) {
+        expect(spies[index]!.mock.calls.length).toBeGreaterThan(0);
+        expect(spies[index]!.mock.calls.length).toBe(spies[index + 1]!.mock.calls.length);
+      }
+      for (const spy of spies) spy.mockRestore();
+    });
+  });
+
+  test("reset refuses to move the generation past 2^53 - 1", () => {
+    const recorded: Mutable = structuredClone(snapshot(new SessionMemory()));
+    recorded.generation = BigInt(Number.MAX_SAFE_INTEGER);
+    const memory = new SessionMemory();
+    memory.openRun({ snapshot: recorded }).close();
+    expectThrow(() => memory.reset(), RangeError, "generation must be at most 9007199254740991");
+    expect(snapshot(memory)).toEqual(recorded);
+  });
+
+  test("module imports only stdlib and lower memory modules", () => {
+    const source = readFileSync(new URL("../../src/memory/session.ts", import.meta.url), "utf8");
+    const allowed = new Set([
+      "node:crypto",
+      "../defaults.ts",
+      "../typesys/json.ts",
+      "./contracts.ts",
+      "./conversation.ts",
+      "./summary.ts",
+      "./storage/sqlite.ts",
+    ]);
+    const imported = importStatements(source).map((statement) => statement.specifier);
+    expect(imported.filter((specifier) => !allowed.has(specifier))).toEqual([]);
+    expect(imported).not.toContain("./index.ts");
+  });
+
   test("openTurn with an aborted signal rejects with its reason and leaves no ticket", async () => {
     await withHarness(async (h) => {
       const controller = new AbortController();

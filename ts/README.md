@@ -363,7 +363,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   in `finally`) and no fork check.
 - `src/memory/session.ts` holds `SessionMemory`, its run handle `Session` and its `Turn`, with
   optional SQLite storage opened at the first operation. Changed: the constructor takes an options
-  object (`historyBudgetChars`, `recentTurns`, `storage`, `createParent`); `openTurn` (which waits
+  object (`historyBudgetChars`, `recentTurns`, `storage`, `createParent`) whose settings are
+  integral `number`s or `bigint`s; `openTurn` (which waits
   for the FIFO lease) and `prepareHistory` are async, everything else is synchronous; a stop is
   an `AbortSignal`; `close(error?)` never rethrows `error`, and appends a stop or cleanup failure
   to `error.notes`; snapshots are deep-frozen; `-0` equals `0` in a compatibility descriptor; there

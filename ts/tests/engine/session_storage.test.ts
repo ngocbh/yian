@@ -24,7 +24,8 @@
  * `test_legacy_native_storage_is_rejected_without_rewriting`.
  *
  * TS-only: a failed first open whose storage close also fails notes `Conversation cleanup also
- * failed: Cleanup: cleanup problem` on the primary and can be retried. With `YIAN_TEST_NODE` set to
+ * failed: Cleanup: cleanup problem` on the primary and can be retried; `±Infinity` in an item
+ * payload survives publication, a snapshot restore and a storage reopen. With `YIAN_TEST_NODE` set to
  * a Node binary, the built backend reopens a store Bun wrote (an item payload holding `Infinity`, a
  * note, a cached summary) under Node, runs one turn, and Bun reads the result back.
  *
@@ -1008,6 +1009,36 @@ describe("legacy native storage is rejected without rewriting", () => {
 });
 
 describe("TS-only", () => {
+  test("infinite payload values survive publication, restore and reopen", async () => {
+    let exported!: Mutable;
+    await withMemory(new SessionMemory({ storage: file }), async (memory) => {
+      await withHarness(
+        (h) =>
+          withTurn(h.frame, request(), (turn) => {
+            const ordinal = turn.request("model", { limit: Infinity });
+            const infinite = new ConversationItem("inf", "fake-v1", { up: Infinity, down: -Infinity });
+            turn.observe(ordinal, "completed", { items: [infinite] });
+          }),
+        memory,
+      );
+      exported = snapshot(memory);
+    });
+    expect(exported.conversation.items[0].payload).toEqual({ down: -Infinity, up: Infinity });
+    expect(exported.conversation.effects[0].request).toEqual({ limit: Infinity });
+    const restored = new SessionMemory().openRun({ snapshot: exported });
+    try {
+      expect(restored.snapshot).toEqual(exported);
+      await withTurn(restored, request("b"), (turn) => {
+        expect(turn.view.items[0]!.payload).toEqual({ down: -Infinity, up: Infinity });
+      });
+    } finally {
+      restored.close();
+    }
+    await withMemory(new SessionMemory({ storage: file }), (memory) => {
+      expect(snapshot(memory)).toEqual(exported);
+    });
+  });
+
   test("a failed first open notes a failed storage close and can be retried", async () => {
     firstOpen(new SessionMemory({ storage: file })).close();
     class Cleanup extends Error {}

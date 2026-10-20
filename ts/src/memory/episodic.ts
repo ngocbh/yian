@@ -772,9 +772,14 @@ export class EpisodicMemory implements Memory {
    * Clear episodes and begin a new generation, retaining commit tombstones.
    *
    * @throws MemoryOperationError The backend is closed, or durable state can't be opened or saved.
+   * @throws RangeError, without changing state, when the epoch is already 2^53 − 1.
    */
   reset(): void {
     this.operation(() => {
+      // The epoch is a `number`, so one past 2^53 − 1 would lose its increment.
+      if (this.epoch >= Number.MAX_SAFE_INTEGER) {
+        throw new RangeError(`epoch must be at most ${Number.MAX_SAFE_INTEGER}`);
+      }
       const cleared: State = Object.freeze({ limits: this.state.limits, episodes: Object.freeze([]) });
       this.saveState(snapshotJson(this.namespace, this.epoch + 1, 0, cleared), { everReset: true });
       this.state = cleared;

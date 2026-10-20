@@ -688,11 +688,16 @@ export class SessionMemory implements Memory {
    *
    * @throws MemoryOperationError `session.busy` (retryable), without changing state, while a turn
    *   is active or queued; `session.closed` after `close()`.
+   * @throws RangeError, without changing state, when the generation is already 2^53 − 1.
    */
   reset(): void {
     this.guard();
     if (this.active !== null || this.queue.length > 0) {
       throw error("busy", "cannot reset active or queued conversations", { stage: "reset" });
+    }
+    // The generation is a `number`, so one past 2^53 − 1 would lose its increment.
+    if (this.generation >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError(`generation must be at most ${Number.MAX_SAFE_INTEGER}`);
     }
     this.saveState(snapshotJson(this.namespace, this.generation + 1, null, []), { used: true, summaries: new Map() });
     this.view = null;

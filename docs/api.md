@@ -1676,9 +1676,9 @@ rejects every later `open_run()` with `<type>.closed`. A backend checks its
 process at every operation once a path is configured, so a forked child
 cannot use it even if the parent never opened it.
 
-Changed (TS yian): `EpisodicMemory` takes `{ storage, createParent }` in its
-options object; the file opens at the first operation (`openRun()`, `reset()`
-or `rewriteQuery()`). There is no `with` form (call `close()` in `finally`) and no fork
+Changed (TS yian): `EpisodicMemory` and `SessionMemory` take `{ storage, createParent }` in
+their options object; the file opens at the first operation (`openRun()`, `reset()`, or
+episodic's `rewriteQuery()`). There is no `with` form (call `close()` in `finally`) and no fork
 check.
 
 ```python

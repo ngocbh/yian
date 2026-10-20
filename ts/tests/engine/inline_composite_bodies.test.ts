@@ -114,8 +114,8 @@
  * resolution counts of the zero-input and nested rows (they spy on the real callable scope).
  *
  * Later (T4, runs): the run half of every row above that runs, and
- * `test_inline_call_and_loop_outer_post_asserts_still_fire` (run only; its outer asserts also
- * need T3-20's lowering). The date row's run half returns the dates as text (rule `dates`).
+ * `test_inline_call_and_loop_outer_post_asserts_still_fire` (run only). The date row's run half
+ * returns the dates as text (rule `dates`).
  */
 
 import { expect, spyOn, test } from "bun:test";

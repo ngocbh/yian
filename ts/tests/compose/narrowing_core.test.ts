@@ -91,7 +91,8 @@
  * `null_narrowing.test.ts` and `union_narrowing.test.ts`, and the node-assert and flow-assert cases
  * in the mirrors of their Python files (`field_read_sites.test.ts`, `null_narrowing.test.ts`,
  * `null_narrowing_case.test.ts`). The sites' locations are not pinned
- * here. Two rows read a `Narrowing` built by hand: an empty one gives the unchanged maps, and a
+ * here; the reference validator's three `load-types/compose_union_narrowing__*` read rows are
+ * pinned whole, with their ranges, in `union_narrowing.test.ts`. Two rows read a `Narrowing` built by hand: an empty one gives the unchanged maps, and a
  * filled one gives each node's and param's results.
  *
  * Changed: the re-export test compares the runtime names only, since `Env` and `Fact` are types

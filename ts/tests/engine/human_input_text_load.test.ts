@@ -77,9 +77,9 @@ const BAD_SPANS: [text: string, fragment: string][] = [
   ["x ${proj", "unbalanced"],
 ];
 
-test.each(BAD_SPANS.flatMap(([text, fragment]) => SITE_NAMES.map((site) => [text, fragment, site])))(
+test.each(BAD_SPANS.flatMap(([text, fragment]) => SITE_NAMES.map((site) => [text, site, fragment])))(
   "a bad span fails to load: %s at %s",
-  (text, fragment, site) => {
+  (text, site, fragment) => {
     const message = failure(flow({ [site]: text })).message;
     const line = message.split("\n").find((each) => each.includes(SITES[site]!))!;
     expect(line.trim().startsWith(`${SITES[site]} `)).toBe(true);

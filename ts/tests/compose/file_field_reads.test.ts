@@ -5,8 +5,9 @@
  *
  * Ported: `test_file_field_type_gives_the_type_of_each_file_field`,
  * `test_project_output_contract_types_the_fields_of_a_file`,
- * `test_another_field_of_a_file_is_a_located_load_error` (but its `flow-assert` id),
+ * `test_another_field_of_a_file_is_a_located_load_error` (6),
  * `test_another_field_of_a_top_level_file_output_is_a_load_error`,
+ * `test_a_node_assert_reading_another_field_of_its_file_output_is_a_load_error`,
  * `test_another_field_of_an_optional_file_is_a_load_error`, `test_a_field_of_a_file_uri_is_a_load_error`,
  * `test_another_field_of_a_file_flow_input_is_a_load_error`,
  * `test_another_field_of_a_carried_file_in_a_loop_predicate_is_a_load_error`,
@@ -21,19 +22,15 @@
  * message), `test_the_uri_of_a_file_into_an_int_typed_binding_is_a_load_error`,
  * `test_a_str_typed_binding_of_a_file_field_loads_like_a_record_field`,
  * `test_the_uri_of_an_optional_file_is_optional_str`, `test_reads_on_object_and_any_stay_unchecked`
- * and `test_a_file_field_into_a_child_input_is_checked_at_load` (4, the cross-flow binding check),
- * pinning the whole message where Python matches a fragment.
+ * `test_a_file_field_into_a_child_input_is_checked_at_load` (4, the cross-flow binding check) and
+ * `test_a_case_on_the_uri_of_a_file_with_an_int_when_is_a_load_error`, pinning the whole message
+ * where Python matches a fragment.
  *
  * Changed: the `child` and `child_int` defs are hand-built children (`handChild`) with the defs'
  * signatures and output contracts. The CODE bodies stay Python's text: the flows only load.
  *
  * Pinned at the end, the harvested `load-core/compose_file_field_reads__*` cases the reference
  * validator and the typed-binding check decide, the `child` def built by hand (`assembledWith`).
- *
- * Later (T3-20): the `flow-assert` id of `test_another_field_of_a_file_is_a_located_load_error`
- * and `test_a_node_assert_reading_another_field_of_its_file_output_is_a_load_error` (the assert
- * passes), and `test_a_case_on_the_uri_of_a_file_with_an_int_when_is_a_load_error` (the CASE
- * `when` value check).
  *
  * Later (T4): the flow runs (`test_a_node_assert_reads_the_uri_of_its_file_output`,
  * `test_the_uri_of_a_file_item_in_a_named_map_feeds_a_str_input`,
@@ -124,9 +121,9 @@ const PRODUCER =
   "      f: file\n      g: Optional(file)\n      r: {opt: Optional(str), s: str}\n      o: object\n      y: Any\n" +
   `    code: |\n      return {'f': ${NAMED_F}, 'g': None, 'r': {'opt': None, 's': 'x'}, 'o': {'k': 1}, 'y': 1}\n`;
 
-/** A flow whose nodes are the producer `a`, then `nodes`, after `head`. */
-const flow = (nodes: string, output = "${b.output}", head = "") =>
-  `id: p\nname: p\n${head}nodes:\n${PRODUCER}${nodes}output: ${output}\n`;
+/** A flow whose nodes are the producer `a`, then `nodes`, after `head` and before `tail`. */
+const flow = (nodes: string, output = "${b.output}", head = "", tail = "") =>
+  `id: p\nname: p\n${head}nodes:\n${PRODUCER}${nodes}output: ${output}\n${tail}`;
 
 /** A CODE node `b` binding `x: <binding>` and returning it. */
 const reader = (binding: string) =>
@@ -169,12 +166,24 @@ test.each([
   expectLocated(flow(nodes, output), URII, marker);
 });
 
+test("another field of a file is a located load error: flow-assert", () => {
+  const text = flow(reader("1"), "${b.output}", "", "asserts:\n  - \"a.output.f.urii == 'f'\"\n");
+  expectLocated(text, URII, "a.output.f.urii == 'f'");
+});
+
 test("another field of a top-level file output is a load error", () => {
   const text =
     `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: return ${F}\n` +
     reader("${a.output.urii}") +
     "output: ${b.output}\n";
   expectLocated(text, URII, "x: ${a.output.urii}");
+});
+
+test("a node assert reading another field of its file output is a load error", () => {
+  const text =
+    `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: return ${F}\n` +
+    "    asserts:\n      - \"output.urii == 'f'\"\noutput: ${a.output.uri}\n";
+  expectLocated(text, URII, "output.urii == 'f'");
 });
 
 test("another field of an optional file is a load error", () => {
@@ -377,6 +386,16 @@ test.each([
   const error = loadError(() => load(text, children()));
 
   expect(error.message).toBe(`call node 'b': binding 's' — ${message}`);
+});
+
+test("a case on the uri of a file with an int when is a load error", () => {
+  const text = flow(
+    caseGate("    on: ${a.output.f.uri}\n    cases:\n      - when: 1\n        then: b"),
+    "${b.output | c.output}",
+  );
+  expect(loadError(() => load(text)).message).toBe(
+    "case node 'gate': `when: 1` is an int but `on: ${a.output.f.uri}` is `str`; quote it: `when: \"1\"`",
+  );
 });
 
 test.each<CaseRow>([

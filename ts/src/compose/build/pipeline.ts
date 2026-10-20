@@ -93,8 +93,6 @@ import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";
 import { MapDescriptor } from "../nodes/map.ts";
 import type { ScalarStyle } from "../source/common.ts";
-import { Narrowing } from "../validate/narrowing.ts";
-import type { LocalInput } from "../validate/typed_bindings.ts";
 import { synthesizeBoundaryGraph } from "./boundary.ts";
 import {
   canonicalizeInlineType,

@@ -140,6 +140,7 @@ import {
   localInputContracts,
 } from "../validate/typed_bindings.ts";
 // T3-20 imports
+import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
 
@@ -1013,13 +1014,29 @@ function outputStyle(
   }
 }
 
-/** Python's `compose.build.pipeline._case_output_cursor`; not ported yet. */
+/**
+ * Return the authored `output:` of one node, or `null` when it has none.
+ *
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param nodeId The case node's id.
+ * @param options.diagnostics Factory for located load errors.
+ * @returns The `output:` value, or `null` for a synthesized node or a node without `output:`.
+ * @throws LoadError when the retained cursor cannot be traversed.
+ */
 function caseOutputCursor(
   nodesCursor: SourceCursor,
   nodeId: string,
   options: { diagnostics: LoadDiagnostics },
 ): SourceCursor | null {
-  return null;
+  const { diagnostics } = options;
+  try {
+    if (!nodesCursor.has(nodeId)) return null;
+    const cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+    return cursor.has("outputs") ? cursor.child("outputs") : null;
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
 }
 
 /**
@@ -2402,8 +2419,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 // `Error("<python name> is not ported yet (T3-xx)")`.
 //
 //   T3-18  validateReferences (1).
-//   T3-20  checkCaseBranches (1); caseOutputCursor (2): returns `null`.
-//          validateNodeAsserts, checkSkippedArithmetic (1).
+//   T3-20  validateNodeAsserts, checkSkippedArithmetic (1).
 //          lowerFlowAsserts (1): returns an empty `LoweredAsserts`.
 //          skipModel (1, Python's `SkipModel` class): returns `null`; nullSkippedOutputs (1):
 //            returns the outputs.
@@ -2442,17 +2458,6 @@ function validateReferences(
 type SkipModel = unknown;
 /** One searched `when:` as authored: its index, text, origin and range. */
 type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];
-
-/** Python's `compose.validate.case_branches.check_case_branches`; not ported yet. */
-function checkCaseBranches(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  options: {
-    registry: TypeRegistry;
-    inputTypes: ReadonlyMap<string, Type>;
-    outputAt: (nodeId: string) => SourceCursor | null;
-    diagnostics: LoadDiagnostics;
-  },
-): void {}
 
 /** Python's `compose.validate.asserts.validate_node_asserts`; not ported yet. */
 function validateNodeAsserts(

@@ -32,8 +32,8 @@ import {
   RecallContext,
   sameMemoryMutation,
 } from "./contracts.ts";
-import { type MarkdownStore, MarkdownVersionMismatch } from "./storage/markdown.ts";
 import { boundedJsonMaterial, visibleInteractionJson } from "./reflective.ts";
+import { type MarkdownStore, MarkdownVersionMismatch } from "./storage/markdown.ts";
 import { isSystemError } from "./storage/sqlite.ts";
 
 const SNAPSHOT_FORMAT = "yian.profile_memory";
@@ -131,9 +131,9 @@ export function parseReply(response: Response, currentText: string, maxChars: nu
   return text ? `${text}\n` : "";
 }
 
-/** Whether one feedback entry is a record (Python's `dict`), not an array or a scalar. */
-function isEntryRecord(entry: JsonValue): entry is JsonObject {
-  return isRecord(entry);
+/** Whether `value` is a JSON object (Python's `dict`), not an array or a scalar. */
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** One key of a feedback record, `null` when absent (Python's `entry.get`). */
@@ -143,7 +143,7 @@ function entryGet(entry: JsonObject, key: string): JsonValue {
 
 /** The `value` of one feedback entry: a record's `value`, else the entry itself. */
 function feedbackValue(entry: JsonValue): JsonValue {
-  return isEntryRecord(entry) ? entryGet(entry, "value") : entry;
+  return isObject(entry) ? entryGet(entry, "value") : entry;
 }
 
 /** Whether `value` holds a non-finite number at any depth. */
@@ -450,7 +450,7 @@ export class ProfileSession implements MemorySession {
       ["base_url", host.baseUrl],
       ["organization", host.organization],
       ["project", host.project],
-      ["headers", host.headers === null ? null : { ...host.headers }],
+      ["headers", host.headers],
     ];
     for (const [name, value] of hostFields) {
       if (value !== null) config[name] = value;
@@ -519,7 +519,7 @@ export class ProfileSession implements MemorySession {
    */
   private material(context: LearnContext, currentText: string, currentVersion: string): string {
     const feedback = context.feedback.map((entry): JsonValue =>
-      isEntryRecord(entry)
+      isObject(entry)
         ? {
             channel: entryGet(entry, "channel"),
             owner_static_path: entryGet(entry, "owner_static_path"),
@@ -542,18 +542,13 @@ export class ProfileSession implements MemorySession {
         prompt: episode.prompt,
         status: episode.status,
       };
-      let encoded = writeAsJson(item as Value);
-      let keptItem: JsonValue = item;
-      if (kept.length === 0) {
-        const bounded = boundedJsonMaterial(item, budget);
-        // A trimmed summary holds only strings, booleans and small ints, so JSON.parse reads it exactly.
-        if (bounded !== encoded) keptItem = JSON.parse(bounded) as JsonObject;
-        encoded = bounded;
-      } else if (used + codePoints(encoded) > budget) {
-        break;
-      }
-      used += codePoints(encoded);
-      kept.push(keptItem);
+      const whole = writeAsJson(item as Value);
+      const encoded = kept.length === 0 ? boundedJsonMaterial(item, budget) : whole;
+      const length = codePoints(encoded);
+      if (kept.length > 0 && used + length > budget) break;
+      used += length;
+      // A trimmed summary holds only strings, booleans and small ints, so JSON.parse reads it exactly.
+      kept.push(encoded === whole ? item : (JSON.parse(encoded) as JsonObject));
     }
     kept.reverse();
     const material: JsonObject = {

@@ -25,10 +25,12 @@
  * `::test_a_nullable_field_leaves_the_records_around_it_alone`,
  * `::test_a_field_narrowed_to_null_leaves_the_records_around_it_alone`,
  * `::test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive` and
- * `::test_a_field_of_an_unchecked_optional_parent_may_still_be_null`. Through `assembleText`:
- * `::test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`, its `need` def built by
- * hand (`handChild`, since def bodies load in T3-22), pinning the whole message where Python
- * matches a fragment.
+ * `::test_a_field_of_an_unchecked_optional_parent_may_still_be_null`. Through `assembleText`, the
+ * rows the CALL type check decides, the `need` def built by hand (`handChild`, since def bodies
+ * load in T3-22): `::test_a_narrowed_optional_field_fills_a_required_input` (4),
+ * `::test_a_narrowed_field_makes_its_parent_non_null` (2) and
+ * `::test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`, pinning the whole
+ * message where Python matches a fragment.
  *
  * Changed: facts and environments compare with `toStrictEqual`, which also compares classes;
  * `Members` takes an array. `declaredImpossible` and `neverValue` are exported for these tests
@@ -45,9 +47,6 @@
  *
  * Later (T3-20): `test_a_node_assert_check_a_null_check_makes_impossible_is_reported` (node
  * asserts).
- *
- * Later (T3-19, the call/map type check decides them): `test_a_narrowed_optional_field_fills_a_required_input`
- * and `test_a_narrowed_field_makes_its_parent_non_null`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -365,30 +364,53 @@ test("a null check the routing proves null is reported", () => {
 
 // ---------- typed CALL arguments ----------
 
-/** A flow whose searched CASE passes `${input.a.b}` to a def `need` taking `!str` when `when`. */
-const nestedFlow = (when: string) =>
+/**
+ * A flow whose searched CASE passes `source` (default `${input.a.b}`) to a def `need` taking
+ * `!<sink>` (default `str`) when `when`; the input `a` is `aType` (default `A`).
+ */
+const nestedFlow = (when: string, aType = "A", source = "${input.a.b}", sink = "str") =>
   "id: p\nname: p\n" +
   "typedefs:\n  A: {b: Optional(str)}\n" +
-  "input:\n  a: !A\n" +
+  `input:\n  a: !${aType}\n` +
   "nodes:\n" +
   "  route:\n    kind: case\n    cases:\n" +
   `      - when: "${when}"\n` +
-  "        then: call(need, v=${input.a.b})\n" +
+  `        then: call(need, v=${source})\n` +
   "    else: e\n" +
   "  e:\n    kind: code\n    code: return 1\n" +
   "output: ${route.output}\n" +
   "defs:\n  need:\n" +
-  "    input:\n      v: !str\n" +
+  `    input:\n      v: !${sink}\n` +
   "    nodes:\n      p:\n        kind: code\n" +
   "        input:\n          o: ${input.v}\n        code: return 1\n" +
   "    output: ${p.output}\n";
 
-/** The `need` def built by hand: input `v: !str`, an untyped `p`, returned. */
-const NEED = handChild({
-  inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),
-  producers: { p: null },
-  output: "${p.output}",
+/** The `need` def built by hand: input `v: !<sink>` (default `str`), an untyped `p`, returned. */
+const need = (sink = "str") =>
+  handChild({
+    inputs: parametersFromYaml(`input:\n  v: !${sink}\n`, readTypedefs({ A: { b: "Optional(str)" } })),
+    producers: { p: null },
+    output: "${p.output}",
+  });
+
+const NEED = need();
+
+describe("a narrowed optional field fills a required input", () => {
+  for (const when of ["isinstance(input.a.b, str)", "input.a.b != null"]) {
+    for (const aType of ["A", "Optional(A)"]) {
+      test(`${when} on ${aType}`, () => {
+        assembleText(nestedFlow(when, aType), "flow.yaml", { children: { need: NEED } });
+      });
+    }
+  }
 });
+
+test.each(["isinstance(input.a.b, str)", "input.a.b != null"])(
+  "a narrowed field makes its parent non-null: %s",
+  (when) => {
+    assembleText(nestedFlow(when, "Optional(A)", "${input.a}", "A"), "flow.yaml", { children: { need: need("A") } });
+  },
+);
 
 test("an unnarrowed optional field still cannot fill a required input", () => {
   const error = loadError(() =>

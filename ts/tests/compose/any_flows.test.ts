@@ -7,9 +7,8 @@
  * child input is a load error unless a tag or an `isinstance` branch narrows it.
  *
  * Ported: `test_an_optional_str_output_into_a_child_any_input_is_a_load_error`,
- * `test_the_same_untagged_wiring_outside_the_branch_is_a_load_error` (its error names node `go`
- * until T3-20's narrowing proves `go`'s source a `str`, so the row asserts Python's substrings, not
- * the node),
+ * `test_an_untagged_any_into_a_child_str_input_loads_inside_an_isinstance_branch` (load half),
+ * `test_the_same_untagged_wiring_outside_the_branch_is_a_load_error`,
  * `test_a_map_over_a_list_of_optional_any_into_a_child_any_input_is_a_load_error`,
  * `test_a_map_over_a_mixed_literal_list_still_checks_each_element_at_load`,
  * `test_a_child_any_output_into_a_parent_int_input_is_a_load_error_with_the_hint`,
@@ -30,7 +29,7 @@
  *
  * Changed: the `child` and `mk_any` defs are built by hand (`handChild`: the def's parameters read
  * from its `input:` text, its nodes as producers with their output contracts, `mk_any`'s output a
- * `Binding` declared `Any`), since def bodies load in T3-22. Rows asserting one fragment pin the
+ * `Binding` declared `Any`), since def bodies load in T3-22. Rows asserting fragments pin the
  * whole message. CODE bodies are TS; load doesn't run them.
  *
  * Not ported (not T3-19 rows): `test_a_typed_any_literal_loads_and_runs` (4) and
@@ -53,10 +52,8 @@
  * `test_a_field_read_on_an_object_value_entry_is_still_checked`. Later (T3-20):
  * `test_a_field_read_on_an_any_output_loads_in_an_assert`,
  * `test_an_int_when_on_an_any_value_loads_and_matches`,
- * `test_a_text_when_on_an_any_value_loads_and_matches`,
- * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag` and
- * `test_an_untagged_any_into_a_child_str_input_loads_inside_an_isinstance_branch` (it loads only
- * once the `isinstance` branch narrows the source). Later (T4):
+ * `test_a_text_when_on_an_any_value_loads_and_matches` and
+ * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag`. Later (T4):
  * `test_a_list_of_any_output_returns_mixed_items`, `test_an_any_output_returns_any_json_value` (4),
  * `test_an_any_output_rejects_null`, `test_an_optional_any_output_returns_null`,
  * `test_an_any_flow_input_rejects_null_naming_the_input`,
@@ -175,14 +172,20 @@ function narrowed(bindingNode: string): string {
   });
 }
 
+test("an untagged Any into a child str input loads inside an isinstance branch (loads)", () => {
+  load(narrowed(call("${mk.output}", "go")), { child: child("str") });
+});
+
 test("the same untagged wiring outside the branch is a load error", () => {
   const text = narrowed(call("${mk.output}", "go") + call("${mk.output}", "c2"));
 
   const message = loadError(() => load(text, { child: child("str") })).message;
 
-  expect(message).toContain("child expects 'str', source is 'Any'");
-  expect(message).toContain("`x: !str ${...}`");
-  expect(message).toContain("isinstance");
+  // `go` is inside the branch, so only `c2` fails.
+  expect(message).toBe(
+    "call node 'c2': binding 'x' — child expects 'str', source is 'Any'; tag the slot " +
+      "(`x: !str ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
+  );
 });
 
 // ---------- MAP over lists of Any ----------

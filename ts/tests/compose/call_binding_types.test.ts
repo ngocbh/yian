@@ -28,11 +28,11 @@
  * harvested `load-map-call/compose_call_binding_types__*` cases, pinned at the end
  * (`…__date_literal_into_a_str_input` is `ok`, rule `dates`); and, as "Pinned harvested cases
  * (TS-only placement)", the cases this check decides whose Python file has no TS mirror:
- * `load-map-call/compose_call_argument_labels__an_argument_literal_type_mismatch` and
- * `types/compose_open_range_flows__call_with_a_wider_open_range_source`.
+ * `load-map-call/compose_call_argument_labels__an_argument_literal_type_mismatch`,
+ * `types/compose_open_range_flows__call_with_a_wider_open_range_source` and
+ * `load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none` (its `place_rest`
+ * def built by hand with the case's typedefs; its `source is 'None'` is the CASE narrowing's).
  *
- * Later (T3-20): `load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none`
- * (its `source is 'None'` needs the CASE narrowing; its Python file has no TS mirror).
  * Later (T4): the run halves of the load rows above.
  */
 
@@ -422,5 +422,17 @@ test.each<CaseRow>([
   {
     id: "types/compose_open_range_flows__call_with_a_wider_open_range_source",
     call: assembledWith({ child: def("t", "int(0..100)", "echo", "int") }),
+  },
+  {
+    // Its `source is 'None'` is the CASE narrowing's: the defensive `else:` sees only null.
+    id: "load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none",
+    call: (document, registry, diagnostics, builder) => {
+      const placeRest = handChild({
+        inputs: parametersFromYaml("input:\n  order: !HoldOrSell\n", registry),
+        producers: { p: null },
+        output: "${p.output}",
+      });
+      return assembledWith({ place_rest: placeRest })(document, registry, diagnostics, builder);
+    },
   },
 ])("assembledWith: $id", runCase);

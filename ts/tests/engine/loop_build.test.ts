@@ -65,7 +65,8 @@
  * `test_carried_field_the_body_does_not_read_is_not_checked`,
  * `test_inline_body_constant_seed_fits_its_generated_parameter`,
  * `test_inline_body_reference_seed_fits_its_generated_parameter` and
- * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` (2).
+ * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` (2); both loads of
+ * `test_loop_seed_reads_the_case_narrowed_type` (the CASE narrowing types the seed).
  *
  * Changed: a row whose Python flow calls a `defs:` body parses the loop node (`nodesOf`) and
  * builds it over a `BuildContext` whose resolver returns the body built by hand (`handChild`: the
@@ -128,8 +129,7 @@
  * `test_carried_field_the_body_does_not_read_is_not_checked`,
  * `test_inline_body_reference_seed_fits_its_generated_parameter` and
  * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input`, and the run half of
- * `test_loop_seed_reads_the_case_narrowed_type`. Later (T3-20): both loads of
- * `test_loop_seed_reads_the_case_narrowed_type` (CASE narrowing).
+ * `test_loop_seed_reads_the_case_narrowed_type`.
  */
 
 import { expect, test } from "bun:test";
@@ -1675,6 +1675,63 @@ output: \${loop.output}
     expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
   },
 );
+
+/**
+ * A LOOP routed by a `case` on a `Union(Buy, Hold)` producer, seeding the whole record into a body
+ * that takes a `Buy`; `then` and `other` pick the branch the LOOP is on.
+ */
+function narrowedLoop(then: string, other: string): string {
+  return `id: p
+name: p
+typedefs:
+  Buy: {kind: 'Literal(buy)', qty: int}
+  Hold: {kind: 'Literal(hold)', note: str}
+input:
+  s: !str
+nodes:
+  d:
+    kind: code
+    input:
+      s: \${input.s}
+    output: Union(Buy, Hold)
+    code: 'return inputs["s"] === "b" ? {kind: "buy", qty: 2n} : {kind: "hold", note: "n"}'
+  route:
+    kind: case
+    on: \${d.output.kind}
+    cases:
+      - when: buy
+        then: ${then}
+    else: ${other}
+  loop:
+    kind: loop
+    times: 1
+    input:
+      order: \${d.output}
+      k: 0
+    call: body
+  e:
+    kind: code
+    code: return 1n
+output: \${loop.output.k}
+`;
+}
+
+test("a loop seed reads the case-narrowed type", () => {
+  const body = handChild({
+    inputs: params("  order: !Buy\n  k: !int\n", readTypedefs({ Buy: { kind: "Literal(buy)", qty: "int" } })),
+    producers: { step: record({ k: "int" }) },
+    output: "${step.output}",
+  });
+
+  // Under `when: buy` the seed is narrowed to `Buy`, as a CALL argument would be.
+  expect(loadSeeded(narrowedLoop("loop", "e"), body).compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+  const error = loadError(() => loadSeeded(narrowedLoop("e", "loop"), body));
+
+  expect(error.message).toBe(
+    "loop node 'loop': binding 'order' — child expects '{\"kind\":Literal(buy),\"qty\":int}', " +
+      "source is '{\"kind\":Literal(hold),\"note\":str}'",
+  );
+});
 
 // ---------- harvested conformance cases ----------
 

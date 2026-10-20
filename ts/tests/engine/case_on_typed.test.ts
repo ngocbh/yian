@@ -75,8 +75,9 @@
  * `test_unquoted_date_when_narrows_a_date_shaped_union_tag`.
  *
  * Later (T3-22): `test_routing_only_call_child_literal_input_missing_a_tag`, which composes a
- * `defs:` entry; its harvested case is pinned at the end with the entry assembled as its own root
- * (the loader's `defs entry 'child': ` prefix and definition frame are T3-22's).
+ * `defs:` entry; its harvested case is pinned at the end with the entry assembled as its own root,
+ * checking the loader's `defs entry 'child': ` prefix and the last frame only. T3-22 replaces that
+ * pin with a `full: true` one (the definition frame included) rather than adding a second.
  *
  * The harvested cases the CASE build, the `when:` value check and the exhaustiveness check decide
  * are pinned at the end.

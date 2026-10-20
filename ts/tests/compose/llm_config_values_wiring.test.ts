@@ -18,8 +18,9 @@
  * `test_skipped_arithmetic_in_a_value_names_the_llm_config_field`,
  * `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`,
  * `test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field` and
- * `test_a_composer_value_error_names_the_gate_field`; the node and flow-layer halves of
- * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer`.
+ * `test_a_composer_value_error_names_the_gate_field`,
+ * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer` and
+ * `test_clone_child_renamespaces_the_reserved_key`, which loads its `defs:` child with `loadFlow`.
  *
  * Pinned in kind_agent_parse.test.ts: `test_an_authored_input_named_like_the_reserved_key_fails`.
  *
@@ -29,20 +30,20 @@
  * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
  *
  * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
- * Later (T3-22): `test_clone_child_renamespaces_the_reserved_key` (a loaded `defs:` child;
- * `compile/expand.ts`), and the `resolve_llm_cascade` half of
- * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer`.
  * Later (T4): `test_runs_with_different_inputs_record_the_same_fingerprint`.
  */
 
 import { expect, test } from "bun:test";
 
+import { cloneChild } from "../../src/compile/expand.ts";
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { SkipModel } from "../../src/compose/validate/skips.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
-import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { Binding, iterSourceStrings, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
 
 const compiled = (text: string): CompiledFlow => assembleText(text, "f.yaml").flow.compiled;
@@ -150,6 +151,34 @@ test("wiring keys equal params plus the reserved key", () => {
   const expected = new Set([...(node.params ?? []).map((parameter) => parameter.name), ...node.reservedWiringKeys()]);
   expect(new Set(flow.wiring.get("open")!.keys())).toEqual(expected);
   expect(expected).toEqual(new Set(["x", LLM_CONFIG_KEY]));
+});
+
+const DEF_CALL = `id: f
+name: f
+defs:
+  child:
+    input: {m: !str }
+    nodes:
+      a:
+        kind: agent
+        prompt: Go.
+        llm_config: {model: '\${input.m}'}
+    output: \${a.output}
+nodes:
+  c:
+    kind: call
+    call: child
+    input: {m: picked}
+output: \${c.output}
+`;
+
+test("cloneChild re-namespaces the reserved key", async () => {
+  const flow = (await loadFlow(DEF_CALL, { sourceLabel: "f.yaml" })).compiled;
+  const child = (flow.nodes.get("c") as unknown as { child: CompiledFlow }).child;
+  expect(carried(child, "a")).toEqual({ node: { model: "${input.m}" } });
+  const cloned = cloneChild(child, "c", { m: "picked" });
+  const texts = [...iterSourceStrings(cloned.wiring.get("c/a")!.get(LLM_CONFIG_KEY))].map(([, text]) => text);
+  expect(texts).toEqual(["${c/__start__.output.m}"]);
 });
 
 test("two loads of the same text have the same fingerprint", () => {
@@ -318,6 +347,9 @@ test("a layer of only tagged literals is wired as a literal layer", () => {
   expect(flow.wiring.get("chat")!.has(LLM_CONFIG_KEY)).toBe(false);
   expect(flow.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set());
   expect(flow.flowLlmConfig).toEqual({ provider: "openai" });
+  const effective = resolveLlmCascade(flow, {}, { defaults: {} });
+  expect(effective["chat"]!["provider"]).toBe("openai");
+  expect(effective["chat"]!["model"]).toBe("gpt-x");
 });
 
 // ---------- harvested conformance cases ----------

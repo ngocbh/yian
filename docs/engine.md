@@ -372,7 +372,8 @@ Changed (TS yian): workers are async evaluations, not threads: at most `num_work
 flight, each starts only after its `NodeStarted` record is durable and published, and each
 settles into a FIFO completion queue (it never rejects) that the dispatcher reads one entry at a
 time, so outcomes commit in settle order. Steps commit inline from the node, since a step is
-appended and applied before `record` returns in both modes. On a `RunFailed` the dispatcher
+appended and applied before `record` returns in both modes, and stream chunks and in-loop events
+go from the node straight to `onStream`/`onEvent` rather than through the dispatcher. On a `RunFailed` the dispatcher
 aborts the run signal, publishes the failure, then waits for every running worker and discards
 what they produce; any other error aborts the run signal, waits for every worker, and ends the
 run with the first error.

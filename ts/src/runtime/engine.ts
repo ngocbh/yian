@@ -308,6 +308,7 @@ export class FlowEngine {
       await Promise.all(active.values());
       throw error;
     }
+    // A success result means nothing else is ready or in flight, so there is nothing to drain.
     return events;
   }
 

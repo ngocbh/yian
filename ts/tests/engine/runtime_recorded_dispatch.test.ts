@@ -106,7 +106,7 @@ import {
 import { commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { aborted, BlockingNode, fragment, fragmentBuilder, rejected } from "./run_state_fixtures.ts";
+import { aborted, BlockingNode, fragment, fragmentBuilder, noGrowth, rejected } from "./run_state_fixtures.ts";
 
 const RUN_ID = "recorded-dispatch";
 const FINGERPRINT = "d".repeat(64);
@@ -310,7 +310,7 @@ function dispatcher(
   numWorkers: number,
   options: Partial<FlowEngineOptions> = {},
 ): FlowEngine {
-  return new FlowEngine(state, log, { growBuilder: () => null as never, numWorkers, ...options });
+  return new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers, ...options });
 }
 
 /** Return the failures the run recorded, in log order. */

@@ -1,9 +1,7 @@
 /**
- * The accepted reverse walk: a port of `tests/engine/test_runtime_backward.py`. Ported, after
- * rewrite: the `validate_attributed_backward` half of
- * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text`, with the root result
- * the test pins (`BackwardResult(self_feedback=("original text",))`) and the empty results built
- * by hand instead of computed.
+ * The accepted reverse walk: a port of `tests/engine/test_runtime_backward.py`. Ported:
+ * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` (it also refuses another
+ * root result).
  *
  * Changed: Python's `ValueError` is a `RangeError`; the results are an array, not a tuple.
  *
@@ -52,17 +50,49 @@
  * the instance, its error an `Error`, Python's `OSError`).
  *
  * Ported, through the engine: `test_terminal_trace_keeps_actual_root_writer_until_quiescence`
- * (2 rows).
+ * (2 rows), `test_diamond_calls_shared_producer_once_with_two_ordered_messages`,
+ * `test_entire_callback_result_is_validated_before_routing_any_input` (3 rows; each pins the
+ * failure's message and cause class),
+ * `test_empty_feedback_keeps_complete_history_without_invoking_callbacks` (2 rows; the `[null]`
+ * refusal's full message is pinned), `test_root_default_feedback_survives_its_literal_route`,
+ * `test_accepted_failure_uses_recorded_inputs_and_diagnostics` (2 rows; the missing parameter is
+ * added by replacing `params`, the body's error is an `Error`, Python's `RuntimeError`) and
+ * `test_failed_end_routes_text_without_fabricating_output_context`.
  *
- * Later (T4-7, with `computeBackward`): the `compute_backward` half of
- * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` and the file's other 24
- * tests, from `test_diamond_calls_shared_producer_once_with_two_ordered_messages` to
+ * `test_callback_failures_are_attributed_without_swallowing_host_faults`: `callback` and
+ * `infrastructure` (the trace's `lookupSource` patched on the instance) are ported; the callback
+ * row also pins the whole `BackwardFailure` and `BackwardComputeError`'s name, message and `cause`.
+ * Changed: `host`: there is no host-control unwrapping, so a `CapabilityFault` a callback throws is
+ * `backward.execute`, its `cause` the fault. Not ported: `cancel` and `memory`; TS has no
+ * `_HostStop` or `MemoryError`.
+ *
+ * Changed: `test_callback_message_mutation_does_not_change_root_or_recorded_feedback`: the
+ * callback's feedback is a deep-frozen copy, so its write throws a `TypeError` (asserted), and the
+ * caller's message and the recorded feedback stay unchanged.
+ *
+ * TS-only, `computeBackward`: a result of another class is `backward.result` with a `TypeError`
+ * cause; an async callback is awaited; a rejected promise is `backward.execute`; a thrown `"x"` or
+ * `undefined` gives its text as the message, its type name as `causeType` and a `null` traceback;
+ * an `Error` subclass's `name` is the `causeType` and its string `notes` follow the stack in the
+ * traceback; a missing handler (the trace's handler map shadowed on the instance) rejects with its
+ * own `Error`, not `backward.execute`; an error from result validation that is neither a
+ * `TypeError` nor a `RangeError` (a forged result's throwing getter) escapes unchanged.
+ *
+ * Later (T4-7):
+ * `test_terminal_trace_latches_causal_route_and_later_failure_wins`,
+ * `test_structural_ancestry_requires_exact_metadata_prescribed_transfer`,
+ * `test_preseeded_root_output_does_not_invent_an_executed_producer`,
+ * `test_opaque_expression_stops_are_recoverable_without_rerunning_functions`,
+ * `test_backward_context_is_trace_owned_detached_and_survives_replay` and
+ * `test_canonical_file_input_feedback_keeps_literal_and_opaque_stops`. Later, with MAP, CASE,
+ * CALL, LOOP, AGENT, pooled mode or `buildGrow`: the file's other 10 tests, from
+ * `test_map_whole_list_context_and_item_order_survive_reversed_completion` to
  * `test_loop_passthrough_field_routes_feedback_to_its_seed`.
  */
 
 import { expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { type FeedbackValue, RouteContext, SourceRef, sourceKey, ValueRoute } from "../../src/expr/lineage.ts";
 import {
@@ -79,10 +109,11 @@ import {
   MemoryStack,
   PolicyCommitOutcome,
 } from "../../src/memory/contracts.ts";
-import { BackwardContext, BackwardResult, Node, NodeKind } from "../../src/nodes/base.ts";
-import { ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import { BackwardContext, BackwardResult, CapabilityFault, Node, NodeKind } from "../../src/nodes/base.ts";
+import { Assertion, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { BackwardComputeError, computeBackward } from "../../src/runtime/backward.ts";
 import {
   AttributedBackwardResult,
   BackwardAttribution,
@@ -144,6 +175,9 @@ import {
   FuncNode,
   graph,
   learnableStarted,
+  RecordingBackwardNode,
+  rejected,
+  RUN_ID,
   terminalSkipRouteFlow,
   traceSnapshot,
 } from "./run_state_fixtures.ts";
@@ -175,10 +209,12 @@ function syntheticTrace(runId: string): RetainedTrace {
   return trace;
 }
 
-test("an explicitly synthetic source-free failure keeps the direct root text", () => {
+test("an explicitly synthetic source-free failure keeps the direct root text", async () => {
   const trace = syntheticTrace("synthetic");
-  const root = new BackwardResult({ selfFeedback: ["original text"] });
-  expect(() => validateAttributedBackward(trace, "original text", root, [])).not.toThrow();
+  const [root, results] = await computeBackward(trace, "original text");
+  expect(() => validateAttributedBackward(trace, "original text", root, results)).not.toThrow();
+  expect(root).toEqual(new BackwardResult({ selfFeedback: ["original text"] }));
+  expect(results).toEqual([]);
   expectError(
     () => validateAttributedBackward(trace, "original text", new BackwardResult(), []),
     RangeError,
@@ -2020,3 +2056,354 @@ test.each<[string, { answer: string[] } | null]>([
     expect(trace.terminal!.failure).toBeNull();
   },
 );
+
+// computeBackward, through the engine.
+
+/** A backward callback that sends its feedback to input `x`. */
+const passthrough = (_context: BackwardContext, feedback: readonly FeedbackValue[]) =>
+  new BackwardResult({ inputFeedback: { x: feedback } });
+
+/** A callback that must not run. */
+function unreachable(label: string) {
+  return (): BackwardResult => {
+    throw new Error(label);
+  };
+}
+
+/** Return the run's engine over `START -> work -> END`, END reporting `work`'s output as `result`. */
+function workEngine(node: Node, inputs: Readonly<Record<string, unknown>> = {}) {
+  return engine(graph([node], [[START_ID, "work"]], { outputs: [new FlowOutput("result", "${work.output}")] }), {
+    inputs,
+    learnable: true,
+  });
+}
+
+/** Run `work` and return the `BackwardComputeError` computing `"review"` rejects with. */
+async function computeError(node: Node): Promise<BackwardComputeError> {
+  const built = workEngine(node);
+  await built.run();
+  const error = await rejected(computeBackward(built.state.trace!, "review"));
+  expect(error).toBeInstanceOf(BackwardComputeError);
+  return error as BackwardComputeError;
+}
+
+test("a diamond calls the shared producer once with two ordered messages", async () => {
+  const producer = new RecordingBackwardNode("producer", (inputs) => inputs.x, passthrough, {
+    reads: { x: "${input.topic}" },
+  });
+  const left = new RecordingBackwardNode("left", (inputs) => inputs.x, passthrough, {
+    reads: { x: "${producer.output}" },
+  });
+  const right = new RecordingBackwardNode("right", (inputs) => inputs.x, passthrough, {
+    reads: { x: "${producer.output}" },
+  });
+  const flow = graph([producer, left, right], [
+    [START_ID, "producer"],
+    ["producer", "left"],
+    ["producer", "right"],
+  ], { outputs: [new FlowOutput("left", "${left.output}"), new FlowOutput("right", "${right.output}")] });
+  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: true });
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, { left: "L", right: "R" });
+
+  validateAttributedBackward(trace, { left: "L", right: "R" }, root, results);
+  expect([producer.calls.length, left.calls.length, right.calls.length]).toEqual([1, 1, 1]);
+  expect(producer.calls[0]![1]).toEqual(["L", "R"]);
+  expect(root.inputFeedback).toEqual({ topic: ["L", "R"] });
+  expect(root.selfFeedback).toEqual([]);
+  expect(root.variableFeedback).toEqual({});
+  expect(results.map((item) => item.source)).toEqual(trace.occurrences.map((item) => item.source));
+  expect(results.every((item) => item.invoked)).toBe(true);
+});
+
+test.each<[string, () => unknown, ErrorClass, string]>([
+  [
+    "an undeclared input",
+    () => new BackwardResult({ inputFeedback: { x: ["valid"], unknown: ["bad"] } }),
+    RangeError,
+    "input_feedback selects undeclared input 'unknown'",
+  ],
+  [
+    "a foreign variable",
+    () => new BackwardResult({ inputFeedback: { x: ["valid"] }, variableFeedback: { foreign: ["bad"] } }),
+    RangeError,
+    "variable_feedback selects undeclared variable 'foreign'",
+  ],
+  [
+    "a short positional message",
+    () => new BackwardResult({ inputFeedback: { x: [[null]] } }),
+    RangeError,
+    'feedback["x"] must have exactly 2 items; got 1',
+  ],
+  ["another class (TS-only)", () => ({}), TypeError, "result must be a BackwardResult"],
+])("the entire callback result is validated before routing any input: %s", async (_, bad, cls, message) => {
+  const producer = new RecordingBackwardNode("producer", () => [1n, 2n], unreachable("routed partial result"));
+  const consumer = new RecordingBackwardNode("consumer", (inputs) => inputs.x, () => bad() as BackwardResult, {
+    reads: { x: "${producer.output}" },
+  });
+  const built = engine(graph([producer, consumer], [
+    [START_ID, "producer"],
+    ["producer", "consumer"],
+  ], { outputs: [new FlowOutput("result", "${consumer.output}")] }), { learnable: true });
+  await built.run();
+
+  const error = (await rejected(computeBackward(built.state.trace!, "review"))) as BackwardComputeError;
+
+  expect(error).toBeInstanceOf(BackwardComputeError);
+  expect(error.failure.code).toBe("backward.result");
+  expect(error.failure.nodeId).toBe("consumer");
+  expect(error.failure.message).toBe(message);
+  expect(error.failure.causeType).toBe(cls.name);
+  expect((error.cause as Error).constructor).toBe(cls);
+  expect(producer.calls).toEqual([]);
+});
+
+test.each<[string, FeedbackValue]>([
+  ["null", null],
+  ["positional nulls", [null, null]],
+])("empty feedback keeps the complete history without invoking callbacks: %s", async (_, feedback) => {
+  const node = new RecordingBackwardNode("work", () => [1n, 2n], unreachable("empty callback"));
+  const built = workEngine(node);
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, feedback);
+
+  validateAttributedBackward(trace, feedback, root, results);
+  expect(root).toEqual(new BackwardResult());
+  expect(results.length).toBe(trace.occurrences.length);
+  for (const result of results) {
+    expect(result.invoked).toBe(false);
+    expect(result.feedback).toEqual([]);
+    expect(result.result).toEqual(new BackwardResult());
+  }
+  const error = await rejected(computeBackward(trace, [null]));
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe("feedback must have exactly 2 items; got 1");
+  expect(node.calls).toEqual([]);
+});
+
+test("root default feedback survives its literal route", async () => {
+  const start = new StartNode(START_ID, {
+    params: [
+      new Parameter("topic", { hasDefault: true, default: "reefs" }),
+      new Parameter("absent", { required: false }),
+    ],
+  });
+  const built = engine(graph([start], [], { outputs: [new FlowOutput("result", "${input.topic}")] }), {
+    learnable: true,
+  });
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, "");
+
+  validateAttributedBackward(trace, "", root, results);
+  expect(root.inputFeedback).toEqual({ topic: [""] });
+});
+
+test.each<[string, boolean]>([
+  ["body failure", false],
+  ["binding failure", true],
+])("an accepted failure uses the recorded inputs and diagnostics: %s", async (_, early) => {
+  const node = new RecordingBackwardNode(
+    "work",
+    () => {
+      throw new Error("body broke");
+    },
+    (context, feedback) =>
+      context.inputs === null
+        ? new BackwardResult({ selfFeedback: ["binding unavailable"] })
+        : new BackwardResult({ inputFeedback: { x: feedback }, selfFeedback: ["body failure"] }),
+    { reads: { x: "${input.topic}" } },
+  );
+  if (early) node.params = [...node.params!, new Parameter("missing", { required: true })];
+  const built = workEngine(node, { topic: "reefs" });
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, "review failure");
+
+  validateAttributedBackward(trace, "review failure", root, results);
+  const [context, received] = node.calls[0]!;
+  expect(received).toEqual(["review failure"]);
+  expect(context.output).toBeNull();
+  expect(context.failure).not.toBeNull();
+  expect(context.inputs === null).toBe(early);
+  expect(root.inputFeedback).toEqual(early ? {} : { topic: ["review failure"] });
+  expect(root.selfFeedback).toEqual([]);
+  expect(results.find((item) => sourceKey(item.source) === sourceKey(trace.terminal!.source!))!.invoked).toBe(true);
+  expect((await rejected(computeBackward(trace, {})) as Error).constructor).toBe(RangeError);
+});
+
+test("a callback failure is attributed to its occurrence, with the original as the cause", async () => {
+  const original = new Error("broken");
+  const node = new RecordingBackwardNode("work", () => "value", () => {
+    throw original;
+  });
+
+  const error = await computeError(node);
+
+  const work = node.calls[0]![0];
+  expect(error.name).toBe("BackwardComputeError");
+  expect(error.message).toBe("broken");
+  expect(error.cause).toBe(original);
+  expect(error.failure).toEqual(new BackwardFailure("backward", "backward.execute", "broken", {
+    scope: work.scope,
+    runId: RUN_ID,
+    nodeId: "work",
+    nodeStartedSeq: work.nodeStartedSeq,
+    causeType: "Error",
+    traceback: original.stack!,
+  }));
+});
+
+test("a host capability fault from a callback is attributed too, with the fault as the cause", async () => {
+  // No host-control unwrapping: a fault a callback throws is the callback's failure.
+  const fault = new CapabilityFault(new Error("broken"));
+  const error = await computeError(new RecordingBackwardNode("work", () => "value", () => {
+    throw fault;
+  }));
+
+  expect(error.failure.code).toBe("backward.execute");
+  expect(error.failure.nodeId).toBe("work");
+  expect(error.failure.causeType).toBe("CapabilityFault");
+  expect(error.cause).toBe(fault);
+});
+
+test("an infrastructure fault reading the trace escapes unchanged", async () => {
+  const original = new Error("broken");
+  const node = new RecordingBackwardNode("work", () => "value", unreachable("callback"));
+  const built = workEngine(node);
+  await built.run();
+  const trace = built.state.trace!;
+  trace.lookupSource = () => {
+    throw original;
+  };
+
+  expect(await rejected(computeBackward(trace, "review"))).toBe(original);
+  expect(node.calls).toEqual([]);
+});
+
+test("a failed END routes text without fabricating an output context", async () => {
+  const producer = new RecordingBackwardNode("producer", () => [1n, 2n], () => new BackwardResult());
+  const built = engine(graph([producer], [[START_ID, "producer"]], {
+    outputs: [new FlowOutput("result", "${producer.output}")],
+  }), { learnable: true });
+  built.state.flow.nodes.get(END_ID)!.preAsserts = [new Assertion("false", "fail END")];
+  await built.run();
+
+  const [root] = await computeBackward(built.state.trace!, "review failed END");
+
+  expect(root).toEqual(new BackwardResult());
+  const [context, messages] = producer.calls[0]!;
+  expect(messages).toEqual(["review failed END"]);
+  const details = context.downstreamContext.flatMap((entry) => entry.contexts as { role: string }[]);
+  expect(details.some((detail) => detail.role === "output")).toBe(false);
+});
+
+test("a callback's message mutation changes neither the root feedback nor the recorded feedback", async () => {
+  // The callback gets deep-frozen copies, so its write throws where Python's lands on a copy.
+  let caught: unknown = null;
+  const end = new RecordingBackwardNode(END_ID, () => [1n, 2n], (_context, feedback) => {
+    try {
+      (feedback[0] as FeedbackValue[])[0] = "mutated by callback";
+    } catch (error) {
+      caught = error;
+    }
+    return new BackwardResult();
+  });
+  const built = engine(graph([end], [[START_ID, END_ID]]), { learnable: true });
+  await built.run();
+  const message = [null, "review second"];
+
+  const [, results] = await computeBackward(built.state.trace!, message);
+
+  expect(caught).toBeInstanceOf(TypeError);
+  expect(message).toEqual([null, "review second"]);
+  expect(results.find((item) => item.invoked)!.feedback).toEqual([[null, "review second"]]);
+});
+
+// TS-only: promises, thrown values and the handler lookup.
+
+test("an async callback is awaited", async () => {
+  const node = new RecordingBackwardNode("work", (inputs) => inputs.x, async (_context, feedback) => {
+    await Promise.resolve();
+    return new BackwardResult({ inputFeedback: { x: feedback } });
+  }, { reads: { x: "${input.topic}" } });
+  const built = workEngine(node, { topic: "reefs" });
+  await built.run();
+
+  const [root] = await computeBackward(built.state.trace!, "review");
+
+  expect(root.inputFeedback).toEqual({ topic: ["review"] });
+});
+
+test("a rejected callback promise is backward.execute", async () => {
+  const original = new Error("async broken");
+  const error = await computeError(new RecordingBackwardNode("work", () => "value", async () => {
+    await Promise.resolve();
+    throw original;
+  }));
+
+  expect(error.failure.code).toBe("backward.execute");
+  expect(error.failure.message).toBe("async broken");
+  expect(error.cause).toBe(original);
+});
+
+test.each<[string, unknown, string, string]>([
+  ["a string", "x", "x", "string"],
+  ["undefined", undefined, "undefined", "undefined"],
+])("a thrown non-Error value gives its text, its type name and no traceback: %s", async (_, thrown, message, type) => {
+  const error = await computeError(new RecordingBackwardNode("work", () => "value", () => {
+    throw thrown;
+  }));
+
+  expect(error.failure.code).toBe("backward.execute");
+  expect(error.failure.message).toBe(message);
+  expect(error.failure.causeType).toBe(type);
+  expect(error.failure.traceback).toBeNull();
+  expect(error.cause).toBe(thrown);
+});
+
+test("an Error subclass's name is the cause type, and its notes follow the stack", async () => {
+  class BrokenHook extends Error {
+    override name = "BrokenHook";
+  }
+  const original = Object.assign(new BrokenHook("hook broke"), { notes: ["first note", 7, "second note"] });
+  const error = await computeError(new RecordingBackwardNode("work", () => "value", () => {
+    throw original;
+  }));
+
+  expect(error.failure.causeType).toBe("BrokenHook");
+  expect(error.failure.traceback).toBe(`${original.stack}\nfirst note\nsecond note`);
+});
+
+test("a missing handler rejects as itself, not as backward.execute", async () => {
+  const node = new RecordingBackwardNode("work", () => "value", unreachable("callback"));
+  const built = workEngine(node);
+  await built.run();
+  const trace = built.state.trace!;
+  Object.defineProperty(trace, "backwardHandlers", { value: new Map() });
+
+  const error = await rejected(computeBackward(trace, "review"));
+
+  expect((error as Error).constructor).toBe(Error);
+  expect((error as Error).message).toBe("backward occurrence has no retained handler");
+});
+
+test("an error from result validation that isn't a TypeError or RangeError escapes", async () => {
+  const original = new Error("forged result");
+  const forged = Object.defineProperty(Object.create(BackwardResult.prototype), "inputFeedback", {
+    get() {
+      throw original;
+    },
+  }) as BackwardResult;
+
+  const built = workEngine(new RecordingBackwardNode("work", () => "value", () => forged));
+  await built.run();
+
+  expect(await rejected(computeBackward(built.state.trace!, "review"))).toBe(original);
+});

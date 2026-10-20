@@ -302,7 +302,7 @@ function deriveWiring(nodes: ReadonlyMap<string, Node>): Record<string, Readonly
 /** Return a flow holding only `node`, wired from `wiring` (by default its `FuncNode.reads`). */
 export function nodeFlow(
   node: Node,
-  wiring: Readonly<Record<string, unknown>> = deriveWiring(new Map([[node.id, node]]))[node.id]!,
+  wiring: Readonly<Record<string, unknown>> = node instanceof FuncNode ? node.reads : {},
 ): CompiledFlow {
   return CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
     wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),

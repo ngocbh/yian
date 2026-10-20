@@ -21,14 +21,17 @@
  * `boundInputs` and `evaluatedKeys` give a fresh copy on each read; a capture built directly
  * freezes its item pairs and copies its evaluated keys.
  *
- * Ported (adapted): the evaluator capture tests
- * `test_binding_failure_keeps_partial_context_without_usable_inputs` (its `ordinary`, `reserved`
- * and `wrapper_default` rows), `test_capture_includes_materialized_reserved_values_from_node_hooks`
- * and `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts` pass Python's
+ * Ported: `test_capture_includes_materialized_reserved_values_from_node_hooks` and
+ * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts` (both with no flow, as
+ * Python passes no override).
+ *
+ * Ported (adapted): the `ordinary`, `reserved` and `wrapper_default` rows of
+ * `test_binding_failure_keeps_partial_context_without_usable_inputs` pass Python's
  * `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a JSON
- * record and these sources hold a `Binding`; Python's bare `Node` is a minimal subclass.
- * `test_evaluator_capture_preserves_typed_values_before_node_mutation` binds a list where Python
- * binds a tuple, so it doesn't check the tuple type.
+ * record and the `reserved` row's `until` source holds a `Binding`; the other rows use the same
+ * fixture for uniformity. In the `ordinary` row, Python's bare `Node` is a minimal subclass.
+ * `test_evaluator_capture_preserves_typed_values_before_node_mutation` also binds through
+ * `nodeFlow`, and binds a list where Python binds a tuple, so it doesn't check the tuple type.
  *
  * Later (T4-10): the `deferred` row of
  * `test_binding_failure_keeps_partial_context_without_usable_inputs` (its MAP item captures) and

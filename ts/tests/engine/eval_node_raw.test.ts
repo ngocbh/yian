@@ -234,7 +234,40 @@ describe("render capture", () => {
       } catch {}
     });
     const error = await rejected(evalNode(node, null, new VariablePool(), { captureBindings: true }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error).not.toBeInstanceOf(CapabilityFault);
     expect((error as Error).message).toMatch(/replace static/);
+    closedError(node.retained[0]!);
+  });
+
+  test("a dropped write is either decided with the outcome or refused as closed", async () => {
+    // Each delay puts the write at a later microtask turn, so one of them lands after the node
+    // settled and before evalNode does.
+    for (let delay = 0; delay < 40; delay++) {
+      let caught: unknown;
+      const node = new Capturing((captureRender) => {
+        void (async () => {
+          for (let turn = 0; turn < delay; turn++) await null;
+          try {
+            captureRender({ static: "changed" });
+          } catch (error) {
+            caught = error;
+          }
+        })();
+      });
+      const settled = await evalNode(node, null, new VariablePool(), { captureBindings: true }).then(
+        (evaluated) => evaluated,
+        (error: unknown) => error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (settled instanceof EvaluatedOutcome) {
+        expect(caught).not.toBeInstanceOf(CapabilityFault);
+        expect((caught as Error).message).toMatch(/closed/);
+      } else {
+        expect(settled).toBeInstanceOf(RangeError);
+        expect((settled as Error).message).toMatch(/replace static/);
+      }
+    }
   });
 
   test("scoped render capture requires the recorded model map entry", async () => {

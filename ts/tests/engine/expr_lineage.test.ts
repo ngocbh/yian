@@ -31,10 +31,13 @@
  * survives that failure.
  *
  * Later (T4-10): `test_equal_map_items_get_distinct_recorded_indices` waits for MAP's `forward`.
- * Later (T4-11): `test_wait_capture_retains_the_delivered_iso_value_after_normalization` waits for
- * WAIT's `forward`.
+ * Later (T4-11): the outcome half of `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
+ * waits for WAIT's `forward`.
  *
  * Not ported:
+ * - The capture half of `test_wait_capture_retains_the_delivered_iso_value_after_normalization`:
+ *   TS WAIT delivers the resolved string unchanged (no `isoformat` object), so nothing is
+ *   normalized; the reserved capture path is `test_reserved_map_over_uses_the_same_capture_path`.
  * - Temporaries `fromHost` refuses, so a builtin can't return them: the NaN row of
  *   `test_nonfinite_temporary_keeps_a_valid_final_interpolation`, the lone-surrogate
  *   `test_noncanonical_unicode_temporary_preserves_comparison_and_partial_snapshot`,

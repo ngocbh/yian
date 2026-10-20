@@ -458,7 +458,7 @@ export async function evalNode(
   /**
    * Freeze the node's one actual render publication, apart from its visible evidence.
    *
-   * @throws Error once the evaluation has settled.
+   * @throws Error once the node and its capability promises have settled.
    * @throws CapabilityFault carrying any other refusal or fault.
    */
   const captureRender = (data: Readonly<Record<string, unknown>>): void => {
@@ -486,6 +486,11 @@ export async function evalNode(
     }
   };
 
+  /** Close the render capture once the outcome is decided, so a later write is refused. */
+  const closeCaptures = (): void => {
+    renderClosed = true;
+  };
+
   let outcome: WorkerOutcome;
   try {
     outcome = await evaluateNode(node, flow, pool, {
@@ -494,6 +499,7 @@ export async function evalNode(
       collector,
       captureInputs: captureBindings ? captureInputs : null,
       captureRender: captureBindings && node.needsRenderCapture === true ? captureRender : null,
+      closeCaptures,
       sourceResolver,
       emitStream,
       emitEvent,
@@ -503,7 +509,8 @@ export async function evalNode(
       steps,
     });
   } finally {
-    renderClosed = true;
+    // The escape paths (a binder fault, a failing input capture) never reach the evaluator's close.
+    closeCaptures();
   }
   return new EvaluatedOutcome(outcome, null, collector?.freeze() ?? null, backwardCapture);
 }
@@ -522,6 +529,8 @@ async function evaluateNode(
     captureInputs: ((inputs: Record<string, unknown>) => void) | null;
     /** The render capture a node declaring `needsRenderCapture` receives, when capturing bindings. */
     captureRender: NonNullable<NodeCaps["captureRender"]> | null;
+    /** Closes the captures once the node and its capability promises have settled. */
+    closeCaptures: () => void;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
@@ -531,7 +540,7 @@ async function evaluateNode(
     steps: NodeSteps | null;
   },
 ): Promise<WorkerOutcome> {
-  const { wiringOverride, signal, collector, captureInputs, captureRender, sourceResolver } = context;
+  const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, sourceResolver } = context;
   const { emitStream, emitEvent, skills, tools, steering, steps } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
@@ -658,6 +667,7 @@ async function evaluateNode(
       : await node.run(record, caps);
   } catch (error) {
     await Promise.allSettled(pending);
+    closeCaptures();
     // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
     // the node rejected with.
     if (faults.first !== null) throw faults.first.original;
@@ -667,6 +677,7 @@ async function evaluateNode(
     return stageFailure(node, error, usesBaseTemplate);
   }
   await Promise.allSettled(pending);
+  closeCaptures();
   if (faults.first !== null) throw faults.first.original;
   if (!(result instanceof Output || result instanceof Route || result instanceof Grow)) {
     return evaluationFailure(

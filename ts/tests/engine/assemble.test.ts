@@ -20,8 +20,10 @@
  * boundary edges), END's binding labels, a value entry loaded as a built-in identity CODE node,
  * and the value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter
  * and binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged).
+ *
  * The wiring parity rows (`test_wiring_parity_*`) call `checkWiringParity` on built CODE and WAIT
- * descriptors.
+ * descriptors. Changed: the parity message spells its key lists in the text form
+ * (`["orphan","x"]`), where Python prints `['orphan', 'x']`.
  *
  * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
  * `test_seed02_branch_target_has_control_edge`, `test_seed02_coalesce_both_producers_terminal`,
@@ -63,11 +65,11 @@ import { BuildContext, BuildResult, type NodeDescriptor } from "../../src/compos
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
-import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes, type ValueReader } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import {

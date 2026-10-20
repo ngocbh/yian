@@ -14,7 +14,8 @@
  * `test_reject_cycles_alias_keeps_other_members`,
  * `test_reject_cycles_keeps_a_synth_node_read_inside_the_cycle`,
  * `test_reject_cycles_ignores_synth_out_edges_outside_the_component`);
- * `test_check_wiring_parity_moved` and `test_validate_human_questions_diag_has_range`; and the parse rows
+ * `test_check_wiring_parity_moved` and `test_validate_human_questions_diag_has_range`; and the
+ * parse rows
  * `test_node_local_asserts_carry_ranges`, `test_per_input_param_carries_ranges`,
  * `test_input_named_like_field_no_collision` (through `nodesOf`),
  * `test_unknown_top_level_key_lists_authored_names` (through `fileOf`) and
@@ -245,35 +246,39 @@ describe("rejectCycles", () => {
   });
 });
 
-test("checkWiringParity anchors a parity failure at the input: mapping", () => {
-  // An orphan wiring key with no matching param fails parity; the error anchors on the node's
-  // `input:` mapping span (else its node range), and the frame carries that range.
-  const { node, wiring } = new CodeDescriptor({ id: "n", code: "m:f", inputs: { x: "${input.x}" } }).build(
-    new BuildContext({ registry: new Map() }),
-  );
-  const range = new SourceRange(3, 5, 4, 20);
-  const result = new BuildResult({ node, wiring, fieldRanges: new Map([[siteKey("field", "inputs"), range]]) });
-  const error = loadError(() =>
-    checkWiringParity(new Map([["n", result]]), new Map([["n", new Map([...wiring, ["orphan", "${input.y}"]])]]), {
-      diagnostics: rangeDiagnostics(),
-    }),
-  );
-  expect(error.message).toContain("key parity");
-  expect(error.diagnostic.frames[0]!.range).toEqual(range);
-});
-
-test("validateHumanQuestions anchors an invalid literal list at the questions: field", () => {
-  // An empty list is refused ("expected 1..4 questions, got 0"); the frame carries the gate's
-  // `questions:` field span.
-  const range = new SourceRange(5, 5, 6, 20);
-  const result = new BuildResult({
-    node: new HumanInputNode("ask", { questions: [] }),
-    wiring: new Map(),
-    fieldRanges: new Map([[siteKey("field", "questions"), range]]),
+describe("located pass errors", () => {
+  test("checkWiringParity anchors a parity failure at the input: mapping", () => {
+    // An orphan wiring key with no matching param fails parity; the error anchors on the node's
+    // `input:` mapping span (else its node range), and the frame carries that range.
+    const { node, wiring } = new CodeDescriptor({ id: "n", code: "m:f", inputs: { x: "${input.x}" } }).build(
+      new BuildContext({ registry: new Map() }),
+    );
+    const range = new SourceRange(3, 5, 4, 20);
+    const result = new BuildResult({ node, wiring, fieldRanges: new Map([[siteKey("field", "inputs"), range]]) });
+    const error = loadError(() =>
+      checkWiringParity(new Map([["n", result]]), new Map([["n", new Map([...wiring, ["orphan", "${input.y}"]])]]), {
+        diagnostics: rangeDiagnostics(),
+      }),
+    );
+    expect(error.message).toContain("key parity");
+    expect(error.diagnostic.frames[0]!.range).toEqual(range);
   });
-  const error = loadError(() => validateHumanQuestions(new Map([["ask", result]]), { diagnostics: rangeDiagnostics() }));
-  expect(error.message).toContain("questions");
-  expect(error.diagnostic.frames[0]!.range).toEqual(range);
+
+  test("validateHumanQuestions anchors an invalid literal list at the questions: field", () => {
+    // An empty list is refused ("expected 1..4 questions, got 0"); the frame carries the gate's
+    // `questions:` field span.
+    const range = new SourceRange(5, 5, 6, 20);
+    const result = new BuildResult({
+      node: new HumanInputNode("ask", { questions: [] }),
+      wiring: new Map(),
+      fieldRanges: new Map([[siteKey("field", "questions"), range]]),
+    });
+    const error = loadError(() =>
+      validateHumanQuestions(new Map([["ask", result]]), { diagnostics: rangeDiagnostics() }),
+    );
+    expect(error.message).toContain("questions");
+    expect(error.diagnostic.frames[0]!.range).toEqual(range);
+  });
 });
 
 describe("parse ranges", () => {

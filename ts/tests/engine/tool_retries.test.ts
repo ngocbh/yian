@@ -1,7 +1,8 @@
 /**
  * The TOOL node's shell: a port of `tests/engine/test_tool_retries.py`.
  *
- * Ported: `test_tool_node_rejects_a_bad_retries_count`.
+ * Ported: `test_tool_node_rejects_a_bad_retries_count`; `test_a_huge_failure_count_gets_the_cap`
+ * (`backoff` takes the draw as an argument, and a failure count of 10 ** 6 gets the cap too).
  *
  * Changed: the `1.0` row is `1.5`, since `1.0` is the integer `1` in JS; a negative count
  * throws `RangeError` where Python raises `ValueError`; each row checks the whole message, not
@@ -9,7 +10,9 @@
  *
  * TS-only: `hostToolCall()` names the tool, the inputs, their proven types and the output type;
  * the node's kind, title and traits read on an instance (`needsTools`, `needsSteps`); `run`
- * rejects as not ported yet.
+ * rejects as not ported yet. `backoff` directly: the doubling and the jitter's upper half, the cap,
+ * `retryAfter` taking no draw, and a zero base giving 0, never `NaN`. `ToolAttemptsFailed` is an
+ * `Error` named `ToolAttemptsFailed` with its `cause`.
  *
  * Later (T4-11): `test_retries_zero_fails_as_before_and_records_no_step`,
  * `test_two_failures_then_success_records_each_attempt`,
@@ -30,16 +33,38 @@
  * `test_the_real_sleep_waits_without_an_event`,
  * `test_a_wait_longer_than_timeout_max_waits_in_chunks`,
  * `test_a_stop_between_timeout_max_chunks_ends_the_wait`,
- * `test_a_failure_after_100_attempts_lists_every_attempt`, `test_ten_attempts_are_all_listed`,
- * `test_a_long_error_type_name_is_capped` and `test_a_huge_failure_count_gets_the_cap`.
+ * `test_a_failure_after_100_attempts_lists_every_attempt`, `test_ten_attempts_are_all_listed` and
+ * `test_a_long_error_type_name_is_capped`.
  */
 
 import { expect, test } from "bun:test";
 
+import { current, forget, install } from "../../src/defaults.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { backoff, ToolAttemptsFailed, ToolNode } from "../../src/nodes/tool/node.ts";
+import { TransientToolError } from "../../src/tools/errors.ts";
 import { typeFor } from "../../src/typesys/index.ts";
+
+/** JS has no built-in `TimeoutError`; the rows throw this one, as Python's throw its own. */
+class TimeoutError extends Error {
+  override name = "TimeoutError";
+}
+
+/** A jitter draw that must not be taken. */
+function noDraw(): number {
+  throw new Error("drew a jitter");
+}
+
+/** Run `body` with the retry base and cap set, restoring the defaults after. */
+function withDelays<T>(base: number, cap: number, body: () => T): T {
+  install({ ...current(), toolRetryDelaySeconds: base, toolRetryMaxDelaySeconds: cap });
+  try {
+    return body();
+  } finally {
+    forget();
+  }
+}
 
 test("tool node rejects a bad retries count", () => {
   const rows: [unknown, typeof TypeError | typeof RangeError, string][] = [
@@ -85,4 +110,39 @@ test("a TOOL forward is not ported yet", async () => {
   await expect(new ToolNode("call", { toolId: "flaky" }).run({})).rejects.toThrow(
     "node 'call' (ToolNode) forward is not ported yet (T4-11)",
   );
+});
+
+test("the backoff doubles from the base and draws from its upper half", () => {
+  const error = new TimeoutError("a");
+  expect([1, 2, 3].map((failure) => backoff(failure, error, () => 1))).toEqual([1, 2, 4]);
+  expect([1, 2].map((failure) => backoff(failure, error, () => 0))).toEqual([0.5, 1.0]);
+});
+
+test("the backoff stops at the cap", () => {
+  const delays = withDelays(10, 15, () => [1, 2, 3].map((failure) => backoff(failure, new TimeoutError(), () => 1)));
+  expect(delays).toEqual([10, 15, 15]);
+});
+
+test("retryAfter replaces the backoff up to the cap and takes no draw", () => {
+  expect(backoff(1, new TransientToolError("busy", { retryAfter: 7 }), noDraw)).toBe(7);
+  expect(backoff(1, new TransientToolError("busy", { retryAfter: 100 }), noDraw)).toBe(30);
+});
+
+test("a huge failure count gets the cap", () => {
+  expect(backoff(2000, new TimeoutError(), () => 1)).toBe(30);
+  expect(backoff(10 ** 6, new TimeoutError(), () => 1)).toBe(30);
+});
+
+test("a zero base gives a zero backoff, never NaN", () => {
+  const delays = withDelays(0, 30, () => [1, 10 ** 6].map((failure) => backoff(failure, new TimeoutError(), () => 1)));
+  expect(delays).toEqual([0, 0]);
+});
+
+test("ToolAttemptsFailed is an Error named ToolAttemptsFailed with its cause", () => {
+  const cause = new TimeoutError("b");
+  const error = new ToolAttemptsFailed("tool 'flaky' failed after 2 attempts", { cause });
+  expect(error).toBeInstanceOf(Error);
+  expect(error.name).toBe("ToolAttemptsFailed");
+  expect(error.message).toBe("tool 'flaky' failed after 2 attempts");
+  expect(error.cause).toBe(cause);
 });

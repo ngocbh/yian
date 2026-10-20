@@ -16,9 +16,90 @@
 
 import { current } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
-import { type Type, valueRepr } from "../../typesys/values.ts";
+import { isTransientToolError } from "../../tools/errors.ts";
+import { jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
 import { Node, NodeKind } from "../base.ts";
 import { HostToolCall, outputContractType } from "../contracts.ts";
+
+/**
+ * A TOOL call failed after at least one retry; the message lists every attempt.
+ *
+ * Its `cause` is the last attempt's error. An attempt that started but has no recorded failure
+ * (the run stopped or crashed inside it) shows as `interrupted`.
+ */
+export class ToolAttemptsFailed extends Error {
+  override name = "ToolAttemptsFailed";
+}
+
+/**
+ * @internal Return the seconds to wait before retrying after failure number `failure` (1-based).
+ *
+ * The delay doubles from `current().toolRetryDelaySeconds` up to
+ * `current().toolRetryMaxDelaySeconds` and is drawn uniformly from its upper half with `random`.
+ * An error `isTransientToolError` accepts whose `retryAfter` is a finite number of seconds, at
+ * least 0, waits that long instead, up to the cap, and takes no draw.
+ */
+export function backoff(failure: number, error: unknown, random: () => number): number {
+  const { toolRetryDelaySeconds: base, toolRetryMaxDelaySeconds: cap } = current();
+  if (isTransientToolError(error)) {
+    let after: unknown = null;
+    // A foreign branded error may hold anything here, or throw from a getter.
+    try {
+      after = (error as { retryAfter?: unknown }).retryAfter;
+    } catch {
+      after = null;
+    }
+    if (typeof after === "number" && Number.isFinite(after) && after >= 0) return Math.min(cap, after);
+  }
+  // The cap is a safe integer, below 2^53, so exponent 53 reaches it for any base of at least 1;
+  // capping the exponent keeps a huge `failure` from giving 0 * Infinity (NaN) for a zero base.
+  const delay = Math.min(cap, base * 2 ** Math.min(failure - 1, 53));
+  return delay / 2 + (random() * delay) / 2;
+}
+
+/** Return `text` with each lone surrogate replaced by `?`, so it can be written as JSON. */
+function clean(text: string): string {
+  return text.replace(/\p{Cs}/gu, "?");
+}
+
+/** Return the recorded form of a failed attempt's error: its type name and message. */
+function errorStep(error: unknown): { type: string; message: string } {
+  let name: string;
+  // A thrown value may be anything, its `name` or `message` a throwing getter.
+  try {
+    name = error instanceof Error ? String(error.name) : jsTypeName(error);
+  } catch {
+    name = jsTypeName(error);
+  }
+  const type = shownText(clean(name));
+  let text: string;
+  try {
+    text = error instanceof Error ? String(error.message) : String(error);
+  } catch {
+    text = `<${type} object>`;
+  }
+  return { type, message: shownText(clean(text)) };
+}
+
+/**
+ * Return the final failure's message, naming every attempt's error up to `attempt`.
+ *
+ * Each error's text is capped by `shownText`, so the message grows only with the number of
+ * attempts.
+ */
+function attemptsMessage(toolId: string, history: readonly ValueRecord[], attempt: number, error: unknown): string {
+  const failed = new Map<number, unknown>();
+  for (const step of history) if (step.event === "failed") failed.set(Number(step.attempt), step.error);
+  const parts: string[] = [];
+  for (let number = 1; number < attempt; number++) {
+    const recorded = failed.get(number) as ValueRecord | null | undefined;
+    const shown = recorded == null ? "interrupted" : `${recorded.type}: ${recorded.message}`;
+    parts.push(`attempt ${number}: ${shown}`);
+  }
+  const last = errorStep(error);
+  parts.push(`attempt ${attempt}: ${last.type}: ${last.message}`);
+  return `tool ${reprText(toolId)} failed after ${attempt} attempts: ` + parts.join("; ");
+}
 
 /**
  * A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).

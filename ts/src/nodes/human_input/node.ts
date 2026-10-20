@@ -5,17 +5,16 @@
  * through the trusted metadata path, and returns the handler's answer as its one `Output`. The
  * worker remains occupied until the host answers or raises.
  *
- * Only the node's shell and its prompt sites are here. Its body (rendering the prompt and the
- * literal questions, parsing the question list, and the `ask_user` call) is not ported yet and
- * comes with `forward`.
- *
- * Knows about:   nodes/base, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/human_input/questions, diagnostics, expr, tools and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { reprText } from "../../diagnostics.ts";
-import { isList, isRecord } from "../../typesys/values.ts";
-import { checkNamedPrompt, Node, NodeKind } from "../base.ts";
+import { renderTemplateRecord } from "../../expr/template.ts";
+import { ToolSet } from "../../tools/registry.ts";
+import { isList, isRecord, type ValueRecord } from "../../typesys/values.ts";
+import { checkNamedPrompt, hostOutput, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
+import { parseQuestions, type QuestionSpec } from "./questions.ts";
 
 /**
  * A structural gate that blocks its worker until a person answers.
@@ -72,9 +71,45 @@ export class HumanInputNode extends Node {
     this.questionsInput = questionsInput;
   }
 
-  /** The prompt, the questions and the `ask_user` call; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (HumanInputNode) forward is not ported yet (T4-11)`);
+  /**
+   * Ask the run's `ask_user` handler and return its answer.
+   *
+   * The prompt is rendered against `inputs`; literal questions have their `question` and each
+   * record option's `label`/`description` rendered, while a `questionsInput` list is read as is.
+   * Either list is parsed with `parseQuestions`, and the handler receives the parsed specs. The
+   * call goes through `caps.tools` (`new ToolSet()`, the global registry, when absent) with
+   * `caps.signal`, and passes no attempt, so the handler's context reads attempt 1, also when a
+   * resumed run asks again.
+   *
+   * @throws ExpressionError or RequiredError when a template doesn't render.
+   * @throws QuestionSpecError when the question list is invalid, before the handler runs.
+   * @throws RangeError when the run has no `ask_user` handler.
+   * @throws HostOutputError when the answer isn't a yian value.
+   * @throws Whatever the handler throws, unchanged.
+   */
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
+    const record = inputs as ValueRecord;
+    const prompt = this.prompt === null ? null : renderTemplateRecord(this.prompt, record);
+    let questions: QuestionSpec[] | null = null;
+    if (this.questions !== null) {
+      // `header` is a key and `multi_select` a flag: both are left verbatim.
+      questions = parseQuestions(this.questions.map((question) => this.renderQuestion(question, record)));
+    } else if (this.questionsInput !== null) {
+      // An upstream-produced list, already resolved: taken as is, no templating.
+      questions = parseQuestions(inputs[this.questionsInput]);
+    }
+    const answer = await (caps.tools ?? new ToolSet()).invokeTrusted(
+      "ask_user",
+      {
+        question: prompt || "",
+        questions,
+        answerSchema: this.answerSchema.length > 0 ? this.answerSchema : null,
+        title: this.title,
+        nodeId: this.id,
+      },
+      { node: this.id, signal: caps.signal },
+    );
+    return new Output(hostOutput(answer));
   }
 
   /**
@@ -92,6 +127,32 @@ export class HumanInputNode extends Node {
       // `||`, as Python's `or`: an empty path names the node by its id.
       checkNamedPrompt(text, `node ${reprText(path || this.id)} ${siteLabel(sitePath)}`);
     }
+  }
+
+  /**
+   * Render `${...}` in a literal question's `question` text and its options against `record`.
+   *
+   * Other keys are copied verbatim for `parseQuestions` to validate; an item that isn't a record
+   * is returned as is, and `parseQuestions` refuses it.
+   */
+  private renderQuestion(question: unknown, record: ValueRecord): unknown {
+    if (!isRecord(question)) return question;
+    const rendered: Record<string, unknown> = { ...question };
+    if (typeof rendered.question === "string") rendered.question = renderTemplateRecord(rendered.question, record);
+    const options = rendered.options;
+    if (isList(options)) rendered.options = options.map((option) => this.renderOption(option, record));
+    return rendered;
+  }
+
+  /** Render `${...}` in one record option's `label`/`description` against `record`. */
+  private renderOption(option: unknown, record: ValueRecord): unknown {
+    if (!isRecord(option)) return option;
+    const rendered: Record<string, unknown> = { ...option };
+    for (const key of ["label", "description"]) {
+      const value = rendered[key];
+      if (typeof value === "string") rendered[key] = renderTemplateRecord(value, record);
+    }
+    return rendered;
   }
 }
 

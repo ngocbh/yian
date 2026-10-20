@@ -2,8 +2,10 @@
  * Per-run tools through the evaluator: the `evalNode` rows of `tests/engine/test_run_tools.py`.
  *
  * Ported: `test_eval_node_rejects_a_raw_tools_mapping`, `test_flow_engine_rejects_a_raw_tools_mapping`,
- * `test_eval_node_passes_the_run_toolset_to_a_tool_node` and
- * `test_flow_engine_passes_its_toolset_to_every_tool_node`.
+ * `test_eval_node_passes_the_run_toolset_to_a_tool_node`,
+ * `test_flow_engine_passes_its_toolset_to_every_tool_node`,
+ * `test_human_input_asks_the_run_ask_user_handler` (the request is camelCase) and
+ * `test_eval_node_gives_human_input_the_run_toolset`.
  *
  * Ported (adapted): `test_only_nodes_that_declare_needs_tools_receive_the_toolset`: every node also
  * receives `signal`, and the opted-in node's `tools` is the run's tool set itself.
@@ -31,9 +33,6 @@
  * `test_trusted_ask_user_call_passes_all_fields_to_the_handler` and
  * `test_ask_user_options_are_normalized_leniently`.
  *
- * Later (T4-11), they run the HUMAN_INPUT body: `test_human_input_asks_the_run_ask_user_handler`
- * and `test_eval_node_gives_human_input_the_run_toolset`.
- *
  * Later (T5-11b), they run the AGENT tool loop: `test_agent_binds_and_calls_granted_per_run_tools`,
  * `test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant`,
  * `test_agent_granted_three_groups_sees_the_union_of_their_tools`,
@@ -46,10 +45,11 @@ import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { ToolSet } from "../../src/tools/registry.ts";
+import { type AskUserHandler, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { engine, graph, rejected } from "./run_state_fixtures.ts";
 
@@ -60,6 +60,14 @@ const PING = new FunctionTool({
   parametersJsonSchema: { type: "object", properties: {} },
   execute: () => "run-pong",
 });
+
+/** An `ask_user` handler that records each request in `seen` and returns `answer`. */
+function recordingHandler(seen: AskUserRequest[], answer: unknown = null): AskUserHandler {
+  return (request) => {
+    seen.push(request);
+    return answer;
+  };
+}
 
 /** Record the capabilities each evaluation supplies. */
 class CapsProbe extends Node {
@@ -132,4 +140,27 @@ test("flow engine passes its toolset to every tool node", async () => {
   await built.run();
 
   expect(built.state.pool.get("ping")).toBe("run-pong");
+});
+
+test("human input asks the run ask_user handler", async () => {
+  const seen: AskUserRequest[] = [];
+  const tools = new ToolSet({ ask_user: recordingHandler(seen, "yes") });
+  const node = new HumanInputNode("approval", { prompt: "Ship ${plan}?", title: "Gate" });
+
+  expect(await node.run({ plan: "v2" }, { tools })).toEqual(new Output("yes"));
+  expect(seen).toEqual([
+    { question: "Ship v2?", options: null, questions: null, answerSchema: null, title: "Gate", nodeId: "approval" },
+  ]);
+});
+
+test("eval node gives human input the run toolset", async () => {
+  const seen: AskUserRequest[] = [];
+  const tools = new ToolSet({ ask_user: recordingHandler(seen, "yes") });
+
+  const node = new HumanInputNode("ask", { prompt: "Ready?" });
+
+  const evaluated = await evalNode(node, null, new VariablePool(), { tools });
+
+  expect(evaluated.outcome).toEqual(new Output("yes"));
+  expect(seen.map((request) => request.nodeId)).toEqual(["ask"]);
 });

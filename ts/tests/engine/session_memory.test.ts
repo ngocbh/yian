@@ -26,7 +26,9 @@
  * TS-only: the constructor's settings (`true`, `1.5` and `"1"` are `TypeError`s; `0` budget
  * characters, `-1` recent turns and a `bigint` beyond 2^53 − 1 are `RangeError`s; a non-boolean
  * `createParent` is a `TypeError`; `bigint` and `null` settings are accepted); a snapshot whose
- * `generation` is `2n ** 53n` is `session.invalid_snapshot`.
+ * `generation` is `2n ** 53n` is `session.invalid_snapshot`; `openTurn` rejects a request that
+ * isn't exactly a `ConversationRequest` and a missing or non-`AbortSignal` signal with a
+ * `TypeError`, leaving no ticket queued or active.
  *
  * Changed:
  * - `test_session_backend_implements_the_protocol`: `isMemory` and the session's methods stand in
@@ -87,38 +89,29 @@ import {
   LearnContext,
   MemoryContent,
   MemoryMutation,
-  MemoryOperationError,
   RecallContext,
 } from "../../src/memory/contracts.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
-import { appendReply, type Harness, item, NEVER, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
-
-// Cloned snapshots and nested test values are edited freely.
-type Mutable = any;
-
-/** The value `fn` throws. */
-function caught(fn: () => unknown): unknown {
-  try {
-    fn();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a throw");
-}
-
-/** The `MemoryOperationError` `fn` throws, checked to carry `code`. */
-function failure(fn: () => unknown, code: string): MemoryOperationError {
-  const error = caught(fn);
-  expect(error).toBeInstanceOf(MemoryOperationError);
-  expect((error as MemoryOperationError).code).toBe(code);
-  return error as MemoryOperationError;
-}
+import {
+  appendReply,
+  caught,
+  failure,
+  type Harness,
+  item,
+  type Mutable,
+  NEVER,
+  request,
+  snapshot,
+  withHarness,
+  withTurn,
+} from "./session_fakes.ts";
 
 /** Check that `fn` throws exactly a `cls` with `message`. */
 function expectThrow(fn: () => unknown, cls: ErrorConstructor, message: string | RegExp): void {
   const error = caught(fn);
   expect(Object.getPrototypeOf(error)).toBe(cls.prototype);
-  expect((error as Error).message).toMatch(message);
+  if (typeof message === "string") expect((error as Error).message).toBe(message);
+  else expect((error as Error).message).toMatch(message);
 }
 
 /** The backend's live conversation view. */
@@ -268,7 +261,11 @@ test("pristine backend adopts snapshot namespace", async () => {
 test("used backend rejects foreign snapshot", () => {
   const memory = new SessionMemory();
   const before = snapshot(memory);
-  failure(() => memory.openRun({ snapshot: snapshot(new SessionMemory()) }), "session.invalid_snapshot");
+  failure(
+    () => memory.openRun({ snapshot: snapshot(new SessionMemory()) }),
+    "session.invalid_snapshot",
+    "snapshot is not proven history of this backend",
+  );
   expect(snapshot(memory)).toEqual(before);
 });
 
@@ -307,7 +304,11 @@ test("session learn and commit accept empty batches", async () => {
     expect(h.frame.learn(new LearnContext("a", "session", []))).toEqual([]);
     h.session.commit("same", []);
     h.session.commit("same", []);
-    failure(() => h.session.commit("same", [new MemoryMutation("m", {})]), "session.invalid_batch");
+    failure(
+      () => h.session.commit("same", [new MemoryMutation("m", {})]),
+      "session.invalid_batch",
+      "mutation batch is invalid",
+    );
     expectThrow(() => h.session.commit("same", new Set() as never), TypeError, "mutations must be an array");
     expect(snapshot(h.memory)).toEqual(before);
   });
@@ -388,7 +389,11 @@ describe("snapshot rejects invalid container or nonfinite json", () => {
       });
       const value = mutate(structuredClone(exported));
       const memory = new SessionMemory();
-      const error = failure(() => memory.openRun({ snapshot: value }), "session.invalid_snapshot");
+      const error = failure(
+        () => memory.openRun({ snapshot: value }),
+        "session.invalid_snapshot",
+        "invalid SessionMemory snapshot",
+      );
       expect([error.stage, error.retryable]).toEqual(["snapshot", false]);
       expect(memory["used"]).toBe(false);
       expect(memory["view"]).toBeNull();
@@ -419,7 +424,11 @@ test("used backend rejects newer same namespace snapshot", async () => {
   });
   const restored = new SessionMemory();
   restored.openRun({ snapshot: initial }).close();
-  failure(() => restored.openRun({ snapshot: newer }), "session.invalid_snapshot");
+  failure(
+    () => restored.openRun({ snapshot: newer }),
+    "session.invalid_snapshot",
+    "snapshot is not proven history of this backend",
+  );
   expect(snapshot(restored)).toEqual(initial);
 });
 
@@ -528,7 +537,11 @@ test("alternate same namespace history is not a valid opening snapshot", async (
       (alternate) => withTurn(alternate.frame, request(), (turn) => appendReply(turn, "reply", "different")),
       fork,
     );
-    failure(() => live.memory.openRun({ snapshot: snapshot(fork) }), "session.invalid_snapshot");
+    failure(
+      () => live.memory.openRun({ snapshot: snapshot(fork) }),
+      "session.invalid_snapshot",
+      "snapshot is not proven history of this backend",
+    );
     expect(snapshot(live.memory)).toEqual(original);
   });
 });
@@ -580,7 +593,7 @@ describe("publication requires owned stamp", () => {
           );
           const checkpoint = new ConversationEffectRequested(replaced, "model", {}, []);
           const before = snapshot(h.memory);
-          failure(() => turn["publish"](checkpoint), "session.conflict");
+          failure(() => turn["publish"](checkpoint), "session.conflict", "checkpoint does not belong to this lease");
           expect(snapshot(h.memory)).toEqual(before);
         });
       });
@@ -589,6 +602,29 @@ describe("publication requires owned stamp", () => {
 });
 
 describe("TS-only", () => {
+  test("openTurn rejects a non-request or a non-signal before queuing", async () => {
+    await withHarness(async (h) => {
+      const rows: [unknown, unknown, string][] = [
+        [{ ...request() }, { signal: NEVER }, "request must be a ConversationRequest"],
+        [request(), undefined, "signal must be an AbortSignal"],
+        [request(), {}, "signal must be an AbortSignal"],
+        [request(), { signal: { aborted: false } }, "signal must be an AbortSignal"],
+      ];
+      for (const [value, options, message] of rows) {
+        const error = await h.frame.openTurn(value as never, options as never).then(
+          () => null,
+          (rejected: unknown) => rejected,
+        );
+        expect(Object.getPrototypeOf(error)).toBe(TypeError.prototype);
+        expect((error as Error).message).toBe(message);
+        expect(h.memory["queue"].length).toBe(0);
+        expect(h.memory["active"]).toBeNull();
+        expect(h.frame["leases"].size).toBe(0);
+      }
+      await withTurn(h.frame, request(), () => {});
+    });
+  });
+
   test("constructor settings are exact integers in range", () => {
     for (const value of [true, 1.5, "1"]) {
       expectThrow(

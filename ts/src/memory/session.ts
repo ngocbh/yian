@@ -23,6 +23,7 @@ import {
   ConversationEffectObserved,
   ConversationEffectRequested,
   type ConversationEffectStatus,
+  type ConversationInvocation,
   type ConversationItem,
   ConversationRequest,
   ConversationStamp,
@@ -195,6 +196,12 @@ function noteId(source: JsonObject): string {
   return crypto.createHash("sha256").update(logJson(source)).digest("hex");
 }
 
+// Local copy of memory/conversation.ts's invocationKey, which that module keeps private.
+/** The lease key of one invocation. */
+function invocationKey(invocation: ConversationInvocation): string {
+  return JSON.stringify([invocation.runId, invocation.startSequence]);
+}
+
 /** Whether `view` admitted the invocation `[runId, executionSeq]`. */
 function admitted(view: ConversationView | null, runId: string, executionSeq: number): boolean {
   // Local copy of memory/conversation.ts's operationKey for the admission, ordinal 0.
@@ -223,7 +230,7 @@ function validateNote(value: unknown): JsonObject {
 }
 
 /** Build one deep-frozen version 3 snapshot, ints as `bigint`s. */
-function snapshot(
+function snapshotJson(
   namespace: string,
   generation: number,
   view: ConversationView | null,
@@ -328,12 +335,22 @@ function summaryJson(summary: Summary): JsonObject {
 /**
  * Own one conversation and its notes, optionally in local SQLite.
  *
- * @example
  * `new SessionMemory()` creates an isolated namespace. Injected conversation-capable callers use
- * `memory.openRun()`; runtime and provider integration are separate from this backend.
- * `new SessionMemory({ storage: "memory.sqlite" })` retains values across restarts; call `close()`
- * in `finally` to release the single file owner. The file is opened at the first operation, not at
- * construction.
+ * `memory.openRun()`; runtime and provider integration are separate from this backend. With
+ * `storage`, values survive restarts; the file is opened at the first operation, not at
+ * construction, and `close()` releases the single file owner.
+ *
+ * @example
+ * ```ts
+ * const memory = new SessionMemory({ storage: "memory.sqlite" });
+ * try {
+ *   const session = memory.openRun();
+ *   // ...
+ *   session.close();
+ * } finally {
+ *   memory.close();
+ * }
+ * ```
  */
 export class SessionMemory implements Memory {
   // TS-private, not `#`, so tests can spy on and read them, as Python's tests read `_view`.
@@ -456,7 +473,7 @@ export class SessionMemory implements Memory {
     let liveNotes = this.notes;
     let pinned: JsonObject;
     if (parsed === null) {
-      pinned = snapshot(this.namespace, this.generation, this.view, this.notes);
+      pinned = snapshotJson(this.namespace, this.generation, this.view, this.notes);
     } else {
       const [data, view, notes] = parsed;
       pinned = data;
@@ -474,7 +491,7 @@ export class SessionMemory implements Memory {
         throw error("invalid_snapshot", "snapshot is not proven history of this backend", { stage: "snapshot" });
       }
     }
-    if (!this.used) this.saveState(snapshot(namespace, generation, liveView, liveNotes), { used: true });
+    if (!this.used) this.saveState(snapshotJson(namespace, generation, liveView, liveNotes), { used: true });
     this.namespace = namespace;
     this.generation = generation;
     this.view = liveView;
@@ -495,7 +512,7 @@ export class SessionMemory implements Memory {
     if (this.active !== null || this.queue.length > 0) {
       throw error("busy", "cannot reset active or queued conversations", { stage: "reset" });
     }
-    this.saveState(snapshot(this.namespace, this.generation + 1, null, []), { used: true, summaries: new Map() });
+    this.saveState(snapshotJson(this.namespace, this.generation + 1, null, []), { used: true, summaries: new Map() });
     this.view = null;
     this.notes = Object.freeze([]);
     this.summaries = new Map();
@@ -680,7 +697,7 @@ export class Session implements MemorySession, TranscriptSource {
         retained.set(note.note_id as string, note);
       }
       notes = Object.freeze([...retained.values()]);
-      candidate = snapshot(this.namespace, this.generation, memory["view"], notes);
+      candidate = snapshotJson(this.namespace, this.generation, memory["view"], notes);
     } catch (cause) {
       if (!(cause instanceof TypeError || cause instanceof RangeError)) throw cause;
       throw error("invalid_batch", "mutation batch is invalid", { stage: "commit", cause });
@@ -750,8 +767,7 @@ export class Session implements MemorySession, TranscriptSource {
     const memory = this.memory;
     memory["guard"]();
     this.ensureLive();
-    // Local copy of memory/conversation.ts's invocationKey.
-    const key = JSON.stringify([request.invocation.runId, request.invocation.startSequence]);
+    const key = invocationKey(request.invocation);
     if (this.leases.has(key)) throw error("conflict", "invocation already has a session lease");
     memory["nextTicket"] += 1;
     const lease: Lease = {
@@ -795,7 +811,7 @@ export class Session implements MemorySession, TranscriptSource {
 
   /** Validate and save a complete candidate snapshot over `view` before publishing it in RAM. */
   private candidateSnapshot(view: ConversationView): void {
-    this.memory["saveState"](snapshot(this.namespace, this.generation, view, this.memory["notes"]));
+    this.memory["saveState"](snapshotJson(this.namespace, this.generation, view, this.memory["notes"]));
   }
 
   /**
@@ -815,8 +831,7 @@ export class Session implements MemorySession, TranscriptSource {
       !lease.active ||
       lease.released ||
       memory["active"] !== lease ||
-      this.leases.get(JSON.stringify([lease.request.invocation.runId, lease.request.invocation.startSequence])) !==
-        lease
+      this.leases.get(invocationKey(lease.request.invocation)) !== lease
     ) {
       throw error("stale", "conversation lease is no longer active");
     }

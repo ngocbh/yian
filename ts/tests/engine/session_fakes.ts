@@ -3,13 +3,38 @@
  * `tests/engine/_session_fakes.py`, plus the promise helpers the session tests share.
  */
 
+import { expect } from "bun:test";
+
 import {
   ConversationInvocation,
   ConversationItem,
   ConversationRequest,
   type JsonObject,
+  MemoryOperationError,
 } from "../../src/memory/contracts.ts";
 import { type Session, SessionMemory, type Turn } from "../../src/memory/session.ts";
+
+// Cloned snapshots and nested test values are edited freely.
+export type Mutable = any;
+
+/** The value `fn` throws. */
+export function caught(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
+
+/** The `MemoryOperationError` `fn` throws, checked to carry `code` and `message`. */
+export function failure(fn: () => unknown, code: string, message: string): MemoryOperationError {
+  const error = caught(fn);
+  expect(error).toBeInstanceOf(MemoryOperationError);
+  expect((error as MemoryOperationError).code).toBe(code);
+  expect((error as MemoryOperationError).message).toBe(message);
+  return error as MemoryOperationError;
+}
 
 /** A signal that never aborts, for Python's `check_stopped=lambda: None`. */
 export const NEVER: AbortSignal = new AbortController().signal;

@@ -46,33 +46,11 @@ import {
   MemoryEpisode,
   MemoryEpisodeStatus,
   MemoryMutation,
-  MemoryOperationError,
   RecallContext,
 } from "../../src/memory/contracts.ts";
 import { type Session, SessionMemory } from "../../src/memory/session.ts";
 import { logJson } from "../../src/typesys/json.ts";
-import { request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
-
-// Cloned snapshots and nested test values are edited freely.
-type Mutable = any;
-
-/** The value `fn` throws. */
-function caught(fn: () => unknown): unknown {
-  try {
-    fn();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a throw");
-}
-
-/** The `MemoryOperationError` `fn` throws, checked to carry `code`. */
-function failure(fn: () => unknown, code: string): MemoryOperationError {
-  const error = caught(fn);
-  expect(error).toBeInstanceOf(MemoryOperationError);
-  expect((error as MemoryOperationError).code).toBe(code);
-  return error as MemoryOperationError;
-}
+import { caught, failure, type Mutable, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
 
 /** One closed note with its source identity. */
 function note(
@@ -95,7 +73,7 @@ async function withNotes(...notes: Mutable[]): Promise<Mutable> {
     await withTurn(h.frame, request(), () => {});
     return snapshot(h.memory);
   });
-  return { ...structuredClone(value), version: 3n, notes: [...notes] };
+  return { ...structuredClone(value), notes: [...notes] };
 }
 
 /** Open one closed turn on `h`'s session. */
@@ -186,7 +164,7 @@ describe("snapshot rejects invalid or unadmitted notes without adoption", () => 
       const value = await withNotes(note());
       mutate(value, value.notes[0]);
       const memory = new SessionMemory();
-      failure(() => memory.openRun({ snapshot: value }), "session.invalid_snapshot");
+      failure(() => memory.openRun({ snapshot: value }), "session.invalid_snapshot", "invalid SessionMemory snapshot");
       expect(memory["used"]).toBe(false);
     });
   }
@@ -206,7 +184,11 @@ test("historical note prefix is pinned without rewinding live state", async () =
     opened.close();
   }
   for (const notes of [full.notes.slice(1), full.notes.toReversed(), [note({ text: "Changed" })]]) {
-    failure(() => memory.openRun({ snapshot: { ...full, notes } }), "session.invalid_snapshot");
+    failure(
+      () => memory.openRun({ snapshot: { ...full, notes } }),
+      "session.invalid_snapshot",
+      "snapshot is not proven history of this backend",
+    );
   }
 });
 
@@ -292,7 +274,11 @@ test("exact commit replay and stable note ids are idempotent", async () => {
     const distinct = mutation(note({ text: "A distinct observation" }));
     h.session.commit("new-feedback", [distinct]);
     const expected = snapshot(h.memory);
-    failure(() => h.session.commit("same", [distinct]), "session.commit_collision");
+    failure(
+      () => h.session.commit("same", [distinct]),
+      "session.commit_collision",
+      "commit id identifies a different batch",
+    );
     expect(snapshot(h.memory)).toEqual(expected);
   });
 });
@@ -316,7 +302,11 @@ describe("invalid last mutation publishes no notes or commit tombstone", () => {
         const before = snapshot(h.memory);
         const first = mutation();
         const second = build(first, mutation(note({ index: 1n })));
-        failure(() => h.session.commit("atomic", [first, second as MemoryMutation]), "session.invalid_batch");
+        failure(
+          () => h.session.commit("atomic", [first, second as MemoryMutation]),
+          "session.invalid_batch",
+          "mutation batch is invalid",
+        );
         expect(snapshot(h.memory)).toEqual(before);
         h.session.commit("atomic", [first]);
         expect((snapshot(h.memory) as Mutable).notes).toEqual([note()]);
@@ -329,7 +319,11 @@ test("empty commit identity cannot later publish a different batch", async () =>
   await withHarness(async (h) => {
     await admit(h);
     h.session.commit("empty", []);
-    failure(() => h.session.commit("empty", [mutation()]), "session.commit_collision");
+    failure(
+      () => h.session.commit("empty", [mutation()]),
+      "session.commit_collision",
+      "commit id identifies a different batch",
+    );
     expect((snapshot(h.memory) as Mutable).notes).toEqual([]);
   });
 });
@@ -341,8 +335,12 @@ test("reset clears notes and keeps commit replay tombstones", async () => {
     h.session.commit("before-reset", batch);
     const old: Mutable = snapshot(h.memory);
     h.memory.reset();
-    failure(() => h.session.commit("before-reset", batch), "session.stale");
-    failure(() => recall(h.frame), "session.stale");
+    failure(
+      () => h.session.commit("before-reset", batch),
+      "session.stale",
+      "memory session is closed or belongs to an old generation",
+    );
+    failure(() => recall(h.frame), "session.stale", "memory session is closed or belongs to an old generation");
     await withHarness((later) => {
       later.session.commit("before-reset", batch);
       expect(recall(later.frame)).toBe("");
@@ -350,7 +348,7 @@ test("reset clears notes and keeps commit replay tombstones", async () => {
       expect(now.notes).toEqual([]);
       expect(now.conversation).toBeNull();
       expect(now.generation).toBe(old.generation + 1n);
-      failure(() => later.session.commit("new-identity", batch), "session.invalid_batch");
+      failure(() => later.session.commit("new-identity", batch), "session.invalid_batch", "mutation batch is invalid");
     }, h.memory);
   });
 });
@@ -387,6 +385,7 @@ describe("malformed attributed self feedback fails without publication", () => {
         failure(
           () => h.frame.learn(new LearnContext("a", "session", learning.episodes, [feedback])),
           "session.invalid_context",
+          "learning context is invalid",
         );
         expect(snapshot(h.memory)).toEqual(before);
       });
@@ -443,7 +442,7 @@ test("busy reset preserves notes and forward turn updates preserve notes", async
     h.session.commit("note", [mutation()]);
     await withTurn(h.frame, request("b"), () => {
       const before = snapshot(h.memory);
-      failure(() => h.memory.reset(), "session.busy");
+      failure(() => h.memory.reset(), "session.busy", "cannot reset active or queued conversations");
       expect(snapshot(h.memory)).toEqual(before);
     });
     expect((snapshot(h.memory) as Mutable).notes).toEqual([note()]);
@@ -456,7 +455,11 @@ test("reset keeps empty commit tombstones", async () => {
     h.memory.reset();
     await withHarness(async (later) => {
       await admit(later);
-      failure(() => later.session.commit("empty", [mutation()]), "session.commit_collision");
+      failure(
+        () => later.session.commit("empty", [mutation()]),
+        "session.commit_collision",
+        "commit id identifies a different batch",
+      );
     }, h.memory);
   });
 });

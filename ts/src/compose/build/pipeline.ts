@@ -78,6 +78,8 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
 // T3-17 imports
+import { inferDataEdges } from "../edges/data.ts";
+import { inferOrderingEdges } from "../edges/ordering.ts";
 import { Narrowing } from "../validate/narrowing.ts";
 import type { LocalInput } from "../validate/typed_bindings.ts";
 // T3-18 imports
@@ -1723,7 +1725,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 //            throws.
 //          readBindingContract (3, `BindingContractReader | null`): `null`.
 //          registerInlineBodies (2): returns the descriptors.
-//          inferDataEdges, hostControlEdges, inferOrderingEdges (1): return `[]`.
+//          hostControlEdges (1): returns `[]`.
 //          stampInlineCallOrigins (2).
 //          synthesizeBoundaryGraph (1, `lowered` positional with a default, then `{ record }`):
 //            returns `[new Map(), [], new Map()]`, so `ComposedFlow.input` throws until it is
@@ -1849,25 +1851,8 @@ function expandCaseOutputs(
   return [new Map(descriptors), outputsSection];
 }
 
-/** Python's `compose.edges.data.infer_data_edges`; not ported yet. */
-function inferDataEdges(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
-): Edge[] {
-  return [];
-}
-
 /** Python's `compose.edges.hosts.host_control_edges`; not ported yet. */
 function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: readonly Edge[]): Edge[] {
-  return [];
-}
-
-/** Python's `compose.edges.ordering.infer_ordering_edges`; not ported yet. */
-function inferOrderingEdges(
-  descriptors: ReadonlyMap<string, NodeDescriptor>,
-  nodeIds: ReadonlySet<string>,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
-): Edge[] {
   return [];
 }
 

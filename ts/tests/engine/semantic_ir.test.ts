@@ -32,7 +32,9 @@
  * `test_child_signature_keeps_nested_partial_output_opaque_at_record_field` and
  * `test_child_signature_rejects_contradictory_declared_output_evidence`;
  * `test_composite_builders_preserve_or_deliberately_wrap_child_contract` (the LOOP count is `1n`,
- * as YAML reads it); and the CASE edge row `test_case_edge_inference_reads_wrapped_lowered_wiring`.
+ * as YAML reads it); the CASE edge row `test_case_edge_inference_reads_wrapped_lowered_wiring`; and
+ * the edge inference rows `test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
+ * `test_producer_scan_unwraps_exactly_one_carrier_layer`.
  *
  * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
  * `literalType` (an int, a float, ±Infinity, text, empty text, a bool, null, a record, a value
@@ -60,6 +62,7 @@
  *   `SimpleNamespace` over bare nodes.
  * - The CASE edge row builds an `on:` `CaseDescriptor` whose `onOrigin` wraps the `__on` wiring
  *   in a `Binding`, where Python calls `_data_edges`, which stays module-private.
+ * - The data-edge row's sink is a base `NodeDescriptor`, where Python passes a bare `object()`.
  * - Binding, Assertion and FlowOutput are frozen, so `object.__setattr__(carrier, ...)` is a forged
  *   carrier (`Object.assign(Object.create(prototype), carrier, {futureSemanticField: true})`); the
  *   raw-output row sets a forged `FlowOutput` whose binding is a string. Python's `ValueError` is a
@@ -71,9 +74,7 @@
  * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring` and
  * `test_reference_validation_checks_a_wrapped_flow_output`); the CALL/LOOP type-check rows
  * (`test_call_type_*` and `test_loop_type_check_*`); inline binding type inference
- * (`test_inline_binding_type_inference_reads_one_carrier_layer`); and edge inference
- * (`test_data_edge_inference_is_identical_for_raw_and_wrapped_sources` and
- * `test_producer_scan_unwraps_exactly_one_carrier_layer`).
+ * (`test_inline_binding_type_inference_reads_one_carrier_layer`).
  */
 
 import { expect, test } from "bun:test";
@@ -95,7 +96,9 @@ import {
   resolveOutputBindingContract,
   templateContract,
 } from "../../src/compose/helpers/output_contracts.ts";
-import { BuildContext } from "../../src/compose/nodes/base.ts";
+import { inferDataEdges } from "../../src/compose/edges/data.ts";
+import { bindingProducers } from "../../src/compose/edges/producers.ts";
+import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
@@ -1089,4 +1092,27 @@ test("composite builders preserve or deliberately wrap the child contract", () =
   expect(listed).not.toBe(contract);
   expect(listed.type.element).toBe(contract.type);
   expect(listed.origins).toStrictEqual(new ContractOrigins({ default: origin("child-root") }));
+});
+
+test("data edge inference is identical for raw and wrapped sources", () => {
+  // Carrier provenance must not change producers, groups, or optionality.
+  const source = "${producer.output}";
+  const descriptors = new Map([["sink", new NodeDescriptor({ id: "sink" })]]);
+  const raw = inferDataEdges(descriptors, new Map([["sink", new Map([["value", source]])]]));
+  const wrapped = inferDataEdges(
+    descriptors,
+    new Map([["sink", new Map([["value", new Binding(source, { origin: origin("sink-value") })]])]]),
+  );
+
+  expect(wrapped).toStrictEqual(raw);
+  expect(raw.map((edge) => [edge.from, edge.to, edge.inputGroup, edge.optional])).toEqual([
+    ["producer", "sink", "value", false],
+  ]);
+});
+
+test("the producer scan unwraps exactly one carrier layer", () => {
+  // A nested carrier remains an opaque payload rather than executable wiring.
+  const inner = new Binding("${producer.output}", { origin: origin("inner") });
+
+  expect(bindingProducers(new Binding(inner, { origin: origin("outer") }))).toEqual([]);
 });

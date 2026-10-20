@@ -15,7 +15,7 @@
  * `test_resolved_parameters_reject_missing_input_representation`). TS-only conductor rows: a cursor
  * with resolved parameters, the memory declaration check, the errors `parseNodes`, the `uses:`
  * alias check and the value-entry reader raise through `assemble`, and one happy path over stand-in
- * nodes (no boundary until T3-17). Later (T3-17): the value-entry rows of `stampNodeWiringOrigins`
+ * nodes (its data edges, no boundary until T3-17). Later (T3-17): the value-entry rows of `stampNodeWiringOrigins`
  * (a value entry's input owns its parameter and binding at the entry itself) and `splitTypedInputs`
  * (a value entry is returned unchanged), once `isValueEntry` is real; the resolved parameter
  * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
@@ -54,7 +54,7 @@ import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compo
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, Edge, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import {
   DiagnosticFrame,
@@ -836,8 +836,12 @@ output:
 
     const compiled = flow.compiled;
     expect([...compiled.nodes.keys()]).toEqual(["a", "b"]);
-    // No data edges or boundary until those passes are ported.
-    expect(compiled.edges).toEqual([]);
+    // The data edges of the wiring (`${input.n}` reads START); no boundary edges until
+    // `synthesizeBoundaryGraph` is ported.
+    expect(compiled.edges).toStrictEqual([
+      new Edge("__start__->a#0", START_ID, "a", { inputGroup: "qty" }),
+      new Edge("a->b#0", "a", "b", { inputGroup: "note" }),
+    ]);
     expect(scope.resolved).toEqual(["helper"]);
     expect([flow.version, flow.name, flow.description, compiled.flowId]).toEqual(["1", "f", "two steps", "f"]);
 

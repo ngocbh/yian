@@ -3,8 +3,7 @@
  * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
- * Later (T3-17): `test_flow_output_field_reads_as_a_template` (flow outputs),
- * `test_nested_reference_orders_its_consumer_after_the_producer` (data edges) and
+ * Later (T3-17): `test_flow_output_field_reads_as_a_template` (flow outputs) and
  * `test_nested_call_directive_is_not_lifted` (inline-call desugaring).
  * Later (T3-18): `test_dangling_nested_reference_fails_at_its_own_line`,
  * `test_dangling_nested_output_reference_fails_at_its_own_line`,
@@ -65,6 +64,12 @@ test("untagged nested binding reads as a template", () => {
   expect(source).toBeInstanceOf(ValueTemplate);
   expect((source as ValueTemplate).value).toEqual({ a: "${p.output}", b: 1n });
   expect((compiled.wiring.get("c")!.get("x") as Binding).contract).toBeNull();
+});
+
+test("a nested reference orders its consumer after the producer", () => {
+  const { compiled } = assembleText(codeFlow("{a: ['${p.output}']}")).flow;
+
+  expect(compiled.edges.map((edge) => [edge.from, edge.to])).toContainEqual(["p", "c"]);
 });
 
 test("wait until container with a span fails at the container", () => {

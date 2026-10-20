@@ -370,7 +370,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   to `error.notes`; snapshots are deep-frozen; `-0` equals `0` in a compatibility descriptor; there
   is no `with` form (call `close()` in `finally`) and no fork check; a waiter sees a poisoned
   store at its next wake-up, not by polling.
-- The reflective and profile backends are not ported yet.
+- `src/memory/reflective.ts` holds `ReflectiveMemory`, which keeps atomic lessons and asks one
+  structured model call to propose lesson mutations. Changed: the constructor takes an options
+  object (`llmConfig`, `maxItems`, `recallLimit`, `storage`, `createParent`, `env`, `createModel`,
+  `onRetry`); `createModel(config)` builds the learner's model (default `chatModelFromConfig`);
+  `recall` and `learn` are async; snapshot and stored ints are `bigint`s; there is no `with` form
+  and no fork check.
+- The profile backend is not ported yet.
 
 ## Runtime
 

@@ -15,12 +15,11 @@
  * `test_resolved_parameters_reject_missing_input_representation`) and the resolved parameter
  * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
  * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`). TS-only conductor rows: a
- * cursor with resolved parameters, the memory declaration check, the errors `parseNodes`, the
- * `uses:` alias check and the value-entry reader raise through `assemble`, one happy path over
- * stand-in nodes (its data and boundary edges), END's binding labels, and a value entry loaded
- * as a built-in identity CODE node. The value-entry rows of `stampNodeWiringOrigins` (a value
- * entry's input owns its parameter and binding at the entry itself) and `splitTypedInputs` (a
- * value entry is returned unchanged).
+ * cursor with resolved parameters, the memory declaration check, the errors `parseNodes` and the
+ * `uses:` alias check raise through `assemble`, one happy path over stand-in nodes (its data and
+ * boundary edges), END's binding labels, a value entry loaded as a built-in identity CODE node,
+ * and the value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter
+ * and binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged).
  * Later (T3-18): the wiring parity rows (`test_wiring_parity_*`).
  *
  * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
@@ -63,7 +62,7 @@ import { BuildContext, BuildResult, type NodeDescriptor } from "../../src/compos
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
-import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { parseNodes, type ValueReader } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
@@ -251,34 +250,29 @@ describe("the descriptor build cache", () => {
   });
 });
 
-/** Parse flow `text`'s `nodes:` as `assemble` reads them, with `StandInCode` as `code`. */
+/**
+ * Parse flow `text`'s `nodes:` as `assemble` reads them, with `StandInCode` as `code`.
+ *
+ * @param options.valueEntries Read each tagged entry as a value entry, under owner `["root"]`.
+ */
 function parsed(
   text: string,
   label = "flow.yaml",
+  options: { valueEntries?: boolean } = {},
 ): { document: SourceDocument; nodesCursor: SourceCursor; descriptors: Map<string, NodeDescriptor> } {
   const document = parseSourceDocument(text, label);
   const nodesCursor = flowNodesCursor(document, parseFile(document).nodes);
-  const descriptors = withKinds([StandInCode], () => parseNodes(nodesCursor));
-  return { document, nodesCursor, descriptors };
-}
-
-/** Parse flow `text`'s `nodes:` as `parsed` does, reading each tagged entry as a value entry. */
-function parsedWithValues(text: string): {
-  document: SourceDocument;
-  nodesCursor: SourceCursor;
-  descriptors: Map<string, NodeDescriptor>;
-} {
-  const document = parseSourceDocument(text, "flow.yaml");
-  const nodesCursor = flowNodesCursor(document, parseFile(document).nodes);
-  const options = {
-    registry: caseRegistry(document),
-    owner: ["root"],
-    catalogBuilder: new SourceCatalogBuilder(),
-    diagnostics: LoadDiagnostics.fromDocument(document),
-  };
-  const descriptors = withKinds([StandInCode], () =>
-    parseNodes(nodesCursor, { readValue: (nodeId, cursor) => readValueEntry(nodeId, cursor, options) }),
-  );
+  let readValue: ValueReader | undefined;
+  if (options.valueEntries) {
+    const readOptions = {
+      registry: caseRegistry(document),
+      owner: ["root"],
+      catalogBuilder: new SourceCatalogBuilder(),
+      diagnostics: LoadDiagnostics.fromDocument(document),
+    };
+    readValue = (nodeId, cursor) => readValueEntry(nodeId, cursor, readOptions);
+  }
+  const descriptors = withKinds([StandInCode], () => parseNodes(nodesCursor, { readValue }));
   return { document, nodesCursor, descriptors };
 }
 
@@ -436,9 +430,8 @@ output: \${a.output}
   });
 
   test("a value entry's input owns its parameter and binding at the entry itself", () => {
-    const { document, nodesCursor, descriptors } = parsedWithValues(
-      "id: f\nname: f\nnodes:\n  v: !int 5\noutput: ${v.output}\n",
-    );
+    const text = "id: f\nname: f\nnodes:\n  v: !int 5\noutput: ${v.output}\n";
+    const { document, nodesCursor, descriptors } = parsed(text, "flow.yaml", { valueEntries: true });
     const node = new StartNode("v", { params: [new Parameter("v")] });
     const wiring = new Map<string, unknown>([["v", 5n]]);
     const builder = new SourceCatalogBuilder();
@@ -523,9 +516,8 @@ output: \${use.output}
   });
 
   test("a value entry, already read through its tag, is returned unchanged", () => {
-    const { document, nodesCursor, descriptors } = parsedWithValues(
-      "id: f\nname: f\nnodes:\n  v: !int 5\noutput: ${v.output}\n",
-    );
+    const text = "id: f\nname: f\nnodes:\n  v: !int 5\noutput: ${v.output}\n";
+    const { document, nodesCursor, descriptors } = parsed(text, "flow.yaml", { valueEntries: true });
     const builder = new SourceCatalogBuilder();
 
     expect(split(document, nodesCursor, descriptors, builder).get("v")).toBe(descriptors.get("v")!);

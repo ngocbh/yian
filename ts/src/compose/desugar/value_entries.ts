@@ -24,7 +24,6 @@
  */
 
 import { reprText } from "../../diagnostics.ts";
-import type { BuiltinCode } from "../../nodes/code/node.ts";
 import { type OutputContract, type ValueContract, type ValuePath, ValueTemplate } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, type Type, ValueKind } from "../../typesys/values.ts";
@@ -162,7 +161,7 @@ export function readValueEntry(
       range: cursor.range ?? cursor.keyRange,
     });
   }
-  rejectUnholdable(nodeId, cursor, { record: infersRecord(contract.type, cursor.value), diagnostics });
+  if (infersRecord(contract.type, cursor.value)) rejectEmptyRecordKeys(nodeId, cursor, { diagnostics });
   const valueRange = cursor.range;
   const fieldRanges =
     valueRange !== null
@@ -171,11 +170,10 @@ export function readValueEntry(
           [siteKey("field", "inputs"), valueRange],
         ])
       : new Map();
-  const code: BuiltinCode = { builtin: "identity", field: nodeId };
   return new ValueEntryDescriptor({
     id: nodeId,
     nodeName: nodeId,
-    code,
+    code: { builtin: "identity", field: nodeId },
     inputs: { [nodeId]: slot.value },
     inputTypes: new Map([[nodeId, contract]]),
     tag: contract,
@@ -198,23 +196,22 @@ export function isValueEntry(descriptor: NodeDescriptor): descriptor is ValueEnt
  * Reject an empty key in a kept record.
  *
  * @param nodeId The entry id.
- * @param cursor The entry's value, or a part of it, which does not contain itself.
- * @param options.record Whether a mapping here is kept as a record: the written-out mapping of a
- *   bare `!object` entry, or a mapping or list inside it outside any nested tag.
+ * @param cursor The kept record, or a part of it outside any nested tag, which does not contain
+ *   itself.
  * @param options.diagnostics Factory for located load errors.
  * @param options.path Where `cursor` sits in the entry's value; defaults to the value itself.
  * @throws LoadError at the mapping, named `'<id>'` or `'<id>.<path>'`.
  */
-function rejectUnholdable(
+function rejectEmptyRecordKeys(
   nodeId: string,
   cursor: SourceCursor,
-  options: { record: boolean; diagnostics: LoadDiagnostics; path?: ValuePath },
+  options: { diagnostics: LoadDiagnostics; path?: ValuePath },
 ): void {
-  const { record, diagnostics, path = [] } = options;
+  const { diagnostics, path = [] } = options;
   const value = cursor.value;
   let keys: (string | number)[];
   if (isRecord(value)) {
-    if (record && Object.hasOwn(value, "")) {
+    if (Object.hasOwn(value, "")) {
       throw diagnostics.error(`${reprText(pathLabel(nodeId, path))}: ${EMPTY_RECORD_KEY}`, { range: cursor.range });
     }
     keys = Object.keys(value);
@@ -225,6 +222,6 @@ function rejectUnholdable(
   }
   for (const key of keys) {
     const child = cursor.child(key);
-    rejectUnholdable(nodeId, child, { record: record && child.tag === null, diagnostics, path: [...path, key] });
+    if (child.tag === null) rejectEmptyRecordKeys(nodeId, child, { diagnostics, path: [...path, key] });
   }
 }

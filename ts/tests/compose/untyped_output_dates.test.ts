@@ -11,10 +11,16 @@
  * `test_untagged_date_as_the_whole_output_is_a_load_error` and
  * `test_an_aliased_date_names_the_output_field`, and `!Any 2026-01-01` in
  * `test_quoted_or_tagged_dates_keep_their_behavior`. Infinity is a float value (rule `infinity`),
- * so `.inf` and its spellings load. The YAML reader refuses the rest before any output check:
- * `.nan` (`!float .nan` too, which Python refuses at run), a float too large to read (`1e400`),
- * and `!!set`, `!!binary`, `!!omap` and `!!pairs`, so the `!!omap` row of
- * `test_other_untagged_literals_in_untyped_outputs_still_load` is a load error.
+ * so `.inf` and its spellings in `test_a_non_finite_number_in_an_untyped_output_is_a_load_error`
+ * load. The YAML reader refuses the rest before any output check: `!!set` and `!!binary`
+ * (`test_set_or_binary_literal_in_an_untyped_output_is_a_load_error`), `!!omap` and `!!pairs`
+ * (`test_a_non_json_value_in_an_omap_pair_is_a_load_error`, and the `!!omap` row of
+ * `test_other_untagged_literals_in_untyped_outputs_still_load`), `.nan` and a float too large to
+ * read (the other rows of `test_a_non_finite_number_in_an_untyped_output_is_a_load_error`,
+ * `test_a_nested_or_core_tagged_non_finite_number_is_a_load_error`, whose `!!omap [{a: .nan}]` row
+ * is refused as `!!omap`, and `test_a_non_finite_number_as_the_whole_output_is_a_load_error`), and
+ * `!float .nan`, which Python refuses at run (the load half of
+ * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`).
  *
  * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
  * `any_tag_on_a_date` is pinned in `tags.test.ts`.
@@ -93,13 +99,13 @@ describe("dates", () => {
   });
 
   test.each([
-    'as_of: "2026-01-01"',
-    "as_of: !Any 2026-01-01",
-    'as_of: !date "2026-01-01"',
-    'as_of: "${b.output}-2026-01-01"',
-    "as_of: ${b.output}-2026-01-01",
-  ])("a quoted or tagged date loads: %j", (output) => {
-    load(flow(`${output}\nh: \${b.output}`));
+    ['as_of: "2026-01-01"', "2026-01-01"],
+    ["as_of: !Any 2026-01-01", "2026-01-01"],
+    ['as_of: !date "2026-01-01"', "2026-01-01"],
+    ['as_of: "${b.output}-2026-01-01"', "${b.output}-2026-01-01"],
+    ["as_of: ${b.output}-2026-01-01", "${b.output}-2026-01-01"],
+  ])("a quoted or tagged date loads: %j", (output, expected) => {
+    expect(outputSources(flow(`${output}\nh: \${b.output}`))["as_of"]).toBe(expected);
   });
 });
 
@@ -119,6 +125,7 @@ describe("other literals", () => {
     ["g: !!binary aGVsbG8=", "binary"],
     ["g: !!omap [a: 1]", "omap"],
     ["g: !!omap [a: 2026-01-01]", "omap"],
+    ["g: !!omap [{a: .nan}]", "omap"],
     ["g: !!pairs [a: !!set {x: null}]", "pairs"],
   ])("the YAML reader refuses %j", (output, tag) => {
     const text = flow(`${output}\nh: \${b.output}`);
@@ -128,8 +135,14 @@ describe("other literals", () => {
 });
 
 describe("numbers that are not finite", () => {
-  test.each([".inf", "-.inf", ".Inf", "+.inf", "-.Inf"])("an infinity in an untyped output loads: %s", (g) => {
-    expect(outputSources(flow(`g: ${g}\nh: \${b.output}`))["g"]).toBe(g.startsWith("-") ? -Infinity : Infinity);
+  test.each([
+    [".inf", Infinity],
+    ["-.inf", -Infinity],
+    [".Inf", Infinity],
+    ["+.inf", Infinity],
+    ["-.Inf", -Infinity],
+  ])("an infinity in an untyped output loads: %s", (g, expected) => {
+    expect(outputSources(flow(`g: ${g}\nh: \${b.output}`))["g"]).toBe(expected);
   });
 
   test.each([

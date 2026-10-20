@@ -857,7 +857,7 @@ export function attachInputContracts(
  * as a `Binding` carrier rather than a record. Recognition and locations follow the retained
  * cursor exactly as for node inputs.
  *
- * An untyped output needs no check that its literals are JSON values, as Python's does: the YAML
+ * Unlike Python's, an untyped output needs no check that its literals are JSON values: the YAML
  * reader keeps a date as text and refuses `.nan`, a float too large to read, `!!set`, `!!binary`,
  * `!!omap` and `!!pairs`, and the source layer refuses a non-text record key.
  *

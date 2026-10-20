@@ -5,8 +5,8 @@
  * `NodeDescriptor` (which records each field's `SourceRange`, the `code:` body's included),
  * checks its own fields, attaches the source origins of the `code:` scalar and of its exact
  * literal lines without keeping YAML objects, and builds the runtime `CodeNode`. Nothing is
- * compiled at load here: the node takes the body as text. Registered in `KINDS` and
- * `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * compiled at load here: the node takes the body as text, or a value entry's built-in identity
+ * form. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, compose source and helpers, and nodes (code).
  * Never imports: compose/parse, the runtime or the CLI.
@@ -140,8 +140,9 @@ export class CodeDescriptor extends NodeDescriptor {
   /**
    * Build the runtime `CodeNode` and its flow-owned wiring.
    *
-   * The node takes the body as text, `ctx.baseDir` as the directory a reference resolves against,
-   * and the descriptor's code origins unchanged; nothing is compiled. Sets the node's `params`
+   * The node takes the body as text, or a value entry's built-in identity form, `ctx.baseDir` as
+   * the directory a reference resolves against, and the descriptor's code origins unchanged;
+   * nothing is compiled. Sets the node's `params`
    * from the authored `input:` and its output contract from `output:`; `_finish` stamps the
    * descriptor origin.
    *

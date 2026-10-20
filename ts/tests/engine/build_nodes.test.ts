@@ -99,25 +99,31 @@ const badConfigFlow = (llmConfig: string) =>
   "    prompt: hi\n" +
   "output: ${note.output}\n";
 
-/** Build `text`'s AGENT `note`, expecting a load error holding `message` at its `llm_config:`. */
+/** Build `text`'s AGENT `note`, expecting load error `message` at its `llm_config:`. */
 function llmConfigErrorAt(text: string, message: string): void {
   const document = parseSourceDocument(text, "flow.yaml");
   const desc = nodesOfDocument(document).get("note")!;
 
   const error = loadError(() => build(desc, new Map(), LoadDiagnostics.fromDocument(document)));
 
-  expect(error.message).toContain(message);
+  expect(error.message).toBe(message);
   const frame = error.diagnostic.frames[0]!;
   expect(frame.range).toEqual(desc.fieldRanges.get(siteKey("field", "llm_config"))!);
   expect(frame.text).toBe(text);
 }
 
 test("an invalid llm_config uses the config field's range", () => {
-  llmConfigErrorAt(badConfigFlow("\n      provider: bogus_provider"), "llm_config");
+  llmConfigErrorAt(
+    badConfigFlow("\n      provider: bogus_provider"),
+    "node 'note': llm_config: 1 validation error for LLMConfig\n" +
+      "provider\n" +
+      '  Input should be "openai", "xai", "deepseek", "qwen", "qwen-cn", "glm", "glm-cn", "minimax", ' +
+      '"minimax-cn", "openrouter", "vllm", "ollama", "anthropic", "google" or "azure"',
+  );
 });
 
 test.each(["bogus", "1", "false", "[bogus]"])("a non-mapping llm_config is a ranged load error: %s", (value) => {
-  llmConfigErrorAt(badConfigFlow(` ${value}`), "must be a mapping");
+  llmConfigErrorAt(badConfigFlow(` ${value}`), "node 'note': llm_config must be a mapping");
 });
 
 test("an AGENT node's knobs", () => {
@@ -158,7 +164,7 @@ test("a CODE node is built", () => {
   expect((node as CodeNode).code).toBe("./fixtures/seeds.ts:one_line_summary");
   expect((node as CodeNode).mode).toBe("reference");
   expect(exactContract(node).type.kind).toBe(ValueKind.STRING);
-  expect(new Set(node.params!.map((param) => param.name))).toEqual(new Set(["rating", "rationale"]));
+  expect(node.params!.map((param) => param.name)).toEqual(["rating", "rationale"]);
   expect(wiring).toEqual(
     new Map([
       ["rating", "${score.output.rating}"],
@@ -176,7 +182,7 @@ test("a TOOL node is built with its argument bindings", () => {
   expect(node).toBeInstanceOf(ToolNode);
   expect((node as ToolNode).toolId).toBe("get_facts");
   expect(node.outputContract).toBeNull(); // no `output:` declared
-  expect(new Set(node.params!.map((param) => param.name))).toEqual(new Set(["symbol", "limit"]));
+  expect(node.params!.map((param) => param.name)).toEqual(["symbol", "limit"]);
   expect(wiring).toEqual(
     new Map<string, unknown>([
       ["symbol", "${input.topic}"],
@@ -184,7 +190,10 @@ test("a TOOL node is built with its argument bindings", () => {
     ]),
   );
   // Inputs are exact untyped sink parameters.
-  expect(node.params!.every((param) => param.constructor === Parameter && param.contract === null)).toBe(true);
+  expect(node.params!.map((param) => [param.constructor, param.contract])).toEqual([
+    [Parameter, null],
+    [Parameter, null],
+  ]);
 });
 
 // ---------- call, map and loop ----------

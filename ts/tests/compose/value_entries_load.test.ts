@@ -65,7 +65,7 @@ import { literalContract } from "../../src/compose/helpers/output_contracts.ts";
 import { forget } from "../../src/defaults.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { type OutputContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { type OutputContract, ValueContract, type ValueTemplate } from "../../src/nodes/contracts.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
 
@@ -128,6 +128,9 @@ function errorLine(error: LoadError): number {
 /** Load `text` and return its flow. */
 const load = (text: string): ComposedFlow => assembleText(text).flow;
 
+/** Return the source of value entry `nodeId`'s binding in the loaded `text`. */
+const entrySource = (text: string, nodeId: string) => load(text).compiled.wiring.get(nodeId)!.get(nodeId)!.source;
+
 /** Return the output contract of node `nodeId` of the loaded `text`. */
 const contractOf = (text: string, nodeId: string) => load(text).compiled.nodes.get(nodeId)!.outputContract;
 
@@ -183,8 +186,11 @@ test.each([
 });
 
 test("an entry under a credential name loads", () => {
-  load(flow("  api_key: !str sk-live-123\n", { output: "${api_key.output}" }));
-  load(flow("  cfg: !object\n    access_token: abc\n    x: ${s.output}\n", { output: "${cfg.output}" }));
+  const scalar = flow("  api_key: !str sk-live-123\n", { output: "${api_key.output}" });
+  const record = flow("  cfg: !object\n    access_token: abc\n    x: ${s.output}\n", { output: "${cfg.output}" });
+
+  expect(entrySource(scalar, "api_key")).toBe("sk-live-123");
+  expect((entrySource(record, "cfg") as ValueTemplate).value).toStrictEqual({ access_token: "abc", x: "${s.output}" });
 });
 
 test("a mistyped literal under a credential name gets the ordinary error", () => {
@@ -197,7 +203,9 @@ test("a mistyped literal under a credential name gets the ordinary error", () =>
 });
 
 test("a nested binding loads", () => {
-  load(flow("  cfg: !object\n    access_token: ${input.t}\n", { output: "${cfg.output}" }));
+  const text = flow("  cfg: !object\n    access_token: ${input.t}\n", { output: "${cfg.output}" });
+
+  expect((entrySource(text, "cfg") as ValueTemplate).value).toStrictEqual({ access_token: "${input.t}" });
 });
 
 test("the fingerprint is stable and tracks the literal", () => {
@@ -286,15 +294,20 @@ test.each(['  r: !Optional(object) {"": 1}\n', '  r: !list(object) [{"": 1}]\n',
 );
 
 describe("numbers that are not finite", () => {
-  test.each([
-    "  x: !float .inf\n",
-    "  x: !float -.inf\n",
-    "  x: !object\n    a: .inf\n",
-    "  x: !object {a: !float .inf}\n",
-    '  x: !object {a: "${input.t}", b: .inf}\n',
-  ])("an infinite entry loads: %j", (entry) => {
-    load(flow(entry));
+  test.each<[string, unknown]>([
+    ["  x: !float .inf\n", Infinity],
+    ["  x: !float -.inf\n", -Infinity],
+    ["  x: !object\n    a: .inf\n", { a: Infinity }],
+  ])("an infinite entry loads: %j", (entry, expected) => {
+    expect(entrySource(flow(entry), "x")).toStrictEqual(expected);
   });
+
+  test.each(["  x: !object {a: !float .inf}\n", '  x: !object {a: "${input.t}", b: .inf}\n'])(
+    "an infinite value in a templated entry loads: %j",
+    (entry) => {
+      load(flow(entry));
+    },
+  );
 
   test.each([
     ["  x: !object {a: .nan}\n", "  x: !object"],

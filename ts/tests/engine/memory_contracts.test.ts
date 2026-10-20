@@ -32,8 +32,9 @@
  * `test_episode_rejects_nonphysical_execution_sequences`,
  * `test_learn_context_requires_episodes_of_its_run`, the episode and context rows of
  * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
- * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree` and
- * `test_learn_context_equal_feedback`; plus JavaScript's own values (a `"__proto__"` key, a
+ * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree`,
+ * `test_learn_context_equal_feedback` and `test_propose_learning_shares_canonical_feedback` (as "the
+ * learner receives the exact `LearnContext`"); plus JavaScript's own values (a `"__proto__"` key, a
  * null-prototype object, a repeated subtree, an array hole), the value nesting limit, and the
  * depth-first order of the first error. 100 000-level arrays and objects are copied through a
  * snapshot envelope, a mutation and learn feedback (compared as log JSON text, since Bun's
@@ -49,9 +50,11 @@
  * feedback keep `±Infinity`, read `-0` back as `0` and refuse NaN; `LearnContext.fromFrozen` stores
  * the given feedback (`toBe`) and checks run, memory and episodes; `freezeFeedback` names items from
  * `firstIndex` and shares a subtree across calls through its memo; each memory `same*` comparison
- * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
- * `samePolicyCommitOutcome`, `sameLearningResult`) is true for separately built equal values and
- * false for each differing field.
+ * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`,
+ * `sameMemorySnapshotEnvelope`, `sameLearningFailure`, `samePolicyCommitOutcome`,
+ * `sameLearningResult`) is true for separately built equal values and false for each differing
+ * field; `sameMemorySnapshotEnvelope` also tells `1n` from `1` and `1` from `true` at depth; a
+ * setup error keeps an explicit `cause` and its origin, and has no `cause` without one.
  *
  * Changed (episodes and learn contexts): the episode and the context hold deep-frozen JSON, so a
  * reader's edit of `inputs`, an interaction value or `feedback` throws `TypeError` where Python
@@ -61,7 +64,11 @@
  * `false, true, -1, 1.5, "1", 1n` (`1.0` is `1` in JS), each with its class and message.
  * `test_freeze_shares_a_repeated_subtree` checks the read feedback (`feedback[0].a` is
  * `feedback[0].b`), since the stored snapshot is what `feedback` returns. Python's dataclass `==`
- * of two contexts is `toEqual`; `copy.deepcopy` is `structuredClone`.
+ * of two contexts is `toEqual`; `copy.deepcopy` is `structuredClone`. `proposeLearning` doesn't
+ * rebuild a context, so the canonical-feedback test checks that the learner receives the very
+ * context and its very `feedback` (`toBe`, where Python checks the private canonical feedback is
+ * shared); its rebuilt non-canonical scalar row has no counterpart (a frozen context can't be
+ * forged).
  *
  * Changed: the JSON tests build a custom-type `MemoryDecl`, as Python's `_decl` does. The non-exact
  * rows are JavaScript's (a `Map`, a `Date`, an own symbol key, a class instance, an array subclass
@@ -110,10 +117,9 @@
  * (a frozen TS carrier can't be forged, so a context keeps its checked episodes by reference);
  * `test_episode_rejects_integer_subclass_execution_sequence` (no integer subclasses in JS);
  * `test_propose_learning_parity_on_deleted_slots` (`object.__delattr__` and
- * `LearnContext._revalidated`, which TS doesn't need).
- *
- * Left for later: `test_propose_learning_rebuild_of_forged_feedback` and
- * `test_propose_learning_shares_canonical_feedback`, with the memory runtime.
+ * `LearnContext._revalidated`, which TS doesn't need) and
+ * `test_propose_learning_rebuild_of_forged_feedback` (`object.__setattr__` on a frozen context; a
+ * TS context is frozen by its constructor, so none holds forged feedback).
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -146,6 +152,7 @@ import {
   type MemorySession,
   MemorySetupError,
   MemorySnapshotEnvelope,
+  MemorySpec,
   ModelTextInteraction,
   ModelValueInteraction,
   PolicyCommitOutcome,
@@ -156,13 +163,16 @@ import {
   sameMemoryMutation,
   sameMemoryOperationFailure,
   sameMemoryScope,
+  sameMemorySnapshotEnvelope,
   samePolicyCommitOutcome,
   validateMutations,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
 import * as runtimeContracts from "../../src/runtime/contracts.ts";
 import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { logJson } from "../../src/typesys/json.ts";
+import { FakeMemory } from "./memory_fakes.ts";
 import { importStatements } from "./source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
@@ -1202,6 +1212,25 @@ test("learn contexts over aliased and copied feedback are equal", () => {
   expect(aliased).toEqual(copied);
 });
 
+// test_propose_learning_shares_canonical_feedback
+test("the learner receives the exact LearnContext", async () => {
+  const memory = new FakeMemory();
+  const runtime = await MemoryRuntime.open({
+    memories: [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])], false)],
+    origins: new Map([["notes", null]]),
+    memory: new Map([["notes", memory]]),
+  });
+  const context = new LearnContext("run", "notes", [], [{ b: [1n, "x", null, 1.5, true], a: {} }]);
+  try {
+    await runtime.proposeLearning([context]);
+  } finally {
+    await runtime.close();
+  }
+  expect(memory.learnContexts).toHaveLength(1);
+  expect(memory.learnContexts[0]).toBe(context);
+  expect(memory.learnContexts[0]!.feedback).toBe(context.feedback);
+});
+
 class SubSection extends MemorySection {}
 class SubEpisode extends MemoryEpisode {}
 
@@ -1598,6 +1627,32 @@ test("sameMemoryMutation compares the id and the payload by JSON value", () => {
   ] as const) {
     expect(sameMemoryMutation(new MemoryMutation("m", a), new MemoryMutation("m", b))).toBe(false);
   }
+});
+
+test("sameMemorySnapshotEnvelope compares the memory key and the snapshot by JSON value", () => {
+  const snapshot = () => ({ notes: [{ id: "lesson", n: 1n, x: 1.5, ok: true, none: null }], meta: { v: 1 } });
+  const envelope = (memory = "notes", value: JsonObject = snapshot()) => new MemorySnapshotEnvelope(memory, value);
+  expect(sameMemorySnapshotEnvelope(envelope(), envelope())).toBe(true);
+  expect(sameMemorySnapshotEnvelope(envelope("other"), envelope())).toBe(false);
+  for (const [a, b] of [
+    [{ deep: { list: [{ n: 1n }] } }, { deep: { list: [{ n: 2n }] } }],
+    [{ deep: { list: [{ n: 1n }] } }, { deep: { list: [{ n: 1 }] } }],
+    [{ deep: { list: [1] } }, { deep: { list: [true] } }],
+    [{ a: 1 }, { a: 1, b: 1 }],
+  ] as const) {
+    expect(sameMemorySnapshotEnvelope(envelope("notes", a), envelope("notes", b))).toBe(false);
+  }
+});
+
+test("a setup error keeps an explicit cause and its origin", () => {
+  const origin = new OriginRef("memory-policy");
+  const cause = new Error("backend failed");
+  const error = new MemorySetupError("m", { origin, cause });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("m");
+  expect(error.cause).toBe(cause);
+  expect(error.origin).toBe(origin);
+  expect("cause" in new MemorySetupError("m", { origin })).toBe(false);
 });
 
 test("sameLearningFailure compares memory, operation and failure by value", () => {

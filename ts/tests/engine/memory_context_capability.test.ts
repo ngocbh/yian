@@ -36,11 +36,18 @@
  * Ported (adapted): `test_dispatch_binds_accepted_identity_before_worker_submission` (serial and
  * two workers): Python's guard that no worker thread reads `accepted_starts` is dropped, since TS
  * workers share the dispatcher's thread; the opener sees the accepted start's identity.
- * Later (T4-7), with `MemoryRuntime.openContext`:
- * `test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure`,
- * `test_real_backend_cleanup_note_survives_node_error_unwrapping` and
- * `test_fifo_turn_covers_stream_drain_and_shape_check_in_bounded_child`, and the `real_backend=True`
- * cells of `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`.
+ *
+ * The real-backend rows open `MemoryRuntime.openContext` over an in-memory `SessionMemory`.
+ * Ported: `test_real_turn_rethrow_is_not_reported_as_secondary_cleanup_failure` (3 rows).
+ * Changed: `test_real_backend_cleanup_note_survives_node_error_unwrapping`: a spy on the private
+ * `Turn.publish` replaces the monkeypatched `_Turn._publish`, and the session's
+ * `Conversation cleanup also failed` note is on the body's error and ends the traceback. The
+ * `(host_stop=False, real_backend=True)` cell of
+ * `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`: the same
+ * spy, and a sink throwing inside the node instead of a generator.
+ * `test_fifo_turn_covers_stream_drain_and_shape_check_in_bounded_child`: no subprocess or threads;
+ * two concurrent evaluations over one runtime, and the first pauses in its body after its chunk,
+ * since the TS sink is synchronous; Bun's per-test timeout bounds it.
  *
  * Not ported: TS has no `_HostStop` (a stop is the node's aborted signal) and no `add_note` hook:
  * `test_callback_primary_stop_marks_signal_before_turn_unwind` and
@@ -51,20 +58,26 @@
  * of `test_callback_error_retains_conversation_cleanup_notes_without_throwing_into_generator`.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { StreamChunk } from "../../src/events.ts";
 import {
+  type ConversationCheckpoint,
+  ConversationClosed,
+  type ConversationCompletion,
   ConversationInvocation,
   type ConversationTurn,
+  DeclSite,
   type JsonObject,
   MemoryContext,
   MemoryContextRequest,
   MemoryRecallError,
   MemoryScope,
   MemorySection,
+  MemorySpec,
 } from "../../src/memory/contracts.ts";
+import { SessionMemory, Turn } from "../../src/memory/session.ts";
 import {
   CapabilityFault,
   Grow,
@@ -83,6 +96,7 @@ import {
   type MemoryContextOpener,
 } from "../../src/runtime/eval_node.ts";
 import { NodeStartedRecord } from "../../src/runtime/log.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { engine, FuncNode, graph, rejected } from "./run_state_fixtures.ts";
 
@@ -588,4 +602,159 @@ test.each([0, 2])("dispatch binds the accepted identity before worker submission
   expect((events[0]![2] as MemoryContextRequest).invocation).toEqual(new ConversationInvocation(start.runId, start.seq));
   expect(events.at(-1)![0]).toBe("completed");
   expect("conversationState" in built.state).toBe(false);
+});
+
+/** Open a runtime whose one AGENT-owned key `session` is backed by `memory`. */
+function openSessionRuntime(memory: SessionMemory): Promise<MemoryRuntime> {
+  const spec = new MemorySpec("session", "session", {}, [new DeclSite([], ["root"], "work")], true);
+  return MemoryRuntime.open({
+    memories: [spec],
+    origins: new Map([["session", null]]),
+    memory: new Map([["session", memory]]),
+  });
+}
+
+/** The runtime's `openContext` as the evaluator's opener. */
+function contextOpener(runtime: MemoryRuntime): MemoryContextOpener {
+  return (scope, request, options) => runtime.openContext(scope, request, options);
+}
+
+/** Make every real turn's `ConversationClosed` checkpoint throw `cleanup`; restore the spy after. */
+function failClose(cleanup: Error): { mockRestore(): void } {
+  const publish = Turn.prototype["publish"];
+  return spyOn(Turn.prototype as never, "publish").mockImplementation(function (
+    this: Turn,
+    checkpoint: ConversationCheckpoint,
+  ): void {
+    if (checkpoint instanceof ConversationClosed) throw cleanup;
+    publish.call(this, checkpoint);
+  } as never);
+}
+
+test.each(["body", "postassertion", "result"])(
+  "real turn rethrow is not reported as secondary cleanup failure: %s",
+  async (stage) => {
+    const error: Error & { notes?: string[] } = new RangeError("body rejected");
+    const node = new Consumer(async (open) => {
+      await open("system", "prompt", {});
+      if (stage === "body") throw error;
+      return stage === "result" ? (null as unknown as NodeResult) : new Output(7n);
+    });
+    if (stage === "postassertion") node.postAsserts = [new Assertion("false", "must fail")];
+    const memory = new SessionMemory();
+    const runtime = await openSessionRuntime(memory);
+    try {
+      const outcome = await evaluate(node, contextOpener(runtime));
+      expect(outcome).toBeInstanceOf(EvaluationFailure);
+      expect((outcome as EvaluationFailure).failure.traceback).not.toContain("Memory context cleanup");
+      expect(error.notes).toBeUndefined();
+      const opened = memory.openRun();
+      try {
+        const conversation = opened.snapshot.conversation as JsonObject;
+        expect((conversation.closed_invocations as JsonObject[]).at(-1)!.status).toBe("failed");
+      } finally {
+        opened.close();
+      }
+    } finally {
+      await runtime.close();
+    }
+  },
+);
+
+test("real backend cleanup note survives node error unwrapping", async () => {
+  const error: Error & { notes?: string[] } = new RangeError("body rejected");
+  const node = new Consumer(async (open) => {
+    await open("system", "prompt", {});
+    throw error;
+  });
+  const memory = new SessionMemory();
+  const runtime = await openSessionRuntime(memory);
+  const spy = failClose(new Error("close storage failed"));
+  try {
+    const outcome = (await evaluate(node, contextOpener(runtime))) as EvaluationFailure;
+    expect(outcome.failure.code).toBe("node.execute");
+    const note = "Conversation cleanup also failed: Error: close storage failed";
+    expect(outcome.failure.traceback!.endsWith(note)).toBe(true);
+    expect(error.notes).toEqual([note]);
+  } finally {
+    spy.mockRestore();
+    await runtime.close();
+  }
+});
+
+test("callback error retains conversation cleanup notes: real backend", async () => {
+  const error: Error & { notes?: string[] } = new Error("callback failure");
+  const node = new Consumer(async (begin, caps) => {
+    await begin("system", "prompt", {});
+    caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "one" }));
+    return new Output(7n);
+  });
+  const emit = (): void => {
+    throw error;
+  };
+  const memory = new SessionMemory();
+  const runtime = await openSessionRuntime(memory);
+  const spy = failClose(new RangeError("conversation close failed"));
+  try {
+    expect(await rejected(evaluate(node, contextOpener(runtime), { emitStream: emit }))).toBe(error);
+    expect((error.notes ?? []).filter((note) => note.includes("conversation close failed")).length).toBe(1);
+  } finally {
+    spy.mockRestore();
+    await runtime.close();
+  }
+});
+
+test("fifo turn covers stream drain and shape check", async () => {
+  const memory = new SessionMemory();
+  const runtime = await openSessionRuntime(memory);
+  let pause!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    pause = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let secondEntered = false;
+  const prior: ConversationCompletion[] = [];
+  const first = new Consumer(async (open, caps) => {
+    await open("system", "prompt", {});
+    caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "one" }));
+    pause();
+    await gate;
+    return null as unknown as NodeResult; // The shape check must happen before the lease is released.
+  });
+  const second = new Consumer(async (open) => {
+    const context = await open("system", "prompt", {});
+    prior.push(...context.transcript!.view.closedInvocations);
+    secondEntered = true;
+    return new Output(7n);
+  });
+  const run = (node: Node, id: string) =>
+    evalNode(node, null, new VariablePool(), {
+      memoryContextOpener: contextOpener(runtime),
+      memoryInvocation: new ConversationInvocation(id, 1),
+      emitStream: () => {},
+    });
+  try {
+    const a = run(first, "a");
+    let b: ReturnType<typeof run>;
+    try {
+      await paused;
+      b = run(second, "b");
+      for (let turn = 0; turn < 1000 && memory["queue"].length !== 1; turn++) await Bun.sleep(0);
+      expect(memory["queue"].length).toBe(1);
+      expect(secondEntered).toBe(false);
+    } finally {
+      release();
+    }
+    expect(((await a).outcome as EvaluationFailure).failure.code).toBe("contract.node_result");
+    expect((await b).outcome).toEqual(new Output(7n));
+    expect(prior.length).toBe(1);
+    expect(prior[0]!.invocation).toEqual(new ConversationInvocation("a", 1));
+    expect(prior[0]!.status).toBe("failed");
+    memory.reset();
+  } finally {
+    await runtime.close();
+  }
 });

@@ -1167,19 +1167,21 @@ describe("runCli", () => {
   );
 
   test.each([
-    [EXCHANGE().replace("POST", "GET"), `expected GET ${USERCODE}`],
+    ["method", EXCHANGE().replace("POST", "GET"), `expected GET ${USERCODE}`],
     [
+      "header",
       EXCHANGE(', headers: {Authorization: "Bearer <key:1>"}'),
       'header Authorization: expected "Bearer <key:1>", got null',
     ],
     [
+      "json",
       EXCHANGE(", json: {client_id: x}"),
       'body: expected json {"client_id": "x"}, got "{\\"client_id\\": \\"y\\"}"',
     ],
-    [EXCHANGE(", form: {client_id: x}"), 'body: expected form {"client_id": "x"}'],
+    ["form", EXCHANGE(", form: {client_id: x}"), 'body: expected form {"client_id": "x"}'],
   ])(
-    "fails a request that doesn't match %s, naming the difference",
-    async (exchange, difference) => {
+    "fails a request whose %s doesn't match, naming the difference",
+    async (_, exchange, difference) => {
       const case_ = `kind: cli\nhttp: [${exchange}]\nexpect: {exit: 0}\n`;
       const failure = cli(case_, POST('{"client_id": "y"}'));
       const request = `POST ${USERCODE} doesn't match \`http[0]\``;
@@ -1254,7 +1256,7 @@ describe("schema.ts", () => {
     expect(validate(ROOT, schema, ["🙂"])).toEqual(["$[0]: shorter than 2 characters"]);
   });
 
-  test("lints the new keywords", () => {
+  test("lints allOf, if, then and the length bounds", () => {
     expect(lintSchema(ROOT, { allOf: [{ x: 1 }], if: { y: 1 }, then: { z: 1 } })).toEqual([
       "$.allOf[0].x: unknown keyword",
       "$.if.y: unknown keyword",

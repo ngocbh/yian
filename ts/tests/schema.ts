@@ -106,8 +106,11 @@ export function validate(
     problems.push(`${path}: ${value} is below ${schema.minimum}`);
   }
   // JSON Schema counts a string's length in code points.
-  const minLength = schema.minLength as number | undefined;
-  if (minLength !== undefined && typeof value === "string" && [...value].length < minLength) {
+  if (
+    "minLength" in schema &&
+    typeof value === "string" &&
+    [...value].length < (schema.minLength as number)
+  ) {
     problems.push(`${path}: shorter than ${schema.minLength} characters`);
   }
   if (types[0] === "object") {
@@ -126,18 +129,19 @@ export function validate(
     }
   }
   if (types[0] === "array") {
-    const length = (value as unknown[]).length;
-    if ("minItems" in schema && length < (schema.minItems as number)) {
+    const items = value as unknown[];
+    if ("minItems" in schema && items.length < (schema.minItems as number)) {
       problems.push(`${path}: fewer than ${schema.minItems} items`);
     }
-    if ("maxItems" in schema && length > (schema.maxItems as number)) {
+    if ("maxItems" in schema && items.length > (schema.maxItems as number)) {
       problems.push(`${path}: more than ${schema.maxItems} items`);
     }
-  }
-  if (types[0] === "array" && "items" in schema) {
-    (value as unknown[]).forEach((item, index) => {
-      problems.push(...validate(root, schema.items as Schema, item, options, `${path}[${index}]`));
-    });
+    if ("items" in schema) {
+      items.forEach((item, index) => {
+        const at = `${path}[${index}]`;
+        problems.push(...validate(root, schema.items as Schema, item, options, at));
+      });
+    }
   }
   if ("oneOf" in schema) {
     const passing = (schema.oneOf as Schema[]).filter(
@@ -154,8 +158,11 @@ export function validate(
   for (const branch of (schema.allOf as Schema[] | undefined) ?? []) {
     problems.push(...validate(root, branch, value, options, path));
   }
-  const passesIf = () => validate(root, schema.if as Schema, value, options, path).length === 0;
-  if ("if" in schema && "then" in schema && passesIf()) {
+  if (
+    "if" in schema &&
+    "then" in schema &&
+    validate(root, schema.if as Schema, value, options, path).length === 0
+  ) {
     problems.push(...validate(root, schema.then as Schema, value, options, path));
   }
   return problems;

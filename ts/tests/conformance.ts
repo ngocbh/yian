@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { constants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1083,7 +1083,10 @@ async function runDefaults(case_: Case, ctx: CaseContext): Promise<void> {
 
 // ---- cli ----
 
-/** The `yian` entry: `../src/cli/index` beside this file, `.ts` from source and `.js` when built. */
+/**
+ * The `yian` entry: `../src/cli/index` beside this file, `.ts` from source and `.js` when
+ * built.
+ */
 const CLI_ENTRY = fileURLToPath(
   new URL(`../src/cli/index.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url),
 );
@@ -1093,7 +1096,10 @@ const CLI_SCHEMA = JSON.parse(
 ) as Schema;
 const FILLED = /sk-conformance-[0-9]+/g;
 
-/** Return `value`, a case's plain JSON, as JSON text with Python's spacing, floats with a fraction. */
+/**
+ * Return `value`, a case's plain JSON, as JSON text with Python's spacing, floats with a
+ * fraction.
+ */
 function jsonText(value: Value): string {
   if (typeof value === "number") {
     const text = String(value);
@@ -1151,7 +1157,7 @@ function mismatch(
 class Stub {
   readonly url: string;
   readonly #http: Case[];
-  readonly #server: ReturnType<typeof createServer>;
+  readonly #server: Server;
   #taken = 0;
   readonly #problems: string[] = [];
   readonly #open = new Set<Promise<void>>();
@@ -1159,7 +1165,7 @@ class Stub {
   readonly #wakers = new Set<() => void>();
   #stopped = false;
 
-  private constructor(http: Case[], server: ReturnType<typeof createServer>) {
+  private constructor(http: Case[], server: Server) {
     this.#http = http;
     this.#server = server;
     this.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
@@ -1240,7 +1246,7 @@ class Stub {
    */
   async close(): Promise<string[]> {
     this.#stopped = true;
-    // Lets a request that arrived just before the command exited reach its handler.
+    // Usually lets a request that arrived just before the command exited reach its handler.
     await new Promise((resolve) => setImmediate(resolve));
     for (const wake of [...this.#wakers]) wake();
     while (this.#open.size > 0) await Promise.all(this.#open);
@@ -1310,12 +1316,24 @@ async function runCommand(
     ran.err += text;
   });
   let finished = false;
+  let failed: Error | undefined;
+  // Node still emits `close` after a spawn error.
+  child.on("error", (error) => {
+    failed = error;
+  });
   const closed = new Promise<void>((resolve) => {
     child.on("close", (code, killedBy) => {
       [ran.code, ran.signal, finished] = [code, killedBy, true];
       resolve();
     });
   });
+  const exited = new Promise<void>((resolve) => {
+    child.on("exit", () => resolve());
+    child.on("error", () => resolve());
+  });
+  const check = () => {
+    if (failed !== undefined) throw new CaseFailure(`the command failed to run: ${failed.message}`);
+  };
   // A command can exit, or stop reading, before taking all of its stdin.
   child.stdin.on("error", () => {});
   child.stdin.end(stdin);
@@ -1328,6 +1346,7 @@ async function runCommand(
       after = ` after ${name}`;
       const deadline = Date.now() + 60_000;
       while (!ran.out.includes(wanted) && !ran.err.includes(wanted)) {
+        check();
         if (finished) {
           const before = `the command exited before ${JSON.stringify(wanted)} appeared`;
           throw new CaseFailure(`${before}\n${streams()}`);
@@ -1344,13 +1363,18 @@ async function runCommand(
       void closed.then(() => clearTimeout(timer));
     });
     await Promise.race([closed, limit]);
+    check();
     if (!finished) {
       throw new CaseFailure(`the command didn't exit within 120 seconds${after}\n${streams()}`);
     }
     return ran;
   } finally {
-    // Ends a command the case gave up on.
-    if (!finished) child.kill("SIGKILL");
+    // Ends a command the case gave up on, and waits for it, as Python's `process.wait()`, so the
+    // stub and the hook outlive it.
+    if (!finished) {
+      child.kill("SIGKILL");
+      await exited;
+    }
   }
 }
 
@@ -1405,12 +1429,13 @@ export async function runCli(
   const home = join(ctx.dir, "home");
   mkdirSync(home);
   const env = { PATH: process.env["PATH"] ?? "", HOME: home, COLUMNS: "1000", ...ctx.env };
-  const stub = await Stub.start(get(case_, "http", []) as Case[]);
   // Outside the case directory, so it is neither in `exists` nor scanned for secrets.
   const hookDir = mkdtempSync(join(tmpdir(), "yian-conformance-hook-"));
+  let stub: Stub | undefined;
   let ran: Ran;
-  let problems: string[];
+  let problems: string[] = [];
   try {
+    stub = await Stub.start(get(case_, "http", []) as Case[]);
     const hook = join(hookDir, "route.mjs");
     writeFileSync(hook, routeHook(stub.url));
     // Bun reads `--import` as `--preload`; `--no-install` keeps it from installing packages.
@@ -1419,15 +1444,18 @@ export async function runCli(
     const stdin = get(case_, "stdin", "") as string;
     ran = await runCommand(args, ctx.dir, env, stdin, get(case_, "signal") as Case | undefined);
   } finally {
-    problems = await stub.close();
-    rmSync(hookDir, { recursive: true, force: true });
+    try {
+      if (stub !== undefined) problems = await stub.close();
+    } finally {
+      rmSync(hookDir, { recursive: true, force: true });
+    }
   }
   // Longest first: the real path can hold the given one (`/private/var` on macOS).
   const paths = [...new Set([ctx.dir, realpathSync(ctx.dir)])].sort((a, b) => b.length - a.length);
   const normal = (text: string) =>
     paths
       .reduce((result, path) => result.replaceAll(path, "<tmp>"), text)
-      .replace(/ +(?=\n|$)/g, "");
+      .replace(/ +$/gm, "");
   const stdout = normal(ran.out);
   const stderr = normal(ran.err);
   const streams = `--- stdout\n${stdout}--- stderr\n${stderr}`;

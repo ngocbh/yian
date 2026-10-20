@@ -95,6 +95,39 @@ function error(
   return failure;
 }
 
+/**
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
+ * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
+ * `text`, loses the note, as Python swallows a failing `add_note`.
+ */
+function addNote(error: unknown, text: () => string): void {
+  try {
+    if (typeof error !== "object" || error === null) return;
+    const target = error as { notes?: unknown };
+    const note = text();
+    if (!Object.hasOwn(target, "notes")) target.notes = [];
+    if (Array.isArray(target.notes)) target.notes.push(note);
+  } catch {}
+}
+
+// Local copy of memory/episodic.ts's typeName.
+/** Python's `type(value).__name__`: the constructor's name, else a string `name`, else `Error`. */
+function typeName(value: unknown): string {
+  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
+  if (typeof constructorName === "string" && constructorName) return constructorName;
+  const name = (value as { name?: unknown } | null | undefined)?.name;
+  return typeof name === "string" ? name : "Error";
+}
+
+/** Preserve a primary failure while noting a secondary cleanup fault on it (Python's `_secondary`). */
+function secondary(primary: unknown, cleanup: unknown): void {
+  addNote(primary, () => {
+    const message = (cleanup as { message?: unknown } | null | undefined)?.message;
+    const text = typeof message === "string" ? message : String(cleanup);
+    return `Conversation cleanup also failed: ${typeName(cleanup)}: ${text}`;
+  });
+}
+
 // Local copy of memory/contracts.ts's isExactly, which that module keeps private.
 /** Whether `value` is an instance of exactly `cls`, not of a subclass. */
 function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
@@ -425,6 +458,19 @@ export class SessionMemory implements Memory {
     this.waiters.clear();
   }
 
+  /** Wait until the next `notifyAll` or until `signal` aborts, whichever comes first. */
+  private wait(signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      const wake = (): void => {
+        signal.removeEventListener("abort", wake);
+        this.waiters.delete(wake);
+        resolve();
+      };
+      this.waiters.add(wake);
+      signal.addEventListener("abort", wake);
+    });
+  }
+
   /** Save a complete validated candidate before publishing it in RAM; nothing without storage. */
   private saveState(snapshot: JsonObject, changes: StateChanges = {}): void {
     if (this.storage === null) return;
@@ -710,7 +756,10 @@ export class Session implements MemorySession, TranscriptSource {
 
   /**
    * Open one turn for an invocation: wait in FIFO order for the instance conversation, persist the
-   * admission and resolve to the admitted turn.
+   * admission and resolve to the admitted turn. If opening fails or the signal aborts after the
+   * lease is reserved, it records the close of a published admission (`interrupted` for an abort),
+   * releases the lease and rejects with that failure unchanged; the caller then has no turn to
+   * close.
    *
    * @param request The authored consumer, unique invocation and exact compatibility descriptor.
    * @param options.signal Aborted when a cooperative stop is requested; checked while queuing and
@@ -719,7 +768,8 @@ export class Session implements MemorySession, TranscriptSource {
    *   `AbortSignal`, before any waiting.
    * @throws MemoryOperationError `session.stale` when this handle is closed or reset-stale;
    *   `session.conflict` when the invocation already has a lease or conflicts with retained
-   *   history; `session.incompatible` when the compatibility descriptor changed.
+   *   history; `session.incompatible` when the compatibility descriptor changed. The signal's
+   *   reason when it aborts.
    */
   async openTurn(request: ConversationRequest, options: { signal: AbortSignal }): Promise<Turn> {
     if (!isExactly(request, ConversationRequest)) throw new TypeError("request must be a ConversationRequest");
@@ -758,7 +808,9 @@ export class Session implements MemorySession, TranscriptSource {
   }
 
   /**
-   * Reserve a FIFO position, then grant the lease over the current live baseline.
+   * Reserve a FIFO position, wait in ticket order until no lease is active, then grant the lease
+   * over the current live baseline. A wait ends at `notifyAll` (release, session close, reset) or
+   * at the signal's abort, and the checks run again.
    *
    * @throws MemoryOperationError `session.stale`, `session.conflict` or `session.incompatible`; the
    *   signal's reason when it aborted. The ticket is released on any failure.
@@ -782,12 +834,13 @@ export class Session implements MemorySession, TranscriptSource {
     memory["queue"].push(lease);
     memory["notifyAll"]();
     try {
-      signal.throwIfAborted();
-      memory["guard"]();
-      this.ensureLive();
-      if (lease.released) throw error("stale", "conversation ticket was released");
-      if (memory["queue"][0] !== lease || memory["active"] !== null) {
-        throw new Error("waiting for a session lease is not implemented");
+      for (;;) {
+        signal.throwIfAborted();
+        memory["guard"]();
+        this.ensureLive();
+        if (lease.released) throw error("stale", "conversation ticket was released");
+        if (memory["queue"][0] === lease && memory["active"] === null) break;
+        await memory["wait"](signal);
       }
       memory["queue"].shift();
       lease.active = true;
@@ -804,7 +857,11 @@ export class Session implements MemorySession, TranscriptSource {
       lease.before = before;
       return lease;
     } catch (primary) {
-      this.release(lease);
+      try {
+        this.release(lease);
+      } catch (cleanup) {
+        secondary(primary, cleanup);
+      }
       throw primary;
     }
   }
@@ -850,6 +907,7 @@ export class Turn implements ConversationTurn {
   private lease: Lease | null = null;
   private turnView: ConversationView | null = null;
   private ordinal = 0;
+  private interrupted = false;
 
   /** @internal Build an unadmitted turn; `Session.openTurn` builds and admits turns. */
   constructor(session: Session, request: ConversationRequest, signal: AbortSignal) {
@@ -873,7 +931,7 @@ export class Turn implements ConversationTurn {
       memory["guard"]();
       session["ensureLease"](lease);
     } catch (failure) {
-      session["release"](lease);
+      this.finish(failure);
       throw failure;
     }
   }
@@ -993,22 +1051,66 @@ export class Turn implements ConversationTurn {
     this.signal.throwIfAborted();
   }
 
+  /** Close this turn as `interrupted` when its body later returns normally. */
+  interrupt(): void {
+    this.interrupted = true;
+  }
+
   /**
-   * Record the turn's `completed` close and release its lease, even when recording fails. A second
-   * call does nothing.
+   * Record the turn's terminal disposition and release its lease (Python's `__exit__`).
    *
-   * @throws MemoryOperationError when recording the close fails, such as a pending effect.
+   * `error` is undefined after the body returns normally, else the body's thrown value. The turn
+   * records `interrupted` when its signal aborted, its session was closed, or `interrupt()` was
+   * called before a normal return; `failed` when `error` is given; else `completed`. A turn records
+   * a close only once its admission was published, and releases its lease even when recording
+   * fails. It never throws `error`: a stop or close failure seen while `error` is pending is noted on
+   * `error` (`Conversation cleanup also failed: <Type>: <message>`). With `error` undefined, the
+   * first failure is thrown and later ones are noted on it; after an abort that is `signal.reason`,
+   * thrown once the close is recorded and the lease released. A second call does nothing.
+   *
+   * @throws MemoryOperationError when recording the close fails, such as a pending effect, and
+   *   `error` is undefined; the signal's reason after an abort.
    */
-  close(_error?: unknown): void {
+  close(error?: unknown): void {
+    this.finish(error);
+  }
+
+  /** Python's `_finish`, without re-raising a pending `error`. */
+  private finish(error: unknown): void {
     const lease = this.lease;
     if (lease === null || lease.released) return;
-    try {
-      if (this.ordinal) {
-        this.session["memory"]["guard"]();
-        this.publish(new ConversationClosed(this.stamp(), "completed"));
+    let failed = error !== undefined;
+    let primary = error;
+    const fail = (value: unknown): void => {
+      if (!failed) {
+        failed = true;
+        primary = value;
+      } else if (primary !== value) {
+        secondary(primary, value);
       }
+    };
+    const session = this.session;
+    try {
+      if (this.signal.aborted) fail(this.signal.reason);
+      if (this.ordinal) {
+        session["memory"]["guard"]();
+        const status =
+          this.signal.aborted || session["closed"] || (error === undefined && this.interrupted)
+            ? "interrupted"
+            : error !== undefined
+              ? "failed"
+              : "completed";
+        this.publish(new ConversationClosed(this.stamp(), status));
+      }
+    } catch (cleanup) {
+      fail(cleanup);
     } finally {
-      this.session["release"](lease);
+      try {
+        session["release"](lease);
+      } catch (cleanup) {
+        fail(cleanup);
+      }
     }
+    if (failed && error === undefined) throw primary;
   }
 }

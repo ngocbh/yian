@@ -142,3 +142,18 @@ export function settle<T>(promise: Promise<T>): Settled<T> {
   );
   return state;
 }
+
+/** Wait one macrotask, so every pending promise reaction has run. */
+export function macrotask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+/** The value `promise` rejects with; a fulfilment fails the test. */
+export function rejected(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => {
+      throw new Error("expected a rejection");
+    },
+    (error: unknown) => error,
+  );
+}

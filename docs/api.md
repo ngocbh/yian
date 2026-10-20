@@ -2579,7 +2579,7 @@ or pass a per-run tool and call it from a TOOL node.
 An authored WAIT needs no host handler. It blocks one worker until its absolute
 UTC `until:` deadline, returns `None`, and can be woken cooperatively when the host
 stops the run. Changed (TS yian): the wait re-reads the wall clock at least hourly,
-so a deadline survives a sleeping machine, and the run's stop signal wakes it.
+so a deadline survives a sleeping machine.
 
 ## `RunResult`
 

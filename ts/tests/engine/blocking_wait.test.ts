@@ -22,7 +22,7 @@
  *   chunks at `TIMEOUT_MAX` (about 49 days); the far-future row's clock jumps past a chunk, as
  *   after a sleeping machine, and each sleep is `min(deadline - now(), SLEEP_CHUNK_MS)`.
  * - The engine rows wait on the real clock for `9999-12-31` through a scheduler that reports the
- *   first sleep; the abort clears the timer, so no thread check is needed.
+ *   first sleep; an abort clears `realScheduler`'s timer, so no thread check is needed.
  *   `test_host_stop_wakes_wait_and_discards_its_outcome` checks that `run()` rejects with the host
  *   signal's reason (no `primary` flag) and that `RunStopped` is recorded;
  *   `test_observer_failure_wakes_wait_and_preserves_callback_error` and

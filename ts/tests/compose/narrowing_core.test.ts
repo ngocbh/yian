@@ -81,7 +81,7 @@
  * `::test_narrow_contract_at_inside_a_partial_record`,
  * `::test_narrow_contract_at_the_root_of_a_partial_record_rebases_field_origins`, and the
  * `check_text`,
- * `check_fact`, `unresolved_type`, `declared_impossible` and `never_value` sites of
+ * `check_fact`, `unresolved_type`, `declared_impossible`, `never_value` and `narrows` sites of
  * `::test_an_unknown_check_kind_fails_loudly`.
  *
  * TS-only: the pinned-case table, which makes the call a site makes on the conformance cases a
@@ -99,14 +99,12 @@
  * also compares classes; `Members` takes an array. `types` takes dotted base paths as keys
  * (Python spells the dots `__`). A compared tag and its close match are spelled `"biy"` /
  * `did you mean "buy"?` (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and
- * `neverValue` are exported for these tests (Python's `_declared_impossible` and `_never_value`).
+ * `neverValue` are exported for these tests (Python's `_declared_impossible` and `_never_value`), as
+ * is `narrows` (`asserts.ts`; Python's `_narrows`).
  * `searchedParamGuards` gives a `Map` of `[case index, guard]` arrays where Python gives a dict of
  * tuples. `narrowContractAt`'s contracts and the narrowed views compare with
  * `sameOutputContract`, and their types with `typeEquals`, as Python's `==` compares them; a
  * `parametrize`d row is a `test.each` naming each type.
- *
- * Later (T3-20): the `narrows` site of `test_an_unknown_check_kind_fails_loudly` (the asserts
- * validator).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -156,6 +154,7 @@ import { projectOutputContract } from "../../src/compose/helpers/output_contract
 import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";
+import { narrows } from "../../src/compose/validate/asserts.ts";
 import { checkCaseWhenValues } from "../../src/compose/validate/case_exhaustive.ts";
 import * as narrowing from "../../src/compose/validate/narrowing.ts";
 import {
@@ -1703,6 +1702,7 @@ describe("an unknown check kind fails loudly", () => {
     ["checkFact", () => checkFact(other, DECISION, true, REGISTRY)],
     ["checkText", () => checkText(other)],
     ["declaredImpossible", () => declaredImpossible(literal, DECISION, true, REGISTRY)],
+    ["narrows", () => narrows(other, "v", [new ValueContract(DECISION)])],
     ["neverValue", () => neverValue(literal, reported)],
     ["unresolvedType", () => unresolvedType(new Holds(other, true), REGISTRY)],
   ];

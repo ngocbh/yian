@@ -34,7 +34,9 @@
  * TS-only, steps and events after a stop (serial and pooled): after a host stop, a settled step
  * (`{ settled: true }`) is still appended after the `RunStopped` and a `ToolCallFinished` still
  * published; another step throws the node signal's reason and appends nothing, and another event or
- * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended. Pooled only:
+ * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended, and a steering
+ * it keeps throws a `CapabilityFault` without calling the inbox, during a later node and after
+ * `run()` resolved, so the run neither stops nor aborts. Pooled only:
  * after a sibling's host fault, the settled step and the `ToolCallFinished` are still kept; after a
  * terminal `RunFailed`, they are refused.
  *
@@ -70,7 +72,7 @@ import {
   ToolCallStarted,
 } from "../../src/events.ts";
 import { MemoryRecallError, MemoryScope } from "../../src/memory/contracts.ts";
-import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import type { OutputContract } from "../../src/nodes/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { evalNode, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
@@ -793,6 +795,56 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
 
     expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
     expect(seen.filter((item) => item instanceof ToolCallFinished || item instanceof StreamChunk)).toEqual([]);
+  });
+
+  test("a kept steering refuses calls once its evaluation ended, without reaching the inbox", async () => {
+    const calls: string[] = [];
+    const steering = {
+      interruptSignal: (): AbortSignal => {
+        calls.push("interruptSignal");
+        throw new Error("inbox failed");
+      },
+      drain: (): string[] => {
+        calls.push("drain");
+        throw new Error("inbox failed");
+      },
+    };
+    let keptCaps!: NodeCaps;
+    const keeper = new ScriptNode("keeper", (caps) => {
+      keptCaps = caps;
+      return "kept";
+    });
+    const refusals: unknown[] = [];
+    const refuse = (): void => {
+      for (const call of [() => keptCaps.steering!.drain("keeper"), () => keptCaps.steering!.interruptSignal("keeper")]) {
+        try {
+          call();
+        } catch (error) {
+          refusals.push(error);
+        }
+      }
+    };
+    const later = new FuncNode("later", () => {
+      refuse();
+      return "done";
+    });
+    const flow = graph([keeper, later], [
+      [START_ID, "keeper"],
+      ["keeper", "later"],
+      ["later", END_ID],
+    ]);
+    const built = engine(flow, { numWorkers, steering });
+
+    expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
+    refuse();
+    expect(refusals.length).toBe(4);
+    for (const refusal of refusals) {
+      expect(refusal).toBeInstanceOf(CapabilityFault);
+      expect((refusal as CapabilityFault).original).toEqual(new Error("steering capability is closed"));
+    }
+    expect(calls).toEqual([]);
+    expect(stops(built)).toEqual([]);
+    expect(built.signal.aborted).toBe(false);
   });
 });
 

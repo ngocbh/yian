@@ -723,7 +723,7 @@ describe("the steering capability", () => {
     return new SteeringCapability({
       interruptSignal: methods.interruptSignal ?? (() => new AbortController().signal),
       drain: methods.drain ?? (() => []),
-    } as Steering, () => {}, []);
+    } as Steering, () => {}, [], () => false);
   }
 
   test("passes the node id and returns the host's signal", () => {

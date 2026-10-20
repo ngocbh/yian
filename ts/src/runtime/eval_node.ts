@@ -184,24 +184,34 @@ export class SteeringCapability implements Steering {
   readonly #inbox: Steering;
   readonly #onFault: (fault: CapabilityFault) => void;
   readonly #pending: Promise<unknown>[];
+  readonly #isClosed: () => boolean;
 
   /**
    * @param onFault Sees each capability fault before it is thrown or rejected with.
    * @param pending Receives each promise `drain` hands out, for the evaluator to await.
+   * @param isClosed Whether the evaluation ended; once it has, each method throws without calling
+   *   the inbox or `onFault`.
    */
-  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void, pending: Promise<unknown>[]) {
+  constructor(
+    inbox: Steering,
+    onFault: (fault: CapabilityFault) => void,
+    pending: Promise<unknown>[],
+    isClosed: () => boolean,
+  ) {
     this.#inbox = inbox;
     this.#onFault = onFault;
     this.#pending = pending;
+    this.#isClosed = isClosed;
   }
 
   /**
    * Return the host's interrupt signal for `nodeId`.
    *
    * @throws CapabilityFault carrying the host's error, or a `TypeError` when the answer isn't an
-   *   `AbortSignal`.
+   *   `AbortSignal`, or an `Error` once the evaluation ended.
    */
   interruptSignal(nodeId: string): AbortSignal {
+    this.#refuseClosed();
     let signal: unknown;
     try {
       signal = this.#inbox.interruptSignal(nodeId);
@@ -219,9 +229,10 @@ export class SteeringCapability implements Steering {
    * the host answers with a promise.
    *
    * @throws CapabilityFault (or rejects with one) carrying the host's error, or a `TypeError` when
-   *   the answer isn't an array of strings.
+   *   the answer isn't an array of strings, or an `Error` once the evaluation ended.
    */
   drain(nodeId: string): readonly string[] | Promise<readonly string[]> {
+    this.#refuseClosed();
     let messages: unknown;
     try {
       messages = this.#inbox.drain(nodeId);
@@ -248,6 +259,14 @@ export class SteeringCapability implements Steering {
       throw this.#fault(new TypeError("steering.drain must return an array of strings"));
     }
     return [...(messages as string[])];
+  }
+
+  /**
+   * Refuse a call once the evaluation ended: code a node left running must not reach the host's
+   * inbox, whose fault would end a run that has already settled or stop a later node's run.
+   */
+  #refuseClosed(): void {
+    if (this.#isClosed()) throw new CapabilityFault(new Error("steering capability is closed"));
   }
 
   /** Return `error` as a capability fault after reporting it. */
@@ -1020,8 +1039,9 @@ async function evaluateNode(
   }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
-  // Closed with the captures, so a step or event the node's dropped code sends after the outcome
-  // is decided is refused or dropped rather than reaching the run with no evaluation left to fail.
+  // Closed with the captures, so a step, event or steering call the node's dropped code makes after
+  // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
+  // left to fail.
   let closed = false;
   const isClosed = (): boolean => closed;
   if (node.needsLiveEvents === true) {
@@ -1029,7 +1049,9 @@ async function evaluateNode(
     if (emitEvent !== null) caps.emitEvent = observerSink(emitEvent, onFault, isClosed);
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
-  if (steering !== null && node.needsSteering === true) caps.steering = new SteeringCapability(steering, onFault, pending);
+  if (steering !== null && node.needsSteering === true) {
+    caps.steering = new SteeringCapability(steering, onFault, pending, isClosed);
+  }
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the
     // evaluator keeps it as it keeps the other capabilities' faults.

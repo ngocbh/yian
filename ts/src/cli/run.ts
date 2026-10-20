@@ -1,7 +1,9 @@
 /**
- * `yian run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log
- * options and default log path, and the signals that stop a run.
+ * The flow commands, `yian run`, `yian check`, `yian status` and `yian skills check`, and `yian
+ * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
+ * default log path, and the signals that stop a run.
  *
+ * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
  *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part.
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
@@ -17,12 +19,24 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { END_ID, START_ID } from "../compile/model.ts";
+import type { ComposedFlow } from "../compose/build/pipeline.ts";
+import { loadSkillDir } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { type Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
+import { isSystemError, SkillError } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import { FileRef, type Value, writeAsText } from "../typesys/values.ts";
-import { UsageError, type Writer } from "./utils.ts";
+import { type CliIo, printJson, UsageError, type Writer } from "./utils.ts";
+
+// The TS loader and run inspection aren't ported yet; each throws until its module lands.
+async function loadFlow(text: string, options: { searchPaths?: string[]; sourceLabel: string }): Promise<ComposedFlow> {
+  throw new Error("loadFlow is not ported to TypeScript yet");
+}
+
+async function inspectRun(log: string): Promise<never> {
+  throw new Error("inspectRun is not ported to TypeScript yet");
+}
 
 const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
 
@@ -521,4 +535,56 @@ export function stopOnSignals(
   };
   for (const [signal, listener] of listeners) target.on(signal, listener);
   return dispose;
+}
+
+/** Start or recover a durable run of the flow at `flow`; returns the exit code. */
+export async function run(flow: string): Promise<number> {
+  await loadFlow(readFileSync(flow, "utf8"), { sourceLabel: flow });
+  return 0;
+}
+
+/** Load each flow without running it and report whether it loads; returns the exit code. */
+export async function check(flows: readonly string[]): Promise<number> {
+  for (const flow of flows) await loadFlow(readFileSync(flow, "utf8"), { sourceLabel: flow });
+  return 0;
+}
+
+/** Report the run recorded in the run log `log`; returns the exit code. */
+export async function status(log: string): Promise<number> {
+  return inspectRun(log);
+}
+
+/** One `yian skills check` result: the skill's name and description, or why it failed to load. */
+type SkillResult =
+  | { path: string; ok: true; name: string; description: string }
+  | { path: string; ok: false; error: { code: "skill.invalid"; message: string } };
+
+/**
+ * Load each skill directory and report whether it holds a valid `SKILL.md`; returns the exit code,
+ * 1 when any fails.
+ *
+ * As text, each loaded skill is a `<path>: ok (<name>)` line on stdout and each failure its message
+ * on stderr; with `json`, one document lists every result, each path as given. Two directories
+ * with one skill name are not reported; that is the caller's concern.
+ */
+export async function skillsCheck(dirs: readonly string[], { json }: { json: boolean }, io: CliIo): Promise<number> {
+  const results = dirs.map((path): SkillResult => {
+    try {
+      const skill = loadSkillDir(path);
+      return { path, ok: true, name: skill.name, description: skill.description };
+    } catch (error) {
+      if (!(error instanceof SkillError) && !isSystemError(error)) throw error;
+      return { path, ok: false, error: { code: "skill.invalid", message: error.message } };
+    }
+  });
+  if (json) {
+    await printJson({ skills: results }, io.stdout);
+  } else {
+    for (const result of results) {
+      // The message already names the path.
+      if (result.ok) await io.stdout.write(`${result.path}: ok (${result.name})\n`);
+      else await io.stderr.write(`${result.error.message}\n`);
+    }
+  }
+  return results.every((result) => result.ok) ? 0 : 1;
 }

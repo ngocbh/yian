@@ -1,14 +1,18 @@
 // Ported from tests/cli/test_run.py: `test_bad_kv_is_rejected`, `test_inputs_json_must_be_an_object`,
 // `test_inputs_file_must_be_utf8` and `test_flag_overrides_json`, on the helpers those runs go
 // through (`parseKv`, `readInputsJson`, `mergeInputs`). Added here: the other `cli/run.ts` helpers
-// (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`). The CLI-run tests come with
-// `yian run`.
+// (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`), `skillsCheck`, and `main`'s
+// command table: the defaults check, usage errors and unported commands. The CLI-run tests come
+// with `yian run`.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import {
   diagnosticJson,
@@ -18,9 +22,11 @@ import {
   mergeInputs,
   parseKv,
   readInputsJson,
+  skillsCheck,
   stopOnSignals,
 } from "../../src/cli/run.ts";
-import { printJson, UsageError, type Writer } from "../../src/cli/utils.ts";
+import { main } from "../../src/cli/index.ts";
+import { type CliIo, printJson, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 
@@ -236,3 +242,169 @@ describe("stopOnSignals", () => {
     expect(listeners(target)).toEqual([0, 0, 0]);
   });
 });
+
+/** Return a `CliIo` over `env` whose streams are collected. */
+function testIo(env: Record<string, string> = {}) {
+  const out = sink();
+  const err = sink();
+  const io: CliIo = {
+    stdout: out.out,
+    stderr: err.out,
+    stdin: new PassThrough(),
+    env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
+  };
+  return { io, stdout: out.text, stderr: err.text };
+}
+
+/** Write a skill directory at `tmp/skills/<name>` holding `skillMd`, and return its path. */
+function skillDir(name: string, skillMd: string): string {
+  const dir = join(tmp, "skills", name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), skillMd);
+  return dir;
+}
+
+const GOOD_SKILL = "---\nname: good\ndescription: Does good things.\n---\nDo good things.\n";
+
+describe("skillsCheck", () => {
+  test("text: ok lines on stdout, errors on stderr, exit 1 when one fails", async () => {
+    const good = skillDir("good", GOOD_SKILL);
+    const { io, stdout, stderr } = testIo();
+    expect(await skillsCheck([good], { json: false }, io)).toBe(0);
+    expect(stdout()).toBe(`${good}: ok (good)\n`);
+    expect(stderr()).toBe("");
+
+    const missing = join(tmp, "skills", "missing");
+    const failed = testIo();
+    expect(await skillsCheck([good, missing], { json: false }, failed.io)).toBe(1);
+    expect(failed.stdout()).toBe(`${good}: ok (good)\n`);
+    expect(failed.stderr()).toBe(`${missing}: missing SKILL.md\n`);
+  });
+
+  test("json: a missing and a bad SKILL.md are skill.invalid, each path as given", async () => {
+    const good = skillDir("good", GOOD_SKILL);
+    skillDir("bad", "---\nname: bad\n---\nNo description.\n");
+    const bad = join(tmp, "skills", "..", "skills", "bad") + "/";
+    const empty = join(tmp, "skills", "empty");
+    mkdirSync(empty);
+    const { io, stdout, stderr } = testIo();
+    expect(await skillsCheck([good, bad, empty], { json: true }, io)).toBe(1);
+    expect(stderr()).toBe("");
+    const document = JSON.parse(stdout());
+    expect(document.format).toBe("yian.cli.v1");
+    expect(document.skills[0]).toEqual({ path: good, ok: true, name: "good", description: "Does good things." });
+    expect(document.skills.map((s: { path: string }) => s.path)).toEqual([good, bad, empty]);
+    for (const result of document.skills.slice(1)) {
+      expect(result.ok).toBe(false);
+      expect(result.error.code).toBe("skill.invalid");
+      expect(typeof result.error.message).toBe("string");
+    }
+  });
+});
+
+describe("main", () => {
+  const BAD_DEFAULTS = { YIAN_MAX_TOTAL_NODES: "abc" };
+
+  test("a bad YIAN_ default: the error on stderr, a document only under --json, exit 1", async () => {
+    const flow = join(tmp, "flow.yaml");
+    writeFileSync(flow, "id: f\n");
+    const text = testIo(BAD_DEFAULTS);
+    expect(await main(["check", flow], text.io)).toBe(1);
+    expect(text.stdout()).toBe("");
+    expect(text.stderr()).toContain("YIAN_MAX_TOTAL_NODES");
+
+    const json = testIo(BAD_DEFAULTS);
+    expect(await main(["check", "--json", flow], json.io)).toBe(1);
+    expect(json.stderr()).toBe(text.stderr());
+    expect(JSON.parse(json.stdout())).toEqual({
+      format: "yian.cli.v1",
+      error: { code: "defaults.invalid", message: text.stderr().trimEnd() },
+    });
+  });
+
+  test("an unknown command or option exits 2 with nothing on stdout", async () => {
+    for (const [argv, message] of [
+      [["nope"], "No such command 'nope'."],
+      [["--nope"], "No such option: --nope"],
+      [["skills", "nope"], "No such command 'nope'."],
+      [["skills", "check", "--nope", "x"], "No such option: --nope"],
+    ] as const) {
+      const { io, stdout, stderr } = testIo();
+      expect(await main(argv, io)).toBe(2);
+      expect(stdout()).toBe("");
+      expect(stderr()).toContain(`Error: ${message}\n`);
+    }
+  });
+
+  test("an unknown command is a usage error before the defaults are checked", async () => {
+    const { io, stderr } = testIo(BAD_DEFAULTS);
+    expect(await main(["nope"], io)).toBe(2);
+    expect(stderr()).toContain("No such command 'nope'.");
+  });
+
+  test("cli rejects negative workers", async () => {
+    const flow = join(tmp, "flow.yaml");
+    writeFileSync(flow, "id: f\n");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["run", "-w", "-1", flow], io)).toBe(2);
+    expect(stdout()).toBe("");
+    expect(stderr()).toStartWith("Usage: yian run [OPTIONS] FLOW\nTry 'yian run --help' for help.\n");
+  });
+
+  test("a missing flow, resume log or --root directory exits 2", async () => {
+    const flow = join(tmp, "flow.yaml");
+    writeFileSync(flow, "id: f\n");
+    const missing = join(tmp, "missing.yaml");
+    const log = join(tmp, "missing.jsonl");
+    const nodir = join(tmp, "nodir");
+    for (const [argv, message] of [
+      [["run", missing], `Invalid value for 'FLOW': File '${missing}' does not exist.`],
+      [["run", flow, "--resume", log], `Invalid value for '--resume': File '${log}' does not exist.`],
+      [["check", "--root", nodir, "x.yaml"], `Invalid value for '--root': Directory '${nodir}' does not exist.`],
+    ] as const) {
+      const { io, stdout, stderr } = testIo();
+      expect(await main(argv, io)).toBe(2);
+      expect(stdout()).toBe("");
+      expect(stderr()).toEndWith(`Error: ${message}\n`);
+    }
+  });
+
+  test("an unported command exits 1 with its line", async () => {
+    for (const [argv, name] of [
+      [["providers"], "providers"],
+      [["config", "check"], "config check"],
+    ] as const) {
+      const { io, stdout, stderr } = testIo();
+      expect(await main(argv, io)).toBe(1);
+      expect(stdout()).toBe("");
+      expect(stderr()).toBe(`yian ${name} is not ported to TypeScript yet\n`);
+    }
+  });
+
+  test("a command's --help prints its help and exits 0", async () => {
+    const { io, stdout } = testIo();
+    expect(await main(["skills", "check", "--help"], io)).toBe(0);
+    expect(stdout()).toStartWith("Usage: yian skills check [OPTIONS] DIRS...\n");
+  });
+});
+
+// The entry as the conformance runner runs it: `.ts` from source, `.js` when built.
+const CLI_ENTRY = fileURLToPath(
+  new URL(`../../src/cli/index.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url),
+);
+
+test("the entry writes a large --json document whole to piped stdout", () => {
+  const dirs = Array.from({ length: 3000 }, (_, i) => `missing-skill-directory-${String(i).padStart(4, "0")}`);
+  const runtime = process.versions.bun !== undefined ? ["--no-install"] : [];
+  const ran = spawnSync(process.execPath, [...runtime, CLI_ENTRY, "skills", "check", "--json", ...dirs], {
+    cwd: tmp,
+    env: { HOME: tmp },
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 30_000,
+  });
+  expect(ran.status).toBe(1);
+  expect(ran.stdout.length).toBeGreaterThan(128 * 1024);
+  const document = JSON.parse(ran.stdout);
+  expect(document.skills.map((s: { path: string }) => s.path)).toEqual(dirs);
+}, 30_000);

@@ -57,7 +57,8 @@ function normalizeUntil(untilSrc: unknown, value: unknown): string {
     deadlineUtc(value);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    throw new BindingError(`wait \`until\` ${reprText(value)}: ${error.message}`, {
+    // The resolved deadline is a run value, so the message writes it in the text form.
+    throw new BindingError(`wait \`until\` ${valueRepr(value)}: ${error.message}`, {
       failureCode: "contract.input",
       origin,
       cause: error,

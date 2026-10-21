@@ -1,0 +1,170 @@
+# From tests/compose/test_kind_case_parse.py::test_searched_case_origins_are_positional_and_select_the_failing_entry.
+# A searched CASE `when:` that fails to evaluate (`1 / zero.output`) fails the gate, located at
+# its arm. TS fails condition.evaluate and Python node.execute.
+kind: run
+rules: [failure-codes]
+flow: |
+  id: searched-case-origins
+  name: searched-case-origins
+  nodes:
+    zero:
+      kind: code
+      code: "return 0"
+      output: int
+    gate:
+      kind: case
+      cases:
+        - when: "zero.output > 0"
+          then: positive
+        - when: "1 / zero.output > 0"
+          then: broken
+        - when: "zero.output > 0"
+          then: duplicate
+      else: negative
+    positive:
+      kind: code
+      code: 'return "positive"'
+      output: str
+    broken:
+      kind: code
+      code: 'return "broken"'
+      output: str
+    duplicate:
+      kind: code
+      code: 'return "duplicate"'
+      output: str
+    negative:
+      kind: code
+      code: 'return "negative"'
+      output: str
+  output: ${positive.output | broken.output | duplicate.output | negative.output}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: condition.evaluate
+      frames:
+      - label: flow.yaml
+        range: [13, 15, 13, 36]
+      message: 'division by zero: 1 / 0'
+      node: gate
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, zero]
+  - - node_succeeded
+    - zero
+    - value: 0
+  - [node_started, gate]
+  - - node_failed
+    - gate
+    - failure:
+        code: condition.evaluate
+        frames:
+        - label: flow.yaml
+          range: [13, 15, 13, 36]
+        message: 'division by zero: 1 / 0'
+        node: gate
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: zero
+  - - NodeSucceeded
+    - node_id: zero
+      output: 0
+  - - NodeStarted
+    - node_id: gate
+  - - NodeFailed
+    - failure:
+        code: condition.evaluate
+        frames:
+        - label: flow.yaml
+          range: [13, 15, 13, 36]
+        message: 'division by zero: 1 / 0'
+        node: gate
+  - - RunFailed
+    - failure:
+        code: condition.evaluate
+        frames:
+        - label: flow.yaml
+          range: [13, 15, 13, 36]
+        message: 'division by zero: 1 / 0'
+        node: gate
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [13, 15, 13, 36]
+      message: 'division by zero: 1 / 0'
+      node: gate
+  trace:
+  - - run_started
+    - null
+    - inputs: {}
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, zero]
+  - - node_succeeded
+    - zero
+    - value: 0
+  - [node_started, gate]
+  - - node_failed
+    - gate
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [13, 15, 13, 36]
+        message: 'division by zero: 1 / 0'
+        node: gate
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: zero
+  - - NodeSucceeded
+    - node_id: zero
+      output: 0
+  - - NodeStarted
+    - node_id: gate
+  - - NodeFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [13, 15, 13, 36]
+        message: 'division by zero: 1 / 0'
+        node: gate
+  - - RunFailed
+    - failure:
+        code: node.execute
+        frames:
+        - label: flow.yaml
+          range: [13, 15, 13, 36]
+        message: 'division by zero: 1 / 0'
+        node: gate

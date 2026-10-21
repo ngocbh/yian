@@ -1,7 +1,9 @@
 /**
  * The conformance runner's own unit tests: reading a case file, the format check, case values,
  * comparison, the case directory, selection and the report. Not a port of
- * `tests/test_conformance.py`, which `conformance.ts` is.
+ * `tests/test_conformance.py`, which `conformance.ts` is, except for
+ * `test_steering_unreached_action_fails`, which no case can cover: a passing case reaches every
+ * action.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -136,6 +138,20 @@ const ONE_OF = "a `json` case takes one of `read` and `write`";
 const READ = "`read` takes `mode` (codec or plain), and no `form`";
 const WRITE = "`write` takes `form` (canonical or log), and no `mode`";
 const KINDS = "load, run, resume, backward, expr, value, defaults, fingerprint, cli, json";
+const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: text, text: hi}]}";
+/** A `run` case whose `host.models.n.agent` script is the one `entry`. */
+const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
+const AT = "host.models.n.agent[0]";
+/** A `run` case whose `host.steering` gives node `chat` the `actions`. */
+const STEER = (actions: string) => `${RUN}host: {steering: {chat: ${actions}}}\n`;
+const STEER_TEXT = "`host.steering.chat[0].steer` must be a non-empty list of text";
+const COUNTS = "`host.steering.chat[0].after` counts must be ints from 1";
+const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
+const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
+const MEMORY_CONSUMER = "consumers go under `__memory__`, and `__memory__` holds only them";
+/** A `run` case whose `expect` adds `results`. */
+const EXPECT = (results: string) => `kind: run\nflow: x\nexpect: {output: 1, ${results}}\n`;
+const ATTEMPT_ONE = "writes `attempt: 1`, which the data form leaves out";
 
 describe("checkCase", () => {
   test.each([
@@ -262,6 +278,162 @@ describe("checkCase", () => {
       `${RUN}host: {human: {}, tools: {ask_user: {parameters: {}, results: []}}}`,
       "a case with `host.human` declares no `ask_user` tool",
     ],
+    [`${RUN}host: {models: 1}`, "`host.models` must be a mapping"],
+    [`${RUN}host: {models: {n: 1}}`, "`host.models.n` must be a mapping"],
+    [
+      `${RUN}host: {models: {n: {x: []}}}`,
+      `\`host.models.n.x\`: the consumer must be one of ${CONSUMER_LIST}`,
+    ],
+    [`${RUN}host: {models: {n: {"memory:a": []}}}`, MEMORY_CONSUMER],
+    [`${RUN}host: {models: {__memory__: {agent: []}}}`, MEMORY_CONSUMER],
+    [`${RUN}host: {models: {n: {agent: {}}}}`, "`host.models.n.agent` must be a list"],
+    [MODEL("1"), `\`${AT}\` must be a mapping`],
+    [MODEL("{}"), `\`${AT}\` takes \`reply\` or \`chunks\``],
+    [MODEL(`{reply: ${TEXT_REPLY}, chunks: []}`), `\`${AT}\` takes \`reply\` or \`chunks\``],
+    [MODEL(`{reply: ${TEXT_REPLY}, x: 1}`), `unknown key \`${AT}.x\``],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, raise: {class: A, message: m}}`),
+      `\`${AT}.raise\` must come with \`chunks\`, not a \`reply\``,
+    ],
+    [
+      MODEL("{reply: {role: assistant, parts: []}}"),
+      `\`${AT}.reply\` is not a yian.message.v1 message`,
+    ],
+    [
+      MODEL("{reply: {format: yian.message.v1, role: user, parts: []}}"),
+      `\`${AT}.reply.role\` must be \`assistant\``,
+    ],
+    [
+      MODEL("{reply: {format: yian.message.v1, role: assistant, " +
+        "parts: [{type: reasoning, text: r}]}}"),
+      `\`${AT}.reply.parts[0]\`: this runner doesn't script \`reasoning\` parts yet`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, usage: {input_tokens: 1}}`),
+      `\`${AT}.usage.output_tokens\` is required`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, usage: {input_tokens: -1, output_tokens: 0, total_tokens: 0}}`),
+      `\`${AT}.usage\` counts must be non-negative ints`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, usage: {input_tokens: 1.0, output_tokens: 0, ` +
+        "total_tokens: 0}}"),
+      `\`${AT}.usage\` counts must be non-negative ints`,
+    ],
+    [
+      MODEL(`{chunks: [{finish: stop}], usage: ${USAGE}}`),
+      `\`${AT}.usage\` must come with a \`reply\`; \`chunks\` carry a usage chunk`,
+    ],
+    [MODEL("{chunks: 1}"), `\`${AT}.chunks\` must be a list`],
+    [
+      MODEL("{chunks: []}"),
+      `\`${AT}.chunks\` must end in a \`finish\` chunk, unless a \`raise\` follows them`,
+    ],
+    [MODEL("{chunks: [{text: a}]}"), `\`${AT}.chunks\` must end in a \`finish\` chunk`],
+    [
+      MODEL("{chunks: [{finish: stop}, {text: a}]}"),
+      `\`${AT}.chunks[0]\`: \`finish\` must be the last chunk`,
+    ],
+    [
+      MODEL("{chunks: [{text: a, finish: stop}]}"),
+      `\`${AT}.chunks[0]\` takes one of \`text\`, \`tool_call\`, \`usage\` and \`finish\``,
+    ],
+    [MODEL("{chunks: [{x: a}]}"), `unknown key \`${AT}.chunks[0].x\``],
+    [MODEL("{chunks: [{text: 1}, {finish: stop}]}"), `\`${AT}.chunks[0].text\` must be text`],
+    [
+      MODEL("{chunks: [{tool_call: {index: 0}}, {finish: stop}]}"),
+      `\`${AT}.chunks[0].tool_call.arguments\` is required`,
+    ],
+    [
+      MODEL("{chunks: [{tool_call: {index: a, arguments: x}}, {finish: stop}]}"),
+      `\`${AT}.chunks[0].tool_call.index\` must be an int`,
+    ],
+    [
+      MODEL("{chunks: [{tool_call: {index: 0, id: 1, arguments: x}}, {finish: stop}]}"),
+      `\`${AT}.chunks[0].tool_call\` \`id\`, \`name\` and \`arguments\` must be text`,
+    ],
+    [
+      MODEL("{chunks: [{usage: {input_tokens: 1}}, {finish: stop}]}"),
+      `\`${AT}.chunks[0].usage.output_tokens\` is required`,
+    ],
+    [MODEL("{chunks: [{finish: 1}]}"), `\`${AT}.chunks[0].finish\` must be text or null`],
+    [MODEL("{chunks: [], raise: {class: A}}"), `\`${AT}.raise.message\` is required`],
+    [MODEL("{chunks: [], raise: {class: A, message: m, x: 1}}"), `unknown key \`${AT}.raise.x\``],
+    [
+      MODEL("{chunks: [], raise: {class: 1, message: m}}"),
+      `\`${AT}.raise.class\` and \`.message\` must be text`,
+    ],
+    [
+      MODEL("{chunks: [], raise: {class: A, message: m, status: 5.0}}"),
+      `\`${AT}.raise.status\` must be an int`,
+    ],
+    [MODEL(`{reply: ${TEXT_REPLY}, request: {}}`), `\`${AT}.request.messages\` is required`],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, request: {messages: 1}}`),
+      `\`${AT}.request.messages\` must be a list`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [], tools: 1}}`),
+      `\`${AT}.request.tools\` must be a list`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [], tools: []}}`),
+      `\`${AT}.request.tools\` is empty; omit \`tools\` when none are bound`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [1]}}`),
+      `\`${AT}.request.messages[0]\` is not a yian.message.v1 message`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [], tools: [{name: t, parameters: {}}]}}`),
+      `\`${AT}.request.tools[0].description\` is required`,
+    ],
+    [
+      MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [], schema: 1}}`),
+      `\`${AT}.request.schema\` must be a mapping`,
+    ],
+    [`${RUN}host: {steering: 1}`, "`host.steering` must be a mapping"],
+    [STEER("{steer: [x]}"), "`host.steering` maps node ids to lists of actions"],
+    [STEER("[1]"), "`host.steering.chat[0]` must be a mapping"],
+    [
+      STEER("[{steer: [x], interrupt: true}]"),
+      "`host.steering.chat[0]` takes `steer` or `interrupt`",
+    ],
+    [
+      STEER("[{steer: [x]}, {after: {model_call: 1}}]"),
+      "`host.steering.chat[1]` takes `steer` or `interrupt`",
+    ],
+    [STEER("[{steer: x}]"), STEER_TEXT],
+    [STEER("[{steer: []}]"), STEER_TEXT],
+    [STEER("[{steer: [x, 1]}]"), STEER_TEXT],
+    [STEER("[{interrupt: false}]"), "`host.steering.chat[0].interrupt` must be `true`"],
+    [STEER("[{stop: true}]"), "unknown key `host.steering.chat[0].stop`"],
+    [STEER("[{after: 1, interrupt: true}]"), "`host.steering.chat[0].after` must be a mapping"],
+    [
+      STEER("[{after: {chunk: 1}, interrupt: true}]"),
+      "`host.steering.chat[0].after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
+    ],
+    [
+      STEER("[{interrupt: true}, {after: {model_call: 1, tool_call: 1}, interrupt: true}]"),
+      "`host.steering.chat[1].after` is",
+    ],
+    [STEER("[{after: {tool_call: 0}, interrupt: true}]"), COUNTS],
+    [STEER("[{after: {model_call: true}, interrupt: true}]"), COUNTS],
+    [STEER("[{after: {model_call: 1, chunk: 1.0}, interrupt: true}]"), COUNTS],
+    [
+      EXPECT("events: [[ModelCallStarted, {node_id: a, attempt: 1}]]"),
+      `\`expect.events[0]\` ${ATTEMPT_ONE}`,
+    ],
+    [
+      EXPECT("events: [[RunStarted], [ModelCallFinished, {attempt: 1.0}]]"),
+      `\`expect.events[1]\` ${ATTEMPT_ONE}`,
+    ],
+    [EXPECT("stream: [{node_id: a, attempt: 1}]"), `\`expect.stream[0]\` ${ATTEMPT_ONE}`],
+    [
+      `${EXPECT("stream: []")}rules: [llm]\npython_expect: {output: 1, stream: [{attempt: 1}]}`,
+      `\`python_expect.stream[0]\` ${ATTEMPT_ONE}`,
+    ],
     [`${RUN}host: {jitter: 0.5}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [`${RUN}host: {jitter: [1]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [`${RUN}host: {jitter: [-0.1]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
@@ -328,6 +500,20 @@ describe("checkCase", () => {
     LOAD,
     `${LOAD}rules: [text]\npython_expect: {load: ok}`,
     `${RUN}host: {jitter: [0, 0.5], human: {n: [a]}}`,
+    MODEL(`{reply: ${TEXT_REPLY}, usage: {input_tokens: 1, output_tokens: 2, total_tokens: 3, ` +
+      "reasoning_tokens: 0}}"),
+    MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [${TEXT_REPLY}], ` +
+      "tools: [{name: t, description: d, parameters: {}}], schema: {}}}"),
+    MODEL('{chunks: [{text: a}, {tool_call: {index: 0, id: c, name: t, arguments: "{}"}}, ' +
+      `{usage: ${USAGE}}, {finish: null}]}`),
+    MODEL("{chunks: [], raise: {class: ConnectionError, message: m}}"),
+    MODEL("{chunks: [{text: a}], raise: {class: X, message: m, status: 503}}"),
+    `${RUN}host: {models: {__memory__: {"memory:a/b": []}, n: {compose: [], ` +
+      "structured_retry: []}}}",
+    STEER("[{steer: [x]}, {after: {model_call: 1, chunk: 2}, interrupt: true}, " +
+      "{after: {tool_call: 1}, steer: [y]}]"),
+    EXPECT("events: [[NodeStarted, {attempt: 1}], [ModelCallStarted, {attempt: 2}]], " +
+      "stream: [{attempt: 2}]"),
     TOOL("{n: [{return: 1}, {raise: {class: TransientToolError, message: m, retry_after: 1}}]}"),
     TOOL("[{raise: {class: TransientToolError, message: m, retry_after: 0.5}}]"),
     RESUME,
@@ -694,6 +880,47 @@ describe("setUp", () => {
   });
 });
 
+describe("run", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Run the `run` case file `text` with the runner's own `run` kind. */
+  async function runCase(text: string): Promise<void> {
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(tmpdir(), "none"));
+    made.push(ctx.dir);
+    await RUNNERS.run!(case_, ctx);
+  }
+
+  /**
+   * A `run` case of one steerable AGENT `chat` replying `done`, whose `host.steering` gives it the
+   * `actions`, expecting the output `output`.
+   */
+  const STEERING_CASE = (actions: string, output: string) =>
+    "kind: run\nflow: |\n  id: steer\n  name: steer\n" +
+    "  llm_config: {provider: openai, model: gpt-5.5}\n" +
+    "  nodes:\n    chat:\n      kind: agent\n      steerable: true\n      tools: []\n" +
+    "      system_prompt: Help.\n      prompt: Go.\n      output: str\n" +
+    "  output: ${chat.output}\n" +
+    "run: {num_workers: 0}\n" +
+    `host:\n  steering: {chat: ${actions}}\n  tools: {}\n` +
+    "  models: {chat: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
+    "parts: [{type: text, text: done}]}}]}}\n" +
+    `expect: {output: {status: succeeded, output: ${output}}}\n`;
+
+  // test_steering_unreached_action_fails
+  test("an action whose point the run never reaches fails the case after the comparisons", async () => {
+    const actions = "[{steer: [early]}, {after: {tool_call: 1}, interrupt: true}]";
+    // A divergence shows first.
+    await expect(runCase(STEERING_CASE(actions, "other"))).rejects.toThrow("output differs");
+    const unreached = runCase(STEERING_CASE(actions, "done"));
+    await expect(unreached).rejects.toBeInstanceOf(CaseFailure);
+    await expect(unreached).rejects.toThrow("`host.steering.chat[1]` was never reached");
+  });
+});
+
 describe("main", () => {
   const FILES: Record<string, string> = {
     "a/ok.yaml": "kind: expr\nexpr: pass\nexpect: {value: 1}\n",
@@ -821,7 +1048,7 @@ describe("main", () => {
 
   test("fails a case using a reserved key before setting it up", async () => {
     const files = {
-      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, models: {}}\nexpect: {output: {}}\n",
+      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, stop: {}}\nexpect: {output: {}}\n",
       "r/memory.yaml": "kind: run\nflow: x\nexpect: {output: {}, memory: {}}\n",
       "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
     };
@@ -832,7 +1059,7 @@ describe("main", () => {
     expect(await run([], files, {}, { run: passing })).toEqual({
       code: 1,
       out: [
-        "FAIL r/host: `host.models` is not supported by the TS runner yet",
+        "FAIL r/host: `host.stop` is not supported by the TS runner yet",
         "FAIL r/memory: `expect.memory` is not supported by the TS runner yet",
         "3 cases: 1 passed, 2 failed, 0 pending",
       ],

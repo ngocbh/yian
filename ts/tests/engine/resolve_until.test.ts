@@ -13,6 +13,8 @@
  * holds year 0, so the overflow row keeps Python's verdict through an explicit UTC year range
  * check (1 to 9999), refused with Python's `OverflowError` text, `date value out of range`. TS
  * dates are text, so Python's `isoformat()` branch for date objects has nothing to read here.
+ * A failure message writes the resolved deadline in the text form (`"…"`), where Python writes
+ * its `repr` (`'…'`).
  *
  * TS-only: `9999-12-31T23:30-01:00` is out of range in UTC and `9999-12-31T23:59:59.999999Z` is
  * in range; a `Binding`-wrapped literal passes through.
@@ -91,7 +93,7 @@ test("deadline that overflows in utc names the value", () => {
   const caught = rejection(literal);
 
   expect(caught.failureCode).toBe("contract.input");
-  expect(caught.message).toBe("wait `until` '0001-01-01T00:00+01:00': date value out of range");
+  expect(caught.message).toBe('wait `until` "0001-01-01T00:00+01:00": date value out of range');
 });
 
 for (const [id, literal, reason] of [
@@ -110,7 +112,7 @@ test("a deadline past year 9999 in UTC is out of range", () => {
   const caught = rejection("9999-12-31T23:30-01:00");
 
   expect(caught.failureCode).toBe("contract.input");
-  expect(caught.message).toBe("wait `until` '9999-12-31T23:30-01:00': date value out of range");
+  expect(caught.message).toBe('wait `until` "9999-12-31T23:30-01:00": date value out of range');
   expect(caught.cause).toBeInstanceOf(RangeError);
 });
 

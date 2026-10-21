@@ -51,7 +51,27 @@ import {
   reprText,
 } from "../src/diagnostics.ts";
 import type { RunEvent, StreamChunk } from "../src/events.ts";
-import { EventStream } from "../src/llm/events.ts";
+import type { Steering } from "../src/nodes/base.ts";
+import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
+import {
+  type ChatModel,
+  type Event,
+  EventStream,
+  Finish,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../src/llm/events.ts";
+import {
+  Message,
+  MessageFormatError,
+  type Request,
+  Response,
+  TextPart,
+  ToolCallPart,
+  Usage,
+} from "../src/llm/messages.ts";
+import { ScriptedModel, type ScriptedReply } from "../src/llm/testing.ts";
 import { checkModelConfig, resolveModelConfig } from "../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import {
@@ -166,14 +186,28 @@ const RUN_KEYS: ReadonlySet<string> = new Set([
 ]);
 const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
 // Host keys the format reserves and this runner doesn't support yet.
-const RESERVED_HOST_KEYS: readonly string[] = ["models", "steering", "stop", "memory", "skills"];
-const HOST_KEYS: ReadonlySet<string> = new Set(["tools", "human", "jitter", ...RESERVED_HOST_KEYS]);
+const RESERVED_HOST_KEYS: readonly string[] = ["stop", "memory", "skills"];
+const HOST_KEYS: ReadonlySet<string> = new Set([
+  "tools", "human", "jitter", "models", "steering", ...RESERVED_HOST_KEYS,
+]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
 const RESERVED: readonly (readonly [string, string])[] = [
   ...RESERVED_HOST_KEYS.map((key) => ["host", key] as const),
   ["expect", "memory"],
 ];
+// `host.models` consumers, besides `memory:<key>` under `LEARNER_NODE`.
+const CONSUMERS: readonly string[] = ["agent", "structured_retry", "compose", "backward", "summary"];
+// The node id memory learners' model calls are scripted under.
+const LEARNER_NODE = "__memory__";
+const USAGE_COUNTS: readonly string[] = ["input_tokens", "output_tokens", "total_tokens"];
+const USAGE_DETAILS: readonly string[] = [
+  "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens",
+];
+/** The events and chunk whose `attempt` is left out when it is 1, as Python leaves it null. */
+const ATTEMPT_LEFT_OUT_AT_1: ReadonlySet<string> = new Set([
+  "ModelCallStarted", "ModelCallFinished", "StreamChunk",
+]);
 const RULES: ReadonlySet<string> = new Set([
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
   "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes",
@@ -317,7 +351,230 @@ function keys(
   return map;
 }
 
-/** Throw unless `value`, the host, its tools and their scripts use only the format's keys. */
+/** Throw unless `usage` is a usage: the three counts and any optional ones, as ints. */
+function checkUsage(where: string, usage: Value | undefined): void {
+  const counts = keys(where, usage, new Set([...USAGE_COUNTS, ...USAGE_DETAILS]), {
+    required: USAGE_COUNTS,
+  });
+  if (Object.values(counts).some((count) => typeof count !== "bigint" || count < 0n)) {
+    throw new Error(`\`${where}\` counts must be non-negative ints`);
+  }
+}
+
+/** Return `data` read as a yian.message.v1 message, throwing unless it is one. */
+function readMessage(where: string, data: Value | undefined): Message {
+  try {
+    return Message.fromJSON(data);
+  } catch (error) {
+    if (!(error instanceof MessageFormatError)) throw error;
+    throw new Error(`\`${where}\` is not a yian.message.v1 message: ${error.message}`);
+  }
+}
+
+/**
+ * Throw unless `reply` is a yian.message.v1 assistant message this runner can serve. This runner
+ * serves only text and tool call parts.
+ */
+function checkReply(where: string, reply: Value | undefined): void {
+  const message = readMessage(where, reply);
+  if (message.role !== "assistant") throw new Error(`\`${where}.role\` must be \`assistant\``);
+  message.parts.forEach((part, index) => {
+    if (!(part instanceof TextPart || part instanceof ToolCallPart)) {
+      throw new Error(
+        `\`${where}.parts[${index}]\`: this runner doesn't script \`${part.type}\` parts yet`,
+      );
+    }
+  });
+}
+
+/** Throw unless `chunk` is one text, tool call, usage or finish chunk; a finish comes last. */
+function checkChunk(where: string, chunk: Value | undefined, last: boolean): void {
+  const kinds = new Set(["text", "tool_call", "usage", "finish"]);
+  const entries = Object.entries(keys(where, chunk, kinds));
+  if (entries.length !== 1) {
+    throw new Error(`\`${where}\` takes one of \`text\`, \`tool_call\`, \`usage\` and \`finish\``);
+  }
+  const [kind, value] = entries[0]!;
+  if (kind === "text" && typeof value !== "string") throw new Error(`\`${where}.text\` must be text`);
+  if (kind === "tool_call") {
+    const call = keys(`${where}.tool_call`, value, new Set(["index", "id", "name", "arguments"]), {
+      required: ["index", "arguments"],
+    });
+    if (typeof call["index"] !== "bigint") {
+      throw new Error(`\`${where}.tool_call.index\` must be an int`);
+    }
+    if (["id", "name", "arguments"].some((key) => typeof get(call, key, "") !== "string")) {
+      throw new Error(`\`${where}.tool_call\` \`id\`, \`name\` and \`arguments\` must be text`);
+    }
+  }
+  if (kind === "usage") checkUsage(`${where}.usage`, value);
+  if (kind === "finish" && !(value === null || typeof value === "string")) {
+    throw new Error(`\`${where}.finish\` must be text or null`);
+  }
+  if (kind === "finish" && !last) throw new Error(`\`${where}\`: \`finish\` must be the last chunk`);
+}
+
+/**
+ * Throw unless `request` is `{messages, tools, schema}` with `messages` required: yian.message.v1
+ * messages, a non-empty list of tool specs and a mapping.
+ */
+function checkRequest(where: string, request: Value | undefined): void {
+  const map = keys(where, request, new Set(["messages", "tools", "schema"]), {
+    required: ["messages"],
+  });
+  for (const key of ["messages", "tools"]) {
+    if (!Array.isArray(get(map, key, []))) throw new Error(`\`${where}.${key}\` must be a list`);
+  }
+  const tools = get(map, "tools", []) as Value[];
+  if (Object.hasOwn(map, "tools") && tools.length === 0) {
+    throw new Error(`\`${where}.tools\` is empty; omit \`tools\` when none are bound`);
+  }
+  (map["messages"] as Value[]).forEach((message, index) => {
+    readMessage(`${where}.messages[${index}]`, message);
+  });
+  const spec = ["name", "description", "parameters"];
+  tools.forEach((item, index) => {
+    keys(`${where}.tools[${index}]`, item, new Set(spec), { required: spec });
+  });
+  mapping(`${where}.schema`, get(map, "schema", {}));
+}
+
+/**
+ * Throw unless `entry` is a `reply` or `chunks` model entry. A `reply` may add a `usage`; `chunks`
+ * may add a `raise`, and without one end in a `finish`. Either may add a `request`.
+ */
+function checkModelEntry(where: string, value: Value | undefined): void {
+  const entry = keys(where, value, new Set(["reply", "usage", "chunks", "raise", "request"]));
+  if (Object.hasOwn(entry, "reply") === Object.hasOwn(entry, "chunks")) {
+    throw new Error(`\`${where}\` takes \`reply\` or \`chunks\``);
+  }
+  if (Object.hasOwn(entry, "request")) checkRequest(`${where}.request`, entry["request"]);
+  if (Object.hasOwn(entry, "reply")) {
+    if (Object.hasOwn(entry, "raise")) {
+      throw new Error(`\`${where}.raise\` must come with \`chunks\`, not a \`reply\``);
+    }
+    checkReply(`${where}.reply`, entry["reply"]);
+    if (Object.hasOwn(entry, "usage")) checkUsage(`${where}.usage`, entry["usage"]);
+    return;
+  }
+  if (Object.hasOwn(entry, "usage")) {
+    throw new Error(
+      `\`${where}.usage\` must come with a \`reply\`; \`chunks\` carry a usage chunk`,
+    );
+  }
+  const chunks = entry["chunks"];
+  if (!Array.isArray(chunks)) throw new Error(`\`${where}.chunks\` must be a list`);
+  chunks.forEach((chunk, index) => {
+    checkChunk(`${where}.chunks[${index}]`, chunk, index === chunks.length - 1);
+  });
+  if (Object.hasOwn(entry, "raise")) {
+    const error = keys(`${where}.raise`, entry["raise"], new Set(["class", "message", "status"]), {
+      required: ["class", "message"],
+    });
+    // The replay builds the error from these.
+    if (typeof error["class"] !== "string" || typeof error["message"] !== "string") {
+      throw new Error(`\`${where}.raise.class\` and \`.message\` must be text`);
+    }
+    if (typeof get(error, "status", 0n) !== "bigint") {
+      throw new Error(`\`${where}.raise.status\` must be an int`);
+    }
+  } else if (chunks.length === 0 || !Object.hasOwn(chunks.at(-1) as Case, "finish")) {
+    throw new Error(
+      `\`${where}.chunks\` must end in a \`finish\` chunk, unless a \`raise\` follows them`,
+    );
+  }
+}
+
+/** Throw unless `models` is `host.models`: node ids to consumers to lists of entries. */
+function checkModels(models: Value | undefined): void {
+  for (const [node, consumers] of Object.entries(mapping("host.models", models))) {
+    for (const [consumer, script] of Object.entries(mapping(`host.models.${node}`, consumers))) {
+      const label = `host.models.${node}.${consumer}`;
+      if (consumer.startsWith("memory:") !== (node === LEARNER_NODE)) {
+        throw new Error(
+          `\`${label}\`: \`memory:<key>\` consumers go under \`${LEARNER_NODE}\`, and ` +
+            `\`${LEARNER_NODE}\` holds only them`,
+        );
+      }
+      if (node !== LEARNER_NODE && !CONSUMERS.includes(consumer)) {
+        throw new Error(`\`${label}\`: the consumer must be one of ${CONSUMERS.join(", ")}`);
+      }
+      if (!Array.isArray(script)) throw new Error(`\`${label}\` must be a list`);
+      script.forEach((entry, index) => {
+        checkModelEntry(`${label}[${index}]`, entry);
+      });
+    }
+  }
+}
+
+/**
+ * Throw unless `steering` is `host.steering`: node ids to lists of actions. An action is
+ * `{after, steer: [text, ...]}` or `{after, interrupt: true}`, `after` optional and one of
+ * `{model_call: n, chunk: k}`, `{model_call: n}` and `{tool_call: i}`, counted from 1.
+ */
+function checkSteering(steering: Value | undefined): void {
+  for (const [node, actions] of Object.entries(mapping("host.steering", steering))) {
+    if (!Array.isArray(actions)) {
+      throw new Error("`host.steering` maps node ids to lists of actions");
+    }
+    actions.forEach((item, index) => {
+      const where = `host.steering.${node}[${index}]`;
+      const action = keys(where, item, new Set(["after", "steer", "interrupt"]));
+      if (Object.hasOwn(action, "steer") === Object.hasOwn(action, "interrupt")) {
+        throw new Error(`\`${where}\` takes \`steer\` or \`interrupt\``);
+      }
+      const steer = action["steer"];
+      if (
+        Object.hasOwn(action, "steer") &&
+        (!Array.isArray(steer) ||
+        steer.length === 0 ||
+        steer.some((text) => typeof text !== "string"))
+      ) {
+        throw new Error(`\`${where}.steer\` must be a non-empty list of text`);
+      }
+      if (Object.hasOwn(action, "interrupt") && action["interrupt"] !== true) {
+        throw new Error(`\`${where}.interrupt\` must be \`true\``);
+      }
+      if (!Object.hasOwn(action, "after")) return;
+      const after = mapping(`${where}.after`, action["after"]);
+      const names = Object.keys(after).sort().join(",");
+      if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
+        throw new Error(
+          `\`${where}.after\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``,
+        );
+      }
+      if (Object.values(after).some((count) => typeof count !== "bigint" || count < 1n)) {
+        throw new Error(`\`${where}.after\` counts must be ints from 1`);
+      }
+    });
+  }
+}
+
+/**
+ * Throw if an `expect` mapping's `events` or `stream` write the `attempt: 1` the data form leaves
+ * out of a model call event or stream chunk; `key` names the mapping.
+ */
+function checkAttempts(key: string, expect: Case): void {
+  const isOne = (data: Value | undefined) =>
+    isMapping(data) && (data["attempt"] === 1n || data["attempt"] === 1);
+  const rejectAttemptOne = (where: string): never => {
+    throw new Error(`\`${where}\` writes \`attempt: 1\`, which the data form leaves out`);
+  };
+  const events = get(expect, "events", []);
+  (Array.isArray(events) ? events : []).forEach((event, index) => {
+    const named = Array.isArray(event) && ATTEMPT_LEFT_OUT_AT_1.has(String(event[0]));
+    if (named && isOne(event[1])) rejectAttemptOne(`${key}.events[${index}]`);
+  });
+  const stream = get(expect, "stream", []);
+  (Array.isArray(stream) ? stream : []).forEach((chunk, index) => {
+    if (isOne(chunk)) rejectAttemptOne(`${key}.stream[${index}]`);
+  });
+}
+
+/**
+ * Throw unless `value`, the host, its tools, models and their scripts and its steering use only
+ * the format's keys.
+ */
 function checkHost(value: Value | undefined, kind: Kind): void {
   const allowed = kind === "resume" ? RESUME_HOST_KEYS : HOST_KEYS;
   const host = keys("host", value, allowed, { known: RESUME_HOST_KEYS, kind });
@@ -364,6 +621,8 @@ function checkHost(value: Value | undefined, kind: Kind): void {
       });
     }
   }
+  checkModels(get(host, "models", {}));
+  checkSteering(get(host, "steering", {}));
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
@@ -524,6 +783,7 @@ export function checkCase(case_: Case): Case {
         throw new Error(`\`${key}.exists\`: \`${path}\` must be a relative path without \`..\``);
       }
     }
+    checkAttempts(key, expect);
   }
   if (Object.hasOwn(case_, "backward")) {
     const backward = case_["backward"];
@@ -706,6 +966,12 @@ function dump(value: unknown): string {
   return doc.toString({ lineWidth: 0 });
 }
 
+/** Return both sides as YAML, or "" when `actual` is the same as `expected`. */
+function difference(what: string, actual: unknown, expected: unknown, flags: SameFlags = {}): string {
+  if (same(actual, expected, flags)) return "";
+  return `${what} differs\n--- actual\n${dump(actual)}--- expected\n${dump(expected)}`;
+}
+
 /** Throw a `CaseFailure` showing both sides as YAML unless `actual` is the same as `expected`. */
 export function compare(
   what: string,
@@ -713,11 +979,8 @@ export function compare(
   expected: unknown,
   flags: SameFlags = {},
 ): void {
-  if (!same(actual, expected, flags)) {
-    throw new CaseFailure(
-      `${what} differs\n--- actual\n${dump(actual)}--- expected\n${dump(expected)}`,
-    );
-  }
+  const text = difference(what, actual, expected, flags);
+  if (text) throw new CaseFailure(text);
 }
 
 /**
@@ -1098,17 +1361,253 @@ const TOOL_ERRORS: ReadonlyMap<string, ErrorClass> = new Map<string, ErrorClass>
 ]);
 
 /**
- * Return the error a script's `raise` mapping `{class, message, retry_after}` names: an error of
- * the class `classes` names, else a plain `Error` named `class` (`TimeoutError` and
- * `ConnectionError` among them).
+ * Return the error a script's `raise` mapping `{class, message, retry_after, status}` names. With
+ * `status` (a model's), it is the `ProviderError` an HTTP reply with that status and the message
+ * as its body gives; else an error of the class `classes` names, else a plain `Error` named
+ * `class` (`TimeoutError` and `ConnectionError` among them).
  */
 function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): Error {
   const name = error["class"] as string;
   const message = error["message"] as string;
+  if (Object.hasOwn(error, "status")) {
+    const status = Number(error["status"]);
+    return new ProviderError(kindForStatus(status, message), message, { status });
+  }
   const Class = classes.get(name);
   if (Class === undefined) return Object.assign(new Error(message), { name });
   const options = Object.hasOwn(error, "retry_after") ? { retryAfter: Number(error["retry_after"]) } : {};
   return new Class(message, options);
+}
+
+// How the user message `generateStructured` adds after an invalid reply starts.
+const CORRECTION = "Your previous output was invalid:";
+
+/**
+ * Return the consumer a model call of node `nodeId` with `request` is scripted under:
+ * `structured_retry` for a structured call's attempts after its first (each ends in the
+ * correction an invalid reply adds), else `compose` for a `<gate>__compose` node and `agent` for
+ * any other.
+ */
+function consumerOf(nodeId: string, request: Request): string {
+  const last = request.messages.at(-1);
+  if (last?.role === "user" && last.text().startsWith(CORRECTION)) return "structured_retry";
+  return nodeId.endsWith("__compose") ? "compose" : "agent";
+}
+
+/** Return a case usage as a `Usage`. */
+function caseUsage(usage: Case): Usage {
+  const count = (name: string) => (Object.hasOwn(usage, name) ? Number(usage[name]) : null);
+  return new Usage({
+    inputTokens: Number(usage["input_tokens"]),
+    outputTokens: Number(usage["output_tokens"]),
+    totalTokens: Number(usage["total_tokens"]),
+    cacheReadTokens: count("cache_read_tokens"),
+    cacheCreationTokens: count("cache_creation_tokens"),
+    reasoningTokens: count("reasoning_tokens"),
+  });
+}
+
+/**
+ * Return a `host.models` entry as the reply a provider streams: a `reply` as a `Response`, which
+ * streams as one chunk; `chunks` as events, then the `raise` error when there is one. All text
+ * chunks build one text part, first when there is any, and each tool call index its own part,
+ * in the order first seen.
+ */
+function scriptedReply(entry: Case): ScriptedReply {
+  if (Object.hasOwn(entry, "reply")) {
+    const usage = Object.hasOwn(entry, "usage") ? caseUsage(entry["usage"] as Case) : null;
+    return new Response({ message: Message.fromJSON(entry["reply"]), usage });
+  }
+  const chunks = entry["chunks"] as Case[];
+  const parts = new Map<string, number>();
+  // Text first, as a LangChain message keeps its text apart from its tool calls.
+  if (chunks.some((chunk) => Object.hasOwn(chunk, "text"))) parts.set("text", 0);
+  const part = (key: string): number => {
+    if (!parts.has(key)) parts.set(key, parts.size);
+    return parts.get(key)!;
+  };
+  const events: (Event | Error)[] = chunks.map((chunk) => {
+    if (Object.hasOwn(chunk, "text")) return new TextDelta(part("text"), chunk["text"] as string);
+    if (Object.hasOwn(chunk, "usage")) return new UsageReport(caseUsage(chunk["usage"] as Case));
+    if (Object.hasOwn(chunk, "finish")) {
+      return new Finish({ reason: chunk["finish"] as string | null });
+    }
+    const delta = chunk["tool_call"] as Case;
+    return new ToolCallDelta({
+      index: part(`tool_call ${String(delta["index"])}`),
+      id: (get(delta, "id") ?? null) as string | null,
+      name: (get(delta, "name") ?? null) as string | null,
+      arguments: delta["arguments"] as string,
+    });
+  });
+  if (Object.hasOwn(entry, "raise")) events.push(scriptedError(entry["raise"] as Case, new Map()));
+  return events;
+}
+
+/**
+ * Return a model call's request in the case's form: its messages as yian.message.v1 messages,
+ * its tools as `{name, description, parameters}` unless none are bound, and its native
+ * structured output's schema unless it asks for none.
+ */
+function v1Request(request: Request): Case {
+  const form: Case = { messages: request.messages.map((message) => message.toJSON() as Case) };
+  if (request.tools.length > 0) {
+    form["tools"] = request.tools.map(
+      ({ name, description, parameters }) => ({ name, description, parameters }) as Case,
+    );
+  }
+  if (request.outputFormat !== null) form["schema"] = request.outputFormat.schema as Case;
+  return form;
+}
+
+/** A point of the run a `host.steering` action waits for: its `after`. */
+type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint };
+
+/**
+ * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id.
+ *
+ * An action without `after` is queued at once, the others when the run reaches their point.
+ * Steers are drained once; an interrupt aborts the node's interrupt signal, which stays aborted.
+ * Calls are counted, and points reached, only once `armed`, so that runs before the main one
+ * neither count nor steer.
+ */
+class Inbox implements Steering {
+  armed = false;
+  readonly #steers = new Map<string, string[]>();
+  readonly #interrupts = new Map<string, AbortController>();
+  readonly #counts = new Map<string, number>();
+  readonly #pending: { label: string; node: string; action: Case }[] = [];
+
+  constructor(steering: Case) {
+    for (const [node, actions] of Object.entries(steering)) {
+      (actions as Case[]).forEach((action, index) => {
+        if (Object.hasOwn(action, "after")) {
+          this.#pending.push({ label: `host.steering.${node}[${index}]`, node, action });
+        } else {
+          this.#act(node, action);
+        }
+      });
+    }
+  }
+
+  /** Queue `action`'s steers for `node`, or abort its interrupt signal. */
+  #act(node: string, action: Case): void {
+    const steers = this.#steers.get(node) ?? [];
+    this.#steers.set(node, [...steers, ...(get(action, "steer", []) as string[])]);
+    if (action["interrupt"] === true) this.#controller(node).abort();
+  }
+
+  /** Return `node`'s interrupt controller, made on first use. */
+  #controller(node: string): AbortController {
+    let controller = this.#interrupts.get(node);
+    if (controller === undefined) this.#interrupts.set(node, (controller = new AbortController()));
+    return controller;
+  }
+
+  /** Count a `model_call` or `tool_call` of `node`; return its number, `null` unarmed. */
+  count(node: string, what: "model_call" | "tool_call"): bigint | null {
+    if (!this.armed) return null;
+    const key = `${what} ${node}`;
+    const number = (this.#counts.get(key) ?? 0) + 1;
+    this.#counts.set(key, number);
+    return BigInt(number);
+  }
+
+  /** Act on the pending actions of `node` whose `after` is `point`. */
+  reached(node: string, point: Point): void {
+    const due = this.#pending.filter((each) => each.node === node && same(each.action["after"], point));
+    for (const item of due) {
+      this.#pending.splice(this.#pending.indexOf(item), 1);
+      this.#act(node, item.action);
+    }
+  }
+
+  /** Remove and return the steers queued for `nodeId`. */
+  drain(nodeId: string): readonly string[] {
+    const steers = this.#steers.get(nodeId) ?? [];
+    this.#steers.delete(nodeId);
+    return steers;
+  }
+
+  /** The signal aborted once `nodeId`'s interrupt is set. */
+  interruptSignal(nodeId: string): AbortSignal {
+    return this.#controller(nodeId).signal;
+  }
+
+  /** Return a message per action whose point was never reached. */
+  left(): string[] {
+    return this.#pending.map(({ label }) => `\`${label}\` was never reached`);
+  }
+}
+
+/**
+ * Yield `events`, a scripted call's, reaching its `inbox` points at `[node, number]`, its model
+ * call: chunk `k` once its events are delivered (a `reply`, whose events are one chunk, after all
+ * of them; a `chunks` entry's, one event each), then the end of the call when it doesn't raise.
+ */
+async function* reaching(
+  events: EventStream,
+  reply: boolean,
+  inbox: Inbox,
+  [node, number]: [string, bigint],
+): AsyncGenerator<Event> {
+  let chunk = 0n;
+  while (true) {
+    const result = await events.next();
+    if (result.done) break;
+    yield result.value;
+    // Reached when the next event is asked for, which is after the AGENT has read this one.
+    if (!reply) inbox.reached(node, { model_call: number, chunk: ++chunk });
+  }
+  if (reply) inbox.reached(node, { model_call: number, chunk: 1n });
+  inbox.reached(node, { model_call: number });
+}
+
+/**
+ * Return a builder of chat models that serve each call the next `host.models` entry of its node
+ * and consumer (`consumerOf`), taken through `take` when the call is made. A call's request that
+ * differs from its entry's `request` is added to `problems`. A call `take` refuses fails at its
+ * stream's first read, as a provider's failure does. An `agent` call reaches its `inbox` points
+ * (`reaching`).
+ */
+function scriptedModels(
+  take: (label: string, what: string) => Value,
+  problems: string[],
+  inbox: Inbox,
+): (provider: string, model: string, nodeId: string) => ChatModel {
+  const served = new Map<string, number>();
+  return (provider, model, nodeId) => ({
+    provider,
+    model,
+    stream: (request, options = {}) => {
+      const consumer = consumerOf(nodeId, request);
+      const label = `host.models.${nodeId}.${consumer}`;
+      let entry: Case;
+      try {
+        entry = take(label, `a model call for \`${consumer}\` from node ${reprText(nodeId)}`) as Case;
+      } catch (error) {
+        return new EventStream({
+          next: () => {
+            throw error;
+          },
+        });
+      }
+      const index = (served.get(label) ?? -1) + 1;
+      served.set(label, index);
+      if (Object.hasOwn(entry, "request")) {
+        const what = `\`${label}[${index}].request\``;
+        // By value: TS holds a JSON number as a JS `number` whether it is written `1` or `1.0`.
+        const text = difference(what, v1Request(request), entry["request"]!, { byValue: true });
+        if (text) problems.push(text);
+      }
+      const scriptedModel = new ScriptedModel([scriptedReply(entry)], { provider, model });
+      const events = scriptedModel.stream(request, options);
+      const number = consumer === "agent" ? inbox.count(nodeId, "model_call") : null;
+      if (number === null) return events;
+      const reply = Object.hasOwn(entry, "reply");
+      return new EventStream(reaching(events, reply, inbox, [nodeId, number]), () => events.close());
+    },
+  });
 }
 
 /** Return `name`, a camelCase field name, in snake_case. */
@@ -1149,13 +1648,16 @@ interface Host {
   random: (() => number) | null;
   /** Builds every model the run calls; no call reaches a provider. */
   models: ModelAccess;
+  /** The `host.steering` inbox. */
+  inbox: Inbox;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
   calls: Map<string, Case[]>;
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
   taken: { label: string; entry: Value; sequence: number }[];
   /**
-   * Throw a `CaseFailure` when a script ran out or was missing; return a message per script with
-   * entries left.
+   * Throw a `CaseFailure` when a script ran out or was missing or a model call's request differed
+   * from its entry's; return a message per script with entries left and per `host.steering`
+   * action never reached.
    */
   check: () => string[];
 }
@@ -1163,14 +1665,17 @@ interface Host {
 /**
  * Return the case's host: each stub tool call is recorded and takes its script's next entry, as
  * each `ask_user` call takes the next `host.human` answer of its node and each backoff the next
- * `host.jitter` draw. Every model the run builds, from `env` after its config is resolved and
- * checked, fails the case when called. `log` is the run's log file.
+ * `host.jitter` draw and each model call the next `host.models` entry of its node and consumer.
+ * Every model the run builds is the scripted one, after its config is resolved and checked with
+ * `env`. Each stub call reaches its `host.steering` point once it takes its entry. `log` is the
+ * run's log file.
  */
 function host(case_: Case, log: string, env: Env): Host {
   const spec = get(case_, "host", {}) as Case;
   const calls = new Map<string, Case[]>();
   const problems: string[] = [];
   const taken: Host["taken"] = [];
+  const inbox = new Inbox(get(spec, "steering", {}) as Case);
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
       `host.human.${node}`,
@@ -1199,7 +1704,10 @@ function host(case_: Case, log: string, env: Env): Host {
     let list = calls.get(name);
     if (list === undefined) calls.set(name, (list = []));
     list.push(record);
-    return take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+    const number = inbox.count(ctx.node, "tool_call");
+    const entry = take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+    if (number !== null) inbox.reached(ctx.node, { tool_call: number });
+    return entry;
   };
 
   const tools: [string, ToolEntry][] = [];
@@ -1236,17 +1744,21 @@ function host(case_: Case, log: string, env: Env): Host {
     random = () => Number(take("host.jitter", "a backoff draw"));
   }
 
+  for (const [node, consumers] of Object.entries(get(spec, "models", {}) as Case)) {
+    for (const [consumer, script] of Object.entries(consumers as Case)) {
+      scripts.set(`host.models.${node}.${consumer}`, [...(script as Value[])]);
+    }
+  }
+  const scripted = scriptedModels(take, problems, inbox);
   // Installed even without `host.models`, so an unscripted model call never reaches a provider.
   const models: ModelAccess = {
     env,
     createModel: (config, { nodeId }) => {
       // The script replaces only the provider: the config is resolved and checked as yian's own
-      // factory does, so its errors stay yian's.
+      // factory does, so its errors stay yian's. No credential is read.
       const values = fromHost(config, "llm_config") as Record<string, unknown>;
       const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
-      const what = `a model call for \`agent\` from node ${reprText(nodeId)} found no \`host.models\` list`;
-      const stream = () => new EventStream({ next: () => refuse(what, what) });
-      return { provider: validated.provider!, model: validated.model!, stream };
+      return scripted(validated.provider!, validated.model!, nodeId);
     },
   };
 
@@ -1257,20 +1769,16 @@ function host(case_: Case, log: string, env: Env): Host {
       .map(([label, script]) => {
         const entries = script.length === 1 ? "entry" : "entries";
         return `\`${label}\` has ${script.length} ${entries} left`;
-      });
+      })
+      .concat(inbox.left());
   };
-  return { tools: Object.fromEntries(tools), random, models, calls, taken, check };
+  return { tools: Object.fromEntries(tools), random, models, inbox, calls, taken, check };
 }
 
 /** Return a run's `failure` in the case's failure form. */
 function failureForm(failure: Failure, flow: ComposedFlow): Case {
   return { ...diagnosticForm(flow.diagnose(failure)), node: failure.nodeId };
 }
-
-/** The events and chunk whose `attempt` is left out when it is 1, as Python leaves it null. */
-const ATTEMPT_LEFT_OUT_AT_1: ReadonlySet<string> = new Set([
-  "ModelCallStarted", "ModelCallFinished", "StreamChunk",
-]);
 
 /**
  * Return the data form of an event or stream chunk, without its null fields: its `toJSON()`, with
@@ -1582,7 +2090,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
   const env = caseEnv(ctx);
-  const { tools, random, models, calls, check } = host(case_, log, env);
+  const { tools, random, models, inbox, calls, check } = host(case_, log, env);
   const run = get(case_, "run", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
@@ -1594,6 +2102,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     tools,
     random,
     models,
+    // Only with `host.steering`, as Python passes it.
+    ...(Object.hasOwn(get(case_, "host", {}) as Case, "steering") ? { steering: inbox } : {}),
     scheduler: virtualScheduler(Date.now()),
     onEvent: (event) => {
       events.push(event);
@@ -1604,6 +2114,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   };
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
+  inbox.armed = true;
   try {
     result = await runFlow(flow, get(case_, "inputs", {}) as Case, options);
   } catch (error) {

@@ -8,11 +8,16 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
+ * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow` and `RunResult`, and
+ * re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering` (`nodes/base.ts`).
+ *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
- *                nodes, platform, runtime, skills, tools, typesys.
+ *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
+ *                typesys.
  * Never imports: the CLI.
  */
 
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { types } from "node:util";
 
@@ -30,13 +35,20 @@ import {
   valueConfigSubjects,
 } from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
+import {
+  applyMemoryLayout,
+  checkSessionCompatibility,
+  memoryStacks,
+  type ResolvedMemoryLayout,
+  resolveMemoryLayout,
+} from "./compile/memory_layout.ts";
 import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
-import { compareCodeUnits, type Failure, getCloseMatches, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
@@ -57,7 +69,14 @@ import {
 } from "./llm_clients/connection.ts";
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
-import type { LearningResult, Memory } from "./memory/contracts.ts";
+import {
+  type LearningResult,
+  type Memory,
+  MemorySetupError,
+  type MemorySpec,
+  type MemoryStack,
+} from "./memory/contracts.ts";
+import { MemoryRegistry } from "./memory_host.ts";
 import type { Node, Steering } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import { type HostToolCall, isExactly, iterSourceStrings, type Parameter } from "./nodes/contracts.ts";
@@ -66,9 +85,10 @@ import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine } from "./runtime/engine.ts";
 import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
 import { JsonlRunLog, MemoryRunLog, type RunLog } from "./runtime/log.ts";
+import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import { commitPrepared, prepareRunStarted, RunState } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
-import { isMcpServer } from "./tools/mcp.ts";
+import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { VariablePool } from "./typesys/pool.ts";
@@ -87,6 +107,9 @@ import {
   type ValueRecord,
   writeAsText,
 } from "./typesys/values.ts";
+
+export type { Steering } from "./nodes/base.ts";
+export { BackwardOutcome } from "./runtime/contracts.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */
 export type EventHook = (event: RunEvent) => unknown;
@@ -185,13 +208,17 @@ export interface RunFlowOptions {
    * `base_url`, `organization`, `project` and `headers`; none of them is recorded.
    */
   llmConfig?: Readonly<Record<string, unknown>> | null;
-  /** The backend of each declared memory key, typically a `MemoryRegistry`. */
+  /**
+   * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Each key's
+   * session opens before the log and closes when the run ends.
+   */
   memory?: ReadonlyMap<string, Memory> | null;
   /** Retain accepted execution for a later explicit backward call (default `false`). */
   learnable?: boolean;
   /**
    * The tools this run sees, keyed by tool id; `null` (the default) uses the registered tools.
-   * A record, even an empty one, is the whole set.
+   * A record, even an empty one, is the whole set. An `McpServer` that isn't open is opened for
+   * this run and closed when it ends; one the host opened stays open.
    */
   tools?: Readonly<Record<string, ToolEntry>> | null;
   /** The skills this run can grant, keyed by `Skill.name`. */
@@ -236,7 +263,7 @@ export interface RunFlowOptions {
  *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), `llmConfig` is a primitive
  *   or an array, a `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its
  *   name, `steering` lacks its methods, `scheduler` lacks `now` or `sleep`, `random` isn't a
- *   function, or `models` lacks `env` or `createModel`.
+ *   function, `models` lacks `env` or `createModel`, or `memory` isn't a `Map` of memories.
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
@@ -246,7 +273,11 @@ export interface RunFlowOptions {
  *   skill this run lacks; a TOOL node names a tool this run lacks, or its inputs or output can't
  *   fit that tool's types; `llmConfig` or an agent's resolved model config is invalid, an agent
  *   has no provider or model, or `llmConfig.api_key` has no `provider`; or the identity, worker
- *   count or prepared start state breaks its contract. A message never echoes the key.
+ *   count or prepared start state breaks its contract; or a `tools` server was opened by
+ *   another run in progress. A message never echoes the key.
+ * @throws MemorySetupError when the flow's memory layout breaks a rule, `memory` lacks a declared
+ *   key or is a `MemoryRegistry` built for another flow, or a memory fails to open its session.
+ * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
  * @throws AuthError when the credential store can't be read.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws The signal's reason when it aborts.
@@ -260,7 +291,7 @@ export async function runFlow(
 ): Promise<RunResult> {
   // The scope makes everything the run reads, the engine's work included, see the run's values;
   // a bad YIAN_<NAME> value fails here, before any work.
-  return withEnv(options.env ?? processEnv, () => {
+  return withEnv(options.env ?? processEnv, async () => {
     const runDefaults = current();
     const { learnable = false, tools = null, steering = null, context, signal = null } = options;
     if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
@@ -269,18 +300,20 @@ export async function runFlow(
       throw new TypeError("signal must be an AbortSignal or null");
     }
     signal?.throwIfAborted();
-    // A server the run opens and closes itself.
-    if (tools !== null && Object.values(tools).some((entry) => isMcpServer(entry) && !entry.isOpen)) {
-      throw new Error("run-owned MCP servers are not ported yet");
-    }
-    // The tool entries' errors, and the checks that need no tools, come before any server starts.
-    new ToolSet(tools, { context });
+    const [otherTools, unopened] = splitRunServers(tools);
+    // The other entries' errors, and the checks that need no tools, come before any server starts.
+    new ToolSet(otherTools, { context });
     checkConditions(flow.compiled);
     checkTemplates(flow.compiled);
     const skills = checkSkills(flow.compiled, options.skills ?? null);
     requireSteering(steering);
     checkTestOptions(options);
-    return startRun(flow, inputs, { ...options, skills }, runDefaults);
+    const runServers = await openRunServers(unopened, signal);
+    try {
+      return await startRun(flow, inputs, { ...options, skills }, runDefaults);
+    } finally {
+      await closeRunServers(runServers);
+    }
   });
 }
 
@@ -503,7 +536,7 @@ export function runStartLlm(
   });
 }
 
-/** Check the tools, then record and drive a fresh run. */
+/** Check the tools, then record and drive a fresh run whose MCP servers are open. */
 async function startRun(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
@@ -553,7 +586,7 @@ async function startRun(
     hostSettings: host,
   });
   // Each call-time agent's provider when run start already knows it: it limits the recorded
-  // selection.
+  // selection and the session check.
   const known = knownCallTimeProviders(privateFlow, runLlm.callTime, snapshot.defaults);
   let callTimeLlm: CallTimeLlm | null = null;
   if (Object.keys(runLlm.callTime).length > 0) {
@@ -581,7 +614,18 @@ async function startRun(
   pool.addSystem("run_id", canonicalRunId);
   const startWiringOverride = Object.fromEntries(Object.keys(coerced).map((name) => [name, `\${input.${name}}`]));
 
-  if (memory !== null) throw new Error("memory is not ported yet");
+  let memoryRuntime: MemoryRuntime | null = null;
+  let layout: MemoryLayoutParts | null = null;
+  if (memory !== null) {
+    layout = resolveRuntimeMemoryLayout(privateFlow, effectiveLlm, known);
+    checkRegistryTypes(memory, layout.memories);
+    memoryRuntime = await MemoryRuntime.open({
+      memories: layout.memories,
+      origins: layout.origins,
+      memory,
+      snapshots: null,
+    });
+  }
 
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
@@ -596,7 +640,10 @@ async function startRun(
       effectiveLlmByStaticPath: effectiveLlm,
       callTimeLlm,
       numWorkers,
+      memorySnapshots: memoryRuntime?.snapshots ?? null,
       learnable,
+      memories: layout?.memories ?? null,
+      memoryStacks: layout?.stacks ?? null,
       defaults: nonDefaults(runDefaults),
     });
 
@@ -604,12 +651,16 @@ async function startRun(
     // path behind.
     authority = log === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(resolve(log), canonicalRunId);
     const observers = commitPrepared(authority, state, preparedStart);
+    const runtime = memoryRuntime;
     // Built before publishing so a callback's rejected promise can stop it.
     const engine = new FlowEngine(state, authority, {
       growBuilder: buildGrow,
       numWorkers,
       onEvent,
       onStream,
+      // A bare `runtime.openContext` would lose its `this`.
+      memoryContextOpener:
+        runtime === null ? null : (scope, request, opts) => runtime.openContext(scope, request, opts),
       tools: runTools,
       skills,
       steering,
@@ -626,7 +677,7 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    closeRunResources(authority, primary);
+    await closeRunResources(memoryRuntime, authority, primary);
   }
 }
 
@@ -964,6 +1015,63 @@ export function staticNodes(flow: Flow, path: readonly string[] = []): [string, 
   return found;
 }
 
+/** A layout's record-facing key table, per-key origins and stacks. */
+type MemoryLayoutParts = {
+  memories: readonly MemorySpec[];
+  origins: Map<string, OriginRef | null>;
+  stacks: readonly MemoryStack[];
+};
+
+/**
+ * Derive the key table, origins and stacks, and stamp one private graph.
+ *
+ * First check that each session key resolves one conversation compatibility across its
+ * placements; `callTimeKnown` gives the provider of each placement resolved only when it runs,
+ * when run start knows it (`checkSessionCompatibility`).
+ *
+ * @param flow The run's private flow copy; its nodes get their memory scopes.
+ * @throws MemorySetupError when the layout breaks a rule or two placements of a session key
+ *   resolve different providers.
+ */
+function resolveRuntimeMemoryLayout(
+  flow: CompiledFlow,
+  effectiveLlm: Readonly<Record<string, Readonly<AgentConfig>>>,
+  callTimeKnown: ReadonlyMap<string, string | null>,
+): MemoryLayoutParts {
+  const resolved = resolveMemoryLayout(flow);
+  checkSessionCompatibility(resolved, effectiveLlm, { callTimeKnown: Object.fromEntries(callTimeKnown) });
+  applyMemoryLayout(flow, resolved);
+  return memoryLayoutParts(resolved);
+}
+
+/** Return one layout's record-facing key table, per-key origins and stacks. */
+function memoryLayoutParts(resolved: ResolvedMemoryLayout): MemoryLayoutParts {
+  return {
+    memories: resolved.memories.map((memory) => memory.spec),
+    origins: new Map(resolved.memories.map((memory) => [memory.key, memory.origin])),
+    stacks: memoryStacks(resolved),
+  };
+}
+
+/**
+ * Reject a `MemoryRegistry` whose declared types differ from this flow's table; any other `Map` is
+ * not checked.
+ *
+ * @throws MemorySetupError when a key's registry type differs from its declared type.
+ */
+function checkRegistryTypes(memory: ReadonlyMap<string, Memory>, specs: readonly MemorySpec[]): void {
+  if (!(memory instanceof MemoryRegistry)) return;
+  for (const spec of specs) {
+    const built = memory.types.get(spec.key);
+    if (built !== undefined && built !== spec.type) {
+      throw new MemorySetupError(
+        `memory ${reprText(spec.key)} is declared as ${reprText(spec.type)} but the registry ` +
+          `built it as ${reprText(built)}; build the registry from the flow you run`,
+      );
+    }
+  }
+}
+
 /**
  * Publish an already-applied segment lead before retaining it in the result. Nothing is in flight
  * yet, so a throwing callback rejects the run with no stop record; a promise the callback returns
@@ -1016,6 +1124,9 @@ function requiredStateRunId(state: RunState): string {
   return state.runId;
 }
 
+// Python's `_set_stop_preserving` has no counterpart: a run's stop is the host's signal, which the
+// run only reads, and a callback's error stops the engine through `stopForCallback`.
+
 /**
  * Close one boundary-owned log while preserving an initiating error: with no `primary`, a close
  * error is thrown; with one, it is noted on it.
@@ -1029,9 +1140,117 @@ function closeOwnedLog(log: RunLog, primary: { error: unknown } | null): void {
   }
 }
 
-/** Close the run's log, once created, while preserving one initiating error. */
-function closeRunResources(log: RunLog | null, primary: { error: unknown } | null): void {
-  if (log !== null) closeOwnedLog(log, primary);
+/** Return the error for the server under `key`, which another run has open or is opening. */
+function otherRunError(key: string, options?: ErrorOptions): RangeError {
+  return new RangeError(
+    `tools[${JSON.stringify(key)}]: this MCP server was opened by another run; ` +
+      'open it with "await server.open()" to share it between runs',
+    options,
+  );
+}
+
+/**
+ * Split the run's tools into the entries that need no opening and the unopened servers.
+ *
+ * An unopened server under a key `ToolSet` rejects (empty, or `ask_user`) stays with the other
+ * entries, so `ToolSet` throws its usual error before any server starts.
+ *
+ * @param tools The `tools` option of `runFlow`. Anything other than a record is returned as is,
+ *   for `ToolSet` to reject.
+ * @returns `tools` without its unopened `McpServer` entries, and those servers in key order with
+ *   the first key each sits under, each once even when it sits under several keys.
+ * @throws RangeError when a server entry is open because another run in progress opened it.
+ */
+function splitRunServers(
+  tools: Readonly<Record<string, ToolEntry>> | null,
+): [Readonly<Record<string, ToolEntry>> | null, [string, McpServer][]] {
+  if (!isRecord(tools)) return [tools, []];
+  // No prototype, so a `__proto__` key stays an entry.
+  const others: Record<string, ToolEntry> = Object.create(null);
+  const unopened: [string, McpServer][] = [];
+  for (const key of Object.keys(tools)) {
+    const entry = tools[key]!;
+    if (!isMcpServer(entry) || key === "" || key === "ask_user") {
+      others[key] = entry;
+    } else if (entry.isOpen) {
+      if (entry.openedByRun) throw otherRunError(key);
+      others[key] = entry;
+    } else if (!unopened.some(([, seen]) => seen === entry)) {
+      unopened.push([key, entry]);
+    }
+  }
+  return [others, unopened];
+}
+
+/**
+ * Open the servers for one run, in order; if one fails, close the ones already open.
+ *
+ * Once `signal` aborts, no further server opens: the ones already open close and the run rejects
+ * with its reason, before anything is recorded.
+ *
+ * @param servers Unopened servers, each listed once with the `tools` key it sits under.
+ * @param signal The run's stop.
+ * @returns The opened servers, owned by a token unique to this run.
+ * @throws RangeError when another caller opened or is opening a server since it was found
+ *   unopened.
+ * @throws Error when the MCP SDK is not installed.
+ * @throws McpConnectError when a server doesn't start or doesn't list its tools.
+ * @throws The signal's reason when it aborts before every server is open.
+ */
+async function openRunServers(
+  servers: readonly [string, McpServer][],
+  signal: AbortSignal | null,
+): Promise<McpServer[]> {
+  const token = `run-${randomUUID().replaceAll("-", "")}`;
+  const opened: McpServer[] = [];
+  try {
+    for (const [key, server] of servers) {
+      signal?.throwIfAborted();
+      try {
+        await server.openForRun(token, signal === null ? {} : { signal });
+      } catch (error) {
+        if (error instanceof AlreadyOpenError) throw otherRunError(key, { cause: error });
+        throw error;
+      }
+      opened.push(server);
+    }
+  } catch (error) {
+    await closeRunServers(opened);
+    throw error;
+  }
+  return opened;
+}
+
+/**
+ * Close the run's servers in order.
+ *
+ * Python's `_close_run_servers` also guards each close and notes its error on the run's; here
+ * `McpServer.close()` never rejects, so there is nothing to note.
+ */
+async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
+  for (const server of servers) await server.close();
+}
+
+/**
+ * Close memory then the log while preserving one initiating error: with no `primary`, the first
+ * close error is thrown, later ones noted on it; with one, each is noted on it.
+ */
+async function closeRunResources(
+  memoryRuntime: MemoryRuntime | null,
+  log: RunLog | null,
+  primary: { error: unknown } | null,
+): Promise<void> {
+  let pending = primary;
+  if (memoryRuntime !== null) {
+    try {
+      await memoryRuntime.close();
+    } catch (cleanupError) {
+      if (pending === null) pending = { error: cleanupError };
+      else noteCleanupError(pending.error, "memory-session close", cleanupError);
+    }
+  }
+  if (log !== null) closeOwnedLog(log, pending);
+  if (primary === null && pending !== null) throw pending.error;
 }
 
 /** Note a cleanup error on the initiating error, when it can take a note, without changing control. */

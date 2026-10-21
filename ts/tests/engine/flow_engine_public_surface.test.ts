@@ -23,7 +23,7 @@
  * one that rejects after it being ignored, with nothing rejecting unhandled; `stopForCallback`
  * stopping a run with the given error and recording one `RunStopped`, and ignored after the result.
  *
- * Later (T4-8): `test_flow_engine_is_not_exported_from_the_package_root`.
+ * Ported: `test_flow_engine_is_not_exported_from_the_package_root`, on `index.ts`.
  *
  * Changed: `test_direct_agent_uses_its_node_owned_model_factory`: the model factory comes from
  * `FlowEngineOptions.models` (ESM exports can't be patched), and the AGENT is built with the
@@ -53,6 +53,7 @@ import {
   RunSucceeded,
   StreamChunk,
 } from "../../src/events.ts";
+import * as yian from "../../src/index.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -505,4 +506,9 @@ test("an onEvent promise that rejects after the terminal result is ignored", asy
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(built.signal.aborted).toBe(false);
   expect(unhandled).toEqual([]);
+});
+
+// test_flow_engine_is_not_exported_from_the_package_root
+test("FlowEngine is not exported from the package root", () => {
+  expect("FlowEngine" in yian).toBe(false);
 });

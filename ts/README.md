@@ -584,6 +584,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   overtaken by another while it awaits (its opener, a handler, a learner or a commit) is refused
   after that await and appends nothing further (Python re-reads the current attempt, which is the
   same while synchronous).
+- `src/run.ts` (`yian/run`) holds `runFlow` and `RunResult`. `runFlow` takes the inputs and
+  `llmConfig` through host intake, checks the run's tools, skills and model configs, opens its
+  memory sessions and MCP servers, creates the log and drives a `FlowEngine` to a result, then
+  closes what it opened.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the
@@ -702,3 +706,7 @@ Flags, each repeatable (values of one flag are alternatives; different flags all
 `--diagnostic-code C` (`load` cases expecting a diagnostic with code C). `--kind`, `--rules` and
 `--diagnostic-code` never hide a case file that can't be read; `--group` and `--case`, read from
 its path, still select or skip it.
+
+The runner runs every kind but `resume` and `backward`. A `run` case's `host` may hold `tools`,
+`human`, `jitter`, `models` and `steering`; a case using `host.stop`, `host.memory`,
+`host.skills` or `expect.memory` fails before it is set up.

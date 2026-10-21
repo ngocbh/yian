@@ -26,7 +26,7 @@
  * `load-core/engine_nested_span_rejected__prompt_shows_the_rewrite` (the reference validator) are
  * pinned at the end.
  *
- * Later (T4): the run tests (`test_parentheses_and_coalesce_cover_a_default_chain`,
+ * Later (T4-8 follow-up): the run tests (`test_parentheses_and_coalesce_cover_a_default_chain`,
  * `test_documented_case_conditions_route`, `test_case_on_a_whole_span_routes` and
  * `test_loop_predicate_in_the_bare_spelling_runs`), with their cases
  * `run-core/engine_nested_span_rejected__{a_default_chain,case_on_a_whole_span_routes,

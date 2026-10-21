@@ -4,7 +4,7 @@
  * of the load rows of `tests/engine/test_skipped_flow_outputs.py`, assembling each flow with
  * `assembleText` where Python calls `load_flow`.
  *
- * Ported, the compiled output sources (Python's `_sources`), whose `_run` half is Later (T4):
+ * Ported, the compiled output sources (Python's `_sources`), whose `_run` half is Later (T4-8 follow-up):
  * `test_record_output_of_a_skipped_branch_is_null`,
  * `test_coalesce_over_a_routing_only_case_is_null`, `test_value_mode_output_is_null`,
  * `test_dotted_output_is_null`, `test_ref_default_group_over_a_routing_only_case_is_null`,
@@ -60,7 +60,7 @@
  * `test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error`; and the `_sources` half of
  * `test_defs_child_returns_null_to_its_caller`.
  *
- * Later (T4), through `run_flow`: `test_nested_case_target_is_null_when_either_case_skips_it`,
+ * Later (T4-8 follow-up), through `run_flow`: `test_nested_case_target_is_null_when_either_case_skips_it`,
  * `test_depends_on_a_skipped_target_is_null`, `test_then_call_target_is_null`,
  * `test_call_node_target_is_null`, `test_loop_node_target_is_null`, `test_map_node_target_is_null`,
  * `test_defs_child_returns_null_to_its_caller`, `test_typed_output_over_a_skipped_branch_fails_at_runtime`,

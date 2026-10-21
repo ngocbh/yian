@@ -31,7 +31,7 @@
  * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
  * `any_tag_on_a_date` is pinned in `tags.test.ts`.
  *
- * Later (T4): the runs of `test_quoted_or_tagged_dates_keep_their_behavior`,
+ * Later (T4-8 follow-up): the runs of `test_quoted_or_tagged_dates_keep_their_behavior`,
  * `test_other_untagged_literals_in_untyped_outputs_still_load` and
  * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`.
  */

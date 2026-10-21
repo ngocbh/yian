@@ -93,7 +93,7 @@
  * `'biy'` / `did you mean 'buy'?`), and the cycle's nodes and the uncovered tags as JSON text,
  * `["b","c"]` and `["hold","sell"]` (Python `['b', 'c']` and `['hold', 'sell']`).
  *
- * Later (T4): `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` and
+ * Later (T4-8 follow-up): `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` and
  * `test_a_partly_shared_union_branch_runs` (runs).
  */
 

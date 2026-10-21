@@ -18,7 +18,7 @@
  * `research-one` is a hand-built child shaped like its def, where Python resolves the sibling
  * file on the search path.
  *
- * Later (T4): `MAP_OVER_NOT_LIST_FMT`, the MAP `over`-not-a-list message the engine's bind seam
+ * Later (T4-8 follow-up): `MAP_OVER_NOT_LIST_FMT`, the MAP `over`-not-a-list message the engine's bind seam
  * raises.
  */
 

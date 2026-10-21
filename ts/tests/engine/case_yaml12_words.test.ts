@@ -7,7 +7,7 @@
  *
  * Changed: the flows assemble (`assembleText`), where Python loads them.
  *
- * Later (T4): the run half of `test_yes_and_no_cover_a_literal_input_without_else`.
+ * Later (T4-8 follow-up): the run half of `test_yes_and_no_cover_a_literal_input_without_else`.
  *
  * The harvested case is pinned at the end.
  */

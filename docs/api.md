@@ -2348,10 +2348,11 @@ A record the envelope or the codec refuses raises its `RangeError` or `TypeError
 anything is written and doesn't poison the log. A damaged record in a log being read
 raises a `RangeError` naming the path, the 1-based line and the seq.
 
-Each record is fsynced before it counts, in both runtimes, so a durable run pays one sync per
-record. Changed (TS yian): on macOS, Node's `fsyncSync` is `fcntl(F_FULLFSYNC)`, which also
-flushes the drive's cache, so a sync costs about 80 times what Python's `os.fsync` and Bun's
-`fsyncSync` (a plain `fsync`, which leaves the data in the drive's cache) cost. On an Apple M4 Pro
+Each record is fsynced before it counts, in Python yian and in TS yian on Node and Bun, so a
+durable run pays one sync per record. Changed (TS yian): on macOS, Node's `fsyncSync` is
+`fcntl(F_FULLFSYNC)`, which also flushes the drive's cache, so a sync costs about 80 times what
+Bun's `fsyncSync` costs (a plain `fsync`, which leaves the data in the drive's cache; Python's
+`os.fsync` is the same plain call, not measured here). On an Apple M4 Pro
 MacBook Pro (Mac16,8, APFS), measured 2026-10, Node pays about 4.2 ms per record: a 10,000-item
 MAP (with `YIAN_MAX_TOTAL_NODES` raised past its default of 10,000) writes 60,011 records and
 spends about 250 s in sync, 254 s in all against 4 s with a memory log, serial or with 8

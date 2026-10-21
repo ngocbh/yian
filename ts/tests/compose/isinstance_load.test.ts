@@ -27,7 +27,7 @@
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
  * `isinstanceMembers` test is ported with the narrowing tests).
  *
- * Later (T4): the run halves of the type-table rows above,
+ * Later (T4-8 follow-up): the run halves of the type-table rows above,
  * `test_a_failing_flow_input_assert_fails_at_start` and `test_a_run_that_used_isinstance_replays`.
  */
 

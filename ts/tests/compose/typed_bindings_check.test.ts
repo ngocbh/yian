@@ -51,7 +51,7 @@
  * block, then those from test files whose mirrors don't exist yet (`test_nested_template_types.py`,
  * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
  *
- * Later (T4): `test_unquoted_yes_or_no_literal_for_str_is_text` (2),
+ * Later (T4-8 follow-up): `test_unquoted_yes_or_no_literal_for_str_is_text` (2),
  * `test_escaped_template_binds_its_text`, and the run half of
  * `test_optional_into_non_optional_loads_and_fails_at_runtime`.
  */

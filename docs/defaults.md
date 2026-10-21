@@ -173,8 +173,10 @@ before the overflow depth was narrowed down.
 | `YIAN_MAX_YAML_NESTING` | 200 | 793 | 3,975 | 818 | flow sequences, block mappings |
 | `YIAN_MAX_CALL_NESTING` | 50 | 268 | at least 400 | 287 | chains of defs, inline bodies, and `uses:` files |
 
-Each cell is the smallest of its row's inputs. A chain of more than about 220 `uses:` files
-runs out of Node's default 4 GB heap before the stack; it wasn't probed on Bun's main thread.
+Each cell is the smallest of its row's inputs, except that the CALL row's Node cell (268) is
+for defs and inline bodies: a chain of `uses:` files was shown to work only up to about 220,
+past which it runs out of Node's default 4 GB heap before the stack; it wasn't probed on Bun's
+main thread.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

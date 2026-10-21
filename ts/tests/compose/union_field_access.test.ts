@@ -48,7 +48,7 @@
  * `__shared_field_in_a_node_assert_loads` are pinned at the end, the map item's `each` def built by
  * hand (`assembledWith`).
  *
- * Later (T4): `::test_runtime_growth_allows_member_only_fields` (runtime growth).
+ * Later (T4-8 follow-up): `::test_runtime_growth_allows_member_only_fields` (runtime growth).
  */
 
 import { expect, test } from "bun:test";

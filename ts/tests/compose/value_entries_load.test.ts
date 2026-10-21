@@ -54,7 +54,7 @@
  * reader, the build-cache reader, the typed-binding check and the reference validator decide
  * (`tags.test.ts` pins the ones `readTaggedValue` decides).
  *
- * Later (T4): the run of `test_an_empty_key_outside_a_written_out_record_loads`.
+ * Later (T4-8 follow-up): the run of `test_an_empty_key_outside_a_written_out_record_loads`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

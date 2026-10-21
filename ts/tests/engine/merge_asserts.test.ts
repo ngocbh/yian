@@ -7,7 +7,7 @@
  * TS-only: the harvested `load-leaves/engine_merge_asserts__system_ref_in_a_flow_assert`, pinned at
  * the end.
  *
- * Later (T4): `test_call_bare_internal_assert_succeeds`, `test_map_bare_internal_assert_all_satisfy_succeeds`,
+ * Later (T4-8 follow-up): `test_call_bare_internal_assert_succeeds`, `test_map_bare_internal_assert_all_satisfy_succeeds`,
  * `test_map_bare_internal_assert_one_element_violates_fails_loudly`,
  * `test_loop_bare_internal_assert_succeeds`, `test_braced_boundary_assert_fail_fast_and_pass`,
  * `test_bare_record_scoped_boundary_assert_fail_fast_and_pass`,

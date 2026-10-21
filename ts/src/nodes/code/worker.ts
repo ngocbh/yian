@@ -1,14 +1,19 @@
 /**
- * The CODE node's worker thread: runs one inline body or `./file.ts:fn` reference and posts its
- * outcome to the main thread, plus the helpers both threads use.
+ * The CODE node's worker thread: runs inline bodies and `./file.ts:fn` references one job at a
+ * time and posts each outcome to the main thread, plus the helpers both threads use.
  *
- * The main thread (`nodes/code/node.ts`) starts a worker on this module with the job in
- * `workerData.yianCodeJob`; the module runs a job only when that key is set, so importing it for
- * its helpers runs nothing. The worker installs the caller's defaults, builds the body or imports
- * the reference, calls it with the frozen `inputs` proxy, takes the result in by host intake, and
- * posts one `CodeReply`. Before the reply it forwards each `console.log/info/warn/error/debug`
- * call as one formatted text on the same port, so the main thread logs them in order. A late
- * timer throw or unhandled rejection replies as a throw of the body.
+ * The main thread (`nodes/code/node.ts`) starts a worker on this module with
+ * `workerData.yianCodeWorker` set and posts it jobs (`{id, ...job}`); the module takes jobs only
+ * when that key is set, so importing it for its helpers runs nothing. For each job the worker
+ * installs the caller's defaults, builds the body or imports the reference (a module is imported
+ * once per thread and cached there), calls it with the frozen `inputs` proxy, takes the result in
+ * by host intake, and posts one `CodeReply` carrying the job's id. It forwards each
+ * `console.log/info/warn/error/debug` call as one formatted text on the same port, so the main
+ * thread logs them in order. A late timer throw or unhandled rejection while a job runs replies
+ * as a throw of that job's body (it may come from an earlier body on this thread); one while the
+ * worker is idle is forwarded as a console error line. Either is marked `late`, and the main
+ * thread retires the worker. While a job runs the port doesn't keep the thread alive, so a body
+ * awaiting a promise nothing can resolve ends the thread instead of hanging it.
  *
  * Values cross by structured clone, which drops a `FileRef`'s class, so a `FileRef` crosses as a
  * `Map` of its fields (no yian value holds a `Map`).
@@ -80,8 +85,13 @@ export type CodeReply =
 /** The console methods a worker forwards. */
 export type ConsoleMethod = "log" | "info" | "warn" | "error" | "debug";
 
-/** A message a worker posts: one console call's text, or the reply. */
-export type CodeMessage = { console: ConsoleMethod; text: string } | CodeReply;
+/**
+ * A message a worker posts: one console call's text, or a job's reply with its id. `late` marks
+ * an error that arrived after its body returned or from a body still running in the background.
+ */
+export type CodeMessage = ({ console: ConsoleMethod; text: string } | (CodeReply & { id: number })) & {
+  late?: true;
+};
 
 /**
  * Strip an inline body's types and build it as a strict async function of `inputs`.
@@ -260,35 +270,56 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
   return { ok: true, value: packFiles(value) };
 }
 
-const job = (workerData as { yianCodeJob?: CodeJob } | null)?.yianCodeJob;
 const port = parentPort;
-if (job !== undefined && port !== null) {
-  install(job.defaults);
+if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true && port !== null) {
+  /** The id of the job running now, else `null`. */
+  let current: number | null = null;
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
   // refuses); the main thread must still hear back.
-  const reply = (make: () => CodeReply): void => {
+  const reply = (id: number, make: () => CodeReply, late?: true): void => {
     try {
-      port.postMessage(make());
+      port.postMessage({ ...make(), id, late } satisfies CodeMessage);
     } catch (error) {
-      port.postMessage({ ok: false, as: "plain", thrown: thrownOf(error) } satisfies CodeReply);
+      port.postMessage({ ok: false, as: "plain", thrown: thrownOf(error), id, late } satisfies CodeMessage);
     }
   };
-  const fail = (error: unknown) => reply(() => ({ ok: false, as: "code", thrown: thrownOf(error) }));
-  process.on("uncaughtException", fail);
-  process.on("unhandledRejection", fail);
-  // Under `bun test` a worker's uncaught throw skips `process.on("uncaughtException")` but still
-  // dispatches the global `error` event.
+  const lateError = (error: unknown): void => {
+    if (current !== null) {
+      reply(current, () => ({ ok: false, as: "code", thrown: thrownOf(error) }), true);
+      return;
+    }
+    const text = error instanceof Error ? `${error.name}: ${error.message}` : format(error);
+    port.postMessage({ console: "error", text: `CODE error after its body returned: ${text}`, late: true });
+  };
+  process.on("uncaughtException", lateError);
+  process.on("unhandledRejection", lateError);
+  // Under `bun test` a worker's uncaught throw or unhandled rejection skips the `process.on`
+  // handlers but still dispatches the global `error` event (never `unhandledrejection`), and the
+  // worker then dies; `preventDefault` doesn't save it.
   globalThis.addEventListener?.("error", (event) => {
     event.preventDefault();
-    fail((event as ErrorEvent).error);
+    lateError((event as ErrorEvent).error);
   });
   for (const method of ["log", "info", "warn", "error", "debug"] as const) {
     console[method] = (...args: unknown[]) => {
       port.postMessage({ console: method, text: format(...args) } satisfies CodeMessage);
     };
   }
-  runJob(job).then(
-    (outcome) => reply(() => outcome),
-    (error: unknown) => reply(() => ({ ok: false, as: "plain", thrown: thrownOf(error) })),
-  );
+  port.on("message", (job: CodeJob & { id: number }) => {
+    current = job.id;
+    // A listened port keeps the thread alive; while a job runs only the body's own work should.
+    port.unref();
+    install(job.defaults);
+    const done = (make: () => CodeReply): void => {
+      reply(job.id, make);
+      if (current === job.id) {
+        current = null;
+        port.ref();
+      }
+    };
+    runJob(job).then(
+      (outcome) => done(() => outcome),
+      (error: unknown) => done(() => ({ ok: false, as: "plain", thrown: thrownOf(error) })),
+    );
+  });
 }

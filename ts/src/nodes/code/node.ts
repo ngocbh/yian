@@ -19,20 +19,25 @@
  * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
  * `module:function` value, and requires a reference's file to exist, running no code.
  *
- * Each run of a reference or an inline body starts its own worker thread (`nodes/code/worker`),
- * which imports the reference's module afresh (each worker has its own module cache) or strips
- * the body's types and builds it as a strict async function of `inputs`. Both are called the same
- * way: `inputs` is a frozen host copy of the record (ints as `number`s, big ones as `bigint`s,
- * files as `FileRef`s) behind a proxy that throws on an undeclared name; the reference's named
- * export must be a function. What the code throws (a reference's module while it loads included,
- * and a late timer throw or unhandled rejection) rejects as a `CodeError` reading
- * `<name>: <message>`; an inline body's is located at the authored line of its first body frame
- * when it has one, a reference's at the whole `code:` value. A result of `undefined` fails; a
- * result goes through host intake in the worker, and a value intake refuses fails
+ * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
+ * per thread. Idle workers are reused (at most `availableParallelism()` wait), and an idle worker
+ * never keeps the process alive; module state and globals may persist between calls that land on
+ * the same thread, but nothing guarantees it. A referenced module is imported once per thread and
+ * cached there, so an edited file takes effect in a new process or a new thread. An inline body is
+ * stripped of its types and built as a strict async function of `inputs`. Both are called the
+ * same way: `inputs` is a frozen host copy of the record (ints as `number`s, big ones as
+ * `bigint`s, files as `FileRef`s) behind a proxy that throws on an undeclared name; the reference's
+ * named export must be a function. What the code throws (a reference's module while it loads
+ * included, and a late timer throw or unhandled rejection while it runs) rejects as a `CodeError`
+ * reading `<name>: <message>`; an inline body's is located at the authored line of its first body
+ * frame when it has one, a reference's at the whole `code:` value. A result of `undefined` fails;
+ * a result goes through host intake in the worker, and a value intake refuses fails
  * `contract.output`. A worker that exits before the body returns (`process.exit`, or a body
- * awaiting a promise nothing can resolve) rejects with its exit code. The worker forwards the
- * code's `console` calls to this thread's `console`. The built-in identity returns its field as
- * bound, with no worker.
+ * awaiting a promise nothing can resolve) rejects with its exit code. A body shouldn't leave work
+ * running after it returns: a late error from it fails the call its thread runs then, or is
+ * printed as a console error line when the thread is idle, and the thread is retired. The worker
+ * forwards the code's `console` calls to this thread's `console`. The built-in identity returns
+ * its field as bound, with no worker.
  *
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
  * there is no injection vector into the code itself, and running it is the same capability
@@ -46,6 +51,7 @@
  */
 
 import { statSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 
@@ -263,40 +269,111 @@ function replyError(reply: Exclude<CodeReply, { ok: true }>): Error {
   return reply.as === "plain" && original instanceof Error ? original : new CodeError(original);
 }
 
+/** A call running on a worker: its job id and how it settles. */
+interface Call {
+  readonly id: number;
+  readonly resolve: (reply: CodeReply) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+/** A started worker and the call it runs; `call` is `null` while it is idle or out of service. */
+interface CodeWorker {
+  readonly worker: Worker;
+  call: Call | null;
+}
+
+/** At most this many idle workers wait for a call. */
+const POOL_SIZE = availableParallelism();
+
+/** The idle workers, the most recently used last. */
+const idle: CodeWorker[] = [];
+
+/** The last job id handed out. */
+let lastJobId = 0;
+
+/** Take `entry` out of the idle pool, if it is there. */
+function leavePool(entry: CodeWorker): void {
+  const at = idle.indexOf(entry);
+  if (at !== -1) idle.splice(at, 1);
+}
+
+/** Take `entry` out of service: out of the pool, its call (returned) detached, the thread stopped. */
+function retire(entry: CodeWorker): Call | null {
+  const call = entry.call;
+  entry.call = null;
+  leavePool(entry);
+  void entry.worker.terminate();
+  return call;
+}
+
+/** Start a worker whose listeners route to its current call for its whole life. */
+function startWorker(): CodeWorker {
+  const entry: CodeWorker = { worker: new Worker(WORKER_URL, { workerData: { yianCodeWorker: true } }), call: null };
+  const { worker } = entry;
+  const failed = (error: unknown): void => {
+    retire(entry)?.reject(new Error(`CODE worker failed: ${markerMessage(error)}`, { cause: error }));
+  };
+  worker.on("message", (message: CodeMessage) => {
+    if ("console" in message) {
+      console[message.console](message.text);
+      // A late error leaves the thread suspect (`bun test` kills it); an idle one stops now.
+      if (message.late === true && entry.call === null) retire(entry);
+      return;
+    }
+    const call = entry.call;
+    if (call === null || message.id !== call.id) return;
+    entry.call = null;
+    if (message.late === true || idle.length >= POOL_SIZE) {
+      void worker.terminate();
+    } else {
+      // An idle worker never keeps this process alive.
+      worker.unref();
+      idle.push(entry);
+    }
+    call.resolve(message);
+  });
+  worker.on("exit", (code: number) => {
+    leavePool(entry);
+    const call = entry.call;
+    entry.call = null;
+    call?.reject(new Error(`CODE worker exited with code ${code} before the body returned`));
+  });
+  worker.on("error", failed);
+  worker.on("messageerror", failed);
+  return entry;
+}
+
 /**
- * Run `job` in a new worker thread and return its reply, terminating the worker first.
+ * Run `job` on an idle worker, or a new one, and return its reply.
  *
- * @throws The signal's reason when `signal` aborts first.
+ * @throws The signal's reason when `signal` aborts first; the worker is terminated before this
+ *   rejects.
  * @throws Error when the worker exits before it replies, or fails to start or to send.
  */
 function runInWorker(job: CodeJob, signal: AbortSignal | undefined): Promise<CodeReply> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(WORKER_URL, { workerData: { yianCodeJob: job } });
-    let done = false;
-    // Every handler returns early once done, so the `exit` our own terminate causes never
-    // rejects a settled run.
-    const finish = (settle: () => void): void => {
-      done = true;
-      signal?.removeEventListener("abort", onAbort);
-      worker.terminate().then(settle, settle);
+    const entry = idle.pop() ?? startWorker();
+    const call: Call = {
+      id: ++lastJobId,
+      resolve: (reply) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(reply);
+      },
+      reject: (error) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(error);
+      },
     };
     const onAbort = (): void => {
-      if (!done) finish(() => reject(signal!.reason));
-    };
-    const failed = (error: unknown): void => {
-      if (!done) finish(() => reject(new Error(`CODE worker failed: ${markerMessage(error)}`, { cause: error })));
+      if (entry.call !== call) return;
+      entry.call = null;
+      const settle = () => call.reject(signal!.reason);
+      entry.worker.terminate().then(settle, settle);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    worker.on("message", (message: CodeMessage) => {
-      if (done) return;
-      if ("console" in message) console[message.console](message.text);
-      else finish(() => resolve(message));
-    });
-    worker.on("exit", (code: number) => {
-      if (!done) finish(() => reject(new Error(`CODE worker exited with code ${code} before the body returned`)));
-    });
-    worker.on("error", failed);
-    worker.on("messageerror", failed);
+    entry.call = call;
+    entry.worker.ref();
+    entry.worker.postMessage({ ...job, id: call.id });
   });
 }
 
@@ -306,7 +383,7 @@ function runInWorker(job: CodeJob, signal: AbortSignal | undefined): Promise<Cod
  * The one `code:` field is classified by shape at construction, and the mode is stored: text with
  * `classifyCodeSource`, a built-in form as `"builtin"`. A tagged value entry lowers to the built-in
  * identity form. The node never touches the pool: its body returns `new Output(value)`. A
- * reference's function and an inline body run in a new worker thread on each run, with one
+ * reference's function and an inline body run on a worker thread (an idle one reused), with one
  * calling convention, and a built-in reads the bound record directly.
  */
 export class CodeNode extends Node {
@@ -437,11 +514,11 @@ export class CodeNode extends Node {
    * Run the code on the bound input record and return its one value.
    *
    * The built-in identity returns the record's field as bound. A reference's function or an
-   * inline body runs in a new worker thread and gets `inputs`, a frozen host copy (ints as
+   * inline body runs on a worker thread and gets `inputs`, a frozen host copy (ints as
    * `number`s, big ones as `bigint`s) behind a proxy that throws on an undeclared name; what it
    * throws rejects as a `CodeError`, its `console` calls go to this thread's `console`, and its
    * result goes through host intake (a top-level `return inputs` returns the record). The worker
-   * is terminated before this settles; it runs with the caller's `current()` values.
+   * runs with the caller's `current()` values and goes back to the idle pool after its reply.
    *
    * @param caps.signal Aborting it rejects with its reason and terminates the worker.
    * @throws ReferenceError when the built-in's field isn't in the record.

@@ -50,8 +50,11 @@
  * a `FileRef` and a returned one commits a `FileRef`; a class instance, a getter and a function
  * in a result fail `contract.output` with intake's messages; a custom error class keeps its name
  * and its line; `process.exit(3)` in a body and a body awaiting a promise nothing resolves reject
- * with the worker's exit code; a late timer throw rejects as a `CodeError`; and the worker uses
- * the caller's `withEnv` values (a refused result's path is cut to a small shown-value cap).
+ * with the worker's exit code, and the next call still works; a late timer throw rejects as a
+ * `CodeError`; the worker uses the caller's `withEnv` values (a refused result's path is cut to a
+ * small shown-value cap); two serial calls reuse one thread (a global set by the first is seen by
+ * the second); a call after an aborted call still works; and a late error from an earlier body
+ * while its worker is idle prints a console error line and doesn't fail the next call.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
@@ -638,6 +641,7 @@ test("a body awaiting a promise nothing resolves rejects rather than hangs", asy
   const error = await failure("await new Promise(() => {})\nreturn 1");
 
   expect((error as Error).message).toBe("CODE worker exited with code 0 before the body returned");
+  expect(await run("return 1")).toBe(1n);
 });
 
 test("a late timer throw rejects as a CodeError", async () => {
@@ -646,6 +650,41 @@ test("a late timer throw rejects as a CodeError", async () => {
   expect(error).toBeInstanceOf(CodeError);
   expect((error as Error).message).toBe("RangeError: late");
   expect((error as CodeError).original).toBeInstanceOf(RangeError);
+});
+
+test("two serial calls reuse one thread", async () => {
+  const body = "globalThis.yianCount = (globalThis.yianCount ?? 0) + 1\nreturn globalThis.yianCount";
+
+  expect(await run(body)).toBe(1n);
+  expect(await run(body)).toBe(2n);
+});
+
+test("a call after an aborted call still works", async () => {
+  const controller = new AbortController();
+  const reason = new Error("stop");
+  const node = new CodeNode("n", { code: "await new Promise((r) => setTimeout(r, 60_000))\nreturn 1" });
+
+  const pending = rejected(node.run({}, { signal: controller.signal }));
+  setTimeout(() => controller.abort(reason), 50);
+
+  expect(await pending).toBe(reason);
+  expect(await run("return 2")).toBe(2n);
+});
+
+test("a late error while the worker is idle prints a console line and doesn't fail the next call", async () => {
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await run('setTimeout(() => { throw new RangeError("later") }, 20)\nreturn 1')).toBe(1n);
+    const line = "CODE error after its body returned: RangeError: later";
+    for (let waited = 0; waited < 2000 && !logged.mock.calls.some(([text]) => text === line); waited += 10) {
+      await Bun.sleep(10);
+    }
+
+    expect(logged).toHaveBeenCalledWith(line);
+    expect(await run("return 2")).toBe(2n);
+  } finally {
+    logged.mockRestore();
+  }
 });
 
 test("the worker uses the caller's withEnv values", async () => {

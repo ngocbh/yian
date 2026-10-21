@@ -10,9 +10,9 @@
  * not-baked setup fault is a rejection, and MAP's `bindItem` capability is passed in `caps`.
  *
  * TS-only: the traits read on instances (`isSpawner`, `growDepthDelta`, MAP's `bindsPerItem` and
- * `itemSourceKey`); CALL's seed record is a copy (changing the input record after `run` leaves the
- * seed alone) and keeps an input named `__proto__` as an own field; MAP without `bindItem` throws
- * a `TypeError`, also for an empty `over`.
+ * `itemSourceKey`); `forward` copies CALL's seed record and each MAP seed record (changing the
+ * record afterwards leaves the seed alone), and each keeps an input named `__proto__` as an own
+ * field; MAP without `bindItem` throws a `TypeError`, also for an empty `over`.
  */
 
 import { expect, test } from "bun:test";
@@ -20,6 +20,7 @@ import { expect, test } from "bun:test";
 import { Grow, type NodeCaps, NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 
 /** A stub baked child: the shell only reads `child` for the not-baked guard. */
 function child(): object {
@@ -81,21 +82,31 @@ test("map empty returns grow with lone list end", async () => {
   expect("subgraph" in out).toBe(false);
 });
 
-test("the CALL seed is a copy of the input record", async () => {
+test("the CALL and MAP seeds copy their records", () => {
+  // Through `forward` itself: `run`'s default filling already copies the input record.
   const inputs: Record<string, unknown> = { topic: "ACME" };
-  const out = (await new CallNode("c", { flowId: "child", child: child() }).run(inputs)) as Grow;
+  const call = new CallNode("c", { flowId: "child", child: child() }).forward(inputs);
   inputs.topic = "BETA";
   inputs.extra = 1n;
-  expect(out.seed).toEqual({ topic: "ACME" });
+  expect(call.seed).toEqual({ topic: "ACME" });
+
+  const record: ValueRecord = { x: "ACME" };
+  const map = new MapNode("m", { flowId: "child", child: child() });
+  const grow = map.forward({ over: [null] }, { bindItem: () => record });
+  record.x = "BETA";
+  expect(grow.seed).toEqual([{ x: "ACME" }]);
 });
 
-test("an input named __proto__ stays an own field of the CALL seed", async () => {
-  const inputs = JSON.parse('{"__proto__": "x", "topic": "ACME"}') as Record<string, unknown>;
-  const out = (await new CallNode("c", { flowId: "child", child: child() }).run(inputs)) as Grow;
-  const seed = out.seed as Record<string, unknown>;
-  expect(Object.hasOwn(seed, "__proto__")).toBe(true);
-  expect(seed["__proto__"]).toBe("x");
-  expect(Object.getPrototypeOf(seed)).toBe(Object.prototype);
+test("an input named __proto__ stays an own field of the CALL and MAP seeds", () => {
+  const record = JSON.parse('{"__proto__": "x", "topic": "ACME"}') as ValueRecord;
+  const call = new CallNode("c", { flowId: "child", child: child() }).forward(record);
+  const map = new MapNode("m", { flowId: "child", child: child() });
+  const grow = map.forward({ over: [null] }, { bindItem: () => record });
+  for (const seed of [call.seed, (grow.seed as unknown[])[0]] as Record<string, unknown>[]) {
+    expect(Object.hasOwn(seed, "__proto__")).toBe(true);
+    expect(seed["__proto__"]).toBe("x");
+    expect(Object.getPrototypeOf(seed)).toBe(Object.prototype);
+  }
 });
 
 test("MAP without bindItem throws a TypeError, also for an empty over", async () => {

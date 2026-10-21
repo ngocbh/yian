@@ -40,10 +40,8 @@
  * `Node` is abstract), `test_run_override_exception_is_node_execution` (5 rows; the override is
  * `async`), `test_missing_node_implementation_is_a_setup_fault` (a subclass without `forward`),
  * `test_malformed_assertion_carrier_is_an_ir_fault` (a `TypeError`, where Python raises
- * `AttributeError`), `test_map_deferred_item_binding_keeps_input_contract_stage` and
- * `test_map_deferred_expression_keeps_binding_stage` (on a local node that binds per item, since
- * MAP's body is ported later), and `test_map_deferred_unexpected_binder_fault_escapes` (on the same
- * node; a getter on the item throws the host fault Python's `__deepcopy__` bomb raises).
+ * `AttributeError`) and `test_map_deferred_unexpected_binder_fault_escapes` (a getter on the item
+ * throws the host fault Python's `__deepcopy__` bomb raises).
  *
  * Not ported: `test_malformed_result_context_is_an_ir_fault`: a template string can't fail on a
  * malformed `kind`.
@@ -984,26 +982,10 @@ test("malformed assertion carrier is an ir fault", async () => {
   expect(await rejected(drive(node))).toBeInstanceOf(TypeError);
 });
 
-/** Bind one record per item through `caps.bindItem`, as MAP does, and return them. */
-class PerItemNode extends Node {
-  readonly kind = NodeKind.MAP;
-  override readonly bindsPerItem = true;
-  readonly items: readonly Value[];
-
-  constructor(nodeId: string, items: readonly Value[]) {
-    super(nodeId);
-    this.items = items;
-  }
-
-  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
-    return new Output(this.items.map((item, index) => caps.bindItem!(item, index)));
-  }
-}
-
 test("map deferred item binding keeps input contract stage", async () => {
   // The per-item binder capability doesn't become a node-body failure.
   const contractOrigin = new OriginRef("map:x:contract");
-  const node = new PerItemNode("m", ["bad"]);
+  const node = new MapNode("m", { flowId: "child", child: {} });
   node.params = [
     new Parameter("x", {
       contract: new ValueContract(Type.scalar(ValueKind.INTEGER), new ContractOrigins({ default: contractOrigin })),
@@ -1011,7 +993,7 @@ test("map deferred item binding keeps input contract stage", async () => {
   ];
 
   const failure = await driveFailure(node, {
-    flow: nodeFlow(node, { x: new Binding("${item}", { origin: new OriginRef("map:x:binding") }) }),
+    flow: nodeFlow(node, { over: ["bad"], x: new Binding("${item}", { origin: new OriginRef("map:x:binding") }) }),
   });
 
   expect(failure.code).toBe("contract.input");
@@ -1021,11 +1003,14 @@ test("map deferred item binding keeps input contract stage", async () => {
 test("map deferred expression keeps binding stage", async () => {
   // A per-item expression failure stays evaluator-owned binding work.
   const bindingOrigin = new OriginRef("map:x:binding");
-  const node = new PerItemNode("m", [{}]);
+  const node = new MapNode("m", { flowId: "child", child: {} });
   node.params = [new Parameter("x")];
 
   const failure = await driveFailure(node, {
-    flow: nodeFlow(node, { x: new Binding('${item.missing :? "x is required"}', { origin: bindingOrigin }) }),
+    flow: nodeFlow(node, {
+      over: [{}],
+      x: new Binding('${item.missing :? "x is required"}', { origin: bindingOrigin }),
+    }),
   });
 
   expect(failure.code).toBe("binding.evaluate");
@@ -1041,10 +1026,10 @@ test("map deferred unexpected binder fault escapes", async () => {
       throw expected;
     },
   }) as Value;
-  const node = new PerItemNode("m", [item]);
+  const node = new MapNode("m", { flowId: "child", child: {} });
   node.params = [new Parameter("x")];
 
-  expect(await rejected(drive(node, { flow: nodeFlow(node, { x: "${item}" }) }))).toBe(expected);
+  expect(await rejected(drive(node, { flow: nodeFlow(node, { over: [item], x: "${item}" }) }))).toBe(expected);
 });
 
 test("per item wrapper default keeps binding stage", async () => {

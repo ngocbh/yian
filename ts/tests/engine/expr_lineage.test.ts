@@ -26,8 +26,8 @@
  * their opaque route by hand (`ValueRoute.literal(x).with({kind: "opaque"})`, the route the
  * evaluator records for a builtin call), so they don't check Python's single builtin call.
  * `test_equal_map_items_get_distinct_recorded_indices` maps over `${left + right + right}` for
- * Python's `${left + right * 2}`: the same six items, with items 2-5 tracing to `right`, but
- * `right` is read twice.
+ * Python's `${left + right * 2}`, since list repetition is a type error in TS: the same six
+ * items, with items 2-5 tracing to `right`, but `right` is read twice.
  *
  * Ported: `test_reserved_map_over_uses_the_same_capture_path`.
  *

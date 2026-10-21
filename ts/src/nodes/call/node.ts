@@ -105,7 +105,7 @@ export class CallNode extends Node {
    * Describe the call's growth: one `Grow` seeded with a copy of the call-arg record.
    *
    * @param inputs The bound call-args.
-   * @returns A `Grow` whose seed is the raw call-arg record, with nothing to prune.
+   * @returns A `Grow` seeded with a copy of the undefaulted call-arg record, with nothing to prune.
    */
   override forward(inputs: Record<string, unknown>): Grow {
     // The call-args go raw: the spliced child START fills omitted inputs from its params'

@@ -21,9 +21,12 @@
  * `boundInputs` and `evaluatedKeys` give a fresh copy on each read; a capture built directly
  * freezes its item pairs and copies its evaluated keys.
  *
- * Ported: `test_capture_includes_materialized_reserved_values_from_node_hooks`,
+ * Ported: `test_capture_includes_materialized_reserved_values_from_node_hooks` and
  * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts` (both with no flow, as
- * Python passes no override) and `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`.
+ * Python passes no override).
+ *
+ * Ported: `test_map_wrapper_capture_includes_valid_defaults_and_item_routes` (with no flow and
+ * Python's `wiring_override`).
  *
  * Ported (adapted): the four rows of
  * `test_binding_failure_keeps_partial_context_without_usable_inputs` pass Python's

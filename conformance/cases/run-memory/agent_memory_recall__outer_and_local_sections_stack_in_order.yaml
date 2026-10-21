@@ -1,0 +1,93 @@
+# From tests/engine/test_agent_memory_recall.py::test_recall_sections_reach_every_agent_path_in_order_with_trace_parity
+# (with two seeded profiles for the test's fake sections).
+# Pins: a flow-level memory and an AGENT-level one stack in the system prompt outer to local,
+# numbered from 1: outer first even though `own` sorts before `team`, and the flow-level
+# declaration comes after the AGENT's in the file.
+kind: run
+flow: |
+  id: office
+  name: office
+  llm_config: {provider: openai, model: test-model}
+  input:
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      long_term_memory: {own: profile}
+      input:
+        message: ${input.message}
+      prompt: ${message}
+      output: str
+  long_term_memory: {team: profile}
+  output: ${reply.output}
+files:
+  memory/office/team.md: |
+    # Team
+    - Ships on Fridays.
+  memory/office/own.md: |
+    # Reply agent
+    - Answers in one line.
+inputs:
+  message: hello
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  memory: {}
+  models:
+    reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: Hi.
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"team","text":"# Team\n- Ships on Fridays.\n"},{"index":2,"memory":"own","text":"# Reply agent\n- Answers in one line.\n"}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hello
+expect:
+  output:
+    status: succeeded
+    output: Hi.
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        message: hello
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        message: hello
+  - [node_started, reply]
+  - - node_succeeded
+    - reply
+    - value: Hi.
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: Hi.

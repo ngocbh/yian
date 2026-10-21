@@ -1,0 +1,112 @@
+# From tests/engine/test_run_memory.py::test_memory_context_opener_uses_same_runtime_on_fresh_and_resume[False-0-True]
+# (the session history a `before` run seeds, as in tests/engine/test_agent_session.py).
+# Pins: a session AGENT whose run is cut before its body (record 2, `__start__`'s success, so
+# `agent` never starts) runs once on resume, and its request holds the earlier run's turn
+# restored from the session, then this run's message. The cut is one record earlier than the
+# test's stop at the AGENT's start: a cut after record 3 lets the body run (that is
+# memory_storage_integration__a_resume_reopens_the_latest_saved_history); this one pins a resume
+# that runs the AGENT fresh (`retry_node_ids: []`).
+kind: resume
+flow: |
+  id: plain-session
+  name: plain_session
+  llm_config: {provider: openai, model: test-model}
+  input:
+    question: !str
+  nodes:
+    agent:
+      kind: agent
+      long_term_memory: session
+      prompt: ${question}
+      input:
+        question: ${input.question}
+      output: str
+  output: ${agent.output}
+inputs:
+  question: second question
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  crash_after_record: 2
+  memory:
+    before:
+    - inputs:
+        question: first question
+      run:
+        run_id: r1
+        num_workers: 0
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: first reply
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: second reply
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: first question
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: first reply
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: second question
+expect:
+  output:
+    status: succeeded
+    output: second reply
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        question: second question
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        question: second question
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: []
+  - [node_started, agent]
+  - - node_succeeded
+    - agent
+    - value: second reply
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: second reply
+resume: {}

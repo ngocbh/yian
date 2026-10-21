@@ -157,9 +157,8 @@ resumed from the log with the `resume` arguments `num_workers` (absent: the reco
 `api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
 run: its output, the trace of the whole log, the events and stream of the resume call, and
 `tool_calls` over both runs. With `host.memory`, the `before` runs come first (their calls are in
-`tool_calls` too), and the cut run and the resume each get the memories built afresh. Memory in a
-`resume` case (memories for the cut run and for the resume) is specified but not yet pinned by a
-case here; later memory cases pin it.
+`tool_calls` too), and the cut run and the resume each get the memories built afresh, so the
+resume sees what the cut run saved before the cut.
 
 ### `backward`
 

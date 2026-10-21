@@ -368,8 +368,10 @@ describe("untagged unions whose members can share a file", () => {
 // --- flows that carry files in typed containers --- //
 
 // A CODE body has no `FileRef` in scope, so it imports this module to build one, as Python's
-// body calls `__import__` on `yian.typesys.values`.
-const VALUES_URL = new URL("../../src/typesys/values.ts", import.meta.url).href;
+// body calls `__import__` on `yian.typesys.values`. The extension follows this file's (`.ts` from
+// source, `.js` when built), so the body gets the module instance the run uses.
+const VALUES_URL = new URL(`../../src/typesys/values.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url)
+  .href;
 const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
 
 /** Load and run `text` with no inputs, asserting it succeeded; return its output. */

@@ -228,16 +228,17 @@
  *   `missing-item`, `boundary-role`): the run goes to the end and the replay stops before its
  *   expansion record, for Python's two stepped nodes; each refusal names its class and message.
  * - `test_seed_connections_wait_for_append_and_survive_unfinished_start_retry`: START and the CALL
- *   are evaluated through `evalNode` with the engine's options, for Python's private
- *   `engine._evaluate`; the log's `append` is replaced on the instance.
+ *   are evaluated through `evalNode` with the engine's learning options, for Python's
+ *   private `engine._evaluate`; the log's `append` is replaced on the instance.
  * - `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`:
  *   the run records `resolveLlmCascade(flow, {}, ...)` as Python's `_engine` computes; the AGENT's
  *   model comes through `FlowEngineOptions.models` and replies with the prompt as its topic, since
  *   ESM can't patch `run_agent`, so each evidence holds that one model reply where Python's holds
  *   none. The forbidden replay methods are `spyOn` replacements of `AgentNode`'s `forward` and
  *   `resolveVariables` and `Node`'s `captureBackwardContext` (`render_template_record` runs only
- *   inside `forward`), and the agents changed after the replay are the ones its graph still
- *   holds, for Python's `handler.__self__`.
+ *   inside `forward`), active through the backward-context reads; the agents changed after the
+ *   replay are the ones its graph still holds, for Python's `handler.__self__`, and each gets a
+ *   new `llmConfig` record where Python edits its config in place.
  *
  * Not ported (TS types): the `mutable-path` row of
  * `test_growth_recipe_tampering_fails_replay_before_apply` (a `SeedConnection` holds a frozen copy
@@ -3663,7 +3664,10 @@ function captureOf(occurrence: TraceOccurrence): ForwardCapture {
   return (occurrence.record as NodeSucceededRecord).forwardCapture!;
 }
 
-/** Route `feedback` through `occurrence`'s joined input route over `trace`; the contributions. */
+/**
+ * Return the `[source, feedback]` contributions of routing `feedback` through `occurrence`'s joined
+ * input route over `trace`.
+ */
 function contributions(trace: RetainedTrace, occurrence: TraceOccurrence, feedback: FeedbackValue) {
   const routed = routeFeedback(occurrence.inputRoute, feedback, (source) => trace.lookupSource(source));
   return routed.contributions.map((item) => [item.source, item.feedback]);
@@ -3756,7 +3760,7 @@ const TAMPERING_MESSAGES = {
 };
 
 /** Return what `fn` throws, or fail when it returns. */
-function rejectedSync(fn: () => unknown): unknown {
+function thrown(fn: () => unknown): unknown {
   try {
     fn();
   } catch (error) {
@@ -3796,7 +3800,7 @@ test.each(["selector-digest", "missing-field", "missing-item", "boundary-role"] 
       });
     }
     const before = [traceSnapshot(replay.trace!), [...replay.flow.nodes.keys()], replay.nextSequence];
-    const refused = rejectedSync(() => prepareRecord(replay, record, { growBuilder: changedBuilder }));
+    const refused = thrown(() => prepareRecord(replay, record, { growBuilder: changedBuilder }));
     expect(refused).toBeInstanceOf(RangeError);
     expect((refused as Error).message).toStartWith(TAMPERING_MESSAGES[change]);
     expect([traceSnapshot(replay.trace!), [...replay.flow.nodes.keys()], replay.nextSequence]).toEqual(before);
@@ -3912,11 +3916,12 @@ test("seed connections wait for the append and survive an unfinished start's ret
   log.append = append;
   commitPrepared(log, state, prepared);
   const target = `spawn/${START_ID}`;
-  const pending = state.trace!.pendingConnections.get(target);
+  const pending = state.trace!.pendingConnections.get(target)!;
+  expect(pending).toBeDefined();
   commitPrepared(log, state, prepareNodeStarted(state, target));
   const abandoned = state.trace!.started.get(target)!;
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
-  expect(state.trace!.pendingConnections.get(target)).toBe(pending!);
+  expect(state.trace!.pendingConnections.get(target)).toBe(pending);
 
   await built.run();
 
@@ -4198,8 +4203,7 @@ output: \${spawn.output}
 
 /** Load the one-spawner flow whose CALL, MAP or LOOP `spawn` runs a countdown child. */
 async function growthFlow(kind: "call" | "map" | "loop"): Promise<CompiledFlow> {
-  let extra = kind === "map" ? "    over: [1, 1]\n" : "";
-  extra += kind === "loop" ? "    times: 3\n" : "";
+  const extra = { call: "", map: "    over: [1, 1]\n", loop: "    times: 3\n" }[kind];
   const binding = kind === "map" ? "'${item}'" : "1";
   const text = `
 id: trace-growth
@@ -4411,25 +4415,24 @@ output: {left: '\${left.output}', right: '\${right.output}'}
     ),
     spyOn(Node.prototype, "captureBackwardContext").mockImplementation(forbidden),
   ];
-  let replay: RunState;
   try {
-    replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
+    const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
+    expect(replay.trace!.occurrences).toEqual(trace.occurrences);
+    // The agents the replayed graph still holds change afterward; no captured context follows them.
+    for (const node of replay.flow.nodes.values()) {
+      if (!(node instanceof AgentNode)) continue;
+      node.prompt = "later prompt";
+      node.llmConfig = { ...node.llmConfig, model: "later model" };
+    }
+    for (const occurrence of agents) {
+      const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
+      // The real agent loop records its one model reply, where Python's patched `run_agent` recorded none.
+      expect((evidence as Record<string, unknown>)["interactions"]).toEqual([
+        { kind: "model_value", value: { topic: data["rendered_prompt"] } },
+      ]);
+      expect(data).toEqual(captureOf(occurrence).nodeData!);
+    }
   } finally {
     for (const spy of spies) spy.mockRestore();
-  }
-  expect(replay.trace!.occurrences).toEqual(trace.occurrences);
-  // The agents the replayed graph still holds change afterward; no captured context follows them.
-  for (const node of replay.flow.nodes.values()) {
-    if (!(node instanceof AgentNode)) continue;
-    node.prompt = "later prompt";
-    node.llmConfig = { ...node.llmConfig, model: "later model" };
-  }
-  for (const occurrence of agents) {
-    const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
-    // The real agent loop records its one model reply, where Python's patched `run_agent` recorded none.
-    expect((evidence as Record<string, unknown>)["interactions"]).toEqual([
-      { kind: "model_value", value: { topic: data["rendered_prompt"] } },
-    ]);
-    expect(data).toEqual(captureOf(occurrence).nodeData!);
   }
 });

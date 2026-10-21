@@ -21,21 +21,17 @@
  * `boundInputs` and `evaluatedKeys` give a fresh copy on each read; a capture built directly
  * freezes its item pairs and copies its evaluated keys.
  *
- * Ported: `test_capture_includes_materialized_reserved_values_from_node_hooks` and
+ * Ported: `test_capture_includes_materialized_reserved_values_from_node_hooks`,
  * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts` (both with no flow, as
- * Python passes no override).
+ * Python passes no override) and `test_map_wrapper_capture_includes_valid_defaults_and_item_routes`.
  *
- * Ported (adapted): the `ordinary`, `reserved` and `wrapper_default` rows of
+ * Ported (adapted): the four rows of
  * `test_binding_failure_keeps_partial_context_without_usable_inputs` pass Python's
  * `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a JSON
  * record and the `reserved` row's `until` source holds a `Binding`; the other rows use the same
  * fixture for uniformity. In the `ordinary` row, Python's bare `Node` is a minimal subclass.
  * `test_evaluator_capture_preserves_typed_values_before_node_mutation` also binds through
  * `nodeFlow`, and binds a list where Python binds a tuple, so it doesn't check the tuple type.
- *
- * Later (T4-10): the `deferred` row of
- * `test_binding_failure_keeps_partial_context_without_usable_inputs` (its MAP item captures) and
- * `test_map_wrapper_capture_includes_valid_defaults_and_item_routes` wait for MAP's `forward`.
  *
  * Not ported: `test_bind_params_rejects_noncanonical_containers` has no counterpart: both of
  * its rows are tuples, and TS has only arrays.
@@ -47,7 +43,7 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
 import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
-import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { Grow, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   applyDefaults,
   BindingCapture,
@@ -237,6 +233,14 @@ describe("binding failure keeps partial context without usable inputs", () => {
       },
     ],
     [
+      "deferred",
+      () => {
+        const node = new MapNode("node", { flowId: "child", child: {} });
+        node.params = [new Parameter("ok"), new Parameter("bad", { contract: INTEGER, origin })];
+        return [node, { over: [1n, "wrong"], ok: { safe: [1n] }, bad: "${item}" }, ["over"]];
+      },
+    ],
+    [
       "wrapper_default",
       () => {
         // The default fails before the child flow is read.
@@ -258,6 +262,13 @@ describe("binding failure keeps partial context without usable inputs", () => {
       expect(failure.trace).toEqual([origin]);
       expect(evaluated.bindings!.boundInputs).toBeNull();
       expect(evaluated.bindings!.route.names).toEqual(expectedNames);
+      if (stage === "deferred") {
+        expect(evaluated.bindings!.items.map(([index]) => index)).toEqual([0, 1]);
+        for (const [, item] of evaluated.bindings!.items) {
+          expect(item.boundInputs).toBeNull();
+          expect(item.route.names).toEqual(["ok", "bad"]);
+        }
+      }
     });
   }
 });
@@ -336,6 +347,22 @@ describe("per-item wrapper capture includes defaults before body and asserts", (
       }
     });
   }
+});
+
+test("map wrapper capture includes valid defaults and item routes", async () => {
+  const node = new MapNode("map", { flowId: "child", child: {} });
+  node.params = [new Parameter("fallback", { contract: NUMBER, hasDefault: true, default: 30n })];
+  const evaluated = await evalNode(node, null, poolOf(), { wiringOverride: { over: [1n] }, captureBindings: true });
+  expect(evaluated.bindings!.boundInputs).toEqual({ over: [1n], fallback: 30n });
+  expect(typeof evaluated.bindings!.boundInputs!["fallback"]).toBe("bigint");
+  expect(evaluated.bindings!.route.names).toEqual(["over", "fallback"]);
+  expect(evaluated.bindings!.route.children.at(-1)!.kind).toBe("literal");
+  expect((evaluated.outcome as Grow).seed).toEqual([{ fallback: 30n }]);
+  const [index, item] = evaluated.bindings!.items[0]!;
+  expect(index).toBe(0);
+  expect(item.boundInputs).toEqual({ fallback: 30n });
+  expect(item.route.names).toEqual(["fallback"]);
+  expect(item.route.children[0]!.kind).toBe("literal");
 });
 
 test("bind a reference and a literal", () => {

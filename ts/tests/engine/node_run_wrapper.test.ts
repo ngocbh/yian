@@ -26,10 +26,9 @@
  * original errors; an async `forward` that throws after an `await` rejects (a `NodeBodyError` under
  * `runForEvaluator`), and its `Output` gets the post-asserts.
  *
- * Ported: `test_wrapper_delegates_to_real_code_node_forward`.
- *
- * Ported (half): `test_wrapper_delegates_for_grow_kind`'s check that `CallNode` doesn't override
- * `run`.
+ * Ported: `test_wrapper_delegates_to_real_code_node_forward` and
+ * `test_wrapper_delegates_for_grow_kind` (the baked child is a stub object, for Python's
+ * `test_expand._child_flow`, which `run` never reads).
  *
  * Ported (adapted), through the shared `drive`: `test_runtime_does_not_drive_backward`,
  * `test_eval_node_does_not_fire_when_run_bypasses_firing` (the bypassing `run` is async) and
@@ -37,8 +36,6 @@
  *
  * Not ported: `test_eval_node_no_longer_has_first_failing_assert`: it checks that a Python module
  * attribute is gone, which TS never had.
- *
- * Later (T4-10): the forward half of `test_wrapper_delegates_for_grow_kind`.
  */
 
 import { expect, test } from "bun:test";
@@ -464,9 +461,14 @@ test("wrapper delegates to real code node forward", async () => {
   expect((result as Output).value).toBe("hi");
 });
 
-test("wrapper delegates for grow kind (CallNode inherits run)", () => {
+test("wrapper delegates for grow kind", async () => {
+  // A spawner (CALL -> Grow): `run` is the inherited template and resolves to `forward`'s Grow.
   const node = new CallNode("r", { flowId: "c", child: {}, childInputs: [] });
   expect(node.run).toBe(Node.prototype.run);
+  const result = await node.run({ topic: "ACME" });
+
+  expect(result).toBeInstanceOf(Grow);
+  expect((result as Grow).seed).toEqual({ topic: "ACME" });
 });
 
 // evalNode doesn't check asserts itself: the `run` template does. evalNode calls `run` (not

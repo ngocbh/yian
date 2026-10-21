@@ -19,7 +19,7 @@
  */
 
 import { type OriginRef, reprText } from "../../diagnostics.ts";
-import { Node, NodeKind } from "../base.ts";
+import { Grow, Node, NodeKind } from "../base.ts";
 import { iterOriginCarrier, type OriginMapper, type Parameter, rewriteOriginCarrier } from "../contracts.ts";
 
 /**
@@ -101,8 +101,17 @@ export class CallNode extends Node {
     }
   }
 
-  /** The call body; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (CallNode) forward is not ported yet (T4-10)`);
+  /**
+   * Describe the call's growth: one `Grow` seeded with a copy of the call-arg record.
+   *
+   * @param inputs The bound call-args.
+   * @returns A `Grow` whose seed is the raw call-arg record, with nothing to prune.
+   */
+  override forward(inputs: Record<string, unknown>): Grow {
+    // The call-args go raw: the spliced child START fills omitted inputs from its params'
+    // defaults, so the driver doesn't pre-default. The seed is the builder's only durable input;
+    // the compile-owned builder constructs the child and lowers its post-asserts onto the child
+    // END, for live execution and replay alike.
+    return new Grow({ ...inputs });
   }
 }

@@ -53,9 +53,8 @@
  * plain `Error` (cause type `Error`) and its `ValueError` a `RangeError`. The non-NodeResult
  * message names the JS type (`Object`). In `test_binding_carrier_unwraps_exactly_one_layer` the
  * inner carrier isn't a yian value, so binding refuses it (`binding.evaluate`) where Python passes
- * it through as data. The MAP carrier row checks the resolved `over` through `bindReserved`, not
- * the `Grow` the body builds from it; the WAIT carrier row checks the resolved `until` through
- * `bindReserved` and the `Output` through the evaluator. The setup faults go
+ * it through as data. The MAP and WAIT carrier rows also check the resolved `over` and `until`
+ * through `bindReserved`, then the `Grow` and the `Output` through the evaluator. The setup faults go
  * through `run`, which rejects with the node's own error; the non-string `when` is a cast. The
  * not-a-list message is pinned as the golden format's text.
  *
@@ -72,9 +71,6 @@
  * that records steps and whose reserved key fails to bind after an earlier start recorded
  * steps rejects with a `RangeError`, while a node that doesn't read its steps gets the ordinary
  * binding failure.
- *
- * Later (T4-10): the run-result half of `test_map_over_accepts_a_binding_carrier` (the `Grow`
- * through the evaluator).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -150,12 +146,14 @@ class RouteNode extends ResultNode {
   override readonly kind = NodeKind.CASE;
 }
 
-test("map over accepts a binding carrier", () => {
+test("map over accepts a binding carrier", async () => {
   // MAP's reserved iteration source uses the ordinary binding read seam.
   const node = new MapNode("m", { flowId: "child", child: {} });
-  const wiring = new Map([["over", new Binding(["first", "second"], { origin: new OriginRef("map-over") })]]);
+  const source = new Binding(["first", "second"], { origin: new OriginRef("map-over") });
+  const wiring = new Map([["over", source]]);
 
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ over: ["first", "second"] });
+  expect(await drive(node, { flow: nodeFlow(node, { over: source }) })).toEqual(new Grow([{}, {}]));
 });
 
 test("wait until accepts a binding carrier", async () => {

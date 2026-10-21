@@ -60,7 +60,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
-import { ConversationItem, type ConversationTurn, type ConversationView } from "../../src/memory/contracts.ts";
+import { ConversationItem, type ConversationView } from "../../src/memory/contracts.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import {
   compatibility,
@@ -71,7 +71,7 @@ import {
 } from "../../src/nodes/agent/memory.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
+import { fakeTurn, NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
 
 // Each test's environment: conftest's base (a private store in a fresh directory, the default
 // model) with the default provider this test sets.
@@ -308,14 +308,6 @@ test("the memory boundary passes a fault and the stop through and wraps anything
   const early = await memoryBoundary(thrower(stop), new AbortController().signal).catch((error: unknown) => error);
   expect((early as CapabilityFault).original).toBe(stop);
 });
-
-/** A hand-made turn of only `request` and `observe`, as Python's `SimpleNamespace` turns. */
-function fakeTurn(
-  request: () => number | Promise<number>,
-  observe: (ordinal: number, status: string) => void | Promise<void>,
-): ConversationTurn {
-  return { request, observe } as unknown as ConversationTurn;
-}
 
 const reply = (text: string): Response =>
   new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });

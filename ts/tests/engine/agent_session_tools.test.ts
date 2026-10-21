@@ -14,7 +14,11 @@
  * and throws the stop; a skipped call is requested and observed `interrupted` with
  * `SKIPPED_TOOL_RESULT`; a representation error leaves the effect `completed` without items and
  * propagates; `interruptTurn` calls a turn's optional `interrupt`, and a failing one is a
- * `CapabilityFault`.
+ * `CapabilityFault`; a stop the turn throws after publishing wins over a representation error
+ * (a spied `fromHost` throws it), which gets no observation note; a `CapabilityFault` with a stop pending is recorded `failed` and
+ * thrown, without the stop check; a skip under an already aborted signal throws the stop, not a
+ * `CapabilityFault`, and records nothing, since a session turn checks the stop before publishing a
+ * request.
  *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
@@ -31,7 +35,7 @@
  * `test_session_tool_calls_keep_public_argument_validation`.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { Message, ToolResultPart } from "../../src/llm/messages.ts";
 import type { ConversationTurn, ConversationView } from "../../src/memory/contracts.ts";
@@ -45,16 +49,8 @@ import {
 } from "../../src/nodes/agent/memory.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { ReportedToolError } from "../../src/tools/errors.ts";
-import { TypeCheckError } from "../../src/typesys/values.ts";
-import { NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
-
-/** A hand-made turn of only `request` and `observe`, as Python's `SimpleNamespace` turns. */
-function fakeTurn(
-  request: () => number | Promise<number>,
-  observe: (ordinal: number, status: string) => void | Promise<void>,
-): ConversationTurn {
-  return { request, observe } as unknown as ConversationTurn;
-}
+import * as values from "../../src/typesys/values.ts";
+import { fakeTurn, NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
 
 const call = { name: "lookup", arguments: { value: 1 }, modelExchangeId: "model", callIndex: 0, toolCallId: "provider" };
 
@@ -198,7 +194,7 @@ test("a skipped call is requested and observed interrupted with SKIPPED_TOOL_RES
 
 test("a representation error leaves the effect completed without items and propagates", async () => {
   const { error, view } = await inTurn((turn) => invokeToolEffect(turn, async () => () => "not a value", call));
-  expect(error).toBeInstanceOf(TypeCheckError);
+  expect(error).toBeInstanceOf(values.TypeCheckError);
   expect(view.effects[0]!.status).toBe("completed");
   expect(view.items).toHaveLength(0);
 });
@@ -218,4 +214,58 @@ test("interruptTurn calls a turn's optional interrupt, and a failing one is a Ca
     } as unknown as ConversationTurn),
   );
   expect((caught as CapabilityFault).original).toBe(error);
+});
+
+test("a stop the turn throws after publishing wins over a representation error", async () => {
+  const controller = new AbortController();
+  const stop = new Error("stopped");
+  // The representation error itself, to check it gets no observation note.
+  const representation = new TypeError("not representable");
+  const spy = spyOn(values, "fromHost").mockImplementation(() => {
+    throw representation;
+  });
+  const invoke = async (): Promise<unknown> => {
+    controller.abort(stop);
+    return "actual";
+  };
+  try {
+    const { error, view } = await inTurn(
+      (turn) => invokeToolEffect(turn, invoke, { ...call, signal: controller.signal }),
+      controller.signal,
+    );
+    expect(error).toBe(stop);
+    expect(view.effects[0]!.status).toBe("completed");
+    expect(view.items).toHaveLength(0);
+    expect(spy).toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+  }
+  expect((representation as Error & { notes?: string[] }).notes).toBeUndefined();
+});
+
+test("a CapabilityFault with a stop pending is recorded failed and thrown, without the stop check", async () => {
+  const controller = new AbortController();
+  const fault = new CapabilityFault(new Error("backend"));
+  const invoke = async (): Promise<unknown> => {
+    controller.abort(new Error("stopped"));
+    throw fault;
+  };
+  const { error, view } = await inTurn(
+    (turn) => invokeToolEffect(turn, invoke, { ...call, signal: controller.signal }),
+    controller.signal,
+  );
+  expect(error).toBe(fault);
+  expect(view.effects[0]!.status).toBe("failed");
+  expect(view.effects[0]!.failure!.message).toBe("Tool invocation failed (CapabilityFault).");
+});
+
+test("a skip under an already aborted signal throws the stop and records nothing", async () => {
+  const controller = new AbortController();
+  const stop = new Error("stopped");
+  const { error, view } = await inTurn(async (turn) => {
+    controller.abort(stop);
+    return recordSkippedTool(turn, { ...call, signal: controller.signal });
+  }, controller.signal);
+  expect(error).toBe(stop);
+  expect(view.effects).toHaveLength(0);
 });

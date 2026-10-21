@@ -9,6 +9,7 @@ import {
   ConversationInvocation,
   ConversationItem,
   ConversationRequest,
+  type ConversationTurn,
   type JsonObject,
   MemoryOperationError,
 } from "../../src/memory/contracts.ts";
@@ -114,6 +115,14 @@ export async function withTurn<T>(
   }
   turn.close();
   return result;
+}
+
+/** A hand-made turn of only `request` and `observe`, as Python's `SimpleNamespace` turns. */
+export function fakeTurn(
+  request: () => number | Promise<number>,
+  observe: (ordinal: number, status: string) => void | Promise<void>,
+): ConversationTurn {
+  return { request, observe } as unknown as ConversationTurn;
 }
 
 /** A promise with its outcome recorded as it settles. */

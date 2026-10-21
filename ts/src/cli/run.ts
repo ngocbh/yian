@@ -33,7 +33,7 @@ import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
-import { Diagnostic, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
@@ -51,7 +51,7 @@ import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { hostInputs, type RunResult, runFlow, runStartLlm, skillGrants, staticNodes } from "../run.ts";
-import type { McpServer } from "../tools/mcp.ts";
+import { McpConnectError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
@@ -665,13 +665,20 @@ interface RunOptions {
   json: boolean;
 }
 
-/** Whether `error` is a host failure `run` reports as `run failed:` rather than with its stack. */
+/**
+ * Whether `error` is a host failure `run` reports as `run failed:` rather than with its stack: a
+ * bad value, an unreadable file, a memory failure, an MCP server that didn't start, the missing MCP
+ * SDK.
+ */
 function isSetupError(error: unknown): error is Error {
   return (
     error instanceof TypeError ||
     error instanceof RangeError ||
     error instanceof AuthError ||
     error instanceof MemoryOperationError ||
+    error instanceof McpConnectError ||
+    // Any other plain `Error` is a bug and keeps its stack.
+    (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
     isSystemError(error)
   );
 }
@@ -689,6 +696,101 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
     for (const grant of node.grantedTools()) grants.add(grant);
   }
   return [toolIds, grants];
+}
+
+/**
+ * @internal Run `body` with the configured MCP servers `flow` needs, and close every server in
+ * `servers` when it settles.
+ *
+ * A server an AGENT grants by name (its tool group) is selected unopened, so the run starts it
+ * after its own checks and closes it. A TOOL node's id names one tool, never a group, so it counts
+ * as unresolved unless it is in `known`; so does a grant that is neither in `known` nor a server
+ * name. When some id is unresolved, the granted servers open here instead, and if their tools don't
+ * supply every unresolved id, every other server opens to show its tools; those that list a
+ * still-unresolved id stay open and the rest close before the run, so an unused server's tool
+ * names can't collide with another's. A server opened only to show its tools that fails to start is
+ * skipped with a `warn` call, unless the flow still lacks a needed id afterwards. Once `signal`
+ * aborts, no further server opens, and only the servers already open are selected. Nothing is
+ * selected when the flow needs no tools.
+ *
+ * @param servers The configured servers by name, none of them open.
+ * @param toolIds The tool ids the flow's static TOOL nodes call.
+ * @param grants The tool and tool-group ids the flow's static AGENT nodes grant.
+ * @param known The tool ids the run supplies without MCP.
+ * @param options.signal The run's stop.
+ * @param options.warn Called with `<error>; skipped, the flow doesn't need it` for each unneeded
+ *   server that failed to start.
+ * @param body Called with the selected servers by name, as tool groups for the run.
+ * @returns What `body` resolves to.
+ * @throws {McpConnectError} A server the flow names doesn't start or lists bad tools; or a needed
+ *   id is still missing and some server failed to start, the first failure then noting the missing
+ *   ids and each other failure.
+ * @throws {Error} A server must open here and the MCP SDK is not installed.
+ * @throws The signal's reason, when it aborts while a server opens.
+ */
+export async function openMcpServers<T>(
+  servers: Readonly<Record<string, McpServer>>,
+  toolIds: ReadonlySet<string>,
+  grants: ReadonlySet<string>,
+  known: ReadonlySet<string>,
+  { signal, warn }: { signal: AbortSignal; warn: (message: string) => void },
+  body: (selected: Record<string, McpServer>) => Promise<T>,
+): Promise<T> {
+  const toolNames = (selected: Record<string, McpServer>) =>
+    new Set(Object.values(selected).flatMap((server) => server.tools.map((tool) => tool.name)));
+  try {
+    let selected: Record<string, McpServer> = {};
+    const named = Object.entries(servers).filter(([name]) => grants.has(name));
+    const unresolved = new Set([
+      ...[...toolIds].filter((id) => !known.has(id)),
+      ...[...grants].filter((id) => !known.has(id) && !Object.hasOwn(servers, id)),
+    ]);
+    if (unresolved.size === 0) {
+      selected = Object.fromEntries(named);
+    } else {
+      for (const [name, server] of named) {
+        if (signal.aborted) break;
+        selected[name] = await server.open({ signal });
+      }
+      // No other server needs to start for an id a granted server supplies.
+      for (const name of toolNames(selected)) unresolved.delete(name);
+      const failed: McpConnectError[] = [];
+      for (const [name, server] of Object.entries(servers)) {
+        if (unresolved.size === 0 || Object.hasOwn(selected, name) || signal.aborted) continue;
+        try {
+          await server.open({ signal });
+        } catch (error) {
+          if (!(error instanceof McpConnectError)) throw error;
+          failed.push(error);
+          continue;
+        }
+        if (server.tools.some((tool) => unresolved.has(tool.name))) selected[name] = server;
+        else await server.close();
+      }
+      if (signal.aborted) {
+        // The run throws the stop; only what is already open goes to it.
+        selected = Object.fromEntries(Object.entries(selected).filter(([, server]) => server.isOpen));
+      } else {
+        const supplied = toolNames(selected);
+        const missing = [...unresolved].filter((id) => !supplied.has(id)).sort(compareCodeUnits);
+        if (missing.length > 0 && failed.length > 0) {
+          // A server that failed to start may be the one that supplies them.
+          const [error, ...others] = failed as [McpConnectError, ...McpConnectError[]];
+          const notes = ((error as { notes?: string[] }).notes ??= []);
+          const shown = `[${missing.map(reprText).join(", ")}]`;
+          notes.push(`the flow needs ${shown}, which no started server supplies`);
+          for (const other of others) notes.push(other.message);
+          throw error;
+        }
+      }
+      for (const error of failed) warn(`${error.message}; skipped, the flow doesn't need it`);
+    }
+    return await body(selected);
+  } finally {
+    // Closing a server that never opened, or that its run already closed, does nothing; this
+    // also covers one stopped between opening and being recorded.
+    for (const server of Object.values(servers)) await server.close();
+  }
 }
 
 /**
@@ -807,17 +909,20 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * closed when the command ends. When an AGENT grants skills, the Claude Code and Codex skill
  * folders are read, each invalid skill a `warning:` line on stderr. When a static TOOL node or
  * AGENT grant names a tool yian lacks, `~/.yian/mcp.json` (when it is a file) and the `mcpConfig`
- * files are read; the servers an AGENT grants go to the run unopened, and a bad config is printed
- * and exits 1. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path
- * always does. On a TTY stdin, each input not supplied is prompted for on stderr, and a cancelled
- * prompt prints `run cancelled` and exits 1. `provider` and `model`, those given, are the run's
- * outermost `llmConfig` layer. Before the log exists, every key the agents need is checked
- * (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is printed and exits 1. The
- * log is `log`, else a fresh one under `~/.yian/runs` named by the run id. A succeeded run prints
- * its output on stdout, as text; a failed one prints its diagnostic on stderr and exits 1. A host
- * failure (a bad option value, a log that can't be created) prints `run failed: <message>` on
- * stderr and exits 1. Under `json`, stdout holds one document: the output (`status: "succeeded"`),
- * the failure (`status: "failed"`) or the error (`compose.load`, `run.cancelled`, `run.setup`).
+ * files are read, a bad config printed and exiting 1; just before the run, `openMcpServers` selects
+ * the servers the flow needs, each unneeded server that failed to start a `warning:` line on
+ * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
+ * progress go to stderr; the log path always does. On a TTY stdin, each input not supplied is
+ * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
+ * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
+ * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
+ * printed and exits 1. The log is `log`, else a fresh one under `~/.yian/runs` named by the run id.
+ * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
+ * stderr and exits 1. A host failure (a bad option value, a log that can't be created, an MCP
+ * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
+ * `McpConnectError`'s notes on the lines below, and exits 1. Under `json`, stdout holds one
+ * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
+ * (`compose.load`, `run.cancelled`, `run.setup`).
  *
  * SIGINT, SIGTERM or SIGHUP from the command's start, Ctrl-C at a prompt during the run, or
  * `io.stop` aborting (with a `HostStop`) stops the run, closing a prompt that is up before it:
@@ -900,11 +1005,15 @@ async function startRun(
   const writeStack = async (error: Error) => {
     if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
   };
+  // An McpConnectError's notes (the ids no started server supplies, the other servers that
+  // failed) follow its message; other notes, such as a cleanup failure, stay out of it.
   const setupFailed = async (error: Error) => {
+    const notes = error instanceof McpConnectError ? ((error as { notes?: string[] }).notes ?? []) : [];
     const label = paint("run failed: ", "red bold", io.stderr, io.env);
-    await io.stderr.write(`${label}${paint(error.message, "red", io.stderr, io.env)}\n`);
+    const text = [error.message, ...notes].map((line) => paint(line, "red", io.stderr, io.env));
+    await io.stderr.write(`${label}${text.join("\n")}\n`);
     await writeStack(error);
-    return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+    return fail(new Diagnostic({ code: "run.setup", message: error.message, notes }));
   };
   let text: string;
   try {
@@ -962,7 +1071,8 @@ async function startRun(
       }
 
       // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
-      // broken config file can't block flows that never use MCP.
+      // broken config file can't block flows that never use MCP. The servers stay unopened here;
+      // `openMcpServers` selects the ones the flow needs just before the run.
       const known = new Set([...Object.keys(registeredTools()), "ask_user", "load_skill"]);
       const [toolIds, grants] = mcpNeededNames(flow);
       let servers: Record<string, McpServer> = {};
@@ -979,10 +1089,6 @@ async function startRun(
         }
         await writeWarnings();
       }
-      // A server an AGENT grants by name goes to the run unopened; the run opens it after its own
-      // checks and closes it.
-      const granted = Object.fromEntries(Object.entries(servers).filter(([name]) => grants.has(name)));
-
       if (!quiet) {
         const banner = flowBanner(flow, io.stderr, io.env);
         if (banner !== null) await io.stderr.write(banner);
@@ -1033,23 +1139,27 @@ async function startRun(
       const log = options.log ?? defaultRunLogPath(runId, io.env);
       await reportRunLog(log, io.stderr, io.env);
       host.started.value = true;
-      try {
-        return await runFlow(flow, supplied, {
-          log,
-          runId,
-          llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-          numWorkers: options.numWorkers ?? 8,
-          onEvent: reporter === null ? null : (event) => reporter.handle(event),
-          memory: registry.size > 0 ? registry : null,
-          tools: { ...registeredTools(), ...granted, ask_user: terminal.askUser },
-          skills,
-          env: commandEnv.read,
-          signal: controller.signal,
-        });
-      } finally {
-        // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
-        reporter?.stop();
-      }
+      const selection = { signal: controller.signal, warn };
+      return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
+        await writeWarnings();
+        try {
+          return await runFlow(flow, supplied, {
+            log,
+            runId,
+            llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+            numWorkers: options.numWorkers ?? 8,
+            onEvent: reporter === null ? null : (event) => reporter.handle(event),
+            memory: registry.size > 0 ? registry : null,
+            tools: { ...registeredTools(), ...selected, ask_user: terminal.askUser },
+            skills,
+            env: commandEnv.read,
+            signal: controller.signal,
+          });
+        } finally {
+          // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+          reporter?.stop();
+        }
+      });
     });
   } catch (error) {
     if (error instanceof HostStop) {

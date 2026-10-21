@@ -11,7 +11,7 @@
  *
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `resumeFlow` and
  * `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering`
- * (`nodes/base.ts`).
+ * (`nodes/base.ts`). It also exports `inspectRun`, which reads where a run log stands.
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -45,7 +45,7 @@ import {
   type ResolvedMemoryLayout,
   resolveMemoryLayout,
 } from "./compile/memory_layout.ts";
-import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
+import { type CompiledFlow, copyGraph, END_ID, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
@@ -100,12 +100,20 @@ import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts"
 import {
   decodeRecord,
   encodeRecord,
+  isRunLogLocked,
   JsonlRunLog,
   MemoryRunLog,
+  NodeExpandedRecord,
+  NodeFailedRecord,
+  NodeRoutedRecord,
+  NodeStartedRecord,
+  NodeSucceededRecord,
+  readRunLog,
   type RecordEnvelope,
   type RunLog,
-  type RunResumedRecord,
+  RunResumedRecord,
   RunStartedRecord,
+  RunStoppedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import { commitPrepared, prepareRunResumed, prepareRunStarted, RunState, replayRecords } from "./runtime/state.ts";
@@ -872,7 +880,8 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       if (state.memories !== null) {
         checkRegistryTypes(memory!, state.memories);
         const authored = resolveAuthoredMemoryLayout(flow);
-        checkRecordedMemoryTable(state.memories, state.memoryStacks, authored.memories, authored.stacks, "supplied flow");
+        const { memories, stacks } = authored;
+        checkRecordedMemoryTable(state.memories, state.memoryStacks, memories, stacks, "supplied flow");
         memoryRuntime = await MemoryRuntime.open({
           memories: state.memories,
           origins: authored.origins,
@@ -915,6 +924,78 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       await closeRunResources(memoryRuntime, authority, primary);
     }
   });
+}
+
+/** Where a run log stands, as `inspectRun` reads it. */
+export type RunStatus = "running" | "succeeded" | "failed" | "stopped" | "interrupted";
+
+/** What `inspectRun` reads from one run log. */
+export interface RunInspection {
+  /**
+   * `running` while a writer holds the log's lock; `succeeded` or `failed` once the run finished;
+   * `stopped` when the host stopped the last segment; otherwise `interrupted` (the process ended
+   * without a stop). A run that isn't running or finished can be resumed.
+   */
+  readonly status: RunStatus;
+  /** The nodes started and not settled, in start order; `[]` for a finished run. */
+  readonly inFlight: readonly string[];
+  /**
+   * By node id, the starts a resume retried with no stop covering them, plus, for a run that is
+   * neither running nor finished, one for each node in flight that no stop covers: the attempts a
+   * resume would retry as interrupted.
+   */
+  readonly interruptedAttempts: ReadonlyMap<string, number>;
+}
+
+/**
+ * Read where the run in `log` stands without changing the file or taking its lock.
+ *
+ * In-flight nodes and interrupted counts come from the records. Without `flow`, the status is
+ * read from the records too: `failed` after a node failure; `succeeded` after the top-level END
+ * succeeded, and `failed` after a route proved END unreachable, each with nothing in flight. The
+ * records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
+ * that proof) but before a node already ready started reads as finished, though `resumeFlow` would
+ * still run that node. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
+ * is exact; pass the flow when you have it.
+ *
+ * @param log The JSONL run log's path.
+ * @param options.flow The loaded flow the run was started with, for an exact status.
+ * @returns The status, the nodes in flight and the interrupted counts.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
+ * @throws RangeError when a complete line isn't a valid record, the log holds no record and no
+ *   writer, or, with `flow`, the replay refuses the log (`replayRunLog`).
+ * @throws DefaultsMismatchError with `flow`, when the run recorded `YIAN_*` values that differ
+ *   from the ones in effect.
+ */
+export function inspectRun(log: string, options: { flow?: ComposedFlow | null } = {}): RunInspection {
+  const envelopes = readRunLog(log);
+  const running = isRunLogLocked(log);
+  if (envelopes.length === 0 && !running) throw new RangeError(`cannot inspect an empty run log: ${log}`);
+  const flow = options.flow ?? null;
+  // A running log's status needs no replay, and its counts get no in-flight attempts: those
+  // attempts are still running.
+  if (running || flow === null) {
+    const scan = scanRunRecords(envelopes);
+    const { starts, interrupted } = scan;
+    if (running) return { status: "running", inFlight: [...starts.keys()], interruptedAttempts: interrupted };
+    if (scan.finished !== null) return { status: scan.finished, inFlight: [], interruptedAttempts: interrupted };
+    return {
+      status: scan.lastStop === null ? "interrupted" : "stopped",
+      inFlight: [...scan.starts.keys()],
+      interruptedAttempts: withInFlightAttempts(scan.interrupted, scan.starts, scan.lastStop),
+    };
+  }
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes));
+  const interrupted = new Map(state.interruptedAttempts);
+  if (state.result !== null) {
+    const status = state.result instanceof RunSucceeded ? "succeeded" : "failed";
+    return { status, inFlight: [], interruptedAttempts: interrupted };
+  }
+  return {
+    status: state.lastStopSequence === null ? "interrupted" : "stopped",
+    inFlight: [...state.inFlight],
+    interruptedAttempts: withInFlightAttempts(interrupted, state.acceptedStarts, state.lastStopSequence),
+  };
 }
 
 /**
@@ -1366,6 +1447,80 @@ export function replayCompiledRunLog(
     throw new RangeError("run log changed while its historical prefix was replayed");
   }
   return state;
+}
+
+/** What `scanRunRecords` reads from a log's records. */
+type RecordScan = {
+  /** The start sequence of each node in flight, in start order. */
+  starts: Map<string, number>;
+  /** The interrupted counts the run's resumes recorded, as `RunState.interruptedAttempts`. */
+  interrupted: Map<string, number>;
+  /** The sequence of the last `RunStopped` since the last `RunResumed`, or `null`. */
+  lastStop: number | null;
+  /** How the records show the run finished, or `null` when they don't. */
+  finished: "succeeded" | "failed" | null;
+};
+
+/**
+ * Read the in-flight nodes, interrupted counts and terminal status from a log's records, as the
+ * reducer derives them from starts, outcomes, stops and resumes.
+ *
+ * Finished means a node failed, or, with nothing in flight, the top-level END succeeded or a route
+ * proved it unreachable; the records don't hold the ready nodes, so a node still ready is missed.
+ */
+function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
+  const starts = new Map<string, number>();
+  let interrupted = new Map<string, number>();
+  let lastStop: number | null = null;
+  let failed = false;
+  let endSucceeded = false;
+  let unreachable = false;
+  for (const { seq, record } of envelopes) {
+    if (record instanceof NodeStartedRecord) {
+      starts.set(record.nodeId, seq);
+    } else if (record instanceof NodeSucceededRecord) {
+      starts.delete(record.nodeId);
+      if (record.nodeId === END_ID) endSucceeded = true;
+    } else if (record instanceof NodeRoutedRecord) {
+      starts.delete(record.nodeId);
+      if (record.terminalFailure !== null) unreachable = true;
+    } else if (record instanceof NodeExpandedRecord) {
+      starts.delete(record.spawnerId);
+    } else if (record instanceof NodeFailedRecord) {
+      starts.delete(record.failure.nodeId!);
+      failed = true;
+    } else if (record instanceof RunStoppedRecord) {
+      lastStop = seq;
+    } else if (record instanceof RunResumedRecord) {
+      // The resume retries exactly the nodes in flight.
+      interrupted = withInFlightAttempts(interrupted, starts, lastStop);
+      starts.clear();
+      lastStop = null;
+    }
+  }
+  let finished: RecordScan["finished"] = null;
+  if (failed || (starts.size === 0 && unreachable)) finished = "failed";
+  else if (starts.size === 0 && endSucceeded) finished = "succeeded";
+  return { starts, interrupted, lastStop, finished };
+}
+
+/**
+ * Return `interrupted` plus one for each node in flight that no stop covers: a stop names every
+ * node in flight, so an attempt is covered exactly when it started before the segment's last stop.
+ *
+ * @param starts The start sequence of each node in flight.
+ * @param lastStop The sequence of the segment's last `RunStopped`, or `null`.
+ */
+function withInFlightAttempts(
+  interrupted: ReadonlyMap<string, number>,
+  starts: ReadonlyMap<string, number>,
+  lastStop: number | null,
+): Map<string, number> {
+  const counts = new Map(interrupted);
+  for (const [nodeId, start] of starts) {
+    if (lastStop === null || start >= lastStop) counts.set(nodeId, (counts.get(nodeId) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** A layout's record-facing key table, per-key origins and stacks. */

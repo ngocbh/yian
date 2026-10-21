@@ -41,6 +41,10 @@
  * route to a handle that matches no edge throws the `RangeError` itself, not the live
  * `NodeDataError`.
  *
+ * TS-only, through `runFlow`, `inspectRun` and `resumeFlow`: a two-worker run whose log refuses
+ * appends after both `NodeStarted` records counts each node once, and its resume publishes a
+ * `NodeAttemptResumed` for each, in start order.
+ *
  * Not ported: none.
  *
  * Covered by a case: `test_recorded_public_resume_keeps_completed_code_and_wire[5]`
@@ -64,7 +68,8 @@ import { legacyConnectionConfig } from "../../src/llm_clients/connection.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Grow } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { replayRunLog, type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { NodeAttemptResumed, type RunEvent, RunResumed } from "../../src/events.ts";
+import { inspectRun, replayRunLog, type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -75,6 +80,7 @@ import {
   NodeStartedRecord,
   RecordEnvelope,
   type RunLog,
+  type RunRecord,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -678,4 +684,50 @@ test("test_run_started_replay_rejects_pool_and_envelope_identity_drift", async (
   }
   expect(caught).toBeInstanceOf(RangeError);
   expect((caught as Error).message).toContain("system.run_id");
+});
+
+test("a pooled run frozen after both starts counts each, and its resume publishes both", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-recovery-prefixes-"));
+  const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
+  const append = JsonlRunLog.prototype.append;
+  const crash = new Error("crash after record 4");
+  try {
+    const flow = await load(FANOUT);
+    const path = join(dir, "pooled.jsonl");
+    // Records 0-4 are RunStarted, START's two and both NodeStarted records.
+    JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
+      if (this.nextSequence >= 5) throw crash;
+      return append.call(this, record);
+    };
+    let caught: unknown;
+    try {
+      await runFlow(flow, {}, { log: path, numWorkers: 2, env });
+    } catch (error) {
+      caught = error;
+    } finally {
+      JsonlRunLog.prototype.append = append;
+    }
+    expect(caught).toBe(crash);
+
+    const counts = new Map([
+      ["first", 1],
+      ["second", 1],
+    ]);
+    const expected = { status: "interrupted" as const, inFlight: ["first", "second"], interruptedAttempts: counts };
+    expect(inspectRun(path)).toEqual(expected);
+    expect(inspectRun(path, { flow })).toEqual(expected);
+
+    const seen: RunEvent[] = [];
+    const result = await resumeFlow(flow, { log: path, env, onEvent: (event) => seen.push(event) });
+    expect(result.status).toBe("succeeded");
+    expect(seen.slice(0, 3)).toEqual([
+      new RunResumed(),
+      new NodeAttemptResumed({ nodeId: "first", interrupted: 1 }),
+      new NodeAttemptResumed({ nodeId: "second", interrupted: 1 }),
+    ]);
+    expect(result.interruptedAttempts).toEqual(counts);
+  } finally {
+    JsonlRunLog.prototype.append = append;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

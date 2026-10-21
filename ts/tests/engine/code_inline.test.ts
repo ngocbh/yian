@@ -46,7 +46,12 @@
  * one that strips cleanly by the constructor, a `SyntaxError`), a body redeclaring `inputs` (the
  * constructor's `SyntaxError`), a Python-style `module:function` value and a reference to a
  * missing file, and passes an existing file (`../` included, never imported), a body that would
- * throw (never called) and a built-in.
+ * throw (never called) and a built-in. The body runs in a worker thread: a file input arrives as
+ * a `FileRef` and a returned one commits a `FileRef`; a class instance, a getter and a function
+ * in a result fail `contract.output` with intake's messages; a custom error class keeps its name
+ * and its line; `process.exit(3)` in a body and a body awaiting a promise nothing resolves reject
+ * with the worker's exit code; a late timer throw rejects as a `CodeError`; and the worker uses
+ * the caller's `withEnv` values (a refused result's path is cut to a small shown-value cap).
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
@@ -65,6 +70,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { withEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { HostOutputError, Output } from "../../src/nodes/base.ts";
@@ -73,7 +79,7 @@ import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from 
 import { TypeStripError } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
-import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { drive, engine, graph, rejected } from "./run_state_fixtures.ts";
@@ -576,6 +582,80 @@ test("the runtime's function header is 2 lines", () => {
   const text = new AsyncFunction("inputs", "/*body*/").toString();
 
   expect(text.slice(0, text.indexOf("/*body*/")).split("\n").length - 1).toBe(2);
+});
+
+// --- the worker thread --- //
+
+test("a file input arrives as a FileRef and a returned FileRef commits a FileRef", async () => {
+  const file = new FileRef({ uri: "file:///tmp/a.txt", mime: "text/plain" });
+
+  const value = await run("return { f: inputs.f, uri: inputs.f.uri, mime: inputs.f.mime, name: inputs.f.name }", {
+    f: file,
+  });
+
+  const { f, ...fields } = value as Record<string, unknown>;
+  expect(fields).toEqual({ uri: "file:///tmp/a.txt", mime: "text/plain", name: null });
+  expect(FileRef.isFileRef(f)).toBe(true);
+  expect(f).toEqual(file);
+});
+
+test("a class instance, a getter and a function in a result fail contract.output", async () => {
+  for (const [code, message] of [
+    ["class Thing {}\nreturn { x: new Thing() }", "output at x: Thing is not a yian value"],
+    ["return { get x() { return 1 } }", "output at x: accessor property is not a yian value"],
+    ["return { x: () => 1 }", "output at x: function is not a yian value"],
+  ] as const) {
+    const node = new CodeNode("n", { code });
+
+    const error = await rejected(node.run({}));
+
+    expect(error).toBeInstanceOf(HostOutputError);
+    expect((error as HostOutputError).message).toBe(message);
+    expect((error as HostOutputError).path).toEqual(["x"]);
+    expect(node.exceptionCode(error)).toBe("contract.output");
+  }
+});
+
+test("a custom error class keeps its name and its line", async () => {
+  const node = locatedNode('class MyError extends Error {\n  name = "MyError"\n}\nthrow new MyError("m")');
+
+  const error = await rejected(node.run({}));
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("MyError: m");
+  expect(node.exceptionOrigin(error)).toBe(node.codeLineOrigins[3]!);
+});
+
+test("process.exit in a body rejects with the worker's exit code and this process lives on", async () => {
+  const error = await failure("process.exit(3)\nreturn 1");
+
+  expect((error as Error).constructor).toBe(Error);
+  expect((error as Error).message).toBe("CODE worker exited with code 3 before the body returned");
+  expect(await run("return 1")).toBe(1n);
+});
+
+test("a body awaiting a promise nothing resolves rejects rather than hangs", async () => {
+  const error = await failure("await new Promise(() => {})\nreturn 1");
+
+  expect((error as Error).message).toBe("CODE worker exited with code 0 before the body returned");
+});
+
+test("a late timer throw rejects as a CodeError", async () => {
+  const error = await failure('setTimeout(() => { throw new RangeError("late") }, 1)\nawait new Promise(() => {})');
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("RangeError: late");
+  expect((error as CodeError).original).toBeInstanceOf(RangeError);
+});
+
+test("the worker uses the caller's withEnv values", async () => {
+  const env = (name: string) => (name === "YIAN_MAX_SHOWN_VALUE_CHARS" ? "10" : undefined);
+  const node = new CodeNode("n", { code: 'return { ["k".repeat(50)]: new Date(0) }' });
+
+  const error = await rejected(withEnv(env, () => node.run({})));
+
+  // In-process, intake cuts the path's key to 9 characters and `…` under this cap.
+  expect((error as Error).message).toBe("output at kkkkkkkkk…: Date is not a yian value");
 });
 
 // --- the awaited load check --- //

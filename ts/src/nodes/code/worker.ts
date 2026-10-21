@@ -1,0 +1,294 @@
+/**
+ * The CODE node's worker thread: runs one inline body or `./file.ts:fn` reference and posts its
+ * outcome to the main thread, plus the helpers both threads use.
+ *
+ * The main thread (`nodes/code/node.ts`) starts a worker on this module with the job in
+ * `workerData.yianCodeJob`; the module runs a job only when that key is set, so importing it for
+ * its helpers runs nothing. The worker installs the caller's defaults, builds the body or imports
+ * the reference, calls it with the frozen `inputs` proxy, takes the result in by host intake, and
+ * posts one `CodeReply`. Before the reply it forwards each `console.log/info/warn/error/debug`
+ * call as one formatted text on the same port, so the main thread logs them in order. A late
+ * timer throw or unhandled rejection replies as a throw of the body.
+ *
+ * Values cross by structured clone, which drops a `FileRef`'s class, so a `FileRef` crosses as a
+ * `Map` of its fields (no yian value holds a `Map`).
+ *
+ * Knows about:   platform, typesys/values, diagnostics, defaults and `node:*`.
+ * Never imports: nodes/base, nodes/contracts, nodes/code/node, compile, compose, runtime.
+ */
+
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { format } from "node:util";
+import { parentPort, workerData } from "node:worker_threads";
+
+import { type Defaults, install } from "../../defaults.ts";
+import { reprText } from "../../diagnostics.ts";
+import { stripTypes, TypeStripError } from "../../platform.ts";
+import {
+  FileRef,
+  fromHost,
+  isList,
+  isRecord,
+  jsTypeName,
+  setField,
+  toHost,
+  TypeCheckError,
+  type Value,
+} from "../../typesys/values.ts";
+
+/** An inline body or a referenced function: a function of the `inputs` record. */
+export type CodeBody = (inputs: Readonly<Record<string, unknown>>) => unknown;
+
+// The constructor isn't a global; every async function's `constructor` is it.
+export const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => CodeBody;
+
+/** What the main thread asks a worker to run. */
+export interface CodeJob {
+  readonly nodeId: string;
+  readonly mode: "reference" | "inline";
+  readonly code: string;
+  readonly baseDir: string | null;
+  /** The bound input record as a host value, through `packFiles`. */
+  readonly inputs: unknown;
+  /** The caller's `current()` values. */
+  readonly defaults: Defaults;
+}
+
+/** A thrown `Error`'s fields; `line` and `column` only for a `TypeStripError`. */
+export interface ThrownError {
+  kind: "error";
+  name: string;
+  message: string;
+  stack?: string;
+  line?: number;
+  column?: number;
+}
+
+/** A thrown value as it crosses: an `Error`'s fields, a yian value (packed), or its text. */
+export type Thrown = ThrownError | { kind: "value"; value: unknown } | { kind: "text"; text: string };
+
+/**
+ * A job's outcome: the result as a packed yian value; a failure the main thread wraps in a
+ * `CodeError` (`"code"`) or rethrows as it is (`"plain"`); or a result intake refused.
+ */
+export type CodeReply =
+  | { ok: true; value: unknown }
+  | { ok: false; as: "code" | "plain"; thrown: Thrown }
+  | { ok: false; as: "output"; message: string; path: (string | number)[] };
+
+/** The console methods a worker forwards. */
+export type ConsoleMethod = "log" | "info" | "warn" | "error" | "debug";
+
+/** A message a worker posts: one console call's text, or the reply. */
+export type CodeMessage = { console: ConsoleMethod; text: string } | CodeReply;
+
+/**
+ * Strip an inline body's types and build it as a strict async function of `inputs`.
+ *
+ * The `sourceURL` comment names the body's stack frames `yian-code:<nodeId>:<line>:<column>`, and
+ * the strict prologue shares the first line, so frame lines stay body lines plus the header.
+ *
+ * @throws TypeStripError when the body doesn't parse or strip.
+ * @throws SyntaxError when the constructor refuses the stripped body.
+ */
+export async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
+  const js = await stripTypes(body);
+  return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
+}
+
+/** Split a `./file.ts:fn` reference into its path and its export name. */
+export function splitReference(reference: string): { path: string; name: string } {
+  const colon = reference.lastIndexOf(":");
+  return { path: reference.slice(0, colon), name: reference.slice(colon + 1) };
+}
+
+/** Return the error a CODE body throws when it reads an input the node doesn't declare. */
+export function undeclaredInput(name: string): ReferenceError {
+  return new ReferenceError(`CODE input ${reprText(name)} is not declared`);
+}
+
+/**
+ * Return `record` behind a proxy that throws on a string key the record doesn't hold.
+ *
+ * The keys the runtime itself probes pass: inherited `Object.prototype` members, `then` (promise
+ * resolution), `toJSON` (`JSON.stringify`) and symbols.
+ */
+export function inputsProxy(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return new Proxy(record, {
+    get(target, key, receiver) {
+      if (typeof key === "symbol" || key in target || key === "then" || key === "toJSON") {
+        return Reflect.get(target, key, receiver);
+      }
+      throw undeclaredInput(key);
+    },
+  });
+}
+
+/** Return a copy of a host value with each `FileRef` as a `Map` of its fields. */
+export function packFiles(value: unknown): unknown {
+  return swapLeaves(value, (part) =>
+    FileRef.isFileRef(part)
+      ? new Map([
+          ["uri", part.uri],
+          ["mime", part.mime],
+          ["name", part.name],
+        ])
+      : part,
+  );
+}
+
+/** Return a copy of a packed value with each `Map` back as a `FileRef`. */
+export function unpackFiles(value: unknown): unknown {
+  return swapLeaves(value, (part) =>
+    part instanceof Map ? new FileRef({ uri: part.get("uri"), mime: part.get("mime"), name: part.get("name") }) : part,
+  );
+}
+
+/** An open array or record in `swapLeaves`, with the fresh copy being filled. */
+interface SwapFrame {
+  readonly source: Record<string | number, unknown>;
+  /** The record's keys, or `null` for an array. */
+  readonly keys: readonly string[] | null;
+  readonly copy: unknown[] | Record<string, unknown>;
+  index: number;
+}
+
+/**
+ * Return a copy of the arrays and records of `value` with each other object part replaced by
+ * `swap(part)`. A part shared by two parents is copied once, and the walk uses an explicit
+ * stack, as `toHost` does, so any depth works.
+ */
+function swapLeaves(value: unknown, swap: (part: object) => unknown): unknown {
+  const stack: SwapFrame[] = [];
+  const copies = new Map<object, unknown[] | Record<string, unknown>>();
+  const enter = (item: unknown): unknown => {
+    if (typeof item !== "object" || item === null) return item;
+    const list = isList(item);
+    if (!list && !isRecord(item)) return swap(item);
+    const shared = copies.get(item);
+    if (shared !== undefined) return shared;
+    const copy = list ? [] : {};
+    copies.set(item, copy);
+    stack.push({ source: item as Record<string, unknown>, keys: list ? null : Object.keys(item), copy, index: 0 });
+    return copy;
+  };
+  const root = enter(value);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    const size = frame.keys === null ? (frame.source as unknown as unknown[]).length : frame.keys.length;
+    if (frame.index === size) {
+      stack.pop();
+      continue;
+    }
+    const index = frame.index++;
+    if (frame.keys === null) {
+      (frame.copy as unknown[]).push(enter(frame.source[index]));
+    } else {
+      const key = frame.keys[index]!;
+      setField(frame.copy as Record<string, Value>, key, enter(frame.source[key]) as Value);
+    }
+  }
+  return root;
+}
+
+/** Return how a value the code threw crosses to the main thread. */
+function thrownOf(value: unknown): Thrown {
+  if (value instanceof Error) {
+    const fields: ThrownError = { kind: "error", name: String(value.name), message: String(value.message) };
+    if (typeof value.stack === "string") fields.stack = value.stack;
+    if (value instanceof TypeStripError) {
+      fields.line = value.line;
+      fields.column = value.column;
+    }
+    return fields;
+  }
+  try {
+    return { kind: "value", value: packFiles(toHost(fromHost(value, "error"))) };
+  } catch {
+    // Not a yian value: its text, else its type name when it has none, as a stage marker reads.
+    try {
+      return { kind: "text", text: String(value) };
+    } catch {
+      return { kind: "text", text: jsTypeName(value) };
+    }
+  }
+}
+
+/** Import a reference's module, resolved against `baseDir` (the current directory when `null`). */
+async function importReference(reference: string, baseDir: string | null): Promise<CodeBody | CodeReply> {
+  const { path, name } = splitReference(reference);
+  let module: Record<string, unknown>;
+  try {
+    module = await import(pathToFileURL(resolve(baseDir ?? process.cwd(), path)).href);
+  } catch (error) {
+    return { ok: false, as: "code", thrown: thrownOf(error) };
+  }
+  const fn = module[name];
+  if (typeof fn !== "function") throw new TypeError(`${reprText(path)} exports no function ${reprText(name)}`);
+  return fn as CodeBody;
+}
+
+/**
+ * Run `job` and return its reply.
+ *
+ * @throws Error (posted as `"plain"`) when the body doesn't build, the reference has no such
+ *   export, or the code returns `undefined`.
+ */
+async function runJob(job: CodeJob): Promise<CodeReply> {
+  const body =
+    job.mode === "reference" ? await importReference(job.code, job.baseDir) : await compileBody(job.nodeId, job.code);
+  if (typeof body !== "function") return body;
+  const record = Object.freeze(unpackFiles(job.inputs) as Record<string, unknown>);
+  const proxy = inputsProxy(record);
+  let result: unknown;
+  try {
+    result = await body(proxy);
+  } catch (error) {
+    return { ok: false, as: "code", thrown: thrownOf(error) };
+  }
+  if (result === undefined) throw new Error("CODE body returned no value; return null for no value");
+  let value: Value;
+  try {
+    // Intake runs here, not after the copy: the clone would turn a class instance or an accessor
+    // into a plain record and refuse a function with its own error.
+    value = fromHost(result === proxy ? record : result, "output");
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    return { ok: false, as: "output", message: error.message, path: [...error.path] };
+  }
+  return { ok: true, value: packFiles(value) };
+}
+
+const job = (workerData as { yianCodeJob?: CodeJob } | null)?.yianCodeJob;
+const port = parentPort;
+if (job !== undefined && port !== null) {
+  install(job.defaults);
+  // Building or posting a reply can throw (a getter on a thrown error, a value the clone
+  // refuses); the main thread must still hear back.
+  const reply = (make: () => CodeReply): void => {
+    try {
+      port.postMessage(make());
+    } catch (error) {
+      port.postMessage({ ok: false, as: "plain", thrown: thrownOf(error) } satisfies CodeReply);
+    }
+  };
+  const fail = (error: unknown) => reply(() => ({ ok: false, as: "code", thrown: thrownOf(error) }));
+  process.on("uncaughtException", fail);
+  process.on("unhandledRejection", fail);
+  // Under `bun test` a worker's uncaught throw skips `process.on("uncaughtException")` but still
+  // dispatches the global `error` event.
+  globalThis.addEventListener?.("error", (event) => {
+    event.preventDefault();
+    fail((event as ErrorEvent).error);
+  });
+  for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+    console[method] = (...args: unknown[]) => {
+      port.postMessage({ console: method, text: format(...args) } satisfies CodeMessage);
+    };
+  }
+  runJob(job).then(
+    (outcome) => reply(() => outcome),
+    (error: unknown) => reply(() => ({ ok: false, as: "plain", thrown: thrownOf(error) })),
+  );
+}

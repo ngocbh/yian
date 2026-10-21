@@ -9,7 +9,11 @@
  * `ValueError`). Where Python checks that a value is kept with `is`, these tests use `toBe`.
  *
  * Changed: in `test_a_partial_loop_keeps_an_omitted_file_as_a_file` the child is a stub object in
- * place of `_child_flow()`, and Python ints in carried values are `bigint`.
+ * place of `_child_flow()`, and Python ints in carried values are `bigint`. In the runs, the CODE
+ * bodies are TS (decisions 6, 11): a body builds a file with the `FileRef` it imports from
+ * `src/typesys/values.ts` (as Python's body calls `__import__`) and reads `x.constructor.name`
+ * where Python reads `type(x).__name__`; ints arrive in a body as `number` (decision 45) and the
+ * outputs' ints are bigints (decision 4a).
  *
  * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` rows keeping an `object`
  * value that holds NaN, turning a `-0` at an `object` position into `0`, and keeping a file
@@ -26,10 +30,7 @@
  * `test_the_parent_reads_a_file_a_loop_carries` and
  * `test_a_loop_reads_a_file_in_a_carried_object_as_a_mapping_on_every_iteration`, and for each
  * learnable and body output `test_a_partial_loop_compares_an_omitted_file_with_a_returned_one` (4)
- * and `test_a_partial_loop_compares_a_carried_file_the_body_does_not_take` (4). The CODE bodies
- * are TS: a body builds a file with the `FileRef` it imports from `src/typesys/values.ts` (as
- * Python's body calls `__import__`) and reads `x.constructor.name` where Python reads
- * `type(x).__name__`; ints arrive as `number` (decision 45) and the outputs' ints are bigints.
+ * and `test_a_partial_loop_compares_a_carried_file_the_body_does_not_take` (4).
  *
  * Later (T4-8): needs `resumeFlow`: the `_LOOP_FLOW` row of
  * `test_resuming_a_finished_run_with_files_replays_its_output` and
@@ -370,8 +371,8 @@ describe("untagged unions whose members can share a file", () => {
 // A CODE body has no `FileRef` in scope, so it imports this module to build one, as Python's
 // body calls `__import__` on `yian.typesys.values`. The extension follows this file's (`.ts` from
 // source, `.js` when built), so the body gets the module instance the run uses.
-const VALUES_URL = new URL(`../../src/typesys/values.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url)
-  .href;
+const VALUES_EXT = import.meta.url.endsWith(".ts") ? "ts" : "js";
+const VALUES_URL = new URL(`../../src/typesys/values.${VALUES_EXT}`, import.meta.url).href;
 const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
 
 /** Load and run `text` with no inputs, asserting it succeeded; return its output. */
@@ -765,7 +766,7 @@ output: \${d.output}
       { learnable },
     );
 
-    expect(output).toEqual(["FileRef", form()]);
+    expect(output).toStrictEqual(["FileRef", form()]);
   },
 );
 

@@ -283,7 +283,8 @@ test(
   async () => {
     const file = marker();
     const server = fake("--marker", file);
-    // Long enough that the losing run finds the server still held by the winner.
+    // The second run finds the server already being opened (`openForRun` claims it before its first
+    // await); the slow tool keeps the winner's run alive meanwhile.
     const flow = await toolFlow("slow", "{seconds: 5}");
     const outcomes = await Promise.allSettled([run(flow, { a: server }), run(flow, { b: server })]);
     const results = outcomes.filter((outcome) => outcome.status === "fulfilled");

@@ -445,8 +445,9 @@ on), `random` (the draw in [0, 1) for backoff jitter) and `models` (the model bu
 use). `inputs` and `llmConfig` are taken through host intake (see [Types → host
 intake](typing.md#two-constructors-infer-vs-check)): a whole `number` within ±(2^53−1) arrives as
 an int (`{n: 3}` holds `3n`) and any other number as a float, so `Infinity` is accepted where a
-float is; NaN, an accessor property, a Proxy and a non-yian object (a `Date`, a `Map`) are refused
-with `TypeCheckError` before the log is created.
+float is; NaN, an accessor property, a Proxy inside a value and a non-yian object (a `Date`, a
+`Map`) are refused with `TypeCheckError`, and an `inputs` record that is a Proxy, or an `llmConfig`
+that isn't a record, with `TypeError`, before the log is created.
 
 ### Tool context
 

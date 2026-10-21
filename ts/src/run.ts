@@ -1127,7 +1127,8 @@ function requiredStateRunId(state: RunState): string {
 // Python's `_set_stop_preserving` has no counterpart: a run's stop is the host's signal, which the
 // run only reads, and a callback's error stops the engine through `stopForCallback`.
 
-/** Close one boundary-owned log while preserving an initiating error: with no `primary`, a close
+/**
+ * Close one boundary-owned log while preserving an initiating error: with no `primary`, a close
  * error is thrown; with one, it is noted on it.
  */
 function closeOwnedLog(log: RunLog, primary: { error: unknown } | null): void {

@@ -22,7 +22,9 @@
  * `test_body_raised_assertion_exception_remains_node_execution`,
  * `test_node_execution_prefers_operation_origin_then_node_fallback` (2 rows),
  * `test_node_execution_uses_the_node_exception_code` (2 rows),
- * `test_exception_code_is_asked_only_for_the_body` (3 rows) and
+ * `test_exception_code_is_asked_only_for_the_body` (3 rows),
+ * `test_map_deferred_item_binding_keeps_input_contract_stage`,
+ * `test_map_deferred_expression_keeps_binding_stage` and
  * `test_per_item_wrapper_default_keeps_binding_stage`.
  *
  * Ported (adapted): `test_map_over_accepts_a_binding_carrier`,

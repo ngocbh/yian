@@ -27,7 +27,8 @@
  * `test_span_calls.py`): an unknown tool id with a close match, an unknown tool group, `ask_user`
  * without a handler, an input the tool doesn't take, a missing required input, a disjoint input
  * type (a literal shown by its value, a long one cut), a disjoint output, skills without a map, a
- * missing skill, a skill keyed by another name, and a bad template span named by its subject.
+ * missing skill, a skill keyed by another name, and a bad template span named by its subject; a
+ * boundary callback whose promise rejects stops the run.
  *
  * Later (T4-10): `test_bool_text_is_not_converted_for_a_child_input` (a CALL).
  */
@@ -41,11 +42,12 @@ import { fileURLToPath } from "node:url";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { current } from "../../src/defaults.ts";
-import { NodeSucceeded } from "../../src/events.ts";
+import { NodeSucceeded, type RunEvent, RunStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { RunResult, runFlow } from "../../src/run.ts";
+import { JsonlRunLog, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { mcpServer } from "../../src/tools/mcp.ts";
@@ -690,4 +692,27 @@ output: ok
 `);
   rewire(waiting, "w", "until", "${upper(input.d, 1)}");
   expect((await runStartError(waiting, {}, { d: "2026-01-01" })).message).toBe(`node 'w' wait until: ${UPPER}`);
+});
+
+test("a boundary callback whose promise rejects stops the run", async () => {
+  const unhandled: unknown[] = [];
+  const collect = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", collect);
+  try {
+    const failure = new Error("host listener failed");
+    const path = join(dir, "run.jsonl");
+    const onEvent = (event: RunEvent): Promise<void> | undefined =>
+      event instanceof RunStarted ? Promise.reject(failure) : undefined;
+    const flow = await load(PLAN_FLOW);
+    await expect(runFlow(flow, { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
+    using log = JsonlRunLog.resume(path);
+    const stopped = log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
+    expect(stopped.map((record) => [record.reason, record.message])).toEqual([["callback", "host listener failed"]]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", collect);
+  }
 });

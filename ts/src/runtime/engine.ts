@@ -575,6 +575,15 @@ export class FlowEngine {
   }
 
   /**
+   * @internal Stop the run for a host callback the caller invoked itself, whose returned promise
+   * rejected with `error`: the run boundary publishes `RunStarted` before the engine exists. As
+   * for the engine's own callbacks, this does nothing once the run has ended or is stopping.
+   */
+  stopForCallback(error: unknown): void {
+    this.#stop("callback", error);
+  }
+
+  /**
    * Stop the run for a host abort or a failing host callback: keep `error` as the initiating
    * error, append one `RunStopped` naming the in-flight nodes unless this segment recorded one
    * already, then abort the run signal with `error`. Does nothing once the run signal is aborted,

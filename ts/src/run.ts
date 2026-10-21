@@ -144,7 +144,8 @@ export interface RunFlowOptions {
   numWorkers?: number;
   /**
    * Sees each observer after its record is appended and reduced, plus the transient in-loop AGENT
-   * events. Called synchronously; a throw rejects the run with that error.
+   * events. Called synchronously; a throw, or a rejection of the promise it returns, rejects the run
+   * with that error.
    */
   onEvent?: EventHook | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
@@ -322,9 +323,14 @@ async function startRun(
     // path behind.
     authority = log === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(resolve(log), canonicalRunId);
     const events: RunEvent[] = [];
-    publishBoundaryObservers(commitPrepared(authority, state, preparedStart), events, onEvent);
+    // A callback's rejection is delivered only after this synchronous stretch, so the engine
+    // exists by then.
+    let engine: FlowEngine | null = null;
+    publishBoundaryObservers(commitPrepared(authority, state, preparedStart), events, onEvent, (error) =>
+      engine?.stopForCallback(error),
+    );
 
-    const engine = new FlowEngine(state, authority, {
+    engine = new FlowEngine(state, authority, {
       growBuilder: buildGrow,
       numWorkers,
       onEvent,
@@ -349,11 +355,18 @@ async function startRun(
 
 /**
  * Publish an already-applied segment lead before retaining it in the result. Nothing is in flight
- * yet, so a throwing callback rejects the run with no stop record.
+ * yet, so a throwing callback rejects the run with no stop record; a promise the callback returns
+ * that rejects goes to `stop`, which stops the run with its error.
  */
-function publishBoundaryObservers(observers: readonly RunEvent[], events: RunEvent[], onEvent: EventHook | null): void {
+function publishBoundaryObservers(
+  observers: readonly RunEvent[],
+  events: RunEvent[],
+  onEvent: EventHook | null,
+  stop: (error: unknown) => void,
+): void {
   for (const observer of observers) {
-    onEvent?.(observer);
+    const returned = onEvent?.(observer);
+    if (returned instanceof Promise) returned.then(undefined, stop);
     events.push(observer);
   }
 }

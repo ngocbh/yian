@@ -3,9 +3,10 @@
  * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
  * default log path, and the signals that stop a run.
  *
- * - `run` checks the run-log options, loads the flow, runs it on a fresh log and prints its output
- *   or its failure; `check` loads each flow, or confined to `--root`, and reports each as text or
- *   one `--json` document; `status` inspects a run log.
+ * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
+ *   servers when it needs them, runs it on a fresh log and prints its output or its failure;
+ *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
+ *   document; `status` inspects a run log.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
  *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
@@ -27,19 +28,32 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
-import { loadSkillDir } from "../compose/skills.ts";
+import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
-import { isSystemError, resolvedPath, SkillError, statOrNull } from "../skills/catalog.ts";
+import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
-import { canonicalTypeLabel, FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
+import {
+  canonicalTypeLabel,
+  FileRef,
+  isRecord,
+  jsTypeName,
+  type Value,
+  writeAsText,
+} from "../typesys/values.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
+import { MemoryOperationError } from "../memory/contracts.ts";
+import type { MemoryRegistry } from "../memory_host.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { type RunResult, runFlow } from "../run.ts";
+import { type RunResult, runFlow, skillGrants, staticNodes } from "../run.ts";
+import { addNote } from "../runtime/eval_node.ts";
+import type { McpServer } from "../tools/mcp.ts";
 import { registeredTools } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
+import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
+import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import { Terminal } from "./terminal.ts";
 import { type CliIo, CommandEnv, osReason, printJson, UsageError, type Writer } from "./utils.ts";
 
@@ -645,8 +659,53 @@ function isSetupError(error: unknown): error is Error {
     error instanceof TypeError ||
     error instanceof RangeError ||
     error instanceof AuthError ||
+    error instanceof MemoryOperationError ||
     isSystemError(error)
   );
+}
+
+/**
+ * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the ids its
+ * static AGENT nodes grant, which name tools or tool groups.
+ */
+function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
+  const toolIds = new Set<string>();
+  const grants = new Set<string>();
+  for (const [, node] of staticNodes(flow.compiled)) {
+    const call = node.hostToolCall();
+    if (call !== null) toolIds.add(call.toolId);
+    for (const grant of node.grantedTools()) grants.add(grant);
+  }
+  return [toolIds, grants];
+}
+
+/**
+ * Return what `body` resolves to once `registry` has closed. When `body` throws, its error is
+ * rethrown, with a close failure, and that failure's notes, appended to its `notes`; otherwise a
+ * close failure is thrown.
+ */
+async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>): Promise<T> {
+  let value: T;
+  try {
+    value = await body();
+  } catch (error) {
+    try {
+      await registry.close();
+    } catch (cleanup) {
+      addNote(error, () => {
+        const [name, message] =
+          cleanup instanceof Error
+            ? [cleanup.name, cleanup.message]
+            : [jsTypeName(cleanup), String(cleanup)];
+        return `Memory cleanup failed: ${name}: ${message}`;
+      });
+      const notes = (cleanup as { notes?: unknown } | null | undefined)?.notes;
+      if (Array.isArray(notes)) for (const note of notes) addNote(error, () => String(note));
+    }
+    throw error;
+  }
+  await registry.close();
+  return value;
 }
 
 /**
@@ -655,17 +714,23 @@ function isSetupError(error: unknown): error is Error {
  *
  * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
  * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
- * 1. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path always
- * does. On a TTY stdin, each input not supplied is prompted for on stderr, and a cancelled prompt
- * prints `run cancelled` and exits 1. The log is `log`, else a fresh one under `~/.yian/runs`
- * named by the run id. A succeeded run prints its output on stdout, as text; a failed one prints
+ * 1. The flow's memories are built from `memoryRoot` and `memoryStorage`, passed to the run, and
+ * closed when the command ends. When an AGENT grants skills, the Claude Code and Codex skill
+ * folders are read, each invalid skill a `warning:` line on stderr. When a static TOOL node or
+ * AGENT grant names a tool yian lacks, `~/.yian/mcp.json` (when it is a file) and the `mcpConfig`
+ * files are read; the servers an AGENT grants go to the run unopened, and a bad config is printed
+ * and exits 1. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path
+ * always does. On a TTY stdin, each input not supplied is prompted for on stderr, and a cancelled
+ * prompt prints `run cancelled` and exits 1. The log is `log`, else a fresh one under
+ * `~/.yian/runs` named by the run id. A succeeded run prints its output on stdout, as text; a failed one prints
  * its diagnostic on stderr and exits 1. A host failure (a bad option value, a log that can't be
  * created) prints `run failed: <message>` on stderr and exits 1. Under `json`, stdout holds one
  * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
  * (`compose.load`, `run.cancelled`, `run.setup`).
  *
- * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for an input the flow
- *   doesn't declare; off a TTY, for missing required inputs.
+ * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
+ *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
+ *   inputs.
  */
 export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
   // Building it touches neither stream; it reads keys only when it prompts.
@@ -720,60 +785,112 @@ async function startRun(
     return fail(error.diagnostic);
   }
 
-  if (!quiet) {
-    const banner = flowBanner(flow, io.stderr, io.env);
-    if (banner !== null) await io.stderr.write(banner);
-  }
-  const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
-  // Recovering a run isn't ported yet; until then `--resume` runs nothing.
-  if (options.resume !== undefined) {
-    throw new Error("yian run --resume is not ported to TypeScript yet");
-  }
   const commandEnv = new CommandEnv(io.env);
-  const supplied = mergeInputs(options.inputs, options.inputValues);
-  // Before prompting, so a typo'd name fails instead of prompting for the real one.
+  // Building opens nothing: built-in storage opens when the run starts.
+  let registry: MemoryRegistry;
   try {
-    checkInputNames(flow.input, supplied);
+    const { memoryRoot: root, memoryStorage: storageOptions } = options;
+    registry = await buildCliMemories(flow, { root, storageOptions, env: commandEnv.read });
   } catch (error) {
-    if (!(error instanceof RangeError)) throw error;
-    throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
-  }
-  const prompter = io.stdin.isTTY === true ? terminal : null;
-  const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
-  if (gathered === null) {
-    await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
-    return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
-  }
-  Object.assign(supplied, gathered);
-
-  const runId = defaultRunId();
-  let log: string;
-  try {
-    log = options.log ?? defaultRunLogPath(runId, io.env);
-  } catch (error) {
-    if (!isSetupError(error)) throw error;
-    return setupFailed(error);
-  }
-  await reportRunLog(log, io.stderr, io.env);
-  let result: RunResult;
-  try {
-    try {
-      result = await runFlow(flow, supplied, {
-        log,
-        runId,
-        numWorkers: options.numWorkers ?? 8,
-        onEvent: reporter === null ? null : (event) => reporter.handle(event),
-        tools: { ...registeredTools(), ask_user: terminal.askUser },
-        env: commandEnv.read,
-      });
-    } finally {
-      // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
-      reporter?.stop();
+    if (error instanceof MemoryOptionError) {
+      throw new UsageError(`Invalid value for ${error.paramHint}: ${error.message}`);
     }
+    if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+    return setupFailed(error);
+  }
+  const warned: string[] = [];
+  const warn = (message: string) => void warned.push(message);
+  const writeWarnings = async () => {
+    for (const message of warned.splice(0)) {
+      await io.stderr.write(`${paint(`warning: ${message}`, "yellow", io.stderr, io.env)}\n`);
+    }
+  };
+
+  let outcome: RunResult | number;
+  try {
+    outcome = await closingAfter(registry, async () => {
+      // Claude Code and Codex skill folders (user, then project up to the git root), read only
+      // when an AGENT grants skills. An invalid skill is warned about and skipped rather than
+      // blocking the run.
+      let skills: Map<string, Skill> | null = null;
+      if (skillGrants(flow.compiled).length > 0) {
+        const roots = defaultSkillRoots({ cwd: process.cwd(), env: commandEnv.read });
+        skills = loadSkills(roots, { skipInvalid: true, warn });
+        await writeWarnings();
+      }
+
+      // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
+      // broken config file can't block flows that never use MCP.
+      const known = new Set([...Object.keys(registeredTools()), "ask_user", "load_skill"]);
+      const [toolIds, grants] = mcpNeededNames(flow);
+      let servers: Record<string, McpServer> = {};
+      if ([...toolIds, ...grants].some((id) => !known.has(id))) {
+        const user = userMcpConfig(commandEnv.read);
+        const paths = [...(statOrNull(user)?.isFile() ? [user] : []), ...options.mcpConfig];
+        try {
+          servers = loadMcpConfig(paths, commandEnv.read, { reserved: known, warn });
+        } catch (error) {
+          if (!(error instanceof McpConfigError)) throw error;
+          await writeWarnings();
+          await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
+          return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+        }
+        await writeWarnings();
+      }
+      // A server an AGENT grants by name goes to the run unopened; the run opens it after its own
+      // checks and closes it.
+      const granted = Object.fromEntries(Object.entries(servers).filter(([name]) => grants.has(name)));
+
+      if (!quiet) {
+        const banner = flowBanner(flow, io.stderr, io.env);
+        if (banner !== null) await io.stderr.write(banner);
+      }
+      const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
+      // Recovering a run isn't ported yet; until then `--resume` runs nothing.
+      if (options.resume !== undefined) {
+        throw new Error("yian run --resume is not ported to TypeScript yet");
+      }
+      const supplied = mergeInputs(options.inputs, options.inputValues);
+      // Before prompting, so a typo'd name fails instead of prompting for the real one.
+      try {
+        checkInputNames(flow.input, supplied);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
+      }
+      const prompter = io.stdin.isTTY === true ? terminal : null;
+      const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
+      if (gathered === null) {
+        await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
+        return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+      }
+      Object.assign(supplied, gathered);
+
+      const runId = defaultRunId();
+      const log = options.log ?? defaultRunLogPath(runId, io.env);
+      await reportRunLog(log, io.stderr, io.env);
+      try {
+        return await runFlow(flow, supplied, {
+          log,
+          runId,
+          numWorkers: options.numWorkers ?? 8,
+          onEvent: reporter === null ? null : (event) => reporter.handle(event),
+          memory: registry.size > 0 ? registry : null,
+          tools: { ...registeredTools(), ...granted, ask_user: terminal.askUser },
+          skills,
+          env: commandEnv.read,
+        });
+      } finally {
+        // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+        reporter?.stop();
+      }
+    });
   } catch (error) {
     if (!isSetupError(error)) throw error;
     return setupFailed(error);
   }
+  if (typeof outcome === "number") return outcome;
+  const result = outcome;
 
   if (result.status === "succeeded") {
     if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);

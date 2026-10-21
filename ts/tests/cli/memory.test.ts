@@ -31,14 +31,40 @@
  * `test_rejected_yaml_config_is_a_load_error_naming_the_key` (the cause's class is TS's: `RangeError`
  * for Python's `ValueError`).
  *
- * Later (T7-1 PR 2, need `yian run`): every other row (exit codes, ordering before
- * inputs/provider/log, resume, cleanup reporting, controller drain, pooled cancellation, help text,
- * module docstrings, `test_resume_accepts_one_def_called_from_two_nodes`), and
- * `tests/cli/test_memory_persistence.py` (needs `runFlow`, the AGENT loop and the run's memory
- * wiring).
+ * Ported through `main` (`yian run`, the "yian run" block):
+ * `test_memory_root_persists_every_builtin_under_the_flow_id`,
+ * `test_memory_storage_is_keyed_by_memory_key`, `test_no_flags_keep_builtins_in_ram`, the CLI halves
+ * of `test_bad_memory_storage_is_a_bad_parameter_before_inputs_provider_and_log` (5 rows),
+ * `test_bad_storage_path_shape_fails_before_inputs_provider_and_log`,
+ * `test_unsafe_flow_id_with_memory_root_names_the_memory_root`,
+ * `test_memory_storage_for_a_custom_key_is_a_bad_parameter` and
+ * `test_custom_type_points_to_the_python_api` (fresh row), and
+ * `test_cli_activates_declared_memory_without_learning` (6 rows),
+ * `test_cli_cleanup_failure_has_concise_host_error`,
+ * `test_open_failure_closes_every_backend_and_creates_no_directory`,
+ * `test_cli_preserves_primary_when_cleanup_also_fails` and `test_run_help_describes_memory_flags`.
+ * Changed there:
+ * - Python's patched `model_from_config` is a fake `fetch` answering as an OpenAI-compatible chat
+ *   endpoint (xAI's route; its key and the default provider and model in the command's env).
+ * - "Before inputs and provider": instead of patching the input gate to fail, the flow declares a
+ *   required input no flag supplies, so reaching the gate would be another usage error.
+ * - "No Traceback" is no stack line (`    at `).
+ * - Python's `_wrap_builtins` close wrappers patch `EpisodicMemory.prototype.close`; the
+ *   cleanup-also-fails row gets its initiating failure from the run itself (a TOOL node naming a
+ *   tool the run lacks) instead of a patched `_run_flow_controlled`, on episodic memory instead of
+ *   a fake session backend.
+ * - No-flags-in-RAM ignores the run log's own `run.jsonl.lock`.
+ *
+ * Later (with `--resume`): `test_custom_type_points_to_the_python_api` (resume row),
+ * `test_flags_are_accepted_with_resume`, `test_resume_opens_memory_only_when_the_record_needs_it`
+ * and `test_resume_accepts_one_def_called_from_two_nodes`.
  *
  * Not ported: `test_no_memory_flow_imports_no_concrete_backend` (TS imports the backends
- * statically; `platform.ts` loads the SQLite driver only on first open).
+ * statically; `platform.ts` loads the SQLite driver only on first open);
+ * `test_first_open_and_cleanup_run_in_controller_after_worker_drain` and
+ * `test_real_pooled_cancellation_keeps_storage_until_model_callback_drains` (Python's controller
+ * thread and terminal broker; TS has no threads); `test_cli_module_docstrings_name_the_new_flags`
+ * (Python docstrings).
  *
  * TS-only: the parsed storage is a null-prototype record that keeps a `__proto__` key as data; an
  * undeclared key's message names the declared keys, or `none`; `env` reaches the built memories;
@@ -48,23 +74,37 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 
+import { main } from "../../src/cli/index.ts";
 import { buildCliMemories, MemoryOptionError, parseMemoryStorage } from "../../src/cli/memory.ts";
+import type { CliIo } from "../../src/cli/utils.ts";
 import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
-import { DeclSite, MemoryDecl, MemorySetupError } from "../../src/memory/contracts.ts";
+import { DeclSite, MemoryDecl, MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
+import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
 let tmp: string;
 
@@ -396,5 +436,318 @@ console.log("ok");
     expect(result.stdout).toBe("ok\n");
     expect(result.status).toBe(0);
     expect(existsSync(join(root, "cli-memory", "notes.sqlite"))).toBe(true);
+  });
+});
+
+// --- `yian run` with the memory flags --- //
+
+/** Python's `_CODE_FLOW`: `memory` declared at flow level (none when `null`) around a CODE node. */
+function codeFlowText(memory: string | null = "{notes: episodic}", flowId = "cli-memory"): string {
+  const declaration = memory === null ? "" : `long_term_memory: ${memory}\n`;
+  return (
+    `id: ${flowId}\nname: cli_memory\n${declaration}` +
+    "nodes:\n  work:\n    kind: code\n    code: return 7\n    output: int\noutput: ${work.output}\n"
+  );
+}
+
+/** Python's `_SESSION_FLOW`: an AGENT node with `chat` session memory. */
+const SESSION_FLOW = `id: cli-memory
+name: cli_memory
+nodes:
+  work:
+    kind: agent
+    long_term_memory: {chat: session}
+    prompt: hello
+    output: str
+output: \${work.output}
+`;
+
+/** A one-word ("7") chat-completions stream. */
+const SEVEN = [
+  { choices: [{ index: 0, delta: { role: "assistant", content: "7" }, finish_reason: null }] },
+  { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+]
+  .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+  .join("") + "data: [DONE]\n\n";
+
+/** Answer every model call with `SEVEN`, so AGENT flows run without a provider. */
+async function offlineModel(): Promise<Response> {
+  return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+}
+
+/**
+ * Return flow `text` with a required input no flag supplies, so a run reaching the input gate fails
+ * there with another usage error (Python patches the gate to fail instead).
+ */
+function withRequiredInput(text: string): string {
+  return text.replace("nodes:\n", "input:\n  topic: !str\nnodes:\n");
+}
+
+/** Write `text` to `tmp/flow.yaml` and return its path. */
+function flowFile(text: string): string {
+  const path = join(tmp, "flow.yaml");
+  writeFileSync(path, text);
+  return path;
+}
+
+/**
+ * Run `yian run <flow> --log tmp/run.jsonl --quiet ...extra` (Python's `_run`) with an offline
+ * model, the default provider and model set so reflective memory and AGENT nodes resolve one.
+ */
+async function runCli(flow: string, ...extra: string[]) {
+  const log = join(tmp, "run.jsonl");
+  const out: string[] = [];
+  const err: string[] = [];
+  const vars: Record<string, string> = {
+    HOME: join(tmp, "home"),
+    XAI_API_KEY: "test-xai-key",
+    YIAN_DEFAULT_PROVIDER: "xai",
+    YIAN_DEFAULT_MODEL: "grok-4.3",
+  };
+  const io: CliIo = {
+    stdout: { write: async (text) => void out.push(text) },
+    stderr: { write: async (text) => void err.push(text) },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined),
+  };
+  const send = globalThis.fetch;
+  globalThis.fetch = offlineModel as unknown as typeof fetch;
+  try {
+    const code = await main(["run", flow, "--log", log, "--quiet", ...extra], io);
+    return { code, stdout: out.join(""), stderr: err.join(""), log };
+  } finally {
+    globalThis.fetch = send;
+  }
+}
+
+/** Collapse whitespace, so wrapped messages match (Python's `_plain`; output here has no styles). */
+function plain(text: string): string {
+  return text.split(/\s+/).filter(Boolean).join(" ");
+}
+
+/** Whether `text` holds a stack trace line. */
+function hasStack(text: string): boolean {
+  return /^\s+at /m.test(text);
+}
+
+/** The records of the run log at `path`. */
+function records(path: string) {
+  return readRunLog(path).map((envelope) => envelope.record);
+}
+
+/**
+ * Patch `close` of every `EpisodicMemory` to run the real close, then `after` (Python's
+ * `_wrap_builtins` close wrappers); returns the restore.
+ */
+function wrapEpisodicClose(after: () => void): () => void {
+  const close = EpisodicMemory.prototype.close;
+  EpisodicMemory.prototype.close = function (this: EpisodicMemory) {
+    close.call(this);
+    after();
+  };
+  return () => {
+    EpisodicMemory.prototype.close = close;
+  };
+}
+
+describe("yian run", () => {
+  beforeEach(() => {
+    mkdirSync(join(tmp, "home"));
+  });
+
+  test("memory root persists every builtin under the flow id", async () => {
+    const root = join(tmp, "mem");
+    const flow = flowFile(codeFlowText("{notes: episodic, lessons: reflective, about: profile}"));
+    const result = await runCli(flow, "--memory-root", root);
+    expect(result.code, result.stderr).toBe(0);
+    expect(statSync(join(root, "cli-memory", "notes.sqlite")).isFile()).toBe(true);
+    expect(statSync(join(root, "cli-memory", "lessons.sqlite")).isFile()).toBe(true);
+    expect(existsSync(join(root, "cli-memory", ".about.md.lock"))).toBe(true);
+    expect(records(result.log)[0]).toBeInstanceOf(RunStartedRecord);
+  });
+
+  test("memory storage is keyed by memory key", async () => {
+    const path = join(tmp, "notes.sqlite");
+    const result = await runCli(flowFile(codeFlowText()), "--memory-storage", `notes=${path}`);
+    expect(result.code, result.stderr).toBe(0);
+    expect(statSync(path).isFile()).toBe(true);
+  });
+
+  test("no flags keep builtins in RAM", async () => {
+    const flow = flowFile(codeFlowText("{notes: episodic, lessons: reflective, about: profile}"));
+    const result = await runCli(flow);
+    expect(result.code, result.stderr).toBe(0);
+    // The run log's own lock file aside.
+    const stored = readdirSync(tmp, { recursive: true, encoding: "utf8" }).filter(
+      (name) => /\.(sqlite|md|lock)$/.test(name) && name !== "run.jsonl.lock",
+    );
+    expect(stored).toEqual([]);
+  });
+
+  test.each([
+    [["notes"]],
+    [["notes="]],
+    [["=x.sqlite"]],
+    [["missing=a.sqlite"]],
+    [["notes=a.sqlite", "notes=b.sqlite"]],
+  ] as const)("bad memory storage %p is a bad parameter before inputs, provider and log", async (options) => {
+    const flow = flowFile(withRequiredInput(codeFlowText()));
+    const result = await runCli(flow, ...options.flatMap((option) => ["--memory-storage", option]));
+    expect(result.code, result.stderr).toBe(2);
+    // The CLI prefixes the flag name; the message itself does not repeat it.
+    expect(plain(result.stderr).split("--memory-storage").length - 1).toBe(1);
+    expect(result.stderr).toContain("Error: Invalid value for --memory-storage: ");
+    expect(existsSync(result.log)).toBe(false);
+  });
+
+  test("bad storage path shape fails before inputs, provider and log", async () => {
+    const flow = flowFile(withRequiredInput(codeFlowText()));
+    const result = await runCli(flow, "--memory-storage", "notes=:memory:");
+    expect(result.code, result.stderr).toBe(1);
+    expect(plain(result.stderr)).toContain("memory 'notes': storage ':memory:' is not a local file path");
+    expect(hasStack(result.stderr)).toBe(false);
+    expect(existsSync(result.log)).toBe(false);
+  });
+
+  test("unsafe flow id with memory root names the memory root", async () => {
+    const root = join(tmp, "mem");
+    const result = await runCli(flowFile(codeFlowText("{notes: episodic}", '"a/b"')), "--memory-root", root);
+    expect(result.code, result.stderr).toBe(1);
+    const text = plain(result.stderr);
+    expect(text).toContain("flow id 'a/b' cannot name a directory under the memory root");
+    expect(text).not.toContain("root=");
+    expect(existsSync(root)).toBe(false);
+    expect(existsSync(result.log)).toBe(false);
+  });
+
+  test("memory storage for a custom key is a bad parameter", async () => {
+    const result = await runCli(flowFile(codeFlowText("{vec: vector}")), "--memory-storage", "vec=v.sqlite");
+    expect(result.code).toBe(2);
+    expect(plain(result.stderr)).toContain("custom");
+  });
+
+  test("custom type points to the TS API (fresh)", async () => {
+    const flow = flowFile(withRequiredInput(codeFlowText("{vec: vector}")));
+    const result = await runCli(flow);
+    expect(result.code).toBe(1);
+    const text = plain(result.stderr);
+    expect(text.startsWith("run failed:")).toBe(true);
+    expect(text).toContain("Use the API");
+    expect(text).toContain("buildMemories");
+    expect(hasStack(result.stderr)).toBe(false);
+    expect(existsSync(result.log)).toBe(false);
+  });
+
+  describe.each(["episodic", "reflective", "session"] as const)("activates declared %s memory", (type) => {
+    test.each([false, true])("without learning (durable %p)", async (durable) => {
+      const key = type === "session" ? "chat" : "notes";
+      const flow = flowFile(type === "session" ? SESSION_FLOW : codeFlowText(`{notes: ${type}}`));
+      const path = join(tmp, "memory.sqlite");
+      const options = durable ? [`${key}=${path}`] : [];
+      const result = await runCli(flow, ...options.flatMap((option) => ["--memory-storage", option]));
+      expect(result.code, result.stderr).toBe(0);
+      const logged = records(result.log);
+      const started = logged[0] as RunStartedRecord;
+      expect(started).toBeInstanceOf(RunStartedRecord);
+      expect(started.memories!.map((spec) => spec.key)).toEqual([key]);
+      expect(started.memorySnapshots!.length).toBe(1);
+      expect(started.learnable).toBe(false);
+      expect(logged.some((record) => record.constructor.name.startsWith("Backward"))).toBe(false);
+      expect(existsSync(path)).toBe(durable);
+      if (durable) {
+        // The CLI must release the file before returning.
+        const loaded = await loadFlow(readFileSync(flow, "utf8"));
+        const reopening = { root: undefined, storageOptions: options, env: modelEnv() };
+        await using registry = await buildCliMemories(loaded, reopening);
+        const session = await registry.get(key)!.openRun();
+        try {
+          expect(Bun.inspect(session.snapshot)).not.toContain(path);
+        } finally {
+          await session.close();
+        }
+      }
+    });
+  });
+
+  test("cli cleanup failure has concise host error", async () => {
+    const restore = wrapEpisodicClose(() => {
+      throw new MemoryOperationError("close", "test.close", "memory close failed", false);
+    });
+    try {
+      const result = await runCli(flowFile(codeFlowText()));
+      expect(result.code).toBe(1);
+      expect(plain(result.stderr)).toContain("run failed: memory close failed");
+      expect(hasStack(result.stderr)).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  test("open failure closes every backend and creates no directory", async () => {
+    const flow = flowFile(
+      SESSION_FLOW.replace("name: cli_memory\n", "name: cli_memory\nlong_term_memory: {archive: episodic}\n"),
+    );
+    // Run setup opens memories in sorted key order: archive opens (and creates its file), then
+    // chat fails because its parent directory is missing.
+    const archivePath = join(tmp, "archive.sqlite");
+    const absent = join(tmp, "absent");
+    const result = await runCli(
+      flow,
+      "--memory-storage",
+      `archive=${archivePath}`,
+      "--memory-storage",
+      `chat=${join(absent, "chat.sqlite")}`,
+    );
+    expect(result.code).toBe(1);
+    expect(plain(result.stderr)).toContain("run failed:");
+    expect(hasStack(result.stderr)).toBe(false);
+    expect(existsSync(absent)).toBe(false);
+    expect(statSync(archivePath).isFile()).toBe(true); // archive really opened before chat failed
+    // Opening takes the store; it would be busy if the run still held it.
+    const archive = new EpisodicMemory({ storage: archivePath });
+    try {
+      archive.openRun().close();
+    } finally {
+      archive.close();
+    }
+  });
+
+  test("cli preserves primary when cleanup also fails", async () => {
+    let closes = 0;
+    const restore = wrapEpisodicClose(() => {
+      closes += 1;
+      throw new Error("cleanup failure");
+    });
+    // A TOOL node naming a tool the run lacks: the run rejects after the registry is built.
+    const work = "    kind: code\n    code: return 7\n    output: int\n";
+    const flow = flowFile(codeFlowText().replace(work, "    kind: tool\n    tool_id: cli_missing_tool\n"));
+    try {
+      const result = await runCli(flow);
+      expect(result.code).toBe(1);
+      expect(plain(result.stderr)).toContain("run failed: ");
+      expect(plain(result.stderr)).toContain("cli_missing_tool");
+      expect(plain(result.stderr)).not.toContain("cleanup failure");
+      expect(closes).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  test("run help describes memory flags", async () => {
+    const out: string[] = [];
+    const io: CliIo = {
+      stdout: { write: async (text) => void out.push(text) },
+      stderr: { write: async (text) => void out.push(text) },
+      stdin: new PassThrough(),
+      stderrStream: new PassThrough(),
+      env: () => undefined,
+    };
+    expect(await main(["run", "--help"], io)).toBe(0);
+    const text = plain(out.join(""));
+    expect(text).toContain("--memory-root");
+    expect(text).toContain("KEY=PATH");
+    expect(text).toContain("Without either flag, memory lives in process RAM.");
+    expect(text).not.toContain("POLICY");
   });
 });

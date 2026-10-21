@@ -687,4 +687,9 @@ cd ts && bun run build && node dist/tests/conformance.js           # every case,
 The TS runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>/<name>`,
 `--rules` and `--diagnostic-code`. It prints one `FAIL` line per failing case and a summary,
 counts a failing `pending` case as expected, fails a case whose kind it doesn't run yet, and exits
-1 when any case fails.
+1 when any case fails. On every `run` and `resume` case with a log it also checks the log's invariants
+(in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
+outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only). `--crash-sweep`
+also cuts each serial `run` case that expects `output` (and has no `host.models`, `host.steering`,
+`host.memory` or `host.stop`) after every record but the last, resumes it, and checks the output
+and node outcomes (when its host is deterministic) and the invariants.

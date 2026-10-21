@@ -26,6 +26,7 @@ import {
   CaseFailure,
   checkCase,
   compare,
+  crashSweep,
   decode,
   expectRaises,
   KINDS as RUNNERS,
@@ -1377,8 +1378,62 @@ describe("main", () => {
     expect(out).toEqual([]);
     expect(err).toEqual([
       "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-        "[--diagnostic-code CODE]",
+        "[--diagnostic-code CODE] [--crash-sweep]",
     ]);
+  });
+
+  test("sweeps an eligible run case with --crash-sweep", async () => {
+    const files = { "a/two.yaml": TWO_NODES };
+    const { code, out } = await run(["--crash-sweep"], files, {}, { run: RUNNERS.run! });
+    expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
+    expect(code).toBe(0);
+  });
+});
+
+// A serial run of two CODE nodes: nine records, so a crash sweep resumes eight cuts.
+const TWO_NODES = `kind: run
+flow: |
+  id: two
+  name: two
+  nodes:
+    a: {kind: code, code: return "x", output: str}
+    b: {kind: code, code: return inputs.v + "y", input: {v: "\${a.output}"}, output: str}
+  output: \${b.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: xy}
+`;
+
+describe("crashSweep", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Return the prepared `TWO_NODES` case and its set-up directory. */
+  function twoNodes(): [Case, CaseContext] {
+    const case_ = prepare(checkCase(readCase(TWO_NODES)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    return [case_, ctx];
+  }
+
+  test("resumes every cut and passes", async () => {
+    const [case_, ctx] = twoNodes();
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    expect(cuts).toHaveLength(8);
+  });
+
+  test("fails a resume that drops a record", async () => {
+    const [case_, ctx] = twoNodes();
+    const dropSecond = (log: string) => {
+      const lines = readFileSync(log, "utf8").split("\n");
+      if (lines.length > 3) writeFileSync(log, [lines[0], ...lines.slice(2)].join("\n"));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: dropSecond });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 2)");
   });
 });
 

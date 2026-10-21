@@ -49,9 +49,11 @@
  *   deep-frozen, so the after-prepare mutations go to the observer's seed and the caller's seed.
  * - `test_growth_rejects_a_cyclic_seed_before_builder`: the original is a `TypeCheckError`
  *   (`value contains itself`), not a `ValueError` about a cyclic container.
- * - `test_growth_rejects_an_excessively_nested_seed_before_builder`: the seed nests one level past
- *   `current().maxValueNesting` and `rejectDeepNesting` refuses it with a `TypeCheckError`, where
- *   Python's codec hits its recursion limit (`nesting exceeds`, a `ValueError`).
+ * - `test_growth_rejects_an_excessively_nested_seed_before_builder`: the net allows the seed two
+ *   levels past `current().maxValueNesting` (the containers that wrap a bound value), so a seed
+ *   two levels past prepares and one three levels past fails `rejectDeepNesting` with a
+ *   `TypeCheckError`, where Python fails only at its codec's recursion limit (`nesting exceeds`,
+ *   a `ValueError`).
  * - `test_growth_builder_receives_a_detached_spawner_and_failure_is_pure`: no `env` half
  *   (`copyGraph` copies the spawner shallowly, and `env` is read-only by contract); the builder
  *   gets a copy, its title change doesn't reach the live spawner, its error keeps its identity and
@@ -343,20 +345,26 @@ test("growth rejects a nonfinite seed before the builder", () => {
 });
 
 test("growth rejects an excessively nested seed before the builder", () => {
-  const { state } = initializedSpawner();
   const limit = current().maxValueNesting;
-  let seed: unknown = "leaf";
-  for (let level = 0; level <= limit; level += 1) seed = [seed];
+  const nested = (levels: number): unknown => {
+    let seed: unknown = "leaf";
+    for (let level = 0; level < levels; level += 1) seed = [seed];
+    return seed;
+  };
   let builderCalled = false;
   const builder: GrowBuilder = () => {
     builderCalled = true;
     return fragment("spawn");
   };
 
+  prepareExpanded(initializedSpawner().state, "spawn", new Grow(nested(limit + 2)), builder);
+  expect(builderCalled).toBe(true);
+
+  builderCalled = false;
   expectRejected(
-    () => prepareExpanded(state, "spawn", new Grow(seed), builder),
+    () => prepareExpanded(initializedSpawner().state, "spawn", new Grow(nested(limit + 3)), builder),
     TypeCheckError,
-    new RegExp(`^growth seed at (\\[0\\]){${limit}}: value nests deeper than ${limit} levels, `),
+    new RegExp(`^growth seed at (\\[0\\]){${limit + 2}}: value nests deeper than ${limit} levels, `),
   );
   expect(builderCalled).toBe(false);
 });

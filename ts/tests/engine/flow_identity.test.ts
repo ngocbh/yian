@@ -159,7 +159,9 @@
  * writes an inline CODE body as `{inline: <body>}` (design 6.7) where Python writes the bare text,
  * and the inline bodies are TS (`+ 1n`); with both put back, Python's pins reproduce.
  *
- * Later (T4-8 follow-up): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
+ * Ported through `loadFlow`, `runFlow` and `resumeFlow`:
+ * `test_resume_rejects_a_flow_with_an_edited_literal`, the mismatch a `RangeError` where Python
+ * raises a `ValueError`.
  *
  * Not ported: `test_flow_fingerprint_distinguishes_yaml_literal_types`,
  * `test_flow_fingerprint_supports_binary_nonfinite_and_non_string_mapping_keys` and
@@ -173,7 +175,7 @@
 
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -214,6 +216,7 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 
@@ -2748,6 +2751,68 @@ output: \${ask.output}
   expect(caught).toBeInstanceOf(LoadError);
   expect((caught as LoadError).message).toContain(message);
   expect((caught as LoadError).message).not.toContain("sk-flow-secret");
+});
+
+/** A two-step flow whose steps both carry the same two literals. */
+const resumeLiteralFlow = (url: string, signature: string) => `
+id: resume-literal
+name: resume_literal
+nodes:
+  first:
+    kind: code
+    input:
+      url: '${url}'
+      signature: '${signature}'
+    code: |
+      return inputs["url"]
+  second:
+    kind: code
+    input:
+      url: '${url}'
+      signature: '${signature}'
+      after: \${first.output}
+    code: |
+      return inputs["url"]
+output:
+  first: \${first.output}
+  second: \${second.output}
+`;
+
+/** Cut the run log at `path` right after the record that commits `nodeId`. */
+function truncateAfterNodeSuccess(path: string, nodeId: string): void {
+  const lines = readFileSync(path, "utf8").split(/(?<=\n)/);
+  const index = lines.findIndex((line) => {
+    const record = JSON.parse(line);
+    return record.kind === "node_succeeded" && record.payload.node_id === nodeId;
+  });
+  if (index < 0) throw new Error(`no node_succeeded record for ${nodeId}`);
+  writeFileSync(path, lines.slice(0, index + 1).join(""));
+}
+
+test.each([
+  [
+    "url-query-key",
+    ["https://example.com/search?key=apples", "q -> a"],
+    ["https://example.com/search?key=pears", "q -> a"],
+  ],
+  [
+    "signature",
+    ["https://example.com/search?key=apples", "q -> a"],
+    ["https://example.com/search?key=apples", "q -> s"],
+  ],
+] as const)("test_resume_rejects_a_flow_with_an_edited_literal: %s", async (_id, before, after) => {
+  const dir = mkdtempSync(join(tmpdir(), "flow-identity-"));
+  try {
+    const log = join(dir, "run.jsonl");
+    await runFlow(await loadFlow(resumeLiteralFlow(before[0], before[1])), {}, { log, numWorkers: 0 });
+    truncateAfterNodeSuccess(log, "first");
+
+    const resumed = resumeFlow(await loadFlow(resumeLiteralFlow(after[0], after[1])), { log, numWorkers: 0 });
+    await expect(resumed).rejects.toThrow(RangeError);
+    await expect(resumed).rejects.toThrow("flow fingerprint mismatch");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const GOLDEN_FLOW = `

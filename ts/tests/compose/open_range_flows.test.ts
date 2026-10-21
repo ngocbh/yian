@@ -51,7 +51,11 @@ const loadErrorMessage = async (text: string): Promise<string> =>
   (await loadErrorAsync(loadConformanceFlow(text))).message;
 
 /** Load and run `text`, expecting a failed run, and return its failure. */
-async function failure(text: string, inputs: Record<string, unknown> = {}, options: RunFlowOptions = {}): Promise<Failure> {
+async function failure(
+  text: string,
+  inputs: Record<string, unknown> = {},
+  options: RunFlowOptions = {},
+): Promise<Failure> {
   const result = await runFlow(await loadConformanceFlow(text), inputs, options);
   expect(result.status).toBe("failed");
   expect(result.failure).not.toBeNull();

@@ -56,12 +56,14 @@
 
 import { expect, test } from "bun:test";
 
+import { Edge, GrowthRejected } from "../../src/compile/model.ts";
 import { canonicalizeInlineType } from "../../src/compose/build/inline_inputs.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { answerSchema } from "../../src/compose/nodes/human_input.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
+import { Grow } from "../../src/nodes/base.ts";
 import {
   Binding,
   isExactly,
@@ -69,12 +71,11 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
-import { Edge, GrowthRejected } from "../../src/compile/model.ts";
-import { Grow } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { prepareExpanded } from "../../src/runtime/state.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { fragment, initializedSpawner } from "../engine/run_state_fixtures.ts";
 import {
   assembled,
   assembledWith,
@@ -86,7 +87,6 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
-import { fragment, initializedSpawner } from "../engine/run_state_fixtures.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -380,14 +380,8 @@ test("runtime growth allows member-only fields", () => {
   };
 
   grow("qty");
-  let error: unknown = null;
-  try {
-    grow("zzz");
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(GrowthRejected);
-  expect((error as GrowthRejected).message).toContain("reads unknown field 'zzz' on record");
+  expect(() => grow("zzz")).toThrow(GrowthRejected);
+  expect(() => grow("zzz")).toThrow("reads unknown field 'zzz' on record");
 });
 
 test("canonicalizeInlineType keeps variants", () => {

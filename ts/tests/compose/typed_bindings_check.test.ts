@@ -44,8 +44,8 @@
  *
  * TS-only: a flow-style variant of `test_nested_template_types.py`'s
  * `test_nested_typed_binding_is_checked_at_its_own_line` (ported in `nested_template_types.test.ts`)
- * that pins the nested binding's whole frame; `shownLiteral` rows (compact JSON, ints as digits); `localInputContracts` rows over
- * hand-built maps (Python has no direct test; the reference and assert checks read it); and the
+ * that pins the nested binding's whole frame; `shownLiteral` rows (compact JSON, ints as digits);
+ * `localInputContracts` rows over hand-built maps (Python has no direct test; the reference and assert checks read it); and the
  * harvested cases these checks decide (`runCase`, `assembled`), in the "Pinned harvested cases"
  * block, then those from `test_open_range_flows.py`, `test_nested_template_types.py` and
  * `test_tagged_bindings.py`, which these checks decide, in the "Pinned harvested cases (TS-only

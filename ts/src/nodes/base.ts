@@ -23,6 +23,7 @@
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
 import type {
   ModelCallFinished,
+  ModelCallRetried,
   ModelCallStarted,
   ReplayDegraded,
   StreamChunk,
@@ -515,6 +516,14 @@ export class BackwardContext {
     ) as typeof this.downstreamContext;
     Object.freeze(this);
   }
+}
+
+/** What the backward driver supplies to a backward hook besides its context and feedback. */
+export interface BackwardOptions {
+  /** Builds the model a hook calls; a hook that calls one defaults to `defaultModelAccess()`. */
+  readonly models?: ModelAccess;
+  /** Receives the transient events a hook publishes; without it nothing is published. */
+  readonly onEvent?: (event: ModelCallRetried | ReplayDegraded) => void;
 }
 
 /**
@@ -1430,9 +1439,15 @@ export abstract class Node {
    *   rather than live node fields when interpreting feedback.
    * @param feedback Ordered independent messages: text, a partial record, an exact-length nested
    *   item list, or `null`; an array is one positional message.
+   * @param options What a hook that calls a model uses: the model access and the observer for the
+   *   transient events it publishes. The base ignores it.
    * @returns The input, self and variable feedback channels; the base returns all three empty.
    */
-  backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult | Promise<BackwardResult> {
+  backward(
+    context: BackwardContext,
+    feedback: readonly FeedbackValue[],
+    options?: BackwardOptions,
+  ): BackwardResult | Promise<BackwardResult> {
     return new BackwardResult();
   }
 

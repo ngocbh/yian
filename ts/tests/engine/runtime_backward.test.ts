@@ -2999,7 +2999,8 @@ test("an AGENT's inventory is recorded and empty feedback does no backward work"
   const forward = spyOn(AgentNode.prototype, "forward").mockImplementation(
     async (inputs) => new Output(inputs.topic),
   );
-  // AGENT's own `backward` is typed to throw, so the spy goes through `Node`'s signature.
+  // AGENT's own `backward` is async, so the spy goes through `Node`'s signature, which may answer
+  // synchronously.
   const backward = spyOn(AgentNode.prototype as Node, "backward").mockImplementation((context, feedback) => {
     calls.push(context);
     return new BackwardResult({

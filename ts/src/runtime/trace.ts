@@ -26,6 +26,7 @@ import { type FeedbackValue, ResolvedValue, SourceRef, sameSource, sourceKey, Va
 import { MemoryScope } from "../memory/index.ts";
 import {
   BackwardContext,
+  type BackwardOptions,
   type BackwardResult,
   type Node,
   retainFailure,
@@ -74,6 +75,7 @@ export type OutcomeRecord = NodeSucceededRecord | NodeRoutedRecord | NodeExpande
 type BackwardHandler = (
   context: BackwardContext,
   feedback: readonly FeedbackValue[],
+  options?: BackwardOptions,
 ) => BackwardResult | Promise<BackwardResult>;
 
 /** @internal Decode a typed value from its canonical log text, a fresh copy. */

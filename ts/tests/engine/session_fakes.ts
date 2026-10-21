@@ -7,6 +7,7 @@
 import { expect } from "bun:test";
 
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import type { Message } from "../../src/llm/messages.ts";
@@ -18,6 +19,7 @@ import {
   type ConversationView,
   DeclSite,
   type JsonObject,
+  type Memory,
   MemoryContext,
   MemoryOperationError,
   MemoryScope,
@@ -30,9 +32,10 @@ import { decodeMessage } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { MemoryContextOpener } from "../../src/runtime/eval_node.ts";
+import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import type { Type } from "../../src/typesys/values.ts";
-import { engine, graph } from "./run_state_fixtures.ts";
+import { engine, graph, serving } from "./run_state_fixtures.ts";
 
 // Cloned snapshots and nested test values are edited freely.
 export type Mutable = any;
@@ -292,4 +295,47 @@ export function runSessionFlow(
     await built.run();
     return built.state.result as RunSucceeded | RunFailed;
   });
+}
+
+/**
+ * Python's `_FLOW` of `tests/engine/test_agent_session.py`: AGENT `agent` owning AGENT memory
+ * `session`, prompted with the run's input `question`, its text output the flow's.
+ */
+export const PLAIN_FLOW = `id: plain-session
+name: plain_session
+llm_config: {provider: openai, model: test-model}
+input:
+  question: !str
+nodes:
+  agent:
+    kind: agent
+    long_term_memory: session
+    prompt: \${question}
+    input:
+      question: \${input.question}
+    output: str
+output: \${agent.output}
+`;
+
+/** An environment holding nothing, so a run reads no host setting. */
+export const NO_ENV = (): undefined => undefined;
+
+/**
+ * `runFlow` of `flow` with `inputs`, `memory` backing memory `session` (or each memory key of a
+ * `Map`), `model` serving every AGENT, in `NO_ENV`; the other options go to `runFlow`.
+ */
+export function runWith(
+  flow: ComposedFlow,
+  inputs: Readonly<Record<string, unknown>>,
+  memory: SessionMemory | ReadonlyMap<string, Memory> | null,
+  model: ChatModel,
+  options: RunFlowOptions = {},
+): Promise<RunResult> {
+  const registry = memory instanceof SessionMemory ? new Map([["session", memory]]) : memory;
+  return runFlow(flow, inputs, { memory: registry, models: serving(model), env: NO_ENV, ...options });
+}
+
+/** The texts of the messages of `model`'s request `index` (the last by default) after its system prompt. */
+export function sentTexts(model: { requests: readonly { messages: readonly Message[] }[] }, index = -1): string[] {
+  return model.requests.at(index)!.messages.slice(1).map((message) => message.text());
 }

@@ -46,7 +46,9 @@
  * refuses it ("Input should be a finite number", a `contract.input` failure when the agent runs)
  * where Python refuses `non-finite number inf`.
  *
- * Later (T4-10): `test_bool_text_is_not_converted_for_a_child_input` (a CALL).
+ * Ported: `test_bool_text_is_not_converted_for_a_child_input` (both answers; the `yes` run is also
+ * the harvested `run-core/engine_run__bool_text_is_not_converted_for_a_child_input`). Changed: the
+ * message quotes the text JSON style, `"yes"`, where Python shows `'yes'` (decision 7).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -328,6 +330,49 @@ test("unrecognized bool spelling fails at boundary", async () => {
   expect(result.failure!.message).toContain("input 'flag'");
   expect(result.failure!.message).toContain("does not match declared type bool");
   expect(hasNodeOutput(result)).toBe(false);
+});
+
+test("bool text is not converted for a child input", async () => {
+  // A CALL edge is not a flow boundary: untyped upstream text reaching a called def's bool input
+  // is validated as is, so even a recognized spelling fails.
+  const flow = await load(`
+id: gatekeeper
+name: gatekeeper
+defs:
+  gate:
+    input:
+      ok: !bool
+    nodes:
+      e:
+        kind: code
+        input:
+          ok: \${input.ok}
+        code: |
+          return inputs["ok"]
+    output: \${e.output}
+input:
+  answer: !str
+nodes:
+  src:
+    kind: code
+    input:
+      a: \${input.answer}
+    code: |
+      return inputs["a"]
+  g:
+    kind: call
+    call: gate
+    input:
+      ok: \${src.output}
+output: \${g.output}
+`);
+  for (const answer of ["yes", "approve"]) {
+    const result = await run(flow, { answer });
+    expect(result.status).toBe("failed");
+    expect(result.failure).not.toBeNull();
+    expect(result.failure!.code).toBe("contract.input");
+    expect(result.failure!.message).toContain(`input 'ok': ${JSON.stringify(answer)} does not match declared type bool`);
+  }
 });
 
 // ---- asserts ----

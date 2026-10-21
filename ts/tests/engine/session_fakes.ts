@@ -1,19 +1,23 @@
 /**
  * A unit-only backend-owned turn harness without a provider or run log: a port of
- * `tests/engine/_session_fakes.py`, plus the promise helpers the session tests share.
+ * `tests/engine/_session_fakes.py`, plus the promise helpers and the hand-built `runAgent` context
+ * the session tests share.
  */
 
 import { expect } from "bun:test";
 
+import type { ChatModel } from "../../src/llm/events.ts";
 import {
   ConversationInvocation,
   ConversationItem,
   ConversationRequest,
   type ConversationTurn,
   type JsonObject,
+  MemoryContext,
   MemoryOperationError,
 } from "../../src/memory/contracts.ts";
 import { type Session, SessionMemory, type Turn } from "../../src/memory/session.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 
 // Cloned snapshots and nested test values are edited freely.
 export type Mutable = any;
@@ -165,4 +169,31 @@ export function rejected(promise: Promise<unknown>): Promise<unknown> {
     },
     (error: unknown) => error,
   );
+}
+
+/**
+ * A hand-built `runAgent` context: AGENT `agent` asked `current question` by `model` with
+ * `transcript` as its memory turn, no tools, and `overrides`.
+ */
+export function agentContext(
+  model: ChatModel,
+  transcript: ConversationTurn,
+  overrides: Partial<AgentRunContext> = {},
+): AgentRunContext {
+  return {
+    nodeId: "agent",
+    prompt: "current question",
+    tools: [],
+    llmConfig: null,
+    outputType: null,
+    retries: 0,
+    maxToolIterations: -1,
+    memoryContext: new MemoryContext({ transcript }),
+    toolset: null,
+    baseSystemPrompt: DEFAULT_SYSTEM,
+    skills: [],
+    models: { env: () => undefined, createModel: () => model },
+    sent: () => [],
+    ...overrides,
+  };
 }

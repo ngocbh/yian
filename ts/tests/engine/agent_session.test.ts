@@ -566,13 +566,13 @@ test("admission follows render and recall, and only the current recall is reused
   const node = new AgentNode("agent", { prompt: "question ${value}", llmConfig: CONFIG });
   for (const [index, note] of ["old recall", "current recall"].entries()) {
     await withHarness(async ({ session }) => {
-      let turn: ConversationTurn | null = null;
+      let turn = null as ConversationTurn | null;
       const openMemoryContext: NodeCaps["openMemoryContext"] = async (_system, prompt, compatibility) => {
         expect(prompt).toBe(`question ${index}`);
         events.push("recall");
         const sections = [new MemorySection("session", note)];
-        events.push("admit");
         turn = await session.openTurn(request(String(index), 1, ["root", "agent"], compatibility), { signal: NEVER });
+        events.push("admit");
         return new MemoryContext({ sections, transcript: turn });
       };
       try {
@@ -582,7 +582,7 @@ test("admission follows render and recall, and only the current recall is reused
           models,
         });
       } finally {
-        (turn as ConversationTurn | null)?.close();
+        turn?.close();
       }
     }, memory);
   }
@@ -637,13 +637,14 @@ async function runSession(
 test("the request is stored before the provider, and a failed effect remains truthful", async () => {
   const error = new Error("provider refused; secret-marker");
   const memory = new SessionMemory();
+  // Captured, not checked, in the probe: a failed check there would become the provider error.
+  let atCall = null as ConversationView | null;
   const model = new ProbedModel([error, reply("later")], (index) => {
-    if (index !== 0) return;
-    const stored = view(memory);
-    expect(stored.effects.map((effect) => effect.status)).toEqual(["pending"]);
-    expect(stored.items).toHaveLength(2);
+    if (index === 0) atCall = view(memory);
   });
   const failed = await runSession(memory, model, "first-run", "first");
+  expect(atCall!.effects.map((effect) => effect.status)).toEqual(["pending"]);
+  expect(atCall!.items).toHaveLength(2);
   expect(failed).toBeInstanceOf(RunFailed);
   const failure = (failed as RunFailed).failure;
   expect(failure.code).toBe("node.execute");

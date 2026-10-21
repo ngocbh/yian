@@ -29,7 +29,8 @@
  * unpairable model reply` text; a stored system message is dropped. Through `runAgent`: an
  * interrupt skipping a reply's calls records each `interrupted` with `SKIPPED_TOOL_RESULT` in call
  * order and asks the turn to `interrupt()`; a granted call whose argument check fails is requested
- * and observed `failed`; an ungranted call records nothing.
+ * and observed `failed` (its `interrupted` branch under a stop is `invokeToolEffect`'s, covered by
+ * the rows above); an ungranted call records nothing.
  *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
@@ -49,17 +50,11 @@ import { expect, spyOn, test } from "bun:test";
 
 import { ModelCallFinished } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-
 import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  type ConversationTurn,
-  type ConversationView,
-  type JsonObject,
-  MemoryContext,
-} from "../../src/memory/contracts.ts";
+import type { ConversationTurn, ConversationView, JsonObject } from "../../src/memory/contracts.ts";
 import { SessionMemory, type Turn } from "../../src/memory/session.ts";
-import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
+import { AgentLoopError, type AgentRunContext } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import {
   decodeMessage,
@@ -78,6 +73,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import * as values from "../../src/typesys/values.ts";
 import {
+  agentContext,
   fakeTurn,
   type Mutable,
   NEVER,
@@ -485,28 +481,10 @@ test("a native structured reply is inert context, and a stored system message is
   ]);
 });
 
-/** A hand-built `runAgent` context over `model` and `transcript`, granted `lookup`, with `overrides`. */
-function context(
-  model: ChatModel,
-  transcript: ConversationTurn,
-  overrides: Partial<AgentRunContext> = {},
-): AgentRunContext {
-  return {
-    nodeId: "agent",
-    prompt: "question",
-    tools: ["lookup"],
-    llmConfig: null,
-    outputType: null,
-    retries: 0,
-    maxToolIterations: -1,
-    memoryContext: new MemoryContext({ transcript }),
-    toolset: new ToolSet({ lookup: lookupTool() }),
-    baseSystemPrompt: DEFAULT_SYSTEM,
-    skills: [],
-    models: { env: () => undefined, createModel: () => model },
-    sent: () => [],
-    ...overrides,
-  };
+/** `agentContext` granted `lookup`, with `overrides`. */
+function context(model: ChatModel, transcript: ConversationTurn, overrides: Partial<AgentRunContext> = {}) {
+  const toolset = new ToolSet({ lookup: lookupTool() });
+  return agentContext(model, transcript, { tools: ["lookup"], toolset, ...overrides });
 }
 
 /** A `lookup` tool taking an integer `value`; it must not run. */
@@ -548,17 +526,13 @@ test("an interrupt skipping calls records each interrupted in call order and ask
   const emitEvent = (event: unknown) => {
     if (event instanceof ModelCallFinished) interrupt.abort(new Error("interrupted"));
   };
-  let asked = 0;
+  let asked: ReturnType<typeof spyOn> | null = null;
   const { result, view } = await inTurn((turn) => {
-    const original = turn.interrupt.bind(turn);
-    turn.interrupt = () => {
-      asked++;
-      original();
-    };
+    asked = spyOn(turn, "interrupt");
     return runAgent(context(model, turn, { steering, emitEvent }));
   });
   expect(result!.value).toBe("Checking both.");
-  expect(asked).toBe(1);
+  expect(asked!).toHaveBeenCalledTimes(1);
   expect(effects(view)).toEqual([
     ["model", "completed", { purpose: "chat" }],
     ["tool", "interrupted", { name: "lookup", arguments: { value: 1n }, call_index: 0, tool_call_id: "call-1" }],
@@ -576,12 +550,12 @@ test("an interrupt skipping calls records each interrupted in call order and ask
 test("a granted call whose argument check fails is requested and observed failed", async () => {
   const model = new ScriptedModel([callsReply("", ["lookup", { value: "not a number" }, "call-1"])]);
   const { error, view } = await inTurn((turn) => runAgent(context(model, turn)));
-  expect(error).toBeInstanceOf(Error);
+  expect(error).toBeInstanceOf(values.TypeCheckError);
   expect(effects(view)).toEqual([
     ["model", "completed", { purpose: "chat" }],
     ["tool", "failed", { name: "lookup", arguments: { value: "not a number" }, call_index: 0, tool_call_id: "call-1" }],
   ]);
-  expect(view.effects[1]!.failure!.message).toBe(`Tool invocation failed (${(error as Error).name}).`);
+  expect(view.effects[1]!.failure!.message).toBe("Tool invocation failed (TypeCheckError).");
 });
 
 test("an ungranted call records nothing", async () => {

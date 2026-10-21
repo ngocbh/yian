@@ -44,7 +44,6 @@
 import { expect, test } from "bun:test";
 
 import { ModelCallFinished, ModelCallStarted } from "../../src/events.ts";
-import type { ChatModel } from "../../src/llm/events.ts";
 import {
   MediaPart,
   Message,
@@ -59,6 +58,7 @@ import {
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type ConversationTurn, MemoryContext, MemorySection } from "../../src/memory/contracts.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
+import { runAgent } from "../../src/nodes/agent/loop.ts";
 import {
   currentHistoryMessages,
   encodeMessage,
@@ -67,14 +67,21 @@ import {
   invokeToolEffect,
   prepareHistory,
 } from "../../src/nodes/agent/memory.ts";
-import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
-import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { logJson } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { type Mutable, NEVER, rejected, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
+import {
+  agentContext,
+  type Mutable,
+  NEVER,
+  rejected,
+  request,
+  snapshot,
+  withHarness,
+  withTurn,
+} from "./session_fakes.ts";
 
 const user = (text: string): Message => new Message({ role: "user", parts: [new TextPart(text)] });
 const assistant = (...parts: Part[]): Response => new Response({ message: new Message({ role: "assistant", parts }) });
@@ -368,30 +375,6 @@ const STRATEGIES = [
 ] as const;
 const INT = Type.scalar(ValueKind.INTEGER);
 
-/** A hand-built `runAgent` context over `model` and `transcript`, with `overrides`. */
-function context(
-  model: ChatModel,
-  transcript: ConversationTurn,
-  overrides: Partial<AgentRunContext> = {},
-): AgentRunContext {
-  return {
-    nodeId: "agent",
-    prompt: "current question",
-    tools: [],
-    llmConfig: null,
-    outputType: null,
-    retries: 0,
-    maxToolIterations: -1,
-    memoryContext: new MemoryContext({ transcript }),
-    toolset: null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
-    skills: [],
-    models: { env: () => undefined, createModel: () => model },
-    sent: () => [],
-    ...overrides,
-  };
-}
-
 /** Python's `_Tool`: a tool `name` taking an integer `value`, answering `result:<value>`. */
 function valueTool(name: string, calls: Record<string, unknown>[]): FunctionTool {
   return new FunctionTool({
@@ -425,7 +408,7 @@ test("a stop after the summary keeps the actual cache without an answer", async 
         withTurn(
           session,
           request("current"),
-          (turn) => runAgent(context(model, turn, { prompt: "current", signal: stop.signal, emitEvent })),
+          (turn) => runAgent(agentContext(model, turn, { prompt: "current", signal: stop.signal, emitEvent })),
           stop.signal,
         ),
       memory,
@@ -458,7 +441,7 @@ test("the summary uses the unbound model and the current instructions and grants
     ({ session }) =>
       withTurn(session, request("current"), (turn) =>
         runAgent(
-          context(model, turn, {
+          agentContext(model, turn, {
             prompt: "new question",
             tools: ["current"],
             toolset,
@@ -489,7 +472,7 @@ for (const [label, config] of STRATEGIES) {
       withHarness(
         ({ session }) =>
           withTurn(session, request("current"), (turn) =>
-            runAgent(context(model, turn, { outputType: INT, retries: 7, llmConfig: config })),
+            runAgent(agentContext(model, turn, { outputType: INT, retries: 7, llmConfig: config })),
           ),
         memory,
       ),
@@ -509,7 +492,7 @@ for (const [label, config] of STRATEGIES) {
     await withHarness(async ({ session }) => {
       const value = await withTurn(session, request("structured"), (turn) =>
         runAgent(
-          context(model, turn, { prompt: "structured question", outputType: INT, retries: 1, llmConfig: config }),
+          agentContext(model, turn, { prompt: "structured question", outputType: INT, retries: 1, llmConfig: config }),
         ),
       );
       expect(value.value).toBe(7n);
@@ -519,10 +502,13 @@ for (const [label, config] of STRATEGIES) {
         const sent = dump(summaryModel.requests[0]!.messages);
         expect(sent).toContain("question-0");
         expect(sent).not.toContain("structured question");
-        expect(messages.map((message) => message.text())).toContain("structured question");
-        expect(dump(messages)).toContain("previous output was invalid");
-        expect(dump(messages)).toContain("bad");
-        expect(dump(messages)).toContain("7");
+        const texts = messages.map((message) => message.text());
+        expect(texts).toContain("structured question");
+        expect(texts.some((text) => text.includes("previous output was invalid"))).toBe(true);
+        // Each stored reply is kept: as text after the prompt strategy, as inert JSON when native.
+        for (const answer of ['{"value":"bad"}', '{"value":7}']) {
+          expect(texts.some((text) => text === answer || text.includes(logJson(answer)))).toBe(true);
+        }
         expect(messages.some((message) => message.parts.some((part) => part instanceof ToolCallPart))).toBe(false);
       });
     }, memory);

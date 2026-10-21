@@ -17,7 +17,7 @@
  *
  * Here so far: prior context comes from the memory transcript, which records each model call's new
  * input and reply, each call a host interrupt skipped, and a granted call whose argument check
- * failed.
+ * failed; a call that runs is not recorded yet.
  *
  * Knows about:   diagnostics, events, llm, memory contracts, nodes/base, skills, tools, typesys,
  *                peer AGENT modules.
@@ -73,7 +73,6 @@ import {
   recordSkippedTool,
   reportedText,
   systemPromptWithMemory,
-  type ToolCallIdentity as EffectIdentity,
   toolText,
 } from "./memory.ts";
 import { generateStructured, typeToSchema, userMessage } from "./structured.ts";
@@ -139,7 +138,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   const nextCall = () => retrySettings(ctx, ++modelCalls);
   const prior = await prepareHistory(transcript, model, { signal: ctx.signal, live, retry: nextCall });
   const messages = [system, ...prior, user];
-  // The prior context is already stored; only what this start adds is.
+  // The prior context is already in the transcript; the next model call stores only what this
+  // start adds.
   let newMessages = [system, user];
   ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.prompt, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
@@ -187,7 +187,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     const exchangeId = newExchangeId();
     let response: Response;
     try {
-      // `invokeModel` checks the stop after the call: a stop that lands during it wins over its reply.
+      // `invokeModel` checks the stop after the call: a stop that lands during it wins over its
+      // reply.
       response = await invokeModel(
         transcript,
         () =>
@@ -220,17 +221,19 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     iterations += 1;
     messages.push(reply);
     // A call whose arguments didn't parse is an invalid tool call, which the loop never runs.
-    const calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
+    const calls = reply.parts.filter(
+      (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
+    );
     if (calls.length === 0) {
       const text = textOf(reply);
       recordModelText(ctx.evaluationTrace, text);
       if (schema !== null) {
-        // With a transcript, the turn so far is read back, so an unpairable reply becomes inert text.
+        // With a transcript, the turn so far is read back, so an unpairable reply becomes inert
+        // text.
         const current = await currentHistoryMessages(transcript, { fallback: messages.slice(1) });
         const conversation = [system, ...prior, ...current];
-        return new Output(
-          await generateStructured(model, conversation, ctx.outputType!, { ...structuredOptions, newMessages: [] }),
-        );
+        const options = { ...structuredOptions, newMessages: [] };
+        return new Output(await generateStructured(model, conversation, ctx.outputType!, options));
       }
       return new Output(text);
     }
@@ -334,7 +337,8 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  * events are published. None of them runs or leaves evidence.
  *
  * @returns `true`, for the caller to return.
- * @throws CapabilityFault when recording a skipped call fails; the stop the turn throws.
+ * @throws CapabilityFault when recording a skipped call fails; a stop the turn throws passes
+ *   through.
  */
 async function skipFrom(turn: ToolTurn, start: number): Promise<true> {
   for (const [index, call] of turn.calls.entries()) {
@@ -515,10 +519,10 @@ function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCall
   return { exchangeId: turn.exchangeId, callIndex: index, toolCallId, name, arguments: call.arguments! };
 }
 
-/** One call's identity on its transcript record. */
-function effectOf(turn: ToolTurn, call: ToolCallPart, index: number): EffectIdentity {
-  const { id: toolCallId, name } = call;
-  return { modelExchangeId: turn.exchangeId, callIndex: index, toolCallId, name, arguments: call.arguments! };
+/** One call's identity on its transcript record: its bracket identity, the exchange id renamed. */
+function effectOf(turn: ToolTurn, call: ToolCallPart, index: number) {
+  const { exchangeId, ...identity } = identityOf(turn, call, index);
+  return { ...identity, modelExchangeId: exchangeId };
 }
 
 /**

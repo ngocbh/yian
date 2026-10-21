@@ -646,9 +646,9 @@ export function engine(
 }
 
 /**
- * Return a child resolver that serves `children[path]` for a `uses: <path>`, loaded once with the
- * conformance fixtures as its base directory (Python's `_resolver(**children)`); an unknown path
- * is a `LoadError`.
+ * Return a child resolver that serves `children[path]` for a `uses: <path>`, loaded on first use
+ * (and then reused) with the conformance fixtures as its base directory (Python's
+ * `_resolver(**children)`, which loads every child up front); an unknown path is a `LoadError`.
  */
 export function childResolver(children: Readonly<Record<string, string>>): ChildResolver {
   const loaded = new Map<string, Promise<ComposedFlow>>();

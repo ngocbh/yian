@@ -585,13 +585,13 @@ function checkTestOptions(options: Pick<RunFlowOptions, "scheduler" | "random" |
 }
 
 /**
- * Take each supplied input through host intake, keyed as given.
+ * @internal Take each supplied input through host intake, keyed as given.
  *
  * @throws TypeError when `inputs` isn't a record or is a Proxy.
  * @throws RangeError when a key names no declared input.
  * @throws TypeCheckError when an input is an accessor property or isn't a yian value.
  */
-function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
+export function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
   // Checked first: reading a Proxy's prototype or keys would run its traps.
   if (types.isProxy(inputs)) throw new TypeError("inputs must be a mapping of input names to values, got Proxy");
   checkInputNames(params, inputs);

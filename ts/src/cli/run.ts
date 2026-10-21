@@ -14,6 +14,7 @@
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
  * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log; `reportRunLog` prints it.
+ * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
  * - `stopOnSignals` stops a run's controller with a `HostStop` on SIGINT, SIGTERM or SIGHUP.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
@@ -22,8 +23,10 @@
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
-import { END_ID, START_ID } from "../compile/model.ts";
+import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
+import { copyGraph, END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
@@ -38,24 +41,32 @@ import {
   canonicalTypeLabel,
   FileRef,
   isRecord,
-  jsTypeName,
   type Value,
   writeAsText,
 } from "../typesys/values.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
+import { type Connection, connectionCredentials, connectionSnapshot } from "../llm_clients/connection.ts";
 import { MemoryOperationError } from "../memory/contracts.ts";
-import type { MemoryRegistry } from "../memory_host.ts";
-import { checkInputNames } from "../nodes/binding.ts";
+import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
+import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { type RunResult, runFlow, skillGrants, staticNodes } from "../run.ts";
-import { addNote } from "../runtime/eval_node.ts";
+import { hostInputs, type RunResult, runFlow, runStartLlm, skillGrants, staticNodes } from "../run.ts";
 import type { McpServer } from "../tools/mcp.ts";
 import { registeredTools } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import { Terminal } from "./terminal.ts";
-import { type CliIo, CommandEnv, osReason, printJson, UsageError, type Writer } from "./utils.ts";
+import {
+  type CliIo,
+  CommandEnv,
+  ensureEnvKey,
+  osReason,
+  printJson,
+  type PromptContext,
+  UsageError,
+  type Writer,
+} from "./utils.ts";
 
 // The TS run inspection isn't ported yet; it throws until its module lands.
 async function inspectRun(log: string): Promise<never> {
@@ -680,6 +691,92 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
 }
 
 /**
+ * @internal Return the distinct provider and connection of every agent in `flow`, as a fresh run
+ * would bind them.
+ *
+ * Snapshots the provider and model defaults and the connections once, resolves the `llm_config`
+ * cascade as a fresh run would (`cliCfg` its outermost gap-fill layer, values read from `inputs`)
+ * on a throwaway copy of the compiled flow, and binds each agent's connection as a fresh run would.
+ * An agent whose config resolves only when it runs counts when its provider is already known, an
+ * Azure one with the `base_url` its layers set; otherwise its key is checked at its model call.
+ *
+ * @param cliCfg The `--provider`/`--model` layer, possibly empty.
+ * @param inputs The run's supplied inputs, before coercion; absent supplies none.
+ * @returns The distinct `[provider, connection]` pairs in first-seen order, the connection `null`
+ *   for a provider without one (`ollama`).
+ * @throws {RangeError} If no layer gives an agent a provider and model, a supplied input can't be
+ *   coerced, an input or a value the `llm_config` reads is invalid, or the saved logins or the
+ *   default-provider environment are invalid.
+ * @throws {TypeError} As `hostInputs` and `coerceInputs` do.
+ */
+export function agentConnections(
+  flow: ComposedFlow,
+  cliCfg: Readonly<Record<string, string>>,
+  { inputs = {}, env }: { inputs?: Readonly<Record<string, unknown>>; env: Env },
+): [string, Connection | null][] {
+  const probe = copyGraph(flow.compiled);
+  const snapshot = connectionSnapshot({ env });
+  // Coerced as `runFlow` coerces, so an input selects the provider the run will use.
+  const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
+  const runLlm = runStartLlm(probe, coerced, { ...cliCfg }, snapshot);
+  // A call-time agent whose provider no value can change needs its key as surely as a static
+  // agent; finding out at its model call would waste the nodes before it.
+  const known = knownCallTimeProviders(probe, runLlm.callTime, snapshot.defaults);
+  const baseUrls = knownCallTimeBaseUrls(probe, runLlm.callTime);
+  const effective: Record<string, Record<string, unknown>> = { ...runLlm.effective };
+  for (const [path, provider] of known) {
+    if (!provider) continue;
+    effective[path] = { provider };
+    // A saved Azure key covers only its own resource, so the endpoint picks the key.
+    const baseUrl = baseUrls.get(path);
+    if (provider === "azure" && baseUrl !== undefined) effective[path]["base_url"] = baseUrl;
+  }
+  const seen: [string, Connection | null][] = [];
+  for (const config of Object.values(snapshot.bind(effective))) {
+    const connection = (config["_connection"] as Connection | undefined) ?? null;
+    const pair: [string, Connection | null] = [config["provider"] as string, connection];
+    if (!seen.some((other) => isDeepStrictEqual(other, pair))) seen.push(pair);
+  }
+  return seen;
+}
+
+/**
+ * @internal Check every key `flow`'s agents will need before the run starts, prompting at
+ * `context.terminal` if one is missing.
+ *
+ * Each distinct agent connection (`agentConnections`) is checked once: a saved login resolves its
+ * stored credential without a prompt; any other agent needs its provider's key variable, through
+ * `ensureEnvKey`, which skips keyless and unknown providers and an unset optional key. An Azure
+ * agent whose `base_url` names another resource than the saved login needs `AZURE_OPENAI_API_KEY`.
+ * A prompted key is `set` in `context.env`.
+ *
+ * @param cliCfg The `--provider`/`--model` layer, possibly empty.
+ * @throws {AuthError} If a saved login can't be resolved.
+ * @throws {Error} As `ensureEnvKey` does, for a required key that is missing.
+ * @throws {RangeError} As `agentConnections` does.
+ */
+export async function ensureProviderKeys(
+  flow: ComposedFlow,
+  cliCfg: Readonly<Record<string, string>>,
+  { supplied = {}, ...context }: PromptContext & { supplied?: Readonly<Record<string, unknown>> },
+): Promise<void> {
+  const env = context.env.read;
+  for (const [provider, connection] of agentConnections(flow, cliCfg, { inputs: supplied, env })) {
+    if (connection !== null && connection.source === "store") {
+      await connectionCredentials(connection, provider, { env });
+    } else {
+      await ensureEnvKey(provider, context);
+    }
+  }
+}
+
+/** Whether `error` is what the key helpers throw for a key that can't be had: a plain `Error`. */
+function isKeyError(error: unknown): error is Error {
+  if (error instanceof AuthError) return true;
+  return error instanceof Error && Object.getPrototypeOf(error) === Error.prototype;
+}
+
+/**
  * Return what `body` resolves to once `registry` has closed. When `body` throws, its error is
  * rethrown, with a close failure, and that failure's notes, appended to its `notes`; otherwise a
  * close failure is thrown.
@@ -692,15 +789,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
     try {
       await registry.close();
     } catch (cleanup) {
-      addNote(error, () => {
-        const [name, message] =
-          cleanup instanceof Error
-            ? [cleanup.name, cleanup.message]
-            : [jsTypeName(cleanup), String(cleanup)];
-        return `Memory cleanup failed: ${name}: ${message}`;
-      });
-      const notes = (cleanup as { notes?: unknown } | null | undefined)?.notes;
-      if (Array.isArray(notes)) for (const note of notes) addNote(error, () => String(note));
+      noteCleanup(error, cleanup, "Memory cleanup failed");
     }
     throw error;
   }
@@ -721,12 +810,14 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * files are read; the servers an AGENT grants go to the run unopened, and a bad config is printed
  * and exits 1. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path
  * always does. On a TTY stdin, each input not supplied is prompted for on stderr, and a cancelled
- * prompt prints `run cancelled` and exits 1. The log is `log`, else a fresh one under
- * `~/.yian/runs` named by the run id. A succeeded run prints its output on stdout, as text; a failed one prints
- * its diagnostic on stderr and exits 1. A host failure (a bad option value, a log that can't be
- * created) prints `run failed: <message>` on stderr and exits 1. Under `json`, stdout holds one
- * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
- * (`compose.load`, `run.cancelled`, `run.setup`).
+ * prompt prints `run cancelled` and exits 1. `provider` and `model`, those given, are the run's
+ * outermost `llmConfig` layer. Before the log exists, every key the agents need is checked
+ * (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is printed and exits 1. The
+ * log is `log`, else a fresh one under `~/.yian/runs` named by the run id. A succeeded run prints
+ * its output on stdout, as text; a failed one prints its diagnostic on stderr and exits 1. A host
+ * failure (a bad option value, a log that can't be created) prints `run failed: <message>` on
+ * stderr and exits 1. Under `json`, stdout holds one document: the output (`status: "succeeded"`),
+ * the failure (`status: "failed"`) or the error (`compose.load`, `run.cancelled`, `run.setup`).
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
  *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
@@ -866,6 +957,20 @@ async function startRun(
       }
       Object.assign(supplied, gathered);
 
+      // The flags supply the outermost cascade layer (fill the gap), not an override: an agent's
+      // own llm_config and the flow's still win.
+      const cliCfg: Record<string, string> = {};
+      if (options.provider) cliCfg["provider"] = options.provider;
+      if (options.model) cliCfg["model"] = options.model;
+      // Any required key is asked for before the run creates its log.
+      try {
+        await ensureProviderKeys(flow, cliCfg, { supplied, env: commandEnv, terminal: prompter });
+      } catch (error) {
+        if (!isKeyError(error)) throw error;
+        await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
+        return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+      }
+
       const runId = defaultRunId();
       const log = options.log ?? defaultRunLogPath(runId, io.env);
       await reportRunLog(log, io.stderr, io.env);
@@ -873,6 +978,7 @@ async function startRun(
         return await runFlow(flow, supplied, {
           log,
           runId,
+          llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
           numWorkers: options.numWorkers ?? 8,
           onEvent: reporter === null ? null : (event) => reporter.handle(event),
           memory: registry.size > 0 ? registry : null,

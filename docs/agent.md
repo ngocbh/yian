@@ -209,6 +209,12 @@ and every granted tool by `ToolCallStarted`/`ToolCallFinished`. These are live
 callbacks only; the node value, the run log, and retained memory are unchanged.
 Changed (TS yian): consecutive concurrency-safe tool calls run together, and a group's
 `ToolCallFinished` events arrive in finish order (see [Tool context](api.md#tool-context)).
+With session memory, each call of a group is requested in the transcript just before it starts,
+and the group's started calls are observed in call order once the whole group has settled: a call
+that returned is `completed` with its result, even when a sibling failed and the node fails; a
+failed call is `failed` (`interrupted` when a stop is pending). A call's status is decided when the
+group settles, so a process killed mid-group leaves its finished calls `pending`, and the next
+run's history reports their outcome as unknown.
 
 With `on_stream`, each chat request's visible text arrives as `StreamChunk`s
 sharing that request's `exchange_id`. A completed request ends with one empty

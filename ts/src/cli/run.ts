@@ -820,9 +820,9 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * the failure (`status: "failed"`) or the error (`compose.load`, `run.cancelled`, `run.setup`).
  *
  * SIGINT, SIGTERM or SIGHUP from the command's start, Ctrl-C at a prompt during the run, or
- * `io.stop` aborting stops the run: `cancelled by user` on stderr, exit 130, no document. The
- * end of input at a prompt during the run prints `run cancelled` and exits 1 (`run.cancelled`).
- * The first stop wins.
+ * `io.stop` aborting (with a `HostStop`) stops the run, closing a prompt that is up before it:
+ * `cancelled by user` on stderr, exit 130, no document. The end of input at a prompt during the
+ * run prints `run cancelled` and exits 1 (`run.cancelled`). The first stop wins.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
  *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
@@ -833,31 +833,41 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
   // From the command's start, so a signal during the load or the prompts stops the run too.
   const disposeSignals = stopOnSignals(controller);
   const stop = io.stop;
-  const forwardStop = () => controller.abort(stop!.reason);
+  const forwardStop = () => controller.abort(stop?.reason);
   if (stop?.aborted) forwardStop();
   else stop?.addEventListener("abort", forwardStop, { once: true });
   // Building it has no side effects; the terminal pauses it while a prompt is up.
   const { quiet, verbose } = options;
   const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
-  const state = { started: false };
+  // `startRun` sets it just before `runFlow`.
+  const started = { value: false };
   // Building it touches neither stream; it reads keys only when it prompts.
   const terminal = new Terminal({
     input: io.stdin,
     output: io.stderrStream,
     // Before the run, a stopped prompt answers null and the command reports it.
     onStop: (reason) => {
-      if (!state.started) return;
+      if (!started.value) return;
       const why = reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof");
       controller.abort(why);
     },
     onActive: (active) => {
       if (active) reporter?.pause();
-      else if (!controller.signal.aborted) reporter?.resume();
+      // The terminal calls this before `onStop`, so whether the run is stopping is known later.
+      else queueMicrotask(() => {
+        if (!controller.signal.aborted) reporter?.resume();
+      });
     },
   });
+  // A stop before the run ends a prompt that is up rather than waiting for its answer.
+  const closePrompt = () => {
+    if (!started.value) terminal.close();
+  };
+  controller.signal.addEventListener("abort", closePrompt, { once: true });
   try {
-    return await startRun(flowPath, options, io, { terminal, controller, reporter, state });
+    return await startRun(flowPath, options, io, { terminal, controller, reporter, started });
   } finally {
+    controller.signal.removeEventListener("abort", closePrompt);
     terminal.close();
     disposeSignals();
     stop?.removeEventListener("abort", forwardStop);
@@ -870,7 +880,7 @@ interface RunHost {
   terminal: Terminal;
   controller: AbortController;
   reporter: ProgressReporter | null;
-  state: { started: boolean };
+  started: { value: boolean };
 }
 
 /** `run`'s body, prompting at `host.terminal`, stopped through `host.controller`. */
@@ -993,6 +1003,8 @@ async function startRun(
       controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;
       const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
+      // A stop closes the prompt, which then answers null: that is the stop, not a cancel.
+      controller.signal.throwIfAborted();
       if (gathered === null) {
         await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
         return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
@@ -1008,6 +1020,8 @@ async function startRun(
       try {
         await ensureProviderKeys(flow, cliCfg, supplied, { env: commandEnv, terminal: prompter });
       } catch (error) {
+        // A key prompt the stop closed is the stop, not a missing key.
+        controller.signal.throwIfAborted();
         if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
         await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
         return fail(new Diagnostic({ code: "run.setup", message: error.message }));
@@ -1018,7 +1032,7 @@ async function startRun(
       const runId = defaultRunId();
       const log = options.log ?? defaultRunLogPath(runId, io.env);
       await reportRunLog(log, io.stderr, io.env);
-      host.state.started = true;
+      host.started.value = true;
       try {
         return await runFlow(flow, supplied, {
           log,

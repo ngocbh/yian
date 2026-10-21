@@ -828,18 +828,40 @@ describe("run's stops", () => {
     const stderr: Writer = {
       write: async (text) => {
         chunks.push(text);
-        if (text.includes("✓ first")) stop.abort(new HostStop("SIGTERM"));
+        if (text.includes("✓ first")) {
+          stop.abort(new HostStop("SIGTERM"));
+          sigintWhileDraining = process.listenerCount("SIGINT");
+        }
       },
     };
     const signalListeners = () =>
       ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => process.listenerCount(name));
     const before = signalListeners();
+    let sigintWhileDraining = -1;
     const io: CliIo = { ...testIo().io, stderr, stop: stop.signal };
     expect(await main(["run", flow, "--log", log], io)).toBe(130);
     expect(chunks.at(-1)).toBe("cancelled by user\n");
+    // A forwarded stop leaves the signal listeners, so a real signal still stops the drain.
+    expect(sigintWhileDraining).toBe(before[0]! + 1);
     expect(existsSync(log)).toBe(true);
     expect(getEventListeners(stop.signal, "abort")).toHaveLength(0);
     expect(signalListeners()).toEqual(before);
+  });
+
+  test("io.stop aborting while an input prompt is up closes it: exit 130", async () => {
+    const flow = file("flow.yaml", REQUIRED_INPUTS_FLOW);
+    const { io, stdout, stderr } = testIo();
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const stop = new AbortController();
+    const argv = ["run", flow, "-q", "--json", "--log", join(tmp, "run.jsonl")];
+    const running = main(argv, { ...io, stdin: input, stderrStream: output, stop: stop.signal });
+    while (output.text === "") await new Promise((resolve) => setTimeout(resolve, 1));
+    stop.abort(new HostStop("SIGTERM"));
+    expect(await running).toBe(130);
+    expect(stdout()).toBe("");
+    expect(stderr()).toBe("cancelled by user\n");
+    expect(input.rawCalls).toEqual([true, false]);
   });
 });
 

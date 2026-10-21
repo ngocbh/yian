@@ -52,7 +52,10 @@ export interface CliIo {
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
   stderrStream: NodeJS.WritableStream & { columns?: number };
   env: Env;
-  /** A stop from outside the process's signals: aborted, or aborting later, it stops the run. */
+  /**
+   * A stop from outside the process's signals, aborted with a `HostStop`: aborted, or aborting
+   * later, it stops the run.
+   */
   stop?: AbortSignal;
 }
 

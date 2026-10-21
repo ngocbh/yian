@@ -30,7 +30,7 @@ import { loadSkillDir } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
-import { isSystemError, resolvedPath, SkillError } from "../skills/catalog.ts";
+import { isSystemError, resolvedPath, SkillError, statOrNull } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import { canonicalTypeLabel, FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
 import { type CliIo, osReason, printJson, UsageError, type Writer } from "./utils.ts";
@@ -589,7 +589,7 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
     return 1;
   }
   await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env });
-  // Running the loaded flow is ported together with the loader; until then nothing runs.
+  // Running the loaded flow isn't ported yet; until then nothing runs.
   throw new Error("yian run is not ported to TypeScript yet");
 }
 
@@ -660,7 +660,7 @@ async function loadConfined(
     const childPath = join(dir, `${ref}.yaml`);
     // A missing child outside the root is reported as outside, by `loadConfined`.
     const inside = !leavesRoot(relative(root, resolveFlowPath(childPath)));
-    if (inside && !statSync(childPath, { throwIfNoEntry: false })?.isFile()) {
+    if (inside && !statOrNull(childPath)?.isFile()) {
       throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
     }
     const child = await loadConfined(root, childPath, importing, env);

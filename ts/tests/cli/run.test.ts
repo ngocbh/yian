@@ -625,6 +625,15 @@ describe("check", () => {
     expect(diagnostic.frames.map((f: { note: string }) => f.note)).toEqual(["uses alias 'child'"]);
   });
 
+  test("--root: a child under a regular file is not found", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/main.yaml", parentFlow("lib/child"));
+    file("company/lib", "not a directory\n");
+    const diagnostic = await rootDiagnostic(root, flow);
+    expect(diagnostic.code).toBe("compose.load");
+    expect(diagnostic.message).toEndWith(`flow 'lib/child' not found: ${join("lib", "child.yaml")}`);
+  });
+
   test("--root: a child outside the root keeps its outside_root code", async () => {
     const root = join(tmp, "company");
     const flow = file("company/main.yaml", parentFlow("../lib/child"));
@@ -666,8 +675,10 @@ describe("check", () => {
         "output: ${work.output}\nuses:\n  child: lib/child\n",
     );
     file("company/sub/m.ts", fn);
-    file("company/sub/lib/child.yaml", `id: child\nname: child\nnodes:\n${node}output: \${a.output}\n`);
-    file("company/sub/lib/m.ts", fn);
+    // The child's own file is only beside it, so resolving it against its importer's directory fails.
+    const childNode = node.replace("./m.ts:f", "./n.ts:f");
+    file("company/sub/lib/child.yaml", `id: child\nname: child\nnodes:\n${childNode}output: \${a.output}\n`);
+    file("company/sub/lib/n.ts", fn);
     for (const argv of [[alone], ["--root", root, flow]]) {
       const { code, flows } = await checkJson(argv);
       expect([code, flows[0].ok]).toEqual([0, true]);

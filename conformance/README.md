@@ -334,11 +334,21 @@ A case can't hold code, so its host is declared under `host`.
   would give (its kind read from the status and the message, as `kindForStatus` reads a body);
   its class name is TS's own, so a case with such a raise doesn't pin `ModelCallFinished.error`.
   Without `status`, it is a plain error named `class`, never retried.
+  TS seats a call from the call itself, since its model is built per node: the node id is the
+  one the model was built for, and the consumer is `structured_retry` when the request's last
+  message is a user message starting `Your previous output was invalid:` (the correction a
+  structured call adds after an invalid reply), else `compose` for a node id ending in
+  `__compose` and `agent` for any other. TS doesn't serve `backward`, `summary` or
+  `memory:<key>` calls yet. Every TS model call streams, so no `chunks` entry is summed; the text
+  chunks of an entry build one text part, ahead of its tool calls.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
   <JSON Schema>}` (Python's schema:
   `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares
   exactly with the call's, failing the case when they differ (`tools` absent: none bound;
   `schema` present: the call asked for output matching it, Python's native structured call).
+  In TS, `schema` is the native structured output's schema, a structured call lowered to a tool
+  binds that tool in `tools`, and numbers compare by value, since a JS number doesn't keep `1`
+  and `1.0` apart.
   A request's `messages` and tool specs are yian's own and shared; its `schema`, any text built
   from it (a fallback call's schema instruction) and a model call's `structured_*` `purpose` in
   `events` record how Python lowers a structured call, so a case that depends on them carries
@@ -492,7 +502,8 @@ produced, such as an output or an answer); fields that are null are left out at 
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
 The `attempt` of `ModelCallStarted`, `ModelCallFinished` and `StreamChunk` is left out when it
-is 1 (a null one already is); cases never write `attempt: 1`.
+is 1 (a null one already is); cases never write `attempt: 1`, and the TS runner's check refuses
+a case that does.
 
 - An **event** is `[<EventName>]` or `[<EventName>, <data form>]`, for example
   `[NodeSucceeded, {node_id: hello, output: hi Ada}]` and `[RunStarted]`.

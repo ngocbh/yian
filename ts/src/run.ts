@@ -271,11 +271,8 @@ export class RunResult {
 /** The retained authority behind each learnable `RunResult`, found by its result. */
 const BACKWARD_HANDLES = new WeakMap<RunResult, BackwardHandle>();
 
-/**
- * The private original program and closed append authority a learnable result keeps for later
- * feedback: the log's path, or a process-local log's records.
- */
-class BackwardHandle {
+/** What a `BackwardHandle` keeps. */
+type BackwardHandleFields = {
   readonly program: CompiledFlow;
   readonly runId: string;
   /** The absolute log path captured at the run, or `null` for a process-local log. */
@@ -285,38 +282,29 @@ class BackwardHandle {
   readonly memory: ReadonlyMap<string, Memory> | null;
   /** The last accepted backward outcome this handle observed. */
   outcome: BackwardOutcome | null;
-  // Held in memory for this result's own backward calls; never recorded.
+  /** The host key, held for this result's own backward calls and never recorded. */
   readonly apiKey: string | null;
+  /** The header values sent with the host key, held and never recorded as the key is. */
   readonly headers: Readonly<Record<string, string>> | null;
   /** The run's environment: the replay checks the recorded `YIAN_*` values against it. */
   readonly env: Env;
   readonly models: ModelAccess;
+};
+
+// The fields are declared once, in `BackwardHandleFields`, and merged into the class.
+interface BackwardHandle extends BackwardHandleFields {}
+
+/**
+ * The private original program and closed append authority a learnable result keeps for later
+ * feedback: the log's path, or a process-local log's records.
+ */
+class BackwardHandle {
   /** Whether a backward call on the result is running. */
   busy = false;
   #unusable = false;
 
-  constructor(fields: {
-    program: CompiledFlow;
-    runId: string;
-    path: string | null;
-    records: readonly RecordEnvelope[];
-    memory: ReadonlyMap<string, Memory> | null;
-    outcome: BackwardOutcome | null;
-    apiKey: string | null;
-    headers: Readonly<Record<string, string>> | null;
-    env: Env;
-    models: ModelAccess;
-  }) {
-    this.program = fields.program;
-    this.runId = fields.runId;
-    this.path = fields.path;
-    this.records = fields.records;
-    this.memory = fields.memory;
-    this.outcome = fields.outcome;
-    this.apiKey = fields.apiKey;
-    this.headers = fields.headers;
-    this.env = fields.env;
-    this.models = fields.models;
+  constructor(fields: BackwardHandleFields) {
+    Object.assign(this, fields);
   }
 
   /**
@@ -325,7 +313,7 @@ class BackwardHandle {
    * @throws Error when an earlier call couldn't retain its accepted prefix, and what the replay or
    *   `driveBackward` throws.
    */
-  backward(
+  async backward(
     feedback: FeedbackValue,
     options: { apiKey: string | null; headers: Readonly<Record<string, string>> | null },
   ): Promise<BackwardOutcome> {
@@ -353,6 +341,7 @@ class BackwardHandle {
         const replayed = state;
         const openMemory = (): Promise<MemoryRuntime> => {
           if (this.memory === null) throw new MemorySetupError("backward requires this run's enabled memory mapping");
+          // `driveBackward` opens memory only when the run recorded a memory table.
           const memories = replayed.memories!;
           checkRegistryTypes(this.memory, memories);
           const program = copyGraph(this.program);
@@ -888,10 +877,10 @@ async function startRun(
       defaults: nonDefaults(runDefaults),
     });
 
+    // Taken once, so a later directory change can't move the log.
+    const locator = log === null ? null : resolve(log);
     // Preparation precedes durable-file creation, so invalid initialization cannot leave an empty
     // path behind.
-    // The absolute path is taken once, so a later directory change can't move the log.
-    const locator = log === null ? null : resolve(log);
     authority = locator === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(locator, canonicalRunId);
     const observers = commitPrepared(authority, state, preparedStart);
     const runtime = memoryRuntime;
@@ -1081,7 +1070,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       }
       const models = options.models ?? defaultModelAccess(env);
       const retainedProgram = state.learnable ? copyGraph(flow.compiled) : null;
-      const handle = (): BackwardHandle | null =>
+      const retain = (): BackwardHandle | null =>
         retainedHandle(retainedProgram, state, authority, options.memory ?? null, {
           locator,
           apiKey,
@@ -1089,7 +1078,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
           env,
           models,
         });
-      if (state.result !== null) return resultFromState(state, log, [], handle());
+      if (state.result !== null) return resultFromState(state, log, [], retain());
       // The checks that need no tools come before any server starts.
       checkConditions(flow.compiled);
       checkTemplates(flow.compiled);
@@ -1153,7 +1142,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
       publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
       events.push(...(await engine.run()));
-      return resultFromState(state, log, events, handle());
+      return resultFromState(state, log, events, retain());
     } catch (error) {
       primary = { error };
       throw error;
@@ -1919,13 +1908,7 @@ function retainedHandle(
   state: RunState,
   log: RunLog,
   memory: ReadonlyMap<string, Memory> | null,
-  options: {
-    locator: string | null;
-    apiKey: string | null;
-    headers: Readonly<Record<string, string>> | null;
-    env: Env;
-    models: ModelAccess;
-  },
+  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models"> & { locator: string | null },
 ): BackwardHandle | null {
   if (program === null) return null;
   return new BackwardHandle({

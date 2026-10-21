@@ -1350,8 +1350,9 @@ object, list or `null` raises `TypeError`; feedback that doesn't match the outpu
 not retained with `learnable: true`, and headers that don't fit raise `RangeError`, not
 `ValueError`. There is no int digit limit. A second call on the same result while one is in
 progress rejects with an `Error` ("a backward call on this result is already in progress") and
-appends nothing. The `learning` and `backwardOutcome` getters read the last accepted attempt, so
-they change when a call settles, whether it resolves or rejects after its attempt was accepted.
+appends nothing. The `learning` and `backwardOutcome` getters read the last accepted attempt this
+result observed, so they change when a call settles, whether it resolves or rejects after its
+attempt was accepted.
 
 A string addresses the whole output. A dictionary selects existing output fields;
 a list selects positions and must have the exact output length at every nested

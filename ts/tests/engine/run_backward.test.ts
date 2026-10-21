@@ -51,6 +51,10 @@
  *   script written to the test's directory, which blocks in a `FakeMemory` learner or a session's
  *   `commit` that writes a marker and never settles.
  *
+ * TS-only: a run whose `env` sets a non-default `YIAN_*` value records it, and a later
+ * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env`; a resume in
+ * another `env` is refused.
+ *
  * Covered by a case: `test_backward_without_memory_is_explicit_and_repeatable[durable]`
  * (`backward/run_backward__backward_without_memory_is_repeatable`, whose runner writes a log),
  * the forward half of `test_forward_returns_before_any_learning_or_commit`
@@ -70,6 +74,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { DefaultsMismatchError } from "../../src/defaults.ts";
 import { RunStarted, RunSucceeded } from "../../src/events.ts";
 import { MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import {
@@ -916,3 +921,18 @@ await resumed.backward("Second review.");
     30_000,
   );
 }
+
+test("a later backward replays in the run's env", async () => {
+  const path = join(dir, "env.jsonl");
+  const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "50" });
+  const flow = await loadFlow(IDENTITY, { env });
+  const result = await run(flow, { text: "hello" }, { learnable: true, log: path, env });
+
+  expect((await result.backward("Review.")).status).toBe("succeeded");
+
+  // The value is recorded: a resume in another env is refused, one in the run's env replays.
+  expect(await rejection(resume(flow, { log: path }))).toBeInstanceOf(DefaultsMismatchError);
+  const resumed = await resume(flow, { log: path, env });
+  expect((await resumed.backward("Again.")).status).toBe("succeeded");
+  expect(startedAttempts(path)).toEqual([1, 2]);
+});

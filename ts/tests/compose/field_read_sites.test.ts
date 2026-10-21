@@ -48,12 +48,18 @@
  * `::test_flow_assert_check_impossible_even_on_null_is_reported` (2),
  * `::test_flow_assert_read_error_names_the_declared_type` (6),
  * `::test_flow_assert_shorthand_check_is_reported_as_written`, `::test_flow_assert_reads_unknown_input_field` (2),
- * `::test_flow_assert_readable_input_fields_load` (2); and the load halves of
- * `::test_loop_assert_reads_the_carried_field` (2), `::test_node_assert_known_input_field_loads_and_runs`,
+ * `::test_flow_assert_readable_input_fields_load` (2); and the load half of
+ * `::test_flow_assert_on_a_skippable_producer_reads_null` `always-on-the-declared-type`.
+ *
+ * Ported through `loadFlow` and `runFlow`: `::test_loop_assert_reads_the_carried_field` (2),
+ * `::test_node_assert_known_input_field_loads_and_runs`,
  * `::test_loop_node_assert_tag_checks_narrow_its_local` (with its two load errors),
  * `::test_partial_record_local_root_reads` (with its load error),
- * `::test_flow_assert_on_a_skippable_producer_reads_null` (2) and
- * `::test_flow_assert_known_input_field_loads_and_runs`.
+ * `::test_flow_assert_known_input_field_loads_and_runs`, the `sell` and `buy-positive` rows of
+ * `::test_guarded_node_assert_runs`, the `buy-zero` row of `::test_guarded_flow_assert_runs`
+ * and the `every-member-ruled-out` row of `::test_flow_assert_on_a_skippable_producer_reads_null`.
+ * Their other rows are covered by `run-core/compose_field_read_sites__guarded_node_assert_fails`,
+ * `__guarded_flow_assert_short_circuits` and `__flow_assert_on_a_skipped_producer_reads_null`.
  *
  * Ported, the builtin-result rows: `::test_binding_reads_a_field_on_a_builtin_result`,
  * `::test_flow_output_reads_a_field_on_a_builtin_result`, `::test_prompt_reads_a_field_on_a_builtin_result`,
@@ -77,14 +83,13 @@
  * node-assert check, the flow-assert lowering and the type-table pass decide, pinned at the end,
  * with `full` (every frame and the notes) for `loop_while_reads_a_field_on_a_builtin_result` and
  * `prompt_inside_a_def_reads_unknown_field`.
- *
- * Later (T4-8 follow-up): `test_guarded_node_assert_runs`, `test_guarded_flow_assert_runs`, and the run halves
- * of the rows above.
  */
 
 import { expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
+import { runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
@@ -162,6 +167,11 @@ const load = (text: string) => assembleText(text);
 
 /** Return the message of the `LoadError` assembling `text` throws. */
 const loadMessage = (text: string) => loadError(() => load(text)).message;
+
+/** Load `text` with `loadFlow` and run it on `inputs` (default: the flow inputs `s` and `r`). */
+async function run(text: string, inputs: Readonly<Record<string, unknown>> = { s: "x", r: { a: "x" } }) {
+  return runFlow(await loadFlow(text), inputs);
+}
 
 /** A CODE node typed `output` reading the flow input `s`. */
 function producer(nodeId: string, output: string): string {
@@ -447,8 +457,10 @@ const LOOPS: [string, (assertion: string) => string][] = [
   ["inline", inlineLoop],
 ];
 
-test.each(LOOPS)("a loop assert reads the carried field (load half): %s", (_id, build) => {
-  load(build("st.b == null or st.b == 'y'"));
+test.each(LOOPS)("a loop assert reads the carried field: %s", async (_id, build) => {
+  const result = await run(build("st.b == null or st.b == 'y'"));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
 });
 
 test.each(LOOPS)("a loop assert reads a field neither seed nor carried has: %s", (_id, build) => {
@@ -470,8 +482,10 @@ test.each([
   load(flow(nodes, "${c.output}"));
 });
 
-test("a node assert known input field loads (load half)", () => {
-  load(flow(code({ v: "${step.output}" }, ["v.a == 'x'"]), "${c.output}"));
+test("a node assert known input field loads and runs", async () => {
+  const result = await run(flow(code({ v: "${step.output}" }, ["v.a == 'x'"]), "${c.output}"));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
 });
 
 test("a node assert reads the narrowed member inside a branch", () => {
@@ -552,6 +566,17 @@ test.each([
 test("a node assert read under two guards is checked under each", () => {
   const message = loadMessage(localAssert("v.qty > 0 or (isinstance(v, Buy) and v.qty > 1)"));
   expect(count(message, `reference \${v.qty} ${ASSERT_QTY_HINT}`)).toBe(1);
+});
+
+test.each([
+  ["sell", { action: "sell" }],
+  ["buy-positive", { action: "buy", qty: 2 }],
+])("a guarded node assert runs: %s", async (_id, order) => {
+  const node = code({ v: "${input.o}" }, ["not isinstance(v, Buy) or v.qty > 0"]);
+
+  const result = await run(flow(node, "${c.output}", { inputs: ORDER_INPUT }), { s: "x", r: { a: "x" }, o: order });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
 });
 
 test("agent node assert reads are narrowed", () => {
@@ -772,8 +797,10 @@ function orderLoop(assertion: string): string {
   return flow(nodes, "${drive.output}", { inputs: "  o: !Order\n" });
 }
 
-test("a loop node assert's tag checks narrow its local (load half)", () => {
-  load(orderLoop("o.action != 'buy' or o.qty > 0"));
+test("a loop node assert's tag checks narrow its local", async () => {
+  const order = { action: "buy", qty: 2 };
+  const result = await run(orderLoop("o.action != 'buy' or o.qty > 0"), { s: "x", r: { a: "x" }, o: order });
+  expect(result.status, result.failure?.message).toBe("succeeded");
   expect(loadMessage(orderLoop("o.qty > 0"))).toContain(
     "node 'drive' assert: reference ${o.qty} reads field 'qty', which only union members with action buy " +
       'have; check the member first with `o.action == "buy" and ...`',
@@ -813,11 +840,11 @@ function partialRead(assertion: string): string {
   return flow(nodes, "${c.output}", { defs: PARTIAL_CHILD_TEXT });
 }
 
-test("partial record local root reads (load half)", () => {
+test("partial record local root reads", async () => {
   expect(loadMessage(partialRead("v.zz == 1"))).toContain(
     "node 'c' assert: reference ${v.zz} reads unknown field 'zz' on record",
   );
-  load(partialRead("v.a == 'a' and v.b.deep.k == 1"));
+  expect((await run(partialRead("v.a == 'a' and v.b.deep.k == 1"))).status).toBe("succeeded");
 });
 
 // ---------- flow asserts ----------
@@ -853,6 +880,14 @@ test("a flow assert read before its check is rejected", () => {
   );
 });
 
+test("a guarded flow assert runs: buy-zero", async () => {
+  const inputs = { s: "x", r: { a: "x" }, o: { action: "buy", qty: 0 }, ab: { x: 1 } };
+
+  const result = await run(flowAssert("not isinstance(input.o, Buy) or input.o.qty > 0"), inputs);
+
+  expect(result.status).toBe("failed");
+});
+
 test("an impossible flow assert check is located at the assert", () => {
   const text = flowAssert("input.o.action == 'hold'");
   const error = loadError(() => load(text));
@@ -874,12 +909,18 @@ function skippableAssert(assertion: string): string {
   return flow(nodes, "${step.output}", { tail: asserts(assertion) });
 }
 
-test.each([
-  ["always-on-the-declared-type", "not isinstance(d.output, Order) or d.output.action == 'sell'"],
-  ["every-member-ruled-out", "not isinstance(d.output, Buy) and not isinstance(d.output, Sell)"],
-])("a flow assert on a skippable producer reads null (load half): %s", (_id, assertion) => {
-  // END binds a producer it reads with `:- null`, so a skipped one reads null.
-  load(skippableAssert(assertion));
+// END binds a producer it reads with `:- null`, so a skipped one reads null.
+test("a flow assert on a skippable producer reads null (load half): always-on-the-declared-type", () => {
+  load(skippableAssert("not isinstance(d.output, Order) or d.output.action == 'sell'"));
+});
+
+test("a flow assert on a skippable producer reads null: every-member-ruled-out", async () => {
+  const result = await run(
+    skippableAssert("not isinstance(d.output, Buy) and not isinstance(d.output, Sell)"),
+    { s: "stop", r: { a: "x" } },
+  );
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
 });
 
 test.each([
@@ -950,8 +991,11 @@ test.each([
   expect(loadMessage(flow("", "${step.output}", { tail: asserts(assertion) }))).toContain(expected);
 });
 
-test("a flow assert known input field loads (load half)", () => {
-  load(flow("", "${step.output}", { tail: asserts("input.r.a == 'x'") }));
+test("a flow assert known input field loads and runs", async () => {
+  const text = flow("", "${step.output}", { tail: asserts("input.r.a == 'x'") });
+
+  expect((await run(text)).status).toBe("succeeded");
+  expect((await run(text, { s: "x", r: { a: "y" } })).status).toBe("failed");
 });
 
 test.each([

@@ -141,7 +141,6 @@ import { MemoryRunLog, NodeExpandedRecord, type RecordEnvelope, type RunRecord }
 import {
   commitPrepared,
   type GrowBuilder,
-  type GrowthIndex,
   growthIndex,
   type PreparedTransition,
   prepareExpanded,
@@ -153,6 +152,7 @@ import {
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import {
   canonicalChild,
+  expectIndexMatchesRebuild,
   expectUnchanged,
   FailingLog,
   fragment,
@@ -224,51 +224,6 @@ function expectAtomic(state: RunState, log: MemoryRunLog, fn: () => void): void 
   expectUnchanged(state, before);
   expect(topologySnapshot(state)).toEqual(beforeTopology);
   expect(log.nextSequence).toBe(sequence);
-}
-
-/**
- * Expect `state.growthIndex` to equal one rebuilt from the live state, and every edge and reducer
- * container to name only live nodes (`_require_index_matches_rebuild` of `test_growth_index.py`).
- */
-function expectIndexMatchesRebuild(state: RunState): void {
-  const flow = state.flow;
-  const kept = state.growthIndex!;
-  state.growthIndex = null;
-  let fresh: GrowthIndex;
-  try {
-    fresh = growthIndex(state);
-  } finally {
-    state.growthIndex = kept;
-  }
-  const sortedIds = (entries: Iterable<readonly [string, ReadonlySet<string>]>) =>
-    Object.fromEntries([...entries].map(([key, ids]) => [key, [...ids].sort()]));
-  expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
-  expect(sortedIds(kept.referrers)).toEqual(sortedIds(fresh.referrers));
-  // The kept index leaves an empty entry for an owner whose grown nodes all moved or retired.
-  expect(sortedIds([...kept.grown].filter(([, ids]) => ids.size > 0))).toEqual(sortedIds(fresh.grown));
-
-  const outgoing = new Map<string, Edge[]>();
-  const incoming = new Map<string, Edge[]>();
-  for (const edge of flow.edges) {
-    expect([edge.id, flow.nodes.has(edge.from) && flow.nodes.has(edge.to)]).toEqual([edge.id, true]);
-    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
-    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
-  }
-  expect(Object.fromEntries(flow.outgoingEdges)).toEqual(Object.fromEntries(outgoing));
-  expect(Object.fromEntries(flow.incomingEdges)).toEqual(Object.fromEntries(incoming));
-  expect([...state.edgeState.keys()].sort()).toEqual(flow.edges.map((edge) => edge.id).sort());
-  expect([...state.nodeState.keys()].sort()).toEqual([...flow.nodes.keys()].sort());
-  for (const ids of [
-    flow.wiring.keys(),
-    state.depth.keys(),
-    state.growthOwner.keys(),
-    state.growthOwner.values(),
-    state.deferredPrune,
-    state.ready,
-    state.inFlight,
-  ]) {
-    expect([...ids].filter((nodeId) => !flow.nodes.has(nodeId))).toEqual([]);
-  }
 }
 
 /** Add one live node of `state`'s flow with no edges and no wiring, as an `UNKNOWN` node. */

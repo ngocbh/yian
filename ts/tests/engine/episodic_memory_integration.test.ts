@@ -15,7 +15,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { reply, runWith } from "./session_fakes.ts";
+import { memorySections, reply, runWith } from "./session_fakes.ts";
 
 const FLOW = `id: episodic-history
 name: episodic_history
@@ -42,10 +42,7 @@ const env: Env = (name) => VARS.get(name);
 
 /** The memory section texts the system prompt of `model`'s last request shows. */
 function recalled(model: ScriptedModel): string[] {
-  const system = model.requests.at(-1)!.messages[0]!.text();
-  if (!system.includes("Memory context (canonical JSON")) return [];
-  const payload = JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { text: string }[] };
-  return payload.sections.map((section) => section.text);
+  return memorySections(model.requests.at(-1)!.messages).map((section) => section.text);
 }
 
 test("backward commits an episode recalled by a fresh run", async () => {

@@ -109,6 +109,7 @@ import { TypeCheckError } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory, FakeSession } from "./memory_fakes.ts";
 import { rejection, serving, textReply } from "./run_state_fixtures.ts";
+import { backwardReply } from "./session_fakes.ts";
 
 const IDENTITY = "id: identity\nname: identity\ninput:\n  text: !str\nnodes: {}\noutput: ${input.text}\n";
 const WITH_MEMORY = IDENTITY.replace("name: identity", "name: identity\nlong_term_memory: test");
@@ -959,7 +960,7 @@ test("result.backward publishes an AGENT backward model retry to onEvent", async
   const chat = new ScriptedModel([
     textReply("Answer."),
     new ProviderError("server", "busy", { retryAfter: 0.001 }),
-    textReply(JSON.stringify({ input_feedback: {}, self_feedback: ["Be brief."], variable_feedback: {} })),
+    backwardReply("Be brief."),
   ]);
   // The run's env allows one retry, and a later backward replays in it.
   const env = hostEnv(dir, { YIAN_MODEL_RETRIES: "1" });

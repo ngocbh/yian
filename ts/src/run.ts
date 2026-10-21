@@ -232,7 +232,9 @@ export class RunResult {
    * @param options.headers The header values sent with that key; their names must be the recorded
    *   ones, compared without case. `null` uses the headers this result was created with, if any.
    * @param options.onEvent Receives each AGENT backward model call's retry (a `ModelCallRetried`
-   *   with consumer `"backward"`) and each `ReplayDegraded`; `null` (the default) publishes nothing.
+   *   with consumer `"backward"`) and one `ReplayDegraded` per reason per call; a throw from it
+   *   fails that AGENT's backward, and the attempt finishes `failed`. `null` (the default)
+   *   publishes nothing.
    * @returns The accepted attempt's outcome, separate from the forward status, output, failure and
    *   events; `learning` is its projection.
    * @throws TypeError when the feedback has an invalid message carrier.

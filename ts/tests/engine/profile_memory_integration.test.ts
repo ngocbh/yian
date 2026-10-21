@@ -34,7 +34,7 @@ import { ProfileMemory } from "../../src/memory/profile.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { JsonlRunLog, MemoryCommitFailedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
-import { rejected, reply, resumeWith, runWith, sentTexts } from "./session_fakes.ts";
+import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "./session_fakes.ts";
 
 const CHAT = `id: chat
 name: chat
@@ -132,10 +132,11 @@ class Learner extends ScriptedModel {
     const inner = super.stream(request, options);
     const before = this.before;
     if (before === null) return inner;
-    async function* events() {
-      await before!();
+    // A generator expression, not a hoisted declaration, so `before` stays narrowed to non-null.
+    const events = async function* () {
+      await before();
       yield* inner;
-    }
+    };
     return new EventStream(events(), () => inner.close());
   }
 }
@@ -181,14 +182,9 @@ async function profile(): Promise<ProfileMemory> {
   return backend(store);
 }
 
-/** An AGENT backward reply with no feedback (Python's `_reply()`). */
-function noFeedback() {
-  return reply(JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} }));
-}
-
 /** Python's `_forward`: a model answering `answers`, then `backwards` AGENT backward calls. */
 function chat(answers: string[], backwards = 1): ScriptedModel {
-  return new ScriptedModel([...answers.map(reply), ...Array.from({ length: backwards }, noFeedback)]);
+  return new ScriptedModel([...answers.map(reply), ...Array.from({ length: backwards }, () => backwardReply())]);
 }
 
 /** The JSON input of `model`'s learner request `index` (the last by default). */

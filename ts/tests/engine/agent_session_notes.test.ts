@@ -16,7 +16,7 @@ import { expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
-import { reply, runWith, SESSION_CONFIG, sentTexts, snapshot } from "./session_fakes.ts";
+import { backwardReply, reply, runWith, SESSION_CONFIG, sentTexts, snapshot } from "./session_fakes.ts";
 
 const NOTE = "Check the measurement units before answering.";
 
@@ -35,11 +35,6 @@ nodes:
 output: \${answer.output}
 `;
 
-/** An AGENT backward reply holding only the self-feedback `NOTE`. */
-function feedback() {
-  return reply(JSON.stringify({ input_feedback: {}, self_feedback: [NOTE], variable_feedback: {} }));
-}
-
 /** The texts of every message of `model`'s request `index`, its system prompt included. */
 function allTexts(model: ScriptedModel, index = -1): string[] {
   return model.requests.at(index)!.messages.map((message) => message.text());
@@ -47,7 +42,7 @@ function allTexts(model: ScriptedModel, index = -1): string[] {
 
 test("backward reuses self feedback without an extra model call", async () => {
   const flow = await loadFlow(FLOW);
-  const model = new ScriptedModel([reply("first answer"), feedback(), reply("next answer")], SESSION_CONFIG);
+  const model = new ScriptedModel([reply("first answer"), backwardReply(NOTE), reply("next answer")], SESSION_CONFIG);
   const memory = new SessionMemory();
   const first = await runWith(flow, { question: "first question" }, memory, model, { learnable: true });
   expect(first.status).toBe("succeeded");
@@ -116,7 +111,7 @@ output:
   right: \${right.output}
 `);
   const model = new ScriptedModel(
-    [reply("answer"), reply("answer"), feedback(), reply("answer"), reply("answer")],
+    [reply("answer"), reply("answer"), backwardReply(NOTE), reply("answer"), reply("answer")],
     SESSION_CONFIG,
   );
   const left = new SessionMemory();
@@ -143,7 +138,7 @@ output:
 
 test("an admitted failed forward can learn without rewriting history", async () => {
   const model = new ScriptedModel(
-    [new Error("provider could not answer"), feedback(), reply("recovered")],
+    [new Error("provider could not answer"), backwardReply(NOTE), reply("recovered")],
     SESSION_CONFIG,
   );
   const memory = new SessionMemory();

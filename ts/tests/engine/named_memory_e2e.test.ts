@@ -20,7 +20,7 @@ import type { ChatModel } from "../../src/llm/events.ts";
 import type { Message } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { buildMemories } from "../../src/memory_host.ts";
-import { reply, runWith } from "./session_fakes.ts";
+import { memorySections, reply, runWith } from "./session_fakes.ts";
 
 const ROOT_FLOW = `id: e2e-memory
 name: e2e_memory
@@ -66,23 +66,19 @@ output: \${summarize.output}
 
 const STATUS_PREFIX = "Session history status (context only): ";
 
-/** Describe what the model saw: real user turns and recalled memory keys. */
-function describe(messages: readonly Message[]) {
+/** Describe what the model saw: real user turns and recalled memory keys (Python's `_reply`). */
+function describeSeen(messages: readonly Message[]) {
   const users = messages.filter((message) => message.role === "user" && !message.text().startsWith(STATUS_PREFIX));
   const keys: string[] = [];
-  const system = messages.find((message) => message.role === "system")?.text() ?? "";
-  if (system.includes("Memory context (canonical JSON")) {
-    const payload = JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { memory: string }[] };
-    for (const section of payload.sections) if (!keys.includes(section.memory)) keys.push(section.memory);
-  }
+  for (const section of memorySections(messages)) if (!keys.includes(section.memory)) keys.push(section.memory);
   return reply(`users=${users.length} memories=${keys.join(",")}`);
 }
 
-/** Python's `_Model`: answers each request with `describe`. */
+/** Python's `_Model`: answers each request with `describeSeen`. */
 const MODEL: ChatModel = {
   provider: "openai",
   model: "fake-model",
-  stream: (request) => new ScriptedModel([describe(request.messages)]).stream(request),
+  stream: (request) => new ScriptedModel([describeSeen(request.messages)]).stream(request),
 };
 
 /** The paths, relative to `dir` and sorted, of the `.sqlite` files under it. */

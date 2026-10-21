@@ -41,7 +41,17 @@ import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { rejected, reply, resumeWith, runWith, sentTexts, snapshot, StopAfterFirstReply } from "./session_fakes.ts";
+import {
+  backwardReply,
+  NO_ENV,
+  rejected,
+  reply,
+  resumeWith,
+  runWith,
+  sentTexts,
+  snapshot,
+  StopAfterFirstReply,
+} from "./session_fakes.ts";
 
 const MODEL_CONFIG = { provider: "openai", model: "storage-test-model" };
 const AGENT_FLOW = `id: durable-session
@@ -167,7 +177,8 @@ for (const policy of ["episodic", "reflective"] as const) {
     const flow = await loadFlow(CODE_FLOW.replace("POLICY", policy));
     const field = policy === "episodic" ? "episodes" : "lessons";
     const recorded = await withBackend(backend(policy, file, reflector), async (memory) => {
-      const result = await runFlow(flow, {}, { memory: new Map([[policy, memory]]), learnable: true, log });
+      const options = { memory: new Map([[policy, memory]]), learnable: true, log, env: NO_ENV };
+      const result = await runFlow(flow, {}, options);
       expect(result.status).toBe("succeeded");
       expect(result.output).toBe(7n);
       expect(snapshot(memory)[field]).toEqual([]);
@@ -180,7 +191,7 @@ for (const policy of ["episodic", "reflective"] as const) {
     const prefix = fs.readFileSync(log);
     await withBackend(backend(policy, file, reflector), async (reopened) => {
       expect(snapshot(reopened)).toEqual(recorded);
-      const inspected = await resumeFlow(flow, { log, memory: new Map([[policy, reopened]]) });
+      const inspected = await resumeFlow(flow, { log, memory: new Map([[policy, reopened]]), env: NO_ENV });
       expect(inspected.output).toBe(7n);
       expect(snapshot(reopened)).toEqual(recorded);
     });
@@ -211,8 +222,7 @@ test("api session history is used after reopening storage", async () => {
 
 test("api session learned notes survive storage reopen", async () => {
   const note = "Check the measurement units before answering.";
-  const feedback = JSON.stringify({ input_feedback: {}, self_feedback: [note], variable_feedback: {} });
-  const model = new ScriptedModel([reply("first answer"), reply(feedback), reply("second answer")], MODEL_CONFIG);
+  const model = new ScriptedModel([reply("first answer"), backwardReply(note), reply("second answer")], MODEL_CONFIG);
   const file = path.join(dir, "session.sqlite");
   const flow = await loadFlow(AGENT_FLOW);
   const recorded = await withBackend(new SessionMemory({ storage: file }), async (memory) => {

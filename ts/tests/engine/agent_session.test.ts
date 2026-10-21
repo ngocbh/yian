@@ -49,8 +49,9 @@ import {
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import { ConversationItem } from "../../src/memory/contracts.ts";
-import { CapabilityFault } from "../../src/nodes/base.ts";
 import { compatibility, decodeMessage, encodeMessage, memoryBoundary } from "../../src/nodes/agent/memory.ts";
+import { CapabilityFault } from "../../src/nodes/base.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 
 // Each test's environment: conftest's base (a private store in a fresh directory, the default
 // model) with the default provider this test sets.
@@ -144,8 +145,11 @@ for (const [label, message] of codecMessages) {
     expect(item.payload["exchange_id"]).toBe("exchange");
     expect(decodeMessage(item).toJSON()).toEqual(message.toJSON());
     expect(encodeMessage(message, "exchange").itemId).not.toBe(item.itemId);
-    // The stored payload cannot be changed afterwards.
-    expect(Object.isFrozen(item.payload["message"])).toBe(true);
+    // The stored payload cannot be changed afterwards, at any depth.
+    const wire = item.payload["message"] as JsonObject;
+    expect(Object.isFrozen(wire)).toBe(true);
+    expect(Object.isFrozen(wire["parts"])).toBe(true);
+    expect(Object.isFrozen((wire["parts"] as JsonObject[])[0])).toBe(true);
   });
 }
 
@@ -157,12 +161,9 @@ const badPayloads: [string, unknown][] = [
 ];
 
 for (const [label, bad] of badPayloads) {
-  test(`message codec rejects non-JSON provider payloads: ${label}`, () => {
-    expect(() =>
-      encodeMessage(
-        new Message({ role: "assistant", parts: [new TextPart("reply")], providerPayload: { bad } as never }),
-        "exchange",
-      ),
+  test(`a Message refuses non-JSON provider payloads before encoding: ${label}`, () => {
+    expect(
+      () => new Message({ role: "assistant", parts: [new TextPart("reply")], providerPayload: { bad } as never }),
     ).toThrow(MessageFormatError);
   });
 }
@@ -228,12 +229,14 @@ test("message codec rejects nested data loss and opaque payload changes", () => 
 
   const item = stored({ exchange_id: "exchange", message: wire });
   const real = Message.prototype.toJSON;
-  const changes: ((data: Record<string, any>) => void)[] = [
-    (data) => (data["parts"][2]["name"] = "different"),
-    (data) => delete data["parts"][2]["id"],
-    (data) => (data["parts"][2]["arguments"]["id"] = true),
-    (data) => (data["parts"][2]["arguments"]["extra"] = "not in the message"),
-    (data) => (data["parts"][0]["extra"] = "not in the message"),
+  const part = (data: JsonObject, index: number) => (data["parts"] as JsonObject[])[index]!;
+  const args = (data: JsonObject) => part(data, 2)["arguments"] as JsonObject;
+  const changes: ((data: JsonObject) => void)[] = [
+    (data) => (part(data, 2)["name"] = "different"),
+    (data) => delete part(data, 2)["id"],
+    (data) => (args(data)["id"] = true),
+    (data) => (args(data)["extra"] = "not in the message"),
+    (data) => (part(data, 0)["extra"] = "not in the message"),
   ];
   for (const change of changes) {
     const spy = spyOn(Message.prototype, "toJSON").mockImplementation(function (this: Message) {
@@ -241,11 +244,20 @@ test("message codec rejects nested data loss and opaque payload changes", () => 
       change(data);
       return data;
     });
+    let error: unknown = null;
     try {
-      expect(() => decodeMessage(item)).toThrow(new RangeError("invalid stored conversation message"));
+      decodeMessage(item);
+    } catch (caught) {
+      error = caught;
     } finally {
       spy.mockRestore();
     }
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toBe("invalid stored conversation message");
+    // The round-trip check refused it, not a change that throws on its own.
+    const cause = (error as Error).cause;
+    expect(cause).toBeInstanceOf(RangeError);
+    expect((cause as Error).message).toBe("stored message would be changed by decoding");
   }
   expect(item.payload["message"]).toEqual(wire);
 });

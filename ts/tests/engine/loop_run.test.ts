@@ -70,14 +70,21 @@
  * - `test_partial_loop_inside_call_body`: covered by
  *   `run-loop/engine_loop_run__partial_loop_inside_call_and_map_children`.
  *
- * Later (T4-8): needs `resumeFlow`: `test_loop_without_max_resumes_from_its_log` (the hand-written
- * `resume/loop_run__a_while_loop_cut_mid_run_resumes_to_the_same_output`, which the conformance
- * runner can't run yet), `test_partial_loop_resumes_from_its_log`, and, which also need a port of
- * Python's `_replay_run_log`, `test_nested_growth_loop_resumes_from_a_cut_log` and
- * `test_loop_with_a_kept_body_node_resumes_from_a_cut_log`.
+ * - `test_loop_without_max_resumes_from_its_log`: covered by the hand-written
+ *   `resume/loop_run__a_while_loop_cut_mid_run_resumes_to_the_same_output`, whose header names
+ *   it (the same flow, cut mid-run, resumed to the same output).
+ *
+ * Ported through `runFlow`, a log cut to its first half, and `resumeFlow`:
+ * `test_partial_loop_resumes_from_its_log`, `test_nested_growth_loop_resumes_from_a_cut_log` and
+ * `test_loop_with_a_kept_body_node_resumes_from_a_cut_log`, the last two replaying the log with
+ * `replayRunLog` (Python's `_replay_run_log`). The kept body node's sleep is 200 ms (Python: 0.2 s).
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
@@ -86,11 +93,12 @@ import { RunSucceeded } from "../../src/events.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { PartialRecordContract, type ValueContract } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
-import { runFlow } from "../../src/run.ts";
+import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
-import { NodeExpandedRecord } from "../../src/runtime/log.ts";
+import { JsonlRunLog, NodeExpandedRecord } from "../../src/runtime/log.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { engine } from "./run_state_fixtures.ts";
 
 const COUNTER = `
@@ -1308,4 +1316,63 @@ test("loop body call grows after its iteration was pruned", async () => {
   const result = await runFlow(await loadConformanceFlow(DEFERRED_CALL), {}, { numWorkers: 4 });
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ n: 3n });
+});
+
+// ---------- resumed from a cut log ----------
+
+const dir = mkdtempSync(join(tmpdir(), "yian-loop-run-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/**
+ * Run `source` on `inputs` into a new log, await `beforeCut` on it, cut the log to its first half
+ * of records, resume it, and expect both to succeed with the same output; return the log's path.
+ */
+async function runCutAndResume(
+  name: string,
+  source: string,
+  inputs: Record<string, unknown>,
+  numWorkers?: number,
+  beforeCut: (path: string) => Promise<void> = async () => {},
+): Promise<string> {
+  const path = join(dir, `${name}.jsonl`);
+  const first = await runFlow(await loadConformanceFlow(source), inputs, { log: path, numWorkers, env: hostEnv(dir) });
+  expect(first.failure).toBeNull();
+  await beforeCut(path);
+  // Cut mid-run, so the resume replays the recorded drivers and runs the rest live.
+  const lines = readFileSync(path, "utf8").split(/(?<=\n)/);
+  writeFileSync(path, lines.slice(0, Math.floor(lines.length / 2)).join(""));
+  const resumed = await resumeFlow(await loadConformanceFlow(source), { log: path, numWorkers, env: hostEnv(dir) });
+  expect(resumed.failure).toBeNull();
+  expect(resumed.output).toEqual(first.output);
+  return path;
+}
+
+/** Replay the log at `path` over `source` (Python's `_replay_run_log`). */
+async function replayed(source: string, path: string) {
+  const log = JsonlRunLog.resume(path);
+  try {
+    return replayRunLog(await loadConformanceFlow(source), log);
+  } finally {
+    log.close();
+  }
+}
+
+test("a partial loop resumes from its log", async () => {
+  await runCutAndResume("partial", PARTIAL_CHAT, PARTIAL_CHAT_INPUTS);
+});
+
+test("a nested growth loop resumes from a cut log", async () => {
+  // The resumed log replays to one resident iteration.
+  const source = NESTED_BODIES["nested"]![0].replace("TIMES", "6");
+  const path = await runCutAndResume("nested", source, {});
+  const state = await replayed(source, path);
+  expect(state.flow.nodes.size).toBe((await finishNested("nested", 2)).state.flow.nodes.size);
+});
+
+test("a loop with a kept body node resumes from a cut log", async () => {
+  // The replay re-derives which body nodes were kept, so a resumed run finishes.
+  const source = DIRECT_SIDE.replace("SLEEP", "200");
+  await runCutAndResume("kept", source, {}, 4, async (path) => {
+    expect((await replayed(source, path)).deferredPrune.size).toBeGreaterThan(0);
+  });
 });

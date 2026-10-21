@@ -64,14 +64,41 @@
  * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
  * matches fragments.
  *
- * Later: the other 17 tests, run-only rows with no backward (CODE, call and map outputs and
- * bindings, run inputs, replay of an older log).
+ * Ported through `runFlow` (inline CODE bodies JavaScript; `deep_tree` the TS fixture
+ * `./fixtures/compose_codefns.ts:deep_tree`), each run in `hostEnv`:
+ * `test_a_record_output_at_the_limit_succeeds`, `test_a_record_output_over_the_limit_fails_at_the_field`,
+ * `test_a_far_too_deep_inline_output_fails_without_raising`,
+ * `test_a_far_too_deep_reference_output_fails_on_depth`, `test_an_untyped_output_over_the_limit_fails`,
+ * `test_a_map_result_list_at_the_limit_succeeds`, `test_a_run_input_record_may_carry_a_value_at_the_limit`,
+ * `test_a_run_input_over_the_limit_is_rejected_before_the_run_starts`,
+ * `test_a_binding_around_a_value_at_the_limit_fails_its_node`,
+ * `test_a_value_template_around_a_value_at_the_limit_fails_its_node`,
+ * `test_a_call_bound_to_a_value_at_the_limit_succeeds`,
+ * `test_a_call_bound_over_the_limit_fails_the_call_not_its_start`,
+ * `test_a_map_over_list_around_a_value_at_the_limit_fails_the_map` and
+ * `test_replay_accepts_a_value_recorded_before_the_limit`. Changed: the run-input error is a
+ * `TypeCheckError` (Python's subclass `ValueError` too). The replay row's recording run reads the
+ * process's installed values, which take `MAX_VALUE_NESTING` 150 unchecked as Python's
+ * `set_defaults.unchecked` does (a `YIAN_*` value in a run's `env` is range-checked, and 100 is
+ * the maximum); its resume runs in `hostEnv`; the old log's `defaults` is `{}`, since TS's
+ * `run_started` requires the field (Python drops it).
+ *
+ * Covered by the harvested run cases (the same flows and results):
+ * `run-core/engine_value_nesting_boundaries__an_untyped_output_at_the_limit_flows_out_whole`,
+ * `run-core/engine_value_nesting_boundaries__a_map_result_list_over_the_limit_fails`
+ * (`test_a_map_result_list_over_the_limit_fails_at_the_map_end`) and
+ * `run-core/engine_value_nesting_boundaries__a_record_flow_output_past_the_limit_fails`
+ * (`test_a_record_flow_output_around_a_value_at_the_limit_fails_at_end`).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { BUILTIN, forget, install, processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallFinished, RunFailed, RunSucceeded, ToolCallStarted } from "../../src/events.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
@@ -83,14 +110,16 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { runFlow, type RunResult } from "../../src/run.ts";
+import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { decodeRecord, encodeRecord } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, TypeCheckError, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { loadErrorAsync } from "../compose/declarations.ts";
-import { drive, serving } from "./run_state_fixtures.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { drive, rejection, serving } from "./run_state_fixtures.ts";
 import { backwardReply, effectsOf, NO_ENV, rejected, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -731,4 +760,286 @@ test("session tool arguments over the limit in a later call stop every call", as
   expect(failure.code).toBe("node.execute");
   expect(failure.message).toContain("deeper than 100 levels");
   expect(calls).toEqual([]);
+});
+
+// ---------- runs: outputs, inputs and bindings ----------
+
+const dir = mkdtempSync(join(tmpdir(), "yian-value-nesting-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Return a flow whose `deep` CODE node runs the inline `body` (Python's `_code_flow`). */
+function codeFlow(body: string, options: { outputLine?: string; flowOutput?: string } = {}): string {
+  const { outputLine = "", flowOutput = "${deep.output}" } = options;
+  const indented = body
+    .trim()
+    .split("\n")
+    .map((line) => `      ${line}`)
+    .join("\n");
+  return `
+id: nesting
+name: nesting
+nodes:
+  deep:
+    kind: code
+${outputLine}
+    code: |
+${indented}
+output: ${flowOutput}
+`;
+}
+
+/** A CODE body returning `{tree: v}`, `v` nested `levels` records deep. */
+const treeBody = (levels: number) =>
+  `let v = "leaf"\nfor (let i = 0; i < ${levels}; i++) v = { a: v }\nreturn { tree: v }`;
+
+/** A CODE body returning a list chain `levels` levels deep. */
+const listBody = (levels: number) => `let v = "leaf"\nfor (let i = 0; i < ${levels}; i++) v = [v]\nreturn v`;
+
+/** Return `leaf` wrapped in `levels` lists. */
+function nestList(levels: number, leaf: Value = "leaf"): Value {
+  let value = leaf;
+  for (let i = 0; i < levels; i++) value = [value];
+  return value;
+}
+
+const TREE_OUTPUT = "    output: {tree: object}";
+
+/** Load `text` with the conformance fixtures and run it on `inputs` in `hostEnv`, with `options`. */
+async function run(text: string, inputs: Record<string, unknown> = {}, options: Parameters<typeof runFlow>[2] = {}) {
+  return runFlow(await loadConformanceFlow(text), inputs, { env: hostEnv(dir), ...options });
+}
+
+/** Expect the run failed `nodeId`'s output contract on value depth. */
+function expectTooDeep(result: RunResult, nodeId: string): void {
+  expect(result.status).toBe("failed");
+  const failure = result.failure!;
+  expect([failure.code, failure.nodeId]).toEqual(["contract.output", nodeId]);
+  expect(failure.message).toContain("deeper than 100 levels");
+  expect(failure.message).not.toContain("Circular");
+}
+
+/** Expect `nodeId` failed `binding.evaluate` on value depth with a `prefix` message. */
+function expectBindingTooDeep(result: RunResult, nodeId: string, prefix: string): void {
+  expect(result.status).toBe("failed");
+  const failure = result.failure!;
+  expect([failure.code, failure.nodeId]).toEqual(["binding.evaluate", nodeId]);
+  expect(failure.message).toStartWith(prefix);
+  expect(failure.message).toContain("deeper than 100 levels");
+}
+
+test("a record output at the limit succeeds", async () => {
+  const result = await run(codeFlow(treeBody(99), { outputLine: TREE_OUTPUT }));
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ tree: nestRecord(99) });
+});
+
+test("a record output over the limit fails at the field", async () => {
+  const result = await run(codeFlow(treeBody(100), { outputLine: TREE_OUTPUT }));
+  expectTooDeep(result, "deep");
+  expect(result.failure!.message).toStartWith("output at tree.a");
+  expect(result.failure!.trace[0]!.key).toBe("/s:root/s:node/s:deep/s:output/s:contract/s:path/s:tree");
+});
+
+test.each([200, 1500])("a far too deep inline output fails without throwing (%d levels)", async (levels) => {
+  expectTooDeep(await run(codeFlow(treeBody(levels), { outputLine: TREE_OUTPUT })), "deep");
+});
+
+test("a far too deep reference output fails on depth", async () => {
+  const text = `
+id: nesting
+name: nesting
+input:
+  n: !int
+nodes:
+  deep:
+    kind: code
+    input:
+      n: \${input.n}
+    code: ./fixtures/compose_codefns.ts:deep_tree
+output: \${deep.output}
+`;
+  const result = await run(text, { n: 1500 });
+  expectTooDeep(result, "deep");
+  expect(result.failure!.message).not.toContain("canonical data nesting");
+});
+
+test("an untyped output over the limit fails", async () => {
+  expectTooDeep(await run(codeFlow(listBody(101))), "deep");
+});
+
+test("a map result list at the limit succeeds", async () => {
+  const text = `
+id: nesting
+name: nesting
+nodes:
+  m:
+    kind: map
+    over: "\${[1, 2]}"
+    input:
+      y: !int \${item}
+    nodes:
+      work:
+        kind: code
+        input:
+          y: \${input.y}
+        code: |
+          let v = inputs["y"]
+          for (let i = 0; i < 99; i++) v = [v]
+          return v
+    output: \${work.output}
+output: \${m.output}
+`;
+  const result = await run(text);
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual([nestList(99, 1n), nestList(99, 2n)]);
+});
+
+const ECHO_X = `
+id: nesting
+name: nesting
+input:
+  x: !object
+nodes:
+  echo:
+    kind: code
+    input:
+      x: \${input.x}
+    code: |
+      return inputs["x"]
+output: \${echo.output}
+`;
+
+test("a run input record may carry a value at the limit", async () => {
+  const value = nestRecord(100);
+  const result = await run(ECHO_X, { x: value });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual(value);
+});
+
+test.each([101, 1500])("a run input over the limit is rejected before the run starts (%d levels)", async (levels) => {
+  // START's committed record may sit one level over the limit, so the input check is what keeps
+  // a run input record from going further.
+  const text = "id: nesting\nname: nesting\ninput:\n  x: !object\nnodes: {}\noutput: ${input.x}\n";
+  const log = join(dir, `input-${levels}.jsonl`);
+  const error = await rejection(run(text, { x: nestRecord(levels) }, { log }));
+  expect(error).toBeInstanceOf(TypeCheckError);
+  expect((error as TypeCheckError).message).toStartWith("input 'x' at a.a");
+  expect((error as TypeCheckError).message).toContain("deeper than 100 levels");
+  expect((error as TypeCheckError).path).toHaveLength(100);
+  expect(existsSync(log)).toBe(false);
+});
+
+const WRAPPED_BINDING_FLOW = `
+id: nesting
+name: nesting
+input:
+  x: !object
+nodes:
+  c:
+    kind: code
+    input:
+      y: \${[input.x]}
+    code: |
+      return 1
+output: \${c.output}
+`;
+
+test("a binding around a value at the limit fails its node", async () => {
+  const result = await run(WRAPPED_BINDING_FLOW, { x: nestRecord(100) });
+  expectBindingTooDeep(result, "c", "input 'y' at [0].a");
+  expect(result.failure!.trace[0]!.key).toBe("/s:root/s:node/s:c/s:input/s:y/s:binding");
+});
+
+test("a value template around a value at the limit fails its node", async () => {
+  // A record written around a nested `${...}` adds a level, like `${[x]}`.
+  const text = WRAPPED_BINDING_FLOW.replace("y: ${[input.x]}", 'y: {w: "${input.x}"}');
+  expect((await run(text, { x: nestRecord(99) })).status).toBe("succeeded");
+  expectBindingTooDeep(await run(text, { x: nestRecord(100) }), "c", "input 'y' at w.a");
+});
+
+/** A flow whose `k` CALL binds the def input `y: declared` to `binding` (Python's `_call_flow`). */
+const callFlow = (binding: string, declared: string) => `
+id: nesting
+name: nesting
+input:
+  x: !object
+defs:
+  body:
+    input:
+      y: !${declared}
+    nodes:
+      inner:
+        kind: code
+        input:
+          y: \${input.y}
+        code: |
+          return 1
+    output: \${inner.output}
+nodes:
+  k:
+    kind: call
+    call: body
+    input:
+      y: ${binding}
+output: \${k.output}
+`;
+
+test("a call bound to a value at the limit succeeds", async () => {
+  const result = await run(callFlow("${input.x}", "object"), { x: nestRecord(100) });
+  expect([result.status, result.output]).toEqual(["succeeded", 1n]);
+});
+
+test("a call bound over the limit fails the call, not its START", async () => {
+  const result = await run(callFlow("${[input.x]}", "list(object)"), { x: nestRecord(100) });
+  expectBindingTooDeep(result, "k", "input 'y' at [0].a");
+});
+
+test("a MAP over a list around a value at the limit fails the MAP", async () => {
+  const text = `
+id: nesting
+name: nesting
+input:
+  x: !object
+nodes:
+  m:
+    kind: map
+    over: \${[input.x]}
+    input:
+      y: !object \${item}
+    nodes:
+      work:
+        kind: code
+        code: |
+          return 1
+    output: \${work.output}
+output: \${m.output}
+`;
+  const result = await run(text, { x: nestRecord(100) });
+  expectBindingTooDeep(result, "m", "MAP node 'm': `over`");
+  expect(result.failure!.trace[0]!.key).toBe("/s:root/s:node/s:m/s:reserved/s:over/s:binding");
+});
+
+// ---------- runs: replay ----------
+
+test("replay accepts a value recorded before the limit", async () => {
+  const text = codeFlow(listBody(120));
+  const path = join(dir, "before-the-limit.jsonl");
+  install({ ...BUILTIN, maxValueNesting: 150 });
+  const recorded = await runFlow(await loadConformanceFlow(text), {}, { log: path, env: processEnv });
+  install({ ...BUILTIN, modelRetries: 0 });
+  expect(recorded.status).toBe("succeeded");
+  // A log from before the limit existed recorded no value for it.
+  const lines = readFileSync(path, "utf8").split(/(?<=\n)/);
+  const envelope = JSON.parse(lines[0]!);
+  expect(envelope.payload.defaults).toEqual({ MAX_VALUE_NESTING: 150 });
+  envelope.payload.defaults = {};
+  lines[0] = encodeRecord(decodeRecord(JSON.stringify(envelope))) + "\n";
+  writeFileSync(path, lines.join(""));
+
+  const replayed = await resumeFlow(await loadConformanceFlow(text), { log: path, env: hostEnv(dir) });
+
+  expect(replayed.status).toBe("succeeded");
+  expect(replayed.failure).toBeNull();
+  expect(replayed.output).toEqual(recorded.output);
+  expect(replayed.output).toEqual(nestList(120));
 });

@@ -16,7 +16,19 @@
 import { resolve } from "node:path";
 import { types } from "node:util";
 
+import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
 import { buildGrow } from "./compile/expand.ts";
+import {
+  applyEffectiveLlmMap,
+  bindHostCredentials,
+  callTimeSelection,
+  hostKeyProviders,
+  knownCallTimeProviders,
+  resolveRunLlm,
+  type RunLLM,
+  staticAgentLabels,
+  valueConfigSubjects,
+} from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
 import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
@@ -28,10 +40,26 @@ import { compareCodeUnits, type Failure, getCloseMatches, reprText } from "./dia
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
+import { LLMConfig, popHostCredentials } from "./llm_clients/config.ts";
+import {
+  type AgentConfig,
+  blockProblem,
+  checkModelConfig,
+  type ConnectionSnapshot,
+  connectionSnapshot,
+  HEADER_NAMES_KEY,
+  HOST_KEY_MARKER,
+  headerNameDiff,
+  legacyConnectionConfig,
+  refusedBlock,
+  type SelectionRecord,
+  splitModelConfig,
+} from "./llm_clients/connection.ts";
+import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import type { LearningResult, Memory } from "./memory/contracts.ts";
 import type { Node, Steering } from "./nodes/base.ts";
-import { checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
+import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import { type HostToolCall, isExactly, iterSourceStrings, type Parameter } from "./nodes/contracts.ts";
 import { realScheduler, type Scheduler } from "./platform.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
@@ -150,7 +178,11 @@ export interface RunFlowOptions {
   onEvent?: EventHook | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: StreamHook | null;
-  /** The per-run outer model configuration layer. */
+  /**
+   * The per-run outer model configuration layer, taken through host intake (`{max_tokens: 1000}`
+   * holds the int `1000n`). Its `api_key` goes only to the agents of its `provider`, with its
+   * `base_url`, `organization`, `project` and `headers`; none of them is recorded.
+   */
   llmConfig?: Readonly<Record<string, unknown>> | null;
   /** The backend of each declared memory key, typically a `MemoryRegistry`. */
   memory?: ReadonlyMap<string, Memory> | null;
@@ -205,8 +237,10 @@ export interface RunFlowOptions {
  *   can't be read.
  * @throws RangeError when an input key names no declared input; an AGENT grants a tool, group or
  *   skill this run lacks; a TOOL node names a tool this run lacks, or its inputs or output can't
- *   fit that tool's types; or the identity, worker count or prepared start state breaks its
- *   contract.
+ *   fit that tool's types; `llmConfig` or an agent's resolved model config is invalid, an agent
+ *   has no provider or model, or `llmConfig.api_key` has no `provider`; or the identity, worker
+ *   count or prepared start state breaks its contract. A message never echoes the key.
+ * @throws AuthError when the credential store can't be read.
  * @throws DefaultsError when a `YIAN_<NAME>` variable holds a value its entry doesn't accept.
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
@@ -259,6 +293,185 @@ function hostInputs(params: readonly Parameter[], inputs: unknown): Record<strin
   return taken;
 }
 
+/** A run's `RunStarted.call_time_llm`: the call-time agents' bases and the selection they bind from. */
+type CallTimeLlm = {
+  selection: SelectionRecord;
+  agents: Record<string, AgentConfig>;
+};
+
+/**
+ * Return host header values once every name and value may be sent, in their given order.
+ *
+ * @throws RangeError when a name or value is refused, or there are too many headers; the message
+ *   never echoes a value.
+ */
+function secretHeaders(raw: unknown): Record<string, string> {
+  return validateHeaders(raw, null);
+}
+
+/**
+ * Return whether a run's recorded agents may use the host key: a static agent is marked for it, or
+ * the call-time agents' selection names its provider.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path.
+ * @param callTime The recorded `RunStarted.call_time_llm`, or `null`.
+ */
+function usesHostKey(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+  callTime: Readonly<CallTimeLlm> | null,
+): boolean {
+  return hostKeyProviders(effective).size > 0 || (callTime !== null && callTime.selection.host !== null);
+}
+
+/**
+ * Return the host key the call-time agents' selection names, for a resume check.
+ *
+ * A call-time agent that has not started may still resolve to that key's provider, so a resume
+ * that can't supply the key is refused up front, as for a marked agent.
+ *
+ * @param callTime The recorded `RunStarted.call_time_llm`, or `null`.
+ * @returns `{provider, header_names}` (header names only when recorded), or `null` when the
+ *   selection names no host key.
+ */
+function selectionHost(callTime: Readonly<CallTimeLlm> | null): Record<string, unknown> | null {
+  const host = callTime === null ? null : callTime.selection.host;
+  if (host === null) return null;
+  const selected: Record<string, unknown> = { provider: host["provider"] };
+  const names = host["header_names"] as readonly string[] | undefined;
+  if (names !== undefined && names.length > 0) selected["header_names"] = [...names];
+  return selected;
+}
+
+/**
+ * Check that the host's headers have the names recorded for its key's agents; names compare
+ * without case, as HTTP compares them.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path.
+ * @param headers The headers given for the host key; `null` gives none.
+ * @param callTime The recorded `RunStarted.call_time_llm`; the header names its selection records
+ *   for the host key are expected too.
+ * @throws RangeError when the names differ; the message names the missing and unrecorded header
+ *   names, never a value.
+ */
+function checkHostHeaderNames(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+  headers: Readonly<Record<string, unknown>> | null,
+  callTime: Readonly<CallTimeLlm> | null = null,
+): void {
+  const expected: string[] = [];
+  for (const config of Object.values(effective)) {
+    if (config[HOST_KEY_MARKER] === true) expected.push(...((config[HEADER_NAMES_KEY] as string[] | undefined) ?? []));
+  }
+  const host = callTime === null ? null : callTime.selection.host;
+  if (host !== null) expected.push(...((host["header_names"] as string[] | undefined) ?? []));
+  const diff = headerNameDiff(expected, Object.keys(headers ?? {}));
+  if (diff !== null) {
+    throw new RangeError(`headers must have the header names this run recorded for its host key: ${diff}`);
+  }
+}
+
+/** Validate a host key without echoing it in errors. */
+function secretKey(raw: string): string {
+  return new LLMConfig({ api_key: raw }).apiKey!;
+}
+
+/**
+ * Reject any agent config its model call would reject, before the run starts.
+ *
+ * @param effectiveLlm The effective model map, keyed by static agent path.
+ * @param apiKey The host key, supplied to each config marked for it.
+ * @param headers The header values sent with the host key, supplied beside it.
+ * @param labels The authored site of each synthesized agent's `llm_config`, keyed by static agent
+ *   path; a message names it instead of the path.
+ * @param located The `llm_config` subject of each agent whose layers carry values
+ *   (`valueConfigSubjects`), keyed by static agent path; its message names the subject, and the
+ *   provider's block when the block is what is refused.
+ * @throws RangeError when a config would be rejected by its model call; the message names its agent
+ *   path, or the authored site of a synthesized agent.
+ */
+function checkEffectiveLlm(
+  effectiveLlm: Readonly<Record<string, Readonly<AgentConfig>>>,
+  apiKey: string | null,
+  headers: Readonly<Record<string, string>> | null,
+  labels: ReadonlyMap<string, string>,
+  located: ReadonlyMap<string, string> | null = null,
+): void {
+  for (const [path, config] of Object.entries(effectiveLlm)) {
+    // The host key and header values stay out of the map; supply them where the marker expects
+    // them.
+    let probe = config;
+    if (HOST_KEY_MARKER in config) {
+      const supplied: AgentConfig = { ...config, api_key: apiKey };
+      if (headers !== null && Object.keys(headers).length > 0) supplied["headers"] = headers;
+      probe = supplied;
+    }
+    try {
+      checkModelConfig(probe);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      const subject = located?.get(path);
+      if (subject !== undefined) {
+        throw new RangeError(blockProblem(subject, refusedBlock(probe).slice(1), error.message), { cause: error });
+      }
+      const where = labels.get(path) ?? `Agent ${reprText(path)}`;
+      throw new RangeError(`${where}: ${error.message}`, { cause: error });
+    }
+  }
+}
+
+/**
+ * @internal Return the run's inputs as run start resolves against them: the supplied inputs plus
+ * each omitted input's valid default.
+ *
+ * START still binds and checks the inputs, so a missing required input or a default that fails its
+ * check stays START's logged failure: such a default is left out here rather than thrown before the
+ * log exists.
+ *
+ * @param params The flow's declared inputs.
+ * @param coerced The supplied inputs, already coerced at the run boundary.
+ */
+export function runStartInputs(
+  params: readonly Parameter[],
+  coerced: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  let runInputs: Record<string, unknown> = { ...coerced };
+  for (const parameter of params) {
+    try {
+      runInputs = applyDefaults([parameter], runInputs);
+    } catch (error) {
+      if (!(error instanceof BindingError)) throw error;
+    }
+  }
+  return runInputs;
+}
+
+/**
+ * @internal Resolve a fresh run's llm cascade over `compiled`, in place, with its inputs.
+ *
+ * Values that read only the run's inputs resolve against the supplied inputs, with omitted inputs'
+ * defaults filled.
+ *
+ * @param compiled The run's private flow copy; its agents get their effective configs.
+ * @param coerced The supplied inputs, already coerced at the run boundary.
+ * @param llmConfig The host layer, without the host key and its settings.
+ * @param snapshot The one selection snapshot that determines every agent's defaults.
+ * @returns The resolved configurations, before any connection is bound.
+ * @throws RangeError as `resolveRunLlm` throws it.
+ */
+export function runStartLlm(
+  compiled: CompiledFlow,
+  coerced: Readonly<Record<string, unknown>>,
+  llmConfig: Readonly<Record<string, unknown>>,
+  snapshot: ConnectionSnapshot,
+): RunLLM {
+  return resolveRunLlm(compiled, llmConfig, {
+    defaults: snapshot.defaults,
+    providerModels: snapshot.providerModels,
+    strayModel: snapshot.strayModel,
+    runInputs: runStartInputs(compiled.nodes.get(compiled.startId)!.params ?? [], coerced),
+  });
+}
+
 /** Check the tools, then record and drive a fresh run. */
 async function startRun(
   flow: ComposedFlow,
@@ -270,7 +483,8 @@ async function startRun(
   const { learnable = false, tools = null, skills = null, steering = null, context, signal = null } = options;
   const random = options.random ?? null;
   const scheduler = options.scheduler ?? realScheduler;
-  const models = options.models ?? defaultModelAccess(options.env ?? processEnv);
+  const env = options.env ?? processEnv;
+  const models = options.models ?? defaultModelAccess(env);
   const runTools = new ToolSet(tools, { context });
   checkToolGrants(flow.compiled, runTools);
   checkToolTypes(flow.compiled, runTools);
@@ -288,10 +502,42 @@ async function startRun(
   const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
   for (const [name, value] of Object.entries(coerced)) rejectDeepNesting(value, `input ${reprText(name)}`);
 
-  // The run-start LLM chain (host credentials, the connection snapshot, the cascade and the
-  // call-time agents) is not ported yet, so only flows without AGENT nodes run.
-  const effectiveLlm: Record<string, Record<string, unknown>> = {};
-  const callTimeLlm = null;
+  // The key stays out of the cascade so RunStarted never records it. Its base_url and connection
+  // settings stay out too, so no authored layer can pair the key with another. Host intake makes
+  // the copy they are taken from, with an integral number as an int.
+  const runLlmConfig = fromHost(options.llmConfig ?? {}, "llm_config") as Record<string, unknown>;
+  const host = popHostCredentials(runLlmConfig);
+  let apiKey = host.apiKey;
+  let headers = host.headers;
+
+  // One selection snapshot determines every static agent before RunStarted, and what each agent
+  // resolved only when it runs binds from.
+  const snapshot = connectionSnapshot({ env });
+  const hostKeyProvider = apiKey === null ? null : (runLlmConfig["provider"] as string);
+  const runLlm = runStartLlm(privateFlow, coerced, runLlmConfig, snapshot);
+  const effectiveLlm = snapshot.bind(runLlm.effective, {
+    hostKeyProvider,
+    hostBaseUrl: host.baseUrl,
+    hostSettings: host,
+  });
+  // Each call-time agent's provider when run start already knows it: it limits the recorded
+  // selection.
+  const known = knownCallTimeProviders(privateFlow, runLlm.callTime, snapshot.defaults);
+  let callTimeLlm: CallTimeLlm | null = null;
+  if (Object.keys(runLlm.callTime).length > 0) {
+    callTimeLlm = {
+      selection: callTimeSelection(snapshot, { known, hostKeyProvider, hostBaseUrl: host.baseUrl, hostSettings: host }),
+      agents: runLlm.callTime,
+    };
+  }
+  applyEffectiveLlmMap(privateFlow, effectiveLlm, callTimeLlm);
+  // A key that neither marks an agent nor is in the call-time agents' selection has nothing to
+  // authenticate, so the run keeps neither it nor its headers.
+  if (apiKey !== null && !usesHostKey(effectiveLlm, callTimeLlm)) apiKey = headers = null;
+  if (apiKey !== null) bindHostCredentials(privateFlow, apiKey, headers);
+  checkEffectiveLlm(effectiveLlm, apiKey, headers, staticAgentLabels(privateFlow), valueConfigSubjects(privateFlow));
+
+  if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
 
   const canonicalRunId = runId ?? defaultRunId();
   const pool = new VariablePool(privateFlow.startId);
@@ -597,6 +843,43 @@ function staticPathKeys(nodes: ReadonlyMap<string, Node>, nodeIds: Iterable<stri
     if (scope !== null) keys.set(nodeId, scope.staticPath.join("/"));
   }
   return keys;
+}
+
+/**
+ * @internal Check the public fields of each recorded agent config before a resume appends.
+ *
+ * A record written before a key was retired may carry it set; resuming would then run with a config
+ * the current carrier refuses. No key is required here, so the host-key marker is left out, and
+ * with it the base_url and connection settings bound to that key (replay has already checked them;
+ * the model call checks the URL against its connection and the header names against the headers
+ * given).
+ *
+ * @param effective The recorded configs: the effective model map keyed by static agent path, and
+ *   the config of each started call-time agent keyed by its runtime id.
+ * @param labels The authored site of each synthesized agent's `llm_config`, keyed by static agent
+ *   path; a message names it instead of the path.
+ * @param staticPaths The static path of each runtime id in `effective`, under which its label is
+ *   looked up; other keys are static paths already.
+ * @throws RangeError when a config has an invalid or retired field; the message names its agent
+ *   path or runtime id, or the authored site of a synthesized agent, and never echoes values.
+ */
+export function checkRecordedLlmFields(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+  labels: ReadonlyMap<string, string>,
+  staticPaths: ReadonlyMap<string, string> = new Map(),
+): void {
+  for (const [path, config] of Object.entries(effective)) {
+    const hostOnly: readonly string[] =
+      HOST_KEY_MARKER in config ? [HOST_KEY_MARKER, "base_url", "organization", "project", HEADER_NAMES_KEY] : [];
+    const publicFields = Object.fromEntries(Object.entries(config).filter(([key]) => !hostOnly.includes(key)));
+    try {
+      splitModelConfig(legacyConnectionConfig(publicFields));
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      const where = labels.get(staticPaths.get(path) ?? path) ?? `Agent ${reprText(path)}`;
+      throw new RangeError(`${where}: ${error.message}`, { cause: error });
+    }
+  }
 }
 
 /**

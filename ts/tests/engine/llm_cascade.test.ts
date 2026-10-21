@@ -2,30 +2,38 @@
  * Cascade resolution and replay over stable paths in the static call tree: mirrors
  * `tests/engine/test_llm_cascade.py`.
  *
- * Ported: every row but the one below. Changed: ints are `bigint`s; errors pin their class
+ * Ported: every row. Changed: ints are `bigint`s; errors pin their class
  * (`RangeError` where Python raises `ValueError`); the LOOP body's CODE reference is TS's form,
  * loaded with the conformance directory as `baseDir` (`loadConformanceFlow`);
  * `test_replay_uses_logged_map_after_environment_changes` changes the environment around the
  * replay where Python also patches `connection_snapshot` to fail (an ES module export a Bun test
- * can't replace).
+ * can't replace); `test_effective_map_resolves_environment_defaults_once` runs with an `env` accessor
+ * that changes `YIAN_DEFAULT_MODEL` after its first read and a `ScriptedModel` from `models`, where
+ * Python patches `connection_snapshot` and the client factory.
  *
  * TS-only: `bindHostCredentials` on a copied flow leaves the original's `llmConfig` unchanged; a
  * NaN run input is a `RangeError` naming the field and the input (Python's `ValueError` reads
  * `input 't': non-finite number nan is not a yian value`).
- *
- * Later (T4-8): `test_effective_map_resolves_environment_defaults_once` (it runs the flow).
  */
 
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { applyEffectiveLlmMap, bindHostCredentials, resolveLlmCascade, resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { type CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import type { Env } from "../../src/defaults.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { mergeLlmConfig } from "../../src/llm_clients/config.ts";
 import { HOST_KEY_MARKER } from "../../src/llm_clients/connection.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
+import { runFlow } from "../../src/run.ts";
 
 import { loadConformanceFlow } from "../compose/declarations.ts";
+import { textReply } from "./run_state_fixtures.ts";
 
 const DEFAULTS = { provider: "anthropic", model: "default-model" };
 const PROVIDER_MODELS = { openai: "openai-default", google: "google-default" };
@@ -378,6 +386,38 @@ test("a shared child is de-aliased per parent provider", async () => {
   expect(effective["right/leaf_call/agent"]!["provider"]).toBe("anthropic");
   expect((left.nodes.get("agent") as AgentNode).llmConfig!["provider"]).toBe("openai");
   expect((right.nodes.get("agent") as AgentNode).llmConfig!["provider"]).toBe("anthropic");
+});
+
+test("the effective map resolves environment defaults once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-cascade-"));
+  try {
+    // The run reads YIAN_DEFAULT_MODEL once, from its one snapshot; any later read sees a new value.
+    const modelReads: string[] = [];
+    const env: Env = (name) => {
+      if (name === "YIAN_AUTH_FILE") return join(dir, "auth.json");
+      if (name === "YIAN_DEFAULT_PROVIDER") return "ANTHROPIC";
+      if (name !== "YIAN_DEFAULT_MODEL") return undefined;
+      modelReads.push(name);
+      return modelReads.length === 1 ? "environment-model" : "later-model";
+    };
+    const seen: Record<string, unknown>[] = [];
+    const models: ModelAccess = {
+      env,
+      createModel: (config) => {
+        seen.push({ provider: config["provider"], model: config["model"] });
+        return new ScriptedModel([textReply("ok")]);
+      },
+    };
+    const loaded = await loadFlow(
+      "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi, llm_config: {inherit: false}}\noutput: ${a.output}\n",
+    );
+    const result = await runFlow(loaded, {}, { env, models });
+    expect(result.status).toBe("succeeded");
+    expect(modelReads).toHaveLength(1);
+    expect(seen).toEqual([{ provider: "anthropic", model: "environment-model" }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a replay uses the logged map after the environment changes", async () => {

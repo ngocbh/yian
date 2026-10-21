@@ -1,8 +1,8 @@
 /**
  * End-to-end fresh runs through `runFlow`: a port of `tests/engine/test_run.py`.
  *
- * Every flow uses CODE, through `./compose_codefns.ts:<fn>` references (resolved from the
- * conformance fixtures as `baseDir`) or inline TS bodies, so no model is needed. A flow failure,
+ * The flows use CODE, through `./compose_codefns.ts:<fn>` references (resolved from the
+ * conformance fixtures as `baseDir`) or inline TS bodies; an AGENT's model is a `ScriptedModel`. A flow failure,
  * a false assert included, comes back as a `RunResult` whose `status` is `"failed"`.
  *
  * Ported: `test_code_flow_runs_to_declared_output`, `test_leaf_binds_from_flow_wiring`,
@@ -30,6 +30,16 @@
  * missing skill, a skill keyed by another name, and a bad template span named by its subject; a
  * boundary callback whose promise rejects stops the run.
  *
+ * The run-start LLM chain, where an AGENT's model is a `ScriptedModel` from `models` and the
+ * environment is an `env` accessor: `test_no_model_anywhere_fails_before_any_node`
+ * (`test_no_builtin_defaults.py`) and `test_key_without_a_provider_is_rejected`
+ * (`test_run_api_key.py`); of `test_a_key_that_marks_no_agent_does_not_block_replay`, the fresh
+ * run (no agent gets the key and the log holds no marker); `test_a_non_finite_value_names_the_block_field`
+ * of `test_llm_config_values_run_start.py` and of `test_llm_config_values_call_time.py`, changed:
+ * TS keeps Infinity, so the provider block refuses it ("Input should be a finite number", a
+ * `contract.input` failure when the agent runs) where Python refuses `non-finite number inf`.
+ * TS-only: an integral number in a host `llm_config` is recorded as an int.
+ *
  * Later (T4-10): `test_bool_text_is_not_converted_for_a_child_input` (a CALL).
  */
 
@@ -41,17 +51,21 @@ import { fileURLToPath } from "node:url";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { current } from "../../src/defaults.ts";
+import { current, type Env } from "../../src/defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { RunResult, runFlow } from "../../src/run.ts";
-import { JsonlRunLog, RunStoppedRecord } from "../../src/runtime/log.ts";
+import { JsonlRunLog, readRunLog, type RunStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { mcpServer } from "../../src/tools/mcp.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
+
+import { textReply } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -715,4 +729,147 @@ test("a boundary callback whose promise rejects stops the run", async () => {
   } finally {
     process.off("unhandledRejection", collect);
   }
+});
+
+// ---- The run-start LLM chain ----
+
+const SENTINEL = "sk-sentinel-5b2e8d41";
+
+/** An environment with only `vars` set, and the credential store in the test's directory. */
+function hostEnv(vars: Record<string, string> = {}): Env {
+  const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
+  return (name) => all.get(name);
+}
+
+/**
+ * A model access over `env` that records each config it builds from in `built` and answers each
+ * call with `ok`.
+ */
+function scripted(built: Record<string, unknown>[], env: Env = hostEnv()): ModelAccess {
+  return {
+    env,
+    createModel: (config) => {
+      built.push({ ...config });
+      return new ScriptedModel([textReply("ok")], { provider: config["provider"] as string, model: config["model"] as string });
+    },
+  };
+}
+
+/** A model access whose every build fails the test. */
+const forbidden: ModelAccess = {
+  env: () => undefined,
+  createModel: () => {
+    throw new Error("no model may be built when the run cannot start");
+  },
+};
+
+test("an AGENT with no provider fails before the log exists", async () => {
+  const flow = await load("id: f\nname: f\nnodes:\n  write: {kind: agent, prompt: hi}\noutput: ${write.output}\n");
+  const error = await runStartError(flow, { env: hostEnv(), models: forbidden });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toContain("Agent 'write'");
+  for (const fix of ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"]) {
+    expect(error.message).toContain(fix);
+  }
+});
+
+const KEYED_FLOW = "id: keyed\nname: keyed\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: ${agent.output}\n";
+
+test("llm_config.api_key without provider is refused without echoing the key", async () => {
+  const error = await runStartError(await load(KEYED_FLOW), {
+    env: hostEnv(),
+    models: forbidden,
+    llmConfig: { api_key: SENTINEL },
+  });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toContain("provider");
+  expect(error.message).not.toContain(SENTINEL);
+});
+
+test("a key that marks no agent is dropped", async () => {
+  const other = await load(
+    "id: other\nname: other\nnodes:\n  agent:\n    kind: agent\n    prompt: hi\n" +
+      "    llm_config: {provider: anthropic, model: claude-sonnet-4-5}\noutput: ${agent.output}\n",
+  );
+  const plain = await load(echoFlow("str"));
+  const llmConfig = { provider: "vllm", model: "served-model", api_key: SENTINEL };
+  for (const [flow, inputs] of [
+    [other, {}],
+    [plain, { x: "ok" }],
+  ] as const) {
+    const built: Record<string, unknown>[] = [];
+    const path = join(dir, `${flow.compiled.nodes.has("agent") ? "other" : "plain"}.jsonl`);
+    const result = await runFlow(flow, inputs, { log: path, env: hostEnv(), models: scripted(built), llmConfig });
+    expect(result.status).toBe("succeeded");
+    expect(built.map((config) => config["api_key"])).toEqual(flow === other ? [undefined] : []);
+    const text = readFileSync(path, "utf8");
+    expect(text).not.toContain("_host_key");
+    expect(text).not.toContain(SENTINEL);
+  }
+});
+
+test("an integral number in a host llm_config is recorded as an int", async () => {
+  const path = join(dir, "run.jsonl");
+  const built: Record<string, unknown>[] = [];
+  const llmConfig = { provider: "anthropic", model: "m", anthropic: { max_tokens: 1000 } };
+  const result = await runFlow(await load(KEYED_FLOW), {}, { log: path, env: hostEnv(), models: scripted(built), llmConfig });
+  expect(result.status).toBe("succeeded");
+  const started = readRunLog(path)[0]!.record as RunStartedRecord;
+  expect((started.effectiveLlmByStaticPath["agent"] as Record<string, unknown>)["anthropic"]).toEqual({ max_tokens: 1000n });
+  expect(built[0]!["anthropic"]).toEqual({ max_tokens: 1000n });
+});
+
+// Ported from `test_llm_config_values_run_start.py` and `test_llm_config_values_call_time.py`.
+// Changed: `t * 10` overflows to Infinity, which TS keeps as a float (Python refuses it as
+// `non-finite number inf`), so the provider block's check is what refuses it.
+
+const TAGGED = `
+id: f
+name: f
+typedefs: {D: "dict(str, str)"}
+input:
+  d: !D
+  t: !float 1.0
+llm_config: {provider: openai}
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {model: m, openai: {temperature: !float '\${input.t * 10}'}}
+output: \${chat.output}
+`;
+
+test("a non-finite value names the block field", async () => {
+  const built: Record<string, unknown>[] = [];
+  const events: RunEvent[] = [];
+  const error = await runStartError(
+    await load(TAGGED),
+    { env: hostEnv(), models: scripted(built), onEvent: (event) => events.push(event) },
+    { d: {}, t: 1e308 },
+  );
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("node 'chat' llm_config.openai.temperature: Input should be a finite number");
+  expect(events).toEqual([]);
+  expect(built).toEqual([]);
+});
+
+const PICKING = `
+id: f
+name: f
+nodes:
+  pick: {kind: code, output: float, code: "return 1e308"}
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {provider: openai, model: m, openai: {temperature: !float '\${pick.output * 10}'}}
+output: \${chat.output}
+`;
+
+test("a non-finite call-time value names the block field", async () => {
+  const built: Record<string, unknown>[] = [];
+  const result = await runFlow(await load(PICKING), {}, { env: hostEnv(), models: scripted(built) });
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("contract.input");
+  expect(result.failure!.message).toBe("node 'chat' llm_config.openai.temperature: Input should be a finite number");
+  expect(built).toEqual([]);
 });

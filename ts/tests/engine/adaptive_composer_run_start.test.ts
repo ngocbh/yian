@@ -2,14 +2,12 @@
  * The adaptive composer's LLM config label: a port of
  * `tests/engine/test_adaptive_composer_run_start.py`.
  *
- * Ported: `test_replayed_map_error_names_the_gate` and `test_composer_label_is_render_only`; of
- * `test_resume_recorded_field_error_names_the_gate`, the `static_agent_labels` half (the label
- * the check names). Changed: the replayed-map errors are `RangeError`s where Python raises
- * `ValueError`.
+ * Ported: `test_replayed_map_error_names_the_gate`, `test_resume_recorded_field_error_names_the_gate`
+ * (the label `staticAgentLabels` gives, and the run module's resume check naming it) and
+ * `test_composer_label_is_render_only`. Changed: the replayed-map and recorded-field errors are
+ * `RangeError`s where Python raises `ValueError`.
  *
- * Later (T4-8): the `_check_recorded_llm_fields` half of
- * `test_resume_recorded_field_error_names_the_gate` (the run module's resume check),
- * `test_run_start_error_names_the_gate`,
+ * Later (T4-8): `test_run_start_error_names_the_gate`,
  * `test_run_start_error_in_a_child_flow_names_the_gate_and_callsite` and
  * `test_plain_agent_run_start_error_is_unchanged` (runs).
  */
@@ -21,6 +19,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
+import { checkRecordedLlmFields } from "../../src/run.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 
@@ -72,6 +71,15 @@ test("a replayed map error names the gate", async () => {
 test("a resumed record names the gate by its static label", async () => {
   const flow = (await loadFlow(GATE_FLOW)).compiled;
   expect(staticAgentLabels(flow)).toEqual(new Map([["ask__compose", LLM_SITE]]));
+  const recorded = { ask__compose: { provider: "openai", model: "m", temperature: 0.5 } };
+  let error: unknown = null;
+  try {
+    checkRecordedLlmFields(recorded, staticAgentLabels(flow));
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as RangeError).message).toStartWith(`${LLM_SITE}: `);
 });
 
 test("composer label is render only", async () => {

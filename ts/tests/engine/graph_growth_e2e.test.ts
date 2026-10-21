@@ -25,8 +25,10 @@
  *   guards against Python's removed node scratch, which TS never had.
  * - `test_no_remaining_engine_xfails`: a pytest collection check.
  *
- * Later (T4-8): `test_f0_goldens_hold` (it re-runs rows of `test_golden_run_results.py`, ported
- * with that file).
+ * Ported through `runFlow` and the loader, each run in `hostEnv`: `test_f0_goldens_hold`, the
+ * rows of `test_golden_run_results.py` it re-runs written out here (`test_golden_call_run_result`,
+ * `test_golden_map_run_result` and `test_golden_static_edge_ids_case_and_call_and_map`, seed 02
+ * from `load-case/seed_02_case`).
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -41,6 +43,7 @@ import { NodeKind } from "../../src/nodes/base.ts";
 import { runFlow } from "../../src/run.ts";
 import type { AskUserRequest } from "../../src/tools/registry.ts";
 import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { childResolver, engine } from "./run_state_fixtures.ts";
 
 // --- CODE-child CALL/MAP fixtures --- //
@@ -183,12 +186,80 @@ test("nested human input reaches terminal", async () => {
           return "approve";
         },
       },
+      env: hostEnv(seeds),
     },
   );
 
   expect(requests[0]!.nodeId).toBe("gate/approve");
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("approve"); // confirm_action({answer: "approve"})
+});
+
+// --- goldens hold (graph growth must not perturb static edge ids) --- //
+
+const CALL = `
+id: ref-parent
+name: ref_parent
+input:
+  topic: !str
+uses:
+  child-one: child-one
+nodes:
+  research:
+    kind: call
+    call: child-one
+    input:
+      topic: \${input.topic}
+output: \${research.output}
+`;
+
+/** The sorted edge ids of the flow of conformance case `id`. */
+async function edgeIds(id: string): Promise<string[]> {
+  return (await loadSeed(id)).compiled.edges.map((edge) => edge.id).sort();
+}
+
+test("f0 goldens hold", async () => {
+  // Graph growth adds namespaced nodes; the static topology and the CALL and MAP run results
+  // are unperturbed.
+  const resolver = { childResolver: childResolver({ "child-one": CHILD }) };
+  const call = await runFlow(await loadConformanceFlow(CALL, resolver), { topic: "ACME" }, { env: hostEnv(seeds) });
+  expect(call.status).toBe("succeeded");
+  expect(call.output).toEqual({ report: "report for ACME", n: 4n });
+
+  const map = await runFlow(await loadConformanceFlow(MAP, resolver), { topics: ["ACME", "BETA"] }, {
+    env: hostEnv(seeds),
+  });
+  expect(map.status).toBe("succeeded");
+  // The join is in over order (element index).
+  expect(map.output).toEqual([
+    { report: "report for ACME", n: 4n },
+    { report: "report for BETA", n: 4n },
+  ]);
+
+  expect(await edgeIds("load-case/seed_02_case")).toEqual([
+    "__start__->cautious#0",
+    "__start__->positive#0",
+    "__start__->score#0",
+    "cautious->__end__#0",
+    "gate->cautious#0",
+    "gate->positive#0",
+    "positive->__end__#0",
+    "score->gate#0",
+  ]);
+  expect(await edgeIds("load-map-call/seed_04_call")).toEqual([
+    "__start__->research#0",
+    "research->__end__#0",
+    "research->take#0",
+    "research->take#1",
+    "take->__end__#0",
+  ]);
+  expect(await edgeIds("load-map-call/seed_05_call_map")).toEqual([
+    "__start__->research_each#0",
+    "__start__->research_each#1",
+    "compare->__end__#0",
+    "research_each->__end__#0",
+    "research_each->compare#0",
+  ]);
 });
 
 // --- representative seeds load with structure --- //

@@ -270,7 +270,7 @@ const runStartedPayload = (path: string) => JSON.parse(linesOf(path)[0]!).payloa
 /** Apply `edit` to the `run_started` payload of the log at `path` and write it back canonically. */
 function rewriteRunStarted(path: string, edit: (payload: Record<string, unknown>) => void): void {
   const lines = linesOf(path);
-  const envelope = parseJson(lines[0]!, "log") as { payload: Record<string, unknown> };
+  const envelope = parseJson(lines[0]!, "codec") as { payload: Record<string, unknown> };
   edit(envelope.payload);
   lines[0] = encodeRecord(decodeRecord(logJson(envelope))) + "\n";
   writeFileSync(path, lines.join(""));

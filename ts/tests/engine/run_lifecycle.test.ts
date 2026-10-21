@@ -21,18 +21,16 @@
  * - Python's `ValueError` is a `RangeError`; a CODE failure's message and traceback name the JS
  *   error, `Error: boom` (Python: the message `boom`, the traceback `ValueError: boom`).
  * - `test_final_run_boundary_signatures_and_result_fields_are_exact`: `resumeFlow(flow, options)`
- *   takes an options record, so the row checks `ResumeFlowOptions`'s keys (TS-only: `signal`,
- *   `env`, `scheduler`, `random`, `models`; `checkLlmConfigs` is `@internal`, Python's
- *   `_resume_flow_controlled` parameter, and there is no `stop_event`: the stop is `signal`).
- *   `runFlow`'s keys and `RunResult`'s fields are checked in `retired_runtime_surface.test.ts`.
+ *   takes an options record, so its keys are checked once, with `runFlow`'s and `RunResult`'s, in
+ *   `retired_runtime_surface.test.ts` (the same check as that file's `resume_flow` row).
  * - `test_terminal_resume_is_read_only_silent_and_unlocks[succeeded]`,
  *   `test_nonterminal_resume_restores_recorded_llm_without_reading_defaults`: ESM bindings can't
  *   be patched, so the resume's environment fails any read of `YIAN_DEFAULT_PROVIDER` or the
  *   credential store instead of `connection_snapshot` being replaced; the AGENT's model comes from
  *   the `models` option (Python patches `model_from_config`).
  * - `test_terminal_resume_preserves_recorded_trace_across_origin_rebase`: the loaded flow's END
- *   output is set back to the source without `:-null`, and its edge to required (Python patches
- *   `null_skipped_outputs` during the load).
+ *   output is set back to the source without `:-null`, and its edge to required, by the shared
+ *   `requiredEndFlow` (Python patches `null_skipped_outputs` during the load).
  * - `test_run_started_append_failure_prevents_execution_observation_and_closes` and
  *   `test_outcome_append_failure_leaves_started_work_recoverable_and_closes`: `JsonlRunLog.create`
  *   is spied on to return the tracking log (which keeps no path: the run boundary never reads it
@@ -71,7 +69,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { CompiledFlow, copyGraph, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { rebaseFlowOrigins } from "../../src/compile/origins.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -93,7 +91,6 @@ import { legacyConnectionConfig, legacyConnectionMap } from "../../src/llm_clien
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Binding } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { Scheduler } from "../../src/platform.ts";
@@ -118,18 +115,11 @@ import {
   RunStartedRecord,
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
-import {
-  commitPrepared,
-  prepareNodeStarted,
-  prepareNodeSucceeded,
-  prepareRunStarted,
-  RunState,
-} from "../../src/runtime/state.ts";
+import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
 import { tool } from "../../src/tools/function_tools.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
-import { seedSystemClock } from "../../src/typesys/seeding.ts";
 
-import { textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { crashAfter, rejection, requiredEndFlow, startedRun, textReply } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
@@ -142,12 +132,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
-
-/** An environment holding only the credential store in the test's directory. */
-function hostEnv(): Env {
-  const auth = join(dir, "auth.json");
-  return (name) => (name === "YIAN_AUTH_FILE" ? auth : undefined);
-}
 
 /** An environment that fails any read of the current model defaults or the credential store. */
 function noDefaultsEnv(): Env {
@@ -164,24 +148,14 @@ function load(text: string): Promise<ComposedFlow> {
   return loadFlow(text, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
 }
 
-/** `runFlow` in `hostEnv()` unless `options` sets `env`. */
+/** `runFlow` in `hostEnv(dir)` unless `options` sets `env`. */
 function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
-  return runFlow(flow, inputs, { env: hostEnv(), ...options });
+  return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
-/** `resumeFlow` in `hostEnv()` unless `options` sets `env`. */
+/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
 function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow(flow, { env: hostEnv(), ...options });
-}
-
-/** The error `promise` rejects with; fails the test when it resolves. */
-async function rejection(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected the promise to reject");
+  return resumeFlow(flow, { env: hostEnv(dir), ...options });
 }
 
 /** Read one closed durable log's records, proving its lock was released. */
@@ -381,36 +355,6 @@ function isOutcomeOf(record: RunRecord, nodeIds: readonly string[]): boolean {
   return record instanceof NodeFailedRecord && nodeIds.includes(record.failure.nodeId!);
 }
 
-/**
- * `TERMINAL_SKIP_FLOW` as loaded before a flow output reading only skippable nodes was made
- * nullable: END requires `selected`, so a route that skips it makes the run fail.
- */
-async function oldTerminalSkipFlow(): Promise<ComposedFlow> {
-  const loaded = await load(TERMINAL_SKIP_FLOW);
-  const compiled = loaded.compiled;
-  const [key, binding] = [...compiled.wiring.get(END_ID)!][0]!;
-  expect(binding.source).toBe("${selected.output:-null}");
-  const required = new Binding("${selected.output}", { origin: binding.origin });
-  compiled.wiring.set(END_ID, new Map([[key, required]]));
-  compiled.outputs = compiled.outputs.map((output) => new FlowOutput(output.name, required));
-  compiled.edges = compiled.edges.map((edge) =>
-    edge.to === END_ID
-      ? new Edge(edge.id, edge.from, edge.to, {
-          sourceHandle: edge.sourceHandle,
-          inputGroup: edge.inputGroup,
-          ordering: edge.ordering,
-        })
-      : edge,
-  );
-  // The copy rebuilds the edge index from the new edges.
-  return new ComposedFlow(copyGraph(compiled), {
-    version: loaded.version,
-    name: loaded.name,
-    description: loaded.description,
-    originResolver: loaded.originResolver,
-  });
-}
-
 /** A tool `name` taking no arguments whose `execute` is `body`. */
 function noArgTool(name: string, body: (ctx: { signal: AbortSignal }) => unknown) {
   return tool({
@@ -455,26 +399,9 @@ function writeNonterminalPrefix(
   inputs: Record<string, unknown>,
   options: { started: readonly string[]; numWorkers: number; effective?: Record<string, Record<string, unknown>> },
 ): number {
-  const privateFlow = copyGraph(loaded.compiled);
-  const pool = new VariablePool(privateFlow.startId);
-  pool.set(privateFlow.startId, structuredClone(inputs));
-  seedSystemClock(pool);
-  pool.addSystem("run_id", RUN_ID);
-  const state = new RunState(privateFlow);
   const log = JsonlRunLog.create(path, RUN_ID);
   try {
-    commitPrepared(
-      log,
-      state,
-      prepareRunStarted(state, {
-        runId: RUN_ID,
-        flowFingerprint: flowFingerprint(loaded.compiled),
-        initialPool: pool,
-        startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
-        effectiveLlmByStaticPath: options.effective ?? {},
-        numWorkers: options.numWorkers,
-      }),
-    );
+    const state = startedRun(loaded, log, { inputs, numWorkers: options.numWorkers, effective: options.effective });
     commitPrepared(log, state, prepareNodeStarted(state, START_ID));
     commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, structuredClone(inputs)));
     for (const nodeId of options.started) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
@@ -524,33 +451,10 @@ async function withCreatedLog<T>(fake: TrackingRunLog, path: string, fn: () => P
   }
 }
 
-/** The process-loss marker a frozen log throws. */
-class Crash extends Error {
-  override name = "Crash";
-}
-
-/**
- * Run `fn` with every durable log refusing appends once it holds `k` records, as a crash after
- * record `k - 1` would; return the error `fn` rejects with, which must be the crash.
- */
-async function crashAfter(k: number, fn: () => Promise<unknown>): Promise<void> {
-  const append = JsonlRunLog.prototype.append;
-  const crash = new Crash(`crash after record ${k - 1}`);
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (this.nextSequence >= k) throw crash;
-    return append.call(this, record);
-  };
-  try {
-    expect(await rejection(fn())).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
-}
-
-/** A model access over `hostEnv()` that records each config it builds from and answers `reply`. */
+/** A model access over `hostEnv(dir)` that records each config it builds from and answers `reply`. */
 function scripted(built: Record<string, unknown>[], reply = "recorded reply"): ModelAccess {
   return {
-    env: hostEnv(),
+    env: hostEnv(dir),
     createModel: (config) => {
       built.push({ ...config });
       return new ScriptedModel([textReply(reply)], {
@@ -577,31 +481,6 @@ function expectResumedSegment(events: readonly RunEvent[]): void {
   expect(events.some((event) => event instanceof RunStarted)).toBe(false);
   expect(events.some((event) => event instanceof NodeStarted && event.nodeId === START_ID)).toBe(false);
 }
-
-test("test_final_run_boundary_signatures_and_result_fields_are_exact", () => {
-  // The options' keys, exactly: a missing or extra key fails `tsc`.
-  const options: Record<keyof ResumeFlowOptions, true> = {
-    log: true,
-    numWorkers: true,
-    onEvent: true,
-    onStream: true,
-    memory: true,
-    tools: true,
-    skills: true,
-    steering: true,
-    apiKey: true,
-    headers: true,
-    context: true,
-    signal: true,
-    env: true,
-    scheduler: true,
-    random: true,
-    models: true,
-    checkLlmConfigs: true,
-  };
-  expect(Object.keys(options)).toHaveLength(17);
-  expect(resumeFlow.length).toBe(2);
-});
 
 test("test_fresh_memory_success_returns_current_segment_and_canonical_input", async () => {
   const seen: RunEvent[] = [];
@@ -740,7 +619,7 @@ test("test_terminal_resume_preserves_source_free_failure", async () => {
 });
 
 test("test_terminal_resume_preserves_recorded_trace_across_origin_rebase", async () => {
-  const loaded = await oldTerminalSkipFlow();
+  const loaded = requiredEndFlow(await load(TERMINAL_SKIP_FLOW));
   const path = join(dir, "terminal-origin-rebase.jsonl");
   const fresh = await run(loaded, { score: 0.0 }, { log: path, runId: RUN_ID });
   const before = readFileSync(path);

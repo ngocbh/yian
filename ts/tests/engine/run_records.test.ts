@@ -138,7 +138,6 @@ import { fileURLToPath } from "node:url";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { copyGraph, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import {
@@ -212,6 +211,7 @@ import {
   VariablePool,
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
 import {
   commitStartSuccess,
@@ -2016,7 +2016,7 @@ output: \${outer.output}
 
 test.each(["success", "failure", "growth"])("historical outcomes keep the schema in their trace lines: %s", async (kind) => {
   const dir = mkdtempSync(join(tmpdir(), "yian-run-records-"));
-  const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
+  const env = hostEnv(dir);
   try {
     const source =
       kind === "growth"

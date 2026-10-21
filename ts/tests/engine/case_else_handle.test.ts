@@ -32,13 +32,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
-import { callRedirectFlow, routeInFlight } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { callRedirectFlow, rejection, routeInFlight } from "./run_state_fixtures.ts";
 
 test("a case may not take the else handle as a branch", () => {
   expect(() => new Case(ELSE_HANDLE, { when: "True" })).toThrow(RangeError);
@@ -96,7 +96,7 @@ output: \${big.output :- "none"}
 
 test("a log routed to the old default handle does not resume", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-case-else-"));
-  const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
+  const env = hostEnv(dir);
   try {
     const path = join(dir, "run.jsonl");
     const first = await runFlow(await loadFlow(ELSE_LESS_FLOW), { n: 1 }, { log: path, env });
@@ -111,12 +111,7 @@ test("a log routed to the old default handle does not resume", async () => {
     lines[routed] = JSON.stringify(records[routed]);
     writeFileSync(path, `${lines.join("\n")}\n`);
 
-    let caught: unknown;
-    try {
-      await resumeFlow(await loadFlow(ELSE_LESS_FLOW), { log: path, env });
-    } catch (error) {
-      caught = error;
-    }
+    const caught = await rejection(resumeFlow(await loadFlow(ELSE_LESS_FLOW), { log: path, env }));
     expect((caught as Error).constructor).toBe(RangeError);
     expect((caught as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'gate'");
   } finally {

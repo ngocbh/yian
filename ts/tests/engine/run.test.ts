@@ -56,7 +56,8 @@
  * is `running` with the recorded counts only; END succeeded with another node ready but unstarted
  * reads `succeeded` without the flow and `interrupted` with it; a finished pooled failure has
  * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
- * holds is refused.
+ * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
+ * checks the recorded `YIAN_*` values against the given `env` (the records alone don't).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -65,11 +66,10 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { current, DefaultsError, type Env } from "../../src/defaults.ts";
+import { current, DefaultsError, DefaultsMismatchError, type Env } from "../../src/defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -85,27 +85,14 @@ import {
   runFlow,
   type RunFlowOptions,
 } from "../../src/run.ts";
-import {
-  JsonlRunLog,
-  readRunLog,
-  type RunRecord,
-  type RunStartedRecord,
-  RunStoppedRecord,
-} from "../../src/runtime/log.ts";
-import {
-  commitPrepared,
-  prepareNodeStarted,
-  prepareNodeSucceeded,
-  prepareRunStarted,
-  RunState,
-} from "../../src/runtime/state.ts";
+import { JsonlRunLog, readRunLog, type RunStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
+import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
-import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
-import { textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { crashAfter, rejection, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -114,15 +101,9 @@ function load(text: string): Promise<ComposedFlow> {
   return loadFlow(text, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
 }
 
-/** An environment with only `vars` set, and the credential store in the test's directory. */
-function hostEnv(vars: Record<string, string> = {}): Env {
-  const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
-  return (name) => all.get(name);
-}
-
-/** `runFlow` in `hostEnv()` unless `options` sets `env`, so no host variable or login decides a row. */
+/** `runFlow` in `hostEnv(dir)` unless `options` sets `env`, so no host variable or login decides a row. */
 function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
-  return runFlow(flow, inputs, { env: hostEnv(), ...options });
+  return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
 const PLAN_FLOW = `
@@ -546,7 +527,7 @@ test("a too-deep input is refused", async () => {
 
 test("the run's env sets the YIAN_* values it reads and records", async () => {
   const path = join(dir, "run.jsonl");
-  const env = hostEnv({ YIAN_MAX_VALUE_NESTING: "3" });
+  const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "3" });
   const flow = await load(echoFlow("Any"));
   const result = await run(flow, { x: [[1]] }, { log: path, env });
   expect(result.status).toBe("succeeded");
@@ -558,7 +539,7 @@ test("the run's env sets the YIAN_* values it reads and records", async () => {
 
 test("a bad YIAN_* value in the run's env rejects before the log exists", async () => {
   const path = join(dir, "run.jsonl");
-  const env = hostEnv({ YIAN_MAX_VALUE_NESTING: "deep" });
+  const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "deep" });
   const flow = await load(PLAN_FLOW);
   const error = await run(flow, { topic: "ACME" }, { log: path, env }).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(DefaultsError);
@@ -863,7 +844,7 @@ const SENTINEL = "sk-sentinel-5b2e8d41";
  * A model access over `env` that records each config it builds from in `built` and answers each
  * call with `ok`.
  */
-function scripted(built: Record<string, unknown>[], env: Env = hostEnv()): ModelAccess {
+function scripted(built: Record<string, unknown>[], env: Env = hostEnv(dir)): ModelAccess {
   return {
     env,
     createModel: (config) => {
@@ -1050,37 +1031,16 @@ nodes:
 output: \${input.x}
 `;
 
-/** `resumeFlow` in `hostEnv()` unless `options` sets `env`. */
+/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
 function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow(flow, { env: hostEnv(), ...options });
+  return resumeFlow(flow, { env: hostEnv(dir), ...options });
 }
 
-/** `inspectRun` of `path` without and with `flow`, which must agree. */
+/** `inspectRun` of `path` without and with `flow` (read in `hostEnv(dir)`), which must agree. */
 function inspectBoth(path: string, flow: ComposedFlow): RunInspection {
   const without = inspectRun(path);
-  expect(inspectRun(path, { flow })).toEqual(without);
+  expect(inspectRun(path, { flow, env: hostEnv(dir) })).toEqual(without);
   return without;
-}
-
-/** Run `fn` with every durable log refusing appends once it holds `k` records; it must reject with that. */
-async function crashAfter(k: number, fn: () => Promise<unknown>): Promise<void> {
-  const append = JsonlRunLog.prototype.append;
-  const crash = new Error(`crash after record ${k - 1}`);
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (this.nextSequence >= k) throw crash;
-    return append.call(this, record);
-  };
-  try {
-    let caught: unknown;
-    try {
-      await fn();
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
 }
 
 /** A log of `WORK_FLOW` whose process ended while `work` ran: records 0-3 are kept. */
@@ -1135,7 +1095,7 @@ test("inspectRun: a RunStopped covers its in-flight nodes", async () => {
       throw ctx.signal.reason;
     },
   });
-  await expect(run(flow, {}, { log: path, numWorkers: 0, signal: host.signal, tools: { work } })).rejects.toBe(stop);
+  expect(await rejection(run(flow, {}, { log: path, numWorkers: 0, signal: host.signal, tools: { work } }))).toBe(stop);
 
   expect(inspectBoth(path, flow)).toEqual({ status: "stopped", inFlight: ["work"], interruptedAttempts: new Map() });
   const resumed = await resume(flow, { log: path, tools: { work } });
@@ -1178,26 +1138,9 @@ test("inspectRun: a locked log is running, with the recorded counts only", async
 test("inspectRun: END succeeded with another node ready but unstarted is succeeded without the flow only", async () => {
   const path = join(dir, "end-first.jsonl");
   const flow = await load(END_FIRST_FLOW);
-  const privateFlow = copyGraph(flow.compiled);
-  const pool = new VariablePool(privateFlow.startId);
-  pool.set(privateFlow.startId, { x: "Ada" });
-  seedSystemClock(pool);
-  pool.addSystem("run_id", "end-first");
-  const state = new RunState(privateFlow);
   const log = JsonlRunLog.create(path, "end-first");
   try {
-    commitPrepared(
-      log,
-      state,
-      prepareRunStarted(state, {
-        runId: "end-first",
-        flowFingerprint: flowFingerprint(flow.compiled),
-        initialPool: pool,
-        startWiringOverride: { x: "${input.x}" },
-        effectiveLlmByStaticPath: {},
-        numWorkers: 0,
-      }),
-    );
+    const state = startedRun(flow, log, { inputs: { x: "Ada" } });
     commitPrepared(log, state, prepareNodeStarted(state, START_ID));
     commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, { x: "Ada" }));
     expect(state.ready).toEqual([END_ID, "side"]);
@@ -1209,7 +1152,11 @@ test("inspectRun: END succeeded with another node ready but unstarted is succeed
   }
 
   expect(inspectRun(path)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
-  expect(inspectRun(path, { flow })).toEqual({ status: "interrupted", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectRun(path, { flow, env: hostEnv(dir) })).toEqual({
+    status: "interrupted",
+    inFlight: [],
+    interruptedAttempts: new Map(),
+  });
   const resumed = await resume(flow, { log: path });
   expect(resumed.output).toBe("Ada");
   expect(resumed.events.some((event) => event instanceof NodeSucceeded && event.nodeId === "side")).toBe(true);
@@ -1228,15 +1175,56 @@ test("inspectRun: a finished pooled failure has nothing in flight and adds nothi
 });
 
 test("inspectRun refuses a missing log and an empty log no writer holds", async () => {
-  let caught: unknown;
-  try {
-    inspectRun(join(dir, "missing.jsonl"));
-  } catch (error) {
-    caught = error;
-  }
-  expect((caught as NodeJS.ErrnoException).code).toBe("ENOENT");
+  const missing = thrownBy(() => inspectRun(join(dir, "missing.jsonl")));
+  expect((missing as NodeJS.ErrnoException).code).toBe("ENOENT");
 
   const empty = join(dir, "empty.jsonl");
   writeFileSync(empty, "");
   expect(() => inspectRun(empty)).toThrow(new RangeError(`cannot inspect an empty run log: ${empty}`));
+});
+
+const UNREACHABLE_FLOW = `
+id: inspect-unreachable
+name: inspect_unreachable
+input:
+  score: !float
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 1.0"
+        then: selected
+  selected:
+    kind: code
+    code: return "selected"
+    output: str
+output: \${selected.output}
+`;
+
+test("inspectRun reads a route that proved END unreachable as failed, with and without the flow", async () => {
+  const path = join(dir, "unreachable.jsonl");
+  const flow = requiredEndFlow(await load(UNREACHABLE_FLOW));
+  const result = await run(flow, { score: 0.0 }, { log: path });
+  expect(result.failure?.code).toBe("graph.terminal_unreachable");
+  const last = readRunLog(path).at(-1)!;
+  expect(last.kind).toBe("node_routed");
+  expect(last.payload["terminal_failure"]).not.toBeNull();
+
+  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+});
+
+test("inspectRun replays with the run's env", async () => {
+  const path = join(dir, "env.jsonl");
+  const flow = await load(WORK_FLOW);
+  const env = hostEnv(dir, { YIAN_MAX_TOTAL_NODES: "5000" });
+  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0, env }));
+
+  expect(inspectRun(path, { flow, env })).toEqual({
+    status: "interrupted",
+    inFlight: ["work"],
+    interruptedAttempts: new Map([["work", 1]]),
+  });
+  expect(thrownBy(() => inspectRun(path, { flow, env: hostEnv(dir) }))).toBeInstanceOf(DefaultsMismatchError);
+  // Reading without the flow doesn't check the recorded values.
+  expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("interrupted");
 });

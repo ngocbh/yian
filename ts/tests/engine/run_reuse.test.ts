@@ -23,13 +23,13 @@ import { fileURLToPath } from "node:url";
 import type { Flow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 
-import { textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { rejection, textReply } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 let dir: string;
@@ -41,12 +41,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
-
-/** An environment holding only the credential store in the test's directory. */
-function hostEnv(): Env {
-  const auth = join(dir, "auth.json");
-  return (name) => (name === "YIAN_AUTH_FILE" ? auth : undefined);
-}
 
 const RECURSIVE_FLOW = `
 id: reusable
@@ -176,7 +170,7 @@ function expectSameGraph(after: Record<string, unknown>, before: Record<string, 
 /** A model access that records each config it builds from and answers `ok`. */
 function scripted(seen: Record<string, unknown>[]): ModelAccess {
   return {
-    env: hostEnv(),
+    env: hostEnv(dir),
     createModel: (config) => {
       seen.push({ ...config });
       return new ScriptedModel([textReply("ok")], {
@@ -193,7 +187,7 @@ test("test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks", a
   const original = graphSnapshot(loaded.compiled);
 
   const first = await runFlow(loaded, { topics: ["alpha", "beta"] }, {
-    env: hostEnv(),
+    env: hostEnv(dir),
     models: scripted(seen),
     llmConfig: { provider: "openai", openai: { reasoning: { effort: "low" } } },
   });
@@ -204,7 +198,7 @@ test("test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks", a
   seen.length = 0;
 
   const second = await runFlow(loaded, { topics: ["alpha", "beta"] }, {
-    env: hostEnv(),
+    env: hostEnv(dir),
     models: scripted(seen),
     llmConfig: { provider: "google", google: { generationConfig: { thinkingConfig: { thinkingLevel: "HIGH" } } } },
   });
@@ -236,18 +230,15 @@ test("test_log_resume_restores_into_a_private_graph", async () => {
     throw interruption;
   };
 
-  let caught: unknown;
-  try {
-    await runFlow(source, {}, { log: path, env: hostEnv(), signal: host.signal, tools: { ask_user: interrupt } });
-  } catch (error) {
-    caught = error;
-  }
+  const caught = await rejection(
+    runFlow(source, {}, { log: path, env: hostEnv(dir), signal: host.signal, tools: { ask_user: interrupt } }),
+  );
   expect(caught).toBe(interruption);
   expectSameGraph(graphSnapshot(source.compiled), sourceStatic);
 
   const fresh = await loadFlow(BLOCKING_CALL);
   const original = graphSnapshot(fresh.compiled);
-  const resumed = await resumeFlow(fresh, { log: path, env: hostEnv(), tools: { ask_user: () => "yes" } });
+  const resumed = await resumeFlow(fresh, { log: path, env: hostEnv(dir), tools: { ask_user: () => "yes" } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");

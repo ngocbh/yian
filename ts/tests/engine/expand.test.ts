@@ -39,6 +39,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { childFlow, engine, intParameter, parentWithSpawner } from "./run_state_fixtures.ts";
 
 test("rensInternal re-namespaces input and output heads", () => {
@@ -202,7 +203,7 @@ test("deep static CALL/MAP chain resumes after its last expansion", async () => 
   // after its last `node_expanded` record, so resume must replay all 8 expansions and then run the
   // deepest leaf fresh.
   const dir = mkdtempSync(join(tmpdir(), "yian-expand-"));
-  const env = (name: string) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
+  const env = hostEnv(dir);
   try {
     const source = mixedChainSource(DEEP_LEVELS);
     const path = join(dir, "deep.jsonl");

@@ -7,9 +7,10 @@
  * rows stop the run right after the effect's durable `NodeStarted`, so no model, human interaction
  * or wait runs. CODE references resolve from the conformance fixtures.
  *
- * Ported: `test_every_nested_growth_prefix_replays_to_the_live_state` (`serial-inline`,
- * `pooled-named`, `pooled-inline`), `test_every_loop_body_spawner_prefix_replays_to_the_live_state`
- * (3 rows) and `test_every_partial_loop_prefix_replays_to_the_live_state` (2 rows).
+ * Ported: `test_every_nested_growth_prefix_replays_to_the_live_state` (4 rows),
+ * `test_every_loop_body_spawner_prefix_replays_to_the_live_state` (3 rows),
+ * `test_every_partial_loop_prefix_replays_to_the_live_state` (2 rows) and
+ * `test_resume_prepends_ordered_effect_retries_before_existing_ready_work`.
  *
  * Changed:
  * - The live snapshot after each commit is taken by the log, before the next append and once at
@@ -28,15 +29,15 @@
  *   lines of a live learnable TS run (schema 10 is the only TS schema) whose memory keys are served
  *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
  *
- * Covered by a case: `test_every_nested_growth_prefix_replays_to_the_live_state[serial-named]`
- * (`resume/run_recovery_matrix__a_cut_after_nested_growth_resumes_the_grown_nodes`, which covers
- * `test_recorded_nested_growth_resumes_with_exact_memory_and_trace` without its memory),
- * `test_effect_start_prefix_replays_without_running_effect_work[agent]`
- * (`resume/run_recovery_matrix__an_agent_started_before_the_crash_runs_again`),
+ * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
+ * (`resume/run_recovery_matrix__an_agent_started_before_the_crash_runs_again`) and
  * `test_namespaced_human_input_start_replays_without_host_interaction[map]`
- * (`resume/run_recovery_matrix__a_human_input_in_a_map_retries_under_its_namespaced_id`) and
- * `test_resume_prepends_ordered_effect_retries_before_existing_ready_work`
- * (`resume/run_lifecycle__a_resume_retries_in_flight_work_ahead_of_ready_work`).
+ * (`resume/run_recovery_matrix__a_human_input_in_a_map_retries_under_its_namespaced_id`). Also
+ * covered by a case, besides their rows here: `[serial-named]`
+ * (`resume/run_recovery_matrix__a_cut_after_nested_growth_resumes_the_grown_nodes`, which covers
+ * `test_recorded_nested_growth_resumes_with_exact_memory_and_trace` without its memory) and the
+ * ordered-retries row (`resume/run_lifecycle__a_resume_retries_in_flight_work_ahead_of_ready_work`,
+ * one retry).
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -48,10 +49,9 @@ import { fileURLToPath } from "node:url";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
-import { copyGraph } from "../../src/compile/model.ts";
+import { copyGraph, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent, RunSucceeded } from "../../src/events.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { NodeKind, Output } from "../../src/nodes/base.ts";
@@ -72,12 +72,18 @@ import {
   RunResumedRecord,
   type RunStartedRecord,
 } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareRunResumed, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
+import {
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  prepareRunResumed,
+  type RunState,
+} from "../../src/runtime/state.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
 
+import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { reducerSnapshot } from "./run_state_fixtures.ts";
+import { reducerSnapshot, startedRun } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";
@@ -376,6 +382,42 @@ output: \${effect.output}
 `,
 };
 
+const ORDERED_EFFECTS = `
+id: recovery-ordered-effects
+name: recovery_ordered_effects
+nodes:
+  release:
+    kind: code
+    input: {x: ready}
+    output: str
+    code: ./compose_codefns.ts:echo_x
+  wait:
+    kind: wait
+    depends_on: [release]
+    until: '${WAIT_DEADLINE}'
+  agent:
+    kind: agent
+    depends_on: [release]
+    prompt: never invoked
+    llm_config: {provider: openai, model: offline-test}
+  human:
+    kind: human_input
+    depends_on: [release]
+    prompt: never invoked
+    output: str
+  later:
+    kind: code
+    depends_on: [release]
+    input: {x: still-ready}
+    output: str
+    code: ./compose_codefns.ts:echo_x
+output:
+  agent: \${agent.output}
+  human: \${human.output}
+  wait: \${wait.output}
+  later: \${later.output}
+`;
+
 /** Load inline Compose YAML whose CODE references resolve from the conformance fixtures. */
 function load(text: string): Promise<ComposedFlow> {
   return loadFlow(text, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
@@ -426,26 +468,8 @@ class CapturingLog extends MemoryRunLog {
 function newStartedRun(loaded: ComposedFlow, numWorkers: number): { state: RunState; log: CapturingLog } {
   const privateFlow = copyGraph(loaded.compiled);
   const effective = resolveLlmCascade(privateFlow, {}, { defaults: { provider: "openai", model: "offline-test" } });
-  const pool = new VariablePool(privateFlow.startId);
-  pool.set(privateFlow.startId, {});
-  pool.addSystem("run_id", RUN_ID);
-  pool.addSystem("today", SYSTEM_TODAY);
-  pool.addSystem("now", SYSTEM_NOW);
-  const state = new RunState(privateFlow);
   const log = new CapturingLog(RUN_ID);
-  commitPrepared(
-    log,
-    state,
-    prepareRunStarted(state, {
-      runId: RUN_ID,
-      flowFingerprint: flowFingerprint(loaded.compiled),
-      initialPool: pool,
-      startWiringOverride: {},
-      effectiveLlmByStaticPath: effective,
-      numWorkers,
-    }),
-  );
-  return { state, log };
+  return { state: startedRun(loaded, log, { numWorkers, effective, privateFlow }), log };
 }
 
 /** Run `loaded` live to its end; return the state, its log and the snapshot after each record. */
@@ -529,7 +553,6 @@ for (const [sourceId, source] of [
     ["serial", 0],
     ["pooled", 2],
   ] as const) {
-    if (sourceId === "named" && workersId === "serial") continue;
     test(`test_every_nested_growth_prefix_replays_to_the_live_state[${workersId}-${sourceId}]`, async () => {
       const loaded = await load(source);
       const { state, log, observers } = await liveRun(loaded, numWorkers);
@@ -657,7 +680,7 @@ test("test_recovered_wait_recomputes_from_the_authored_absolute_deadline", async
 
 test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-recovery-matrix-"));
-  const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
+  const env = hostEnv(dir);
   try {
     const source = NESTED_GROWTH.replace(
       "name: recovery_matrix_growth\n",
@@ -733,4 +756,35 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("test_resume_prepends_ordered_effect_retries_before_existing_ready_work", async () => {
+  const loaded = await load(ORDERED_EFFECTS);
+  const { state, log } = newStartedRun(loaded, 2);
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareNodeStarted(state, "release"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, "release", "ready"));
+  expect(state.ready).toEqual(["wait", "agent", "human", "later"]);
+
+  const retryOrder = ["wait", "agent", "human"];
+  expect(retryOrder).not.toEqual([...retryOrder].sort());
+  for (const nodeId of retryOrder) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+  const startedOrder = log
+    .records()
+    .flatMap((envelope) => (envelope.record instanceof NodeStartedRecord ? [envelope.record.nodeId] : []));
+  expect(startedOrder).toEqual([START_ID, "release", ...retryOrder]);
+  expect([...state.inFlight]).toEqual(retryOrder);
+  expect(state.ready).toEqual(["later"]);
+
+  const recovered = replayRunLog(loaded, log);
+  expect([...recovered.inFlight]).toEqual(retryOrder);
+  expect(recovered.ready).toEqual(["later"]);
+
+  const prepared = prepareRunResumed(recovered, { numWorkers: 2 });
+  expect(prepared.record).toEqual(new RunResumedRecord(retryOrder, 2));
+  commitPrepared(log, recovered, prepared);
+  expect(log.records().at(-1)!.record).toEqual(prepared.record);
+  expect([...recovered.inFlight]).toEqual([]);
+  expect(recovered.ready).toEqual([...retryOrder, "later"]);
 });

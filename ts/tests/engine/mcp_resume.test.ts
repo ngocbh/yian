@@ -39,6 +39,7 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { McpConnectError, type McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
+import { Crash, rejection } from "./run_state_fixtures.ts";
 
 const SLOW = 30_000;
 const markers: string[] = [];
@@ -89,26 +90,11 @@ function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
   return resumeFlow(flow, { env: hostEnv(dir), ...options });
 }
 
-/** The error `promise` rejects with; fails the test when it resolves. */
-async function rejection(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected the promise to reject");
-}
-
 /** An unopened fake server over stdio, its pid appended to a fresh marker file. */
 function fake(): [McpServer, string] {
   const file = join(dir, `marker-${markers.length + 1}`);
   markers.push(file);
   return [mcpServer(stdioOptions("--marker", file)), file];
-}
-
-/** The process-loss marker a frozen log throws. */
-class Crash extends Error {
-  override name = "Crash";
 }
 
 /** Crash a run of `WHOAMI_FLOW` inside its TOOL node and return the call's context. */

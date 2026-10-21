@@ -60,15 +60,15 @@ import { fileURLToPath } from "node:url";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
-import { type CompiledFlow, copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
+import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, type Env } from "../../src/defaults.ts";
+import { NodeAttemptResumed, type RunEvent, RunResumed } from "../../src/events.ts";
 import { legacyConnectionConfig } from "../../src/llm_clients/connection.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Grow } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { NodeAttemptResumed, type RunEvent, RunResumed } from "../../src/events.ts";
 import { inspectRun, replayRunLog, type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import {
   decodeRecord,
@@ -80,7 +80,6 @@ import {
   NodeStartedRecord,
   RecordEnvelope,
   type RunLog,
-  type RunRecord,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -94,9 +93,10 @@ import {
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import {
   commitStartSuccess,
+  crashAfter,
   flow,
   fragmentBuilder,
   reducerSnapshot,
@@ -104,16 +104,13 @@ import {
   routeInFlight,
   RUN_ID,
   startData,
+  startedRun,
+  thrownBy,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message is `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
-  let caught: unknown;
-  try {
-    fn();
-  } catch (error) {
-    caught = error;
-  }
+  const caught = thrownBy(fn);
   expect((caught as Error | undefined)?.constructor).toBe(cls);
   expect((caught as Error).message).toBe(message);
 }
@@ -372,40 +369,6 @@ class ReadOnlyLog implements RunLog {
   }
 }
 
-/** Commit a canonical RunStarted record of `loaded` for one private graph. */
-function startedState(
-  loaded: ComposedFlow,
-  options: {
-    startInput: Record<string, unknown>;
-    startWiring: Record<string, unknown>;
-    numWorkers?: number;
-    effective?: Record<string, Record<string, unknown>>;
-    privateFlow?: CompiledFlow;
-  },
-): { state: RunState; log: MemoryRunLog } {
-  const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
-  const pool = new VariablePool(privateFlow.startId);
-  pool.set(privateFlow.startId, options.startInput);
-  pool.addSystem("run_id", RECOVERY_RUN_ID);
-  pool.addSystem("today", "2026-08-14");
-  pool.addSystem("now", "2026-08-14T12:00:00+00:00");
-  const state = new RunState(privateFlow);
-  const log = new MemoryRunLog(RECOVERY_RUN_ID);
-  commitPrepared(
-    log,
-    state,
-    prepareRunStarted(state, {
-      runId: RECOVERY_RUN_ID,
-      flowFingerprint: flowFingerprint(loaded.compiled),
-      initialPool: pool,
-      startWiringOverride: options.startWiring,
-      effectiveLlmByStaticPath: options.effective ?? {},
-      numWorkers: options.numWorkers ?? 0,
-    }),
-  );
-  return { state, log };
-}
-
 /** Every replay-relevant coordinate of `state`, the live topology included. */
 function recoverySnapshot(state: RunState): Record<string, unknown> {
   return {
@@ -422,11 +385,8 @@ async function loadedLinearHistory(): Promise<{
   snapshots: Record<string, unknown>[];
 }> {
   const loaded = await load(LINEAR);
-  const { state, log } = startedState(loaded, {
-    startInput: { x: "Ada" },
-    startWiring: { x: "${input.x}" },
-    numWorkers: 2,
-  });
+  const log = new MemoryRunLog(RECOVERY_RUN_ID);
+  const state = startedRun(loaded, log, { inputs: { x: "Ada" }, numWorkers: 2 });
   const snapshots = [recoverySnapshot(state)];
   const transitions = [
     () => prepareNodeStarted(state, START_ID),
@@ -458,7 +418,8 @@ async function agentGrowthHistory(): Promise<{
     { openai: { temperature: 0.25 } },
     { defaults: { provider: "openai", model: "recorded-model" } },
   );
-  const { state, log } = startedState(loaded, { startInput: {}, startWiring: {}, effective, privateFlow });
+  const log = new MemoryRunLog(RECOVERY_RUN_ID);
+  const state = startedRun(loaded, log, { effective, privateFlow });
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "gate"));
@@ -486,7 +447,8 @@ test("test_replay_every_prefix_matches_live_state_and_uses_commit_path", async (
 
 test("test_replay_preserves_ordered_unfinished_starts_for_later_resume", async () => {
   const loaded = await load(FANOUT);
-  const { state, log } = startedState(loaded, { startInput: {}, startWiring: {}, numWorkers: 4 });
+  const log = new MemoryRunLog(RECOVERY_RUN_ID);
+  const state = startedRun(loaded, log, { numWorkers: 4 });
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
   expect(state.ready).toEqual(["first", "second"]);
@@ -520,7 +482,6 @@ test("test_replay_applies_logged_llm_map_before_rebuilding_growth", async () => 
 
 test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-recovery-prefixes-"));
-  const freshEnv: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
   const env: Env = (name) => {
     if (name === "YIAN_DEFAULT_PROVIDER" || name === "YIAN_AUTH_FILE") throw new Error("read current defaults");
     return undefined;
@@ -532,7 +493,7 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
       log: path,
       runId: "historical-linear",
       numWorkers: 0,
-      env: freshEnv,
+      env: hostEnv(dir),
     });
     expect(fresh.status).toBe("succeeded");
     const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
@@ -592,12 +553,7 @@ test("test_replay_rejects_changed_but_valid_growth_digest", async () => {
   expect(grown.topologyDigest).not.toBe(changed.topologyDigest);
   envelopes.push(new RecordEnvelope(SCHEMA_VERSION, last.runId, last.seq, changed));
 
-  let caught: unknown;
-  try {
-    replayRunLog(loaded, new ReadOnlyLog(envelopes));
-  } catch (error) {
-    caught = error;
-  }
+  const caught = thrownBy(() => replayRunLog(loaded, new ReadOnlyLog(envelopes)));
   expect(caught).toBeInstanceOf(RangeError);
   expect((caught as Error).message).toContain("topology digest mismatch");
 });
@@ -642,12 +598,7 @@ test("test_fingerprint_mismatch_fails_before_copy_or_llm_apply", async () => {
   changed.compiled.nodes.get("n")!.env = { "semantic-change": true };
   const before = flowManifest(changed.compiled);
 
-  let caught: unknown;
-  try {
-    replayRunLog(changed, source);
-  } catch (error) {
-    caught = error;
-  }
+  const caught = thrownBy(() => replayRunLog(changed, source));
   expect(caught).toBeInstanceOf(RangeError);
   expect((caught as Error).message).toStartWith("flow fingerprint mismatch: recorded '");
   expect(flowManifest(changed.compiled)).toEqual(before);
@@ -676,38 +627,19 @@ test("test_run_started_replay_rejects_pool_and_envelope_identity_drift", async (
   const drifted = new RunStartedRecord({ ...start, initialPool: pool as never });
   const source = new ReadOnlyLog([new RecordEnvelope(SCHEMA_VERSION, first.runId, 0, drifted)]);
 
-  let caught: unknown;
-  try {
-    replayRunLog(loaded, source);
-  } catch (error) {
-    caught = error;
-  }
+  const caught = thrownBy(() => replayRunLog(loaded, source));
   expect(caught).toBeInstanceOf(RangeError);
   expect((caught as Error).message).toContain("system.run_id");
 });
 
 test("a pooled run frozen after both starts counts each, and its resume publishes both", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-recovery-prefixes-"));
-  const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
-  const append = JsonlRunLog.prototype.append;
-  const crash = new Error("crash after record 4");
+  const env = hostEnv(dir);
   try {
     const flow = await load(FANOUT);
     const path = join(dir, "pooled.jsonl");
     // Records 0-4 are RunStarted, START's two and both NodeStarted records.
-    JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-      if (this.nextSequence >= 5) throw crash;
-      return append.call(this, record);
-    };
-    let caught: unknown;
-    try {
-      await runFlow(flow, {}, { log: path, numWorkers: 2, env });
-    } catch (error) {
-      caught = error;
-    } finally {
-      JsonlRunLog.prototype.append = append;
-    }
-    expect(caught).toBe(crash);
+    await crashAfter(5, () => runFlow(flow, {}, { log: path, numWorkers: 2, env }));
 
     const counts = new Map([
       ["first", 1],
@@ -715,7 +647,7 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
     ]);
     const expected = { status: "interrupted" as const, inFlight: ["first", "second"], interruptedAttempts: counts };
     expect(inspectRun(path)).toEqual(expected);
-    expect(inspectRun(path, { flow })).toEqual(expected);
+    expect(inspectRun(path, { flow, env })).toEqual(expected);
 
     const seen: RunEvent[] = [];
     const result = await resumeFlow(flow, { log: path, env, onEvent: (event) => seen.push(event) });
@@ -727,7 +659,6 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
     ]);
     expect(result.interruptedAttempts).toEqual(counts);
   } finally {
-    JsonlRunLog.prototype.append = append;
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -19,7 +19,9 @@
  * `run_flow` and `resume_flow` parameter rows check `RunFlowOptions`'s and `ResumeFlowOptions`'s
  * keys (TS-only: `signal`, `env`, `scheduler`, `random`, `models`, and the `@internal`
  * `checkLlmConfigs` of Python's `_resume_flow_controlled`) and the `RunResult` row its own fields
- * and getters (TS-only: `interruptedAttempts`; `_backward_handle` is a private field).
+ * and getters (TS-only: `interruptedAttempts`; `_backward_handle` is a private field). The
+ * `ResumeFlowOptions` keys also stand for `test_run_lifecycle.py`'s
+ * `test_final_run_boundary_signatures_and_result_fields_are_exact`.
  *
  * TS-only: the package root (`index.ts`) exports exactly its documented root list plus the memory
  * storage names and `ToolAttemptsFailed`, each the owning module's export, and `yian/run`

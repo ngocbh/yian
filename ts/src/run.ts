@@ -116,7 +116,14 @@ import {
   RunStoppedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
-import { commitPrepared, prepareRunResumed, prepareRunStarted, RunState, replayRecords } from "./runtime/state.ts";
+import {
+  addInterruptedAttempts,
+  commitPrepared,
+  prepareRunResumed,
+  prepareRunStarted,
+  RunState,
+  replayRecords,
+} from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
@@ -321,7 +328,8 @@ export async function runFlow(
 ): Promise<RunResult> {
   // The scope makes everything the run reads, the engine's work included, see the run's values;
   // a bad YIAN_<NAME> value fails here, before any work.
-  return withEnv(options.env ?? processEnv, async () => {
+  const env = options.env ?? processEnv;
+  return withEnv(env, async () => {
     const runDefaults = current();
     const { learnable = false, tools = null, steering = null, context, signal = null } = options;
     if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
@@ -340,7 +348,7 @@ export async function runFlow(
     checkTestOptions(options);
     const runServers = await openRunServers(unopened, signal);
     try {
-      return await startRun(flow, inputs, { ...options, skills }, runDefaults);
+      return await startRun(flow, inputs, { ...options, skills }, runDefaults, env);
     } finally {
       await closeRunServers(runServers);
     }
@@ -572,12 +580,12 @@ async function startRun(
   inputs: Readonly<Record<string, unknown>>,
   options: RunFlowOptions,
   runDefaults: Defaults,
+  env: Env,
 ): Promise<RunResult> {
   const { log = null, runId = null, numWorkers = 8, onEvent = null, onStream = null, memory = null } = options;
   const { learnable = false, tools = null, skills = null, steering = null, context, signal = null } = options;
   const random = options.random ?? null;
   const scheduler = options.scheduler ?? realScheduler;
-  const env = options.env ?? processEnv;
   const models = options.models ?? defaultModelAccess(env);
   const runTools = new ToolSet(tools, { context });
   checkToolGrants(flow.compiled, runTools);
@@ -821,7 +829,8 @@ export interface ResumeFlowOptions {
 export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
   // here, before the log is opened.
-  return withEnv(options.env ?? processEnv, async () => {
+  const env = options.env ?? processEnv;
+  return withEnv(env, async () => {
     current();
     const { log, tools = null, steering = null, context, signal = null } = options;
     if (!(flow instanceof ComposedFlow)) throw new TypeError("resumeFlow expects a ComposedFlow");
@@ -894,13 +903,13 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       const prepared = prepareRunResumed(state, { numWorkers });
       const observers = commitPrepared(authority, state, prepared);
       const runtime = memoryRuntime;
-      const env = options.env ?? processEnv;
       // Built before publishing so a callback's rejected promise can stop it.
       const engine = new FlowEngine(state, authority, {
         growBuilder: buildGrow,
         numWorkers,
         onEvent: options.onEvent ?? null,
         onStream: options.onStream ?? null,
+        // A bare `runtime.openContext` would lose its `this`.
         memoryContextOpener:
           runtime === null ? null : (scope, request, opts) => runtime.openContext(scope, request, opts),
         tools: runTools,
@@ -956,46 +965,46 @@ export interface RunInspection {
  * records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
  * that proof) but before a node already ready started reads as finished, though `resumeFlow` would
  * still run that node. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
- * is exact; pass the flow when you have it.
+ * is exact; pass the flow when you have it. The lock is probed before and after the records are
+ * read, so a writer that holds it at either probe makes the run `running`.
  *
  * @param log The JSONL run log's path.
  * @param options.flow The loaded flow the run was started with, for an exact status.
+ * @param options.env The environment whose `YIAN_*` values the replay with `flow` checks the
+ *   recorded ones against, as `resumeFlow`'s `env`; without one, the values already in effect.
+ *   Reading without `flow` doesn't use it.
  * @returns The status, the nodes in flight and the interrupted counts.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
  * @throws RangeError when a complete line isn't a valid record, the log holds no record and no
  *   writer, or, with `flow`, the replay refuses the log (`replayRunLog`).
+ * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError with `flow`, when the run recorded `YIAN_*` values that differ
- *   from the ones in effect.
+ *   from `env`'s.
  */
-export function inspectRun(log: string, options: { flow?: ComposedFlow | null } = {}): RunInspection {
+export function inspectRun(
+  log: string,
+  options: { flow?: ComposedFlow | null; env?: Env | null } = {},
+): RunInspection {
+  const lockedBefore = isRunLogLocked(log);
   const envelopes = readRunLog(log);
-  const running = isRunLogLocked(log);
+  // A writer that took or released the lock while the records were read is caught by one probe.
+  const running = isRunLogLocked(log) || lockedBefore;
   if (envelopes.length === 0 && !running) throw new RangeError(`cannot inspect an empty run log: ${log}`);
   const flow = options.flow ?? null;
-  // A running log's status needs no replay, and its counts get no in-flight attempts: those
-  // attempts are still running.
-  if (running || flow === null) {
-    const scan = scanRunRecords(envelopes);
-    const { starts, interrupted } = scan;
-    if (running) return { status: "running", inFlight: [...starts.keys()], interruptedAttempts: interrupted };
-    if (scan.finished !== null) return { status: scan.finished, inFlight: [], interruptedAttempts: interrupted };
-    return {
-      status: scan.lastStop === null ? "interrupted" : "stopped",
-      inFlight: [...scan.starts.keys()],
-      interruptedAttempts: withInFlightAttempts(scan.interrupted, scan.starts, scan.lastStop),
-    };
-  }
-  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes));
-  const interrupted = new Map(state.interruptedAttempts);
-  if (state.result !== null) {
-    const status = state.result instanceof RunSucceeded ? "succeeded" : "failed";
-    return { status, inFlight: [], interruptedAttempts: interrupted };
-  }
-  return {
-    status: state.lastStopSequence === null ? "interrupted" : "stopped",
-    inFlight: [...state.inFlight],
-    interruptedAttempts: withInFlightAttempts(interrupted, state.acceptedStarts, state.lastStopSequence),
-  };
+  // A running log's status needs no replay.
+  const source =
+    running || flow === null
+      ? scanRunRecords(envelopes)
+      : withEnv(options.env ?? processEnv, () => replayedScan(flow, envelopes));
+  const { starts, interrupted, lastStop, finished } = source;
+  let status: RunStatus;
+  if (running) status = "running";
+  else if (finished !== null) status = finished;
+  else status = lastStop === null ? "interrupted" : "stopped";
+  // A running run's attempts are still running, and a finished run's are abandoned.
+  if (status === "interrupted" || status === "stopped") addInterruptedAttempts(interrupted, starts, lastStop);
+  const inFlight = status === "succeeded" || status === "failed" ? [] : [...starts.keys()];
+  return { status, inFlight, interruptedAttempts: interrupted };
 }
 
 /**
@@ -1470,7 +1479,7 @@ type RecordScan = {
  */
 function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
   const starts = new Map<string, number>();
-  let interrupted = new Map<string, number>();
+  const interrupted = new Map<string, number>();
   let lastStop: number | null = null;
   let failed = false;
   let endSucceeded = false;
@@ -1493,7 +1502,7 @@ function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
       lastStop = seq;
     } else if (record instanceof RunResumedRecord) {
       // The resume retries exactly the nodes in flight.
-      interrupted = withInFlightAttempts(interrupted, starts, lastStop);
+      addInterruptedAttempts(interrupted, starts, lastStop);
       starts.clear();
       lastStop = null;
     }
@@ -1505,22 +1514,21 @@ function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
 }
 
 /**
- * Return `interrupted` plus one for each node in flight that no stop covers: a stop names every
- * node in flight, so an attempt is covered exactly when it started before the segment's last stop.
+ * Replay `envelopes` read-only over a private copy of `flow`, as `resumeFlow` replays its log, and
+ * read the same parts as `scanRunRecords` from the state.
  *
- * @param starts The start sequence of each node in flight.
- * @param lastStop The sequence of the segment's last `RunStopped`, or `null`.
+ * @throws RangeError, and the other errors of `replayRunLog`.
  */
-function withInFlightAttempts(
-  interrupted: ReadonlyMap<string, number>,
-  starts: ReadonlyMap<string, number>,
-  lastStop: number | null,
-): Map<string, number> {
-  const counts = new Map(interrupted);
-  for (const [nodeId, start] of starts) {
-    if (lastStop === null || start >= lastStop) counts.set(nodeId, (counts.get(nodeId) ?? 0) + 1);
-  }
-  return counts;
+function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]): RecordScan {
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes));
+  let finished: RecordScan["finished"] = null;
+  if (state.result !== null) finished = state.result instanceof RunSucceeded ? "succeeded" : "failed";
+  return {
+    starts: new Map(state.acceptedStarts),
+    interrupted: new Map(state.interruptedAttempts),
+    lastStop: state.lastStopSequence,
+    finished,
+  };
 }
 
 /** A layout's record-facing key table, per-key origins and stacks. */
@@ -1588,11 +1596,9 @@ function checkRegistryTypes(memory: ReadonlyMap<string, Memory>, specs: readonly
  * Nothing is stamped, so a def called from several nodes needs no de-aliasing; the table, origins
  * and stacks equal those a fresh run records.
  *
- * @throws TypeError when `flow` isn't a `ComposedFlow`.
  * @throws MemorySetupError when the layout breaks a rule.
  */
 function resolveAuthoredMemoryLayout(flow: ComposedFlow): MemoryLayoutParts {
-  if (!(flow instanceof ComposedFlow)) throw new TypeError("memory layout resolution expects a ComposedFlow");
   return memoryLayoutParts(resolveMemoryLayout(flow.compiled));
 }
 

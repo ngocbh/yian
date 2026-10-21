@@ -447,10 +447,12 @@ describe("loadFlow's env", () => {
 
   test("concurrent loads keep their own limits", async () => {
     let arrived = 0;
+    const bothArrived = Promise.withResolvers<void>();
     const gateA = Promise.withResolvers<void>();
     const gateB = Promise.withResolvers<void>();
     const gated = (gate: Promise<void>) => async () => {
       arrived += 1;
+      if (arrived === 2) bothArrived.resolve();
       await gate;
       return child;
     };
@@ -459,7 +461,8 @@ describe("loadFlow's env", () => {
       childResolver: gated(gateA.promise),
     });
     const b = loadConformanceFlow(ROOT, { env: envOf({}), childResolver: gated(gateB.promise) });
-    for (let i = 0; i < 100 && arrived < 2; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    // A load that settles before reaching its resolver ends the wait and fails below.
+    await Promise.race([bothArrived.promise, a, b]);
     expect(arrived).toBe(2);
     // A finishes under its limit after B has started, so a value B left behind would show here.
     gateA.resolve();

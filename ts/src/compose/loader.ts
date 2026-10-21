@@ -610,7 +610,7 @@ export async function loadFlow(text: string, options: LoadOptions = {}): Promise
 }
 
 /** Load `text` as `loadFlow` does, under the `YIAN_*` values already in effect. */
-async function loadText(text: string, options: LoadOptions): Promise<ComposedFlow> {
+async function loadText(text: string, options: Omit<LoadOptions, "env">): Promise<ComposedFlow> {
   const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null } = options;
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const document = parseSourceDocument(text, sourceLabel);

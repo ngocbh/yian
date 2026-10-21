@@ -251,7 +251,9 @@ test("a constructor in a flow output (loads)", () => {
 });
 
 test("a constructor in a flow output (runs)", async () => {
-  expect(await ok(flow("output:\n  decision: ${Buy(d.output)}\n"), { order: A_BUY })).toStrictEqual({ decision: A_BUY });
+  const text = flow("output:\n  decision: ${Buy(d.output)}\n");
+
+  expect(await ok(text, { order: A_BUY })).toStrictEqual({ decision: A_BUY });
 });
 
 const MAP_FLOW =

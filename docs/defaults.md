@@ -130,8 +130,8 @@ load, run, and resume with stack to spare:
   shown to fit. A chain of `uses:` imports is held to the same limit, since loading
   each file recurses too; the deepest accepted load measured, 50 imports whose last
   file calls a 50-level chain, peaks near 735 frames on Python 3.10 and 3.12.
-  Changed (TS yian): run and resume are not yet ported, so the maximum stays until they are
-  measured.
+  Changed (TS yian): loading, running, and resuming a chain of defs fits 268 levels under a
+  1 MiB stack on Node (see the table below); the maximum stays 50.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
   Changed (TS yian): the `yaml` package composes about 500 levels on Node but 5000 on
@@ -142,8 +142,7 @@ load, run, and resume with stack to spare:
   share its types, so record depth adds no stack at run setup. The limit also bounds
   each typedef's levels, the length of a chain of typedefs naming each other, and a
   type with its typedef names expanded. Changed (TS yian): the TS type walkers handle at
-  least 500 levels on Node and Bun; the maximum stays 125 until the walkers not yet ported
-  are measured.
+  least 893 levels on Node and Bun (see the table below); the maximum stays 125.
 - `YIAN_MAX_AGENT_OUTPUT_NESTING` can only be lowered (maximum 16). Building a model's
   structured reply schema is recursive. The costliest shape is an `Optional(Union(...))`
   field at each level, about 28 frames per level on Python 3.12 and more on 3.11. With
@@ -152,12 +151,28 @@ load, run, and resume with stack to spare:
   The maximum is the smallest passing depth minus 2, a margin for Python versions and
   library releases that weren't measured. Under the deepest accepted load (50 `uses:`
   imports whose last file calls a 50-level chain), an AGENT at 16 levels builds its
-  schema well above the load's peak. Changed (TS yian): the schema builder is not yet
-  ported; the maximum also stays because providers limit the nesting of a structured-output
-  schema, so a deeper `output:` type is of no use.
+  schema well above the load's peak. Changed (TS yian): the schema builder handles at least
+  400 levels (see the table below); the maximum stays because providers limit the nesting of a
+  structured-output schema, so a deeper `output:` type is of no use.
 
 Changed (TS yian): the limits keep the deepest accepted input the same on Node and Bun,
-whose stacks differ. Each maximum is re-measured once every recursive walker is ported.
+whose stacks differ. Each maximum sits well below the deepest input measured to work
+with every limit lifted: the flow loads, runs to a durable log, replays, and resumes from
+a crash prefix of its log. The table gives the deepest level that worked under Node 22
+with `ulimit -s 1024` (a 1 MiB stack), inside a Bun 1.4 `Worker`, and on Bun's main
+thread with `ulimit -s 1024`; "at least" marks a level whose probing stopped on time
+before the overflow depth was narrowed down.
+
+| Limit | Maximum | Node, 1 MiB | Bun `Worker` | Bun, 1 MiB | Inputs probed |
+|---|---:|---:|---:|---:|---|
+| `YIAN_MAX_VALUE_NESTING` | 100 | 1,587 | 10,500 | 1,787 | an input value, a nested list literal and nested parentheses in an expression |
+| `YIAN_MAX_TYPE_NESTING` | 125 | 1,387 | at least 3,200 | 893 | `list(...)` type text, a chain of record typedefs |
+| `YIAN_MAX_AGENT_OUTPUT_NESTING` | 16 | at least 400 | at least 800 | at least 400 | a structured reply schema with an `Optional(Union(...))` field per level |
+| `YIAN_MAX_YAML_NESTING` | 200 | 793 | 3,975 | 818 | flow sequences, block mappings |
+| `YIAN_MAX_CALL_NESTING` | 50 | 268 | at least 400 | 287 | chains of defs, inline bodies, and `uses:` files |
+
+Each cell is the smallest of its row's inputs. A chain of more than about 220 `uses:` files
+runs out of Node's default 4 GB heap before the stack; it wasn't probed on Bun's main thread.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

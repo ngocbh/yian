@@ -38,6 +38,11 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { childFlow } from "./run_state_fixtures.ts";
 
+/** Return an instance of `cls` holding `fields`, made without running its constructor. */
+function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {
+  return Object.assign(Object.create(cls.prototype) as object, fields) as T;
+}
+
 /** Return the running driver `origin~k` over `child`, reading the child START's params. */
 function driver(origin: string, k: number, child: Flow): LoopNode {
   const d = new LoopNode(`${origin}~${k}`, {
@@ -252,22 +257,22 @@ test("continue revalidates supplied driver memory scope", () => {
   const child = childFlow();
   const d = driver("lp", 1, child);
   const baseScope = new MemoryScope(["lp"]);
-  const occurrence = Object.assign(Object.create(MemoryOccurrenceSegment.prototype) as object, {
+  const occurrence = forged(MemoryOccurrenceSegment, {
     kind: MemoryOccurrenceKind.MAP_ITEM,
     staticPath: ["outer"],
     index: false,
-  }) as MemoryOccurrenceSegment;
-  const forged = Object.assign(Object.create(MemoryScope.prototype) as object, {
+  });
+  const forgedScope = forged(MemoryScope, {
     staticPath: baseScope.staticPath,
     memories: baseScope.memories,
     occurrencePath: [occurrence],
-  }) as MemoryScope;
-  d.memoryScope = forged;
+  });
+  d.memoryScope = forgedScope;
 
   const grow = () => loopContinueSubgraph(child, "lp", { x: 1n }, 0, d, { memoryScope: baseScope });
   expect(grow).toThrow(TypeError);
   expect(grow).toThrow("index must be an integer");
 
-  expect(d.memoryScope).toBe(forged);
+  expect(d.memoryScope).toBe(forgedScope);
   expect([...child.nodes.values()].every((node) => node.memoryScope === null)).toBe(true);
 });

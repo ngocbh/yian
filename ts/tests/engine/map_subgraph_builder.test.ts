@@ -32,6 +32,11 @@ import { Binding, ChildFlowBoundary, SeedConnection } from "../../src/nodes/cont
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { childFlow } from "./run_state_fixtures.ts";
 
+/** Return an instance of `cls` holding `fields`, made without running its constructor. */
+function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {
+  return Object.assign(Object.create(cls.prototype) as object, fields) as T;
+}
+
 test("map subgraph matches grow map type", () => {
   const child = childFlow();
   const records = [{ x: 1n }, { x: 2n }];
@@ -166,11 +171,11 @@ test("map subgraph appends item occurrence and scopes generated fan nodes", () =
 
 test("map subgraph revalidates supplied memory scope", () => {
   const child = childFlow();
-  const occurrence = Object.assign(Object.create(MemoryOccurrenceSegment.prototype) as object, {
+  const occurrence = forged(MemoryOccurrenceSegment, {
     kind: MemoryOccurrenceKind.LOOP_ITERATION,
     staticPath: ["outer"],
     index: true,
-  }) as MemoryOccurrenceSegment;
+  });
   const scope = new MemoryScope(["outer", "map"], { occurrencePath: [occurrence] });
 
   const grow = () => mapSubgraph(child, "map", [{ x: 1n }], { memoryScope: scope });

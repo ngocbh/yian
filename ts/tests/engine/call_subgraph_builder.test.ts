@@ -20,11 +20,13 @@
  * Changed:
  * - ints are `bigint`s (decision 4a), and Python's `ValueError` is a `RangeError`; where Python
  *   accepts `(TypeError, ValueError)`, each row pins the one class TS throws;
- * - carriers are frozen, so a forged seed connection, memory occurrence or recipe list is an
- *   object of the carrier's prototype built without its constructor, or a reassigned field,
- *   where Python sets a field on a built carrier; the forged occurrence is built before its scope;
- * - the `invalid-parameters` row gives START a non-`Parameter` entry: TS checks each entry, where
- *   Python also requires the list itself to be a `list` (an empty tuple there);
+ * - carriers are frozen, so a forged seed connection or memory occurrence is an object of the
+ *   carrier's prototype built without its constructor, where Python sets a field on a built
+ *   carrier, and the forged occurrence is built before its scope; a fragment's readonly recipe
+ *   lists are reassigned through `setRecipes`;
+ * - the `invalid-parameters` row gives START an empty array-like object, where Python gives an
+ *   empty tuple: JS has no tuple, and an empty array is just "no parameters", so a non-array
+ *   stands in for Python's non-`list` and hits the same "not an array" check;
  * - the nested recipes are snapshotted by copying the arrays of frozen carriers, not `deepcopy`.
  *
  * Not ported:
@@ -48,6 +50,11 @@ import { childFlow } from "./run_state_fixtures.ts";
 /** Return an instance of `cls` holding `fields`, made without running its constructor. */
 function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {
   return Object.assign(Object.create(cls.prototype) as object, fields) as T;
+}
+
+/** Reassign `flow`'s readonly growth recipes, as Python assigns them on the fragment. */
+function setRecipes(flow: Flow, recipes: Partial<Pick<Flow, "inputConnections" | "childBoundaries">>): void {
+  Object.assign(flow, recipes);
 }
 
 test("call subgraph matches grow call type", () => {
@@ -98,7 +105,7 @@ test.each([
         "negative-index": [-1, "x"],
         "deep-selector": [0, "x", "nested"],
       }[malformation];
-      Object.assign(fragment, {
+      setRecipes(fragment, {
         inputConnections: [
           forged(SeedConnection, { childStartId: connection.childStartId, inputName: connection.inputName, seedPath }),
         ],
@@ -106,15 +113,15 @@ test.each([
       break;
     }
     case "duplicate-target":
-      Object.assign(fragment, { inputConnections: [...fragment.inputConnections, connection] });
+      setRecipes(fragment, { inputConnections: [...fragment.inputConnections, connection] });
       break;
     case "missing-start":
-      Object.assign(fragment, {
+      setRecipes(fragment, {
         inputConnections: [new SeedConnection("absent", connection.inputName, connection.seedPath)],
       });
       break;
     case "undeclared-input":
-      Object.assign(fragment, {
+      setRecipes(fragment, {
         inputConnections: [new SeedConnection(connection.childStartId, "absent", connection.seedPath)],
       });
       break;
@@ -122,13 +129,13 @@ test.each([
       fragment.wiring.set(fragment.startId, new Map());
       break;
     case "invalid-parameters":
-      start.params = ["x"] as unknown as Parameter[];
+      start.params = { length: 0 } as unknown as Parameter[];
       break;
     case "duplicate-boundary":
-      Object.assign(fragment, { childBoundaries: [...fragment.childBoundaries, ...fragment.childBoundaries] });
+      setRecipes(fragment, { childBoundaries: [...fragment.childBoundaries, ...fragment.childBoundaries] });
       break;
     case "missing-end":
-      Object.assign(fragment, { childBoundaries: [new ChildFlowBoundary(fragment.startId, "absent")] });
+      setRecipes(fragment, { childBoundaries: [new ChildFlowBoundary(fragment.startId, "absent")] });
       break;
     case "wrong-role":
       start.executionScope = new ExecutionScope(["call", START_ID], { flowPath: ["call"], boundary: "end" });
@@ -159,7 +166,7 @@ function fragmentWithDefaultedInput(options: { default?: boolean; wired?: boolea
 
 test("growth metadata accepts unwired defaulted target", () => {
   const [fragment, nodeId] = fragmentWithDefaultedInput();
-  Object.assign(fragment, { inputConnections: [...fragment.inputConnections, new SeedConnection(nodeId, "p", ["p"])] });
+  setRecipes(fragment, { inputConnections: [...fragment.inputConnections, new SeedConnection(nodeId, "p", ["p"])] });
 
   expect(() => validateGrowthMetadata(fragment)).not.toThrow();
 });
@@ -177,7 +184,7 @@ test.each([
     "undeclared-input": new SeedConnection(nodeId, "absent", ["p"]),
     "unknown-target": new SeedConnection("absent", "p", ["p"]),
   }[kase];
-  Object.assign(fragment, { inputConnections: [...fragment.inputConnections, connection] });
+  setRecipes(fragment, { inputConnections: [...fragment.inputConnections, connection] });
 
   expect(() => validateGrowthMetadata(fragment)).toThrow(RangeError);
   expect(() => validateGrowthMetadata(fragment)).toThrow(message);
@@ -191,7 +198,7 @@ test.each(["call", "map"] as const)(
     for (const [id, node] of nested.nodes) child.nodes.set(id, node);
     for (const [id, nodeWiring] of nested.wiring) child.wiring.set(id, nodeWiring);
     child.edges.push(...nested.edges);
-    Object.assign(child, { inputConnections: nested.inputConnections, childBoundaries: nested.childBoundaries });
+    setRecipes(child, { inputConnections: nested.inputConnections, childBoundaries: nested.childBoundaries });
     const before = [[...child.inputConnections], [...child.childBoundaries]];
 
     let fragment: Flow;
@@ -225,7 +232,7 @@ test("map clone rejects a preserved recipe that would need two item indices", ()
   for (const [id, nodeWiring] of nested.wiring) child.wiring.set(id, nodeWiring);
   child.edges.push(...nested.edges);
   const inner = nested.inputConnections[0]!;
-  Object.assign(child, {
+  setRecipes(child, {
     inputConnections: [new SeedConnection(inner.childStartId, inner.inputName, [2, "x"])],
     childBoundaries: nested.childBoundaries,
   });

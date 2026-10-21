@@ -448,8 +448,9 @@ async function failCall(
  * With a memory transcript, each call is requested right before it starts, and a request that
  * fails is the group's failure in time. Once the group settles, every started call is observed in
  * call order (`observeToolGroup`), so a finished sibling of a failing call stays `completed` with
- * its result. An observation fault wins over the first failure, though not over a pending stop; a
- * result `toolText` refuses is thrown only when no call failed.
+ * its result. An observation fault is thrown unless a stop is pending or an earlier call (in call
+ * order) failed or couldn't be represented; then the group ends as without the fault. A result
+ * `toolText` refuses is thrown when committing, as without a transcript, only when no call failed.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
  */
@@ -517,17 +518,13 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
       if (!begun) break;
     }
     const settled = await Promise.all(outcomes);
-    const unrepresented = transcript
-      ? await observeToolGroup(
-          transcript,
-          started.map((effect, position) => ({ ...effect, outcome: settled[position]! })),
-          signal,
-        )
-      : null;
+    if (transcript) {
+      const observed = started.map((effect, position) => ({ ...effect, outcome: settled[position]! }));
+      await observeToolGroup(transcript, observed, signal);
+    }
     // A stop pending when the calls settle wins over the first failure and over their results.
     checkNodeStopped(turn);
     if (failure !== null) throw failure.error;
-    if (unrepresented !== null) throw unrepresented.error;
     for (const [position, outcome] of settled.entries()) {
       const { call } = group[position]!;
       // No outcome is an error: a failure was thrown above.

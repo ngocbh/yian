@@ -536,7 +536,7 @@ export function requestTool(
  * @returns The represented result as a tool message, already stored.
  * @throws What `invokeToolEffect` throws after its call ran.
  */
-export async function settleToolEffect(
+async function settleToolEffect(
   turn: ConversationTurn,
   ordinal: number,
   outcome: ToolOutcome,
@@ -574,35 +574,42 @@ export async function settleToolEffect(
  * Observe a settled group's started tool calls in call order, each as `settleToolEffect` does.
  *
  * The stop a turn throws after publishing doesn't end the observations, nor does a failed call's
- * own error; a result that can't be represented is observed `completed` without items.
+ * own error, nor a result that can't be represented (observed `completed` without items; the
+ * caller throws its error when it commits the results). A fault observing a call the stop cut
+ * short is swallowed, as `observePreservingError` swallows it under a stop, and observing goes on.
+ *
+ * Any other fault ends the observations, the faulting call and every later one left `pending`.
+ * Then a pending stop is thrown; else, when an earlier call failed or couldn't be represented, the
+ * group ends as if the fault hadn't happened, since in Python's one-at-a-time order the faulting
+ * call would never have run; else the fault is thrown.
  *
  * @param calls Each started call's identity, its request's ordinal and its outcome, in call order.
  * @param signal The node's stop signal.
- * @returns The first representation error in call order, or `null` without one.
- * @throws The stop, when it is pending at the first observation that fails; otherwise that
- *   observation's `CapabilityFault`: a failed call's error wrapped, the fault noted on it, or the
- *   fault itself. Later calls stay `pending`.
+ * @throws The stop, when it is pending at the first fault; else, without an earlier failure or
+ *   representation error, that observation's `CapabilityFault`: a failed call's error wrapped, the
+ *   fault noted on it, or the fault itself.
  */
 export async function observeToolGroup(
   turn: ConversationTurn,
   calls: readonly (ToolCallIdentity & { readonly ordinal: number; readonly outcome: ToolOutcome })[],
   signal: AbortSignal | undefined,
-): Promise<{ readonly error: unknown } | null> {
-  let unrepresented: { error: unknown } | null = null;
+): Promise<void> {
+  // Whether a call observed so far failed or couldn't be represented.
+  let earlier = false;
   for (const { ordinal, outcome, ...call } of calls) {
     try {
       await settleToolEffect(turn, ordinal, outcome, { ...call, signal });
     } catch (error) {
-      // Each is thrown once the observation is stored.
-      if (isStop(error, signal) || ("error" in outcome && error === outcome.error)) continue;
-      if (error instanceof CapabilityFault) {
+      // The stop and a failed call's own error are thrown once the observation is stored.
+      const stored = isStop(error, signal) || ("error" in outcome && error === outcome.error);
+      if (!stored && error instanceof CapabilityFault) {
         signal?.throwIfAborted();
+        if (earlier) return;
         throw error;
       }
-      unrepresented ??= { error };
+      if (!isStop(error, signal)) earlier = true;
     }
   }
-  return unrepresented;
 }
 
 /** A text message of `role`. */

@@ -37,89 +37,16 @@ import { expect, test } from "bun:test";
 
 import { buildGrow, callSubgraph, loopContinueSubgraph, mapSubgraph } from "../../src/compile/expand.ts";
 import { expansionDigest } from "../../src/compile/manifest.ts";
-import {
-  CompiledFlow,
-  copyGraph,
-  Edge,
-  END_ID,
-  Flow,
-  FlowOutput,
-  GrowthRejected,
-  START_ID,
-} from "../../src/compile/model.ts";
+import { copyGraph, END_ID, Flow, GrowthRejected } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
 import { Grow, type Node, NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { EndNode } from "../../src/nodes/end/node.ts";
+import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { StartNode } from "../../src/nodes/start/node.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { FuncNode } from "./run_state_fixtures.ts";
-
-/** A required int parameter that coerces supplied strings. */
-function intParameter(name: string): Parameter {
-  return new Parameter(name, {
-    contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
-    required: true,
-    coerceStrings: true,
-  });
-}
-
-/** A child START -> head (reads `${input.x}`) -> tail (reads `${head.output}`) -> END. */
-function childFlow(): CompiledFlow {
-  const head = new CodeNode("head", { code: 'return inputs["x"] + 1' });
-  head.params = [new Parameter("x")];
-  const tail = new CodeNode("tail", { code: 'return inputs["r"] * 10' });
-  tail.params = [new Parameter("r")];
-  const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: [intParameter("x")] })],
-    ["head", head],
-    ["tail", tail],
-    [END_ID, EndNode.value(END_ID, { outputName: "out" })],
-  ]);
-  const edges = [
-    new Edge("__start__->head#0", START_ID, "head", { inputGroup: "x" }),
-    new Edge("head->tail#0", "head", "tail", { inputGroup: "r" }),
-    new Edge("tail->__end__#0", "tail", END_ID, { inputGroup: "out" }),
-  ];
-  const wiring = new Map([
-    ["head", new Map([["x", "${input.x}"]])],
-    ["tail", new Map([["r", "${head.output}"]])],
-    [START_ID, new Map([["x", "${input.x}"]])],
-    [END_ID, new Map([["out", "${tail.output}"]])],
-  ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
-}
-
-/** A parent whose CALL `sp` of `child` reads `${input.x}` and whose `after` reads `${sp.output}`. */
-function parentWithSpawner(child: CompiledFlow): CompiledFlow {
-  const sp = new CallNode("sp", { flowId: "child", child, childInputs: child.nodes.get(child.startId)!.params });
-  sp.params = [new Parameter("x")];
-  const after = new FuncNode("after", (inputs) => inputs["v"], { reads: { v: "${sp.output}" } });
-  const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: [intParameter("x")] })],
-    ["sp", sp],
-    ["after", after],
-    [END_ID, EndNode.value(END_ID, { outputName: "out" })],
-  ]);
-  const edges = [
-    new Edge("__start__->sp", START_ID, "sp"),
-    new Edge("sp->after#0", "sp", "after", { inputGroup: "v" }),
-    new Edge("after->__end__#0", "after", END_ID, { inputGroup: "out" }),
-  ];
-  const wiring = new Map([
-    ["sp", new Map([["x", "${input.x}"]])],
-    ["after", new Map([["v", "${sp.output}"]])],
-    [START_ID, new Map([["x", "${input.x}"]])],
-    [END_ID, new Map([["out", "${after.output}"]])],
-  ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
-}
+import { childFlow, FuncNode, parentWithSpawner } from "./run_state_fixtures.ts";
 
 /** One live seed-producing spawner of every legal grow kind, with the `Grow` its `run` gives. */
 async function growthProducers(): Promise<[[CallNode, Grow], [MapNode, Grow], [LoopNode, Grow]]> {

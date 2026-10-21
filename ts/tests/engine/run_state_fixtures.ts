@@ -1,7 +1,8 @@
 /**
  * Builders shared by the run-state tests (Python's `_fakes.py`, `_backward_fakes.py`,
  * `_graph_builder.py` and the helpers `test_run_state_initialization.py`,
- * `test_run_state_growth.py` and `test_runtime_memory_learning.py` lend to other files).
+ * `test_run_state_growth.py`, `test_runtime_memory_learning.py` and `test_expand.py` lend to other
+ * files).
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here.
@@ -30,7 +31,8 @@ import {
   Route,
 } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
+import { comparePaths, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
   type LearnContext,
@@ -70,6 +72,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";
@@ -1035,6 +1038,100 @@ export function fragment(spawnerId: string, suffix: string = "child"): Flow {
 
 /** A builder returning `fragment(spawner.id)`. */
 export const fragmentBuilder: GrowBuilder = (spawner) => fragment(spawner.id);
+
+/**
+ * Return a real manifestable child flow, as `buildGrow` accepts; with `optionalInput`, its START
+ * declares an optional text input `optional` defaulting to `fallback` (Python's
+ * `test_run_state_growth._canonical_child`).
+ */
+export function canonicalChild(options: { optionalInput?: boolean } = {}): CompiledFlow {
+  const parameters = options.optionalInput
+    ? [
+        new Parameter("optional", {
+          contract: new ValueContract(Type.scalar(ValueKind.STRING)),
+          hasDefault: true,
+          default: "fallback",
+          coerceStrings: true,
+        }),
+      ]
+    : [];
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID, { params: parameters })],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
+    wiring: new Map([
+      [START_ID, new Map(options.optionalInput ? [["optional", "${input.optional}"]] : [])],
+      [END_ID, new Map()],
+    ]),
+  });
+}
+
+/** A required int parameter that coerces supplied strings. */
+function intParameter(name: string): Parameter {
+  return new Parameter(name, {
+    contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
+    required: true,
+    coerceStrings: true,
+  });
+}
+
+/**
+ * A child START -> head (reads `${input.x}`) -> tail (reads `${head.output}`) -> END
+ * (Python's `test_expand._child_flow`).
+ */
+export function childFlow(): CompiledFlow {
+  const head = new CodeNode("head", { code: 'return inputs["x"] + 1' });
+  head.params = [new Parameter("x")];
+  const tail = new CodeNode("tail", { code: 'return inputs["r"] * 10' });
+  tail.params = [new Parameter("r")];
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID, { params: [intParameter("x")] })],
+    ["head", head],
+    ["tail", tail],
+    [END_ID, EndNode.value(END_ID, { outputName: "out" })],
+  ]);
+  const edges = [
+    new Edge("__start__->head#0", START_ID, "head", { inputGroup: "x" }),
+    new Edge("head->tail#0", "head", "tail", { inputGroup: "r" }),
+    new Edge("tail->__end__#0", "tail", END_ID, { inputGroup: "out" }),
+  ];
+  const wiring = new Map([
+    ["head", new Map([["x", "${input.x}"]])],
+    ["tail", new Map([["r", "${head.output}"]])],
+    [START_ID, new Map([["x", "${input.x}"]])],
+    [END_ID, new Map([["out", "${tail.output}"]])],
+  ]);
+  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
+}
+
+/**
+ * A parent whose CALL `sp` of `child` reads `${input.x}` and whose `after` reads `${sp.output}`
+ * (Python's `test_expand._parent_with_spawner`, whose call arguments are always `x`).
+ */
+export function parentWithSpawner(child: CompiledFlow): CompiledFlow {
+  const sp = new CallNode("sp", { flowId: "child", child, childInputs: child.nodes.get(child.startId)!.params });
+  sp.params = [new Parameter("x")];
+  const after = new FuncNode("after", (inputs) => inputs["v"], { reads: { v: "${sp.output}" } });
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID, { params: [intParameter("x")] })],
+    ["sp", sp],
+    ["after", after],
+    [END_ID, EndNode.value(END_ID, { outputName: "out" })],
+  ]);
+  const edges = [
+    new Edge("__start__->sp", START_ID, "sp"),
+    new Edge("sp->after#0", "sp", "after", { inputGroup: "v" }),
+    new Edge("after->__end__#0", "after", END_ID, { inputGroup: "out" }),
+  ];
+  const wiring = new Map([
+    ["sp", new Map([["x", "${input.x}"]])],
+    ["after", new Map([["v", "${sp.output}"]])],
+    [START_ID, new Map([["x", "${input.x}"]])],
+    [END_ID, new Map([["out", "${after.output}"]])],
+  ]);
+  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
+}
 
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */
 export class FailingLog extends MemoryRunLog {

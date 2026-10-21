@@ -156,6 +156,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import {
+  canonicalChild,
   expectUnchanged,
   FailingLog,
   fragment,
@@ -174,33 +175,6 @@ class ParameterSubclass extends Parameter {}
 /** An ordinary dynamic-overlay node. */
 class OverlayNode extends Node {
   readonly kind = NodeKind.CODE;
-}
-
-/**
- * Return a real manifestable child flow, as `buildGrow` accepts; with `optionalInput`, its START
- * declares an optional text input `optional` defaulting to `fallback`.
- */
-function canonicalChild(options: { optionalInput?: boolean } = {}): CompiledFlow {
-  const parameters = options.optionalInput
-    ? [
-        new Parameter("optional", {
-          contract: new ValueContract(Type.scalar(ValueKind.STRING)),
-          hasDefault: true,
-          default: "fallback",
-          coerceStrings: true,
-        }),
-      ]
-    : [];
-  const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: parameters })],
-    [END_ID, EndNode.value(END_ID, { outputName: null })],
-  ]);
-  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
-    wiring: new Map([
-      [START_ID, new Map(options.optionalInput ? [["optional", "${input.optional}"]] : [])],
-      [END_ID, new Map()],
-    ]),
-  });
 }
 
 /**

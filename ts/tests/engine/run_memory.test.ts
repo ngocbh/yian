@@ -11,16 +11,8 @@
  * `test_unfinished_primary_resume_uses_static_layout_after_map_growth`,
  * `test_unfinished_primary_requires_recorded_memory_mapping_on_resume`,
  * `test_run_started_records_the_resolved_memory_table_and_stacks` and
- * `test_replay_rejects_a_recorded_key_table_or_stacks_that_differ_from_the_flow` (2 rows).
- *
- * Changed: `AgentNode.prototype.forward` is spied on, where Python patches `AgentNode.forward`;
- * the turn's request is its private `turnRequest`. `runFlow` builds its `FlowEngine` itself, so the
- * runtimes `MemoryRuntime.open` returns (spied on) stand in for the openers Python's patched
- * `FlowEngine` receives, and TS has no `memory_recall` option to refuse. The flow's int output is
- * `7n`. A tampered `RunStartedRecord` is rebuilt from its fields (Python's `dataclasses.replace`);
- * the mismatch is a `RangeError` (Python's `ValueError`).
- *
- * Later (T6-6, with RunResult.backward): `test_learnable_true_retains_without_enabling_an_authored_policy`,
+ * `test_replay_rejects_a_recorded_key_table_or_stacks_that_differ_from_the_flow` (2 rows); with
+ * `RunResult.backward` too: `test_learnable_true_retains_without_enabling_an_authored_policy`,
  * `test_learning_success_is_separate_from_the_primary_result`,
  * `test_learning_failure_does_not_replace_primary_success`,
  * `test_primary_failure_still_learns_without_changing_its_failure`,
@@ -28,6 +20,16 @@
  * `test_explicit_retry_uses_static_layout_after_map_growth`,
  * `test_code_node_occurrences_are_episodes_of_the_flow_key` and
  * `test_backward_rejects_a_tampered_recorded_stack_set_before_learning` (2 rows).
+ *
+ * Changed: `AgentNode.prototype.forward` is spied on, where Python patches `AgentNode.forward`;
+ * the turn's request is its private `turnRequest`. `runFlow` builds its `FlowEngine` itself, so the
+ * runtimes `MemoryRuntime.open` returns (spied on) stand in for the openers Python's patched
+ * `FlowEngine` receives, and TS has no `memory_recall` option to refuse. The flow's int output is
+ * `7n`. A tampered `RunStartedRecord` is rebuilt from its fields (Python's `dataclasses.replace`);
+ * the mismatch is a `RangeError` (Python's `ValueError`). The failing CODE body is
+ * TypeScript throwing an `Error` (Python raises `RuntimeError`). The settled resume of
+ * `test_precommit_failure_requires_an_explicit_whole_pass_retry` passes an empty object as the
+ * ignored memory (Python's `object()`).
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -42,6 +44,8 @@ import {
   ConversationItem,
   DeclSite,
   type JsonObject,
+  type Memory,
+  MemoryOperationError,
   MemorySetupError,
   MemorySpec,
   MemoryStack,
@@ -51,12 +55,16 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
 import {
+  BackwardFinishedRecord,
   BackwardStartedRecord,
   decodeRecord,
   encodeRecord,
   JsonlRunLog,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
   RecordEnvelope,
   type RunRecord,
+  RunResumedRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
@@ -70,6 +78,19 @@ nodes:
   work:
     kind: code
     code: return 7
+    output: int
+output: \${work.output}
+`;
+
+const FAILED_FLOW = `id: memory-run-failed
+name: memory_run_failed
+long_term_memory: test
+nodes:
+  work:
+    kind: code
+    code: |
+      if (true) throw new Error("boom");
+      return 0;
     output: int
 output: \${work.output}
 `;
@@ -228,6 +249,15 @@ test("authored policy is dormant when memory is none", async () => {
   expect(started.learnable).toBe(false);
 });
 
+test("learnable true retains without enabling an authored policy", async () => {
+  const path = join(dir, "retained.jsonl");
+  const result = await runFlow(await loadFlow(FLOW), {}, { log: path, learnable: true });
+  expect(result.learning).toBeNull();
+  expect(result.backwardOutcome).toBeNull();
+  expect((records(path)[0] as RunStartedRecord).memories).toBeNull();
+  expect((await result.backward()).learning).toBeNull();
+});
+
 test("recall only records snapshot without evidence or learning", async () => {
   const path = join(dir, "recall-only.jsonl");
   const memory = new FakeMemory();
@@ -246,6 +276,125 @@ test("recall only records snapshot without evidence or learning", async () => {
   expect(started.memorySnapshots).not.toBeNull();
   expect(started.learnable).toBe(false);
   expect(all.some((record) => record instanceof BackwardStartedRecord)).toBe(false);
+});
+
+test("learning success is separate from the primary result", async () => {
+  const path = join(dir, "learn.jsonl");
+  const memory = new FakeMemory();
+  const options = { log: path, memory: new Map([["test", memory]]), learnable: true };
+  const result = await runFlow(await loadFlow(FLOW), {}, options);
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(7n);
+  expect(result.learning).toBeNull();
+  await result.backward();
+  expect(result.learning).not.toBeNull();
+  expect(result.learning!.status).toBe("succeeded");
+  expect(memory.learnContexts).toHaveLength(1);
+  expect(memory.learnContexts[0]!.episodes).toHaveLength(3);
+  expect(memory.learnContexts[0]!.feedback).toEqual([]);
+  expect(memory.commitCalls).toHaveLength(1);
+  expect(memory.commitCalls[0]![1]).toEqual([]);
+  const all = records(path);
+  expect(all.at(-3)).toBeInstanceOf(MemoryCommitRequestedRecord);
+  expect(all.at(-2)).toBeInstanceOf(MemoryCommitSucceededRecord);
+  expect(all.at(-1)).toBeInstanceOf(BackwardFinishedRecord);
+});
+
+test("learning failure does not replace primary success", async () => {
+  const path = join(dir, "learn-failed.jsonl");
+  const memory = new FakeMemory({
+    learnOutcomes: [new MemoryOperationError("learner", "declined", "Cannot learn.", true)],
+  });
+  const options = { log: path, memory: new Map([["test", memory]]), learnable: true };
+  const result = await runFlow(await loadFlow(FLOW), {}, options);
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(7n);
+  expect(result.failure).toBeNull();
+  const outcome = await result.backward();
+  expect(outcome.status).toBe("failed");
+  expect(outcome.failure!.stage).toBe("learn");
+  expect(result.learning).not.toBeNull();
+  expect(result.learning!.status).toBe("failed");
+  expect(result.learning!.failures).toHaveLength(1);
+  expect(result.learning!.failures[0]!.operation).toBe("learn");
+  expect(result.learning!.failures[0]!.failure.message).toBe("Cannot learn.");
+  expect(records(path).some((record) => record instanceof BackwardFinishedRecord)).toBe(true);
+});
+
+test("primary failure still learns without changing its failure", async () => {
+  const path = join(dir, "primary-failed.jsonl");
+  const memory = new FakeMemory();
+  const options = { log: path, memory: new Map([["test", memory]]), learnable: true };
+  const result = await runFlow(await loadFlow(FAILED_FLOW), {}, options);
+  expect(result.status).toBe("failed");
+  expect(result.failure).not.toBeNull();
+  expect(result.failure!.code).toBe("node.execute");
+  await result.backward("Review the failure.");
+  expect(result.learning).not.toBeNull();
+  expect(result.learning!.status).toBe("succeeded");
+  expect(memory.learnContexts).toHaveLength(1);
+  expect(memory.commitCalls).toHaveLength(1);
+});
+
+test("precommit failure requires an explicit whole pass retry", async () => {
+  const path = join(dir, "retry.jsonl");
+  const retryable = new MemoryOperationError("learn", "test.busy", "try later", true);
+  const memory = new FakeMemory({ learnOutcomes: [retryable, []] });
+  const registry = new Map([["test", memory]]);
+  const flow = await loadFlow(FLOW);
+
+  const first = await runFlow(flow, {}, { log: path, memory: registry, learnable: true });
+  await first.backward();
+  const primaryPrefix = records(path).length;
+
+  expect(first.status).toBe("succeeded");
+  expect(first.learning).not.toBeNull();
+  expect(first.learning!.status).toBe("failed");
+  const resumed = await resumeFlow(flow, { log: path, memory: registry });
+  expect(resumed.learning).toEqual(first.learning);
+  expect(records(path)).toHaveLength(primaryPrefix);
+  expect(memory.learnContexts).toHaveLength(1);
+  await resumed.backward();
+
+  expect(resumed.status).toBe("succeeded");
+  expect(resumed.output).toBe(7n);
+  expect(resumed.events).toEqual([]);
+  expect(resumed.learning).not.toBeNull();
+  expect(resumed.learning!.status).toBe("succeeded");
+  expect(memory.learnContexts).toHaveLength(2);
+  const suffix = records(path).slice(primaryPrefix);
+  expect(suffix.some((record) => record instanceof RunResumedRecord)).toBe(false);
+
+  const settledCount = records(path).length;
+  // Ignored: the primary run and its learning are settled.
+  const ignored = new Map([["test", {} as Memory]]);
+  const silent = await resumeFlow(flow, { log: path, memory: ignored });
+  expect(silent.learning).not.toBeNull();
+  expect(silent.learning!.status).toBe("succeeded");
+  expect(records(path)).toHaveLength(settledCount);
+});
+
+test("explicit retry uses static layout after map growth", async () => {
+  const path = join(dir, "map-learning.jsonl");
+  const retryable = new MemoryOperationError("learn", "test.busy", "later", true);
+  const memory = new Map([["test", new FakeMemory({ learnOutcomes: [retryable, []] })]]);
+  const flow = await loadFlow(MAP_FLOW);
+
+  const first = await runFlow(flow, { values: [1n, 4n] }, { log: path, memory, learnable: true });
+  await first.backward();
+  const resumed = await resumeFlow(flow, { log: path, memory });
+
+  expect(first.status).toBe("succeeded");
+  expect(first.output).toEqual([2n, 5n]);
+  expect(first.learning).not.toBeNull();
+  expect(first.learning!.status).toBe("failed");
+  expect(resumed.status).toBe("succeeded");
+  expect(resumed.output).toEqual([2n, 5n]);
+  expect(resumed.events).toEqual([]);
+  expect(resumed.learning).not.toBeNull();
+  expect(resumed.learning).toEqual(first.learning);
+  await resumed.backward();
+  expect(resumed.learning!.status).toBe("succeeded");
 });
 
 test("unfinished primary resume uses static layout after map growth", async () => {
@@ -313,5 +462,54 @@ for (const tampered of ["stacks", "table"] as const) {
     const error = await rejected(resumeFlow(await loadFlow(FLOW), { log: path, memory }));
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toContain("memory table or stacks");
+  });
+}
+
+test("code node occurrences are episodes of the flow key", async () => {
+  const memory = new FakeMemory();
+  const options = { learnable: true, log: join(dir, "code.jsonl"), memory: new Map([["test", memory]]) };
+  const result = await runFlow(await loadFlow(FLOW), {}, options);
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(7n);
+
+  const outcome = await result.backward("Prefer eight.");
+
+  expect(outcome.status).toBe("succeeded");
+  expect(memory.learnContexts).toHaveLength(1);
+  const context = memory.learnContexts[0]!;
+  expect(context.memory).toBe("test");
+  const work = context.episodes.filter((episode) => episode.ownerStaticPath.join("/") === "work");
+  expect(work).toHaveLength(1);
+  expect(work[0]!.output).toBe(7n);
+  expect(work[0]!.occurrencePath).toEqual([]);
+  expect(context.feedback).toContainEqual(expect.objectContaining({ owner_static_path: ["work"] }));
+  expect(memory.commitCalls).toHaveLength(1);
+});
+
+for (const tamper of ["emptied", "dropped"] as const) {
+  test(`backward rejects a tampered recorded stack set before learning (${tamper})`, async () => {
+    const path = join(dir, "tampered-backward.jsonl");
+    const memory = new FakeMemory();
+    const options = { learnable: true, log: path, memory: new Map([["test", memory]]) };
+    const result = await runFlow(await loadFlow(FLOW), {}, options);
+    expect(result.status).toBe("succeeded");
+
+    const lines = readFileSync(path, "utf8").split("\n").filter((line) => line !== "");
+    const envelope = decodeRecord(lines[0]!);
+    const record = envelope.record as RunStartedRecord;
+    const recorded = record.memoryStacks!;
+    const stacks =
+      tamper === "emptied"
+        ? recorded.map((stack) => new MemoryStack(stack.locator, []))
+        : recorded.filter((stack) => stack.locator.join("/") !== "work");
+    const changed = new RunStartedRecord({ ...record, memoryStacks: stacks });
+    lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed));
+    writeFileSync(path, lines.join("\n") + "\n");
+
+    const error = await rejected(result.backward("Review."));
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toContain("memory table or stacks");
+    expect(memory.learnContexts).toEqual([]);
+    expect(memory.commitCalls).toEqual([]);
   });
 }

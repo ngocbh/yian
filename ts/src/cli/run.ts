@@ -3,12 +3,13 @@
  * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
  * default log path, and the signals that stop a run.
  *
- * - `run` checks the run-log options, reads the flow and loads it; `check` loads each flow, or
- *   confined to `--root`, and reports each as text or one `--json` document; `status` inspects a
- *   run log.
+ * - `run` checks the run-log options, loads the flow, runs it on a fresh log and prints its output
+ *   or its failure; `check` loads each flow, or confined to `--root`, and reports each as text or
+ *   one `--json` document; `status` inspects a run log.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
- *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part.
+ *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
+ *   `renderRunError` renders a failed run's diagnostic.
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
  * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log; `reportRunLog` prints it.
@@ -33,7 +34,11 @@ import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, SkillError, statOrNull } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import { canonicalTypeLabel, FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
-import { type CliIo, osReason, printJson, UsageError, type Writer } from "./utils.ts";
+import { AuthError } from "../llm_clients/auth/index.ts";
+import { type RunResult, runFlow } from "../run.ts";
+import { registeredTools } from "../tools/registry.ts";
+import { defaultRunId } from "../typesys/seeding.ts";
+import { type CliIo, CommandEnv, osReason, printJson, UsageError, type Writer } from "./utils.ts";
 
 // The TS run inspection isn't ported yet; it throws until its module lands.
 async function inspectRun(log: string): Promise<never> {
@@ -147,6 +152,36 @@ export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
   }
   if (diag.notes.length > 0) document.notes = [...diag.notes];
   return document;
+}
+
+/** Return `text`, an engine stack, in a box titled `traceback`, ending in a newline. */
+function tracebackBox(text: string, out: Writer, env: Env): string {
+  const lines = splitLines(text.trimEnd());
+  const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
+  return `${box(rows, "red", out, env, "traceback")}\n`;
+}
+
+/**
+ * Write a failed run's diagnostic to `out` and return it: the flow's `diagnose` of its failure,
+ * or an unlocated `(no detail)` when it has none. With `engineTrace`, the traceback the diagnostic
+ * captured follows it, boxed, when it holds one.
+ */
+export async function renderRunError(
+  result: RunResult,
+  flow: ComposedFlow,
+  engineTrace: boolean,
+  out: Writer,
+  env: Env,
+): Promise<Diagnostic> {
+  const diagnostic =
+    result.failure === null
+      ? new Diagnostic({ code: "node.execute", message: "(no detail)" })
+      : flow.diagnose(result.failure);
+  await renderDiagnostic(diagnostic, out, env);
+  if (engineTrace && diagnostic.traceback) {
+    await out.write(tracebackBox(diagnostic.traceback, out, env));
+  }
+  return diagnostic;
 }
 
 /**
@@ -554,27 +589,63 @@ function readFlowText(path: string): string {
   return text.replace(/\r\n?/g, "\n");
 }
 
-/** The options `run` reads; an absent option is `undefined`, no `--input` an empty list. */
+/**
+ * The options `run` reads; an absent option is `undefined`, an absent repeatable one an empty list,
+ * an absent flag `false`.
+ */
 interface RunOptions {
   inputValues: readonly string[];
   inputs?: string | undefined;
   log?: string | undefined;
   resume?: string | undefined;
+  quiet: boolean;
+  memoryRoot?: string | undefined;
+  memoryStorage: readonly string[];
+  verbose: boolean;
+  numWorkers?: number | undefined;
   provider?: string | undefined;
   model?: string | undefined;
+  engineTrace: boolean;
+  mcpConfig: readonly string[];
   json: boolean;
 }
 
+/** Whether `error` is a host failure `run` reports as `run failed:` rather than with its stack. */
+function isSetupError(error: unknown): error is Error {
+  return (
+    error instanceof TypeError ||
+    error instanceof RangeError ||
+    error instanceof AuthError ||
+    isSystemError(error)
+  );
+}
+
 /**
- * Start or recover a durable run of the flow at `flowPath`; returns the exit code.
+ * Start a durable run of the flow at `flowPath`; returns the exit code. Recovering one (`resume`)
+ * isn't ported yet and throws after the flow loads.
  *
- * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text is
- * reported on stderr, and as a `compose.load` error document on stdout under `json`, and exits 1.
+ * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
+ * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
+ * 1. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path always
+ * does. The log is `log`, else a fresh one under `~/.yian/runs` named by the run id. A succeeded
+ * run prints its output on stdout, as text; a failed one prints its diagnostic on stderr and exits
+ * 1. A host failure (a bad option value, an input the flow doesn't declare, a log that can't be
+ * created) prints `run failed: <message>` on stderr and exits 1. Under `json`, stdout holds one
+ * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
+ * (`compose.load`, `run.setup`).
  *
- * @throws {UsageError} As `validateRunLogOptions` does.
+ * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do.
  */
 export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
   validateRunLogOptions(options);
+  const { json, quiet, engineTrace } = options;
+  const fail = async (diagnostic: Diagnostic) => {
+    if (json) await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
+    return 1;
+  };
+  const writeStack = async (error: Error) => {
+    if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
+  };
   let text: string;
   try {
     text = readFlowText(flowPath);
@@ -582,15 +653,68 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
     if (!(error instanceof NotUtf8Error)) throw error;
     const message = `can't read ${flowPath}: not UTF-8 text`;
     await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
-    if (options.json) {
-      const diagnostic = new Diagnostic({ code: "compose.load", message });
-      await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
-    }
-    return 1;
+    return fail(new Diagnostic({ code: "compose.load", message }));
   }
-  await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env });
-  // Running the loaded flow isn't ported yet; until then nothing runs.
-  throw new Error("yian run is not ported to TypeScript yet");
+  let flow: ComposedFlow;
+  try {
+    const loading = { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env };
+    flow = await loadFlow(text, loading);
+  } catch (error) {
+    if (!(error instanceof LoadError)) throw error;
+    // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
+    await renderDiagnostic(error.diagnostic, io.stderr, io.env);
+    await writeStack(error);
+    return fail(error.diagnostic);
+  }
+
+  if (!quiet) {
+    const banner = flowBanner(flow, io.stderr, io.env);
+    if (banner !== null) await io.stderr.write(banner);
+  }
+  const { verbose } = options;
+  const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
+  // Recovering a run isn't ported yet; until then `--resume` runs nothing.
+  if (options.resume !== undefined) {
+    throw new Error("yian run --resume is not ported to TypeScript yet");
+  }
+  const commandEnv = new CommandEnv(io.env);
+  const supplied = mergeInputs(options.inputs, options.inputValues);
+
+  let result: RunResult;
+  try {
+    const runId = defaultRunId();
+    const log = options.log ?? defaultRunLogPath(runId, io.env);
+    await reportRunLog(log, io.stderr, io.env);
+    result = await runFlow(flow, supplied, {
+      log,
+      runId,
+      numWorkers: options.numWorkers ?? 8,
+      onEvent: reporter === null ? null : (event) => reporter.handle(event),
+      tools: { ...registeredTools() },
+      env: commandEnv.read,
+    });
+  } catch (error) {
+    if (!isSetupError(error)) throw error;
+    const label = paint("run failed: ", "red bold", io.stderr, io.env);
+    await io.stderr.write(`${label}${paint(error.message, "red", io.stderr, io.env)}\n`);
+    await writeStack(error);
+    return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+  } finally {
+    reporter?.stop();
+  }
+
+  if (result.status === "succeeded") {
+    if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);
+    // A string prints as is; any other value in yian's text form.
+    else await io.stdout.write(`${writeAsText(result.output as Value)}\n`);
+    return 0;
+  }
+  const diagnostic = await renderRunError(result, flow, engineTrace, io.stderr, io.env);
+  if (json) {
+    const failure = { ...diagnosticJson(diagnostic), node: result.failure?.nodeId ?? null };
+    await printJson({ status: "failed", failure }, io.stdout);
+  }
+  return 1;
 }
 
 /**

@@ -1,0 +1,18 @@
+kind: cli
+# --input x=inf into a float gives infinity, a float value in TS yian, which the JSON codec writes
+# as {$float: inf}; Python yian refuses infinity as a value.
+rules: [infinity]
+flow: |
+  id: unbounded
+  name: unbounded
+  input:
+    x: !float
+  nodes: {}
+  output: ${input.x}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json, --input, x=inf]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output: {$float: inf}

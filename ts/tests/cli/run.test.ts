@@ -1,16 +1,21 @@
 // Ported from tests/cli/test_run.py: `test_bad_kv_is_rejected`, `test_inputs_json_must_be_an_object`,
 // `test_inputs_file_must_be_utf8` and `test_flag_overrides_json`, on the helpers those runs go
-// through (`parseKv`, `readInputsJson`, `mergeInputs`). Added here: the other `cli/run.ts` helpers
-// (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`), `skillsCheck`, and `main`'s
-// command table: the defaults check, usage errors and the routing to `cli/auth.ts`; `check`, on its
-// own and confined to `--root`. `run` is covered up to the loaded flow and `status` up to the run
-// inspection, which aren't ported yet; from tests/cli/test_run_log_options.py, the run-log checks
-// running before the flow is read.
+// through (`parseKv`, `readInputsJson`, `mergeInputs`); the non-TTY run outcomes through `main`
+// (`test_run_succeeds_with_input_flag`, `test_run_keeps_registered_tools`,
+// `test_run_inline_code_in_process`, `test_run_reads_inputs_json`, `test_flag_overrides_json`,
+// `test_failed_run_exits_nonzero`, `test_non_tty_run_omits_optional_and_defaulted_inputs`,
+// `test_non_tty_inputs_json_preserves_explicit_structured_null`). Changed: the CODE bodies are
+// TS's, and a non-string output prints in yian's text form, not Python's repr. Added here: the
+// other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
+// `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
+// `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents and its
+// `run failed:` setup errors. `status` is covered up to the run inspection, which isn't ported
+// yet; from tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -30,6 +35,8 @@ import {
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, printJson, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 
 let tmp: string;
@@ -444,12 +451,216 @@ describe("run", () => {
     });
   });
 
-  test("a readable flow loads, then stops short of running", async () => {
-    const flow = file("flow.yaml", FLOW);
-    const { io, stdout, stderr } = testIo();
-    expect(await main(["run", flow], io)).toBe(1);
-    expect(stdout()).toBe("");
-    expect(stderr()).toContain("yian run is not ported to TypeScript yet");
+});
+
+/** A flow with one `topic` input whose CODE node `body` makes the output's `topic`. */
+function topicFlow(body: string): string {
+  return (
+    "id: cli_echo\nname: cli_echo\ninput:\n  topic: !str\nnodes:\n  echo:\n    kind: code\n" +
+    `    input:\n      topic: \${input.topic}\n    output: str\n    code: ${body}\n` +
+    "output:\n  topic: ${echo.output}\n"
+  );
+}
+
+const ECHO_FLOW = topicFlow("return inputs.topic");
+const INLINE_FLOW = topicFlow("|\n      return inputs.topic.toUpperCase();");
+const FAIL_FLOW = topicFlow('throw new Error("always fails")');
+
+const OMITTABLE_INPUTS_FLOW = `id: cli_omittable_inputs
+name: cli_omittable_inputs
+input:
+  topic: !str
+  limit: !int 7
+  labels: !list(str) [alpha, beta]
+  note: !Optional(str)
+nodes:
+  show:
+    kind: code
+    input:
+      topic: \${input.topic}
+      limit: \${input.limit}
+      labels: \${input.labels}
+      note: \${input.note}
+    output: object
+    code: return inputs
+output: \${show.output}
+`;
+
+const NULLABLE_STRUCTURED_INPUT_FLOW = `id: cli_nullable_structured_input
+name: cli_nullable_structured_input
+input:
+  items: !Optional(list(int))
+nodes:
+  inspect:
+    kind: code
+    input:
+      items: \${input.items}
+    output: object
+    code: 'return { items: inputs.items, is_none: inputs.items === null }'
+output: \${inspect.output}
+`;
+
+const REGISTERED_TOOL_FLOW =
+  "id: cli_registered_tool\nname: cli_registered_tool\nnodes:\n  call:\n    kind: tool\n" +
+  "    tool_id: cli_run_probe\noutput: ${call.output}\n";
+
+/** Run `yian run flow.yaml argv` on a flow holding `body`, its default log under `tmp/home`. */
+async function runFlowCli(body: string, argv: readonly string[]) {
+  const flow = file("flow.yaml", body);
+  mkdirSync(join(tmp, "home"), { recursive: true });
+  const { io, stdout, stderr } = testIo({ HOME: join(tmp, "home") });
+  const code = await main(["run", flow, ...argv], io);
+  return { code, stdout: stdout(), stderr: stderr() };
+}
+
+describe("run outcomes", () => {
+  test("run succeeds with input flag", async () => {
+    const { code, stdout, stderr } = await runFlowCli(ECHO_FLOW, ["--input", "topic=clouds"]);
+    expect(code).toBe(0);
+    expect(stdout).toBe('{"topic":"clouds"}\n');
+    expect(stderr).toContain("✓ echo");
+  });
+
+  test("a string output prints as is", async () => {
+    const flow = ECHO_FLOW.replace("output:\n  topic: ${echo.output}", "output: ${echo.output}");
+    const { code, stdout } = await runFlowCli(flow, ["-q", "--input", "topic=a *b*"]);
+    expect(code).toBe(0);
+    expect(stdout).toBe("a *b*\n");
+  });
+
+  test("run keeps registered tools", async () => {
+    const probe = new FunctionTool({
+      name: "cli_run_probe",
+      description: "Probe.",
+      parametersJsonSchema: { type: "object", properties: {} },
+      execute: () => "from the registry",
+    });
+    registerTool("cli_run_probe", probe);
+    try {
+      const { code, stdout } = await runFlowCli(REGISTERED_TOOL_FLOW, ["-q"]);
+      expect(code).toBe(0);
+      expect(stdout).toBe("from the registry\n");
+    } finally {
+      TOOL_REGISTRY.delete("cli_run_probe");
+    }
+  });
+
+  test("run inline code in process", async () => {
+    const { code, stdout } = await runFlowCli(INLINE_FLOW, ["--input", "topic=clouds"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("CLOUDS");
+  });
+
+  test("run reads inputs json, a flag overriding it", async () => {
+    const inputs = inputsFile('{"topic": "rivers"}');
+    let { code, stdout } = await runFlowCli(ECHO_FLOW, ["--inputs", inputs]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("rivers");
+    ({ code, stdout } = await runFlowCli(ECHO_FLOW, ["--inputs", inputs, "--input", "topic=mountains"]));
+    expect(code).toBe(0);
+    expect(stdout).toContain("mountains");
+    expect(stdout).not.toContain("rivers");
+  });
+
+  test("failed run exits nonzero, the located failure on stderr", async () => {
+    const { code, stdout, stderr } = await runFlowCli(FAIL_FLOW, ["-q", "--input", "topic=clouds"]);
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("flow.yaml:");
+    expect(stderr).toContain("always fails");
+    expect(stderr).not.toContain("─ traceback ");
+  });
+
+  test("failed run under --engine-trace adds the captured traceback", async () => {
+    const { code, stderr } = await runFlowCli(FAIL_FLOW, ["-q", "--engine-trace", "--input", "topic=clouds"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("always fails");
+    expect(stderr).toContain("─ traceback ");
+  });
+
+  test("non-TTY run omits optional and defaulted inputs", async () => {
+    const log = join(tmp, "run.jsonl");
+    const { code, stdout, stderr } = await runFlowCli(OMITTABLE_INPUTS_FLOW, [
+      "--input",
+      "topic=clouds",
+      "--log",
+      log,
+      "--quiet",
+    ]);
+    expect(code).toBe(0);
+    expect(existsSync(log)).toBe(true);
+    expect(JSON.parse(stdout)).toEqual({ topic: "clouds", limit: 7, labels: ["alpha", "beta"], note: null });
+    // Quiet: only the run log's path is on stderr.
+    expect(stderr).toBe(`Run log: ${log}\n`);
+  });
+
+  test("non-TTY inputs json preserves explicit structured null", async () => {
+    const inputs = inputsFile('{"items": null}');
+    const log = join(tmp, "run.jsonl");
+    const { code, stdout } = await runFlowCli(NULLABLE_STRUCTURED_INPUT_FLOW, [
+      "--inputs",
+      inputs,
+      "--log",
+      log,
+      "--quiet",
+    ]);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ items: null, is_none: true });
+  });
+
+  test("the banner precedes progress, and --quiet drops both", async () => {
+    const flow = ECHO_FLOW.replace("name: cli_echo\n", "name: cli_echo\ndescription: Echoes.\n");
+    const loud = await runFlowCli(flow, ["--input", "topic=x"]);
+    expect(loud.stderr).toStartWith("╭");
+    expect(loud.stderr).toContain("Running flow: cli_echo");
+    expect(loud.stderr.indexOf("Running flow")).toBeLessThan(loud.stderr.indexOf("✓ echo"));
+    const quiet = await runFlowCli(flow, ["-q", "--input", "topic=x"]);
+    expect(quiet.stderr).toStartWith("Run log: ");
+    expect(quiet.stderr).not.toContain("Running flow");
+    expect(quiet.stderr).not.toContain("✓");
+  });
+});
+
+describe("run --json", () => {
+  test("succeeded: the output in the codec form, only the document on stdout", async () => {
+    const { code, stdout } = await runFlowCli(ECHO_FLOW, ["--json", "--input", "topic=clouds"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ format: "yian.cli.v1", status: "succeeded", output: { topic: "clouds" } });
+  });
+
+  test("failed: the diagnostic and the failed node", async () => {
+    const { code, stdout } = await runFlowCli(FAIL_FLOW, ["--json", "--input", "topic=clouds"]);
+    expect(code).toBe(1);
+    const document = JSON.parse(stdout);
+    expect(document.status).toBe("failed");
+    expect(document.failure.node).toBe("echo");
+    expect(document.failure.message).toContain("always fails");
+    expect(document.failure.frames[0].label).toBe("flow.yaml");
+  });
+
+  test("a load error: the located diagnostic on stderr, compose.load on stdout", async () => {
+    const { code, stdout, stderr } = await runFlowCli(ECHO_FLOW.replace("${echo.output}", "${ech.output}"), [
+      "--json",
+    ]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("flow.yaml:");
+    expect(JSON.parse(stdout).error.code).toBe("compose.load");
+  });
+
+  test("an unknown input is a run.setup error, run failed: on stderr", async () => {
+    const { code, stdout, stderr } = await runFlowCli(ECHO_FLOW, [
+      "--json",
+      "--input",
+      "topic=clouds",
+      "--input",
+      "topik=x",
+    ]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("run failed: ");
+    expect(stderr).toContain("topik");
+    const { error } = JSON.parse(stdout);
+    expect(error.code).toBe("run.setup");
+    expect(error.message).toContain("topik");
   });
 });
 

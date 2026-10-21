@@ -1,15 +1,23 @@
 // Ported from tests/engine/test_cli_progress.py (the reporter tests): per-node progress, `✓` on
 // success, `✗` and the error on failure, the output when verbose. They run on a non-TTY writer,
 // the path the CLI takes off a terminal: no spinner, only each node's final line. Added here: the
-// spinner a TTY writer gets, and `pause`/`resume`. The CLI-run tests come with `yian run`.
+// spinner a TTY writer gets, and `pause`/`resume`. The CLI-run tests drive a CODE-only flow
+// through `yian run` instead of a faked runner: `--verbose` prints the output, `--quiet` streams no
+// events, and the worker count is read from the run log's `RunStarted` record.
 
-import { afterEach, expect, jest, test } from "bun:test";
+import { afterEach, beforeEach, expect, jest, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
+import { main } from "../../src/cli/index.ts";
 import { ProgressReporter } from "../../src/cli/run.ts";
-import type { Writer } from "../../src/cli/utils.ts";
+import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { NodeExpanded, NodeFailed, NodeRouted, NodeStarted, NodeSucceeded } from "../../src/events.ts";
+import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
 // `NO_COLOR` keeps a TTY writer's text plain, so the tests see only the cursor control.
 const noColor = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
@@ -149,4 +157,69 @@ test("pause and resume stop and restart the redraw", () => {
   const count = chunks.length;
   jest.advanceTimersByTime(400);
   expect(chunks).toHaveLength(count);
+});
+
+// ---------- the flags of `yian run` ----------
+
+const FLOW = "id: f\nname: f\nnodes:\n  a: {kind: code, output: str, code: return 'hello'}\noutput: ${a.output}\n";
+
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "yian-cli-progress-"));
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+/** Run `yian run` on `FLOW` with `args`, its log at `tmp/<log>`; return the exit code and output. */
+async function runCli(args: string[], log = "run.jsonl") {
+  const flow = join(tmp, "f.yaml");
+  writeFileSync(flow, FLOW);
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: CliIo = {
+    stdout: { write: async (text) => void out.push(text) },
+    stderr: { write: async (text) => void err.push(text) },
+    stdin: new PassThrough(),
+    env: (name) => (name === "HOME" ? tmp : undefined),
+  };
+  const code = await main(["run", flow, "--log", join(tmp, log), ...args], io);
+  return { code, stdout: out.join(""), stderr: err.join("") };
+}
+
+/** Return the worker count the run logged at `tmp/<log>` recorded in its `RunStarted`. */
+function loggedWorkers(log: string): number {
+  const started = readRunLog(join(tmp, log))[0]!.record;
+  expect(started).toBeInstanceOf(RunStartedRecord);
+  return (started as RunStartedRecord).numWorkers;
+}
+
+test("cli accepts verbose flag", async () => {
+  const { code, stdout, stderr } = await runCli(["--verbose"]);
+  expect(code).toBe(0);
+  expect(stdout).toBe("hello\n");
+  expect(stderr).toContain("✓ a\n    hello\n");
+});
+
+test("cli quiet suppresses events", async () => {
+  const { code, stdout, stderr } = await runCli(["--quiet"]);
+  expect(code).toBe(0);
+  expect(stdout).toBe("hello\n");
+  expect(stderr).toBe(`Run log: ${join(tmp, "run.jsonl")}\n`);
+});
+
+test("cli num workers threads through", async () => {
+  // Fresh runs use eight workers unless explicitly overridden, including zero.
+  for (const [args, workers] of [
+    [[], 8],
+    [["--num-workers", "4"], 4],
+    [["-w", "2"], 2],
+    [["-w", "0"], 0],
+  ] as const) {
+    const log = `run-${workers}.jsonl`;
+    expect((await runCli([...args, "-q"], log)).code).toBe(0);
+    expect(loggedWorkers(log)).toBe(workers);
+  }
 });

@@ -42,7 +42,8 @@ import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
-import { type Diagnostic, type Failure, reprText } from "../src/diagnostics.ts";
+import { compareCodeUnits, type Diagnostic, type Failure, reprText } from "../src/diagnostics.ts";
+import type { RunEvent, StreamChunk } from "../src/events.ts";
 import {
   constructorNames,
   evalExpr,
@@ -1084,7 +1085,8 @@ function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): E
   const message = error["message"] as string;
   const Class = classes.get(name);
   if (Class === undefined) return Object.assign(new Error(message), { name });
-  return new Class(message, Object.hasOwn(error, "retry_after") ? { retryAfter: Number(error["retry_after"]) } : {});
+  const retryAfter = Object.hasOwn(error, "retry_after") ? Number(error["retry_after"]) : undefined;
+  return new Class(message, retryAfter === undefined ? {} : { retryAfter });
 }
 
 /** Return `name`, a camelCase field name, in snake_case. */
@@ -1223,6 +1225,111 @@ function failureForm(failure: Failure, flow: ComposedFlow): Case {
   return { ...diagnosticForm(flow.diagnose(failure)), node: failure.nodeId };
 }
 
+/** The events and chunk whose `attempt` is left out when it is 1, as Python leaves it null. */
+const ATTEMPT_LEFT_OUT_AT_1: ReadonlySet<string> = new Set([
+  "ModelCallStarted", "ModelCallFinished", "StreamChunk",
+]);
+
+/**
+ * Return the data form of an event or stream chunk, without its null fields: its `toJSON()`, with
+ * a failure in failure form and every file as `{uri, mime, name}`.
+ */
+function fields(event: RunEvent, flow: ComposedFlow): Case {
+  const data: Case = {};
+  for (const [key, item] of Object.entries(event.toJSON())) {
+    if (item === null || (key === "attempt" && item === 1 && ATTEMPT_LEFT_OUT_AT_1.has(event.type))) continue;
+    const failure = key === "failure" ? (event as { failure: Failure }).failure : null;
+    data[key] = failure !== null ? failureForm(failure, flow) : dataForm(item as YianValue);
+  }
+  return data;
+}
+
+/** Return `event` as `[<EventName>]` or `[<EventName>, <data form>]`. */
+function eventForm(event: RunEvent, flow: ComposedFlow): Value[] {
+  const data = fields(event, flow);
+  return Object.keys(data).length > 0 ? [event.type, data] : [event.type];
+}
+
+/**
+ * Return `entries` with run-level ones (node `null`) first, then each node's, nodes sorted; each
+ * group keeps its order.
+ */
+function grouped<T>(entries: readonly T[], nodeOf: (entry: T) => string | null): T[] {
+  const key = (entry: T): string | null => nodeOf(entry);
+  // `sort` is stable, so each group keeps its order.
+  return [...entries].sort((a, b) => {
+    const [first, second] = [key(a), key(b)];
+    if (first === null || second === null) return (first === null ? 0 : 1) - (second === null ? 0 : 1);
+    return compareCodeUnits(first, second);
+  });
+}
+
+/** Return `results` with the events, stream and each tool's calls `grouped` by node. */
+function pooled(results: Record<string, unknown>): Record<string, unknown> {
+  // A `NodeFailed` belongs to its failure's node; run events have no `node_id`.
+  const eventNode = (event: Value[]): string | null => {
+    const data = (event[1] ?? {}) as Case;
+    const node = event[0] === "NodeFailed" ? (data["failure"] as Case)["node"] : data["node_id"];
+    return (node ?? null) as string | null;
+  };
+  const toolCalls = results["tool_calls"] as Record<string, Case[]>;
+  return {
+    ...results,
+    events: grouped(results["events"] as Value[][], eventNode),
+    stream: grouped(results["stream"] as Case[], (chunk) => (get(chunk, "node_id") ?? null) as string | null),
+    tool_calls: Object.fromEntries(
+      Object.entries(toolCalls).map(([name, calls]) => [
+        name,
+        grouped(calls, (call) => call["node"] as string),
+      ]),
+    ),
+  };
+}
+
+/** The fields whose text values are ids an implementation makes up. */
+const ID_FIELDS: ReadonlySet<string> = new Set(["exchange_id", "commit_id", "mutation_id", "note_id"]);
+
+/**
+ * Return `results` with each made-up id in their text replaced by `<id:N>`.
+ *
+ * The ids are `runId` (unless `null`) and every text value of an `ID_FIELDS` key, numbered in
+ * order of first appearance walking `results` in their order, with mapping keys in UTF-16 order.
+ */
+function placeholders(results: Record<string, unknown>, runId: string | null): Record<string, unknown> {
+  const ids = new Set<string>(runId === null ? [] : [runId]);
+  const collect = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+    } else if (isMapping(value)) {
+      for (const [key, item] of Object.entries(value)) {
+        if (ID_FIELDS.has(key) && typeof item === "string" && item !== "") ids.add(item);
+        collect(item);
+      }
+    }
+  };
+  collect(results);
+  if (ids.size === 0) return results;
+  // Longest first, so an id that holds another is replaced whole.
+  const longestFirst = [...ids].sort((a, b) => b.length - a.length);
+  const escaped = longestFirst.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(escaped.join("|"), "g");
+  const numbers = new Map<string, number>();
+  const number = (id: string): number => {
+    if (!numbers.has(id)) numbers.set(id, numbers.size + 1);
+    return numbers.get(id)!;
+  };
+  const replace = (value: unknown): unknown => {
+    if (typeof value === "string") return value.replace(pattern, (id) => `<id:${number(id)}>`);
+    if (Array.isArray(value)) return value.map(replace);
+    if (isMapping(value)) {
+      const names = Object.keys(value).sort(compareCodeUnits);
+      return Object.fromEntries(names.map((name) => [name, replace(value[name])]));
+    }
+    return value;
+  };
+  return Object.fromEntries(Object.entries(results).map(([name, value]) => [name, replace(value)]));
+}
+
 /** Return `result` in the form of `expect.output`. */
 function output(result: RunResult, flow: ComposedFlow): Case {
   if (result.status === "succeeded") {
@@ -1240,15 +1347,24 @@ function output(result: RunResult, flow: ComposedFlow): Case {
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
-  const { tools, random, check } = host(case_, log);
+  const { tools, random, calls, check } = host(case_, log);
+  const run = get(case_, "run", {}) as Case;
+  const events: RunEvent[] = [];
+  const chunks: StreamChunk[] = [];
   // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
   const options: RunFlowOptions = {
-    ...runOptions(get(case_, "run", {}) as Case),
+    ...runOptions(run),
     log,
     env: caseEnv(ctx),
     tools,
     random,
     scheduler: virtualScheduler(Date.now()),
+    onEvent: (event) => {
+      events.push(event);
+    },
+    onStream: (chunk) => {
+      chunks.push(chunk);
+    },
   };
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
@@ -1259,10 +1375,28 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   }
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
+  const text = existsSync(log) ? readFileSync(log, "utf8") : "";
+  const lines = text.split("\n").filter((line) => line !== "");
   // In placeholder order: ids are numbered walking the results in this order.
-  const actual = {
+  let actual: Record<string, unknown> = {
+    events: events.map((event) => eventForm(event, flow)),
+    stream: chunks.map((chunk) => fields(chunk, flow)),
+    tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
   };
+  const error = caught["error"];
+  checkSecrets(case_, {
+    ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
+    "the run log": text,
+    "the raised error": error === undefined ? "" : error instanceof Error ? error.message : String(error),
+  });
+  // Python's `!= 0`, under which 0.0 and false equal 0 too.
+  const workers = get(run, "num_workers", 8n);
+  if (workers !== 0n && workers !== 0 && workers !== false) actual = pooled(actual);
+  const given = Object.hasOwn(run, "run_id") || lines.length === 0;
+  const runId = given ? null : ((JSON.parse(lines[0]!) as Case)["run_id"] as string);
+  // A raised error is compared as is, without placeholders.
+  actual = placeholders(actual, runId);
   return { ...actual, ...caught, left };
 }
 
@@ -1282,6 +1416,10 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
   if (Object.hasOwn(expect, "output")) {
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
+  }
+  for (const name of ["events", "stream", "tool_calls"]) {
+    // A run's events, stream and tool calls compare numbers by value.
+    if (Object.hasOwn(expect, name)) compare(name, actual[name], expect[name], { byValue: true });
   }
   // Last: a leftover entry usually follows from a divergence the comparisons show.
   const left = actual["left"] as string[];

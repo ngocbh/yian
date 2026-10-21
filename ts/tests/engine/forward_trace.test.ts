@@ -164,10 +164,9 @@
  * `test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced`,
  * `test_capture_canonicalizes_supported_binding_objects` (an array for Python's tuple),
  * `test_learning_retains_opaque_calls_with_arguments` (4 rows; `collect_args` as in the codec row)
- * and the `output`, `route` (a `BranchNode` choosing the else handle, for Python's empty CASE) and
- * `failure` rows of `test_trace_replay_matches_live_accepted_prefixes` (a node body called during
- * replay throws; Python's handler identity check is dropped, since a TS bound handler can't name
- * its node).
+ * and `test_trace_replay_matches_live_accepted_prefixes` (8 rows; the `route` row's `BranchNode`
+ * chooses the else handle, for Python's empty CASE; a node body called during replay throws;
+ * Python's handler identity check is dropped, since a TS bound handler can't name its node).
  *
  * Ported (adapted), through the engine:
  * - `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data` (2 rows): a
@@ -204,33 +203,61 @@
  * is the replayed END's bound `backward`, so its node's `names` and `params` are changed through
  * the replayed flow, for Python's `handler.__self__`).
  *
- * Later (T4-10), through CALL, MAP and LOOP growth:
- * `test_nested_growth_preserves_authored_paths_and_local_driver_zero`,
- * `test_missing_seed_selector_is_an_accepted_growth_failure`,
- * `test_growth_recipe_tampering_fails_replay_before_apply`,
- * `test_reference_looking_seed_strings_reach_the_child_as_text`,
+ * Ported through CALL, MAP and LOOP growth (`engine` with `learnable` and `buildGrow`, and
+ * `loadFlow` where Python loads YAML), on a local `seedCallFlow` (Python's `_seed_call_flow`) and
+ * `nestedGrowthFlow` (Python's `_nested_growth_flow`):
+ * `test_nested_growth_preserves_authored_paths_and_local_driver_zero` (`call`, `map`; the first
+ * driver is read from the nodes the run held, for Python's `handler.__self__`),
+ * `test_missing_seed_selector_is_an_accepted_growth_failure` (2 rows),
+ * `test_reference_looking_seed_strings_reach_the_child_as_text` (3 rows),
  * `test_failed_child_binding_joins_captured_fields`,
- * `test_seed_connections_wait_for_append_and_survive_unfinished_start_retry`,
- * `test_pruned_seed_connections_do_not_leak_into_reused_node_ids`,
+ * `test_pruned_seed_connections_do_not_leak_into_reused_node_ids` (2 rows),
  * `test_call_seed_routes_survive_materialized_values`,
- * `test_null_materialized_seed_keeps_its_selected_source`,
- * `test_map_seed_routes_preserve_equal_item_positions`,
- * `test_loop_carried_routes_survive_live_pruning` and the `call`, `map`, `loop`, `nested-call` and
- * `nested-map` rows of `test_trace_replay_matches_live_accepted_prefixes`.
+ * `test_null_materialized_seed_keeps_its_selected_source` (`call`, `map`),
+ * `test_map_seed_routes_preserve_equal_item_positions` (3 rows) and
+ * `test_loop_carried_routes_survive_live_pruning` (times 0 and 3). A growth recipe Python sets on
+ * the fragment is a rebuilt `Flow`.
  *
- * Later (T4-10): `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`
- * (it loads a flow with `defs` and runs AGENTs under CALL, MAP and LOOP growth).
+ * Changed:
+ * - The CODE reference `tests.engine._compose_codefns:loop_countdown` is an inline body with the
+ *   same behavior, since TS load refuses a Python reference.
+ * - The `* 2` row of `test_map_seed_routes_preserve_equal_item_positions` maps over
+ *   `input.left + input.right + input.right`, since repetition is a type error in TS; the list
+ *   and each item's feedback are the same as Python's.
+ * - `test_growth_recipe_tampering_fails_replay_before_apply` (`selector-digest`, `missing-field`,
+ *   `missing-item`, `boundary-role`): the run goes to the end and the replay stops before its
+ *   expansion record, for Python's two stepped nodes; each refusal names its class and message.
+ * - `test_seed_connections_wait_for_append_and_survive_unfinished_start_retry`: START and the CALL
+ *   are evaluated through `evalNode` with the engine's options, for Python's private
+ *   `engine._evaluate`; the log's `append` is replaced on the instance.
+ * - `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`:
+ *   the run records `resolveLlmCascade(flow, {}, ...)` as Python's `_engine` computes; the AGENT's
+ *   model comes through `FlowEngineOptions.models` and replies with the prompt as its topic, since
+ *   ESM can't patch `run_agent`, so each evidence holds that one model reply where Python's holds
+ *   none. The forbidden replay methods are `spyOn` replacements of `AgentNode`'s `forward` and
+ *   `resolveVariables` and `Node`'s `captureBackwardContext` (`render_template_record` runs only
+ *   inside `forward`), and the agents changed after the replay are the ones its graph still
+ *   holds, for Python's `handler.__self__`.
+ *
+ * Not ported (TS types): the `mutable-path` row of
+ * `test_growth_recipe_tampering_fails_replay_before_apply` (a `SeedConnection` holds a frozen copy
+ * of its path, and a forged unfrozen `["x"]` is the same selector).
  */
 
 import { afterEach, expect, spyOn, test } from "bun:test";
 
-import { type CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { buildGrow, callSubgraph, cloneChild } from "../../src/compile/expand.ts";
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { expansionDigest } from "../../src/compile/manifest.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
-import { NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
+import { NodeExpanded, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   type FeedbackValue,
   ResolvedValue,
@@ -240,7 +267,7 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
-import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
+import { ConversationInvocation, EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
@@ -257,12 +284,24 @@ import {
   Route,
   retainFailure,
 } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
+import { CaseNode } from "../../src/nodes/case/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { ChildFlowBoundary, ExecutionPosition, ExecutionScope, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
+import {
+  ChildFlowBoundary,
+  ExecutionPosition,
+  ExecutionScope,
+  Parameter,
+  SeedConnection,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
+import { EvaluatedOutcome, evalNode } from "../../src/runtime/eval_node.ts";
 import { BackwardCapture, BackwardOutcome, ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
   BackwardFinishedRecord,
@@ -305,6 +344,7 @@ import {
 } from "../../src/runtime/trace.ts";
 import {
   commitPrepared,
+  type GrowBuilder,
   PreparedTransition,
   prepareExpanded,
   prepareNodeFailed,
@@ -324,6 +364,7 @@ import {
   aborted,
   BlockingNode,
   BranchNode,
+  childFlow,
   commitStartSuccess,
   engine,
   expectUnchanged,
@@ -342,6 +383,7 @@ import {
   snapshot,
   startTraceNode,
   terminalSkipRouteFlow,
+  textReply,
   traceSnapshot,
 } from "./run_state_fixtures.ts";
 
@@ -3456,42 +3498,6 @@ test("learning retains noncanonical partial temporary comparisons", async () => 
   expect(calls).toEqual([null]);
 });
 
-test.each(["output", "route", "failure"] as const)("trace replay matches live accepted prefixes: %s", async (kind) => {
-  let replaying = false;
-  const work = (): unknown => {
-    if (replaying) throw new Error("replay evaluated a node body");
-    if (kind === "failure") throw new Error("failed body");
-    return { x: 1n };
-  };
-  const flow =
-    kind === "route"
-      ? graph([new BranchNode("choice", ELSE_HANDLE)], [
-          [START_ID, "choice"],
-          ["choice", END_ID, ELSE_HANDLE],
-        ])
-      : graph([new FuncNode("work", work)], [
-          [START_ID, "work"],
-          ["work", END_ID],
-        ]);
-  // The trace after each accepted record, keyed by the log length it follows.
-  const snapshots = new Map<number, Record<string, unknown>>();
-  const observe = (): void => {
-    snapshots.set(built.state.nextSequence, replayTraceSnapshot(built.state.trace!));
-  };
-  const built = engine(flow, { learnable: true, onEvent: observe });
-  const original = copyGraph(built.state.flow);
-  observe();
-
-  await built.run();
-
-  expect(built.state.result).toBeInstanceOf(kind === "failure" ? RunFailed : RunSucceeded);
-  replaying = true;
-  const records = built.log.records();
-  for (const [length, expected] of [...snapshots].sort(([a], [b]) => a - b)) {
-    expect(replayTraceSnapshot(replayed(copyGraph(original), records.slice(0, length)).trace!)).toEqual(expected);
-  }
-});
-
 test("a discarded agent worker keeps its render capture out of the accepted trace", async () => {
   const config = { provider: "openai", model: "gpt-5.5" };
   const entered = Promise.withResolvers<void>();
@@ -3543,4 +3549,887 @@ test("a discarded agent worker keeps its render capture out of the accepted trac
   expect(trace.started.has("slow")).toBe(true);
   expect(trace.occurrences.map((item) => item.nodeId)).toEqual([START_ID, "bad"]);
   expect(trace.currentWriters.has("slow")).toBe(false);
+});
+
+// The growth rows: captures and trace entries through CALL, MAP and LOOP growth.
+
+/**
+ * A `START -> spawn -> END` flow whose CALL `spawn` reads `sources` and calls a START -> END child
+ * with one parameter per source (Python's `_seed_call_flow`); `extraNodes` hang off START, after
+ * `spawn` or, with `extraFirst`, before it.
+ */
+function seedCallFlow(
+  sources: Readonly<Record<string, string>> = { x: "${input.seed}" },
+  extraNodes: readonly Node[] = [],
+  options: { extraFirst?: boolean } = {},
+): CompiledFlow {
+  const parameters = Object.keys(sources).map((name) => new Parameter(name));
+  const child = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID, { params: parameters })],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [new Edge("order", START_ID, END_ID, { ordering: true })],
+    {
+      wiring: new Map([
+        [START_ID, new Map(Object.keys(sources).map((name) => [name, `\${input.${name}}`]))],
+        [END_ID, new Map()],
+      ]),
+    },
+  );
+  const node = new CallNode("spawn", { flowId: "child", child });
+  node.params = parameters;
+  const entries: [string, string][] = extraNodes.map((item) => [START_ID, item.id]);
+  entries.splice(options.extraFirst ? entries.length : 0, 0, [START_ID, "spawn"]);
+  return graph([node, ...extraNodes], [...entries, ["spawn", END_ID]], { wiring: { spawn: sources } });
+}
+
+// A child body that decrements the carried `n` (Python's `_compose_codefns:loop_countdown`).
+const COUNTDOWN = `code: 'return {n: inputs["n"] - 1}'`;
+
+/**
+ * Load a flow whose `outer` CALL (or MAP over `[n, n]`) calls a LOOP of two iterations, each body
+ * a CALL of a countdown leaf (Python's `_nested_growth_flow`).
+ */
+async function nestedGrowthFlow(kind: "call" | "map"): Promise<CompiledFlow> {
+  const over = kind === "map" ? "    over: '${[input.n, input.n]}'\n" : "";
+  const seed = kind === "map" ? "${item}" : "${input.n}";
+  const text = `
+id: nested-seeds
+name: nested-seeds
+input:
+  n: !int
+defs:
+  leaf:
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        ${COUNTDOWN}
+        output: {n: int}
+    output: \${work.output}
+  body:
+    input:
+      n: !int
+    nodes:
+      invoke:
+        kind: call
+        call: leaf
+        input: {n: '\${input.n}'}
+    output: \${invoke.output}
+  repeated:
+    input:
+      n: !int
+    nodes:
+      repeat:
+        kind: loop
+        call: body
+        times: 2
+        input: {n: '\${input.n}'}
+    output: \${repeat.output}
+nodes:
+  outer:
+    kind: ${kind}
+    call: repeated
+${over}    input: {n: '${seed}'}
+output: \${outer.output}
+`;
+  return (await loadFlow(text)).compiled;
+}
+
+/** Return a learnable engine over `flow` with real growth; the other options go to the fixture. */
+function growing(flow: CompiledFlow, options: Parameters<typeof engine>[1] = {}): FlowEngine {
+  return engine(flow, { learnable: true, growBuilder: buildGrow, ...options });
+}
+
+/** Return `fragment` with its growth recipes replaced (Python sets them on the fragment). */
+function withRecipes(
+  fragment: Flow,
+  recipes: { inputConnections?: readonly SeedConnection[]; childBoundaries?: readonly ChildFlowBoundary[] },
+): Flow {
+  return new Flow(fragment.nodes, fragment.edges, {
+    wiring: fragment.wiring,
+    startId: fragment.startId,
+    endId: fragment.endId,
+    inputConnections: recipes.inputConnections ?? fragment.inputConnections,
+    childBoundaries: recipes.childBoundaries ?? fragment.childBoundaries,
+  });
+}
+
+/** Return the capture of an accepted occurrence's record. */
+function captureOf(occurrence: TraceOccurrence): ForwardCapture {
+  return (occurrence.record as NodeSucceededRecord).forwardCapture!;
+}
+
+/** Route `feedback` through `occurrence`'s joined input route over `trace`; the contributions. */
+function contributions(trace: RetainedTrace, occurrence: TraceOccurrence, feedback: FeedbackValue) {
+  const routed = routeFeedback(occurrence.inputRoute, feedback, (source) => trace.lookupSource(source));
+  return routed.contributions.map((item) => [item.source, item.feedback]);
+}
+
+test.each(["call", "map"] as const)(
+  "nested growth preserves authored paths and local driver zero: %s",
+  async (kind) => {
+    // Every node the run has held, by id, so retired drivers can still be read.
+    const seen = new Map<string, Node>();
+    const built = growing(await nestedGrowthFlow(kind), {
+      inputs: { n: 9n },
+      onEvent: () => {
+        for (const [id, node] of built.state.flow.nodes) seen.set(id, node);
+      },
+    });
+
+    await built.run();
+
+    const trace = built.state.trace!;
+    const occurrences = occurrencesById(built);
+    const loopPath = ["outer", "repeat"];
+    const invokePath = [...loopPath, "invoke"];
+    for (let item = 0; item < (kind === "map" ? 2 : 1); item++) {
+      const prefix = kind === "map" ? `outer#${item}` : "outer";
+      const outer =
+        kind === "map"
+          ? new ExecutionPosition("map_item", ["outer"], item)
+          : new ExecutionPosition("call", ["outer"]);
+      for (let iteration = 0; iteration < 3; iteration++) {
+        const driver = occurrences.get(`${prefix}/repeat` + (iteration ? `~${iteration}` : ""))!;
+        expect(captureOf(driver).scope!.staticPath).toEqual(loopPath);
+        expect(captureOf(driver).scope!.occurrencePath).toEqual([
+          outer,
+          new ExecutionPosition("loop_driver", loopPath, iteration),
+        ]);
+      }
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const bodyStart = occurrences.get(`${prefix}/repeat#${iteration}/${START_ID}`)!;
+        const callId = `${prefix}/repeat#${iteration}/invoke`;
+        const leafStart = occurrences.get(`${callId}/${START_ID}`)!;
+        const position = [outer, new ExecutionPosition("loop_body", loopPath, iteration)];
+        expect(captureOf(bodyStart).scope!.occurrencePath).toEqual(position);
+        expect(captureOf(leafStart).scope!.occurrencePath).toEqual([
+          ...position,
+          new ExecutionPosition("call", invokePath),
+        ]);
+        expect(captureOf(leafStart).scope!.flowPath).toEqual(invokePath);
+        expect(leafStart.inputRoute.children[0]!.source).toEqual(
+          new SourceRef(bodyStart.source.runId, bodyStart.source.executionSeq, ["n"]),
+        );
+      }
+      const driverNode = seen.get(`${prefix}/repeat`) as LoopNode;
+      expect((driverNode.child as CompiledFlow).nodes.get("invoke")!.executionScope!.occurrencePath).toEqual([]);
+    }
+    expect(trace.boundaries.every((boundary) => boundary.startSource !== null && boundary.endSource !== null)).toBe(
+      true,
+    );
+  },
+);
+
+test.each<[string, (string | number)[]]>([
+  ["absent", ["absent"]],
+  ["item", [9, "x"]],
+])("a missing seed selector is an accepted growth failure: %s", async (_, path) => {
+  const invalidSelector: GrowBuilder = (spawner, seed) => {
+    const fragment = buildGrow(spawner, seed);
+    return withRecipes(fragment, { inputConnections: [new SeedConnection(fragment.startId, "x", path)] });
+  };
+  const built = growing(seedCallFlow(), { inputs: { seed: 7n }, growBuilder: invalidSelector });
+
+  await built.run();
+
+  const record = built.state.trace!.occurrences.at(-1)!.record;
+  expect(record).toBeInstanceOf(NodeFailedRecord);
+  const failure = (record as NodeFailedRecord).failure;
+  expect(failure.code).toBe("contract.growth");
+  expect(failure).toEqual((built.state.result as RunFailed).failure);
+  expect((record as NodeFailedRecord).forwardCapture!.boundInputs).toEqual({ x: 7n });
+  expect(built.state.trace!.pendingConnections.size).toBe(0);
+  expect(built.state.trace!.boundaries).toEqual([]);
+});
+
+// The start of each refusal; the digest row goes on to name both digests.
+const TAMPERING_MESSAGES = {
+  "selector-digest": "NodeExpandedRecord topology digest mismatch: recorded ",
+  "missing-field": 'seed connection ["absent"] was not captured',
+  "missing-item": 'seed connection [9,"x"] was not captured',
+  "boundary-role": "child boundary role disagrees with its execution scope",
+};
+
+/** Return what `fn` throws, or fail when it returns. */
+function rejectedSync(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
+
+test.each(["selector-digest", "missing-field", "missing-item", "boundary-role"] as const)(
+  "growth recipe tampering fails replay before apply: %s",
+  async (change) => {
+    const built = growing(seedCallFlow(), { inputs: { seed: 7n } });
+    const original = copyGraph(built.state.flow);
+    await built.run();
+    const envelopes = built.log.records();
+    const at = envelopes.findIndex((envelope) => envelope.record instanceof NodeExpandedRecord);
+    let record = envelopes[at]!.record as NodeExpandedRecord;
+
+    const changedBuilder: GrowBuilder = (spawner, seed) => {
+      const fragment = buildGrow(spawner, seed);
+      const path = change === "missing-item" ? [9, "x"] : ["absent"];
+      return withRecipes(fragment, {
+        inputConnections: [new SeedConnection(fragment.startId, "x", path)],
+        childBoundaries:
+          change === "boundary-role" ? [new ChildFlowBoundary(fragment.endId, fragment.startId)] : undefined,
+      });
+    };
+
+    const replay = replayRecords(new RunState(copyGraph(original)), envelopes.slice(0, at), {
+      growBuilder: buildGrow,
+    });
+    if (change === "missing-field" || change === "missing-item") {
+      const changed = changedBuilder(replay.flow.nodes.get("spawn")!, { x: 7n });
+      record = new NodeExpandedRecord(record.spawnerId, record.seed, record.pruneIds, expansionDigest(changed), {
+        evidence: record.evidence,
+        forwardCapture: record.forwardCapture,
+      });
+    }
+    const before = [traceSnapshot(replay.trace!), [...replay.flow.nodes.keys()], replay.nextSequence];
+    const refused = rejectedSync(() => prepareRecord(replay, record, { growBuilder: changedBuilder }));
+    expect(refused).toBeInstanceOf(RangeError);
+    expect((refused as Error).message).toStartWith(TAMPERING_MESSAGES[change]);
+    expect([traceSnapshot(replay.trace!), [...replay.flow.nodes.keys()], replay.nextSequence]).toEqual(before);
+  },
+);
+
+test.each<[string, boolean]>([
+  ["${peer.output | null}", false],
+  ["${peer.output}", false],
+  ["${peer.output}", true],
+])("reference-looking seed strings reach the child as text: %s, early peer %s", async (seed, earlyPeer) => {
+  // A seed is resolved data: the child START receives the exact text, its local route is a
+  // literal, and no feedback reaches `peer`, whichever order `peer` runs in.
+  const peer = new FuncNode("peer", () => 11n);
+  const built = growing(seedCallFlow(undefined, [peer], { extraFirst: earlyPeer }), { inputs: { seed } });
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  const trace = built.state.trace!;
+  const occurrences = occurrencesById(built);
+  const parent = occurrences.get("spawn")!;
+  const child = occurrences.get(`spawn/${START_ID}`)!;
+  expect(captureOf(parent).boundInputs).toEqual({ x: seed });
+  const capture = captureOf(child);
+  expect(capture.boundInputs).toEqual({ x: seed });
+  expect([...capture.evaluatedKeys]).toEqual([]);
+  expect(capture.route.children[0]!.kind).toBe("literal");
+  // The joined route reaches the run input the seed came from, not `peer`.
+  const root = occurrences.get(START_ID)!;
+  expect(child.inputRoute.children[0]!.source).toEqual(
+    new SourceRef(root.source.runId, root.source.executionSeq, ["seed"]),
+  );
+  const peerSource = occurrences.get("peer")!.source;
+  expect(contributions(trace, child, { x: "Change." }).map(([source]) => source)).not.toContainEqual(peerSource);
+});
+
+test("a failed child binding joins the captured fields", async () => {
+  const flow = seedCallFlow({ safe: "${input.safe}", x: "${input.seed}" });
+  const child = (flow.nodes.get("spawn") as CallNode).child as CompiledFlow;
+  child.nodes.get(START_ID)!.params = [
+    new Parameter("safe"),
+    new Parameter("x", { contract: new ValueContract(Type.scalar(ValueKind.INTEGER)), required: true }),
+  ];
+  const built = growing(flow, { inputs: { safe: 7n, seed: "not a number" } });
+
+  await built.run();
+
+  const trace = built.state.trace!;
+  const occurrence = trace.occurrences.at(-1)!;
+  expect(occurrence.nodeId).toBe(`spawn/${START_ID}`);
+  const record = occurrence.record as NodeFailedRecord;
+  expect(record).toBeInstanceOf(NodeFailedRecord);
+  expect(record.failure).toEqual((built.state.result as RunFailed).failure);
+  expect(record.failure.code).toBe("contract.input");
+  expect(record.forwardCapture!.boundInputs).toBeNull();
+  expect(occurrence.inputRoute.names).toEqual(["safe", "x"]);
+  expect(record.forwardCapture!.route.names).toEqual(["safe", "x"]);
+  const root = trace.occurrences.find((item) => item.nodeId === START_ID)!;
+  expect(occurrence.inputRoute.children[0]!.source).toEqual(
+    new SourceRef(root.source.runId, root.source.executionSeq, ["safe"]),
+  );
+  expect(trace.boundaries).toHaveLength(1);
+  const [boundary] = trace.boundaries;
+  expect(boundary!.startSource).toEqual(occurrence.source);
+  expect(boundary!.endSource).toBeNull();
+  expect(trace.pendingConnections.size).toBe(0);
+});
+
+/** Evaluate started `nodeId` as the engine does for a learnable run (Python's `engine._evaluate`). */
+function evaluateStarted(state: RunState, nodeId: string): Promise<EvaluatedOutcome> {
+  const trace = state.trace!;
+  return evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
+    wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
+    captureEvidence: true,
+    captureBindings: true,
+    effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
+    sourceResolver: (path) => trace.resolve(path),
+    memoryInvocation: new ConversationInvocation(RUN_ID, state.acceptedStarts.get(nodeId)!),
+  });
+}
+
+/** The joined forward capture of an evaluation. */
+function joinedCapture(evaluated: EvaluatedOutcome): ForwardCapture {
+  return captureBindings(evaluated.bindings!, evaluated.backwardCapture!);
+}
+
+test("seed connections wait for the append and survive an unfinished start's retry", async () => {
+  const built = growing(seedCallFlow(), { inputs: { seed: 7n } });
+  const { state, log } = built;
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  const start = await evaluateStarted(state, START_ID);
+  commitPrepared(
+    log,
+    state,
+    prepareNodeSucceeded(state, START_ID, (start.outcome as Output).value, {
+      evidence: start.evidence,
+      forwardCapture: joinedCapture(start),
+    }),
+  );
+  commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
+  const evaluated = await evaluateStarted(state, "spawn");
+  const prepared = prepareExpanded(state, "spawn", evaluated.outcome as Grow, built.growBuilder, {
+    forwardCapture: joinedCapture(evaluated),
+  });
+  const before = [traceSnapshot(state.trace!), [...state.flow.nodes.keys()], state.nextSequence];
+  const append = log.append;
+  log.append = () => {
+    throw new Error("append failed");
+  };
+  expect(() => commitPrepared(log, state, prepared)).toThrow("append failed");
+  expect([traceSnapshot(state.trace!), [...state.flow.nodes.keys()], state.nextSequence]).toEqual(before);
+  log.append = append;
+  commitPrepared(log, state, prepared);
+  const target = `spawn/${START_ID}`;
+  const pending = state.trace!.pendingConnections.get(target);
+  commitPrepared(log, state, prepareNodeStarted(state, target));
+  const abandoned = state.trace!.started.get(target)!;
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  expect(state.trace!.pendingConnections.get(target)).toBe(pending!);
+
+  await built.run();
+
+  const child = state.trace!.occurrences.find((item) => item.nodeId === target)!;
+  expect(child.source.executionSeq).not.toBe(abandoned);
+  expect(child.inputRoute.children[0]!.source).not.toBeNull();
+  expect(state.trace!.pendingConnections.size).toBe(0);
+});
+
+test.each([false, true])(
+  "pruned seed connections do not leak into reused node ids: skip first %s",
+  async (skipFirst) => {
+    const sharedStart = `shared/${START_ID}`;
+    const sharedEnd = `shared/${END_ID}`;
+    const child = (seedCallFlow().nodes.get("spawn") as CallNode).child as CompiledFlow;
+    const emptyChild = (seedCallFlow({}).nodes.get("spawn") as CallNode).child as CompiledFlow;
+
+    /** Grows an empty child and prunes the shared child's boundary. */
+    class Prune extends Node {
+      readonly kind = NodeKind.CODE;
+      override readonly isSpawner = true;
+
+      override forward(): NodeResult {
+        return new Grow({}, [sharedStart, sharedEnd]);
+      }
+    }
+
+    const first = new CallNode("first", { flowId: "child", child: copyGraph(child) });
+    const again = new CallNode("again", { flowId: "child", child: copyGraph(child) });
+    first.params = again.params = [new Parameter("x")];
+
+    const builder: GrowBuilder = (spawner, seed) => {
+      if (spawner.id === "prune") return callSubgraph(emptyChild, "prune", {});
+      if (spawner.id === "first" && skipFirst) {
+        const finish = EndNode.value("finish", { outputName: null });
+        finish.commitAs = "first";
+        return new Flow(
+          new Map<string, Node>([
+            ["entry", new StartNode("entry", { params: [] })],
+            ["choice", new CaseNode("choice", [])],
+            [sharedStart, new StartNode(sharedStart, { params: [new Parameter("x")] })],
+            [sharedEnd, EndNode.value(sharedEnd, { outputName: null })],
+            ["finish", finish],
+          ]),
+          [
+            new Edge("enter", "entry", "choice", { ordering: true }),
+            new Edge("chosen", "choice", "finish", { sourceHandle: ELSE_HANDLE }),
+            new Edge("skipped", "choice", sharedStart, { sourceHandle: "other" }),
+            new Edge("child", sharedStart, sharedEnd, { ordering: true }),
+          ],
+          {
+            wiring: new Map<string, Map<string, unknown>>([
+              ["entry", new Map()],
+              ["choice", new Map()],
+              [sharedStart, new Map([["x", (seed as Record<string, unknown>)["x"]]])],
+              [sharedEnd, new Map()],
+              ["finish", new Map()],
+            ]),
+            startId: "entry",
+            endId: "finish",
+            inputConnections: [new SeedConnection(sharedStart, "x", ["x"])],
+            childBoundaries: [new ChildFlowBoundary(sharedStart, sharedEnd)],
+          },
+        );
+      }
+      const fragment = cloneChild((spawner as CallNode).child as Flow, "shared", seed as Record<string, unknown>);
+      fragment.nodes.get(fragment.endId)!.commitAs = spawner.id;
+      return fragment;
+    };
+
+    const seen = new Map<string, Map<string, SeedRoutes>>();
+    const flow = graph([first, new Prune("prune"), again], [
+      [START_ID, "first"],
+      ["first", "prune"],
+      ["prune", "again"],
+      ["again", END_ID],
+    ], { wiring: { first: { x: "${input.first}" }, prune: {}, again: { x: "${input.second}" } } });
+    const built = growing(flow, {
+      inputs: { first: 7n, second: 11n },
+      growBuilder: builder,
+      onEvent: (event) => {
+        if (event instanceof NodeExpanded) seen.set(event.nodeId, new Map(built.state.trace!.pendingConnections));
+      },
+    });
+
+    await built.run();
+
+    expect(built.state.result).toBeInstanceOf(RunSucceeded);
+    const trace = built.state.trace!;
+    expect(seen.get("first")!.has(sharedStart)).toBe(true);
+    expect(seen.get("prune")!.has(sharedStart)).toBe(false);
+    expect(seen.get("again")!.get(sharedStart)!.owner).not.toEqual(seen.get("first")!.get(sharedStart)!.owner);
+    const reused = trace.occurrences.filter((item) => item.nodeId === sharedStart);
+    expect(reused).toHaveLength(skipFirst ? 1 : 2);
+    const root = trace.occurrences.find((item) => item.nodeId === START_ID)!;
+    expect(reused.at(-1)!.inputRoute.children[0]!.source).toEqual(
+      new SourceRef(root.source.runId, root.source.executionSeq, ["second"]),
+    );
+    const boundaries = trace.boundaries.filter((item) => item.startId === sharedStart);
+    expect(boundaries).toHaveLength(2);
+    expect(boundaries[0]!.owner).not.toEqual(boundaries[1]!.owner);
+    expect(boundaries[0]!.startSource).toEqual(skipFirst ? null : reused[0]!.source);
+    expect(boundaries[1]!.startSource).toEqual(reused.at(-1)!.source);
+    expect(trace.pendingConnections.size).toBe(0);
+  },
+);
+
+test("CALL seed routes survive materialized values", async () => {
+  const loaded = (
+    await loadFlow(`
+id: seed-call
+name: seed-call
+input:
+  n: !int
+defs:
+  child:
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        ${COUNTDOWN}
+        output: {n: int}
+    output: \${work.output}
+nodes:
+  spawn:
+    kind: call
+    call: child
+    input: {n: '\${input.n}'}
+output: \${spawn.output}
+`)
+  ).compiled;
+  const built = growing(loaded, { inputs: { n: 9n } });
+
+  await built.run();
+
+  const trace = built.state.trace!;
+  const occurrences = occurrencesById(built);
+  const child = occurrences.get(`spawn/${START_ID}`)!;
+  const rawCapture = captureOf(child);
+  expect(rawCapture.boundInputs).toEqual({ n: 9n });
+  expect(rawCapture.route.children[0]!.kind).toBe("literal");
+  expect(contributions(trace, child, { n: "Use another seed." })).toEqual([
+    [occurrences.get(START_ID)!.source, { n: "Use another seed." }],
+  ]);
+  expect(rawCapture.scope!.occurrencePath).toEqual([new ExecutionPosition("call", ["spawn"])]);
+  expect(trace.boundaries).toHaveLength(1);
+  const [boundary] = trace.boundaries;
+  expect(boundary!.owner).toEqual(occurrences.get("spawn")!.source);
+  expect([boundary!.startId, boundary!.endId]).toEqual([`spawn/${START_ID}`, `spawn/${END_ID}`]);
+  expect([boundary!.startSource, boundary!.endSource]).toEqual([
+    child.source,
+    occurrences.get(`spawn/${END_ID}`)!.source,
+  ]);
+  expect(trace.pendingConnections.size).toBe(0);
+});
+
+test.each(["call", "map"] as const)("a null materialized seed keeps its selected source: %s", async (kind) => {
+  let flow = seedCallFlow();
+  if (kind === "map") {
+    const node = new MapNode("spawn", { flowId: "child", child: (flow.nodes.get("spawn") as CallNode).child });
+    node.params = [new Parameter("x")];
+    flow = graph([node], [
+      [START_ID, "spawn"],
+      ["spawn", END_ID],
+    ], { wiring: { spawn: { over: "${[input.seed]}", x: "${item}" } } });
+  }
+  const built = growing(flow, { inputs: { seed: null } });
+
+  await built.run();
+
+  const trace = built.state.trace!;
+  const root = trace.occurrences.find((item) => item.nodeId === START_ID)!;
+  const childId = kind === "map" ? `spawn#0/${START_ID}` : `spawn/${START_ID}`;
+  const child = trace.occurrences.find((item) => item.nodeId === childId)!;
+  expect(captureOf(child).boundInputs).toEqual({ x: null });
+  expect(captureOf(child).route.children[0]!.kind).toBe("literal");
+  expect(contributions(trace, child, { x: "Fill this value." })).toEqual([
+    [root.source, { seed: "Fill this value." }],
+  ]);
+});
+
+test.each<[string, Record<string, unknown>, FeedbackValue[]]>([
+  ["${input.left}", { left: [7n, 7n] }, [{ left: ["Change.", null] }, { left: [null, "Change."] }]],
+  [
+    "${input.left + input.right + input.right}",
+    { left: [7n, 7n], right: [7n] },
+    [{ left: ["Change.", null] }, { left: [null, "Change."] }, { right: ["Change."] }, { right: ["Change."] }],
+  ],
+  ["${input.left}", { left: [] }, []],
+])("MAP seed routes preserve equal item positions: %s", async (over, inputs, expected) => {
+  const node = new MapNode("spawn", { flowId: "child", child: childFlow() });
+  node.params = [new Parameter("x")];
+  const flow = graph([node], [
+    [START_ID, "spawn"],
+    ["spawn", END_ID],
+  ], { wiring: { spawn: { over, x: "${item}" } } });
+  const built = growing(flow, { inputs });
+
+  await built.run();
+
+  const trace = built.state.trace!;
+  const occurrences = occurrencesById(built);
+  for (const [index, feedback] of expected.entries()) {
+    const child = occurrences.get(`spawn#${index}/${START_ID}`)!;
+    expect(captureOf(child).boundInputs).toEqual({ x: 7n });
+    expect(captureOf(child).route.children[0]!.kind).toBe("literal");
+    expect(contributions(trace, child, { x: "Change." })).toEqual([[occurrences.get(START_ID)!.source, feedback]]);
+    expect(captureOf(child).scope!.occurrencePath).toEqual([new ExecutionPosition("map_item", ["spawn"], index)]);
+  }
+  expect(trace.boundaries).toHaveLength(expected.length);
+  for (const nodeId of [`spawn/${START_ID}`, `spawn/${END_ID}`]) {
+    expect(captureOf(occurrences.get(nodeId)!).scope).toEqual(new ExecutionScope(["spawn"]));
+  }
+  expect(trace.pendingConnections.size).toBe(0);
+});
+
+test.each([0, 3])("LOOP carried routes survive live pruning: times %d", async (times) => {
+  const loopPolicy = times ? `times: ${times}` : "while: '${n < 0}'\n    max: 3";
+  const loaded = (
+    await loadFlow(`
+id: seed-loop
+name: seed-loop
+input:
+  n: !int
+defs:
+  child:
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        ${COUNTDOWN}
+        output: {n: int}
+    output: \${work.output}
+nodes:
+  spawn:
+    kind: loop
+    call: child
+    ${loopPolicy}
+    input: {n: '\${input.n}'}
+output: \${spawn.output}
+`)
+  ).compiled;
+  const built = growing(loaded, { inputs: { n: 9n } });
+
+  await built.run();
+
+  const trace = built.state.trace!;
+  const occurrences = occurrencesById(built);
+  const drivers = [
+    occurrences.get("spawn")!,
+    ...Array.from({ length: times }, (_, i) => occurrences.get(`spawn~${i + 1}`)!),
+  ];
+  expect(new Set(drivers.map((item) => sourceKey(item.source))).size).toBe(times + 1);
+  for (const [index, driver] of drivers.entries()) {
+    expect(captureOf(driver).scope!.occurrencePath).toEqual([new ExecutionPosition("loop_driver", ["spawn"], index)]);
+  }
+  expect(trace.currentWriters.get("spawn")!.source).toEqual(drivers.at(-1)!.source);
+  for (let index = 0; index < times; index++) {
+    const child = occurrences.get(`spawn#${index}/${START_ID}`)!;
+    const previous = occurrences.get(index === 0 ? START_ID : `spawn#${index - 1}/${END_ID}`)!;
+    expect(captureOf(child).boundInputs).toEqual({ n: BigInt(9 - index) });
+    expect(contributions(trace, child, { n: "Change." })).toEqual([[previous.source, { n: "Change." }]]);
+    expect(captureOf(child).scope!.occurrencePath).toEqual([new ExecutionPosition("loop_body", ["spawn"], index)]);
+    const boundary = trace.boundaries[index]!;
+    expect(boundary.owner).toEqual(drivers[index]!.source);
+    expect(boundary.startSource).toEqual(child.source);
+    expect(boundary.endSource).toEqual(occurrences.get(`spawn#${index}/${END_ID}`)!.source);
+    if (index < times - 1) {
+      expect(built.state.flow.nodes.has(child.nodeId)).toBe(false);
+      expect(trace.sources.has(sourceKey(child.source))).toBe(true);
+    }
+  }
+  expect(trace.pendingConnections.size).toBe(0);
+});
+
+/** Load the one-spawner flow whose CALL, MAP or LOOP `spawn` runs a countdown child. */
+async function growthFlow(kind: "call" | "map" | "loop"): Promise<CompiledFlow> {
+  let extra = kind === "map" ? "    over: [1, 1]\n" : "";
+  extra += kind === "loop" ? "    times: 3\n" : "";
+  const binding = kind === "map" ? "'${item}'" : "1";
+  const text = `
+id: trace-growth
+name: trace-growth
+defs:
+  child:
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        ${COUNTDOWN}
+        output: {n: int}
+    output: \${work.output}
+nodes:
+  spawn:
+    kind: ${kind}
+    call: child
+${extra}    input: {n: ${binding}}
+output: \${spawn.output}
+`;
+  return (await loadFlow(text)).compiled;
+}
+
+test.each(["output", "route", "failure", "call", "map", "loop", "nested-call", "nested-map"] as const)(
+  "trace replay matches live accepted prefixes: %s",
+  async (kind) => {
+    let replaying = false;
+    const work = (): unknown => {
+      if (replaying) throw new Error("replay evaluated a node body");
+      if (kind === "failure") throw new Error("failed body");
+      return { x: 1n };
+    };
+    let flow: CompiledFlow;
+    if (kind === "nested-call" || kind === "nested-map") {
+      flow = await nestedGrowthFlow(kind === "nested-call" ? "call" : "map");
+    } else if (kind === "call" || kind === "map" || kind === "loop") {
+      flow = await growthFlow(kind);
+    } else if (kind === "route") {
+      flow = graph([new BranchNode("choice", ELSE_HANDLE)], [
+        [START_ID, "choice"],
+        ["choice", END_ID, ELSE_HANDLE],
+      ]);
+    } else {
+      flow = graph([new FuncNode("work", work)], [
+        [START_ID, "work"],
+        ["work", END_ID],
+      ]);
+    }
+    // The trace after each accepted record, keyed by the log length it follows.
+    const snapshots = new Map<number, Record<string, unknown>>();
+    const observe = (): void => {
+      snapshots.set(built.state.nextSequence, replayTraceSnapshot(built.state.trace!));
+    };
+    const built = growing(flow, { inputs: kind.startsWith("nested-") ? { n: 9n } : {}, onEvent: observe });
+    const original = copyGraph(built.state.flow);
+    observe();
+
+    await built.run();
+
+    expect(built.state.result).toBeInstanceOf(kind === "failure" ? RunFailed : RunSucceeded);
+    const trace = built.state.trace!;
+    if (kind === "loop") {
+      const retired = trace.occurrences.filter((item) => !built.state.flow.nodes.has(item.nodeId));
+      expect(retired.length).toBeGreaterThan(0);
+      for (const item of retired) {
+        expect(trace.backwardHandlers.has(sourceKey(item.source))).toBe(true);
+        if (item.record instanceof NodeSucceededRecord) {
+          expect(trace.sources.has(sourceKey(item.source))).toBe(true);
+          expect(trace.currentWriters.has(item.nodeId)).toBe(false);
+        }
+      }
+    }
+    replaying = true;
+    const records = built.log.records();
+    const forward = spyOn(CodeNode.prototype, "forward").mockImplementation(() => {
+      throw new Error("replay evaluated a node body");
+    });
+    try {
+      for (const [length, expected] of [...snapshots].sort(([a], [b]) => a - b)) {
+        const replay = replayRecords(new RunState(copyGraph(original)), records.slice(0, length), {
+          growBuilder: buildGrow,
+        });
+        expect(replayTraceSnapshot(replay.trace!)).toEqual(expected);
+      }
+    } finally {
+      forward.mockRestore();
+    }
+  },
+);
+
+test("a nested agent's render capture uses the authored model map and replays without execution", async () => {
+  const loaded = (
+    await loadFlow(`id: captured_models
+name: captured_models
+llm_config: {provider: ollama, model: root, ollama: {options: {temperature: 0.2}}}
+defs:
+  leaf:
+    input:
+      topic: !str
+    nodes:
+      writer:
+        kind: agent
+        input: {topic: '\${input.topic}'}
+        prompt: '\${topic}: \${instruction}'
+        variables:
+          instruction: !str clearly
+        output: {topic: str}
+    output: \${writer.output}
+  repeat_left:
+    llm_config: {model: left}
+    input:
+      topic: !str
+    nodes:
+      twice:
+        kind: loop
+        call: leaf
+        times: 2
+        input: {topic: '\${input.topic}'}
+    output: \${twice.output}
+  repeat_right:
+    llm_config: {model: right}
+    input:
+      topic: !str
+    nodes:
+      twice:
+        kind: loop
+        call: leaf
+        times: 2
+        input: {topic: '\${input.topic}'}
+    output: \${twice.output}
+nodes:
+  left:
+    kind: call
+    call: repeat_left
+    input: {topic: reefs}
+  right:
+    kind: map
+    call: repeat_right
+    over: [reefs, reefs]
+    input: {topic: '\${item}'}
+output: {left: '\${left.output}', right: '\${right.output}'}
+`)
+  ).compiled;
+  // Each model call's prompt; the reply's topic is the prompt, as Python's patched `run_agent`
+  // returns.
+  const rendered: string[] = [];
+  let replaying = false;
+  const models: ModelAccess = {
+    env: () => undefined,
+    createModel: (config) => {
+      if (replaying) throw new Error("replay tried to invoke a model");
+      return {
+        provider: config["provider"] as string,
+        model: config["model"] as string,
+        stream: (request, options) => {
+          const prompt = request.messages.at(-1)!.text();
+          rendered.push(prompt);
+          return new ScriptedModel([textReply(JSON.stringify({ topic: prompt }))]).stream(request, options);
+        },
+      };
+    },
+  };
+  const built = growing(loaded, {
+    effectiveLlmByStaticPath: resolveLlmCascade(loaded, {}, { defaults: { provider: "test", model: "test" } }),
+    models,
+  });
+  const original = copyGraph(built.state.flow);
+
+  await built.run();
+
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  const trace = built.state.trace!;
+  const agents = trace.occurrences.filter((item) => captureOf(item).variableNames.join() === "instruction");
+  expect(agents).toHaveLength(6);
+  expect(rendered).toHaveLength(6);
+  const block = { options: { temperature: 0.2 } };
+  expect(built.state.effectiveLlmByStaticPath).toEqual({
+    "left/twice/writer": { provider: "ollama", model: "left", ollama: block },
+    "right/twice/writer": { provider: "ollama", model: "right", ollama: block },
+  });
+  const positions = new Set<string>();
+  for (const occurrence of agents) {
+    const capture = captureOf(occurrence);
+    const scope = capture.scope!;
+    const data = capture.nodeData!;
+    expect(data["effective_llm_config"]).toEqual(built.state.effectiveLlmByStaticPath[scope.staticPath.join("/")]);
+    expect(data["prompt_template"]).toBe("${topic}: ${instruction}");
+    expect(data["variables"]).toEqual({ instruction: "clearly" });
+    expect(data["rendered_prompt"]).toBe(`${capture.boundInputs!["topic"]}: clearly`);
+    expect([["left", "twice", "writer"], ["right", "twice", "writer"]]).toContainEqual([...scope.staticPath]);
+    expect(scope.occurrencePath.map((item) => item.kind)).toEqual(
+      scope.staticPath[0] === "left" ? ["call", "loop_body"] : ["map_item", "loop_body"],
+    );
+    positions.add(JSON.stringify([scope.staticPath, scope.occurrencePath]));
+  }
+  expect(positions.size).toBe(6);
+  expect(agents.some((item) => !built.state.flow.nodes.has(item.nodeId))).toBe(true);
+
+  replaying = true;
+  const forbidden = () => {
+    throw new Error("replay tried to resolve, render, capture, or invoke a model");
+  };
+  const spies = [
+    spyOn(AgentNode.prototype, "forward").mockImplementation(forbidden),
+    spyOn(AgentNode.prototype as unknown as { resolveVariables(): unknown }, "resolveVariables").mockImplementation(
+      forbidden,
+    ),
+    spyOn(Node.prototype, "captureBackwardContext").mockImplementation(forbidden),
+  ];
+  let replay: RunState;
+  try {
+    replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+  expect(replay.trace!.occurrences).toEqual(trace.occurrences);
+  // The agents the replayed graph still holds change afterward; no captured context follows them.
+  for (const node of replay.flow.nodes.values()) {
+    if (!(node instanceof AgentNode)) continue;
+    node.prompt = "later prompt";
+    node.llmConfig = { ...node.llmConfig, model: "later model" };
+  }
+  for (const occurrence of agents) {
+    const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
+    // The real agent loop records its one model reply, where Python's patched `run_agent` recorded none.
+    expect((evidence as Record<string, unknown>)["interactions"]).toEqual([
+      { kind: "model_value", value: { topic: data["rendered_prompt"] } },
+    ]);
+    expect(data).toEqual(captureOf(occurrence).nodeData!);
+  }
 });

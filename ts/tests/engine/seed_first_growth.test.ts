@@ -2,7 +2,8 @@
  * Seed-first growth, nodes describe expansion and compile constructs topology: a port of
  * `tests/engine/test_seed_first_growth.py`.
  *
- * Ported: `test_loop_respawn_preserves_diagnostic_origin_separately_from_origin_id`,
+ * Ported: `test_call_map_and_loop_return_seed_only`,
+ * `test_loop_respawn_preserves_diagnostic_origin_separately_from_origin_id`,
  * `test_compile_builder_derives_prefix_from_each_spawner_failure_trace`,
  * `test_source_free_spawners_do_not_invent_generated_context`,
  * `test_compile_builder_propagates_each_spawner_memory_occurrence`,
@@ -13,9 +14,8 @@
  * `test_compile_builder_preserves_helper_fault_identity_after_seed_validation`.
  *
  * Changed:
- * - each spawner's seed is written out as its `run` gives it (`test_call_map_and_loop_return_seed_only`
- *   pins them), since CALL, MAP and LOOP `forward` aren't ported; ints are `bigint`s, as the
- *   reducer's canonical seed holds them;
+ * - `growthProducers` is async, as `run` is; ints are `bigint`s, as the reducer's canonical seed
+ *   holds them, the LOOP iteration included (`[{ x: 1n }, 0n]`, where Python's seed is a tuple);
  * - Python's `ValueError` is a `RangeError`;
  * - `test_compile_builder_keeps_an_unsupported_kind_outside_growth_rejection`: the spawner is a
  *   `FuncNode` (kind `code`), since `Node` is abstract, and the message is pinned whole;
@@ -31,8 +31,6 @@
  *   rows;
  * - two `buildGrow` calls on one spawner give equal fragments and leave its child template
  *   unchanged.
- *
- * Later (T4-10): `test_call_map_and_loop_return_seed_only`.
  */
 
 import { expect, test } from "bun:test";
@@ -51,7 +49,7 @@ import {
 } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
-import { type Node, NodeKind } from "../../src/nodes/base.ts";
+import { Grow, type Node, NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -123,15 +121,17 @@ function parentWithSpawner(child: CompiledFlow): CompiledFlow {
   return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
 }
 
-/** One seed-producing spawner of every legal grow kind, with the seed its `run` gives. */
-function growthProducers(): [[CallNode, JsonObject], [MapNode, JsonValue[]], [LoopNode, JsonValue[]]] {
+/** One live seed-producing spawner of every legal grow kind, with the `Grow` its `run` gives. */
+async function growthProducers(): Promise<[[CallNode, Grow], [MapNode, Grow], [LoopNode, Grow]]> {
   const child = childFlow();
 
   const call = new CallNode("call", { flowId: "child", child });
   call.params = [new Parameter("x")];
   call.postAsserts = [new Assertion("output == x", "output == x")];
+  const callGrow = await call.run({ x: 1n });
 
   const mapNode = new MapNode("map", { flowId: "child", child });
+  const mapGrow = await mapNode.run({ over: [1n, 2n] }, { bindItem: (item) => ({ x: item }) });
 
   const loop = new LoopNode("loop", {
     flowId: "child",
@@ -141,11 +141,12 @@ function growthProducers(): [[CallNode, JsonObject], [MapNode, JsonValue[]], [Lo
     maxIters: 3,
   });
   loop.params = child.nodes.get(child.startId)!.params;
+  const loopGrow = await loop.run({ x: 1n });
 
   return [
-    [call, { x: 1n }],
-    [mapNode, [{ x: 1n }, { x: 2n }]],
-    [loop, [{ x: 1n }, 0n]],
+    [call, callGrow as Grow],
+    [mapNode, mapGrow as Grow],
+    [loop, loopGrow as Grow],
   ];
 }
 
@@ -168,6 +169,16 @@ function expectSameFragment(actual: Flow, expected: Flow): void {
   }
 }
 
+test("call map and loop return seed only", async () => {
+  const producers = await growthProducers();
+
+  expect(producers.every(([, grow]) => grow instanceof Grow)).toBe(true);
+  expect(producers.every(([, grow]) => !("subgraph" in grow))).toBe(true);
+  expect(producers[0][1].seed).toEqual({ x: 1n });
+  expect(producers[1][1].seed).toEqual([{ x: 1n }, { x: 2n }]);
+  expect(producers[2][1].seed).toEqual([{ x: 1n }, 0n]);
+});
+
 test("loop respawn preserves diagnostic origin separately from origin id", () => {
   const loop = new LoopNode("loop", { flowId: "child", originId: "runtime-loop" });
   const authoredOrigin = new OriginRef("root/node/loop");
@@ -183,8 +194,8 @@ test("loop respawn preserves diagnostic origin separately from origin id", () =>
   expect(clone.originId).toBe("runtime-loop");
 });
 
-test("compile builder derives prefix from each spawner failure trace", () => {
-  const [[call, callSeed], [mapNode, mapSeed], [loop, loopSeed]] = growthProducers();
+test("compile builder derives prefix from each spawner failure trace", async () => {
+  const [[call, callGrow], [mapNode, mapGrow], [loop, loopGrow]] = await growthProducers();
   const outer = new OriginRef("root/nodes/outer");
   const localOrigins = [
     new OriginRef("root/nodes/call"),
@@ -196,13 +207,13 @@ test("compile builder derives prefix from each spawner failure trace", () => {
     spawner.origin = localOrigins[i]!;
   }
 
-  const callFragment = buildGrow(call, callSeed);
+  const callFragment = buildGrow(call, callGrow.seed as JsonValue);
   for (const node of callFragment.nodes.values()) expect(node.originContext).toEqual([outer, localOrigins[0]]);
 
-  const mapFragment = buildGrow(mapNode, mapSeed);
+  const mapFragment = buildGrow(mapNode, mapGrow.seed as JsonValue);
   for (const node of mapFragment.nodes.values()) expect(node.originContext).toEqual([outer, localOrigins[1]]);
 
-  const loopFragment = buildGrow(loop, loopSeed);
+  const loopFragment = buildGrow(loop, loopGrow.seed as JsonValue);
   const nextDriver = loopFragment.nodes.get("loop~1")!;
   for (const [nodeId, node] of loopFragment.nodes) {
     if (nodeId !== nextDriver.id) expect(node.originContext).toEqual([outer, localOrigins[2]]);
@@ -211,15 +222,15 @@ test("compile builder derives prefix from each spawner failure trace", () => {
   expect(nextDriver.failureTrace()).toEqual([outer, localOrigins[2]]);
 });
 
-test("source free spawners do not invent generated context", () => {
-  for (const [spawner, seed] of growthProducers()) {
-    const fragment = buildGrow(spawner, seed);
+test("source free spawners do not invent generated context", async () => {
+  for (const [spawner, grow] of await growthProducers()) {
+    const fragment = buildGrow(spawner, grow.seed as JsonValue);
     expect([...fragment.nodes.values()].every((node) => node.originContext.length === 0)).toBe(true);
   }
 });
 
-test("compile builder propagates each spawner memory occurrence", () => {
-  const [[call, callSeed], [mapNode, mapSeed], [loop, loopSeed]] = growthProducers();
+test("compile builder propagates each spawner memory occurrence", async () => {
+  const [[call, callGrow], [mapNode, mapGrow], [loop, loopGrow]] = await growthProducers();
   const outer = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["outer"], 3);
   for (const spawner of [call, mapNode, loop]) {
     const child = copyGraph(spawner.child as Flow);
@@ -230,10 +241,10 @@ test("compile builder propagates each spawner memory occurrence", () => {
     }
   }
 
-  const callFragment = buildGrow(call, callSeed);
+  const callFragment = buildGrow(call, callGrow.seed as JsonValue);
   for (const node of callFragment.nodes.values()) expect(node.memoryScope!.occurrencePath).toEqual([outer]);
 
-  const mapFragment = buildGrow(mapNode, mapSeed);
+  const mapFragment = buildGrow(mapNode, mapGrow.seed as JsonValue);
   const mapItems = [...mapFragment.nodes]
     .filter(([nodeId]) => nodeId.includes("#"))
     .map(([, node]) => node.memoryScope!.occurrencePath.at(-1)!.index);
@@ -244,7 +255,7 @@ test("compile builder propagates each spawner memory occurrence", () => {
     expect([item.kind, item.staticPath]).toEqual([MemoryOccurrenceKind.MAP_ITEM, ["outer", "map"]]);
   }
 
-  const loopFragment = buildGrow(loop, loopSeed);
+  const loopFragment = buildGrow(loop, loopGrow.seed as JsonValue);
   const nextDriver = loopFragment.nodes.get("loop~1")!;
   expect(nextDriver.memoryScope!.occurrencePath).toEqual([outer]);
   for (const [nodeId, node] of loopFragment.nodes) {
@@ -276,8 +287,11 @@ test("nested map then call extends context only when inner expands", () => {
   expect(callFragment.nodes.get("each#0/sp/head")!.originContext).toEqual([outerOrigin, innerOrigin]);
 });
 
-test("compile builder reconstructs every growth kind", () => {
-  const [[call, callSeed], [mapNode, mapSeed], [loop, loopSeed]] = growthProducers();
+test("compile builder reconstructs every growth kind", async () => {
+  const [[call, callGrow], [mapNode, mapGrow], [loop, loopGrow]] = await growthProducers();
+  const callSeed = callGrow.seed as JsonObject;
+  const mapSeed = mapGrow.seed as JsonValue[];
+  const loopSeed = loopGrow.seed as JsonValue[];
 
   const callExpected = callSubgraph(call.child as Flow, call.id, { ...callSeed }, {
     postAsserts: call.postAsserts,
@@ -320,9 +334,9 @@ test.each([
     RangeError,
     "LOOP growth seed iteration must be at most 9007199254740991, got 9007199254740992",
   ],
-] as const)("compile builder marks only explicit legal seed rejection: %s", (_id, index, seed, cls, message) => {
+] as const)("compile builder marks only explicit legal seed rejection: %s", async (_id, index, seed, cls, message) => {
   // Malformed legal-kind seeds keep their typed rejection in one marker.
-  const spawner = growthProducers()[index][0];
+  const spawner = (await growthProducers())[index][0];
 
   let error: unknown;
   try {
@@ -354,9 +368,9 @@ test("compile builder keeps an unsupported kind outside growth rejection", () =>
   expect((error as Error).message).toBe("node 'unsupported' (code) cannot build graph growth");
 });
 
-test("compile builder preserves helper fault identity after seed validation", () => {
+test("compile builder preserves helper fault identity after seed validation", async () => {
   // Only seed validation marks rejection; compiler construction faults stay raw.
-  const call = growthProducers()[0][0];
+  const call = (await growthProducers())[0][0];
   const expected = new TypeError("compiler helper fault");
   Object.defineProperty(call.child, "inputConnections", {
     get() {
@@ -374,8 +388,9 @@ test("compile builder preserves helper fault identity after seed validation", ()
   expect(error).toBe(expected);
 });
 
-test("two builds of one spawner give equal fragments and leave its template unchanged", () => {
-  const [call, seed] = growthProducers()[0];
+test("two builds of one spawner give equal fragments and leave its template unchanged", async () => {
+  const [call, grow] = (await growthProducers())[0];
+  const seed = grow.seed as JsonValue;
   const template = (call.child as Flow).nodes.get(END_ID)!;
 
   const first = buildGrow(call, seed);

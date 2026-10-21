@@ -3,49 +3,61 @@
  * `tests/engine/test_loop_node.py`.
  *
  * Ported: `test_loop_is_a_spawner_kind`, `test_compiled_loop_origin_is_self`,
+ * `test_run_grows_iteration_zero_with_next_driver_when_continue`,
+ * `test_run_commits_seed_when_while_predicate_false`,
+ * `test_clone_driver_self_prunes_previous_body_and_self`,
  * `test_respawn_preserves_assertion_carriers`,
  * `test_respawn_preserves_the_full_output_contract_carrier`,
  * `test_respawn_preserves_the_derived_base_memory_scope`,
  * `test_respawn_defaults_omitted_fields_from_the_carried_record`,
+ * `test_respawned_driver_binds_merged_record`,
  * `test_partial_respawn_requires_the_carried_record`,
  * `test_respawn_keeps_a_null_omitted_value_as_its_default`, `test_total_respawn_keeps_params`,
- * `test_should_stop_is_the_max_iters_budget` and `test_should_stop_without_max_never_stops`.
+ * `test_until_do_while_continues_on_iteration_zero`, `test_times_stops_at_count`,
+ * `test_runaway_guard_raises_loop_max_exceeded`, `test_should_stop_is_the_max_iters_budget`,
+ * `test_should_stop_without_max_never_stops` and
+ * `test_unlimited_driver_far_past_any_cap_still_grows`.
  *
  * Changed: `NodeKind` is a const object of strings, so a member is its value and has no `.value`;
- * a trait is read on an instance, not the class. The child is a stub object, in place of
- * `_child_flow()`. Python ints in carried values are `bigint`.
+ * a trait is read on an instance, not the class. Where Python's driver needs only some child, the
+ * child is a stub object, in place of `object()` or `_child_flow()`. Python ints in carried values
+ * are `bigint`, and so is the iteration in a `Grow` seed (`[carried, 0n]`), which the log's JSON
+ * would refuse as a float. `run` is async, so its result is awaited and the guard's error is a
+ * rejection; the guard row also pins the message and the `loop.max_exceeded` code.
  *
  * TS-only: the other traits (`kind`, `isLoop`, `growDepthDelta`) on an instance; `exceptionCode`
  * classifies `LoopMaxExceeded` as `loop.max_exceeded` and defers a plain `Error` to
  * `node.execute`; `skippedOutputTarget()` is the origin id on a node built with `originId` and on a
- * respawned driver; a baked LOOP's `run` rejects as not ported yet; `respawn` refuses an execution
- * scope of another class and one that doesn't end in the driver's position, and moves a scope that
- * does to index `k`.
+ * respawned driver; `respawn` refuses an execution scope of another class and one that doesn't end
+ * in the driver's position, and moves a scope that does to index `k`; a `while:` that throws while
+ * evaluating, and an `until:` at `k >= 1`, is rethrown unchanged and classified
+ * `condition.evaluate` (Python: `node.execute`), and through `engine` the run's `NodeFailed` has
+ * that code at the LOOP's origin; a stopping driver reads a file's JSON form as a `FileRef` under
+ * an exact `ValueContract` and under a `PartialRecordContract`'s typed field, and leaves an untyped
+ * field as given (Python has no direct `_read_carried` row; the `run-loop` file cases cover it end
+ * to end).
  *
  * Covered elsewhere: `test_node_origin_id_defaults_none` (`base_node.test.ts`).
  *
  * Ported through `buildGrow`, the child a hand-built START -> head -> tail -> END flow (Python's
  * `_child_flow` from `test_expand.py`, written here):
- * `test_build_grow_rebuilds_body_and_next_driver_on_origin` and
- * `test_later_loop_growth_does_not_duplicate_the_loop_origin`.
- *
- * Later (T4-10): `test_run_grows_iteration_zero_with_next_driver_when_continue`,
- * `test_run_commits_seed_when_while_predicate_false`,
- * `test_clone_driver_self_prunes_previous_body_and_self`,
- * `test_respawned_driver_binds_merged_record`, `test_until_do_while_continues_on_iteration_zero`,
- * `test_times_stops_at_count`, `test_runaway_guard_raises_loop_max_exceeded`,
- * `test_unlimited_driver_far_past_any_cap_still_grows`, and (they compare with a live driver's
- * `run`) `test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte` and
- * `test_build_grow_partial_loop_matches_live_and_replay_digest`.
+ * `test_build_grow_rebuilds_body_and_next_driver_on_origin`,
+ * `test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte`,
+ * `test_later_loop_growth_does_not_duplicate_the_loop_origin` and
+ * `test_build_grow_partial_loop_matches_live_and_replay_digest`; the live `Grow`'s seed goes to
+ * `buildGrow` as it is, and the replay seed is the log's JSON with ints as `bigint`s.
  */
 
 import { expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
+import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { NodeFailed } from "../../src/events.ts";
+import { ExpressionError, evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import { MemoryScope } from "../../src/memory/contracts.ts";
-import { type Node, NodeKind } from "../../src/nodes/base.ts";
+import { Grow, type Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import {
   Assertion,
@@ -53,13 +65,16 @@ import {
   ExecutionPosition,
   ExecutionScope,
   Parameter,
+  PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
+import type { JsonValue } from "../../src/typesys/json.ts";
+import { FileRef, Type, ValueKind } from "../../src/typesys/values.ts";
+import { engine, graph } from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -358,7 +373,270 @@ test("a driver's skipped output targets its origin", () => {
   expect(new LoopNode("lp", { flowId: "f" }).skippedOutputTarget()).toBe("lp");
 });
 
-test("a baked loop's run rejects as not ported yet", async () => {
-  const node = new LoopNode("lp", { flowId: "f", child: {}, predicate: "not exited", maxIters: 3 });
-  await expect(node.run({ exited: false })).rejects.toThrow("node 'lp' (LoopNode) forward is not ported yet (T4-10)");
+/** A `while` driver `chat_loop` over `childFlow()` on `not exited`, its params the child START's. */
+function chatLoop(): LoopNode {
+  const child = childFlow();
+  const node = new LoopNode("chat_loop", {
+    flowId: "ct",
+    child,
+    predicateKind: "while",
+    predicate: "not exited",
+    maxIters: 1000,
+  });
+  node.params = child.nodes.get(child.startId)!.params;
+  return node;
+}
+
+/** Return what `promise` rejects with. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a rejection");
+}
+
+test("run grows iteration zero with next driver when continue", async () => {
+  const seed = { messages: [], exited: false };
+  const result = await chatLoop().run({ ...seed });
+  expect(result).toBeInstanceOf(Grow);
+  expect((result as Grow).seed).toEqual([seed, 0n]);
+  // k is 0: no previous body, and the origin never prunes itself.
+  expect((result as Grow).prune.size).toBe(0);
+  expect("subgraph" in (result as Grow)).toBe(false);
+});
+
+test("run commits seed when while predicate false", async () => {
+  const node = new LoopNode("chat_loop", {
+    flowId: "ct",
+    child: {},
+    predicateKind: "while",
+    predicate: "${exited}",
+    maxIters: 1000,
+  });
+  const seed = { messages: [], exited: false };
+  const result = await node.run({ ...seed });
+  expect(result).toBeInstanceOf(Output);
+  expect((result as Output).value).toEqual(seed);
+  expect((result as Output).commitAs).toBe("chat_loop");
+});
+
+test("clone driver self prunes previous body and self", async () => {
+  const node = chatLoop();
+  const clone = node.respawn(1);
+  clone.params = node.params;
+  expect([clone.id, clone.originId, clone.iteration]).toEqual(["chat_loop~1", "chat_loop", 1]);
+
+  const result = await clone.run({ messages: ["hi"], exited: false });
+
+  expect(result).toBeInstanceOf(Grow);
+  const { prune, seed } = result as Grow;
+  // The previous body (`chat_loop#0/...`) and this driver.
+  expect(prune.has("chat_loop~1")).toBe(true);
+  expect([...prune].some((id) => id.startsWith("chat_loop#0/"))).toBe(true);
+  expect(seed).toEqual([{ messages: ["hi"], exited: false }, 1n]);
+  expect("subgraph" in (result as Grow)).toBe(false);
+});
+
+test("respawned driver binds merged record", async () => {
+  const clone = partialLoop().respawn(1, { n: 1n, person: { name: "A" } });
+
+  const merged = await clone.run({ n: 2n });
+  expect(merged).toBeInstanceOf(Output);
+  expect((merged as Output).value).toEqual({ n: 2n, person: { name: "A" } });
+
+  const explicitNull = await clone.run({ n: 2n, person: null });
+  expect(explicitNull).toBeInstanceOf(Output);
+  expect((explicitNull as Output).value).toEqual({ n: 2n, person: null });
+});
+
+test("until do while continues on iteration zero", async () => {
+  const child = childFlow();
+  const node = new LoopNode("lp", { flowId: "f", child, predicateKind: "until", predicate: "x <= 0", maxIters: 10 });
+  node.params = child.nodes.get(child.startId)!.params;
+  // `until` stops on a true post-check; k 0 always continues.
+  expect(await node.run({ x: 5n })).toBeInstanceOf(Grow);
+});
+
+test("times stops at count", async () => {
+  const child = childFlow();
+  const node = new LoopNode("lp", { flowId: "f", child, predicateKind: "times", times: 3, maxIters: 3 });
+  node.params = child.nodes.get(child.startId)!.params;
+  const node3 = node.respawn(3);
+  node3.params = node.params;
+
+  const result = await node3.run({ x: 1n });
+
+  expect(result).toBeInstanceOf(Output);
+  expect((result as Output).commitAs).toBe("lp");
+});
+
+test("runaway guard raises loop max exceeded", async () => {
+  const child = childFlow();
+  // `max: 1` permits exactly one body run.
+  const origin = new LoopNode("lp", { flowId: "f", child, predicateKind: "while", predicate: "${x}", maxIters: 1 });
+  origin.params = child.nodes.get(child.startId)!.params;
+  // driver@0 grows body_0, within budget.
+  expect(await origin.run({ x: 1n })).toBeInstanceOf(Grow);
+  // driver@1 would grow the second body: over budget.
+  const driver = origin.respawn(1);
+  const error = await rejection(driver.run({ x: 1n }));
+  expect(error).toBeInstanceOf(LoopMaxExceeded);
+  expect((error as Error).message).toBe("loop 'lp' exceeded max (1)");
+  expect(driver.exceptionCode(error)).toBe("loop.max_exceeded");
+});
+
+test.each([["until", "${exited}"]] as const)(
+  "unlimited driver far past any cap still grows: %s %s",
+  async (kind, predicate) => {
+    const child = childFlow();
+    const origin = new LoopNode("chat_loop", { flowId: "ct", child, predicateKind: kind, predicate, maxIters: null });
+    origin.params = child.nodes.get(child.startId)!.params;
+    const driver = origin.respawn(100_000);
+    expect(driver.maxIters).toBeNull();
+
+    const result = await driver.run({ messages: [], exited: false });
+
+    expect(result).toBeInstanceOf(Grow);
+    expect(((result as Grow).seed as JsonValue[])[1]).toBe(100_000n);
+  },
+);
+
+test("buildGrow matches live clone and origin replay byte for byte", async () => {
+  // A live clone and the compiled origin's replay rebuild the same origin-keyed window.
+  const origin = grownLoop();
+  const clone = origin.respawn(2);
+
+  const liveOutcome = await clone.run({ x: 1n });
+  expect(liveOutcome).toBeInstanceOf(Grow);
+  const live = buildGrow(clone, (liveOutcome as Grow).seed as JsonValue);
+  // The log's canonical JSON turns the pair into a list.
+  const replay = buildGrow(origin, [{ x: 1n }, 2n]);
+
+  expect(live.startId).toBe(replay.startId);
+  expect(live.endId).toBe(replay.endId);
+  expect(new Set(live.nodes.keys())).toEqual(new Set(replay.nodes.keys()));
+  expect(live.edges).toEqual(replay.edges);
+  expect(live.wiring).toEqual(replay.wiring);
+  const [liveDriver, replayDriver] = [live.nodes.get("lp~3") as LoopNode, replay.nodes.get("lp~3") as LoopNode];
+  expect([liveDriver.originId, replayDriver.originId]).toEqual(["lp", "lp"]);
+  expect([liveDriver.iteration, replayDriver.iteration]).toEqual([3, 3]);
+});
+
+test("buildGrow partial loop matches live and replay digest", async () => {
+  // Live and replayed partial-loop growth build one fragment whose next driver keeps omitted fields.
+  const origin = new LoopNode("lp", {
+    flowId: "f",
+    child: childFlow(),
+    predicateKind: "while",
+    predicate: "${x}",
+    maxIters: 10,
+    returnedFields: ["x"],
+  });
+  origin.params = [new Parameter("x"), new Parameter("exited")];
+  const carried = { x: 1n, exited: false };
+  const clone = origin.respawn(2, carried);
+
+  const liveOutcome = await clone.run({ ...carried });
+  expect(liveOutcome).toBeInstanceOf(Grow);
+  const live = buildGrow(clone, (liveOutcome as Grow).seed as JsonValue);
+  const replay = buildGrow(origin, [{ x: 1n, exited: false }, 2n]);
+
+  expect(expansionDigest(live)).toBe(expansionDigest(replay));
+  const exited = live.nodes.get("lp~3")!.params!.find((param) => param.name === "exited")!;
+  expect(exited.hasDefault).toBe(true);
+  expect(exited.default).toBe(carried.exited);
+});
+
+test("a while: that throws while evaluating is rethrown unchanged as condition.evaluate", async () => {
+  const node = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "while", predicate: "n / 0 > 0" });
+  let direct: unknown;
+  try {
+    evaluateWhenRecord("n / 0 > 0", { n: 1n });
+  } catch (error) {
+    direct = error;
+  }
+
+  const error = await rejection(node.run({ n: 1n }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toBe((direct as Error).message);
+  expect(node.exceptionCode(error)).toBe("condition.evaluate");
+  // The code follows the thrown error itself, not its text.
+  expect(node.exceptionCode(new ExpressionError((error as Error).message))).toBe("node.execute");
+});
+
+test("an until: that throws at k >= 1 is rethrown unchanged as condition.evaluate", async () => {
+  const origin = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "until", predicate: "x > 0" });
+  let direct: unknown;
+  try {
+    evaluateWhenRecord("x > 0", { x: { a: 1n } });
+  } catch (error) {
+    direct = error;
+  }
+  const driver = origin.respawn(1);
+
+  const error = await rejection(driver.run({ x: { a: 1n } }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toBe((direct as Error).message);
+  expect(driver.exceptionCode(error)).toBe("condition.evaluate");
+});
+
+test("a failing predicate fails the run with condition.evaluate at the loop's origin", async () => {
+  const origin = new OriginRef("nodes/lp");
+  const loop = new LoopNode("lp", { flowId: "f", child: childFlow(), predicateKind: "while", predicate: "n / 0 > 0" });
+  loop.params = [new Parameter("n")];
+  loop.origin = origin;
+  const flow = graph([loop], [[START_ID, "lp"], ["lp", END_ID]], { wiring: { lp: { n: "${input.n}" } } });
+
+  const events = await engine(flow, { inputs: { n: 1n }, growBuilder: buildGrow }).run();
+
+  const failed = events.filter((event) => event instanceof NodeFailed);
+  expect(failed).toHaveLength(1);
+  const { failure } = failed[0] as NodeFailed;
+  expect(failure.code).toBe("condition.evaluate");
+  expect(failure.causeType).toBe("ExpressionError");
+  expect(failure.trace.at(-1)).toEqual(origin);
+});
+
+/** The object type `{f: file, n: int}`. */
+function fileRecordType(): Type {
+  return new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([
+      ["f", Type.scalar(ValueKind.FILE)],
+      ["n", Type.scalar(ValueKind.INTEGER)],
+    ]),
+    required: new Set(["f", "n"]),
+  });
+}
+
+/** A file's JSON form. */
+function fileForm(): Record<string, string | null> {
+  return { uri: "f", mime: null, name: null };
+}
+
+test("a stopping driver reads a file's JSON form as a FileRef under an exact contract", async () => {
+  const node = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "while", predicate: "false" });
+  node.outputContract = new ValueContract(fileRecordType());
+
+  const result = await node.run({ f: fileForm(), n: 1n });
+
+  expect(result).toBeInstanceOf(Output);
+  expect((result as Output).value).toStrictEqual({ f: new FileRef({ uri: "f" }), n: 1n });
+});
+
+test("a stopping driver reads a partial contract's typed field and leaves an untyped one", async () => {
+  const node = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "times", times: 0, maxIters: 0 });
+  node.outputContract = new PartialRecordContract([
+    ["f", new ValueContract(Type.scalar(ValueKind.FILE))],
+    ["g", null],
+  ]);
+
+  const result = await node.run({ f: fileForm(), g: fileForm() });
+
+  expect(result).toBeInstanceOf(Output);
+  expect((result as Output).value).toStrictEqual({ f: new FileRef({ uri: "f" }), g: fileForm() });
 });

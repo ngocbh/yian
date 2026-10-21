@@ -22,18 +22,21 @@
  * node also owns origin traversal for its cached body signature and exposes the baked body
  * through the source-neutral `originChildren` hook.
  *
- * Knows about:   nodes/base, nodes/contracts, expr, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/contracts, nodes/ids, expr, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
+import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import type { FeedbackValue } from "../../expr/index.ts";
-import { isRecord, normalizeFiles, type Value } from "../../typesys/values.ts";
+import { isRecord, normalizeFiles, setField, type Type, type Value, type ValueRecord } from "../../typesys/values.ts";
 import {
   type BackwardContext,
   BackwardResult,
+  Grow,
   Node,
   NodeKind,
+  Output,
   parseNamedCondition,
   projectStructuralFeedback,
 } from "../base.ts";
@@ -44,9 +47,12 @@ import {
   iterOriginCarrier,
   type OriginMapper,
   Parameter,
+  PartialRecordContract,
   rewriteOriginCarrier,
   sameExecutionPosition,
+  ValueContract,
 } from "../contracts.ts";
+import { mapCallsite, ns } from "../ids.ts";
 
 /**
  * The while/until runaway guard tripped (the loop would start more than `max` body runs).
@@ -59,6 +65,12 @@ import {
 export class LoopMaxExceeded extends Error {
   override name = "LoopMaxExceeded";
 }
+
+/**
+ * Each error a `while:`/`until:` predicate threw while evaluating, so the error itself stays
+ * unchanged. Python classifies it `node.execute`; JS has no traceback to tell it apart later.
+ */
+const failedPredicates = new WeakSet<object>();
 
 /**
  * A higher-order `('a -> 'a) -> 'a -> 'a` driver over a carried record.
@@ -189,9 +201,13 @@ export class LoopNode extends Node {
     return this.child === null ? [] : [this.child];
   }
 
-  /** Classify the runaway guard as `loop.max_exceeded`; defer everything else. */
+  /**
+   * Classify the runaway guard as `loop.max_exceeded` and a predicate that failed to evaluate as
+   * `condition.evaluate`; defer everything else.
+   */
   override exceptionCode(error: unknown): FailureCode {
     if (error instanceof LoopMaxExceeded) return "loop.max_exceeded";
+    if (isObject(error) && failedPredicates.has(error)) return "condition.evaluate";
     return super.exceptionCode(error);
   }
 
@@ -369,8 +385,91 @@ export class LoopNode extends Node {
     return value;
   }
 
-  /** The loop policy; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (LoopNode) forward is not ported yet (T4-10)`);
+  /**
+   * Own the whole loop policy: decide continue-vs-stop on the carried record, and on continue
+   * return a self-respawning `Grow` (body_k and a fresh `L~(k+1)` driver) that prunes this driver
+   * and the previous body.
+   *
+   * Stop rule (`k = this.iteration`, the index of the body about to run):
+   *   while: stop when the predicate is false on the carried record.
+   *   until: do-while; stop when `k >= 1` and the predicate is true (`k` 0 always continues).
+   *   times: stop when `k >= this.maxIters` (`times N` is baked as `maxIters`).
+   * On stop: `Output(carried, commitAs = origin)`. On continue: the runaway guard, only when
+   * `max:` is set, then `Grow([carried, k], prune)`, pruning body_{k-1} and this driver unless it
+   * is the origin. The reducer retires each body_{k-1} node with its whole grown subtree once
+   * every node in it is settled.
+   *
+   * @param inputs The carried record, keyed by the loop's input field names.
+   * @returns The stopping `Output` or the continuing `Grow`; the seed's iteration is a `bigint`.
+   * @throws LoopMaxExceeded when a `while`/`until` loop would start more than `max` body runs.
+   * @throws ExpressionError (unchanged) when the predicate fails to evaluate.
+   */
+  override forward(inputs: Record<string, unknown>): Output | Grow {
+    const origin = this.originId ?? this.id;
+    const carried = this.readCarried({ ...inputs } as ValueRecord);
+    const k = this.iteration;
+    if (this.shouldStopNow(carried, k)) return new Output(carried, { commitAs: origin });
+    // Guard on `shouldStop(k)`, not `k + 1`: driver@k grows body_k, the (k+1)-th body, which is
+    // within budget while `k < maxIters`, so `max: M` permits exactly M body runs. A `times` loop
+    // stops above instead.
+    if ((this.predicateKind === "while" || this.predicateKind === "until") && this.shouldStop(k)) {
+      throw new LoopMaxExceeded(`loop ${reprText(origin)} exceeded max (${this.maxIters})`);
+    }
+    const prune = new Set<string>();
+    if (k >= 1) {
+      for (const childId of (this.child as { nodes: ReadonlyMap<string, unknown> }).nodes.keys()) {
+        prune.add(ns(mapCallsite(origin, k - 1), childId));
+      }
+    }
+    // Self-prune, never the origin `L`.
+    if (this.id !== origin) prune.add(this.id);
+    return new Grow([carried, BigInt(k)], prune);
   }
+
+  /**
+   * Read the carried record through the loop's output contract.
+   *
+   * A field can reach the driver holding a file as its JSON form: a returned field bound from a
+   * whole-reference body output, since the body's END has no contract for it, and an omitted
+   * field the body doesn't take as input, since its carried default has no body parameter to read
+   * it through. Reading every typed field through the contract the record is committed under
+   * makes each `file` position a `FileRef` and each `object` position's nested files mappings, so
+   * the predicate reads every iteration alike. Untyped fields are read as given.
+   */
+  private readCarried(carried: ValueRecord): ValueRecord {
+    const contract = this.outputContract;
+    if (isExactly(contract, ValueContract)) return normalizeFiles(contract.type, carried) as ValueRecord;
+    if (isExactly(contract, PartialRecordContract)) {
+      const typed = new Map<string, Type>();
+      for (const [name, field] of contract.fields) if (field !== null) typed.set(name, field.type);
+      const read: ValueRecord = {};
+      for (const [name, value] of Object.entries(carried)) {
+        const type = typed.get(name);
+        setField(read, name, type === undefined ? value : normalizeFiles(type, value));
+      }
+      return read;
+    }
+    return carried;
+  }
+
+  /** Continue-vs-stop on the carried record at index `k`; see `forward` for the stop rule. */
+  private shouldStopNow(carried: ValueRecord, k: number): boolean {
+    if (this.predicateKind === "times") return this.shouldStop(k);
+    // Do-while: the seed is never tested.
+    if (this.predicateKind === "until" && k === 0) return false;
+    let truth: boolean;
+    try {
+      // The setup check has parsed the `while`/`until` predicate, a string.
+      truth = evaluateWhenRecord(this.predicate as string, carried, this.types);
+    } catch (error) {
+      if (isObject(error)) failedPredicates.add(error);
+      throw error;
+    }
+    return this.predicateKind === "while" ? !truth : truth;
+  }
+}
+
+/** Return whether `value` can be held in a `WeakSet`. */
+function isObject(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
 }

@@ -954,29 +954,43 @@ describe("run", () => {
     await expect(unreached).rejects.toBeInstanceOf(CaseFailure);
     await expect(unreached).rejects.toThrow("`host.steering.chat[1]` was never reached");
   });
-});
 
-describe("run memory", () => {
-  const made: string[] = [];
-  afterEach(() => {
-    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  /**
+   * A `run` case whose AGENT `answer` replies `a1` to `q`, declaring `agentMemory` when given, with
+   * `host.memory` set to `memory` and `expect.memory` to `expected`.
+   */
+  const MEMORY_CASE = (agentMemory: string, memory: string, expected: string) =>
+    "kind: run\nflow: |\n  id: tutor\n  name: tutor\n" +
+    "  llm_config: {provider: openai, model: gpt-5.5}\n" +
+    "  input:\n    q: !str\n  nodes:\n    answer:\n      kind: agent\n" +
+    (agentMemory ? `      long_term_memory: ${agentMemory}\n` : "") +
+    '      input: {q: "${input.q}"}\n      system_prompt: Tutor.\n      prompt: "${q}"\n' +
+    "      output: str\n  output: ${answer.output}\n" +
+    "inputs: {q: first}\nrun: {num_workers: 0}\n" +
+    `host:\n  memory: ${memory}\n` +
+    "  models: {answer: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
+    "parts: [{type: text, text: a1}]}}]}}\n" +
+    `expect: {output: {status: succeeded, output: a1}, memory: ${expected}}\n`;
+
+  // test_memory_expect_refuses_a_session_key
+  test("a session key in `expect.memory` fails the case when the runner reads it", async () => {
+    const read = runCase(MEMORY_CASE("{chat: session}", "{}", "{chat: ''}"));
+    await expect(read).rejects.toBeInstanceOf(CaseFailure);
+    await expect(read).rejects.toThrow("`expect.memory.chat` is a session memory");
   });
 
-  test("a `before` run with backward calls fails the case: RunResult.backward isn't run yet", async () => {
-    const case_ = prepare(checkCase(readCase(
-      "kind: run\nflow: |\n  id: m\n  name: m\n" +
-        "  llm_config: {provider: openai, model: gpt-5.5}\n" +
-        "  nodes:\n    chat:\n      kind: agent\n      prompt: Go.\n      output: str\n" +
-        "  output: ${chat.output}\n" +
-        "host:\n  memory:\n    before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: f}]}]\n" +
-        "expect: {output: {status: succeeded, output: done}}\n",
-    )));
-    const ctx = setUp(case_, join(tmpdir(), "none"));
-    made.push(ctx.dir);
-    const failed = RUNNERS.run!(case_, ctx);
+  test("a key the flow doesn't declare in `expect.memory` fails the case", async () => {
+    const read = runCase(MEMORY_CASE("", "{}", "{nope: ''}"));
+    await expect(read).rejects.toBeInstanceOf(CaseFailure);
+    await expect(read).rejects.toThrow("`expect.memory.nope` names no memory the flow declares");
+  });
+
+  test("a `before` entry with backward calls fails the case before any run", async () => {
+    const before = "{before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: f}]}]}";
+    const failed = runCase(MEMORY_CASE("", before, "{}"));
     await expect(failed).rejects.toBeInstanceOf(CaseFailure);
     await expect(failed).rejects.toThrow(
-      "`host.memory.before[0].backward` needs RunResult.backward, not in the TS runner yet",
+      "`host.memory.before[0].backward` is not supported by the TS runner yet",
     );
   });
 });

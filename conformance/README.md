@@ -341,8 +341,8 @@ A case can't hold code, so its host is declared under `host`.
   historical conversation` (the AGENT's summary prompt), else `structured_retry` when the
   request's last message is a user message starting `Your previous output was invalid:` (the
   correction a structured call adds after an invalid reply), else `compose` for a node id ending
-  in `__compose` and `agent` for any other. Every TS model call streams, so no `chunks` entry is summed; the text
-  chunks of an entry build one text part, ahead of its tool calls.
+  in `__compose` and `agent` for any other. Every TS model call streams, so no `chunks` entry is
+  summed; the text chunks of an entry build one text part, ahead of its tool calls.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
   <JSON Schema>}` (Python's schema:
   `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares

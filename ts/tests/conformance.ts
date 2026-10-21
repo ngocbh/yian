@@ -836,7 +836,8 @@ export function checkCase(case_: Case): Case {
     if (!Object.hasOwn(get(case_, "host", {}) as Case, "memory")) {
       throw new Error(`\`${key}.memory\` needs \`host.memory\``);
     }
-    if (Object.values(mapping(`${key}.memory`, expect["memory"])).some((text) => typeof text !== "string")) {
+    const texts = Object.values(mapping(`${key}.memory`, expect["memory"]));
+    if (texts.some((text) => typeof text !== "string")) {
       throw new Error(`\`${key}.memory\` values must be text`);
     }
   }
@@ -2158,7 +2159,8 @@ async function recall(memory: MemoryRegistry, key: string): Promise<string> {
  * Run each `host.memory.before` entry in order, logged to `before-<n>.jsonl` in the case
  * directory, with `options` and memories from `memories()`, closed after the run. Return the log
  * texts by where they are reported and each run's trace (grouped when the run is pooled). A raise
- * fails the case, and so does an entry with `backward`, which needs `RunResult.backward`.
+ * fails the case, and so does an entry with `backward` (before any run), which needs
+ * `RunResult.backward`.
  */
 async function beforeRuns(
   case_: Case,
@@ -2169,20 +2171,26 @@ async function beforeRuns(
 ): Promise<{ logs: Record<string, string>; traces: Value[][][] }> {
   const logs: Record<string, string> = {};
   const traces: Value[][][] = [];
-  const before = get(get(get(case_, "host", {}) as Case, "memory", {}) as Case, "before", []) as Case[];
+  const memory = get(get(case_, "host", {}) as Case, "memory", {}) as Case;
+  const before = get(memory, "before", []) as Case[];
+  // Checked before any run: backward calls need `RunResult.backward`, which isn't ported yet.
+  const learning = before.findIndex((entry) => Object.hasOwn(entry, "backward"));
+  if (learning !== -1) {
+    throw new CaseFailure(
+      `\`host.memory.before[${learning}].backward\` is not supported by the TS runner yet`,
+    );
+  }
   for (const [index, entry] of before.entries()) {
     const where = `host.memory.before[${index}]`;
-    if (Object.hasOwn(entry, "backward")) {
-      throw new CaseFailure(`\`${where}.backward\` needs RunResult.backward, not in the TS runner yet`);
-    }
     const log = join(ctx.dir, `before-${index + 1}.jsonl`);
     const run = entry["run"] as Case;
     try {
-      const memory = await memories();
+      const registry = await memories();
       try {
-        await runFlow(flow, get(entry, "inputs", {}) as Case, { ...options, ...runOptions(run), log, memory });
+        const inputs = get(entry, "inputs", {}) as Case;
+        await runFlow(flow, inputs, { ...options, ...runOptions(run), log, memory: registry });
       } finally {
-        await memory?.close();
+        await registry?.close();
       }
     } catch (error) {
       throw new CaseFailure(`\`${where}\` raised\n${failureText(error)}`);
@@ -2190,7 +2198,8 @@ async function beforeRuns(
     const text = readFileSync(log, "utf8");
     logs[`the log of \`${where}\``] = text;
     const lines = trace(text.split("\n").filter((line) => line !== ""), flow);
-    traces.push(isZero(get(run, "num_workers", 8n)) ? lines : grouped(lines, (record) => record[1] as string | null));
+    const isPooled = !isZero(get(run, "num_workers", 8n));
+    traces.push(isPooled ? grouped(lines, (record) => record[1] as string | null) : lines);
   }
   return { logs, traces };
 }
@@ -2214,11 +2223,17 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const spec = get(case_, "host", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
+  // The learners' events (TS-only, from `buildMemories`' `onEvent`) are never read: collected here
+  // so they stay out of the run's `events`, which `expect.events` compares.
   const apart: unknown[] = [];
   // A run without `host.memory` gets none, leaving the flow's declarations dormant.
   const memories = async (): Promise<MemoryRegistry | null> =>
     Object.hasOwn(spec, "memory")
-      ? buildMemories(flow, { root: join(ctx.dir, "memory"), models, onEvent: (event) => apart.push(event) })
+      ? buildMemories(flow, {
+          root: join(ctx.dir, "memory"),
+          models,
+          onEvent: (event) => apart.push(event),
+        })
       : null;
   // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
   const shared: RunFlowOptions = {

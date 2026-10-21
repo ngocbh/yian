@@ -496,6 +496,11 @@ def _check_host(host: object, kind: str) -> None:
                           required=("class", "message"))
                     if "retry_after" in error and error["class"] != "TransientToolError":
                         raise ValueError(f"`{at}.raise.retry_after` is for TransientToolError")
+                    seconds = error.get("retry_after", 0)
+                    # Finite, as a TS `TransientToolError` requires.
+                    if type(seconds) not in (int, float) or not 0 <= seconds < math.inf:
+                        raise ValueError(
+                            f"`{at}.raise.retry_after` must be a finite non-negative number")
     _check_models(host.get("models", {}))
     if "memory" in host:
         _check_memory(host["memory"])
@@ -4198,6 +4203,22 @@ def test_memory_checks() -> None:
     for message, change in problems.items():
         with pytest.raises(ValueError, match=re.escape(message)):
             _check({**base, **change})
+
+
+def test_retry_after_checks() -> None:
+    """A stub's `retry_after` is a finite non-negative number of seconds."""
+    def case(seconds: object) -> dict:
+        error = {"class": "TransientToolError", "message": "m", "retry_after": seconds}
+        tool = {"parameters": {"type": "object"}, "results": [{"raise": error}]}
+        return {"kind": "run", "flow": "x", "host": {"tools": {"t": tool}},
+                "expect": {"output": {"status": "succeeded", "output": "a"}}}
+
+    message = "`host.tools.t.results[0].raise.retry_after` must be a finite non-negative number"
+    for seconds in (None, "1", True, -1, -0.5, math.inf, math.nan):
+        with pytest.raises(ValueError, match=re.escape(message)):
+            _check(case(seconds))
+    for seconds in (0, 1, 0.5):
+        _check(case(seconds))
 
 
 def test_memory_expect_refuses_a_session_key(tmp_path: Path) -> None:

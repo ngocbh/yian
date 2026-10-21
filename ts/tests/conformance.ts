@@ -42,7 +42,18 @@ import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
-import type { Diagnostic } from "../src/diagnostics.ts";
+import {
+  compareCodeUnits,
+  type Diagnostic,
+  Failure,
+  type FailureCode,
+  OriginRef,
+  reprText,
+} from "../src/diagnostics.ts";
+import type { RunEvent, StreamChunk } from "../src/events.ts";
+import { EventStream } from "../src/llm/events.ts";
+import { checkModelConfig, resolveModelConfig } from "../src/llm_clients/connection.ts";
+import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import {
   constructorNames,
   evalExpr,
@@ -53,10 +64,21 @@ import {
 } from "../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
+import { virtualScheduler } from "../src/platform.ts";
+import { type RunFlowOptions, type RunResult, runFlow } from "../src/run.ts";
+import type { ToolContext } from "../src/tools/context.ts";
+import {
+  PermanentToolError,
+  ReportedToolError,
+  ToolCheckError,
+  TransientToolError,
+} from "../src/tools/errors.ts";
+import { tool } from "../src/tools/function_tools.ts";
+import type { AskUserHandler, AskUserRequest, ToolEntry } from "../src/tools/registry.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
-import type { JsonMode } from "../src/typesys/json.ts";
+import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
-import { buildValueAs, FileRef, isRecord } from "../src/typesys/values.ts";
+import { buildValueAs, FileRef, fromHost, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
 import { validate } from "./schema.ts";
 import type { Schema } from "./schema.ts";
@@ -203,6 +225,11 @@ function truthy(value: Value | undefined): boolean {
   return Boolean(value);
 }
 
+/** Return whether `value` is 0 in Python's `== 0` sense, under which 0.0 and false equal 0 too. */
+function isZero(value: Value | undefined): boolean {
+  return value === 0n || value === 0 || value === false;
+}
+
 /**
  * Return the case file `text` as YAML 1.2 core, untagged, with only text keys, each once.
  */
@@ -322,8 +349,16 @@ function checkHost(value: Value | undefined, kind: Kind): void {
           const error = keys(`${at}.raise`, step["raise"], raiseKeys, {
             required: ["class", "message"],
           });
-          if (Object.hasOwn(error, "retry_after") && error["class"] !== "TransientToolError") {
-            throw new Error(`\`${at}.raise.retry_after\` is for TransientToolError`);
+          if (Object.hasOwn(error, "retry_after")) {
+            if (error["class"] !== "TransientToolError") {
+              throw new Error(`\`${at}.raise.retry_after\` is for TransientToolError`);
+            }
+            const seconds = error["retry_after"];
+            const number = typeof seconds === "bigint" || typeof seconds === "number";
+            // Finite, as `TransientToolError` requires.
+            if (!number || !(seconds >= 0 && seconds < Infinity)) {
+              throw new Error(`\`${at}.raise.retry_after\` must be a finite non-negative number`);
+            }
           }
         }
       });
@@ -509,9 +544,7 @@ export function checkCase(case_: Case): Case {
     if (cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
       throw new Error("a `resume` case needs `host.crash_after_record`, a record number or `end`");
     }
-    // Python's `!= 0`, under which 0.0 and false equal 0 too.
-    const workers = get(run, "num_workers");
-    if (workers !== 0n && workers !== 0 && workers !== false) {
+    if (!isZero(get(run, "num_workers"))) {
       throw new Error("`host.crash_after_record` needs `run.num_workers: 0`");
     }
   }
@@ -690,9 +723,12 @@ export function compare(
 /**
  * TS error class names that differ from the case names, mapped to the case names. A change that
  * introduces such a class adds its entry here and the matching row to the error-class table in
- * `conformance/README.md`; empty while no class differs.
+ * `conformance/README.md`.
  */
-export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map();
+export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
+  // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
+  ["RangeError", "ValueError"],
+]);
 
 /**
  * Return `error` in the case's `raises` form: `{class, message}`, plus `path` for a
@@ -767,7 +803,7 @@ export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>
  */
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
   load: runLoad,
-  // run: not run yet
+  run: runRun,
   // resume: not run yet
   // backward: not run yet
   expr: runExpr,
@@ -1030,6 +1066,607 @@ async function runLoad(case_: Case, ctx: CaseContext): Promise<void> {
 }
 
 // ---- run ----
+
+/** The `runFlow` option each `run` key sets. */
+const RUN_OPTIONS: Readonly<Record<string, keyof RunFlowOptions>> = {
+  run_id: "runId",
+  num_workers: "numWorkers",
+  learnable: "learnable",
+  llm_config: "llmConfig",
+  context: "context",
+};
+
+/** Return the `run` arguments as `runFlow` options: an int as a JS number, `context` an object. */
+function runOptions(run: Case): RunFlowOptions {
+  return Object.fromEntries(
+    Object.entries(run).map(([key, value]) => [
+      RUN_OPTIONS[key],
+      key === "context" ? {} : typeof value === "bigint" ? Number(value) : value,
+    ]),
+  );
+}
+
+/** An error class a script's `raise` can name. */
+type ErrorClass = new (message: string, options?: ErrorOptions & { retryAfter?: number }) => Error;
+
+/** The classes a stub tool's `raise` can name; any other name is a plain `Error` of that name. */
+const TOOL_ERRORS: ReadonlyMap<string, ErrorClass> = new Map<string, ErrorClass>([
+  ["PermanentToolError", PermanentToolError],
+  ["TransientToolError", TransientToolError],
+  ["ReportedToolError", ReportedToolError],
+  ["ToolCheckError", ToolCheckError],
+]);
+
+/**
+ * Return the error a script's `raise` mapping `{class, message, retry_after}` names: an error of
+ * the class `classes` names, else a plain `Error` named `class` (`TimeoutError` and
+ * `ConnectionError` among them).
+ */
+function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): Error {
+  const name = error["class"] as string;
+  const message = error["message"] as string;
+  const Class = classes.get(name);
+  if (Class === undefined) return Object.assign(new Error(message), { name });
+  const options = Object.hasOwn(error, "retry_after") ? { retryAfter: Number(error["retry_after"]) } : {};
+  return new Class(message, options);
+}
+
+/** Return `name`, a camelCase field name, in snake_case. */
+function snakeCase(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Return an `ask_user` request as a case writes its `args`: snake_case keys, each question's
+ * too, null fields left out.
+ */
+function askUserArgs(request: AskUserRequest): Case {
+  const args: Case = {};
+  for (const [key, value] of Object.entries(request)) {
+    if (value === null) continue;
+    args[snakeCase(key)] =
+      key === "questions"
+        ? (value as Value[]).map((question) =>
+            isMapping(question)
+              ? Object.fromEntries(Object.entries(question).map(([name, item]) => [snakeCase(name), item]))
+              : question,
+          )
+        : (value as Value);
+  }
+  return args;
+}
+
+/** Return how many records the log file at `path` holds: the `nextSequence` of its next append. */
+function nextSequence(path: string): number {
+  return existsSync(path) ? readFileSync(path, "utf8").split("\n").length - 1 : 0;
+}
+
+/** A case's scripted host: what `runFlow` gets from it, what it records, and its check. */
+interface Host {
+  /** A stub per `host.tools` entry, and `ask_user` for `host.human`. */
+  tools: Record<string, ToolEntry>;
+  /** The draws retry backoffs take, from `host.jitter`; `null` for the implementation's own. */
+  random: (() => number) | null;
+  /** Builds every model the run calls; no call reaches a provider. */
+  models: ModelAccess;
+  /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
+  calls: Map<string, Case[]>;
+  /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
+  taken: { label: string; entry: Value; sequence: number }[];
+  /**
+   * Throw a `CaseFailure` when a script ran out or was missing; return a message per script with
+   * entries left.
+   */
+  check: () => string[];
+}
+
+/**
+ * Return the case's host: each stub tool call is recorded and takes its script's next entry, as
+ * each `ask_user` call takes the next `host.human` answer of its node and each backoff the next
+ * `host.jitter` draw. Every model the run builds, from `env` after its config is resolved and
+ * checked, fails the case when called. `log` is the run's log file.
+ */
+function host(case_: Case, log: string, env: Env): Host {
+  const spec = get(case_, "host", {}) as Case;
+  const calls = new Map<string, Case[]>();
+  const problems: string[] = [];
+  const taken: Host["taken"] = [];
+  const scripts = new Map<string, Value[]>(
+    Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
+      `host.human.${node}`,
+      [...(answers as Value[])],
+    ]),
+  );
+
+  const refuse = (problem: string, message: string): never => {
+    problems.push(problem);
+    // Permanent, so a TOOL node doesn't retry the overrun; a model call's overrun fails its
+    // AGENT. `check()` reports it either way.
+    throw new PermanentToolError(message);
+  };
+
+  const take = (label: string, what: string): Value => {
+    const script = scripts.get(label);
+    if (script === undefined) return refuse(`${what} found no \`${label}\` list`, `\`${label}\` is used up`);
+    if (script.length === 0) return refuse(`${what} found \`${label}\` used up`, `\`${label}\` is used up`);
+    const entry = script.shift()!;
+    taken.push({ label, entry, sequence: nextSequence(log) });
+    return entry;
+  };
+
+  const call = (name: string, label: string, ctx: ToolContext, args: Case): Value => {
+    const record = { args, call_id: ctx.callId, attempt: BigInt(ctx.attempt), node: ctx.node };
+    let list = calls.get(name);
+    if (list === undefined) calls.set(name, (list = []));
+    list.push(record);
+    return take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+  };
+
+  const tools: [string, ToolEntry][] = [];
+  for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
+    const stub = entry as Case;
+    const results = stub["results"];
+    const byNode = isMapping(results);
+    if (byNode) {
+      for (const [node, script] of Object.entries(results)) {
+        scripts.set(`host.tools.${name}.results.${node}`, [...(script as Value[])]);
+      }
+    } else {
+      scripts.set(`host.tools.${name}.results`, [...(results as Value[])]);
+    }
+    const execute = (args: Record<string, unknown>, ctx: ToolContext): unknown => {
+      const label = `host.tools.${name}.results${byNode ? `.${ctx.node}` : ""}`;
+      const step = call(name, label, ctx, args as Case) as Case;
+      if (Object.hasOwn(step, "return")) return step["return"];
+      throw scriptedError(step["raise"] as Case, TOOL_ERRORS);
+    };
+    const description = get(stub, "description", "") as string;
+    const isConcurrencySafe = stub["concurrency_safe"] === true ? () => true : null;
+    const parameters = stub["parameters"] as JsonObject;
+    tools.push([name, tool({ name, description, parameters, execute, isConcurrencySafe })]);
+  }
+  if (Object.hasOwn(spec, "human")) {
+    const askUser: AskUserHandler = (request, ctx) =>
+      call("ask_user", `host.human.${ctx.node}`, ctx, askUserArgs(request));
+    tools.push(["ask_user", askUser]);
+  }
+  let random: (() => number) | null = null;
+  if (Object.hasOwn(spec, "jitter")) {
+    scripts.set("host.jitter", [...(spec["jitter"] as Value[])]);
+    random = () => Number(take("host.jitter", "a backoff draw"));
+  }
+
+  // Installed even without `host.models`, so an unscripted model call never reaches a provider.
+  const models: ModelAccess = {
+    env,
+    createModel: (config, { nodeId }) => {
+      // The script replaces only the provider: the config is resolved and checked as yian's own
+      // factory does, so its errors stay yian's.
+      const values = fromHost(config, "llm_config") as Record<string, unknown>;
+      const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
+      const what = `a model call for \`agent\` from node ${reprText(nodeId)} found no \`host.models\` list`;
+      const stream = () => new EventStream({ next: () => refuse(what, what) });
+      return { provider: validated.provider!, model: validated.model!, stream };
+    },
+  };
+
+  const check = (): string[] => {
+    if (problems.length > 0) throw new CaseFailure(problems.join("\n"));
+    return [...scripts]
+      .filter(([, script]) => script.length > 0)
+      .map(([label, script]) => {
+        const entries = script.length === 1 ? "entry" : "entries";
+        return `\`${label}\` has ${script.length} ${entries} left`;
+      });
+  };
+  return { tools: Object.fromEntries(tools), random, models, calls, taken, check };
+}
+
+/** Return a run's `failure` in the case's failure form. */
+function failureForm(failure: Failure, flow: ComposedFlow): Case {
+  return { ...diagnosticForm(flow.diagnose(failure)), node: failure.nodeId };
+}
+
+/** The events and chunk whose `attempt` is left out when it is 1, as Python leaves it null. */
+const ATTEMPT_LEFT_OUT_AT_1: ReadonlySet<string> = new Set([
+  "ModelCallStarted", "ModelCallFinished", "StreamChunk",
+]);
+
+/**
+ * Return the data form of an event or stream chunk, without its null fields: its `toJSON()`, with
+ * a failure in failure form and every file as `{uri, mime, name}`.
+ */
+function fields(event: RunEvent, flow: ComposedFlow): Case {
+  const data: Case = {};
+  for (const [key, item] of Object.entries(event.toJSON())) {
+    if (item === null || (key === "attempt" && item === 1 && ATTEMPT_LEFT_OUT_AT_1.has(event.type))) continue;
+    const failure = key === "failure" ? (event as { failure: Failure }).failure : null;
+    data[key] = failure !== null ? failureForm(failure, flow) : dataForm(item as YianValue);
+  }
+  return data;
+}
+
+/** Return `event` as `[<EventName>]` or `[<EventName>, <data form>]`. */
+function eventForm(event: RunEvent, flow: ComposedFlow): Value[] {
+  const data = fields(event, flow);
+  return Object.keys(data).length > 0 ? [event.type, data] : [event.type];
+}
+
+// The README's trace table: record kind -> [the payload field naming the node, the payload fields
+// kept].
+type TraceRow = readonly [string | null, readonly string[]];
+const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
+  [
+    "run_started",
+    [
+      null,
+      ["inputs", "learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm"],
+    ],
+  ],
+  ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
+  ["run_stopped", [null, ["reason", "node_ids"]]],
+  ["node_started", ["node_id", []]],
+  ["node_step", ["node_id", ["step"]]],
+  ["node_succeeded", ["node_id", ["value", "commit_target", "forward_capture"]]],
+  ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
+  ["node_expanded", ["spawner_id", ["seed", "prune_ids", "forward_capture"]]],
+  ["node_failed", ["failure", ["failure", "forward_capture"]]],
+  ...["memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"].map(
+    (kind): [string, TraceRow] => [
+      kind,
+      [null, ["memory", "commit_id", "attempt_id", "mutations", "failure"]],
+    ],
+  ),
+  ["backward_started", [null, ["attempt_id", "feedback"]]],
+  ["backward_ready", [null, ["attempt_id", "root_result", "attributed_results", "proposals"]]],
+  ["backward_finished", [null, ["attempt_id", "outcome", "attributed_results"]]],
+]);
+const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
+  "defaults", "effective_llm_by_static_path", "call_time_llm",
+]);
+const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
+  "evaluated_keys", "items", "node_data", "input_names", "variable_names",
+]);
+const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
+  ["node_failed", "failure"],
+  ["node_routed", "terminal_failure"],
+]);
+
+/** Return a connection record with only its `method`, `source` and `endpoint`. */
+function cut(connection: Case): Case {
+  const names = ["method", "source", "endpoint"].filter((name) => Object.hasOwn(connection, name));
+  return Object.fromEntries(names.map((name) => [name, connection[name]!]));
+}
+
+/**
+ * Return an agent's LLM config projected to the trace: its `llm_config` fields (keys not
+ * starting with `_`), `_header_names` and `_host_key` stay, and its `_connection` is cut; any
+ * other `_` key is dropped.
+ */
+function llm(config: Case): Case {
+  const kept = Object.fromEntries(
+    Object.entries(config).filter(
+      ([key]) => !key.startsWith("_") || key === "_header_names" || key === "_host_key",
+    ),
+  );
+  const connection = get(config, "_connection") ?? null;
+  if (connection !== null) kept["_connection"] = cut(connection as Case);
+  return kept;
+}
+
+/** Return whether a route field holds its empty value, as Python's `in (None, [], 0, "")` reads. */
+function emptyRouteValue(value: Value): boolean {
+  // Python's `0` also equals `0.0` and `False`.
+  return (
+    value === null || value === "" || value === 0 || value === 0n || value === false ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+/** Return a `forward_capture` projected to the trace, changing it in place. */
+function capture(captured: Case): Case {
+  const route = (node: Case): Case => {
+    // `expression` and `result_type` are text each implementation spells its own way.
+    const lean: Case = Object.fromEntries(
+      Object.entries(node).filter(
+        ([key, value]) =>
+          key !== "expression" && key !== "result_type" && (key === "kind" || !emptyRouteValue(value)),
+      ),
+    );
+    if (Object.hasOwn(lean, "value_json")) {
+      lean["value_json"] = parseJson(lean["value_json"] as string, "codec") as Value;
+    }
+    if (Object.hasOwn(lean, "children")) lean["children"] = (lean["children"] as Case[]).map(route);
+    if (Object.hasOwn(lean, "snapshot")) lean["snapshot"] = route(lean["snapshot"] as Case);
+    return lean;
+  };
+  const data = get(captured, "node_data") ?? null;
+  if (isMapping(data) && (get(data, "effective_llm_config") ?? null) !== null) {
+    data["effective_llm_config"] = llm(data["effective_llm_config"] as Case);
+  }
+  captured["route"] = route(captured["route"] as Case);
+  for (const item of captured["items"] as Case[]) item["capture"] = capture(item["capture"] as Case);
+  return Object.fromEntries(
+    Object.entries(captured).filter(
+      ([key, value]) => truthy(value) || !CAPTURE_LEFT_OUT_WHEN_EMPTY.has(key),
+    ),
+  );
+}
+
+/** Return the run log's `lines` projected to the README's trace. */
+function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
+  const failure = (payload: Case): Case => {
+    const origins = (payload["trace"] as Case[]).map(
+      (origin) => new OriginRef(origin["key"] as string),
+    );
+    return failureForm(
+      new Failure({
+        code: payload["code"] as FailureCode,
+        message: payload["message"] as string,
+        nodeId: payload["node_id"] as string | null,
+        trace: origins,
+      }),
+      flow,
+    );
+  };
+  return lines.map((line) => {
+    // Read with the codec, so ints stay ints and floats floats. Each record is parsed afresh, so
+    // its payload is projected in place.
+    const record = parseJson(line, "codec") as Case;
+    const kind = record["kind"] as string;
+    const payload = record["payload"] as Case;
+    const row = TRACE.get(kind);
+    if (row === undefined) {
+      throw new CaseFailure(`the run log holds a \`${kind}\` record the trace has no row for`);
+    }
+    const [nodeField, kept] = row;
+    let node = nodeField === null ? null : (payload[nodeField] ?? null);
+    if (kind === "node_failed") node = (node as Case)["node_id"] ?? null;
+    if (kind === "run_started") {
+      const pool = payload["initial_pool"] as Case;
+      payload["inputs"] = ((pool["store"] as Case)[pool["start_id"] as string] as Case)["value"]!;
+      const effective = payload["effective_llm_by_static_path"] as Case;
+      payload["effective_llm_by_static_path"] = Object.fromEntries(
+        Object.entries(effective).map(([path, config]) => [path, llm(config as Case)]),
+      );
+      const callTime = get(payload, "call_time_llm") ?? null;
+      if (callTime !== null) {
+        // `selection` is internal; its effect is each agent's `effective_llm_config` step.
+        const agents = (callTime as Case)["agents"] as Case;
+        payload["call_time_llm"] = {
+          agents: Object.fromEntries(
+            Object.entries(agents).map(([path, config]) => [path, llm(config as Case)]),
+          ),
+        };
+      }
+    }
+    if (kind === "node_succeeded") {
+      payload["value"] = (payload["value"] as Case)["value"]!;
+      if (payload["commit_target"] === node) delete payload["commit_target"];
+    }
+    const key = FAILURE_FIELDS.get(kind);
+    if (key !== undefined && (payload[key] ?? null) !== null) {
+      payload[key] = failure(payload[key] as Case);
+    }
+    if ((get(payload, "forward_capture") ?? null) !== null) {
+      payload["forward_capture"] = capture(payload["forward_capture"] as Case);
+    }
+    if (kind === "node_step") {
+      const step = payload["step"] as Case;
+      if (Object.hasOwn(step, "retry_in")) step["retry_in"] = Number(step["retry_in"]);
+      if ((get(step, "effective_llm_config") ?? null) !== null) {
+        step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
+      }
+      // A failed step's error type goes through the error-class table.
+      const error = get(step, "error");
+      if (step["event"] === "failed" && isMapping(error) && typeof error["type"] === "string") {
+        error["type"] = ERROR_CLASSES.get(error["type"]) ?? error["type"];
+      }
+    }
+    if (kind === "backward_finished") {
+      const backward = get(payload["outcome"] as Case, "failure") ?? null;
+      if (backward !== null) {
+        const failed = backward as Case;
+        delete failed["cause_type"];
+        delete failed["traceback"];
+        // A backward failure's `cause` is a node failure when it has a `trace`.
+        const cause = failed["cause"];
+        if (isMapping(cause) && Object.hasOwn(cause, "trace")) failed["cause"] = failure(cause);
+      }
+    }
+    const projected = Object.fromEntries(
+      Object.entries(payload).filter(
+        ([name, value]) =>
+          kept.includes(name) && value !== null && !(LEFT_OUT_WHEN_EMPTY.has(name) && !truthy(value)),
+      ),
+    );
+    return Object.keys(projected).length > 0 ? [kind, node, projected] : [kind, node];
+  });
+}
+
+/** Return `result` in the form of `expect.output`. */
+function output(result: RunResult, flow: ComposedFlow): Case {
+  if (result.status === "succeeded") {
+    return { status: "succeeded", output: dataForm(result.output as YianValue) };
+  }
+  return { status: result.status, failure: failureForm(result.failure!, flow) };
+}
+
+/**
+ * Return `entries` with run-level ones (node `null`) first, then each node's, nodes sorted; each
+ * group keeps its order.
+ */
+function grouped<T>(entries: readonly T[], nodeOf: (entry: T) => string | null): T[] {
+  // `sort` is stable, so each group keeps its order.
+  return [...entries].sort((a, b) => {
+    const [first, second] = [nodeOf(a), nodeOf(b)];
+    if (first === null || second === null) return (first === null ? 0 : 1) - (second === null ? 0 : 1);
+    return compareCodeUnits(first, second);
+  });
+}
+
+/** Return `results` with the trace, events, stream and each tool's calls `grouped` by node. */
+function pooled(results: Record<string, unknown>): Record<string, unknown> {
+  // A `NodeFailed` belongs to its failure's node; run events have no `node_id`.
+  const eventNode = (event: Value[]): string | null => {
+    const data = (event[1] ?? {}) as Case;
+    const node = event[0] === "NodeFailed" ? (data["failure"] as Case)["node"] : data["node_id"];
+    return (node ?? null) as string | null;
+  };
+  const toolCalls = results["tool_calls"] as Record<string, Case[]>;
+  return {
+    ...results,
+    trace: grouped(results["trace"] as Value[][], (entry) => entry[1] as string | null),
+    events: grouped(results["events"] as Value[][], eventNode),
+    stream: grouped(results["stream"] as Case[], (chunk) => (get(chunk, "node_id") ?? null) as string | null),
+    tool_calls: Object.fromEntries(
+      Object.entries(toolCalls).map(([name, calls]) => [
+        name,
+        grouped(calls, (call) => call["node"] as string),
+      ]),
+    ),
+  };
+}
+
+/** The fields whose text values are ids an implementation makes up. */
+const ID_FIELDS: ReadonlySet<string> = new Set(["exchange_id", "commit_id", "mutation_id", "note_id"]);
+
+/**
+ * Return `results` with each made-up id in their text replaced by `<id:N>`.
+ *
+ * The ids are `runId` (unless `null`) and every text value of an `ID_FIELDS` key, numbered in
+ * order of first appearance walking `results` in their order, with mapping keys in UTF-16 order.
+ */
+function placeholders(results: Record<string, unknown>, runId: string | null): Record<string, unknown> {
+  const ids = new Set<string>(runId === null ? [] : [runId]);
+  const collect = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+    } else if (isMapping(value)) {
+      for (const [key, item] of Object.entries(value)) {
+        if (ID_FIELDS.has(key) && typeof item === "string" && item !== "") ids.add(item);
+        collect(item);
+      }
+    }
+  };
+  collect(results);
+  if (ids.size === 0) return results;
+  // Longest first, so an id that holds another is replaced whole.
+  const longestFirst = [...ids].sort((a, b) => b.length - a.length);
+  const escaped = longestFirst.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(escaped.join("|"), "g");
+  const numbers = new Map<string, number>();
+  const number = (id: string): number => {
+    if (!numbers.has(id)) numbers.set(id, numbers.size + 1);
+    return numbers.get(id)!;
+  };
+  const replace = (value: unknown): unknown => {
+    if (typeof value === "string") return value.replace(pattern, (id) => `<id:${number(id)}>`);
+    if (Array.isArray(value)) return value.map(replace);
+    if (isMapping(value)) {
+      const names = Object.keys(value).sort(compareCodeUnits);
+      return Object.fromEntries(names.map((name) => [name, replace(value[name])]));
+    }
+    return value;
+  };
+  return Object.fromEntries(Object.entries(results).map(([name, value]) => [name, replace(value)]));
+}
+
+/**
+ * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
+ * the case directory, its waits on a virtual clock that starts at the real current time. Return
+ * its results: `output`, or the host error as `raises` and `error` (never compared), and `left`, a
+ * message per script with entries left.
+ */
+async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
+  const flow = await loadText(case_["flow"] as string, ctx);
+  const log = join(ctx.dir, "run.jsonl");
+  const env = caseEnv(ctx);
+  const { tools, random, models, calls, check } = host(case_, log, env);
+  const run = get(case_, "run", {}) as Case;
+  const events: RunEvent[] = [];
+  const chunks: StreamChunk[] = [];
+  // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
+  const options: RunFlowOptions = {
+    ...runOptions(run),
+    log,
+    env,
+    tools,
+    random,
+    models,
+    scheduler: virtualScheduler(Date.now()),
+    onEvent: (event) => {
+      events.push(event);
+    },
+    onStream: (chunk) => {
+      chunks.push(chunk);
+    },
+  };
+  let result: RunResult | undefined;
+  let caught: Record<string, unknown> = {};
+  try {
+    result = await runFlow(flow, get(case_, "inputs", {}) as Case, options);
+  } catch (error) {
+    caught = { raises: raised(error), error };
+  }
+  // A call past a script's end is the case's own error, whatever it made differ.
+  const left = check();
+  const text = existsSync(log) ? readFileSync(log, "utf8") : "";
+  const lines = text.split("\n").filter((line) => line !== "");
+  // In placeholder order: ids are numbered walking the results in this order.
+  let actual: Record<string, unknown> = {
+    trace: trace(lines, flow),
+    events: events.map((event) => eventForm(event, flow)),
+    stream: chunks.map((chunk) => fields(chunk, flow)),
+    tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
+    ...(result !== undefined ? { output: output(result, flow) } : {}),
+  };
+  checkSecrets(case_, {
+    ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
+    "the run log": text,
+    "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
+  });
+  if (!isZero(get(run, "num_workers", 8n))) actual = pooled(actual);
+  const runId =
+    Object.hasOwn(run, "run_id") || lines.length === 0
+      ? null
+      : ((parseJson(lines[0]!, "codec") as Case)["run_id"] as string);
+  // A raised error is compared as is, without placeholders.
+  actual = placeholders(actual, runId);
+  return { ...actual, ...caught, left };
+}
+
+/**
+ * Throw a `CaseFailure` unless the results in `actual` are the ones `expect` holds: the raised
+ * error, or the output, which compares numbers by value for a success.
+ */
+function checkResults(expect: Case, actual: Record<string, unknown>): void {
+  if (Object.hasOwn(expect, "raises") && !Object.hasOwn(actual, "raises")) {
+    const expected = str(get(expect["raises"] as Case, "class"));
+    throw new CaseFailure(`expected ${expected} to be raised, but nothing was`);
+  }
+  if (Object.hasOwn(actual, "raises") && !Object.hasOwn(expect, "raises")) {
+    throw new CaseFailure(`unexpected error\n${failureText(actual["error"])}`);
+  }
+  if (Object.hasOwn(expect, "raises")) compare("raises", actual["raises"], expect["raises"]);
+  if (Object.hasOwn(expect, "output")) {
+    const form = actual["output"] as Case;
+    compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
+  }
+  for (const name of ["trace", "events", "stream", "tool_calls"]) {
+    // Only a run's events, stream and tool calls compare numbers by value; the trace keeps kinds.
+    const byValue = name !== "trace";
+    if (Object.hasOwn(expect, name)) compare(name, actual[name], expect[name], { byValue });
+  }
+  // Last: a leftover entry usually follows from a divergence the comparisons show.
+  const left = actual["left"] as string[];
+  if (left.length > 0) throw new CaseFailure(left.join("\n"));
+}
+
+/** Run a `run` case: run the flow and compare its results with `expect`. */
+async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
+  checkResults(case_["expect"] as Case, await actualRun(case_, ctx));
+}
 
 // ---- resume ----
 

@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, int-in-float]
 flow: |2
 
   id: f
@@ -29,16 +29,16 @@ expect:
   - - run_started
     - null
     - inputs:
-        x: 1.0
-        z: 0.0
+        x: 1
+        z: 0
       learnable: false
       num_workers: 0
   - [node_started, __start__]
   - - node_succeeded
     - __start__
     - value:
-        x: 1.0
-        z: 0.0
+        x: 1
+        z: 0
   - [node_started, v]
   - - node_failed
     - v
@@ -56,8 +56,8 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output:
-        x: 1.0
-        z: 0.0
+        x: 1
+        z: 0
   - - NodeStarted
     - node_id: v
   - - NodeFailed

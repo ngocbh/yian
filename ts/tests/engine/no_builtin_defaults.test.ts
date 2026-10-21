@@ -4,8 +4,10 @@
  * Ported: `test_each_layer_wins_over_lower_layers` (over `resolveLlmCascade`) and
  * `test_python_api_resolve_model_config_without_model`.
  *
- * Later (T4-8), since they run the flow: `test_no_model_anywhere_fails_before_any_node`,
- * `test_provider_without_model_names_that_provider`,
+ * In `run.test.ts` ("an AGENT with no provider fails before the log exists"), with the same
+ * checks: `test_no_model_anywhere_fails_before_any_node`.
+ *
+ * Later (T4-8), since they run the flow: `test_provider_without_model_names_that_provider`,
  * `test_synthesized_agent_without_model_names_its_llm_config`,
  * `test_run_records_the_layer_that_wins` and
  * `test_default_model_without_provider_is_named_only_when_needed`.

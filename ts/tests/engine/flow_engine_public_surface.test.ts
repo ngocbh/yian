@@ -20,7 +20,8 @@
  * TS-only: the constructor's other checks, the run's tool set bound to the run id and signal, a
  * terminal state returning no events, unfinished starts refused, a second `run()` refused, an
  * `onEvent` promise that rejects before the terminal result rejecting `run()` with its error, and
- * one that rejects after it being ignored, with nothing rejecting unhandled.
+ * one that rejects after it being ignored, with nothing rejecting unhandled; `stopForCallback`
+ * stopping a run with the given error and recording one `RunStopped`, and ignored after the result.
  *
  * Later (T4-10, T4-5): `test_direct_engine_executes_real_dynamic_combinators` (CALL, MAP and LOOP
  * growth). Later (T4-8): `test_flow_engine_is_not_exported_from_the_package_root`.
@@ -52,7 +53,7 @@ import { Node, type NodeCaps, NodeKind, type NodeResult } from "../../src/nodes/
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
-import { MemoryRunLog, NodeStartedRecord } from "../../src/runtime/log.ts";
+import { MemoryRunLog, NodeStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareNodeFailed, prepareNodeStarted, RunState } from "../../src/runtime/state.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import {
@@ -349,6 +350,35 @@ test("an onEvent promise that rejects before the terminal result rejects run wit
   expect(work.map((envelope) => envelope.record.constructor)).toEqual([NodeStartedRecord]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(unhandled).toEqual([]);
+});
+
+test("stopForCallback stops the run with that error", async () => {
+  const error = new Error("boundary listener failed");
+  const flow = graph([new WaitNode("work")], [
+    [START_ID, "work"],
+    ["work", END_ID],
+  ]);
+  const built = engine(flow, {
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeStarted && event.nodeId === "work") built.stopForCallback(error);
+    },
+  });
+
+  expect(await rejected(built.run())).toBe(error);
+  expect(built.signal.reason).toBe(error);
+  const stops = built.log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
+  expect(stops.map((record) => [record.reason, record.message, record.nodeIds])).toEqual([
+    ["callback", "boundary listener failed", ["work"]],
+  ]);
+});
+
+test("stopForCallback after the terminal result is ignored", async () => {
+  const built = engine(staticFlow(), { inputs: { x: 1n } });
+
+  expect((await built.run()).at(-1)).toEqual(new RunSucceeded({ output: 2n }));
+  built.stopForCallback(new Error("late"));
+  expect(built.signal.aborted).toBe(false);
+  expect(built.log.records().some(({ record }) => record instanceof RunStoppedRecord)).toBe(false);
 });
 
 test("an onEvent promise that rejects after the terminal result is ignored", async () => {

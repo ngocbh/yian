@@ -44,7 +44,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { BUILTIN, type Env, install } from "../../src/defaults.ts";
+import { BUILTIN, install } from "../../src/defaults.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
@@ -69,7 +69,7 @@ import {
   REDIRECT_LOCATION,
   startHttpServer,
 } from "../fixtures/mcp/fake_server.ts";
-import { killMarkers, stdioOptions, strayProcesses, trackServers } from "./mcp_helpers.ts";
+import { hostEnv, killMarkers, stdioOptions, strayProcesses, trackServers } from "./mcp_helpers.ts";
 
 // Process and HTTP tests get 15 s; the `< N s` assertions are the real check.
 const SLOW = 15_000;
@@ -531,12 +531,6 @@ describe("errors over HTTP", () => {
 });
 
 describe("runs", () => {
-  /** An environment holding `vars` and the credential store in the test's directory. */
-  function hostEnv(vars: Record<string, string> = {}): Env {
-    const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
-    return (name) => all.get(name);
-  }
-
   const RETRY_FLOW = `
 id: retry
 name: retry
@@ -562,7 +556,7 @@ output: \${call.output}
         const flow = await loadFlow(RETRY_FLOW.replace("TOOL", tool).replace("INPUT", args));
         const result = await runFlow(flow, {}, {
           tools: { fake: [...server.tools] },
-          env: hostEnv({ YIAN_TOOL_RETRY_DELAY_SECONDS: "0" }),
+          env: hostEnv(dir, { YIAN_TOOL_RETRY_DELAY_SECONDS: "0" }),
         });
         expect(result.status).toBe("failed");
         expect((await calls()) - before).toBe(attempts);
@@ -596,8 +590,8 @@ output: \${worker.output}
       const server = await fake().open();
       const result = await runFlow(flow, {}, {
         tools: { fake: [...server.tools] },
-        env: hostEnv(),
-        models: { env: hostEnv(), createModel: () => model },
+        env: hostEnv(dir),
+        models: { env: hostEnv(dir), createModel: () => model },
       });
       expect(result.failure).toBeNull();
       expect(result.output).toBe("gave up");

@@ -34,7 +34,6 @@ import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -44,7 +43,7 @@ import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
-import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
+import { expectClosed, hostEnv, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
 
 // Each row starts at least one server process; the default 5 s is too tight on a loaded machine.
 const SLOW = 30_000;
@@ -76,15 +75,9 @@ function fake(...flags: string[]): McpServer {
   return mcpServer(stdioOptions(...flags));
 }
 
-/** An environment with only the credential store in the test's directory. */
-function hostEnv(): Env {
-  const all = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
-  return (name) => all.get(name);
-}
-
-/** `runFlow` in `hostEnv()`, so no host variable or login decides a row. */
+/** `runFlow` in `hostEnv(dir)`, so no host variable or login decides a row. */
 function run(flow: ComposedFlow, tools: Readonly<Record<string, ToolEntry>>, options: RunFlowOptions = {}) {
-  return runFlow(flow, {}, { env: hostEnv(), tools, ...options });
+  return runFlow(flow, {}, { env: hostEnv(dir), tools, ...options });
 }
 
 /** A flow whose one TOOL node `call` calls `toolId` with the YAML mapping `inputs`. */
@@ -122,7 +115,7 @@ function callThenAnswer(name: string, args: JsonObject): ScriptedModel {
 
 /** A model access that serves `model` for every agent. */
 function serving(model: ScriptedModel): ModelAccess {
-  return { env: hostEnv(), createModel: () => model };
+  return { env: hostEnv(dir), createModel: () => model };
 }
 
 /** The tool results the model read in request `index`. */
@@ -140,14 +133,6 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
     return error as Error;
   }
   throw new Error("expected a rejection");
-}
-
-/** Expect the server closed and every process listed in `file` (if given) gone. */
-async function expectClosed(server: McpServer, file?: string): Promise<void> {
-  expect(server.isOpen).toBe(false);
-  if (file !== undefined) {
-    for (const pid of pids(file)) expect(await waitFor(() => !childAlive(pid), 5_000)).toBe(true);
-  }
 }
 
 /** The other-run error's message for `key`. */

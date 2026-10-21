@@ -3,6 +3,7 @@
  * `tests/engine/mcp_helpers.py`. They import no `bun:test`, so they also run built on Node.
  */
 
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
@@ -99,6 +100,25 @@ export async function waitFor(predicate: () => boolean | Promise<boolean>, ms: n
 export function strayProcesses(): string[] {
   const listing = spawnSync("ps", ["-eo", "pid,command"], { encoding: "utf8" }).stdout;
   return listing.split("\n").filter((line) => line.includes(FAKE_SOURCE) || line.includes(FAKE_BUILT));
+}
+
+/**
+ * An environment holding `vars` and only the credential store in `dir`, so no host variable or
+ * login decides a row.
+ */
+export function hostEnv(dir: string, vars: Readonly<Record<string, string>> = {}): (name: string) => string | undefined {
+  const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
+  return (name) => all.get(name);
+}
+
+/** Assert the server closed and every process listed in `file` (if given) gone. */
+export async function expectClosed(server: { readonly isOpen: boolean }, file?: string): Promise<void> {
+  assert.equal(server.isOpen, false);
+  if (file !== undefined) {
+    for (const pid of pids(file)) {
+      assert.ok(await waitFor(() => !childAlive(pid), 5_000), `pid ${pid} is still running`);
+    }
+  }
 }
 
 /** Servers a test opened, to close in `afterEach`. */

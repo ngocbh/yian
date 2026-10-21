@@ -27,13 +27,12 @@ import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import { readRunLog } from "../../src/runtime/log.ts";
 import { type McpServer, mcpServer } from "../../src/tools/mcp.ts";
-import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
+import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
 
 // Bounds that keep a hang from stalling the suite; a clean stop takes well under a second.
 const SLOW = 30_000;
@@ -79,15 +78,9 @@ nodes:
 output: \${worker.output}
 `;
 
-/** An environment with only the credential store in the test's directory. */
-function hostEnv(): Env {
-  const all = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
-  return (name) => all.get(name);
-}
-
-/** `runFlow` in `hostEnv()`, so no host variable or login decides a row. */
+/** `runFlow` in `hostEnv(dir)`, so no host variable or login decides a row. */
 function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
-  return runFlow(flow, inputs, { env: hostEnv(), ...options });
+  return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
 /** An unopened fake server over stdio, its pid appended to a fresh marker file. */
@@ -118,14 +111,6 @@ async function stopAfterCall(server: McpServer, stop: AbortController): Promise<
   await new Promise((resolve) => setTimeout(resolve, 500));
   stop.abort(new Error("stopped"));
   return performance.now();
-}
-
-/** Expect the server closed and every process listed in `file` (if given) gone. */
-async function expectClosed(server: McpServer, file?: string): Promise<void> {
-  expect(server.isOpen).toBe(false);
-  if (file !== undefined) {
-    for (const pid of pids(file)) expect(await waitFor(() => !childAlive(pid), 5_000)).toBe(true);
-  }
 }
 
 for (const numWorkers of [0, 8]) {
@@ -201,7 +186,7 @@ for (const numWorkers of [0, 8]) {
         const outcomeB = settled(
           run(flow, { seconds: 1.5 }, { numWorkers, tools: { fake: server }, signal: stopB.signal }),
         );
-        await waitFor(() => callsInFlight(server) >= 2, 20_000);
+        expect(await waitFor(() => callsInFlight(server) >= 2, 20_000)).toBe(true);
         const stoppedAt = await stopAfterCall(server, stopA);
         const a = await outcomeA;
         const b = await outcomeB;
@@ -242,7 +227,7 @@ for (const numWorkers of [0, 8]) {
             numWorkers,
             tools: { fake: server },
             signal: stop.signal,
-            models: { env: hostEnv(), createModel: () => model },
+            models: { env: hostEnv(dir), createModel: () => model },
           },
         ),
       );

@@ -1,7 +1,9 @@
 /**
  * The conformance runner's own unit tests: reading a case file, the format check, case values,
  * comparison, the case directory, selection and the report. Not a port of
- * `tests/test_conformance.py`, which `conformance.ts` is.
+ * `tests/test_conformance.py`, which `conformance.ts` is, except for
+ * `test_steering_unreached_action_fails`, which no case can cover: a passing case reaches every
+ * action.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -875,6 +877,47 @@ describe("setUp", () => {
     const bare = setUp({ kind: "cli" }, temp());
     made.push(bare.dir);
     expect(bare.env).toEqual({});
+  });
+});
+
+describe("run", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Run the `run` case file `text` with the runner's own `run` kind. */
+  async function runCase(text: string): Promise<void> {
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(tmpdir(), "none"));
+    made.push(ctx.dir);
+    await RUNNERS.run!(case_, ctx);
+  }
+
+  /**
+   * A `run` case of one steerable AGENT `chat` replying `done`, whose `host.steering` gives it the
+   * `actions`, expecting the output `output`.
+   */
+  const STEERING_CASE = (actions: string, output: string) =>
+    "kind: run\nflow: |\n  id: steer\n  name: steer\n" +
+    "  llm_config: {provider: openai, model: gpt-5.5}\n" +
+    "  nodes:\n    chat:\n      kind: agent\n      steerable: true\n      tools: []\n" +
+    "      system_prompt: Help.\n      prompt: Go.\n      output: str\n" +
+    "  output: ${chat.output}\n" +
+    "run: {num_workers: 0}\n" +
+    `host:\n  steering: {chat: ${actions}}\n  tools: {}\n` +
+    "  models: {chat: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
+    "parts: [{type: text, text: done}]}}]}}\n" +
+    `expect: {output: {status: succeeded, output: ${output}}}\n`;
+
+  // test_steering_unreached_action_fails
+  test("an action whose point the run never reaches fails the case after the comparisons", async () => {
+    const actions = "[{steer: [early]}, {after: {tool_call: 1}, interrupt: true}]";
+    // A divergence shows first.
+    await expect(runCase(STEERING_CASE(actions, "other"))).rejects.toThrow("output differs");
+    const unreached = runCase(STEERING_CASE(actions, "done"));
+    await expect(unreached).rejects.toBeInstanceOf(CaseFailure);
+    await expect(unreached).rejects.toThrow("`host.steering.chat[1]` was never reached");
   });
 });
 

@@ -557,17 +557,17 @@ function checkSteering(steering: Value | undefined): void {
 function checkAttempts(key: string, expect: Case): void {
   const isOne = (data: Value | undefined) =>
     isMapping(data) && (data["attempt"] === 1n || data["attempt"] === 1);
-  const refuse = (where: string) => {
+  const rejectAttemptOne = (where: string): never => {
     throw new Error(`\`${where}\` writes \`attempt: 1\`, which the data form leaves out`);
   };
   const events = get(expect, "events", []);
   (Array.isArray(events) ? events : []).forEach((event, index) => {
     const named = Array.isArray(event) && ATTEMPT_LEFT_OUT_AT_1.has(String(event[0]));
-    if (named && isOne(event[1])) refuse(`${key}.events[${index}]`);
+    if (named && isOne(event[1])) rejectAttemptOne(`${key}.events[${index}]`);
   });
   const stream = get(expect, "stream", []);
   (Array.isArray(stream) ? stream : []).forEach((chunk, index) => {
-    if (isOne(chunk)) refuse(`${key}.stream[${index}]`);
+    if (isOne(chunk)) rejectAttemptOne(`${key}.stream[${index}]`);
   });
 }
 
@@ -1383,17 +1383,15 @@ function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): E
 const CORRECTION = "Your previous output was invalid:";
 
 /**
- * Return the `[node, consumer]` a model call of node `nodeId` with `request` is scripted under:
+ * Return the consumer a model call of node `nodeId` with `request` is scripted under:
  * `structured_retry` for a structured call's attempts after its first (each ends in the
  * correction an invalid reply adds), else `compose` for a `<gate>__compose` node and `agent` for
  * any other.
  */
-function modelKey(nodeId: string, request: Request): [string, string] {
+function consumerOf(nodeId: string, request: Request): string {
   const last = request.messages.at(-1);
-  if (last?.role === "user" && last.text().startsWith(CORRECTION)) {
-    return [nodeId, "structured_retry"];
-  }
-  return [nodeId, nodeId.endsWith("__compose") ? "compose" : "agent"];
+  if (last?.role === "user" && last.text().startsWith(CORRECTION)) return "structured_retry";
+  return nodeId.endsWith("__compose") ? "compose" : "agent";
 }
 
 /** Return a case usage as a `Usage`. */
@@ -1460,12 +1458,6 @@ function v1Request(request: Request): Case {
   }
   if (request.outputFormat !== null) form["schema"] = request.outputFormat.schema as Case;
   return form;
-}
-
-/** Return how a model call's `request` differs from `expected`, or "" when it doesn't. */
-function requestDifference(what: string, expected: Value, request: Request): string {
-  // By value: TS holds a JSON number as a JS `number` whether it is written `1` or `1.0`.
-  return difference(what, v1Request(request), expected, { byValue: true });
 }
 
 /** A point of the run a `host.steering` action waits for: its `after`. */
@@ -1573,7 +1565,7 @@ async function* reaching(
 
 /**
  * Return a builder of chat models that serve each call the next `host.models` entry of its node
- * and consumer (`modelKey`), taken through `take` when the call is made. A call's request that
+ * and consumer (`consumerOf`), taken through `take` when the call is made. A call's request that
  * differs from its entry's `request` is added to `problems`. A call `take` refuses fails at its
  * stream's first read, as a provider's failure does. An `agent` call reaches its `inbox` points
  * (`reaching`).
@@ -1583,16 +1575,16 @@ function scriptedModels(
   problems: string[],
   inbox: Inbox,
 ): (provider: string, model: string, nodeId: string) => ChatModel {
-  const taken = new Map<string, number>();
+  const served = new Map<string, number>();
   return (provider, model, nodeId) => ({
     provider,
     model,
     stream: (request, options = {}) => {
-      const [node, consumer] = modelKey(nodeId, request);
-      const label = `host.models.${node}.${consumer}`;
+      const consumer = consumerOf(nodeId, request);
+      const label = `host.models.${nodeId}.${consumer}`;
       let entry: Case;
       try {
-        entry = take(label, `a model call for \`${consumer}\` from node ${reprText(node)}`) as Case;
+        entry = take(label, `a model call for \`${consumer}\` from node ${reprText(nodeId)}`) as Case;
       } catch (error) {
         return new EventStream({
           next: () => {
@@ -1600,19 +1592,20 @@ function scriptedModels(
           },
         });
       }
-      const index = (taken.get(label) ?? -1) + 1;
-      taken.set(label, index);
+      const index = (served.get(label) ?? -1) + 1;
+      served.set(label, index);
       if (Object.hasOwn(entry, "request")) {
         const what = `\`${label}[${index}].request\``;
-        const text = requestDifference(what, entry["request"]!, request);
+        // By value: TS holds a JSON number as a JS `number` whether it is written `1` or `1.0`.
+        const text = difference(what, v1Request(request), entry["request"]!, { byValue: true });
         if (text) problems.push(text);
       }
       const scriptedModel = new ScriptedModel([scriptedReply(entry)], { provider, model });
       const events = scriptedModel.stream(request, options);
-      const number = consumer === "agent" ? inbox.count(node, "model_call") : null;
+      const number = consumer === "agent" ? inbox.count(nodeId, "model_call") : null;
       if (number === null) return events;
       const reply = Object.hasOwn(entry, "reply");
-      return new EventStream(reaching(events, reply, inbox, [node, number]), () => events.close());
+      return new EventStream(reaching(events, reply, inbox, [nodeId, number]), () => events.close());
     },
   });
 }

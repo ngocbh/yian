@@ -21,8 +21,9 @@
  * `interruptedAttempts`; `_backward_handle` is a private field).
  * Later (T4-8): that test's `resume_flow` row.
  *
- * TS-only: the package root (`index.ts`) exports exactly design 6.11's root list, each the owning
- * module's export, and `yian/run` (`run.ts`) re-exports `BackwardOutcome` and `Steering`.
+ * TS-only: the package root (`index.ts`) exports exactly design 6.11's root list plus T6-3's
+ * storage names and `ToolAttemptsFailed`, each the owning module's export, and `yian/run`
+ * (`run.ts`) re-exports `BackwardOutcome` and `Steering`.
  */
 
 import { expect, test } from "bun:test";
@@ -151,7 +152,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(getters).toEqual(["learning", "backwardOutcome"]);
 });
 
-test("the package root exports exactly design 6.11's root list", () => {
+test("the package root exports exactly design 6.11's root list plus T6-3's storage names and ToolAttemptsFailed", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,

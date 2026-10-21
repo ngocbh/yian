@@ -2419,27 +2419,7 @@ the signal's reason and records a `RunStoppedRecord`, and an already-aborted sig
 the log is locked. `env` is the environment the resume reads connections, credentials and its
 `YIAN_*` values from; the run's recorded values must match it. `scheduler`, `random` and `models`
 are for tests, as for `runFlow`. Header names that aren't the recorded ones, a negative
-`numWorkers` and an invalid log prefix raise `RangeError`, not `ValueError`. A resume without the
-key fails each agent the log marks for it with `provider.auth` when the agent runs, a node failure
-whose message says to pass `api_key` again.
-
-### Reading a run log with `inspectRun`
-
-Changed (TS yian): `inspectRun(log, { flow, env })` reads where the run in a log stands without
-changing the file or taking its lock, and returns `{ status, inFlight, interruptedAttempts }`.
-`status` is `running` while a writer holds the log's lock, `succeeded` or `failed` once the run
-finished, `stopped` when the host stopped its last segment (a `RunStoppedRecord`), and otherwise
-`interrupted`, the process having ended without a stop; a run that is neither running nor finished
-can be resumed. `inFlight` lists the nodes started and not settled, in start order (`[]` for a
-finished run), and `interruptedAttempts` the attempts a resume counted as interrupted, plus, for a
-run that is neither running nor finished, one for each node in flight that no stop covers: what
-`resumeFlow` would count. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
-is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, the status is read
-from the records, which don't hold the ready nodes: a run whose process ended after the top-level
-END succeeded (or after a route proved END unreachable) but before a node already ready started
-reads as finished, though `resumeFlow` would still run that node. Pass the flow when you have it.
-An empty log with no writer raises `RangeError`, and a missing one the `fs` error with `code`
-`ENOENT`.
+`numWorkers` and an invalid log prefix raise `RangeError`, not `ValueError`.
 
 Recovery locks the existing file before reading it and validates the complete
 record prefix; a file whose complete lines are not a valid run log is rejected and
@@ -2601,6 +2581,24 @@ callback throws or rejects, the engine lets the nodes in flight wind down and ap
 naming them, with `reason` `signal` or `callback`. It isn't terminal: the stopped nodes are still
 in flight, a resume retries them after its `RunResumed`, and they aren't counted as interrupted.
 Between the stop and that resume only those nodes' steps are appended.
+
+### Reading a run log with `inspectRun`
+
+Changed (TS yian): `inspectRun(log, { flow, env })` reads where the run in a log stands without
+changing the file or taking its lock, and returns `{ status, inFlight, interruptedAttempts }`.
+`status` is `running` while a writer holds the log's lock, `succeeded` or `failed` once the run
+finished, `stopped` when the host stopped its last segment (a `RunStoppedRecord`), and otherwise
+`interrupted`, the process having ended without a stop; a run that is neither running nor finished
+can be resumed. `inFlight` lists the nodes started and not settled, in start order (`[]` for a
+finished run), and `interruptedAttempts` the attempts a resume counted as interrupted, plus, for a
+run that is neither running nor finished, one for each node in flight that no stop covers: what
+`resumeFlow` would count. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
+is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, the status is read
+from the records, which don't hold the ready nodes: a run whose process ended after the top-level
+END succeeded (or after a route proved END unreachable) but before a node already ready started
+reads as finished, though `resumeFlow` would still run that node. Pass the flow when you have it.
+An empty log with no writer raises `RangeError`, and a missing one the `fs` error with `code`
+`ENOENT`.
 
 ## Defaults and limits
 

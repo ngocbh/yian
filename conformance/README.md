@@ -690,9 +690,10 @@ counts a failing `pending` case as expected, fails a case whose kind it doesn't 
 1 when any case fails. On every `run` and `resume` case with a log it also checks the log's invariants
 (in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
 outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only). `--crash-sweep`
-also cuts each serial `run` case that expects `output` (and has no `host.models`, `host.steering`,
-`host.memory` or `host.stop`) after every record but the last, resumes it, and checks the output
-and node outcomes (when its host is deterministic) and the invariants.
+also cuts each serial `run` case that expects `output`, isn't `pending`, and has no `host.models`,
+`host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it, and
+checks the invariants, plus the output and node outcomes when the case has no `host.human` or
+`host.jitter` and its tool scripts only return.
 
 A `run` or `resume` case may have a **golden log**, `<name>.log.jsonl` beside it: the TS run log
 the case writes (for a `resume` case, the whole log after the resume), pinned byte for byte. Before
@@ -701,5 +702,5 @@ the comparison, every `traceback` value and the seeded clock values (`initial_po
 encoder, which gives back the line as written. Bun and Node write the same bytes. A golden log goes
 with a serial case that sets `run.run_id`, makes no random ids (no AGENT or memory), and holds no
 file paths; the error texts in it are a stub's or the runner's own (the stop's `conformance stop`).
-`--write-logs` (for development) writes the golden log of each selected `run` and `resume` case
-instead of comparing it. The Python runner ignores golden logs.
+`--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`
+and `resume` case instead of comparing it. The Python runner ignores golden logs.

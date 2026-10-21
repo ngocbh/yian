@@ -1384,7 +1384,8 @@ describe("main", () => {
 
   test("writes a golden log with --write-logs, then compares it byte for byte", async () => {
     const kinds = { run: RUNNERS.run! };
-    expect((await run(["--write-logs"], { "a/two.yaml": TWO_NODES }, {}, kinds)).code).toBe(0);
+    const written = await run(["--write-logs", "--case", "a/two"], { "a/two.yaml": TWO_NODES }, {}, kinds);
+    expect(written.code).toBe(0);
     const golden = readFileSync(join(roots.at(-1)!, "cases", "a", "two.log.jsonl"), "utf8");
     const lines = golden.trimEnd().split("\n");
     expect(lines).toHaveLength(9);
@@ -1400,6 +1401,13 @@ describe("main", () => {
     const { code, out } = await run([], changed, {}, kinds);
     expect(code).toBe(1);
     expect(out[0]).toBe("FAIL a/two: the run log differs from two.log.jsonl at record 8");
+  });
+
+  test("refuses --write-logs without --case", async () => {
+    const { code, out, err } = await run(["--write-logs"], { "a/two.yaml": TWO_NODES });
+    expect(code).toBe(2);
+    expect(out).toEqual([]);
+    expect(err[0]).toBe("--write-logs needs --case: name each case whose golden log to write");
   });
 
   test("sweeps an eligible run case with --crash-sweep", async () => {

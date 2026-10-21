@@ -1,4 +1,4 @@
-# TS-only (decision 20, choice 8): a host stop after fetch's first tool call records run_stopped with fetch in
+# TS-only (decision 20): a host stop after fetch's first tool call records run_stopped with fetch in
 # flight; the resume retries fetch, and its NodeAttemptResumed counts no interrupted attempt, since the stop covers
 # that start.
 kind: resume

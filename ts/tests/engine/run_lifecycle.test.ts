@@ -60,7 +60,7 @@
  * `node_started` (the child's CODE bodies wait 1 s, so the kill lands while that node runs). The
  * records-only `inspectRun` then reads `interrupted` with the killed node in flight, counted once,
  * and `resumeFlow` in the test process gives an uncut run's output and node outcomes
- * (`node_succeeded`, `node_routed`, `node_failed`, by node and value).
+ * (`node_succeeded`, `node_routed`, `node_failed`, by node and value or handle).
  *
  * Covered by a case: `test_terminal_resume_is_read_only_silent_and_unlocks[failed]` and
  * `test_terminal_resume_preserves_compose_failure_and_diagnosis`
@@ -1158,10 +1158,13 @@ output: \${both.output}
 
 /** The node outcomes of the log at `path`: kind, node and value (or route handle), in order. */
 function nodeOutcomes(path: string): unknown[] {
-  const kinds = new Set(["node_succeeded", "node_routed", "node_failed"]);
-  return readRunLog(path)
-    .filter((envelope) => kinds.has(envelope.kind))
-    .map(({ kind, payload }) => [kind, payload["node_id"], payload["value"] ?? payload["handle"] ?? payload["failure"]]);
+  return readRunLog(path).flatMap(({ kind, payload }) => {
+    if (kind === "node_succeeded") return [[kind, payload["node_id"], payload["value"]]];
+    if (kind === "node_routed") return [[kind, payload["node_id"], payload["handle"]]];
+    if (kind !== "node_failed") return [];
+    const failure = payload["failure"] as Readonly<Record<string, unknown>>;
+    return [[kind, failure["node_id"], failure]];
+  });
 }
 
 /** The number of complete lines in the file at `path`. */
@@ -1200,10 +1203,12 @@ console.log("finished");
   child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
   const closed = new Promise((resolve) => child.on("close", resolve));
+  // A function, so a check doesn't narrow the fields for the code after `kill`.
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
   try {
     const deadline = Date.now() + 10_000;
     for (;;) {
-      if (child.exitCode !== null) throw new Error(`the child exited before record ${k}:\n${output}`);
+      if (exited()) throw new Error(`the child exited before record ${k}:\n${output}`);
       let lines = 0;
       try {
         lines = lineCount(log);
@@ -1218,7 +1223,7 @@ console.log("finished");
     await closed;
     expect(child.signalCode).toBe("SIGKILL");
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
+    if (!exited()) {
       child.kill("SIGKILL");
       await closed;
     }

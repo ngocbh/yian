@@ -1151,7 +1151,7 @@ export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
   load: runLoad,
   run: runRun,
-  resume: runResume,
+  resume: runRun,
   // backward: not run yet
   expr: runExpr,
   value: runValue,
@@ -1266,8 +1266,8 @@ export interface MainOptions {
  * Run the cases the flags in `argv` select; report one `FAIL` line per failing case and a
  * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
- * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`
- * writes each `run` and `resume` case's golden log (`goldenLog`).
+ * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`,
+ * which needs `--case`, writes each selected `run` and `resume` case's golden log (`goldenLog`).
  */
 export async function main(
   argv: readonly string[],
@@ -1298,6 +1298,12 @@ export async function main(
       },
     }).values;
   } catch {
+    writeError(USAGE);
+    return 2;
+  }
+  // Pinning a golden log is a choice per case, never a whole suite's.
+  if (flags["write-logs"] === true && flags.case === undefined) {
+    writeError("--write-logs needs --case: name each case whose golden log to write");
     writeError(USAGE);
     return 2;
   }
@@ -1914,10 +1920,10 @@ function host(case_: Case, log: string, env: Env): Host {
       .concat(inbox.left());
   };
   const putBack = (last: number): void => {
-    for (const item of taken.filter(({ sequence }) => sequence > last).reverse()) {
-      scripts.get(item.label)!.unshift(item.entry);
-      taken.splice(taken.lastIndexOf(item), 1);
-    }
+    // Taken in `nextSequence` order, so the entries to put back are a tail.
+    const first = taken.findIndex(({ sequence }) => sequence > last);
+    if (first === -1) return;
+    for (const item of taken.splice(first).reverse()) scripts.get(item.label)!.unshift(item.entry);
   };
   return { tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, check };
 }
@@ -2233,29 +2239,39 @@ class Cut extends Error {
   override name = "Cut";
 }
 
-/** What `cutAt` returns for a run that resolved. */
+/** What `settle` returns for a run that resolved. */
 const ENDED = Symbol("ended");
 
-/**
- * Run `start` with every append refused once the log holds record `last` (none refused when
- * `null`); return what it rejected with, or `ENDED`, and the `Cut` a refused append throws.
- */
-async function cutAt(last: number | null, start: () => Promise<unknown>): Promise<[unknown, Cut]> {
-  const append = JsonlRunLog.prototype.append;
-  const refused = new Cut("the conformance runner refused this append");
-  if (last !== null) {
-    JsonlRunLog.prototype.append = function (this: JsonlRunLog, record) {
-      if (this.nextSequence > last) throw refused;
-      return append.call(this, record);
-    };
-  }
+/** Return what `start` rejects with, or `ENDED` when it resolves. */
+async function settle(start: () => Promise<unknown>): Promise<unknown> {
   try {
     await start();
-    return [ENDED, refused];
+    return ENDED;
   } catch (error) {
-    return [error, refused];
+    return error;
+  }
+}
+
+/**
+ * Run `start` with every append refused once the log holds record `last`; throw a `CaseFailure`
+ * (`at` saying where) unless it rejects with that refusal.
+ */
+async function cutAt(last: number, start: () => Promise<unknown>, at = ""): Promise<void> {
+  const append = JsonlRunLog.prototype.append;
+  const refused = new Cut("the conformance runner refused this append");
+  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record) {
+    if (this.nextSequence > last) throw refused;
+    return append.call(this, record);
+  };
+  let outcome: unknown;
+  try {
+    outcome = await settle(start);
   } finally {
     JsonlRunLog.prototype.append = append;
+  }
+  if (outcome === ENDED) throw new CaseFailure(`the run ended before record ${last + 1}${at}`);
+  if (outcome !== refused) {
+    throw new CaseFailure(`the run raised before record ${last + 1}${at}\n${failureText(outcome)}`);
   }
 }
 
@@ -2427,17 +2443,17 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   inbox.armed = true;
   if (case_["kind"] === "resume") {
     const last = get(spec, "crash_after_record");
-    const [outcome, refused] = await cutAt(typeof last === "bigint" ? Number(last) : null, start);
-    const raisedText = () => failureText(outcome);
-    if (stop !== null) {
-      if (outcome === ENDED) throw new CaseFailure("the run ended before its `host.stop` point");
-      if (outcome !== stop.error) throw new CaseFailure(`the run raised before its stop\n${raisedText()}`);
-    } else if (last === "end") {
-      if (outcome !== ENDED) throw new CaseFailure(`the run raised before its end\n${raisedText()}`);
+    if (typeof last === "bigint") {
+      await cutAt(Number(last), start);
     } else {
-      const next = `record ${(last as bigint) + 1n}`;
-      if (outcome === ENDED) throw new CaseFailure(`the run ended before ${next}`);
-      if (outcome !== refused) throw new CaseFailure(`the run raised before ${next}\n${raisedText()}`);
+      const outcome = await settle(start);
+      if (stop !== null && outcome === ENDED) {
+        throw new CaseFailure("the run ended before its `host.stop` point");
+      }
+      if (outcome !== (stop === null ? ENDED : stop.error)) {
+        const before = stop === null ? "its end" : "its stop";
+        throw new CaseFailure(`the run raised before ${before}\n${failureText(outcome)}`);
+      }
     }
     events.length = 0;
     chunks.length = 0;
@@ -2581,14 +2597,6 @@ function goldenLog(log: string, ctx: CaseContext): void {
   throw new CaseFailure(`the run log differs from ${basename(golden)} at record ${at}\n${lines}`);
 }
 
-/** Return the records of the log file at `path`, read with the codec. */
-function logRecords(path: string): Case[] {
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => parseJson(line, "codec") as Case);
-}
-
 /**
  * Throw a `CaseFailure` naming the first invariant the run log at `log` breaks (`at` says where in
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
@@ -2609,15 +2617,13 @@ async function checkInvariants(
   const fail = (problem: string): never => {
     throw new CaseFailure(`invariant${at}: ${problem}`);
   };
-  const records = logRecords(log);
-  if (records.length === 0) return;
+  const envelopes = readRunLog(log);
+  if (envelopes.length === 0) return;
   const inFlight = new Set<string>();
   let workers = 1;
   let stopped = false;
   let lastRun = -1;
-  records.forEach((record, seq) => {
-    const kind = record["kind"] as string;
-    const payload = record["payload"] as Case;
+  envelopes.forEach(({ kind, payload }, seq) => {
     if (stopped && kind !== "node_step" && kind !== "run_resumed") {
       fail(`record ${seq} (${kind}) follows a run_stopped`);
     }
@@ -2630,18 +2636,19 @@ async function checkInvariants(
     if (kind === "node_started") inFlight.add(payload["node_id"] as string);
     if (kind === "node_succeeded" || kind === "node_routed") inFlight.delete(payload["node_id"] as string);
     if (kind === "node_expanded") inFlight.delete(payload["spawner_id"] as string);
-    if (kind === "node_failed") inFlight.delete((payload["failure"] as Case)["node_id"] as string);
+    if (kind === "node_failed") inFlight.delete((payload["failure"] as Readonly<Case>)["node_id"] as string);
     if (inFlight.size > workers) {
       fail(`${inFlight.size} nodes are in flight after record ${seq}, over ${workers}`);
     }
     if (!kind.startsWith("backward_") && !kind.startsWith("memory_")) lastRun = seq;
   });
-  const envelopes = readRunLog(log);
   const replay = (count: number) =>
     withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes.slice(0, count))));
   // A terminal result is never undone, so checking the prefix before the last run record covers
   // every record after it.
   if (lastRun > 0 && replay(lastRun).result !== null) fail(`record ${lastRun} follows the terminal outcome`);
+  // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
+  // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
@@ -2659,8 +2666,8 @@ async function checkInvariants(
   });
   compare(`inspectRun with the flow${at}`, form(inspectRun(log, { flow, env: options.env })), expected);
   const blind = form(inspectRun(log));
-  const endSucceeded = records.some(
-    (record) => record["kind"] === "node_succeeded" && (record["payload"] as Case)["node_id"] === END_ID,
+  const endSucceeded = envelopes.some(
+    ({ kind, payload }) => kind === "node_succeeded" && payload["node_id"] === END_ID,
   );
   const corner =
     finished === null &&
@@ -2739,7 +2746,7 @@ export async function crashSweep(
     return trace(lines, flow).filter(([kind]) => OUTCOMES.has(kind as string));
   };
   const expected = outcomes(uncutLog);
-  const count = logRecords(uncutLog).length;
+  const count = readRunLog(uncutLog).length;
   for (let k = 0; k <= count - 2; k += 1) {
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
@@ -2747,11 +2754,7 @@ export async function crashSweep(
     const hooks = runHooks(case_, log, env, scripted, start);
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
-    const [outcome, refused] = await cutAt(k, cut);
-    if (outcome === ENDED) throw new CaseFailure(`the run ended before record ${k + 1}${at}`);
-    if (outcome !== refused) {
-      throw new CaseFailure(`the run raised before record ${k + 1}${at}\n${failureText(outcome)}`);
-    }
+    await cutAt(k, cut, at);
     scripted.putBack(k);
     const reopen = { env, tools: scripted.tools, models: scripted.models };
     await checkInvariants(flow, log, reopen, null, at);
@@ -2771,8 +2774,9 @@ export async function crashSweep(
 }
 
 /**
- * Run a `run` case: run the flow and compare its results with `expect`; with `--crash-sweep`, an
- * eligible case's crash sweep (`crashSweep`) runs after.
+ * Run a `run` or `resume` case (whose first run `actualRun` cuts or stops and resumes): run the
+ * flow and compare its results with `expect`; with `--crash-sweep`, an eligible case's crash sweep
+ * (`crashSweep`) runs after.
  */
 async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
   checkResults(case_["expect"] as Case, await actualRun(case_, ctx));
@@ -2781,10 +2785,7 @@ async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
 
 // ---- resume ----
 
-/** Run a `resume` case: its first run is cut or stopped and resumed (`actualRun`), as `runRun` does. */
-async function runResume(case_: Case, ctx: CaseContext): Promise<void> {
-  await runRun(case_, ctx);
-}
+// `resume` cases run through `runRun`: `actualRun` cuts or stops their first run and resumes it.
 
 // ---- backward ----
 

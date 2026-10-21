@@ -1,0 +1,80 @@
+/**
+ * Public flow integration for the built-in episodic-memory backend: mirrors
+ * `tests/engine/test_episodic_memory_integration.py`.
+ *
+ * Ported, through `runFlow` and `RunResult.backward`:
+ * `test_backward_commits_episode_recalled_by_a_fresh_run`. Changed: a `ScriptedModel` from
+ * `models` answers each run and the recalled sections are read from its request's system prompt
+ * (Python patches `run_agent` to read `context.memory_context`); the run's environment names the
+ * default model (conftest's in Python), since the flow names none.
+ */
+
+import { expect, test } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
+import type { Env } from "../../src/defaults.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { reply, runWith } from "./session_fakes.ts";
+
+const FLOW = `id: episodic-history
+name: episodic_history
+input:
+  topic: !str
+nodes:
+  answer:
+    kind: agent
+    long_term_memory:
+      episodic: {type: episodic, config: {max_episodes: 4, recall_limit: 2}}
+    input: {topic: "\${input.topic}"}
+    prompt: Explain \${topic}.
+    output: str
+output: \${answer.output}
+`;
+
+const ANSWER = "Use a queue to preserve arrival order.";
+
+const VARS = new Map([
+  ["YIAN_DEFAULT_PROVIDER", "openai"],
+  ["YIAN_DEFAULT_MODEL", "test-model"],
+]);
+const env: Env = (name) => VARS.get(name);
+
+/** The memory section texts the system prompt of `model`'s last request shows. */
+function recalled(model: ScriptedModel): string[] {
+  const system = model.requests.at(-1)!.messages[0]!.text();
+  if (!system.includes("Memory context (canonical JSON")) return [];
+  const payload = JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { text: string }[] };
+  return payload.sections.map((section) => section.text);
+}
+
+test("backward commits an episode recalled by a fresh run", async () => {
+  const flow = await loadFlow(FLOW);
+  const model = new ScriptedModel([reply(ANSWER), reply(ANSWER), reply(ANSWER)]);
+  const memory = new Map([["episodic", new EpisodicMemory()]]);
+  const inputs = { topic: "queue ordering" };
+
+  const first = await runWith(flow, inputs, memory, model, { learnable: true, env });
+  expect(first.status).toBe("succeeded");
+  expect(recalled(model)).toEqual([]);
+
+  // Forward retains the episode but does not update memory.
+  const beforeBackward = await runWith(flow, inputs, memory, model, { env });
+  expect(beforeBackward.status).toBe("succeeded");
+  expect(recalled(model)).toEqual([]);
+
+  const outcome = await first.backward();
+  expect(outcome.status).toBe("succeeded");
+  expect(outcome.learning).not.toBeNull();
+  expect(outcome.learning!.status).toBe("succeeded");
+
+  const later = await runWith(flow, inputs, memory, model, { env });
+  expect(later.status).toBe("succeeded");
+  expect(model.requests).toHaveLength(3);
+  const sections = recalled(model);
+  expect(sections).toHaveLength(1);
+  const episode = JSON.parse(sections[0]!).episode;
+  expect(episode.run_id).toBe(first.runId);
+  expect(episode.inputs).toEqual({ topic: "queue ordering" });
+  expect(episode.output).toBe(ANSWER);
+});

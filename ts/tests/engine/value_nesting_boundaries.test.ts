@@ -46,8 +46,10 @@
  * schema-missing native reply is stored `completed`, as a prompted one is (Python: `failed`, not
  * stored); the exhausted schema miss fails `agent.output_invalid`, as without memory.
  *
- * Later (T6-6, with RunResult.backward): the learning half of
- * `test_tool_arguments_at_the_limit_run_and_are_learned_from` (it learns from backward feedback).
+ * Ported through `runFlow` and `RunResult.backward`, with episodic memory from `buildMemories`:
+ * the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`. Changed: the
+ * backward runs at the test's own stack depth (Python lowers the recursion limit by 300 frames;
+ * JS has no such knob).
  *
  * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
  * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
@@ -67,10 +69,12 @@ import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
+import { buildMemories } from "../../src/memory_host.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
@@ -78,7 +82,7 @@ import { Type, type Value, ValueKind, VariablePool } from "../../src/typesys/ind
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadErrorAsync } from "../compose/declarations.ts";
 import { drive, serving } from "./run_state_fixtures.ts";
-import { effectsOf, runSessionFlow, sessionFlow } from "./session_fakes.ts";
+import { effectsOf, NO_ENV, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -225,10 +229,9 @@ test.each(ROWS)("a structured agent over the limit without retries fails (%s, %d
 
 // ---------- the tool loop's argument checks ----------
 
-/** A run with an AGENT `agent` granted a `lookup` tool that records its arguments. */
-function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) => void } = {}) {
-  const calls: unknown[] = [];
-  const lookup = new FunctionTool({
+/** A `lookup` tool that records the arguments of each call in `calls`. */
+function lookupTool(calls: unknown[]): FunctionTool {
+  return new FunctionTool({
     name: "lookup",
     description: "Look one thing up.",
     parametersJsonSchema: { type: "object", properties: { x: {}, q: {} } },
@@ -237,6 +240,12 @@ function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) =
       return "ok";
     },
   });
+}
+
+/** A run with an AGENT `agent` granted a `lookup` tool that records its arguments. */
+function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) => void } = {}) {
+  const calls: unknown[] = [];
+  const lookup = lookupTool(calls);
   const node = new AgentNode("agent", { prompt: "q", llmConfig: NATIVE, tools: ["lookup"] });
   const outcome = drive(node, {
     models: { env: () => undefined, createModel: () => model },
@@ -290,6 +299,45 @@ test("tool arguments at the limit run", async () => {
 
   expect(await outcome).toEqual(new Output("finished"));
   expect(calls).toEqual([{ q: atLimit }]);
+});
+
+test("tool arguments at the limit are learned from", async () => {
+  const flow = await loadFlow(`id: nesting
+name: nesting
+long_term_memory: episodic
+llm_config: {provider: openai, model: gpt-5.5}
+nodes:
+  w:
+    kind: agent
+    prompt: go
+    tools: [lookup]
+    output: str
+output: \${w.output}
+`);
+  const atLimit = nestRecord(99);
+  const call = new ToolCallPart({ id: "1", name: "lookup", arguments: { q: atLimit } as JsonObject });
+  const reflection = JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} });
+  const model = new ScriptedModel(
+    [partsReply(call), partsReply(new TextPart("finished")), reply(reflection)],
+    NATIVE,
+  );
+  const calls: unknown[] = [];
+  await using memory = await buildMemories(flow);
+  const result = await runFlow(flow, {}, {
+    memory,
+    learnable: true,
+    tools: { lookup: lookupTool(calls) },
+    models: serving(model),
+    env: NO_ENV,
+  });
+  expect([result.status, result.output]).toEqual(["succeeded", "finished"]);
+  expect(calls).toEqual([{ q: atLimit }]);
+
+  const outcome = await result.backward("good");
+
+  expect(outcome.status).toBe("succeeded");
+  expect(outcome.learning!.status).toBe("succeeded");
+  expect(model.requests).toHaveLength(3);
 });
 
 test("a too-deep later call of a streamed reply stops every call of the reply", async () => {

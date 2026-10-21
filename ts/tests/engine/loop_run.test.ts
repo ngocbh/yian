@@ -40,7 +40,7 @@
  * Changed:
  * - `test_body_failure_in_bounded_loop_keeps_the_body_code`: `causeType` is `"CodeError"`, not
  *   `"ValueError"`: TS wraps whatever a CODE body throws (the TS `boom` throws an `Error`) in a
- *   `CodeError` (T4-9).
+ *   `CodeError`, as `code_inline.test.ts` pins.
  * - `test_loop_body_blocks_for_each_human_turn`: TS has no `chat_fold` fixture; the body folds
  *   each message in an inline TS CODE body.
  * - `test_while_loop_predicate_runtime_error_fails_run`: a `while:` evaluation error is code

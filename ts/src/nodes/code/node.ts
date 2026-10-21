@@ -32,12 +32,13 @@
  * reading `<name>: <message>`; an inline body's is located at the authored line of its first body
  * frame when it has one, a reference's at the whole `code:` value. A result of `undefined` fails;
  * a result goes through host intake in the worker, and a value intake refuses fails
- * `contract.output`. A worker that exits before the body returns (`process.exit`, or a body
- * awaiting a promise nothing can resolve) rejects with its exit code. A body shouldn't leave work
- * running after it returns: a late error from it fails the call its thread runs then, or is
- * printed as a console error line when the thread is idle, and the thread is retired. The worker
- * forwards the code's `console` calls to this thread's `console`. The built-in identity returns
- * its field as bound, with no worker.
+ * `contract.output`. A worker that exits before the body returns rejects with its exit code: a
+ * `process.exit`, or a body awaiting a promise nothing can resolve when no earlier body on its
+ * thread left work running (a `setInterval`, say); otherwise that body waits until it is stopped.
+ * A body shouldn't leave work running after it returns: a late error from it fails the call its
+ * thread runs then, or is printed as a console error line when the thread is idle, and the thread
+ * is retired. The worker forwards the code's `console` calls to this thread's `console`. The
+ * built-in identity returns its field as bound, with no worker.
  *
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
  * there is no injection vector into the code itself, and running it is the same capability
@@ -201,7 +202,10 @@ function bodyLine(error: unknown, nodeId: string): number | null {
  */
 export class CodeError extends Error {
   override name = "CodeError";
-  /** The value the code threw, as rebuilt from the worker's copy (`rebuildError`). */
+  /**
+   * A copy of what the code threw, rebuilt from the worker's reply: an `Error` (`rebuildError`), a
+   * yian value, or the thrown value's text.
+   */
   readonly original: unknown;
 
   /** Wrap `original`, also kept as the `cause`. */
@@ -348,7 +352,8 @@ function startWorker(): CodeWorker {
  *
  * @throws The signal's reason when `signal` aborts first; the worker is terminated before this
  *   rejects.
- * @throws Error when the worker exits before it replies, or fails to start or to send.
+ * @throws Error when the worker exits before it replies, or fails to start.
+ * @throws The clone's error when `job` can't be sent; the worker is retired.
  */
 function runInWorker(job: CodeJob, signal: AbortSignal | undefined): Promise<CodeReply> {
   return new Promise((resolve, reject) => {
@@ -373,7 +378,12 @@ function runInWorker(job: CodeJob, signal: AbortSignal | undefined): Promise<Cod
     signal?.addEventListener("abort", onAbort, { once: true });
     entry.call = call;
     entry.worker.ref();
-    entry.worker.postMessage({ ...job, id: call.id });
+    try {
+      entry.worker.postMessage({ ...job, id: call.id });
+    } catch (error) {
+      // A job the clone refuses (a function input from a direct caller) never reaches the worker.
+      retire(entry)?.reject(error);
+    }
   });
 }
 

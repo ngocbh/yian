@@ -53,7 +53,8 @@
  * with the worker's exit code, and the next call still works; a late timer throw rejects as a
  * `CodeError`; the worker uses the caller's `withEnv` values (a refused result's path is cut to a
  * small shown-value cap); two serial calls reuse one thread (a global set by the first is seen by
- * the second); a call after an aborted call still works; and a late error from an earlier body
+ * the second); a call after an aborted call still works; an input the clone refuses rejects,
+ * leaves no abort listener on the signal, and the next call works; and a late error from an earlier body
  * while its worker is idle prints a console error line and doesn't fail the next call.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
@@ -67,6 +68,7 @@
  */
 
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
+import { getEventListeners } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -655,8 +657,9 @@ test("a late timer throw rejects as a CodeError", async () => {
 test("two serial calls reuse one thread", async () => {
   const body = "globalThis.yianCount = (globalThis.yianCount ?? 0) + 1\nreturn globalThis.yianCount";
 
-  expect(await run(body)).toBe(1n);
-  expect(await run(body)).toBe(2n);
+  // An earlier row may have run this body on the popped thread, so only the step is fixed.
+  const first = (await run(body)) as bigint;
+  expect(await run(body)).toBe(first + 1n);
 });
 
 test("a call after an aborted call still works", async () => {
@@ -668,6 +671,17 @@ test("a call after an aborted call still works", async () => {
   setTimeout(() => controller.abort(reason), 50);
 
   expect(await pending).toBe(reason);
+  expect(await run("return 2")).toBe(2n);
+});
+
+test("an input the clone refuses rejects, leaves no abort listener, and the next call works", async () => {
+  const controller = new AbortController();
+  const node = new CodeNode("n", { code: "return 1" });
+
+  const error = await rejected(node.run({ f: () => 1 }, { signal: controller.signal }));
+
+  expect((error as Error).name).toBe("DataCloneError");
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   expect(await run("return 2")).toBe(2n);
 });
 

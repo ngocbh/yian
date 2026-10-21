@@ -11,8 +11,8 @@
  * `YIAN_MAX_CALL_NESTING`; and a MAP or LOOP build whose child already nests at the limit fails,
  * since a MAP and a LOOP resolve their child through `resolveChild` as a CALL does.
  *
- * Ported through `loadFlow`, over chains of `uses:` files: `test_uses_files_count` (its load
- * half), `test_long_uses_chain_fails_at_the_import_past_the_limit`,
+ * Ported through `loadFlow`, over chains of `uses:` files: `test_uses_files_count` (the chain at
+ * the limit run with `runFlow`), `test_long_uses_chain_fails_at_the_import_past_the_limit`,
  * `test_import_only_chain_counts`, `test_import_depth_does_not_depend_on_load_order`,
  * `test_import_depth_holds_through_a_memoizing_resolver`,
  * `test_resolver_that_calls_load_flow_is_bounded`,
@@ -36,20 +36,18 @@
  * `test_imports_load_before_defs`, `test_broken_import_is_reported_at_its_alias_before_defs`,
  * `test_alias_collision_wins_over_a_broken_target`,
  * `test_imports_and_a_calling_defs_chain_count_apart`,
- * `test_imports_at_the_limit_over_defs_at_the_limit_load`, and the load halves of
- * `test_chain_at_the_limit_loads_runs_and_resumes`, `test_call_directive_counts` and
- * `test_map_and_loop_bodies_count`.
- *
- * Later (T4-8): the run halves of `test_chain_at_the_limit_loads_runs_and_resumes`,
- * `test_inline_bodies_count`, `test_uses_files_count`, `test_call_directive_counts` and
- * `test_map_and_loop_bodies_count`.
+ * `test_imports_at_the_limit_over_defs_at_the_limit_load`,
+ * `test_chain_at_the_limit_loads_runs_and_resumes` (run with `runFlow`, resumed with
+ * `resumeFlow`), and `test_call_directive_counts` and `test_map_and_loop_bodies_count` (the chains
+ * at the limit run with `runFlow`).
  *
  * Ported through `assembleText`: the load half of `test_inline_bodies_count`, pinning the whole
  * message (no recursion guard is needed: TS has no recursion limit to pin), and its case
- * `load-map-call/compose_call_nesting_limit__inline_bodies_count`.
+ * `load-map-call/compose_call_nesting_limit__inline_bodies_count`; its run half loads the chain
+ * at the limit with `loadFlow` and runs it.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,6 +67,8 @@ import type { CompiledFlow } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget, reload } from "../../src/defaults.ts";
+import { NodeStarted } from "../../src/events.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
@@ -79,6 +79,17 @@ import {
   loadErrorAsync,
   runCase,
 } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+
+// The runs' isolated environment and logs.
+const runDir = mkdtempSync(join(tmpdir(), "yian-call-nesting-"));
+const env = hostEnv(runDir);
+afterAll(() => rmSync(runDir, { recursive: true, force: true }));
+
+/** Return the ids of the nodes `events` saw start. */
+function started(events: readonly unknown[]): string[] {
+  return events.flatMap((event) => (event instanceof NodeStarted ? [event.nodeId] : []));
+}
 
 /** A node whose only static child is `child`, counting how often it is asked. */
 class FakeNode {
@@ -306,8 +317,10 @@ function inlineChain(n: number): string {
   return `${header}${body.replace(/^(?=.)/gm, "    ")}output: \${top.output}\n`;
 }
 
-test("inline bodies count", () => {
-  expect(() => assembleText(inlineChain(50))).not.toThrow();
+test("inline bodies count", async () => {
+  const result = await runFlow(await loadConformanceFlow(inlineChain(50)), { x: "hi" }, { numWorkers: 0, env });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("hi");
 
   const text = inlineChain(51);
   const error = loadError(() => assembleText(text));
@@ -493,7 +506,10 @@ describe("chains of uses: files", () => {
 
   test("uses: files count", async () => {
     const legal = dir("legal");
-    await loadConformanceFlow(usesFiles(legal, 50), { searchPaths: [legal] });
+    const flow = await loadConformanceFlow(usesFiles(legal, 50), { searchPaths: [legal] });
+    const result = await runFlow(flow, { x: "hi" }, { numWorkers: 0, env });
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe("hi");
 
     const deep = dir("deep");
     const error = await loadErrorAsync(loadConformanceFlow(usesFiles(deep, 51), { searchPaths: [deep] }));
@@ -807,8 +823,25 @@ const errorLine = (error: LoadError) => error.diagnostic.frames.at(-1)!.range.st
 const UNCALLED_DEFS = defsChain(51, { prefix: "k" }).split("nodes:\n  top:\n")[0] + "nodes:\n" + ROOT_LEAF;
 
 describe("chains of defs: entries", () => {
-  test("a chain at the limit loads", async () => {
-    await loadConformanceFlow(defsChain(50));
+  test("a chain at the limit loads, runs and resumes", async () => {
+    const text = defsChain(50);
+    const path = join(runDir, "chain.jsonl");
+    const leaf = ["top", ...Array<string>(50).fill("step")].join("/");
+
+    const first = await runFlow(await loadConformanceFlow(text), { x: "hi" }, { log: path, numWorkers: 0, env });
+    expect(first.status).toBe("succeeded");
+    expect(first.output).toBe("hi");
+    // Cut right after the last expansion so resume replays all 50 and runs the leaf.
+    const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
+    const expanded = lines.flatMap((line, index) => (JSON.parse(line).kind === "node_expanded" ? [index] : []));
+    expect(expanded).toHaveLength(50);
+    writeFileSync(path, `${lines.slice(0, expanded.at(-1)! + 1).join("\n")}\n`);
+
+    const resumed = await resumeFlow(await loadConformanceFlow(text), { log: path, env });
+
+    expect(resumed.status).toBe("succeeded");
+    expect(resumed.output).toBe("hi");
+    expect(started(resumed.events)).toContain(leaf);
   });
 
   test("a chain past the limit is located at the root call", async () => {
@@ -840,7 +873,11 @@ describe("chains of defs: entries", () => {
   });
 
   test("map and loop bodies count", async () => {
-    await loadConformanceFlow(mixedChain(50));
+    const result = await runFlow(await loadConformanceFlow(mixedChain(50)), { v: "hi" }, { numWorkers: 0, env });
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toEqual([{ v: "hi" }]);
+    // The CODE leaf, 50 bodies down, ran.
+    expect(started(result.events).some((id) => id.split("/").length === 51 && id.endsWith("/step"))).toBe(true);
 
     const text = mixedChain(51);
     const error = await loadErrorAsync(loadConformanceFlow(text));
@@ -849,7 +886,9 @@ describe("chains of defs: entries", () => {
   });
 
   test("call directives count", async () => {
-    await loadConformanceFlow(directiveChain(50));
+    const result = await runFlow(await loadConformanceFlow(directiveChain(50)), { x: "hi" }, { numWorkers: 0, env });
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe("hi");
 
     const error = await loadErrorAsync(loadConformanceFlow(directiveChain(51)));
     expect(error.message).toContain("past the call nesting limit of 50");

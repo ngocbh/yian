@@ -29,15 +29,20 @@
  * `test_external_alias_rebases_every_output_contract_origin` and the fingerprint half of the
  * formatting row.
  *
- * Later (T4-8):
- * `test_nested_output_failure_selects_the_exact_contract_field`,
- * `test_root_output_failure_selects_the_contract_root` and
- * `test_scalar_list_output_failure_falls_back_to_the_contract_root`.
- * Later (T3-16, T4-8):
+ * Ported through `loadFlow` and `runFlow`: `test_root_output_failure_selects_the_contract_root`
+ * and `test_scalar_list_output_failure_falls_back_to_the_contract_root`.
+ *
+ * Covered by `run-core/compose_node_output_contract_origins__nested_output_failure_frame`:
+ * `test_nested_output_failure_selects_the_exact_contract_field`; by
+ * `run-core/compose_node_output_contract_origins__named_call_output_failure_frames`:
  * `test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field`.
  */
 
-import { expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
@@ -55,6 +60,8 @@ import { CodeNode } from "../../src/nodes/code/node.ts";
 import { ContractOrigins, ValueContract } from "../../src/nodes/contracts.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { drive } from "../engine/run_state_fixtures.ts";
 import { assembleText, loadError } from "./declarations.ts";
 
@@ -425,6 +432,55 @@ output: \${invoke.output}
     expect(parent.originResolver!.resolve(rebasedOrigin!)).toEqual(child.originResolver!.resolve(canonicalOrigin!));
   });
   expectProfileSites(parent.originResolver!, rebased, childDocument.root.child("nodes").child("emit").child("output"));
+});
+
+const dir = mkdtempSync(join(tmpdir(), "yian-output-contract-origins-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test.each([
+  [
+    "root output failure selects the contract root",
+    "root.yaml",
+    `id: root-output-contract
+name: root-output-contract
+nodes:
+  emit:
+    kind: code
+    code: |-
+      return {"not": "an integer"}
+    output: int
+output: \${emit.output}
+`,
+  ],
+  [
+    "scalar list output failure falls back to the contract root",
+    "scalar-list.yaml",
+    `id: scalar-list-output
+name: scalar-list-output
+typedefs:
+  Profile:
+    age: int
+nodes:
+  emit:
+    kind: code
+    code: |-
+      return [{"age": "bad"}]
+    output: list(Profile)
+output: \${emit.output}
+`,
+  ],
+])("%s", async (_name, label, text) => {
+  const loaded = await loadFlow(text, { sourceLabel: label });
+  const contract = exactContract(loaded.compiled.nodes.get("emit")!);
+  expect(contract.origins.entries).toEqual([]);
+
+  const result = await runFlow(loaded, {}, { env: hostEnv(dir) });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("contract.output");
+  expect(result.failure!.trace).toEqual([contract.origins.default!]);
+  const expected = SourceDocument.parse(text, label).root.child("nodes").child("emit").child("output");
+  expect(loaded.diagnose(result.failure!).frames.at(-1)!.range).toEqual(expected.range!);
 });
 
 test("non-string nested output key reports the key site", () => {

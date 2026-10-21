@@ -83,7 +83,7 @@ import {
   sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
-import type { Node, Steering } from "./nodes/base.ts";
+import type { BackwardOptions, Node, Steering } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
   type HostToolCall,
@@ -231,6 +231,8 @@ export class RunResult {
    *   created with, if any. A run that marked no agent ignores it.
    * @param options.headers The header values sent with that key; their names must be the recorded
    *   ones, compared without case. `null` uses the headers this result was created with, if any.
+   * @param options.onEvent Receives each AGENT backward model call's retry (a `ModelCallRetried`
+   *   with consumer `"backward"`) and each `ReplayDegraded`; `null` (the default) publishes nothing.
    * @returns The accepted attempt's outcome, separate from the forward status, output, failure and
    *   events; `learning` is its projection.
    * @throws TypeError when the feedback has an invalid message carrier.
@@ -246,7 +248,11 @@ export class RunResult {
    */
   async backward(
     feedback: unknown = null,
-    options: { apiKey?: string | null; headers?: Readonly<Record<string, string>> | null } = {},
+    options: {
+      apiKey?: string | null;
+      headers?: Readonly<Record<string, string>> | null;
+      onEvent?: BackwardOptions["onEvent"] | null;
+    } = {},
   ): Promise<BackwardOutcome> {
     const handle = BACKWARD_HANDLES.get(this);
     if (handle === undefined) throw new RangeError("backward requires a run retained with learnable: true");
@@ -257,12 +263,13 @@ export class RunResult {
       return value;
     });
     if (handle.busy) throw new Error("a backward call on this result is already in progress");
-    const { apiKey = null, headers = null } = options;
+    const { apiKey = null, headers = null, onEvent = null } = options;
     handle.busy = true;
     try {
       return await handle.backward(taken as FeedbackValue, {
         apiKey: apiKey === null ? null : secretKey(apiKey),
         headers: headers === null ? null : secretHeaders(headers),
+        onEvent,
       });
     } finally {
       this.#backwardOutcome = handle.outcome;
@@ -318,7 +325,11 @@ class BackwardHandle {
    */
   async backward(
     feedback: FeedbackValue,
-    options: { apiKey: string | null; headers: Readonly<Record<string, string>> | null },
+    options: {
+      apiKey: string | null;
+      headers: Readonly<Record<string, string>> | null;
+      onEvent: BackwardOptions["onEvent"] | null;
+    },
   ): Promise<BackwardOutcome> {
     if (this.#unusable) {
       throw new Error("backward handle is unavailable after an accepted-prefix refresh failure");
@@ -358,7 +369,8 @@ class BackwardHandle {
             snapshots: replayed.memorySnapshots,
           });
         };
-        return await driveBackward(state, authority, feedback, { openMemory, models: this.models });
+        const onEvent = options.onEvent ?? undefined;
+        return await driveBackward(state, authority, feedback, { openMemory, models: this.models, onEvent });
       } catch (error) {
         primary = { error };
         throw error;

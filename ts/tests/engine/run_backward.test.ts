@@ -54,7 +54,8 @@
  * TS-only: a run whose `env` sets a non-default `YIAN_*` value records it, and a later
  * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env` and bounds its
  * feedback by that `env`'s nesting limit (51 levels under a limit of 50 is a `TypeCheckError` that
- * appends nothing); a resume in another `env` is refused.
+ * appends nothing); a resume in another `env` is refused. `result.backward`'s `onEvent` receives an
+ * AGENT backward model call's retry as one `ModelCallRetried` with consumer `backward`.
  *
  * Covered by a case: `test_backward_without_memory_is_explicit_and_repeatable[durable]`
  * (`backward/run_backward__backward_without_memory_is_repeatable`, whose runner writes a log),
@@ -76,7 +77,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../../src/defaults.ts";
-import { RunStarted, RunSucceeded } from "../../src/events.ts";
+import { ModelCallRetried, RunStarted, RunSucceeded } from "../../src/events.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import {
   replayRunLog,
@@ -105,7 +108,7 @@ import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory, FakeSession } from "./memory_fakes.ts";
-import { rejection } from "./run_state_fixtures.ts";
+import { rejection, serving, textReply } from "./run_state_fixtures.ts";
 
 const IDENTITY = "id: identity\nname: identity\ninput:\n  text: !str\nnodes: {}\noutput: ${input.text}\n";
 const WITH_MEMORY = IDENTITY.replace("name: identity", "name: identity\nlong_term_memory: test");
@@ -945,4 +948,29 @@ test("a later backward replays in the run's env", async () => {
   const resumed = await resume(flow, { log: path, env });
   expect((await resumed.backward("Again.")).status).toBe("succeeded");
   expect(startedAttempts(path)).toEqual([1, 2]);
+});
+
+test("result.backward publishes an AGENT backward model retry to onEvent", async () => {
+  const flow = await loadFlow(
+    "id: agent\nname: agent\nllm_config: {provider: openai, model: test-model}\ninput:\n  text: !str\n" +
+      "nodes:\n  agent:\n    kind: agent\n    prompt: ${text}\n    input:\n      text: ${input.text}\n" +
+      "    output: str\noutput: ${agent.output}\n",
+  );
+  const chat = new ScriptedModel([
+    textReply("Answer."),
+    new ProviderError("server", "busy", { retryAfter: 0.001 }),
+    textReply(JSON.stringify({ input_feedback: {}, self_feedback: ["Be brief."], variable_feedback: {} })),
+  ]);
+  // The run's env allows one retry, and a later backward replays in it.
+  const env = hostEnv(dir, { YIAN_MODEL_RETRIES: "1" });
+  const result = await run(flow, { text: "hello" }, { learnable: true, models: serving(chat), env });
+  const seen: unknown[] = [];
+  const outcome = await result.backward("Review.", { onEvent: (event) => void seen.push(event) });
+
+  expect(outcome.status).toBe("succeeded");
+  expect(chat.requests).toHaveLength(3);
+  expect(seen).toHaveLength(1);
+  const event = seen[0] as ModelCallRetried;
+  expect(event).toBeInstanceOf(ModelCallRetried);
+  expect([event.nodeId, event.consumer, event.attempt, event.error.kind]).toEqual(["agent", "backward", 1, "server"]);
 });

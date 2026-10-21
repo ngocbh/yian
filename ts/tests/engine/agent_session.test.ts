@@ -4,8 +4,10 @@
  * Ported: `test_compatibility_matches_factory_defaults_and_config_carriers`,
  * `test_message_codec_round_trip_preserves_exact_provider_fields` (4 rows),
  * `test_message_codec_rejects_non_json_provider_payloads` (4 rows),
- * `test_message_codec_rejects_unknown_or_corrupt_stored_format` (5 rows) and
- * `test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes`.
+ * `test_message_codec_rejects_unknown_or_corrupt_stored_format` (5 rows),
+ * `test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes`, the `request` and
+ * `observe` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`, and
+ * `test_failed_observation_does_not_replace_provider_or_host_error` (2 rows).
  *
  * Changed: the expected `message_format` is TS's own `yian.message.v1`, not Python's
  * `yian.langchain-message.v1`, and the codec rows use `yian.message.v1` messages. A stored payload
@@ -14,20 +16,29 @@
  * symbol key stands in for `{1: ...}`. A corrupt stored message is a `RangeError` with Python's
  * text. The data-loss rows are what a TS message can lose: an unknown key `Message.fromJSON`
  * refuses, and a part `toJSON` writes back changed (a spied `Message.prototype.toJSON`, as Python
- * patches `message_to_dict`).
+ * patches `message_to_dict`). A host stop is the aborted signal, its reason what the call throws,
+ * rather than a `_HostStop`; an observation failure's note is on the error's own `notes` array.
  *
  * TS-only: a record's `api_key` is not kept when the provider resolves from the defaults, a
  * passed `snapshot` is used, and no provider anywhere throws `RangeError`; each `decodeMessage`
  * error text; the memory boundary passes a `CapabilityFault` and the aborted signal's reason
- * through and wraps anything else, also an error other than the reason after an abort.
+ * through and wraps anything else, also an error other than the reason after an abort; a model
+ * call is requested with only its new input and observed with its reply under one exchange id;
+ * without a turn the stop is checked before the reply check; a cut reply is observed `interrupted`
+ * with the partial reply; a reply the check rejects is not stored and is recorded `failed`, or
+ * `interrupted` with the stop thrown when a stop is pending.
  *
  * Not ported: `test_message_codec_accepts_older_payloads_without_optional_defaults`,
  * `test_message_codec_accepts_nested_tool_call_discriminator_defaults` and
  * `test_message_codec_rejects_replaced_supplied_tool_call_discriminator`: LangChain's optional
- * defaults and tool-call discriminators; `yian.message.v1` has neither.
+ * defaults and tool-call discriminators; `yian.message.v1` has neither. The `encode_input` and
+ * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
+ * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6): every other test of the file, which needs the rest of the adapter, session memory
- * and `run_flow`.
+ * Later (T6-6): the `history` and `view` stages of
+ * `test_adapter_memory_faults_are_distinct_from_provider_failures`, which need the history
+ * projection, and every other test of the file, which needs the rest of the adapter, session
+ * memory and `run_flow`.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -42,16 +53,25 @@ import {
   MESSAGE_FORMAT,
   MessageFormatError,
   ReasoningPart,
+  Response,
   TextPart,
   ToolCallPart,
   ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
-import { ConversationItem } from "../../src/memory/contracts.ts";
-import { compatibility, decodeMessage, encodeMessage, memoryBoundary } from "../../src/nodes/agent/memory.ts";
+import { ConversationItem, type ConversationTurn, type ConversationView } from "../../src/memory/contracts.ts";
+import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
+import {
+  compatibility,
+  decodeMessage,
+  encodeMessage,
+  invokeModel,
+  memoryBoundary,
+} from "../../src/nodes/agent/memory.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
 
 // Each test's environment: conftest's base (a private store in a fresh directory, the default
 // model) with the default provider this test sets.
@@ -288,3 +308,176 @@ test("the memory boundary passes a fault and the stop through and wraps anything
   const early = await memoryBoundary(thrower(stop), new AbortController().signal).catch((error: unknown) => error);
   expect((early as CapabilityFault).original).toBe(stop);
 });
+
+/** A hand-made turn of only `request` and `observe`, as Python's `SimpleNamespace` turns. */
+function fakeTurn(
+  request: () => number | Promise<number>,
+  observe: (ordinal: number, status: string) => void | Promise<void>,
+): ConversationTurn {
+  return { request, observe } as unknown as ConversationTurn;
+}
+
+const reply = (text: string): Response =>
+  new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
+const newInput = new Message({ role: "user", parts: [new TextPart("new")] });
+
+for (const stage of ["request", "observe"] as const) {
+  test(`adapter memory faults are distinct from provider failures: ${stage}`, async () => {
+    const calls: string[] = [];
+    const expected = new RangeError("memory refused write");
+    const turn = fakeTurn(
+      () => {
+        if (stage === "request") throw expected;
+        return 1;
+      },
+      () => {
+        if (stage === "observe") throw expected;
+      },
+    );
+    const invoke = async () => {
+      calls.push("provider");
+      return reply("reply");
+    };
+    const error = await rejected(invokeModel(turn, invoke, { newMessages: [newInput], signal: NEVER }));
+    expect(error).toBeInstanceOf(CapabilityFault);
+    expect((error as CapabilityFault).original).toBe(expected);
+    expect(calls).toHaveLength(stage === "observe" ? 1 : 0);
+  });
+}
+
+for (const hostStop of [false, true]) {
+  test(`failed observation does not replace provider or host error: host stop ${hostStop}`, async () => {
+    const controller = new AbortController();
+    const primary = new Error(hostStop ? "provider cancelled" : "provider failed");
+    const seen: string[] = [];
+    const invoke = async (): Promise<Response> => {
+      // The host stop is the node's aborted signal, its reason what the call throws.
+      if (hostStop) controller.abort(primary);
+      throw primary;
+    };
+    const turn = fakeTurn(
+      () => 1,
+      (_ordinal, status) => {
+        seen.push(status);
+        throw new Error("cannot save failure");
+      },
+    );
+    const error = await rejected(invokeModel(turn, invoke, { newMessages: [newInput], signal: controller.signal }));
+    if (hostStop) {
+      expect(error).toBe(primary);
+    } else {
+      expect(error).toBeInstanceOf(CapabilityFault);
+      expect((error as CapabilityFault).original).toBe(primary);
+    }
+    expect(seen).toEqual([hostStop ? "interrupted" : "failed"]);
+    expect((primary as Error & { notes?: string[] }).notes).toEqual([
+      "Conversation observation failed: Error: cannot save failure",
+    ]);
+  });
+}
+
+test("a model call is requested with its new input and observed with its reply", async () => {
+  await withHarness(async ({ session }) => {
+    await withTurn(session, request(), async (turn) => {
+      const response = reply("answer");
+      const returned = await invokeModel(turn, async () => response, {
+        newMessages: [newInput],
+        signal: NEVER,
+        exchangeId: "exchange",
+        purpose: "chat",
+      });
+      expect(returned).toBe(response);
+      const [effect] = turn.view.effects;
+      expect(effect!.kind).toBe("model");
+      expect(effect!.request).toEqual({ exchange_id: "exchange", purpose: "chat" });
+      expect(effect!.status).toBe("completed");
+      expect(turn.view.items.map(decodeMessage)).toEqual([newInput, response.message]);
+      expect(turn.view.items.map((stored) => stored.payload["exchange_id"])).toEqual(["exchange", "exchange"]);
+    });
+  });
+});
+
+test("a model call without a turn is invoked, stop checked, then reply checked", async () => {
+  const events: string[] = [];
+  const response = reply("answer");
+  const returned = await invokeModel(null, async () => response, {
+    newMessages: [newInput],
+    checkReply: (checked) => {
+      events.push("check");
+      expect(checked).toBe(response);
+    },
+  });
+  expect(returned).toBe(response);
+  expect(events).toEqual(["check"]);
+  const controller = new AbortController();
+  const stop = new Error("stopped");
+  const stopped = invokeModel(
+    null,
+    async () => {
+      controller.abort(stop);
+      return response;
+    },
+    { newMessages: [], signal: controller.signal, checkReply: () => events.push("late check") },
+  );
+  expect(await rejected(stopped)).toBe(stop);
+  expect(events).toEqual(["check"]);
+});
+
+test("a cut reply is observed interrupted with the partial reply, and ReplyInterrupted rethrown", async () => {
+  await withHarness(async ({ session }) => {
+    const partial = new Message({ role: "assistant", parts: [new TextPart("partial")] });
+    const cut = new ReplyInterrupted(partial);
+    let view: ConversationView | null = null;
+    const error = await rejected(
+      withTurn(session, request(), async (turn) => {
+        try {
+          return await invokeModel(turn, () => Promise.reject(cut), { newMessages: [newInput], signal: NEVER });
+        } finally {
+          view = turn.view;
+        }
+      }),
+    );
+    expect(error).toBe(cut);
+    expect(view!.effects[0]!.status).toBe("interrupted");
+    expect(decodeMessage(view!.items.at(-1)!)).toEqual(partial);
+  });
+});
+
+for (const pending of [false, true]) {
+  test(`a rejected reply is not stored and is recorded ${pending ? "interrupted under a stop" : "failed"}`, async () => {
+    await withHarness(async ({ session }) => {
+      const controller = new AbortController();
+      const stop = new Error("stopped");
+      const refusal = new TypeError("invalid tool arguments");
+      let seen: { status: string; failure: string | null; items: number } | null = null;
+      const error = await rejected(
+        withTurn(
+          session,
+          request(),
+          async (turn) => {
+            try {
+              return await invokeModel(turn, async () => reply("bad"), {
+                newMessages: [newInput],
+                signal: controller.signal,
+                checkReply: () => {
+                  if (pending) controller.abort(stop);
+                  throw refusal;
+                },
+              });
+            } finally {
+              const [effect] = turn.view.effects;
+              seen = { status: effect!.status, failure: effect!.failure?.message ?? null, items: turn.view.items.length };
+            }
+          },
+          controller.signal,
+        ),
+      );
+      expect(error).toBe(pending ? stop : refusal);
+      expect(seen!).toEqual(
+        pending
+          ? { status: "interrupted", failure: "Model invocation interrupted (Error).", items: 1 }
+          : { status: "failed", failure: "Model invocation failed (TypeError).", items: 1 },
+      );
+    });
+  });
+}

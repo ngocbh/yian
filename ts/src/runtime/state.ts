@@ -1274,8 +1274,10 @@ export function prepareExpanded(
   let seedWire: JsonValue;
   let builderSeed: JsonValue;
   try {
-    // Live seeds only, like steps: replay folds a recorded seed without the process limit.
-    rejectDeepNesting(grow.seed, "growth seed");
+    // Live seeds only, like steps: replay folds a recorded seed without the process limit. The
+    // bound values a seed carries were checked at binding, and a seed wraps them in at most two
+    // containers, so those two levels don't count.
+    rejectDeepNesting(grow.seed, "growth seed", { enclosingLevels: -2 });
     [seedWire, builderSeed] = canonicalSeed(grow.seed);
   } catch (error) {
     if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);

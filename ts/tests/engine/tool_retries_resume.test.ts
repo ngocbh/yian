@@ -406,7 +406,7 @@ test("two tools retrying at once in a pooled map resume with their own steps", a
     name: "x",
     description: "Fail attempt 1, crash in attempt 2 once, then fail once more before succeeding.",
     parameters: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
-    execute: async (args: { n: unknown }, ctx) => {
+    execute: async (args, ctx) => {
       const n = Number(args.n);
       seen.push([n, seenOf(ctx)]);
       if (ctx.attempt === 1) {
@@ -567,7 +567,7 @@ test("a long loop keeps no steps for finished iterations", async () => {
     name: "x",
     description: "Fail each iteration's first attempt.",
     parameters: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
-    execute: (args: { n: unknown }, ctx) => {
+    execute: (args, ctx) => {
       calls.push([Number(args.n), ctx.attempt]);
       if (ctx.attempt === 1) throw new TimeoutError(`a${args.n}`);
       return "ok";

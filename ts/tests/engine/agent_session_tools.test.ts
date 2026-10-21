@@ -24,9 +24,9 @@
  * gets a context-only error result with each of the three repair texts (effect `completed`,
  * `failed`, or another status such as `interrupted` or none recorded), a non-`completed` effect is
  * listed in the status message; an unpaired tool result and a tool message with another part
- * are inert `unpaired tool result` text; a reply with an unparsed call, an empty name or id, or
- * repeated ids, and a native structured reply, are inert `structured or unpairable model reply`
- * text; a stored system message is dropped.
+ * are inert `unpaired tool result` text; a reply with an unparsed call, an empty name or id,
+ * repeated ids, or a tool result, and a native structured reply, are inert `structured or
+ * unpairable model reply` text; a stored system message is dropped.
  *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
@@ -440,6 +440,7 @@ const unpairable: [string, Part[]][] = [
   ["an empty name", [new ToolCallPart({ id: "provider", name: "", arguments: {} })]],
   ["an empty id", [new ToolCallPart({ id: "", name: "lookup", arguments: {} })]],
   ["repeated ids", [lookupCall, new ToolCallPart({ id: "provider", name: "other", arguments: {} })]],
+  ["a tool result", [new ToolResultPart({ callId: "provider", name: "lookup", content: "result" })]],
 ];
 
 for (const [label, parts] of unpairable) {

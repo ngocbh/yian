@@ -16,19 +16,20 @@
  * reasoning only, a parsed and an unparsed tool call, a media part, and a non-assistant reply (a
  * spied `callModel`, since a `Response` is always an assistant message); Python's opaque-payload,
  * `function_call` and LangChain block rows have no TS form. A `ValueError` is a `RangeError`, each
- * with Python's text. A reply's text parts join with `"\n"` (`Message.text`), not `""`.
+ * with Python's text. A non-assistant reply's `TypeError` reads "summary reply must be an assistant
+ * message" for Python's "summary reply must be an AIMessage".
  *
  * TS-only: the summary request is the prompt with the budget and the projection as a user message,
  * published with purpose `history_summary` and its own retry settings; the summary goes first as a
- * user message; a refusal part is not text.
+ * user message; a refusal part is not text; a tool result in the reply is a tool call.
  *
- * Later (T6-6): `test_refused_summary_call_fails_provider_auth`,
- * `test_summary_failure_never_enters_answer_structured_retry`,
+ * Later (T6-6 PR 1, the loop wiring): `test_stop_after_summary_preserves_actual_cache_without_answer`,
  * `test_tool_then_structured_uses_summary_once_and_safe_current_projection`,
  * `test_summary_uses_unbound_model_and_current_instructions_and_grants`,
- * `test_stop_after_summary_preserves_actual_cache_without_answer` and
- * `test_structured_correction_attempts_are_one_whole_recent_turn`, which need the loop wiring or
- * `run_flow`.
+ * `test_summary_failure_never_enters_answer_structured_retry` and
+ * `test_structured_correction_attempts_are_one_whole_recent_turn`.
+ *
+ * Later (T6-6 PR 3): `test_refused_summary_call_fails_provider_auth`.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -43,6 +44,7 @@ import {
   Response,
   TextPart,
   ToolCallPart,
+  ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ConversationTurn } from "../../src/memory/contracts.ts";
@@ -151,6 +153,12 @@ const invalidReplies: [string, () => Response, ErrorConstructor, string][] = [
     "summary reply must contain only text",
   ],
   ["a refusal part", () => assistant(new RefusalPart("no")), RangeError, "summary reply must contain only text"],
+  [
+    "a tool result",
+    () => assistant(new TextPart("text"), new ToolResultPart({ callId: "call", name: "tool", content: "result" })),
+    RangeError,
+    "summary reply must not contain tool calls",
+  ],
 ];
 
 for (const [label, make, type, message] of invalidReplies) {
@@ -348,7 +356,7 @@ test("valid text blocks are kept intact without hard truncation", async () => {
   await withHarness(async ({ session }) => {
     await withTurn(session, request("current"), async (turn) => {
       const messages = await prepareHistory(turn, model, { signal: NEVER });
-      expect(messages[0]!.text()).toContain("A long \nvalid summary");
+      expect(messages[0]!.text()).toContain("A long valid summary");
       const cached = await prepareHistory(turn, new ScriptedModel([]), { signal: NEVER });
       expect(cached).toEqual(messages);
     });

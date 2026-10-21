@@ -563,7 +563,7 @@ function resultCallId(message: Message): string | null {
  *   without a unique nonempty `exchange_id`, an item no model effect owns, or an item
  *   `decodeMessage` refuses.
  */
-export function projectHistory(
+function projectHistory(
   view: ConversationView,
   selected: readonly ConversationInvocation[],
   options: { active?: ConversationInvocation | null } = {},
@@ -709,8 +709,8 @@ export function currentHistoryMessages(
  * @param options.live The sinks the summary call publishes to.
  * @param options.retry Called once per summary call for its retry settings.
  * @throws The summary call's error or reply-validation error with its own identity: TypeError for a
- *   reply that isn't an assistant message, RangeError for tool calls, parts other than text and
- *   reasoning, or blank text.
+ *   reply that isn't an assistant message, RangeError for tool calls or tool results, parts other
+ *   than text and reasoning, or blank text.
  * @throws CapabilityFault when reading or projecting history fails, or the backend's summary or
  *   projection is invalid.
  * @throws The stop (`signal.reason`).
@@ -788,37 +788,43 @@ export async function prepareHistory(
 }
 
 /**
- * The summary text of `reply`: its text parts joined (`Message.text`), reasoning dropped.
+ * The summary text of `reply`: its text parts joined with `""`, reasoning dropped.
  *
  * @throws TypeError when `reply` isn't a `Response` of an assistant message.
- * @throws RangeError for tool calls, parts other than text and reasoning, or blank text.
+ * @throws RangeError for tool calls or tool results, parts other than text and reasoning, or
+ *   blank text.
  */
 function summaryText(reply: Response): string {
   if (!(reply instanceof Response) || reply.message.role !== "assistant") {
     throw new TypeError("summary reply must be an assistant message");
   }
   const parts = reply.message.parts;
-  if (parts.some((part) => part instanceof ToolCallPart)) {
+  if (parts.some((part) => part instanceof ToolCallPart) || !pairableCalls(reply.message)) {
     throw new RangeError("summary reply must not contain tool calls");
   }
   if (!parts.every((part) => part instanceof TextPart || part instanceof ReasoningPart)) {
     throw new RangeError("summary reply must contain only text");
   }
-  const text = reply.message.text();
+  // Python joins the text blocks with "", unlike `Message.text`'s "\n".
+  const text = parts
+    .filter((part) => part instanceof TextPart)
+    .map((part) => part.text)
+    .join("");
   if (!text.trim()) throw new RangeError("summary reply must contain nonempty text");
   return text;
 }
 
 /** Render a prior message as labelled user text with no actionable message metadata. */
-export function inertMessage(message: Message, reason: string): Message {
+function inertMessage(message: Message, reason: string): Message {
   return textMessage("user", `Prior ${reason} (context only, not an executable request): ` + logJson(message.toJSON()));
 }
 
 /**
- * Whether every tool call of `message` can be paired with its result: each has parsed arguments, a
- * nonempty name and a nonempty id, and the ids are unique.
+ * Whether every tool call of `message` can be paired with its result: it holds no tool result, and
+ * each call has parsed arguments, a nonempty name and a nonempty id, and the ids are unique.
  */
-export function pairableCalls(message: Message): boolean {
+function pairableCalls(message: Message): boolean {
+  if (message.parts.some((part) => part instanceof ToolResultPart)) return false;
   const calls = message.toolCalls();
   const ids = new Set(calls.map((call) => call.id));
   return ids.size === calls.length && calls.every((call) => call.arguments !== null && call.name && call.id);

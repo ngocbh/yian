@@ -3,17 +3,36 @@
  * `test_a_retired_key_in_yaml_is_a_load_error` (the root flow assembled as the loader assembles
  * it), `test_a_retired_key_in_a_host_layer_fails_the_cascade` (over `resolveLlmCascade`), and the
  * harvested case `engine_retired_llm_keys__temperature_on_a_node` (assembled likewise); the flow
- * and def sites of the load-error test through `loadFlow`. Later (T4-8): the run and resume tests
- * go with `runFlow`.
+ * and def sites of the load-error test through `loadFlow`.
+ *
+ * Ported through `runFlow` and `resumeFlow`, in `hostEnv` (with `VLLM_API_KEY` where Python sets
+ * it), an AGENT's model a `ScriptedModel` given as `models`: `test_a_retired_key_in_the_run_layer_fails_before_the_log`,
+ * `test_resuming_a_record_with_a_set_retired_key_fails_before_appending` and
+ * `test_a_finished_record_with_a_set_retired_key_still_replays` (Python serves its reply through
+ * an OpenAI client over a mock transport). Changed: the refusals are `RangeError`s (Python's
+ * `ValueError`).
  */
 
-import { expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { LLMConfig, retiredKeyError } from "../../src/llm_clients/config.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { NodeStarted, type RunEvent } from "../../src/events.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
+import { decodeRecord, encodeRecord } from "../../src/runtime/log.ts";
 import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { rejection, serving, textReply } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-retired-llm-keys-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const SENTINEL = "sentinel-3f9a1c";
 const SENTINEL_NUMBER = 0.734519;
@@ -27,8 +46,9 @@ const RETIRED: Record<string, [unknown, string]> = {
 };
 
 /** Assert that `message` names `key`, shows its new form and never echoes its value. */
-function expectMigration(message: string, key: string): void {
-  const [value, form] = RETIRED[key]!;
+function expectMigration(message: string, key: string, provider: string | null = null): void {
+  const [value, retiredForm] = RETIRED[key]!;
+  const form = key === "temperature" && provider !== null ? `\`${provider}: {temperature: <value>}\`` : retiredForm;
   expect(message).toContain(`\`${key}\``);
   expect(message).toContain(form);
   expect(message).not.toContain(String(value));
@@ -137,6 +157,78 @@ test.each(Object.keys(RETIRED))("a retired key in a host layer fails the cascade
   }
   expect(caught).toBeInstanceOf(RangeError);
   expectMigration((caught as RangeError).message, key);
+});
+
+const VLLM = { provider: "vllm", model: "served-model" };
+
+test.each(Object.keys(RETIRED))("a retired key in the run layer fails before the log %s", async (key) => {
+  const log = join(dir, `run-layer-${key}.jsonl`);
+  const error = await rejection(
+    runFlow(await loadFlow(FLOW), {}, { log, llmConfig: { ...VLLM, [key]: RETIRED[key]![0] }, env: hostEnv(dir) }),
+  );
+  expect(error).toBeInstanceOf(RangeError);
+  expectMigration((error as RangeError).message, key, "vllm");
+  expect(existsSync(log)).toBe(false);
+});
+
+/** Rewrite the `run_started` record of `log` so the agent's recorded config sets `temperature`. */
+function recordTemperature(log: string): void {
+  const lines = readFileSync(log, "utf8").split(/(?<=\n)/);
+  const started = JSON.parse(lines[0]!);
+  expect(started.kind).toBe("run_started");
+  started.payload.effective_llm_by_static_path.agent.temperature = 0.25;
+  lines[0] = encodeRecord(decodeRecord(JSON.stringify(started))) + "\n";
+  writeFileSync(log, lines.join(""));
+}
+
+test("resuming a record with a set retired key fails before appending", async () => {
+  const env = hostEnv(dir, { VLLM_API_KEY: "sk-environment-key" });
+  const log = join(dir, "stopped.jsonl");
+  const stop = new Error("host stopped before model");
+  const stopBeforeModel = (event: RunEvent) => {
+    if (event instanceof NodeStarted && event.nodeId === "agent") throw stop;
+  };
+  const caught = await rejection(
+    runFlow(await loadFlow(FLOW), {}, {
+      log,
+      onEvent: stopBeforeModel,
+      llmConfig: VLLM,
+      models: serving(new ScriptedModel([textReply("ok")])),
+      env,
+    }),
+  );
+  expect(caught).toBe(stop);
+  recordTemperature(log);
+  const before = readFileSync(log);
+
+  const error = await rejection(resumeFlow(await loadFlow(FLOW), { log, env }));
+
+  expect(error).toBeInstanceOf(RangeError);
+  const message = (error as RangeError).message;
+  expect(message).toStartWith("Agent 'agent': ");
+  expect(message).toContain("`temperature` moved into the provider block");
+  expect(message).toContain("`vllm: {temperature: <value>}`");
+  expect(message).not.toContain("0.25");
+  expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("a finished record with a set retired key still replays", async () => {
+  const env = hostEnv(dir, { VLLM_API_KEY: "sk-environment-key" });
+  const log = join(dir, "finished.jsonl");
+  const result = await runFlow(await loadFlow(FLOW), {}, {
+    log,
+    llmConfig: VLLM,
+    models: serving(new ScriptedModel([textReply("ok")])),
+    env,
+  });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  recordTemperature(log);
+  const before = readFileSync(log);
+
+  const replayed = await resumeFlow(await loadFlow(FLOW), { log, env });
+
+  expect(replayed.status).toBe("succeeded");
+  expect(readFileSync(log).equals(before)).toBe(true);
 });
 
 test.each(["load-agent/engine_retired_llm_keys__temperature_on_a_node"])("case %s", (id) =>

@@ -29,9 +29,15 @@
  * message writes the node list in the text form (`["pick"]`, rule `messages`), the two
  * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
  *
+ * `test_runs_with_different_inputs_record_the_same_fingerprint` runs with a scripted model from
+ * `models`, where Python patches `model_from_config`.
+ *
  * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
- * Later (T4-8 follow-up): `test_runs_with_different_inputs_record_the_same_fingerprint`.
  */
+
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
@@ -42,8 +48,11 @@ import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { SkipModel } from "../../src/compose/validate/skips.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { Binding, iterSourceStrings, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
+import { serving, textReply } from "../engine/run_state_fixtures.ts";
 import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
 
 const compiled = (text: string): CompiledFlow => assembleText(text, "f.yaml").flow.compiled;
@@ -207,6 +216,38 @@ test("changing which lower value is dropped changes the wiring identity", () => 
   const wiringOf = (flow: CompiledFlow) => (flowManifest(flow)["wiring"] as Record<string, unknown>)["a"];
   expect(wiringOf(shielded)).not.toEqual(wiringOf(open));
   expect(flowFingerprint(shielded)).not.toBe(flowFingerprint(open));
+});
+
+const RUN = `id: f
+name: f
+input: {m: !str }
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {provider: openai, model: '\${input.m}'}
+output: \${chat.output}
+`;
+
+test("runs with different inputs record the same fingerprint", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-run-"));
+  try {
+    const fingerprints: unknown[] = [];
+    for (const [index, model] of ["gpt-a", "gpt-b"].entries()) {
+      const log = join(dir, `run${index}.jsonl`);
+      const result = await runFlow(await loadFlow(RUN), { m: model }, {
+        log,
+        models: serving(new ScriptedModel([textReply("ok")])),
+      });
+      expect(result.status, result.failure?.message).toBe("succeeded");
+      const started = JSON.parse(readFileSync(log, "utf8").split("\n")[0]!);
+      expect(started.payload.effective_llm_by_static_path.chat.model).toBe(model);
+      fingerprints.push(started.payload.flow_fingerprint);
+    }
+    expect(fingerprints[0]).toBe(fingerprints[1]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const SELF = `id: f

@@ -265,6 +265,11 @@ export class RunState {
   nodeState: Map<string, NodeState>;
   /** The disposition of every live edge, initially all `UNKNOWN`. */
   edgeState: Map<string, NodeState>;
+  /**
+   * The number of `UNKNOWN` incoming edges of each live node that has any. Every commit that
+   * settles, adds or retires an edge keeps it in step with `edgeState`, so a replay rebuilds it.
+   */
+  unknownIncoming = new Map<string, number>();
   /** The dispatcher-owned FIFO of nodes eligible to start. */
   ready: string[] = [];
   /** Durably started nodes without a durable outcome, in start order. */
@@ -376,6 +381,7 @@ export class RunState {
     this.pool = new VariablePool(flow.startId);
     this.nodeState = new Map([...flow.nodes.keys()].map((id) => [id, NodeState.UNKNOWN]));
     this.edgeState = new Map(flow.edges.map((edge) => [edge.id, NodeState.UNKNOWN]));
+    for (const edge of flow.edges) addUnknownIncoming(this, edge.to);
     this.memoryAuthority = new MemoryAuthority(null, false, null, null, this.backwardState.memoryOrder);
     this.initialStaticIds = new Set(flow.nodes.keys());
   }
@@ -473,6 +479,8 @@ interface SuccessDelta {
   readonly commitTarget: string;
   readonly valueJson: string;
   readonly outgoingEdgeIds: readonly string[];
+  /** The head of each of `outgoingEdgeIds`, in the same order. */
+  readonly successorIds: readonly string[];
   readonly newlyReadyIds: readonly string[];
   readonly observerCommitAs: string | null;
 }
@@ -503,6 +511,8 @@ interface RouteDelta {
   readonly nodeId: string;
   readonly handle: string;
   readonly edgeUpdates: readonly (readonly [string, NodeState])[];
+  /** The head of each of `edgeUpdates`, in the same order. */
+  readonly edgeHeads: readonly string[];
   readonly skippedNodeIds: readonly string[];
   readonly newlyReadyIds: readonly string[];
   readonly terminalUnreachableFailure: Failure | null;
@@ -1845,6 +1855,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.pool.store.set(delta.commitTarget, apply.value);
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const edgeId of delta.outgoingEdgeIds) state.edgeState.set(edgeId, NodeState.TAKEN);
+  for (const nodeId of delta.successorIds) dropUnknownIncoming(state, nodeId);
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
   forgetNodeSteps(state, delta.nodeId);
@@ -1882,6 +1893,7 @@ function commitRoute(log: RunLog, state: RunState, prepared: PreparedTransition)
   appendAndVerify(log, prepared);
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const [edgeId, disposition] of delta.edgeUpdates) state.edgeState.set(edgeId, disposition);
+  for (const nodeId of delta.edgeHeads) dropUnknownIncoming(state, nodeId);
   for (const nodeId of delta.skippedNodeIds) state.nodeState.set(nodeId, NodeState.SKIPPED);
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
@@ -3287,6 +3299,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
   if (!isExactly(state.pool.store, Map)) throw new RangeError("success requires an exact variable-pool store");
   const target = record.commitTarget;
   const outgoingEdgeIds: string[] = [];
+  const successorIds: string[] = [];
   const newlyReadyIds: string[] = [];
   const settledEdgeIds = new Set<string>();
   const seenOutgoingEdgeIds = new Set<string>();
@@ -3315,6 +3328,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
       );
     }
     outgoingEdgeIds.push(edgeId);
+    successorIds.push(edge.to);
     seenOutgoingEdgeIds.add(edgeId);
     remainingBySuccessor.set(edge.to, (remainingBySuccessor.get(edge.to) ?? 0) + 1);
     const ids = edgeIdsBySuccessor.get(edge.to);
@@ -3329,6 +3343,10 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
     remainingBySuccessor.set(successor, remaining);
     if (remaining) continue;
     const required = new Set(edgeIdsBySuccessor.get(successor));
+    // An UNKNOWN edge beyond the ones settling here keeps the join waiting; the running count
+    // shows it without rescanning the whole join on every success into it, which is quadratic
+    // for a wide join. The scan still classifies, and validates, the join once it can be ready.
+    if ((state.unknownIncoming.get(successor) ?? 0) > required.size) continue;
     if (sparseDisposition(state.flow, state.edgeState, settledEdgeIds, successor, required) !== "ready") continue;
     if (state.nodeState.get(successor) !== NodeState.UNKNOWN) {
       throw new RangeError(`newly-ready successor ${reprText(successor)} must have UNKNOWN disposition`);
@@ -3341,6 +3359,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
     commitTarget: target,
     valueJson: logJson(typed.toWire()),
     outgoingEdgeIds: Object.freeze(outgoingEdgeIds),
+    successorIds: Object.freeze(successorIds),
     newlyReadyIds: Object.freeze(newlyReadyIds),
     observerCommitAs: target === record.nodeId ? null : target,
   });
@@ -3495,6 +3514,7 @@ function prepareRouteDelta(
 ): { delta: RouteDelta; causalFailure: Failure | null } {
   validateRouteRecord(state, record);
   const edgeUpdates = new Map<string, NodeState>();
+  const edgeHeads: string[] = [];
   const skippedNodeIds: string[] = [];
   const skippedNodes = new Set<string>();
   const propagatedTargets = new Set<string>([record.nodeId]);
@@ -3535,6 +3555,7 @@ function prepareRouteDelta(
     }
     settleJoinEdge(scratch, edge.id, disposition, edge.to);
     edgeUpdates.set(edge.id, disposition);
+    edgeHeads.push(edge.to);
 
     const head = edge.to;
     const headDisposition = state.nodeState.get(head);
@@ -3592,6 +3613,7 @@ function prepareRouteDelta(
     nodeId: record.nodeId,
     handle: record.handle,
     edgeUpdates: Object.freeze([...edgeUpdates].map((entry) => Object.freeze(entry))),
+    edgeHeads: Object.freeze(edgeHeads),
     skippedNodeIds: Object.freeze(skippedNodeIds),
     newlyReadyIds: Object.freeze(newlyReadyIds),
     terminalUnreachableFailure,
@@ -3963,6 +3985,18 @@ function classifyJoin(scratch: JoinScratch): "ready" | "wait" | "dead" {
   if (scratch.requiredOrderingSkipped) return "dead";
   if (scratch.unknown) return "wait";
   return "ready";
+}
+
+/** Count one more `UNKNOWN` incoming edge of `nodeId`. */
+function addUnknownIncoming(state: RunState, nodeId: string): void {
+  state.unknownIncoming.set(nodeId, (state.unknownIncoming.get(nodeId) ?? 0) + 1);
+}
+
+/** Count one fewer `UNKNOWN` incoming edge of `nodeId`, as it settles or retires. */
+function dropUnknownIncoming(state: RunState, nodeId: string): void {
+  const count = (state.unknownIncoming.get(nodeId) ?? 0) - 1;
+  if (count > 0) state.unknownIncoming.set(nodeId, count);
+  else state.unknownIncoming.delete(nodeId);
 }
 
 /** Reject any state that no longer has its constructor-created empty frontier. */
@@ -4358,6 +4392,7 @@ function applyGrowth(
       }
     }
     for (const edge of topology.retiredEdges) {
+      if (state.edgeState.get(edge.id) === NodeState.UNKNOWN) dropUnknownIncoming(state, edge.to);
       state.edgeState.delete(edge.id);
       for (const [adjacency, nodeId] of [
         [flow.outgoingEdges, edge.from],
@@ -4376,6 +4411,7 @@ function applyGrowth(
       flow.incomingEdges.delete(nodeId);
       flow.outgoingEdges.delete(nodeId);
       state.nodeState.delete(nodeId);
+      state.unknownIncoming.delete(nodeId);
       state.pool.store.delete(nodeId);
       state.depth.delete(nodeId);
       state.wiringOverrides.delete(nodeId);
@@ -4393,6 +4429,7 @@ function applyGrowth(
   for (const nodeId of delta.newNodeIds) state.nodeState.set(nodeId, NodeState.UNKNOWN);
   if (!retired.has(delta.spawnerId)) state.nodeState.set(delta.spawnerId, NodeState.EXPANDED);
   for (const edgeId of delta.newEdgeIds) state.edgeState.set(edgeId, NodeState.UNKNOWN);
+  for (const edge of topology.edges) addUnknownIncoming(state, edge.to);
   state.inFlight.delete(delta.spawnerId);
   state.acceptedStarts.delete(delta.spawnerId);
   forgetNodeSteps(state, delta.spawnerId);

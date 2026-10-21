@@ -112,7 +112,8 @@
  * output is accepted (the flip of `test_long_int_boundaries.py::
  * test_a_long_int_in_a_partial_record_output_names_the_limit`, since a `bigint` has no digit
  * limit); a whole float output stays a float; a skipped END input with no group name derives
- * `terminal output null skipped`, live and on replay.
+ * `terminal output null skipped`, live and on replay; the successes into an N-leaf join visit
+ * incoming edges linearly (2N leaves take about twice the visits of N).
  *
  * Not ported (no allocation probe): `test_route_reducer_allocation_is_independent_of_wide_ready_queue`,
  * `test_success_reducer_allocation_is_independent_of_total_run_size`.
@@ -335,6 +336,38 @@ function parallelSuccessorFlow(width: number): CompiledFlow {
     ]),
     edges,
   );
+}
+
+/**
+ * Run `START -> leaf-i -> END` for `width` leaves through each leaf's success and return how many
+ * incoming edges the reducer read through `flow.incoming`, from START's success on.
+ */
+function wideJoinVisits(width: number): number {
+  const nodes = new Map<string, Node>([[START_ID, new StartNode(START_ID)]]);
+  const edges: Edge[] = [];
+  for (let index = 0; index < width; index++) {
+    nodes.set(`leaf-${index}`, func(`leaf-${index}`));
+    edges.push(
+      new Edge(`start-leaf-${index}`, START_ID, `leaf-${index}`),
+      new Edge(`leaf-${index}-end`, `leaf-${index}`, END_ID),
+    );
+  }
+  nodes.set(END_ID, EndNode.value(END_ID, { outputName: null }));
+  const { state, log } = initializedAndStarted(CompiledFlow.fromParts(nodes, edges));
+  const incoming = state.flow.incoming.bind(state.flow);
+  let visits = 0;
+  state.flow.incoming = (nodeId) => {
+    const found = incoming(nodeId);
+    visits += found.length;
+    return found;
+  };
+  commitStartSuccess(state, log);
+  for (let index = 0; index < width; index++) {
+    commitPrepared(log, state, prepareNodeStarted(state, `leaf-${index}`));
+    commitPrepared(log, state, prepareNodeSucceeded(state, `leaf-${index}`, { done: true }));
+  }
+  expect(state.ready).toEqual([END_ID]);
+  return visits;
 }
 
 /** Return `START -> work -> END` where `work` declares a partial-record output, `work` in flight. */
@@ -666,6 +699,14 @@ test("a success scans each distinct affected join once", () => {
 
   expect(scanned).toEqual(["after-a", "after-b"]);
   expect(successPlan(prepared).delta.newlyReadyIds).toEqual(["after-a", "after-b"]);
+});
+
+test("the successes into a wide join visit its incoming edges linearly", () => {
+  const visits = wideJoinVisits(2_000);
+  const doubled = wideJoinVisits(4_000);
+
+  // A rescan of the whole join on every success would quadruple the visits.
+  expect(doubled).toBeLessThan(2.5 * visits);
 });
 
 test.each([

@@ -48,6 +48,7 @@ import {
 } from "../../src/memory/index.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
@@ -706,6 +707,15 @@ export function expectIndexMatchesRebuild(state: RunState): void {
   ]) {
     expect([...ids].filter((nodeId) => !flow.nodes.has(nodeId))).toEqual([]);
   }
+}
+
+/** Expect `state.unknownIncoming` to equal a recount of each live node's `UNKNOWN` incoming edges. */
+export function expectUnknownIncomingMatchesRecount(state: RunState): void {
+  const recount = new Map<string, number>();
+  for (const edge of state.flow.edges) {
+    if (state.edgeState.get(edge.id) === NodeState.UNKNOWN) recount.set(edge.to, (recount.get(edge.to) ?? 0) + 1);
+  }
+  expect(Object.fromEntries(state.unknownIncoming)).toEqual(Object.fromEntries(recount));
 }
 
 /** The memory key and policy type `ownerEngine` records. */

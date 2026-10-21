@@ -480,7 +480,7 @@ interface SuccessDelta {
   readonly valueJson: string;
   readonly outgoingEdgeIds: readonly string[];
   /** The head of each of `outgoingEdgeIds`, in the same order. */
-  readonly successorIds: readonly string[];
+  readonly edgeHeads: readonly string[];
   readonly newlyReadyIds: readonly string[];
   readonly observerCommitAs: string | null;
 }
@@ -1855,7 +1855,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.pool.store.set(delta.commitTarget, apply.value);
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const edgeId of delta.outgoingEdgeIds) state.edgeState.set(edgeId, NodeState.TAKEN);
-  for (const nodeId of delta.successorIds) dropUnknownIncoming(state, nodeId);
+  for (const nodeId of delta.edgeHeads) dropUnknownIncoming(state, nodeId);
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
   forgetNodeSteps(state, delta.nodeId);
@@ -3299,7 +3299,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
   if (!isExactly(state.pool.store, Map)) throw new RangeError("success requires an exact variable-pool store");
   const target = record.commitTarget;
   const outgoingEdgeIds: string[] = [];
-  const successorIds: string[] = [];
+  const edgeHeads: string[] = [];
   const newlyReadyIds: string[] = [];
   const settledEdgeIds = new Set<string>();
   const seenOutgoingEdgeIds = new Set<string>();
@@ -3328,7 +3328,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
       );
     }
     outgoingEdgeIds.push(edgeId);
-    successorIds.push(edge.to);
+    edgeHeads.push(edge.to);
     seenOutgoingEdgeIds.add(edgeId);
     remainingBySuccessor.set(edge.to, (remainingBySuccessor.get(edge.to) ?? 0) + 1);
     const ids = edgeIdsBySuccessor.get(edge.to);
@@ -3343,9 +3343,10 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
     remainingBySuccessor.set(successor, remaining);
     if (remaining) continue;
     const required = new Set(edgeIdsBySuccessor.get(successor));
-    // An UNKNOWN edge beyond the ones settling here keeps the join waiting; the running count
-    // shows it without rescanning the whole join on every success into it, which is quadratic
-    // for a wide join. The scan still classifies, and validates, the join once it can be ready.
+    // Another UNKNOWN incoming edge means the scan can only return "wait" or "dead", never
+    // "ready", and a success skips both. So the running count can skip the scan, which would be
+    // quadratic for a wide join. The scan still classifies and validates the join once it can be
+    // ready.
     if ((state.unknownIncoming.get(successor) ?? 0) > required.size) continue;
     if (sparseDisposition(state.flow, state.edgeState, settledEdgeIds, successor, required) !== "ready") continue;
     if (state.nodeState.get(successor) !== NodeState.UNKNOWN) {
@@ -3359,7 +3360,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
     commitTarget: target,
     valueJson: logJson(typed.toWire()),
     outgoingEdgeIds: Object.freeze(outgoingEdgeIds),
-    successorIds: Object.freeze(successorIds),
+    edgeHeads: Object.freeze(edgeHeads),
     newlyReadyIds: Object.freeze(newlyReadyIds),
     observerCommitAs: target === record.nodeId ? null : target,
   });
@@ -4192,6 +4193,8 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
 function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.pool = apply.pool;
   state.nodeState = apply.nodeState;
+  // The constructor's `unknownIncoming` stays valid: RunStarted requires the all-UNKNOWN edge
+  // states it was seeded from.
   state.edgeState = apply.edgeState;
   state.ready = apply.ready;
   state.inFlight = apply.inFlight;
@@ -4429,6 +4432,7 @@ function applyGrowth(
   for (const nodeId of delta.newNodeIds) state.nodeState.set(nodeId, NodeState.UNKNOWN);
   if (!retired.has(delta.spawnerId)) state.nodeState.set(delta.spawnerId, NodeState.EXPANDED);
   for (const edgeId of delta.newEdgeIds) state.edgeState.set(edgeId, NodeState.UNKNOWN);
+  // `topology.edges` are the edges of `newEdgeIds`, which the delta carries as ids only.
   for (const edge of topology.edges) addUnknownIncoming(state, edge.to);
   state.inFlight.delete(delta.spawnerId);
   state.acceptedStarts.delete(delta.spawnerId);

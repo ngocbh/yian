@@ -102,6 +102,13 @@
  * - `test_failure_commit_uses_only_materialized_data_after_append`: the instance patches throwing
  *   `flow.incoming` and `flow.outgoing` before the commit, and the log that patches them again
  *   after its append.
+ * - A success into a join that still has another `UNKNOWN` incoming edge skips the join's
+ *   adjacency checks (settling edges absent from the successor's incoming adjacency, invalid
+ *   incoming adjacency or edge IDs, a missing or invalid disposition); they fire when the join's
+ *   last edge settles, where Python raises them at that success. Only a corrupted compiled
+ *   adjacency reaches them, and readiness and frontier order don't change. The `incoming` row of
+ *   `test_success_rejects_touched_topology_invariant_breaks` still raises at that success because
+ *   `after-baked` has one incoming edge.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
  *   Python's `id()` values; it compares the pool as its wire object and adds the start counts,
  *   steps, interrupted-attempt counts and last stop sequence.

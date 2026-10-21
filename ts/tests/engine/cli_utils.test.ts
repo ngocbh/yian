@@ -527,7 +527,8 @@ describe("streamWriter", () => {
     void writer.write("a");
     void writer.write("b");
     let flushed = false;
-    const done = flush({ stdout: writer, stderr: writer, stdin: process.stdin, env: base }).then(() => (flushed = true));
+    const io = { stdout: writer, stderr: writer, stdin: process.stdin, stderrStream: process.stderr, env: base };
+    const done = flush(io).then(() => (flushed = true));
     while (callbacks.length > 0 || written.length < 2) {
       await new Promise((resolve) => setTimeout(resolve, 1));
       expect(flushed).toBe(false);

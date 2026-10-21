@@ -118,6 +118,7 @@ function fakeIo(options: { stdin?: string | Uint8Array; isTTY?: boolean; env?: R
     stdin,
     stdout: stdout.out,
     stderr: stderr.out,
+    stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
   };
   return { io, out: stdout.text, err: stderr.text };

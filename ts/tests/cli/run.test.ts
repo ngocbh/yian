@@ -4,7 +4,13 @@
 // (`test_run_succeeds_with_input_flag`, `test_run_keeps_registered_tools`,
 // `test_run_inline_code_in_process`, `test_run_reads_inputs_json`, `test_flag_overrides_json`,
 // `test_failed_run_exits_nonzero`, `test_non_tty_run_omits_optional_and_defaulted_inputs`,
-// `test_non_tty_inputs_json_preserves_explicit_structured_null`). Changed: the CODE bodies are
+// `test_non_tty_inputs_json_preserves_explicit_structured_null`); the input gate
+// (`test_undeclared_input_flag_is_a_bad_parameter`,
+// `test_undeclared_inputs_json_key_is_a_bad_parameter`,
+// `test_non_tty_run_reports_all_missing_required_inputs_before_setup`, and from
+// tests/engine/test_cli_prompt.py `test_gather_non_tty_*` and the run half of
+// `test_prompt_accepting_omission_preserves_start_owned_defaults`, through `main`, on a fake TTY
+// for the prompts). Changed: an unknown name is quoted as `"topik"`; the CODE bodies are
 // TS's, and a non-string output prints in yian's text form, not Python's repr. Added here: the
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
@@ -37,7 +43,9 @@ import { type CliIo, printJson, UsageError, type Writer } from "../../src/cli/ut
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
+import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
+import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
 
@@ -260,6 +268,7 @@ function testIo(env: Record<string, string> = {}) {
     stdout: out.out,
     stderr: err.out,
     stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
   };
   return { io, stdout: out.text, stderr: err.text };
@@ -621,6 +630,163 @@ describe("run outcomes", () => {
   });
 });
 
+const REQUIRED_INPUTS_FLOW = `id: cli_required_inputs
+name: cli_required_inputs
+input:
+  first: !str
+  optional: !Optional(str)
+  second: !int
+nodes:
+  show:
+    kind: code
+    input:
+      first: \${input.first}
+      optional: \${input.optional}
+      second: \${input.second}
+    output: object
+    code: return inputs
+output: \${show.output}
+`;
+
+/** A flow declaring `inputs` (YAML lines under `input:`) whose output is `null`. */
+function inputsFlow(inputs: string): string {
+  return `id: gate\nname: gate\ninput:\n${inputs}nodes: {}\noutput: null\n`;
+}
+
+/** The input names the run at `log` was given, from its `RunStarted` record. */
+function suppliedNames(log: string): string[] {
+  const record = readRunLog(log)[0]!.record;
+  if (!(record instanceof RunStartedRecord)) throw new Error("the log doesn't start with RunStarted");
+  return Object.keys(record.startWiringOverride);
+}
+
+const INPUT_HINT = "Invalid value for '--input' / '--inputs'";
+
+describe("run's input gate", () => {
+  test("undeclared input flag is a bad parameter", async () => {
+    const argv = ["--input", "topic=clouds", "--input", "topik=x"];
+    const { code, stdout, stderr } = await runFlowCli(ECHO_FLOW, argv);
+    expect(code).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toEndWith(`Error: ${INPUT_HINT}: unknown input "topik"; declared inputs: topic\n`);
+  });
+
+  test("undeclared inputs json key is a bad parameter", async () => {
+    const inputs = inputsFile('{"topic": "clouds", "topik": "x"}');
+    const { code, stderr } = await runFlowCli(ECHO_FLOW, ["--inputs", inputs]);
+    expect(code).toBe(2);
+    expect(stderr).toContain('unknown input "topik"');
+  });
+
+  test("an unknown name fails before a missing required input is reported", async () => {
+    const { code, stderr } = await runFlowCli(REQUIRED_INPUTS_FLOW, ["-q", "--input", "nope=1"]);
+    expect(code).toBe(2);
+    expect(stderr).toContain('unknown input "nope"');
+    expect(stderr).not.toContain("missing required");
+  });
+
+  test("gather non-TTY leaves optional and defaulted inputs absent", async () => {
+    const log = join(tmp, "run.jsonl");
+    const flow = inputsFlow("  optional: !Optional(str)\n  defaulted: !int 7\n");
+    const { code } = await runFlowCli(flow, ["-q", "--log", log]);
+    expect(code).toBe(0);
+    expect(suppliedNames(log)).toEqual([]);
+  });
+
+  test("gather non-TTY reports all missing required inputs in order", async () => {
+    const { code, stdout, stderr } = await runFlowCli(REQUIRED_INPUTS_FLOW, ["-q"]);
+    expect(code).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toEndWith(`Error: ${INPUT_HINT}: missing required flow inputs: first, second\n`);
+  });
+
+  test("gather non-TTY filters required inputs by exact key membership", async () => {
+    const declared = "  none: !Optional(str)\n  flag: !bool\n  zero: !int\n  blank: !str\n  missing: !int\n";
+    const flow = inputsFlow(declared);
+    const inputs = inputsFile('{"none": null, "flag": false, "zero": 0, "blank": ""}');
+    const { code, stderr } = await runFlowCli(flow, ["-q", "--inputs", inputs]);
+    expect(code).toBe(2);
+    expect(stderr).toEndWith(`Error: ${INPUT_HINT}: missing required flow input: missing\n`);
+  });
+
+  test("non-TTY run reports all missing required inputs before setup", async () => {
+    const { code, stderr } = await runFlowCli(REQUIRED_INPUTS_FLOW, ["-q"]);
+    expect(code).toBe(2);
+    const error = stderr.slice(stderr.indexOf("Error: "));
+    expect(error.indexOf("first")).toBeLessThan(error.indexOf("second"));
+    expect(error).not.toContain("optional");
+    expect(stderr).not.toContain("Run log:");
+    // The default log path was never made.
+    expect(existsSync(join(tmp, "home", ".yian"))).toBe(false);
+  });
+});
+
+/** Run `yian run flow.yaml -q argv` on a log at `tmp/run.jsonl`, stdin a fake TTY given `keys`. */
+async function runOnTty(body: string, argv: readonly string[], keys: (input: FakeInput) => void) {
+  const flow = file("flow.yaml", body);
+  const { io, stdout, stderr } = testIo();
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  // Typed ahead: the terminal reads them once it prompts.
+  keys(input);
+  const code = await main(["run", flow, "-q", "--log", join(tmp, "run.jsonl"), ...argv], {
+    ...io,
+    stdin: input,
+    stderrStream: output,
+  });
+  return { code, stdout: stdout(), stderr: stderr(), drawn: output.text, input };
+}
+
+const PROMPT_DEFAULTS_FLOW = `id: prompt-defaults
+name: prompt-defaults
+typedefs:
+  Mode: Literal(z, a)
+input:
+  items: !list(str) [a, b]
+  mode: !Mode z
+  flag: !Optional(bool)
+nodes:
+  show:
+    kind: code
+    code: return inputs
+    input:
+      items: \${input.items}
+      mode: \${input.mode}
+      flag: \${input.flag}
+    output: object
+output: \${show.output}
+`;
+
+describe("run's input prompts on a TTY", () => {
+  test("accepting each omission leaves START's defaults", async () => {
+    const enter = (keys: FakeInput) => keys.write("\r\r\r");
+    const { code, stdout, drawn, input } = await runOnTty(PROMPT_DEFAULTS_FLOW, [], enter);
+    expect(code).toBe(0);
+    for (const label of ["items (list(str)) [default: ", "mode (Literal(a, z))", "flag (Optional(bool))"]) {
+      expect(drawn).toContain(label);
+    }
+    expect(input.rawCalls).toEqual([true, false]);
+    expect(JSON.parse(stdout)).toEqual({ flag: null, items: ["a", "b"], mode: "z" });
+    expect(suppliedNames(join(tmp, "run.jsonl"))).toEqual([]);
+  });
+
+  test("a cancelled prompt is run cancelled, run.cancelled under --json", async () => {
+    const stops: [string, (keys: FakeInput) => void][] = [
+      ["Ctrl-C", (keys) => keys.write("\x03")],
+      ["the end of input", (keys) => keys.end()],
+    ];
+    for (const [name, stop] of stops) {
+      const { code, stdout, stderr } = await runOnTty(REQUIRED_INPUTS_FLOW, ["--json"], stop);
+      expect(code, name).toBe(1);
+      expect(stderr, name).toBe("run cancelled\n");
+      expect(JSON.parse(stdout), name).toEqual({
+        format: "yian.cli.v1",
+        error: { code: "run.cancelled", message: "run cancelled" },
+      });
+    }
+  });
+});
+
 // Two nodes that start together, so a TTY shows two spinner lines.
 const PARALLEL_FLOW =
   "id: par\nname: par\nnodes:\n  a: {kind: code, output: str, code: return 'a'}\n" +
@@ -648,6 +814,7 @@ describe("run setup errors", () => {
       stdout: sink().out,
       stderr,
       stdin: new PassThrough(),
+      stderrStream: new PassThrough(),
       env: (name) => (name === "NO_COLOR" ? "1" : undefined),
     };
     expect(await main(["run", flow, "-q", "--log", join(tmp, "run.jsonl")], io)).toBe(0);
@@ -660,19 +827,15 @@ describe("run setup errors", () => {
   });
 
   test("--engine-trace prints the stack box after run failed:", async () => {
-    const { code, stderr } = await runFlowCli(ECHO_FLOW, [
-      "-q",
-      "--engine-trace",
-      "--input",
-      "topic=clouds",
-      "--input",
-      "topik=x",
-    ]);
+    // A log whose directory is a file: the run can't create it.
+    const log = join(file("taken", ""), "run.jsonl");
+    const argv = ["-q", "--engine-trace", "--log", log, "--input", "topic=clouds"];
+    const { code, stderr } = await runFlowCli(ECHO_FLOW, argv);
     expect(code).toBe(1);
     const failed = stderr.indexOf("run failed: ");
     expect(failed).toBeGreaterThan(-1);
     expect(stderr.indexOf("─ traceback ")).toBeGreaterThan(failed);
-    expect(stderr).toContain("RangeError");
+    expect(stderr).toContain("ENOTDIR");
     expect(stderr).toContain("    at ");
   });
 });
@@ -703,20 +866,12 @@ describe("run --json", () => {
     expect(JSON.parse(stdout).error.code).toBe("compose.load");
   });
 
-  test("an unknown input is a run.setup error, run failed: on stderr", async () => {
-    const { code, stdout, stderr } = await runFlowCli(ECHO_FLOW, [
-      "--json",
-      "--input",
-      "topic=clouds",
-      "--input",
-      "topik=x",
-    ]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("run failed: ");
-    expect(stderr).toContain("topik");
-    const { error } = JSON.parse(stdout);
-    expect(error.code).toBe("run.setup");
-    expect(error.message).toContain("topik");
+  test("an unknown input is a usage error: exit 2, nothing on stdout", async () => {
+    const argv = ["--json", "--input", "topic=clouds", "--input", "topik=x"];
+    const { code, stdout, stderr } = await runFlowCli(ECHO_FLOW, argv);
+    expect(code).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("unknown input");
   });
 });
 

@@ -35,9 +35,12 @@ import { isSystemError, resolvedPath, SkillError, statOrNull } from "../skills/c
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import { canonicalTypeLabel, FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
+import { checkInputNames } from "../nodes/binding.ts";
+import type { Parameter } from "../nodes/contracts.ts";
 import { type RunResult, runFlow } from "../run.ts";
 import { registeredTools } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
+import { Terminal } from "./terminal.ts";
 import { type CliIo, CommandEnv, osReason, printJson, UsageError, type Writer } from "./utils.ts";
 
 // The TS run inspection isn't ported yet; it throws until its module lands.
@@ -447,6 +450,32 @@ export function mergeInputs(inputs: string | undefined, inputValues: readonly st
   return Object.assign(Object.create(null), fromFile, parseKv(inputValues));
 }
 
+// Click's hint for an error in the inputs `--input` and `--inputs` supply together.
+const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
+
+/**
+ * Return the inputs to add to `supplied`: each declaration it lacks (key presence) answered at
+ * `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted inputs absent
+ * for START. Returns null when a prompt is cancelled.
+ *
+ * @throws {UsageError} Without a terminal, when required inputs are missing, naming them all in
+ *   declaration order.
+ */
+async function gatherMissingInputs(
+  decls: readonly Parameter[],
+  supplied: Readonly<Record<string, unknown>>,
+  terminal: Terminal | null,
+): Promise<Record<string, unknown> | null> {
+  if (terminal !== null) return terminal.promptInputs(decls, supplied);
+  const required = decls.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
+  if (required.length > 0) {
+    const noun = required.length === 1 ? "input" : "inputs";
+    const names = required.map((decl) => decl.name).join(", ");
+    throw new UsageError(`${INPUTS_HINT}: missing required flow ${noun}: ${names}`);
+  }
+  return {};
+}
+
 /** Whether a directory entry exists at `path`, a dangling symlink included. */
 function lexists(path: string): boolean {
   try {
@@ -627,16 +656,34 @@ function isSetupError(error: unknown): error is Error {
  * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
  * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
  * 1. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path always
- * does. The log is `log`, else a fresh one under `~/.yian/runs` named by the run id. A succeeded
- * run prints its output on stdout, as text; a failed one prints its diagnostic on stderr and exits
- * 1. A host failure (a bad option value, an input the flow doesn't declare, a log that can't be
+ * does. On a TTY stdin, each input not supplied is prompted for on stderr, and a cancelled prompt
+ * prints `run cancelled` and exits 1. The log is `log`, else a fresh one under `~/.yian/runs`
+ * named by the run id. A succeeded run prints its output on stdout, as text; a failed one prints
+ * its diagnostic on stderr and exits 1. A host failure (a bad option value, a log that can't be
  * created) prints `run failed: <message>` on stderr and exits 1. Under `json`, stdout holds one
  * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
- * (`compose.load`, `run.setup`).
+ * (`compose.load`, `run.cancelled`, `run.setup`).
  *
- * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do.
+ * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for an input the flow
+ *   doesn't declare; off a TTY, for missing required inputs.
  */
 export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
+  // Building it touches neither stream; it reads keys only when it prompts.
+  const terminal = new Terminal({ input: io.stdin, output: io.stderrStream });
+  try {
+    return await startRun(flowPath, options, io, terminal);
+  } finally {
+    terminal.close();
+  }
+}
+
+/** `run`'s body, prompting at `terminal`. */
+async function startRun(
+  flowPath: string,
+  options: RunOptions,
+  io: CliIo,
+  terminal: Terminal,
+): Promise<number> {
   validateRunLogOptions(options);
   const { json, quiet, verbose, engineTrace } = options;
   const fail = async (diagnostic: Diagnostic) => {
@@ -684,6 +731,20 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
   }
   const commandEnv = new CommandEnv(io.env);
   const supplied = mergeInputs(options.inputs, options.inputValues);
+  // Before prompting, so a typo'd name fails instead of prompting for the real one.
+  try {
+    checkInputNames(flow.input, supplied);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
+  }
+  const prompter = io.stdin.isTTY === true ? terminal : null;
+  const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
+  if (gathered === null) {
+    await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
+    return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+  }
+  Object.assign(supplied, gathered);
 
   const runId = defaultRunId();
   let log: string;
@@ -702,7 +763,7 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
         runId,
         numWorkers: options.numWorkers ?? 8,
         onEvent: reporter === null ? null : (event) => reporter.handle(event),
-        tools: { ...registeredTools() },
+        tools: { ...registeredTools(), ask_user: terminal.askUser },
         env: commandEnv.read,
       });
     } finally {

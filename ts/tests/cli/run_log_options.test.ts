@@ -131,6 +131,7 @@ async function runCli(args: string[]) {
     stdout: { write: async (text) => void out.push(text) },
     stderr: { write: async (text) => void err.push(text) },
     stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
     env: (name) => (name === "HOME" ? join(tmp, "home") : undefined),
   };
   const code = await main(["run", flow, ...args], io);

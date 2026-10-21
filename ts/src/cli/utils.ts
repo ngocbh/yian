@@ -42,11 +42,15 @@ export interface Writer {
   readonly columns?: number;
 }
 
-/** A command's standard streams and environment. */
+/**
+ * A command's standard streams and environment: `stdin` and `stderrStream` are the raw streams a
+ * `Terminal` prompts on, `stderrStream` being the stream under `stderr`.
+ */
 export interface CliIo {
   stdout: Writer;
   stderr: Writer;
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
+  stderrStream: NodeJS.WritableStream & { columns?: number };
   env: Env;
 }
 
@@ -97,6 +101,7 @@ export function processIo(): CliIo {
     stdout: streamWriter(process.stdout),
     stderr: streamWriter(process.stderr),
     stdin: process.stdin,
+    stderrStream: process.stderr,
     env: processEnv,
   };
 }

@@ -183,6 +183,7 @@ async function runCli(args: string[], log = "run.jsonl") {
     stdout: { write: async (text) => void out.push(text) },
     stderr: { write: async (text) => void err.push(text) },
     stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
     env: (name) => (name === "HOME" ? tmp : undefined),
   };
   const code = await main(["run", flow, "--log", join(tmp, log), ...args], io);

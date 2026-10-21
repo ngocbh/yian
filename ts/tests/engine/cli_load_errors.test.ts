@@ -103,6 +103,7 @@ async function runCli(text: string, args: string[] = []): Promise<{ code: number
     stdout: { write: async () => {} },
     stderr: { write: async (chunk) => void chunks.push(chunk) },
     stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
     env: (name) => (name === "HOME" ? tmp : undefined),
   };
   const code = await main(["run", flow, ...args], io);

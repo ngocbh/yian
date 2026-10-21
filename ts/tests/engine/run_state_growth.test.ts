@@ -85,9 +85,6 @@
  *   '__end__' has invalid wiring`).
  * - the `buildGrow` rows' LOOP seeds hold the iteration as a `bigint` (`[{}, 0n]`), as the
  *   reducer's canonical seed does.
- * - `test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero`: the clone's `Grow`
- *   is written out as its `run` gives it (seed `[{}, 1n]`, pruning body 0 and itself), since LOOP
- *   `forward` isn't ported.
  * - `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`: it keeps the
  *   after-prepare mutations, the builder call count and the `addSubgraph`/`removeSubgraph` spies;
  *   the guards on `copy.deepcopy`, `canonical_seed`, `expansion_digest` and `NodeExpanded` go,
@@ -136,7 +133,6 @@ import {
   ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
-import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -1468,7 +1464,7 @@ test.each([
   expect(error.cause).toBeInstanceOf(ExpressionError);
 });
 
-test("a LOOP clone record uses the actual id, self-prunes and inherits depth zero", () => {
+test("a LOOP clone record uses the actual id, self-prunes and inherits depth zero", async () => {
   const child = canonicalChild();
   const loop = new LoopNode("spawn", {
     flowId: "child",
@@ -1497,9 +1493,10 @@ test("a LOOP clone record uses the actual id, self-prunes and inherits depth zer
   state.ready.push("spawn~1");
   commitPrepared(log, state, prepareNodeStarted(state, "spawn~1"));
 
-  // The grow the clone's `run({})` gives: continue with iteration 1, pruning body 0 and itself.
-  const grow = new Grow([{}, 1n], [...[...child.nodes.keys()].map((id) => ns(mapCallsite("spawn", 0), id)), "spawn~1"]);
-  const prepared = prepareExpanded(state, "spawn~1", grow, buildGrow);
+  const clone = state.flow.nodes.get("spawn~1")!;
+  const grow = await clone.run({});
+  expect(grow.constructor).toBe(Grow);
+  const prepared = prepareExpanded(state, "spawn~1", grow as Grow, buildGrow);
 
   const record = prepared.record as NodeExpandedRecord;
   expect(record.spawnerId).toBe("spawn~1");

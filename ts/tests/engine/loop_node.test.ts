@@ -39,8 +39,8 @@
  *
  * Covered elsewhere: `test_node_origin_id_defaults_none` (`base_node.test.ts`).
  *
- * Ported through `buildGrow`, the child a hand-built START -> head -> tail -> END flow (Python's
- * `_child_flow` from `test_expand.py`, written here):
+ * Ported through `buildGrow`, the child a hand-built START -> head -> tail -> END flow
+ * (`run_state_fixtures.ts`'s `childFlow`, Python's `_child_flow` from `test_expand.py`):
  * `test_build_grow_rebuilds_body_and_next_driver_on_origin`,
  * `test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte`,
  * `test_later_loop_growth_does_not_duplicate_the_loop_origin` and
@@ -52,13 +52,12 @@ import { expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
 import { expansionDigest } from "../../src/compile/manifest.ts";
-import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed } from "../../src/events.ts";
 import { ExpressionError, evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import { MemoryScope } from "../../src/memory/contracts.ts";
 import { Grow, type Node, NodeKind, Output } from "../../src/nodes/base.ts";
-import { CodeNode } from "../../src/nodes/code/node.ts";
 import {
   Assertion,
   ContractOrigins,
@@ -68,13 +67,11 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
-import { EndNode } from "../../src/nodes/end/node.ts";
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
-import { StartNode } from "../../src/nodes/start/node.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
 import { FileRef, Type, ValueKind } from "../../src/typesys/values.ts";
-import { engine, graph, rejected } from "./run_state_fixtures.ts";
+import { childFlow, engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -258,37 +255,6 @@ test("respawn refuses a scope that doesn't end in the driver's position", () => 
     expectError(() => node.respawn(1), RangeError, "loop scope must end in its current driver position");
   }
 });
-
-/** A child START -> head (reads `${input.x}`) -> tail (reads `${head.output}`) -> END. */
-function childFlow(): CompiledFlow {
-  const head = new CodeNode("head", { code: 'return inputs["x"] + 1' });
-  head.params = [new Parameter("x")];
-  const tail = new CodeNode("tail", { code: 'return inputs["r"] * 10' });
-  tail.params = [new Parameter("r")];
-  const x = new Parameter("x", {
-    contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
-    required: true,
-    coerceStrings: true,
-  });
-  const nodes = new Map<string, Node>([
-    [START_ID, new StartNode(START_ID, { params: [x] })],
-    ["head", head],
-    ["tail", tail],
-    [END_ID, EndNode.value(END_ID, { outputName: "out" })],
-  ]);
-  const edges = [
-    new Edge("__start__->head#0", START_ID, "head", { inputGroup: "x" }),
-    new Edge("head->tail#0", "head", "tail", { inputGroup: "r" }),
-    new Edge("tail->__end__#0", "tail", END_ID, { inputGroup: "out" }),
-  ];
-  const wiring = new Map([
-    ["head", new Map([["x", "${input.x}"]])],
-    ["tail", new Map([["r", "${head.output}"]])],
-    [START_ID, new Map([["x", "${input.x}"]])],
-    [END_ID, new Map([["out", "${tail.output}"]])],
-  ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
-}
 
 /** A `while` driver `lp` over `childFlow()`, its params the child START's. */
 function grownLoop(): LoopNode {

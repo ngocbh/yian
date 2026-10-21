@@ -20,8 +20,11 @@
  * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
  * `test_expansion_deletes_the_spawners_steps_and_starts` (on the shared `initializedSpawner` and
  * `fragment`),
- * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta` and
- * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
+ * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta`,
+ * `test_broken_step_state_is_rejected_before_append` (4 rows) and
+ * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune` (on the shared
+ * `initializedSpawner`, `parentFlow` and `canonicalChild`; the LOOP seed's iteration is `0n`, and
+ * the replay runs over a `copyGraph` copy of a fresh parent flow). Each rejected row names its one
  * class and full message, where Python matches a part of the message or accepts either class.
  *
  * Ported, the replay tests (through `replayRecords` on a fresh `fanoutFlow()`; the log never
@@ -50,10 +53,6 @@
  * and the `{1: "x"}` row of `test_prepare_node_step_rejects_invalid_steps` (JS object keys are
  * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
  * and a list are both an array).
- *
- * Ported: `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune`, on the shared
- * `initializedSpawner`, `parentFlow` and `canonicalChild`; the LOOP seed's iteration is `0n`, and
- * the replay runs over a `copyGraph` copy of a fresh parent flow.
  */
 
 import { expect, test } from "bun:test";

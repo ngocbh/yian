@@ -15,10 +15,9 @@
  * public `names`, `mode` and `n` (Python's private `_names`, `_mode`, `_n`).
  * `test_end_projects_its_zero_one_and_many_output_layouts` appends an END's extra assertion param
  * by replacing `params`, which TS types as read-only.
- * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate` builds the
- * stopped driver's output, the carried record, by hand, since LOOP's body isn't ported yet; its
- * predicate doesn't parse, so backward would throw if it evaluated it (Python's monkeypatch). The
- * params are emptied by assigning `[]`.
+ * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate` swaps the
+ * predicate for one that doesn't parse after `forward` stops, so backward would throw if it
+ * evaluated it (Python's monkeypatch). The params are emptied by assigning `[]`.
  *
  * Ported (through `evalNode`): `test_input_inventory_capture_preserves_canonical_parameter_setup_faults`
  * (Python's `object()` entry is `{}`),
@@ -298,17 +297,18 @@ test("end backward uses captured layout after live node fields change", () => {
 });
 
 test("stopping loop projects all carried fields without reevaluating predicate", () => {
-  // A predicate that doesn't parse: evaluating it in backward would throw.
   const node = new LoopNode("loop", {
     flowId: "body",
-    predicate: "${unparseable",
+    predicate: "false",
     maxIters: 2,
     childInputs: [new Parameter("value")],
   });
   node.params = [new Parameter("value"), new Parameter("carried_only")];
   const inputs = { value: 7n, carried_only: ["kept"] };
-  const context = contextFor(node, inputs, { ...inputs });
+  const context = contextFor(node, inputs, (node.forward(inputs) as Output).value);
 
+  // A predicate that doesn't parse: evaluating it in backward would throw.
+  node.predicate = "${unparseable";
   node.params = [];
   const result = node.backward(context, [{ carried_only: ["Review."] }]);
   expect(result.inputFeedback).toEqual({ carried_only: [["Review."]] });

@@ -24,6 +24,12 @@ per entry (`current().maxTotalNodes`). It reads the process environment (`proces
 `read(env)` takes any `Env` accessor and returns the values it sets, with built-in values
 for the rest. TS yian's own entries are in a second table, [TS yian only](#ts-yian-only).
 
+Changed (TS yian): a host can pass the environment per call instead.
+`loadFlow(text, { env })` with an `env` other than `processEnv` reads every variable from
+it when the load starts and uses those values for the whole load; `withEnv(env, fn)` does
+the same for any code. The `AGENT_RETRIES` and `TOOL_RETRIES` defaults a load fills in
+become part of the loaded flow, so they keep the load's values when the flow runs.
+
 ## Setting a value
 
 Set the variable before the process starts:

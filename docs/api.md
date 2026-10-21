@@ -107,14 +107,17 @@ reachable source origin. It is `None` only for a source-free graph. External
 files remain canonical in the path cache; each `uses:` alias embeds a rebased
 copy whose routes still resolve to the original file.
 
-Changed (TS yian): `loadFlow(text, { childResolver, searchPaths, sourceLabel, baseDir })`
+Changed (TS yian): `loadFlow(text, { childResolver, searchPaths, sourceLabel, baseDir, env })`
 returns a Promise of the `ComposedFlow`, and a `LoadError` is its rejection. A
 `childResolver(path, version)` may return the flow or a Promise of it. Every `uses:` file
 is read before the flow assembles. `baseDir` is the directory a CODE node's
 `./file.ts:fn` reference resolves against (default: the first search path, else the
 current directory); a file read through the search path resolves against its own
 directory, so a `childResolver` that loads a child file passes the child's own directory
-as its `baseDir`.
+as its `baseDir`. `env` is the environment this load reads the `YIAN_*` values from. The
+default is the process environment, or the calling load's when a `childResolver` calls
+`loadFlow` without `env`.
+A bad `YIAN_*` value in `env` rejects with `DefaultsError`, not `LoadError`.
 
 ## `run_flow`
 
@@ -2549,6 +2552,12 @@ current().max_total_nodes  # 10000 unless YIAN_MAX_TOTAL_NODES sets it
 - `DefaultsMismatchError` (a `ValueError`) is raised by `resume_flow` and by
   `RunResult.backward`'s replay when the run's recorded values differ from this
   process's; see [Durable recovery](#durable-recovery-with-resume_flow).
+
+Changed (TS yian): `loadFlow`'s `env` option sets the `YIAN_*` values for that load:
+`current()` returns the values read from it for all of the load's work, so concurrent loads
+with different environments each keep their own. `withEnv(env, fn)` (from
+`ts/src/defaults.ts`) does the same for any code; `withEnv(processEnv, fn)` keeps the values
+already in effect. Elsewhere `current()` returns the process values, read once.
 
 Changed: these module constants were removed; set the variable instead.
 

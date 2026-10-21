@@ -8,16 +8,18 @@
  * (`_BYTES`, `_CHARS`); counts have none. Code reads a value as the camelCase property
  * of `current()`, for example `current().maxValueNesting`.
  *
- * Values are read once per process: the first `current()` call reads and checks every
- * variable, and later changes to the environment have no effect. The environment is
- * injected as an `Env` function (`processEnv` reads `process.env`), and an empty
- * variable counts as unset. A run records the values that differ from the built-in
- * ones, and resuming it with different values is refused. `docs/defaults.md` lists
- * every entry.
+ * Values are read once per process, unless a call's `env` scopes them: the first
+ * `current()` call reads and checks every variable, and later changes to the environment
+ * have no effect. Inside `withEnv(env, fn)`, `current()` returns the values `env` sets
+ * instead, for `fn` and the async work it starts. The environment is injected as an `Env`
+ * function (`processEnv` reads `process.env`), and an empty variable counts as unset. A run
+ * records the values that differ from the built-in ones, and resuming it with different
+ * values is refused. `docs/defaults.md` lists every entry.
  *
  * This module imports only `node:` builtins, so any layer may import it.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
 
 /** The kind of an entry: a language safety limit, a setting's default, or an input cap. */
@@ -529,16 +531,43 @@ export function read(env: Env): Defaults {
 
 let cached: Defaults | undefined;
 
+/** The values of the innermost enclosing `withEnv` call with a custom `env`, if any. */
+const SCOPED = new AsyncLocalStorage<Defaults>();
+
 /**
- * Return this process's values, reading `processEnv` on the first call.
+ * Return the values in effect: the enclosing `withEnv` call's, else this process's, reading
+ * `processEnv` on the first call.
  *
  * A failed read is not kept, so every call throws until the environment is fixed.
  *
- * @returns The values in effect for this process.
+ * @returns The values in effect for this call.
  * @throws {DefaultsError} If a variable holds a value its entry does not accept.
  */
 export function current(): Defaults {
-  return (cached ??= read(processEnv));
+  return SCOPED.getStore() ?? (cached ??= read(processEnv));
+}
+
+/**
+ * Run `fn` with `current()` returning the values `env` sets, for `fn` and the async work it starts.
+ *
+ * `processEnv` keeps the values already in effect (the enclosing call's, else this process's).
+ * A custom `env` is read once, before `fn` runs. The scope covers only `fn` and the work it
+ * starts: an object returned from `fn` and used later (a run result's replay, a pooled
+ * connection's callbacks) is outside it, so wrap that use in its own `withEnv` or capture the
+ * values. Concurrent calls don't see each other's values.
+ *
+ * @param env The environment to read, such as `processEnv`; an empty value counts as unset.
+ * @param fn The work to run, sync or async.
+ * @returns What `fn` returns.
+ * @throws {DefaultsError} If a variable holds a value its entry does not accept; then `fn` is not called.
+ */
+export function withEnv<T>(env: Env, fn: () => T): T {
+  if (env === processEnv) {
+    // Read now, so a bad process value throws before `fn` starts work, as a custom one does.
+    current();
+    return fn();
+  }
+  return SCOPED.run(read(env), fn);
 }
 
 /**
@@ -582,6 +611,8 @@ export function checkRecorded(recorded: Readonly<Record<string, bigint | number>
 /**
  * Drop this process's values, read `env` and keep the result; for tests and conformance.
  *
+ * Inside a `withEnv` call with a custom `env`, `current()` still returns that call's values.
+ *
  * @param env The environment to read.
  * @returns The new values.
  * @throws {DefaultsError} If a variable holds a value its entry does not accept; then no values are kept.
@@ -592,12 +623,19 @@ export function reload(env: Env = processEnv): Defaults {
   return cached;
 }
 
-/** Keep a frozen copy of `values` as this process's values, with no range check; for tests and conformance. */
+/**
+ * Keep a frozen copy of `values` as this process's values, with no range check; for tests and conformance.
+ *
+ * Inside a `withEnv` call with a custom `env`, `current()` still returns that call's values.
+ */
 export function install(values: Defaults): void {
   cached = Object.freeze({ ...values });
 }
 
-/** Drop this process's values so the next `current()` reads again; for tests and conformance. */
+/**
+ * Drop this process's values so the next `current()` outside a custom `withEnv` scope reads
+ * again; for tests and conformance.
+ */
 export function forget(): void {
   cached = undefined;
 }

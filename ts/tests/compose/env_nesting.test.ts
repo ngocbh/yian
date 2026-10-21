@@ -27,6 +27,9 @@
  * `test_env_value_repeating_an_alias_loads_and_runs`. The CODE reference is TS's
  * (`./fixtures/compose_codefns.ts:echo`). The other rows are ported through `checkEnvValues`.
  *
+ * TS-only: `loadFlow`'s `env` sets the limit for one load, its imports included, without
+ * reading the process environment; concurrent loads keep their own limits.
+ *
  * Changed: Python's check that no `RecursionError` is in the error's chain is left out.
  *
  * Not ported: the `!!pairs` row of `test_flow_env_cycle_names_the_entry_that_refers_back`
@@ -36,12 +39,13 @@
  * `test_env_value_repeating_an_alias_loads_and_runs`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { checkEnvValues, checkWrittenValue } from "../../src/compose/helpers/value_nesting.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { BUILTIN, install } from "../../src/defaults.ts";
+import { BUILTIN, DefaultsError, ENTRIES, type Env, forget, install, processEnv } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
 import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
@@ -412,5 +416,110 @@ describe("loaded sites", () => {
 
   test("an env scalar value loads", async () => {
     await loadConformanceFlow(loadedFlowEnv("", "1"));
+  });
+});
+
+describe("loadFlow's env", () => {
+  const AT_3 = "value nests deeper than 3 levels";
+  // Five levels: past a limit of 3, within the built-in one.
+  const ROOT = "uses:\n  ext: child\n" + nodeEnv("", "[[[[[1]]]]]");
+  const CHILD_TEXT =
+    "id: child\nname: child\nnodes:\n  step:\n" +
+    ECHO +
+    "    input:\n      topic: x\noutput: ${step.output}\n";
+
+  /** Return an environment holding only `vars`. */
+  function envOf(vars: Readonly<Record<string, string>>): Env {
+    return (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined);
+  }
+
+  /** Assert `promise` rejects with the limit-of-3 error at node `use`. */
+  async function expectAt3(promise: Promise<unknown>): Promise<void> {
+    const { diagnostic } = await loadErrorAsync(promise);
+    expect(diagnostic.message.startsWith("node 'use' env 'K' at ")).toBe(true);
+    expect(diagnostic.message).toContain(AT_3);
+  }
+
+  let child: ComposedFlow;
+  beforeAll(async () => {
+    child = await loadConformanceFlow(CHILD_TEXT);
+  });
+
+  test("concurrent loads keep their own limits", async () => {
+    let arrived = 0;
+    const bothArrived = Promise.withResolvers<void>();
+    const gateA = Promise.withResolvers<void>();
+    const gateB = Promise.withResolvers<void>();
+    const gated = (gate: Promise<void>) => async () => {
+      arrived += 1;
+      if (arrived === 2) bothArrived.resolve();
+      await gate;
+      return child;
+    };
+    const a = loadConformanceFlow(ROOT, {
+      env: envOf({ YIAN_MAX_VALUE_NESTING: "3" }),
+      childResolver: gated(gateA.promise),
+    });
+    const b = loadConformanceFlow(ROOT, { env: envOf({}), childResolver: gated(gateB.promise) });
+    // A load that settles before reaching its resolver ends the wait and fails below.
+    await Promise.race([bothArrived.promise, a, b]);
+    expect(arrived).toBe(2);
+    // A finishes under its limit after B has started, so a value B left behind would show here.
+    gateA.resolve();
+    await expectAt3(a);
+    gateB.resolve();
+    await b;
+  });
+
+  test("a child loaded without env loads under its importer's", async () => {
+    const shallowRoot = "uses:\n  ext: child\n" + nodeEnv("", "1");
+    const deepChild = nodeEnv("", "[[[[[1]]]]]");
+    const error = await loadErrorAsync(
+      loadConformanceFlow(shallowRoot, {
+        env: envOf({ YIAN_MAX_VALUE_NESTING: "3" }),
+        childResolver: () => loadConformanceFlow(deepChild),
+      }),
+    );
+    expect(error.diagnostic.message).toContain(AT_3);
+  });
+
+  test("the default keeps the process values", async () => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    await expectAt3(loadConformanceFlow(ROOT, { childResolver: () => child }));
+    await expectAt3(loadConformanceFlow(ROOT, { env: processEnv, childResolver: () => child }));
+  });
+
+  test("a bad env value is a DefaultsError before anything resolves", async () => {
+    let called = false;
+    const load = loadConformanceFlow(ROOT, {
+      env: envOf({ YIAN_MAX_VALUE_NESTING: "abc" }),
+      childResolver: () => {
+        called = true;
+        return child;
+      },
+    });
+    await expect(load).rejects.toBeInstanceOf(DefaultsError);
+    expect(called).toBe(false);
+  });
+
+  test("a load reads each variable from env once and not the process environment", async () => {
+    const asked: string[] = [];
+    const recorder: Env = (name) => {
+      asked.push(name);
+      return undefined;
+    };
+    await loadConformanceFlow(ROOT, { env: recorder, childResolver: () => child });
+    expect(asked).toEqual(ENTRIES.map((entry) => entry.variable));
+
+    // A bad process value makes any read of the process environment throw.
+    const saved = process.env["YIAN_MAX_VALUE_NESTING"];
+    try {
+      process.env["YIAN_MAX_VALUE_NESTING"] = "abc";
+      forget();
+      await loadConformanceFlow(ROOT, { env: recorder, childResolver: () => child });
+    } finally {
+      if (saved === undefined) delete process.env["YIAN_MAX_VALUE_NESTING"];
+      else process.env["YIAN_MAX_VALUE_NESTING"] = saved;
+    }
   });
 });

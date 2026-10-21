@@ -283,6 +283,13 @@ test("AGENT backward uses the recorded model and no tools", async () => {
     }),
   ]);
   const models = access(chat);
+  const build = models.createModel;
+  // As Python's factory, mutate the config the model is built from; the record must not change.
+  models.createModel = (config, given) => {
+    const built = build(config, given);
+    (config as Record<string, unknown>)["model"] = "factory mutation";
+    return built;
+  };
 
   const result = await node.backward(recorded, feedback, { models });
 

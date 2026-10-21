@@ -53,27 +53,28 @@
  * its `typeof`); the `SKIPPED_TOOL_RESULT` and `SKIPPED_TOOL_ERROR` texts; the `DEFAULT_SYSTEM`
  * text and the loop errors' names; `isTextOutput`; `isMaxToolIterations`; the default
  * `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward`'s host
- * secrets (a static agent's own `api_key` and `headers`, a marked call-time agent's host key, an
- * unmarked one's none) joined to the recorded config; the load-time hooks (`reservedWiringKeys`,
- * `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`, `recordedLlmConfig`, `boundLlmConfig`,
- * `backwardInputNames`, `bindReserved`, `validatePrompts`, `validateExecutionSetup`); `needsSteps`
- * on every agent, call-time or not, also on a shallow copy, which carries `callTime`;
- * `needsModels`; each `provider.*` code through
- * the node (a `ProviderError` of the kind `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call
- * with invalid arguments gets `ToolCallStarted` then `ToolCallFinished{error: "RangeError"}` before
- * the node fails, an ungranted call gets no brackets, the request carries the bound `ToolSpec`s in
- * grant order (`load_skill` last when skills are granted) with no `toolChoice` and
- * `parallelToolCalls: null`, a call's id is `<run>/<node>/<exchange>/<index>` on a run-bound tool
- * set and a fresh id on an unbound one, with the node and `attempt: 1` in its `ToolContext`, and a
- * tool result `fromHost` refuses fails the node after the call ran; a call-time agent records a
- * copy of its bound config and calls the model with the host key joined, and a bound config that
- * differs from the recorded one is a host fault before any model is built; a reply calling a tool
- * at a cap of one model turn fails with `agent.max_tool_iterations`; without `models` the node
- * builds through `defaultModelAccess` (an unknown provider's `ValidationError`, no network); a
- * failing credentials read doesn't replace the error being scrubbed. Through `FlowEngine` with a
- * run log: a retried model call's `model_attempt` step comes before the node's outcome; a resumed
- * call-time agent (state replayed from the log, a fresh engine) restarts past its `model_attempt`
- * step, records its `effective_llm_config` again, and numbers its calls from 1 again.
+ * secrets (a static agent's own `api_key` and `headers`, a marked call-time agent's host key and
+ * headers, an unmarked one's none) joined to the recorded config; the load-time hooks
+ * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
+ * `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`, `validatePrompts`,
+ * `validateExecutionSetup`); `needsSteps` on every agent, call-time or not, also on a shallow copy,
+ * which carries `callTime`; `needsModels`; each `provider.*` code through the node (a
+ * `ProviderError` of the kind `kindForStatus` reads from a status and message, the message kept);
+ * in the tool loop: a call with invalid arguments gets `ToolCallStarted` then
+ * `ToolCallFinished{error: "RangeError"}` before the node fails, an ungranted call gets no
+ * brackets, the request carries the bound `ToolSpec`s in grant order (`load_skill` last when skills
+ * are granted) with no `toolChoice` and `parallelToolCalls: null`, a call's id is
+ * `<run>/<node>/<exchange>/<index>` on a run-bound tool set and a fresh id on an unbound one, with
+ * the node and `attempt: 1` in its `ToolContext`, and a tool result `fromHost` refuses fails the
+ * node after the call ran; a call-time agent records a copy of its bound config and calls the model
+ * with the host key joined, and a bound config that differs from the recorded one is a host fault
+ * before any model is built; a reply calling a tool at a cap of one model turn fails with
+ * `agent.max_tool_iterations`; without `models` the node builds through `defaultModelAccess` (an
+ * unknown provider's `ValidationError`, no network); a failing credentials read doesn't replace the
+ * error being scrubbed. Through `FlowEngine` with a run log: a retried model call's `model_attempt`
+ * step comes before the node's outcome; a resumed call-time agent (state replayed from the log, a
+ * fresh engine) restarts past its `model_attempt` step, records its `effective_llm_config` again,
+ * and numbers its calls from 1 again.
  *
  * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
  * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
@@ -463,8 +464,8 @@ test("backward joins the node's own key and headers, or a marked call-time agent
   expect(await backwardConfig(own, plain)).toEqual({ ...legacyConnectionConfig(plain), api_key: "sk-own", headers });
   const callTimeAgent = new AgentNode("chat", { prompt: "hi" });
   callTimeAgent.callTime = callTime({}, "openai");
-  callTimeAgent.hostCredentials = new HostConnection({ apiKey: "sk-host" });
-  const joined = { ...legacyConnectionConfig(marked), api_key: "sk-host" };
+  callTimeAgent.hostCredentials = new HostConnection({ apiKey: "sk-host", headers: { "X-Host": "tide" } });
+  const joined = { ...legacyConnectionConfig(marked), api_key: "sk-host", headers: { "X-Host": "tide" } };
   expect(await backwardConfig(callTimeAgent, marked)).toEqual(joined);
   expect(await backwardConfig(callTimeAgent, plain)).toEqual(legacyConnectionConfig(plain));
 });

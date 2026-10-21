@@ -6,8 +6,9 @@
  * model access and text helper, never runtime, live node configuration, expression evaluation, or
  * memory operations.
  *
- * Knows about:   nodes/base, events, expr/lineage, llm (messages, executor), llm_clients
- *                (connection, factory), typesys, diagnostics, peer AGENT modules.
+ * Knows about:   nodes/base, nodes/contracts, events, expr/lineage, llm (events, messages,
+ *                executor), llm_clients (connection, factory), typesys, diagnostics, peer AGENT
+ *                modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -200,10 +201,9 @@ export async function backwardAgent(
   };
   const prompt = writeAsText(material as unknown as Value);
   const config = legacyConnectionConfig(data["effective_llm_config"] as Record<string, unknown>);
-  const { apiKey = null, headers = null, onEvent } = options;
+  const { models = defaultModelAccess(), apiKey = null, headers = null, onEvent } = options;
   if (apiKey !== null) config["api_key"] = apiKey;
   if (headers !== null) config["headers"] = headers;
-  const models = options.models ?? defaultModelAccess();
   const nodeId = context.nodeId ?? "";
   let model: ChatModel | null = null;
   const scrub = <T>(error: T): T => {

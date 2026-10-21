@@ -750,6 +750,7 @@ export class AgentNode extends Node {
    */
   private hostSecrets(recorded: unknown): { apiKey: string | null; headers: Readonly<Record<string, string>> | null } {
     let config: Readonly<Record<string, unknown>> | null = this.llmConfig;
+    // Through `invocationConfig`, so the host-key marker rule lives in one place.
     if (this.callTime !== null) config = isRecord(recorded) ? invocationConfig(recorded, this.hostCredentials) : null;
     if (config === null) return { apiKey: null, headers: null };
     return {

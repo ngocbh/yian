@@ -28,7 +28,7 @@
  *
  * Changed: the error rows pin the whole message where Python matches its start, and the last frame's label and range where Python
  * checks the first frame's line. CODE bodies are written in TS and code refs name
- * `./fixtures/compose_codefns.ts`, as the harvested cases write them; load doesn't run them.
+ * `./fixtures/compose_codefns.ts`, as the harvested cases write them.
  *
  * Not ported here: the literal rows the tags reader (`readTaggedValue`, tested in `tags.test.ts`)
  * decides while the binding is split, before this check runs. Pinned in `tags.test.ts` through
@@ -51,9 +51,14 @@
  * block, then those from test files whose mirrors don't exist yet (`test_nested_template_types.py`,
  * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
  *
- * Later (T4-8 follow-up): `test_unquoted_yes_or_no_literal_for_str_is_text` (2),
- * `test_escaped_template_binds_its_text`, and the run half of
- * `test_optional_into_non_optional_loads_and_fails_at_runtime`.
+ * Ported through `loadFlow` (`loadConformanceFlow`, which resolves the fixture reference) and
+ * `runFlow`: the `yes` row of `test_unquoted_yes_or_no_literal_for_str_is_text`. Covered by
+ * `run-core` cases running the same flows: its `no` row
+ * (`compose_typed_bindings_check__unquoted_no_for_str_is_text`),
+ * `test_escaped_template_binds_its_text`
+ * (`compose_typed_bindings_check__escaped_template_binds_its_text`) and the run half of `test_optional_into_non_optional_loads_and_fails_at_runtime`
+ * (`compose_typed_bindings_check__optional_into_non_optional_fails_at_runtime`, failing with
+ * `binding.type` at `use`).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -66,11 +71,13 @@ import { Binding, type OutputContract, PartialRecordContract, ValueContract } fr
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   runCase,
 } from "./declarations.ts";
@@ -248,6 +255,13 @@ test("a disjoint binding nested in a value template names its path", () => {
 });
 
 // ---------- literals ----------
+
+test("an unquoted yes literal for str is text", async () => {
+  const result = await runFlow(await loadConformanceFlow(flow("!str yes")), {});
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("yes");
+});
 
 test.each(["!Optional(int) null", "!int 3", "!list(str) []", "!float 3", "!str abc", "!str $${x}"])(
   "fitting literals load: %s",

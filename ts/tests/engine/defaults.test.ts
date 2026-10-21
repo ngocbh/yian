@@ -30,6 +30,7 @@ import {
   processEnv,
   read,
   reload,
+  withEnv,
 } from "../../src/defaults.ts";
 
 const TS_ONLY = [
@@ -489,5 +490,57 @@ describe("the process values", () => {
   test("checkRecorded accepts an out-of-range value in effect", () => {
     install({ ...BUILTIN, maxValueNesting: 150 });
     checkRecorded({ MAX_VALUE_NESTING: 150n });
+  });
+});
+
+describe("per-call values", () => {
+  beforeEach(() => install(BUILTIN));
+  afterEach(forget);
+
+  const AT_80 = envOf({ YIAN_MAX_VALUE_NESTING: "80" });
+
+  test("withEnv scopes the values env sets to fn", async () => {
+    expect(withEnv(AT_80, () => current().maxValueNesting)).toBe(80);
+    expect(current()).toEqual(BUILTIN);
+    const later = await withEnv(AT_80, async () => {
+      await Promise.resolve();
+      return current().maxValueNesting;
+    });
+    expect(later).toBe(80);
+    expect(current()).toEqual(BUILTIN);
+  });
+
+  test("processEnv keeps the values in effect", () => {
+    install({ ...BUILTIN, maxValueNesting: 90 });
+    expect(withEnv(processEnv, () => current()).maxValueNesting).toBe(90);
+    expect(withEnv(AT_80, () => withEnv(processEnv, () => current().maxValueNesting))).toBe(80);
+  });
+
+  test("reload inside a scope sets the process values only", () => {
+    withEnv(AT_80, () => {
+      expect(reload(envOf({ YIAN_MAX_VALUE_NESTING: "70" })).maxValueNesting).toBe(70);
+      expect(current().maxValueNesting).toBe(80);
+    });
+    expect(current().maxValueNesting).toBe(70);
+  });
+
+  test("a bad value throws before fn runs", () => {
+    let called = false;
+    const fn = () => {
+      called = true;
+    };
+    expect(() => withEnv(envOf({ YIAN_MAX_VALUE_NESTING: "0" }), fn)).toThrow(DefaultsError);
+    expect(called).toBe(false);
+
+    const saved = process.env["YIAN_MAX_VALUE_NESTING"];
+    try {
+      process.env["YIAN_MAX_VALUE_NESTING"] = "0";
+      forget();
+      expect(() => withEnv(processEnv, fn)).toThrow(DefaultsError);
+      expect(called).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env["YIAN_MAX_VALUE_NESTING"];
+      else process.env["YIAN_MAX_VALUE_NESTING"] = saved;
+    }
   });
 });

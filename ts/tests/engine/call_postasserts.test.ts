@@ -13,16 +13,26 @@
  * Integers are bigints (decision 4a); the CODE reference is the TS fixture's
  * (`./fixtures/compose_codefns.ts:make_report`).
  *
- * Later (T4-8): `test_call_post_assert_survives_recovery_true` and
- * `test_call_post_assert_survives_recovery_false`: needs `resumeFlow` (a host stop, then a resume).
+ * Ported through `runFlow` and `resumeFlow`, in `hostEnv`: `test_call_post_assert_survives_recovery_true`
+ * and `test_call_post_assert_survives_recovery_false`. Changed: the interruption before the human
+ * answer is the run's `signal`, which the `ask_user` handler aborts (Python: the handler raises
+ * `_HostStop`).
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { RunFailed } from "../../src/events.ts";
-import { runFlow } from "../../src/run.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
-import { childResolver } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { childResolver, rejection } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-call-postasserts-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 // A child that re-exports a {report, n} record; the parent's call `${output}` is that record,
 // with `n == len(topic)`.
@@ -73,7 +83,7 @@ function load(asserts: string) {
 
 test("call post assert true passes", async () => {
   // A true `${output.field}` post-assert: the run succeeds.
-  const res = await runFlow(await load("      - output.n == 4"), {});
+  const res = await runFlow(await load("      - output.n == 4"), {}, { env: hostEnv(dir) });
   expect(res.status).toBe("succeeded");
   expect(res.output).toEqual({ report: "report for ACME", n: 4n });
 });
@@ -84,7 +94,7 @@ test("call post assert false fails loudly", async () => {
   // A false `${output}` post-assert fails on the cloned child END (`research/__end__`), where the
   // lowered assertion rides.
   const loaded = await load("      - output.n == 999");
-  const res = await runFlow(loaded, {});
+  const res = await runFlow(loaded, {}, { env: hostEnv(dir) });
   expect(res.status).toBe("failed");
   const failed = res.events.filter((event) => event instanceof RunFailed);
   expect(failed.length).toBeGreaterThan(0);
@@ -97,14 +107,14 @@ test("call post assert false fails loudly", async () => {
 
 test("call post assert reads input and output true", async () => {
   // The baseline true assertion: n == len("ACME") == 4.
-  const res = await runFlow(await load("      - output.n == 4"), {});
+  const res = await runFlow(await load("      - output.n == 4"), {}, { env: hostEnv(dir) });
   expect(res.status).toBe("succeeded");
 });
 
 test("call post assert reads input and output false", async () => {
   // An input+output post-assert that is false: `topic` ("ACME") is the recovered call input, so
   // `topic == "OTHER"` fails loudly.
-  const res = await runFlow(await load('      - topic == "OTHER" and output.n == 4'), {});
+  const res = await runFlow(await load('      - topic == "OTHER" and output.n == 4'), {}, { env: hostEnv(dir) });
   expect(res.status).toBe("failed");
   const failed = res.events.filter((event) => event instanceof RunFailed);
   expect(failed.length).toBeGreaterThan(0);
@@ -114,6 +124,86 @@ test("call post assert reads input and output false", async () => {
 
 test("call post assert reads input true", async () => {
   // The input ref resolves from the call's canonical growth seed (not null or dropped).
-  const res = await runFlow(await load('      - topic == "ACME" and output.n == 4'), {});
+  const res = await runFlow(await load('      - topic == "ACME" and output.n == 4'), {}, { env: hostEnv(dir) });
   expect(res.status).toBe("succeeded");
+});
+
+// --- 4. durable: the input record survives interruption and recovery --- //
+
+// A child whose HUMAN_INPUT leaf the host interrupts; the parent's call post-assert reads both
+// the declared input `action` and `${output}`.
+const BLOCKING_CHILD = `
+id: approver
+name: approver
+input:
+  action: !str
+nodes:
+  approve:
+    kind: human_input
+    input:
+      action: \${input.action}
+    prompt: "Approve \${action}?"
+    output: str
+output: \${approve.output}
+`;
+
+function loadBlocking(asserts: string) {
+  return loadConformanceFlow(
+    `
+id: gate-parent
+name: gate_parent
+uses:
+  approver: approver
+input:
+  action: !str
+nodes:
+  gate:
+    kind: call
+    call: approver
+    input:
+      action: \${input.action}
+    asserts:
+${asserts}
+output: \${gate.output}
+`,
+    { childResolver: childResolver({ approver: BLOCKING_CHILD }) },
+  );
+}
+
+/** Interrupt the started HUMAN_INPUT, then recover it from its run log with `answer`. */
+async function driveDurable(name: string, asserts: string, answer: string) {
+  const path = join(dir, `${name}.jsonl`);
+  const interruption = new Error("interrupt before human answer");
+  const host = new AbortController();
+  const interrupt = () => {
+    host.abort(interruption);
+    throw interruption;
+  };
+  const caught = await rejection(
+    runFlow(
+      await loadBlocking(asserts),
+      { action: "deploy" },
+      { log: path, signal: host.signal, tools: { ask_user: interrupt }, env: hostEnv(dir) },
+    ),
+  );
+  expect(caught).toBe(interruption);
+  return resumeFlow(await loadBlocking(asserts), { log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
+}
+
+test("call post assert survives recovery true", async () => {
+  // A true input+output post-assert fires after recovery; `action` comes from the recorded
+  // NodeExpanded seed.
+  const res = await driveDurable("true", '      - action == "deploy" and output == "yes"', "yes");
+  expect(res.status, res.failure?.message).toBe("succeeded");
+  expect(res.output).toBe("yes");
+});
+
+test("call post assert survives recovery false", async () => {
+  // A false post-assert after recovery fails, located at the cloned child END.
+  const res = await driveDurable("false", '      - action == "deploy" and output == "no"', "yes");
+  expect(res.status).toBe("failed");
+  const failed = res.events.filter((event) => event instanceof RunFailed);
+  expect(failed.length).toBeGreaterThan(0);
+  expect(failed[0]!.failure.causeType).toBe("NodeAssertFailed");
+  expect(res.failure!.nodeId).toBe("gate/__end__");
 });

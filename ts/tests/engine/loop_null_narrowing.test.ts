@@ -67,10 +67,15 @@
  * by `run-loop/engine_loop_null_narrowing__an_absent_checked_field_reads_as_null` (its events pin
  * that the body never starts).
  *
- * Later (T4-8): needs `resumeFlow`: `test_optional_seed_pagination_resumes_after_its_first_expansion`.
+ * Ported through `runFlow` and `resumeFlow`, in `hostEnv`:
+ * `test_optional_seed_pagination_resumes_after_its_first_expansion`.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
@@ -79,7 +84,7 @@ import { forget } from "../../src/defaults.ts";
 import { NodeStarted } from "../../src/events.ts";
 import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
-import { type RunResult, runFlow } from "../../src/run.ts";
+import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -93,8 +98,12 @@ import {
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 
 afterEach(() => forget());
+
+const dir = mkdtempSync(join(tmpdir(), "yian-loop-null-narrowing-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -271,6 +280,26 @@ test("optional seed fills a strict body input under a while null check", async (
     expect(result.output).toEqual({ cursor: null });
     expect(bodyRuns(result)).toBe(runs);
   }
+});
+
+test("optional seed pagination resumes after its first expansion", async () => {
+  const source = withDefs(page(), FETCH_PAGE);
+  const path = join(dir, "pages.jsonl");
+  const first = await runFlow(await loadConformanceFlow(source), { start: "p1" }, {
+    log: path,
+    numWorkers: 0,
+    env: hostEnv(dir),
+  });
+  expect(first.status, first.failure?.message).toBe("succeeded");
+  const lines = readFileSync(path, "utf8").split(/(?<=\n)/);
+  const expanded = lines.findIndex((line) => JSON.parse(line).kind === "node_expanded");
+  expect(expanded).toBeGreaterThanOrEqual(0);
+  writeFileSync(path, lines.slice(0, expanded + 1).join(""));
+
+  const resumed = await resumeFlow(await loadConformanceFlow(source), { log: path, env: hostEnv(dir) });
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toEqual({ cursor: null });
 });
 
 test.each<[string, string]>([

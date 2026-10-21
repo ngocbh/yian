@@ -396,8 +396,8 @@ A case can't hold code, so its host is declared under `host`.
     calls have already started when an earlier one returns, and they finish;
   - an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
 
-  TS reads the interrupt before each later **text** chunk, before each tool call's check and
-  before each group. So a case that cuts mid-stream needs a text chunk after its point (an
+  TS reads the interrupt before each later **text** chunk, before each tool call's check,
+  before each group, and before failing at a call whose check failed. So a case that cuts mid-stream needs a text chunk after its point (an
   interrupt before a `tool_call`, `usage` or `finish` chunk keeps the reply whole in TS, and its
   calls are skipped with brackets), or a TS `expect`.
 

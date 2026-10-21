@@ -133,6 +133,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     const steers = await drainSteers(ctx);
     // A stop during the drain wins; its steers are never sent.
     checkStopped(ctx);
+    // So does an interrupt that lands while an async drain settles: no model call follows it.
+    if (interrupt?.aborted) return interrupted(reply);
     for (const steer of steers) messages.push(userMessage(steer));
     const exchangeId = newExchangeId();
     let response: Response;

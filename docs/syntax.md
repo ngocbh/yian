@@ -2466,7 +2466,8 @@ worker:
   sink, so an interrupt during a call is read before each later text chunk, and a
   reply whose text had all arrived is kept whole. In place of before each tool
   call, the node checks before each call's check (its grant and arguments) and
-  before each group of calls that run together (see [API](api.md#tool-context));
+  before each group of calls that run together, and before failing at a call
+  whose check failed (see [API](api.md#tool-context));
   a group of concurrency-safe calls that started finishes. An interrupt during
   the wait before retrying a failed model call ends the wait at once, and the
   node succeeds with `""`.

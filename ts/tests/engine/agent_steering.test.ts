@@ -49,7 +49,8 @@
  * `typing.Protocol`; TS checks `Steering` statically).
  *
  * TS-only: a steer an async `drain` promises is awaited before the model call; a drain that
- * resolves after the run stopped rejects the node with the stop's reason and sends no steer; a
+ * resolves after the run stopped rejects the node with the stop's reason and sends no steer; an
+ * interrupt that lands during an async drain returns `""` before any model call; a
  * steer queued between two calls of a reply joins after both results; a too-deep tool call fails
  * the node even with the interrupt set, since the argument check runs first; a cut with no stream
  * sink keeps the text received, and closes the stream; a cut reply's tool call never runs; a
@@ -339,6 +340,26 @@ test("a drain that resolves after the run stopped rejects with the stop and send
   stop.abort(reason);
   drained.resolve(["too late"]);
   expect(await rejected(running)).toBe(reason);
+  expect(model.requests).toEqual([]);
+});
+
+test("an interrupt that lands during an async drain returns before any model call", async () => {
+  const interrupt = new AbortController();
+  const drained = Promise.withResolvers<readonly string[]>();
+  const draining = Promise.withResolvers<void>();
+  const steering: Steering = {
+    interruptSignal: () => interrupt.signal,
+    drain: () => {
+      draining.resolve();
+      return drained.promise;
+    },
+  };
+  const model = new ScriptedModel([reply("done")], CONFIG);
+  const running = runAgent(agentContext(model, { steering }));
+  await draining.promise;
+  interrupt.abort();
+  drained.resolve(["too late"]);
+  expect((await running).value).toBe("");
   expect(model.requests).toEqual([]);
 });
 

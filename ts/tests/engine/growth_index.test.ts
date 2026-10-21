@@ -14,17 +14,33 @@
  * TS-only: each row also checks the running join counts (`state.unknownIncoming`) against a
  * recount after every growth and its prune, live and on a replay of each record prefix that ends
  * at a growth.
+ *
+ * The `run_flow` half, through `runFlow` with a durable log (all four rows): the run succeeds,
+ * and the replay (`replayRunLog`) of each log prefix ending at a growth holds a growth index and
+ * join counts equal to a rebuild, with more than six growths and deferred pruned work exactly in
+ * the deferred rows.
+ *
+ * Covered by `run-map-call/engine_growth_index__map_over_loop_over_call_growth`: the
+ * `nested-serial` run's output.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildGrow } from "../../src/compile/expand.ts";
 import { copyGraph } from "../../src/compile/model.ts";
 import { NodeExpanded, type RunEvent, RunSucceeded } from "../../src/events.ts";
-import { NodeExpandedRecord } from "../../src/runtime/log.ts";
+import { replayRunLog, runFlow } from "../../src/run.ts";
+import { MemoryRunLog, NodeExpandedRecord, readRunLog } from "../../src/runtime/log.ts";
 import { replayRecords, RunState } from "../../src/runtime/state.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { engine, expectIndexMatchesRebuild, expectUnknownIncomingMatchesRecount } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-growth-index-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 // The body output reads only `bump`, so later drivers prune iterations whose `slow`
 // side chain is still running; the reducer defers and later retires them.
@@ -163,5 +179,28 @@ for (const [id, source, inputs, numWorkers, defers] of ROWS) {
       replayed += 1;
     });
     expect(replayed).toBe(checked.length);
+  });
+}
+
+for (const [id, source, inputs, numWorkers, defers] of ROWS) {
+  test(`a run's replay keeps the growth index and join counts at every growth: ${id}`, async () => {
+    const flow = await loadConformanceFlow(source);
+    const log = join(dir, `${id}.jsonl`);
+
+    const result = await runFlow(flow, inputs, { log, numWorkers, env: hostEnv(dir) });
+
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    const records = readRunLog(log);
+    const deferred: boolean[] = [];
+    records.forEach((envelope, index) => {
+      if (!(envelope.record instanceof NodeExpandedRecord)) return;
+      const replay = replayRunLog(flow, MemoryRunLog.fromRecords(records.slice(0, index + 1)));
+      expectIndexMatchesRebuild(replay);
+      expectUnknownIncomingMatchesRecount(replay);
+      deferred.push(replay.deferredPrune.size > 0);
+    });
+    expect(deferred.length).toBeGreaterThan(6);
+    // The deferred cases keep unfinished pruned work live across growths.
+    expect(deferred.some(Boolean)).toBe(defers);
   });
 }

@@ -24,6 +24,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
+import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
 import { loadSkillDir } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
@@ -31,14 +32,10 @@ import { Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, SkillError } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
-import { FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
+import { canonicalTypeLabel, FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
 import { type CliIo, osReason, printJson, UsageError, type Writer } from "./utils.ts";
 
-// The TS loader and run inspection aren't ported yet; each throws until its module lands.
-async function loadFlow(text: string, options: { searchPaths?: string[]; sourceLabel: string }): Promise<ComposedFlow> {
-  throw new Error("loadFlow is not ported to TypeScript yet");
-}
-
+// The TS run inspection isn't ported yet; it throws until its module lands.
 async function inspectRun(log: string): Promise<never> {
   throw new Error("inspectRun is not ported to TypeScript yet");
 }
@@ -591,7 +588,7 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
     }
     return 1;
   }
-  await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath) });
+  await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env });
   // Running the loaded flow is ported together with the loader; until then nothing runs.
   throw new Error("yian run is not ported to TypeScript yet");
 }
@@ -609,23 +606,40 @@ function resolveFlowPath(path: string): string {
   }
 }
 
+/** Whether `shown`, a path relative to the root, leaves it. */
+function leavesRoot(shown: string): boolean {
+  return shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown);
+}
+
 /**
- * Load the flow at `path` from inside `root`, labelled with its path relative to `root`.
+ * Load the flow at `path` from inside `root`, labelled with its path relative to `root`; its
+ * `uses:` children load the same way, each ref only from `<importing file's dir>/<ref>.yaml`.
+ *
+ * The loader puts the `uses:` alias frame on a child's `LoadError` and turns anything else a child
+ * throws into a `compose.load` error there.
  *
  * @param root The resolved root directory.
+ * @param loading The resolved paths of the flows importing this one.
  * @throws {LoadError} `compose.outside_root` for a flow outside `root`; `compose.load` for a flow
- *   whose YAML doesn't parse or that sets `system.paths`.
+ *   whose YAML doesn't parse, that sets `system.paths`, or that doesn't load.
+ * @throws {Error} A reference cycle.
  * @throws {NotUtf8Error} When the flow isn't UTF-8 text.
  * @throws {Error} A system error when the flow can't be read.
  */
-async function loadConfined(root: string, path: string): Promise<ComposedFlow> {
+async function loadConfined(
+  root: string,
+  path: string,
+  loading: ReadonlySet<string>,
+  env: Env,
+): Promise<ComposedFlow> {
   // Resolved paths are compared, so a symlinked root (/var -> /private/var on macOS) works.
   const resolved = resolveFlowPath(path);
   const shown = relative(root, resolved) || ".";
-  if (shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown)) {
+  if (leavesRoot(shown)) {
     const message = `${shown} is outside the root`;
     throw new LoadError(new Diagnostic({ code: "compose.outside_root", message }));
   }
+  if (loading.has(resolved)) throw new Error(`flow-reference cycle at ${shown}`);
   const text = readFlowText(resolved);
   const doc = parseSourceDocument(text, shown).root.value;
   // The loader doesn't search `system.paths` when given a child resolver, so such a flow would
@@ -638,11 +652,47 @@ async function loadConfined(root: string, path: string): Promise<ComposedFlow> {
       }),
     );
   }
-  return loadFlow(text, { sourceLabel: shown });
+  const dir = dirname(resolved);
+  const importing = new Set([...loading, resolved]);
+  // Unlike the default file resolver, this keeps no reuse cache, so a child imported along several
+  // paths loads once per path; that is fine for a check.
+  const childResolver = async (ref: string, version: string | null): Promise<ComposedFlow> => {
+    const childPath = join(dir, `${ref}.yaml`);
+    // A missing child outside the root is reported as outside, by `loadConfined`.
+    const inside = !leavesRoot(relative(root, resolveFlowPath(childPath)));
+    if (inside && !statSync(childPath, { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
+    }
+    const child = await loadConfined(root, childPath, importing, env);
+    if (version !== null && child.version !== version) {
+      const shownVersion = child.version === null ? "null" : reprText(child.version);
+      throw new Error(`${ref} is version ${shownVersion}, not ${reprText(version)}`);
+    }
+    return child;
+  };
+  // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child.
+  return loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, env });
 }
 
-/** One `yian check` result: the flow loaded, or the diagnostic saying why it didn't. */
-type CheckResult = { path: string; ok: true } | { path: string; ok: false; diagnostic: Diagnostic };
+/** A loaded flow's input in a `yian check` result. */
+interface CheckInput {
+  name: string;
+  type: string;
+  required: boolean;
+  has_default: boolean;
+}
+
+/** One `yian check` result: the loaded flow's id, name, description and inputs, or why it failed. */
+type CheckResult =
+  | {
+      path: string;
+      ok: true;
+      id: string | null;
+      name: string | null;
+      description: string | null;
+      inputs: CheckInput[];
+    }
+  | { path: string; ok: false; diagnostic: Diagnostic };
 
 /**
  * Load the flow file `path` as `yian run` loads it, or confined to `root`, running nothing.
@@ -650,12 +700,14 @@ type CheckResult = { path: string; ok: true } | { path: string; ok: false; diagn
  * A `LoadError`, a flow that isn't UTF-8 text, or one that can't be read is a failed result;
  * another error is thrown.
  */
-async function checkFlow(path: string, root: string | undefined): Promise<CheckResult> {
+async function checkFlow(path: string, root: string | undefined, env: Env): Promise<CheckResult> {
+  let flow: ComposedFlow;
   try {
     if (root === undefined) {
-      await loadFlow(readFlowText(path), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
+      const text = readFlowText(path);
+      flow = await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env });
     } else {
-      await loadConfined(root, path);
+      flow = await loadConfined(root, path, new Set(), env);
     }
   } catch (error) {
     if (error instanceof LoadError) return { path, ok: false, diagnostic: error.diagnostic };
@@ -666,8 +718,15 @@ async function checkFlow(path: string, root: string | undefined): Promise<CheckR
     const diagnostic = new Diagnostic({ code: "compose.load", message: `can't read ${path}: ${reason}` });
     return { path, ok: false, diagnostic };
   }
-  // A loaded flow's id, name, description and inputs are added once flows load in TS.
-  return { path, ok: true };
+  const inputs = flow.input.map((decl) => ({
+    name: decl.name,
+    // A flow's `input:` entry always declares its type, so its contract is set.
+    type: canonicalTypeLabel(decl.contract!.type),
+    required: decl.required,
+    has_default: decl.hasDefault,
+  }));
+  const { name, description } = flow;
+  return { path, ok: true, id: flow.compiled.flowId, name, description, inputs };
 }
 
 /**
@@ -686,7 +745,7 @@ export async function check(
 ): Promise<number> {
   const resolvedRoot = root === undefined ? undefined : realpathSync(root);
   const results: CheckResult[] = [];
-  for (const path of flows) results.push(await checkFlow(path, resolvedRoot));
+  for (const path of flows) results.push(await checkFlow(path, resolvedRoot, io.env));
   if (json) {
     const documents = results.map((result) =>
       result.ok ? result : { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] },

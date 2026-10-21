@@ -46,7 +46,8 @@
  * attempt's `ModelCallFinished{error}` (call and attempt `1n`, the error's kind and message,
  * `partial` `null`, `retry_in` the wait the scheduler got, from the backoff the draw gave); a step
  * holds the partial reply's JSON; the second call of a tool loop records call `2n`, and so does
- * the final structured pass after a chat reply; a key echoed in the error is scrubbed; without steps nothing is recorded and the call still retries; a
+ * the final structured pass after a chat reply; a key echoed in the error is scrubbed; without
+ * steps nothing is recorded and the call still retries; a
  * `steps.record` fault ends the call as a host fault, unretried, with no finished event after it.
  * `ReplayDegraded`: the reasons a built model signals over a two-turn tool loop reach the event
  * sink once per reason.

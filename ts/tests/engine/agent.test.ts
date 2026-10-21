@@ -56,8 +56,8 @@
  * ported yet; the load-time hooks (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`,
  * `llmNullable`, `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`,
  * `validatePrompts`, `validateExecutionSetup`); `needsSteps` on every agent, call-time or not,
- * also on a shallow copy, which carries `callTime`; `needsModels`; each `provider.*` code through the node (a `ProviderError` of the
- * kind `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call
+ * also on a shallow copy, which carries `callTime`; `needsModels`; each `provider.*` code through
+ * the node (a `ProviderError` of the kind `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call
  * with invalid arguments gets `ToolCallStarted` then `ToolCallFinished{error: "RangeError"}` before
  * the node fails, an ungranted call gets no brackets, the request carries the bound `ToolSpec`s in
  * grant order (`load_skill` last when skills are granted) with no `toolChoice` and

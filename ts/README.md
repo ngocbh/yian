@@ -296,7 +296,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Before each wait between model-call attempts, an AGENT with `caps.steps` records a
   `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
   from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
-  is. Nothing reads these steps yet, so a resumed AGENT restarts. Each reason the built model gives
+  is. Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
+  (before, the real clock and `Math.random`). Nothing reads these steps yet, so a resumed AGENT
+  restarts. Each reason the built model gives
   for leaving out replay state (`onReplayDegraded`, passed to `ModelAccess.createModel`) reaches
   `emitEvent` once per invocation, as the in-loop `ReplayDegraded`.
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,

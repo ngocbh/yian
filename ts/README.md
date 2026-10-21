@@ -671,12 +671,19 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   fakes), `CommandEnv` (a prompted key is recorded there, never in `process.env`), `printJson`
   (one `yian.cli.v1` document; ints must be `bigint`, a `number` is written as a float), and the
   key prompts `ensureEnvKey`, `ensureApiKey`, `confirmOllamaEndpoint`.
-- `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, the
-  diagnostic boxes, the banner, progress on stderr and `stopOnSignals` (SIGINT, SIGTERM and SIGHUP
-  stop a run; exit 130). `run`, `check` and `status` stop at the loader and run inspection until
-  those are ported. `src/cli/mcp_config.ts` reads `mcpServers` files into unopened MCP servers
-  (`userMcpConfig`, `loadMcpConfig`). `src/cli/memory.ts` builds the memory registry from
-  `--memory-root` and `--memory-storage` (`parseMemoryStorage`, `buildCliMemories`).
+- `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, wired to
+  `loadFlow`, `runFlow` (fresh), `resumeFlow` (`--resume`, with the recorded-key checks),
+  `loadSkillDir` and `inspectRun`; the diagnostic boxes, the banner, progress on stderr and
+  `stopOnSignals` (SIGINT, SIGTERM and SIGHUP stop a run; exit 130).
+- A stop aborts the run's controller with a `HostStop` naming the signal; Ctrl-C at a prompt is a
+  `HostStop("SIGINT")`.
+- A required provider key that is missing and that no prompt supplied throws `MissingKeyError`
+  (`utils.ts`); `run` reports it as `run.setup` before the log exists.
+- `run --json` runs in a child of the same runtime whose fd 1 is the parent's stderr and whose
+  document goes out on fd 3; the parent forwards a stop as SIGUSR2 (`index.ts`).
+- `src/cli/mcp_config.ts` reads `mcpServers` files into unopened MCP servers (`userMcpConfig`,
+  `loadMcpConfig`). `src/cli/memory.ts` builds the memory registry from `--memory-root` and
+  `--memory-storage` (`parseMemoryStorage`, `buildCliMemories`).
 - `src/cli/auth.ts` holds `yian auth` (list, setup through `Terminal` prompts, `--default`,
   `--remove`, whole-file removal, device sign-in as JSON lines), `yian models`, `yian providers`
   and `yian config check`. `auth` and `models` take an optional `AuthDeps` (the OpenAI service, the

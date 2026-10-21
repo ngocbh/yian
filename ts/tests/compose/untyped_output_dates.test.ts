@@ -31,9 +31,11 @@
  * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
  * `any_tag_on_a_date` is pinned in `tags.test.ts`.
  *
- * Later (T4-8 follow-up): the runs of `test_quoted_or_tagged_dates_keep_their_behavior`,
- * `test_other_untagged_literals_in_untyped_outputs_still_load` and
- * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`.
+ * Ported as run rows (`loadConformanceFlow` and `runFlow`) next to their load rows: the runs of
+ * `test_quoted_or_tagged_dates_keep_their_behavior`,
+ * `test_other_untagged_literals_in_untyped_outputs_still_load` (its `!!omap` run is refused at load,
+ * above) and `test_quoted_tagged_or_finite_numbers_keep_their_behavior` (its `!float .nan` run is
+ * refused at load, above). Their ints read back as `bigint`s (decision 4a).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -45,10 +47,12 @@ import { forget } from "../../src/defaults.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
+import { runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   loadErrorAsync,
   runCase,
@@ -68,6 +72,13 @@ function flow(output: string): string {
 
 /** Load `text` and return its flow. */
 const load = (text: string): ComposedFlow => assembleText(text).flow;
+
+/** Load and run `text`, returning its output and expecting it succeeded. */
+async function ok(text: string): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text), {});
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
 
 /** Return each flow output's binding source by name. */
 function outputSources(text: string): Record<string, unknown> {
@@ -120,6 +131,11 @@ describe("dates", () => {
     ["as_of: ${b.output}-2026-01-01", "${b.output}-2026-01-01"],
   ])("a quoted or tagged date loads: %j", (output, expected) => {
     expect(outputSources(flow(`${output}\nh: \${b.output}`))["as_of"]).toBe(expected);
+  });
+
+  test("quoted or tagged dates keep their behavior (runs)", async () => {
+    // A quoted date stays text.
+    expect(await ok(flow('as_of: "2026-01-01"\nh: ${b.output}'))).toStrictEqual({ as_of: "2026-01-01", h: 1n });
   });
 });
 
@@ -283,6 +299,16 @@ describe("other literals", () => {
     });
   });
 
+  test("other untagged literals in untyped outputs still load (runs)", async () => {
+    expect(await ok(flow("n: 1\ns: x\nl: [1, null]\nm: {k: true}\nh: ${b.output}"))).toStrictEqual({
+      n: 1n,
+      s: "x",
+      l: [1n, null],
+      m: { k: true },
+      h: 1n,
+    });
+  });
+
   test.each([
     ["g: !!set {a: null}", "set"],
     ["g: !!binary aGVsbG8=", "binary"],
@@ -333,6 +359,12 @@ describe("numbers that are not finite", () => {
     expect(outputSources(flow('g: ".nan"\nh: ${b.output}'))["g"]).toBe(".nan");
     expect(outputSources(flow("g: !!str .nan\nh: ${b.output}"))["g"]).toBe(".nan");
     expect(outputSources(flow("g: [1.5, -2e10, 1e300]\nh: ${b.output}"))["g"]).toStrictEqual([1.5, -2e10, 1e300]);
+  });
+
+  test("quoted tagged or finite numbers keep their behavior (runs)", async () => {
+    expect(await ok(flow('g: ".nan"\nh: ${b.output}'))).toStrictEqual({ g: ".nan", h: 1n });
+    expect(await ok(flow("g: !!str .nan\nh: ${b.output}"))).toStrictEqual({ g: ".nan", h: 1n });
+    expect(await ok(flow("g: [1.5, -2e10, 1e300]\nh: ${b.output}"))).toStrictEqual({ g: [1.5, -2e10, 1e300], h: 1n });
   });
 });
 

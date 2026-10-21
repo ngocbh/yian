@@ -8,8 +8,9 @@
  * `test_a_map_over_literal_under_a_credential_name_loads`,
  * `test_an_inline_call_in_a_node_assert_shows_the_assert_under_any_keyword` (the node-assert check
  * refuses the call before the `g` def is resolved), the multi-node-def and single-node-def params
- * of `test_a_def_env_literal_under_a_credential_name_loads` and
- * `test_a_def_input_default_under_a_credential_name_loads` (loaded with `loadFlow`).
+ * of `test_a_def_env_literal_under_a_credential_name_loads`,
+ * `test_a_def_input_default_under_a_credential_name_loads` (loaded with `loadFlow`) and
+ * `test_a_value_entry_under_a_credential_name_is_identity` (its fingerprints and its run).
  *
  * Changed: CODE bodies are TS.
  *
@@ -23,7 +24,6 @@
  * `test_a_nested_key_under_a_credential_name_loads`,
  * `test_a_typed_binding_under_a_credential_name_loads` (its case is pinned in `tags.test.ts`),
  * `test_a_flow_output_under_a_credential_name_is_identity`,
- * `test_a_value_entry_under_a_credential_name_is_identity` (its run is T4's),
  * `test_a_call_argument_under_a_credential_name_is_identity`,
  * `test_a_case_call_target_with_a_credential_keyword_loads`,
  * `test_an_inline_call_flow_output_with_a_credential_keyword_loads` and
@@ -35,7 +35,8 @@ import { expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { runFlow } from "../../src/run.ts";
+import { assembleText, loadConformanceFlow, loadError } from "./declarations.ts";
 
 /**
  * Assert two flows that differ only in a literal have different fingerprints and that `literalA`
@@ -114,6 +115,13 @@ test("a map over literal under a credential name loads", () => {
 
   expect(flowFingerprint(first)).not.toBe(flowFingerprint(load("hunter3")));
   expect(JSON.stringify(flowManifest(first))).toContain("hunter2");
+});
+
+test("a value entry under a credential name is identity", async () => {
+  const flow = (value: string) => `id: f\nname: f\nnodes:\n  api_key: !str ${value}\noutput: \${api_key.output}\n`;
+
+  await assertIdentity(flow("hunter2"), flow("hunter3"), "hunter2");
+  expect((await runFlow(await loadConformanceFlow(flow("hunter2")), {})).output).toBe("hunter2");
 });
 
 test("an inline call in a node assert shows the assert under any keyword", () => {

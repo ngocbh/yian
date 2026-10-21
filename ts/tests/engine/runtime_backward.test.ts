@@ -105,16 +105,42 @@
  * binds synchronously at dispatch, so a consumer that started first can't block until a peer
  * commits and then bind its output.
  *
- * Later, with MAP, CASE, CALL, LOOP, AGENT or `buildGrow`: the file's other 9 tests, from
- * `test_map_whole_list_context_and_item_order_survive_reversed_completion` to
- * `test_loop_passthrough_field_routes_feedback_to_its_seed`.
+ * Ported, through CASE and AGENT: `test_case_control_and_unselected_branch_do_not_receive_feedback`
+ * and `test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work` (AGENT's
+ * `forward` and `backward` are `spyOn` replacements on the prototype, restored in `finally`; the
+ * variables are read with `parametersFromYaml` over an empty `readTypedefs({})`; the params and
+ * variables are cleared by assigning empty arrays; the engine records no effective LLM map, as the
+ * replaced `forward` calls no model).
+ *
+ * Ported, through CALL, MAP and LOOP growth (`engine` or `ownerEngine` with `growBuilder:
+ * buildGrow`, Python's `_engine` default; `loadFlow` where Python loads YAML; Python's class-level
+ * `CodeNode` patches are `spyOn` replacements on the prototype, restored in `finally`):
+ * `test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_projection`,
+ * `test_loop_carried_routes_use_the_same_fold_after_live_pruning`,
+ * `test_map_canonical_item_shape_preserves_its_projected_seed_stop` (2 rows; the template function
+ * registered with `registerTemplateFn`) and `test_loop_passthrough_field_routes_feedback_to_its_seed`
+ * (12 rows, shape × times 1, 2, 3, 6). The inline CODE bodies keep Python's text, which is also
+ * valid TS; the feedback entries' integers are `bigint`s.
+ *
+ * Changed:
+ * - `test_map_whole_list_context_and_item_order_survive_reversed_completion`: Python's thread
+ *   event is a promise the `onEvent` observer resolves when `map#1`'s END succeeds; item 0's
+ *   `forward` awaits it with no timeout of its own (the test's timeout bounds it).
+ * - `test_empty_map_retains_synthetics_without_inventing_item_contributors`: the child body that
+ *   must not run throws an `Error`, Python's `AssertionError`.
+ * - `test_map_bounded_projected_file_lists_compose_before_stopping` (2 rows): `+ []` is ported;
+ *   Python's `* 2` is list repetition, a type error in TS, so the second row adds the same 40-deep
+ *   list to itself, with the same two-element feedback and the same single stop.
  */
 
 import { afterEach, expect, spyOn, test } from "bun:test";
 
+import { buildGrow } from "../../src/compile/expand.ts";
 import { CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure } from "../../src/diagnostics.ts";
+import { NodeSucceeded } from "../../src/events.ts";
 import {
   type FeedbackValue,
   RouteContext,
@@ -129,6 +155,7 @@ import {
   LearnContext,
   LearningFailure,
   LearningResult,
+  MemoryDecl,
   MemoryEpisode,
   MemoryEpisodeStatus,
   MemoryMutation,
@@ -148,8 +175,13 @@ import {
   Output,
   Route,
 } from "../../src/nodes/base.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
+import { Case, CaseNode } from "../../src/nodes/case/node.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Assertion, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { BackwardComputeError, computeBackward } from "../../src/runtime/backward.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
@@ -210,7 +242,9 @@ import {
 } from "../../src/runtime/state.ts";
 import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceTerminal } from "../../src/runtime/trace.ts";
 import { FileRef, type Value, VariablePool } from "../../src/typesys/index.ts";
-import { logJson } from "../../src/typesys/json.ts";
+import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { readTypedefs } from "../../src/typesys/types.ts";
+import { parametersFromYaml } from "../compose/declarations.ts";
 import {
   commitStartSuccess,
   engine,
@@ -221,6 +255,7 @@ import {
   learnableStarted,
   noGrowth,
   ownerEngine,
+  POLICY,
   RecordingBackwardNode,
   rejected,
   RUN_ID,
@@ -2716,3 +2751,637 @@ test("a backward context the trace can't build escapes unchanged before the call
   expect(await rejected(computeBackward(trace, "review"))).toBe(original);
   expect(node.calls).toEqual([]);
 });
+
+// computeBackward through CASE, AGENT, and CALL, MAP and LOOP growth.
+
+/** Return the compiled flow `loadFlow` composes from `text`. */
+async function compiled(text: string): Promise<CompiledFlow> {
+  return (await loadFlow(text)).compiled;
+}
+
+/** Return whether `value` is a record holding `key`. */
+function holds(value: unknown, key: string): value is Readonly<Record<string, FeedbackValue>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && key in value;
+}
+
+test("a MAP's whole-list context and item order survive reversed completion", async () => {
+  const secondDone = Promise.withResolvers<void>();
+  const originalForward = CodeNode.prototype.forward;
+  const calls = new Map<number | null, [BackwardContext, readonly FeedbackValue[]]>();
+  const forward = spyOn(CodeNode.prototype, "forward").mockImplementation(async function (this: CodeNode, inputs) {
+    if (this.executionScope!.occurrencePath.at(-1)!.index === 0) await secondDone.promise;
+    return originalForward.call(this, inputs);
+  });
+  const backward = spyOn(CodeNode.prototype, "backward").mockImplementation((context, feedback) => {
+    calls.set(context.nodeStartedSeq, [context, feedback]);
+    return new BackwardResult({ inputFeedback: { x: feedback } });
+  });
+  try {
+    const work = new CodeNode("work", { code: "return inputs['x']" });
+    work.params = [new Parameter("x")];
+    const child = graph([work], [[START_ID, "work"]], {
+      outputs: [new FlowOutput("result", "${work.output}")],
+      wiring: { work: { x: "${input.x}" } },
+    });
+    const mapper = new MapNode("map", { flowId: "child", child });
+    mapper.params = [new Parameter("x")];
+    const producer = new RecordingBackwardNode(
+      "producer",
+      (inputs) => inputs.items,
+      (_context, feedback) => new BackwardResult({ inputFeedback: { items: feedback } }),
+      { reads: { items: "${input.items}" } },
+    );
+    const flow = graph([producer, mapper], [[START_ID, "producer"], ["producer", "map"]], {
+      outputs: [new FlowOutput("result", "${map.output}")],
+      wiring: { producer: { items: "${input.items}" }, map: { over: "${producer.output}", x: "${item}" } },
+    });
+    const { engine: built, memories, stacks } = ownerEngine(flow, {
+      inputs: { items: [7n, 7n] },
+      numWorkers: 2,
+      growBuilder: buildGrow,
+      onEvent: (event) => {
+        if (event instanceof NodeSucceeded && event.nodeId === `map#1/${END_ID}`) secondDone.resolve();
+      },
+    });
+    await built.run();
+    const trace = built.state.trace!;
+    const ends = trace.occurrences
+      .map((item) => item.nodeId)
+      .filter((nodeId) => nodeId === `map#0/${END_ID}` || nodeId === `map#1/${END_ID}`);
+    expect(ends).toEqual([`map#1/${END_ID}`, `map#0/${END_ID}`]);
+
+    const [root, results] = await computeBackward(trace, "review both items");
+
+    validateAttributedBackward(trace, "review both items", root, results);
+    const both = [["review both items", null], [null, "review both items"]];
+    expect(producer.calls[0]![1]).toEqual(both);
+    expect(root.inputFeedback).toEqual({ items: both });
+    const itemContext = (index: number) => (detail: Readonly<Record<string, unknown>>) =>
+      detail.role === "output" && Bun.deepEquals(detail.result, [7n, 7n]) &&
+      Bun.deepEquals(detail.positions, [[BigInt(index)]]);
+    for (const index of [0, 1]) {
+      const occurrence = trace.occurrences.find((item) => item.nodeId === `map#${index}/work`)!;
+      const [context, feedback] = calls.get(occurrence.source.executionSeq)!;
+      expect(feedback).toEqual(["review both items"]);
+      const details = context.downstreamContext.flatMap(
+        (entry) => entry.contexts as readonly Readonly<Record<string, unknown>>[],
+      );
+      expect(details.some(itemContext(index))).toBe(true);
+    }
+    expect(results).toHaveLength(trace.occurrences.length);
+    const ownerContexts = projectOwnerContexts(trace, memories, stacks, "review both items", root, results);
+    expect(ownerContexts).toHaveLength(1);
+    const [ownerContext] = ownerContexts;
+    expect(ownerContext!.episodes).toHaveLength(trace.occurrences.length);
+    const entries = feedbackEntries(ownerContext!);
+    const producerReceived = entries.filter(
+      (entry) => entry.channel === "output" && Bun.deepEquals(entry.owner_static_path, ["producer"]),
+    );
+    expect(producerReceived.map((entry) => entry.value)).toEqual(both);
+    for (const index of [0, 1]) {
+      const occurrence = trace.occurrences.find((item) => item.nodeId === `map#${index}/work`)!;
+      const received = entries.filter(
+        (entry) => entry.channel === "output" && entry.execution_seq === BigInt(occurrence.source.executionSeq),
+      );
+      expect(received).toHaveLength(1);
+      const path = [{ kind: "map_item", static_path: ["map"], index: BigInt(index) }];
+      expect(received[0]!.occurrence_path).toEqual(path);
+      expect((received[0]!.execution_scope as Readonly<Record<string, unknown>>).occurrence_path).toEqual(path);
+      const contribution = received[0]!.contribution_context as Readonly<Record<string, unknown>>;
+      expect(contribution).toEqual(calls.get(occurrence.source.executionSeq)![0].downstreamContext[0]!);
+      const contexts = contribution.contexts as readonly Readonly<Record<string, unknown>>[];
+      expect(contexts.some(itemContext(index))).toBe(true);
+    }
+  } finally {
+    forward.mockRestore();
+    backward.mockRestore();
+  }
+});
+
+test("a diamond crossing a CALL uses one walk and preserves the child's default projection", async () => {
+  const calls: BackwardContext[] = [];
+  const backward = spyOn(CodeNode.prototype, "backward").mockImplementation((context, feedback) => {
+    calls.push(context);
+    return new BackwardResult({
+      inputFeedback: { x: feedback, literal: ["child default"] },
+      selfFeedback: ["child only"],
+    });
+  });
+  try {
+    const start = new StartNode(START_ID, {
+      params: [new Parameter("x"), new Parameter("literal", { hasDefault: true, default: "default" })],
+    });
+    const work = new CodeNode("work", { code: "return inputs['x']" });
+    work.params = [new Parameter("x"), new Parameter("literal")];
+    const child = graph([start, work], [[START_ID, "work"]], {
+      outputs: [new FlowOutput("result", "${work.output}")],
+      wiring: { work: { x: "${input.x}", literal: "${input.literal}" } },
+    });
+    child.memories = [new MemoryDecl("child_notes", "child_notes", {}, new DeclSite([], ["def", "child"], null))];
+    const call = new CallNode("call", { flowId: "child", child });
+    call.params = [new Parameter("x")];
+    const producer = new RecordingBackwardNode("producer", (inputs) => inputs.x, passthrough, {
+      reads: { x: "${input.topic}" },
+    });
+    const right = new RecordingBackwardNode("right", (inputs) => inputs.x, passthrough, {
+      reads: { x: "${producer.output}" },
+    });
+    const flow = graph([producer, call, right], [[START_ID, "producer"], ["producer", "call"], ["producer", "right"]], {
+      outputs: [new FlowOutput("left", "${call.output}"), new FlowOutput("right", "${right.output}")],
+      wiring: {
+        producer: { x: "${input.topic}" },
+        call: { x: "${producer.output}" },
+        right: { x: "${producer.output}" },
+      },
+    });
+    const { engine: built, memories, stacks } = ownerEngine(flow, {
+      inputs: { topic: "reefs" },
+      growBuilder: buildGrow,
+    });
+    await built.run();
+    const trace = built.state.trace!;
+    const feedback = { left: "L", right: "R" };
+
+    const [root, results] = await computeBackward(trace, feedback);
+
+    validateAttributedBackward(trace, feedback, root, results);
+    expect(calls).toHaveLength(1);
+    expect(producer.calls).toHaveLength(1);
+    expect(producer.calls[0]![1]).toEqual(["L", "R"]);
+    expect(root.inputFeedback).toEqual({ topic: ["L", "R"] });
+    expect(trace.boundaries).toHaveLength(1);
+    const [boundary] = trace.boundaries;
+    expect(resultAt(results, boundary!.startSource!).result.inputFeedback).toEqual({
+      x: ["L"],
+      literal: ["child default"],
+    });
+    expect(resultAt(results, boundary!.owner).invoked).toBe(false);
+    expect(root.selfFeedback).toEqual([]);
+    expect(root.variableFeedback).toEqual({});
+    const contexts = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
+    expect(contexts).toHaveLength(2);
+    for (const context of contexts) {
+      const entries = feedbackEntries(context);
+      const defaults = entries.filter(
+        (entry) =>
+          entry.execution_seq === BigInt(boundary!.startSource!.executionSeq) &&
+          entry.channel === "input" &&
+          entry.target_name === "literal",
+      );
+      expect(defaults).toHaveLength(1);
+      expect(defaults[0]!.value).toBe("child default");
+      expect((defaults[0]!.contribution_context as { contributions: unknown }).contributions).toEqual([]);
+      const selfEntries = entries.filter((entry) => entry.channel === "self");
+      expect(selfEntries).toHaveLength(1);
+      expect(selfEntries[0]!.value).toBe("child only");
+      expect(selfEntries[0]!.message_index).toBe(0n);
+      expect(selfEntries[0]!.owner_static_path).toEqual(["call", "work"]);
+      expect(selfEntries[0]!.root).toBeFalsy();
+    }
+  } finally {
+    backward.mockRestore();
+  }
+});
+
+test("CASE control and an unselected branch don't receive feedback", async () => {
+  const control = new RecordingBackwardNode("control", () => true, unreachable("control feedback"));
+  const value = new RecordingBackwardNode("value", (inputs) => inputs.x, passthrough, {
+    reads: { x: "${input.topic}" },
+  });
+  const branch = new CaseNode("case", [new Case("go", { when: "${__r0}" })]);
+  branch.params = [new Parameter("__r0")];
+  const selected = new RecordingBackwardNode("selected", (inputs) => inputs.x, passthrough, {
+    reads: { x: "${value.output}" },
+  });
+  const unused = new RecordingBackwardNode("unused", () => {
+    throw new Error("unselected forward");
+  }, unreachable("unselected backward"));
+  const flow = graph([control, value, branch, selected, unused], [
+    [START_ID, "control"],
+    [START_ID, "value"],
+    ["control", "case"],
+    ["case", "selected", "go"],
+    ["case", "unused", ELSE_HANDLE],
+    ["value", "selected"],
+  ], {
+    outputs: [new FlowOutput("result", "${selected.output | unused.output}")],
+    wiring: {
+      value: { x: "${input.topic}" },
+      case: { __r0: "${control.output}" },
+      selected: { x: "${value.output}" },
+    },
+  });
+  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: true });
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, "review selected");
+
+  validateAttributedBackward(trace, "review selected", root, results);
+  expect(root.inputFeedback).toEqual({ topic: ["review selected"] });
+  expect(control.calls).toEqual([]);
+  expect(unused.calls).toEqual([]);
+  const byNode = new Map(trace.occurrences.map((item) => [item.nodeId, item]));
+  expect(byNode.has("unused")).toBe(false);
+  expect(byNode.get("case")!.record.forwardCapture!.inputNames).toEqual([]);
+  expect(resultAt(results, byNode.get("case")!.source).invoked).toBe(false);
+});
+
+test("an AGENT's inventory is recorded and empty feedback does no backward work", async () => {
+  const calls: BackwardContext[] = [];
+  const forward = spyOn(AgentNode.prototype, "forward").mockImplementation(
+    async (inputs) => new Output(inputs.topic),
+  );
+  // AGENT's own `backward` is typed to throw, so the spy goes through `Node`'s signature.
+  const backward = spyOn(AgentNode.prototype as Node, "backward").mockImplementation((context, feedback) => {
+    calls.push(context);
+    return new BackwardResult({
+      inputFeedback: { topic: feedback },
+      selfFeedback: ["agent note"],
+      variableFeedback: { instruction: ["local note"] },
+    });
+  });
+  try {
+    const variables = parametersFromYaml("variables:\n  instruction: !str concise\n", readTypedefs({}), {
+      field: "variables",
+      requireDefault: true,
+    });
+    const node = new AgentNode("agent", { prompt: "${topic}", variables });
+    node.params = [new Parameter("topic")];
+    const built = engine(graph([node], [[START_ID, "agent"]], {
+      outputs: [new FlowOutput("result", "${agent.output}")],
+      wiring: { agent: { topic: "${input.topic}" } },
+    }), { inputs: { topic: "reefs" }, learnable: true });
+    await built.run();
+    const trace = built.state.trace!;
+    node.params = [];
+    node.variables = [];
+    node.captureBackwardContext = () => {
+      throw new Error("recaptured invocation");
+    };
+
+    const [, inactive] = await computeBackward(trace, null);
+
+    expect(calls).toEqual([]);
+    expect(inactive).toHaveLength(trace.occurrences.length);
+    const [root, active] = await computeBackward(trace, "review");
+    expect(calls[0]!.inputNames).toEqual(["topic"]);
+    expect(calls[0]!.variableNames).toEqual(["instruction"]);
+    expect(root.inputFeedback).toEqual({ topic: ["review"] });
+    expect(root.selfFeedback).toEqual([]);
+    expect(root.variableFeedback).toEqual({});
+    expect(active.some((result) => Bun.deepEquals(result.result.variableFeedback, { instruction: ["local note"] })))
+      .toBe(true);
+  } finally {
+    forward.mockRestore();
+    backward.mockRestore();
+  }
+});
+
+test("an empty MAP retains its synthetics without inventing item contributors", async () => {
+  const work = new CodeNode("work", { code: "throw new Error('empty map ran a child');" });
+  work.params = [new Parameter("x")];
+  const child = graph([work], [[START_ID, "work"]], {
+    outputs: [new FlowOutput("result", "${work.output}")],
+    wiring: { work: { x: "${input.x}" } },
+  });
+  const mapper = new MapNode("map", { flowId: "child", child });
+  mapper.params = [new Parameter("x")];
+  const built = engine(graph([mapper], [[START_ID, "map"]], {
+    outputs: [new FlowOutput("result", "${map.output}")],
+    wiring: { map: { over: [], x: "${item}" } },
+  }), { learnable: true, growBuilder: buildGrow });
+  await built.run();
+  const trace = built.state.trace!;
+
+  const [root, results] = await computeBackward(trace, "review empty list");
+
+  validateAttributedBackward(trace, "review empty list", root, results);
+  expect(root).toEqual(new BackwardResult());
+  expect(trace.boundaries).toEqual([]);
+  expect(trace.occurrences).toHaveLength(5);
+  expect(results).toHaveLength(5);
+});
+
+test("LOOP carried routes use the same fold after live pruning", async () => {
+  const calls: (number | null)[] = [];
+  const backward = spyOn(CodeNode.prototype, "backward").mockImplementation((context, feedback) => {
+    calls.push(context.nodeStartedSeq);
+    return new BackwardResult({
+      inputFeedback: {
+        n: feedback.map((message) => (typeof message === "string" ? message : (message as { n: FeedbackValue }).n)),
+      },
+    });
+  });
+  try {
+    const flow = await compiled(`id: carried
+name: carried
+input:
+  n: !int
+defs:
+  body:
+    long_term_memory: body_notes
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        code: "return {'n': inputs['n'] - 1}"
+        output: {n: int}
+    output: \${work.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: 2
+    input: {n: '\${input.n}'}
+output: \${loop.output}
+`);
+    const { engine: built, memories, stacks } = ownerEngine(flow, { inputs: { n: 3n }, growBuilder: buildGrow });
+    const original = copyGraph(built.state.flow);
+    await built.run();
+    const trace = built.state.trace!;
+
+    const [root, results] = await computeBackward(trace, "review carried value");
+
+    validateAttributedBackward(trace, "review carried value", root, results);
+    expect(root.inputFeedback).toEqual({ n: ["review carried value"] });
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls).size).toBe(2);
+    const drivers = trace.occurrences.filter((item) =>
+      Bun.deepEquals(item.record.forwardCapture!.scope?.staticPath, ["loop"]),
+    );
+    expect(drivers).toHaveLength(3);
+    const reached = new Set(results.filter((result) => result.invoked).map((result) => sourceKey(result.source)));
+    expect(reached.has(sourceKey(drivers.at(-1)!.source))).toBe(true);
+    expect(drivers.slice(0, -1).every((item) => !reached.has(sourceKey(item.source)))).toBe(true);
+    const contexts = projectOwnerContexts(trace, memories, stacks, "review carried value", root, results);
+    expect(contexts).toHaveLength(2);
+    const byKey = new Map(contexts.map((context) => [context.memory, context]));
+    const policy = byKey.get(POLICY)!;
+    expect(policy.episodes).toHaveLength(trace.occurrences.length);
+    expect(byKey.get("body_notes")!.episodes).toHaveLength(6);
+    expect(new Set(policy.episodes.map((episode) => episode.executionSeq)).size).toBe(policy.episodes.length);
+    expect(trace.occurrences.some((item) => !built.state.flow.nodes.has(item.nodeId))).toBe(true);
+    for (const ownerContext of contexts) {
+      for (const episode of ownerContext.episodes) {
+        const occurrence = trace.occurrences.find((item) => item.source.executionSeq === episode.executionSeq)!;
+        expect(episode.ownerStaticPath).toEqual(occurrence.memoryScope!.staticPath);
+        expect(episode.occurrencePath).toEqual(occurrence.memoryScope!.occurrencePath);
+      }
+    }
+    for (const driver of drivers.slice(0, -1)) {
+      const episode = policy.episodes.find((item) => item.executionSeq === driver.source.executionSeq)!;
+      expect((episode.output as { kind: unknown }).kind).toBe("grow");
+      expect(
+        feedbackEntries(policy).some((entry) => entry.execution_seq === BigInt(driver.source.executionSeq)),
+      ).toBe(false);
+    }
+    backward.mockImplementation(unreachable("projection replay invoked callback"));
+    const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
+    expect(projectOwnerContexts(replay.trace!, memories, stacks, "review carried value", root, results)).toEqual(
+      contexts,
+    );
+  } finally {
+    backward.mockRestore();
+  }
+});
+
+test.each([false, true])(
+  "a MAP's canonical item shape preserves its projected seed stop (opaque: %p)",
+  async (opaque) => {
+    const files = [new FileRef({ uri: "file:///tmp/same.txt" }), new FileRef({ uri: "file:///tmp/same.txt" })];
+    const calls: null[] = [];
+    standIn("backward_files", () => {
+      calls.push(null);
+      return files;
+    });
+    const child = graph([new StartNode(START_ID, { params: [new Parameter("file")] })], [], {
+      outputs: [new FlowOutput("uri", "${input.file.uri}")],
+    });
+    const mapper = new MapNode("map", { flowId: "child", child });
+    mapper.params = [new Parameter("file")];
+    const flow = graph([mapper], [[START_ID, "map"]], {
+      outputs: [new FlowOutput("files", "${map.output}")],
+      wiring: { map: { over: opaque ? "${backward_files()}" : files, file: "${item}" } },
+    });
+    const { engine: built, memories, stacks } = ownerEngine(flow, { growBuilder: buildGrow });
+    await built.run();
+    const trace = built.state.trace!;
+    const feedback = [null, "Check second URI."];
+
+    const [root, results] = await computeBackward(trace, feedback);
+
+    const start = trace.occurrence(trace.boundaries[1]!.startSource!);
+    const result = resultAt(results, start.source).result;
+    expect(result.inputFeedback).toEqual({ file: [{ uri: "Check second URI." }] });
+    const routed = routeFeedback(
+      start.inputRoute.children[0]!,
+      result.inputFeedback.file![0]!,
+      (source) => trace.lookupSource(source),
+      { recordedValue: start.record.forwardCapture!.boundInputs!.file },
+    );
+    expect(root).toEqual(new BackwardResult());
+    expect(routed.contributions).toEqual([]);
+    const stops = opaque ? [[null, { uri: "Check second URI." }]] : [];
+    expect(routed.stopped.map((stop) => stop.feedback)).toEqual(stops);
+    const [context] = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
+    const stopped = feedbackEntries(context!).filter((entry) => entry.channel === "stopped");
+    expect(stopped.map((entry) => entry.value)).toEqual(stops);
+    expect(calls).toEqual(opaque ? [null] : []);
+  },
+);
+
+const DEEP_FILES = "item." + "nested.".repeat(40) + "files";
+
+test.each([
+  ["+ []", "+ []"],
+  ["+ the same list", `+ ${DEEP_FILES}`],
+])(
+  "a MAP's bounded projected file lists compose before stopping (operator: %s)",
+  async (_label, operator) => {
+    let raw: Record<string, unknown> = { files: [new FileRef({ uri: "file:///tmp/x" })] };
+    for (let i = 0; i < 40; i++) raw = { nested: raw };
+    const calls: null[] = [];
+    standIn("deep_map_files", () => {
+      calls.push(null);
+      return [raw];
+    });
+    const child = graph([new StartNode(START_ID, { params: [new Parameter("files")] })], [], {
+      outputs: [new FlowOutput("files", "${input.files}")],
+    });
+    const mapper = new MapNode("map", { flowId: "child", child });
+    mapper.params = [new Parameter("files")];
+    const flow = graph([mapper], [[START_ID, "map"]], {
+      outputs: [new FlowOutput("files", "${map.output}")],
+      wiring: { map: { over: "${deep_map_files()}", files: `\${${DEEP_FILES} ${operator}}` } },
+    });
+    const built = engine(flow, { learnable: true, growBuilder: buildGrow });
+    await built.run();
+    const trace = built.state.trace!;
+    expect(trace.terminal!.succeeded).toBe(true);
+    const feedback: FeedbackValue[] = [{ uri: "Review." }];
+    if (operator !== "+ []") feedback.push(null);
+
+    const [root, results] = await computeBackward(trace, [feedback]);
+
+    const start = trace.occurrence(trace.boundaries[0]!.startSource!);
+    const result = resultAt(results, start.source).result;
+    const routed = routeFeedback(
+      start.inputRoute.children[0]!,
+      result.inputFeedback.files![0]!,
+      (source) => trace.lookupSource(source),
+      { recordedValue: start.record.forwardCapture!.boundInputs!.files },
+    );
+    expect(root).toEqual(new BackwardResult());
+    expect(routed.contributions).toEqual([]);
+    expect(routed.stopped.map((stop) => stop.feedback)).toEqual([[{ uri: "Review." }]]);
+    expect(calls).toEqual([null]);
+  },
+);
+
+/** One LOOP pass-through flow: its source for `times`, the root feedback and the expected root input feedback. */
+interface PassthroughFlow {
+  source: (times: number) => string;
+  feedback: FeedbackValue;
+  expected: Readonly<Record<string, readonly FeedbackValue[]>>;
+}
+
+const PASSTHROUGH_FLOWS: Readonly<Record<string, PassthroughFlow>> = {
+  "chat-shaped": {
+    source: (times) => `id: passthrough
+name: passthrough
+input:
+  n: !int
+  tag: !str
+defs:
+  body:
+    input:
+      n: !int
+      tag: !str
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}', tag: '\${input.tag}'}
+        code: "return {'n': inputs['n'] - 1, 'seen': inputs['tag']}"
+        output: {n: int, seen: str}
+    output: \${work.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: ${times}
+    input: {n: '\${input.n}', tag: '\${input.tag}', seen: ''}
+output: \${loop.output}
+`,
+    feedback: { seen: "review seen" },
+    expected: { tag: ["review seen"] },
+  },
+  "loop-output": {
+    source: (times) => `id: passthrough
+name: passthrough
+input:
+  n: !int
+  tag: !str
+defs:
+  body:
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        code: "return {'n': inputs['n'] - 1}"
+        output: {n: int}
+    output: \${work.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: ${times}
+    input: {n: '\${input.n}', tag: '\${input.tag}'}
+output: \${loop.output}
+`,
+    feedback: { tag: "review tag" },
+    expected: { tag: ["review tag"] },
+  },
+  "nested-call": {
+    source: (times) => `id: passthrough
+name: passthrough
+input:
+  n: !int
+  tag: !str
+defs:
+  dec:
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: code
+        input: {n: '\${input.n}'}
+        code: "return {'n': inputs['n'] - 1}"
+        output: {n: int}
+    output: \${work.output}
+  body:
+    input:
+      n: !int
+    nodes:
+      inner:
+        kind: call
+        call: dec
+        input: {n: '\${input.n}'}
+    output: \${inner.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    times: ${times}
+    input: {n: '\${input.n}', tag: '\${input.tag}'}
+output: \${loop.output}
+`,
+    feedback: { tag: "review tag" },
+    expected: { tag: ["review tag"] },
+  },
+};
+
+test.each(Object.keys(PASSTHROUGH_FLOWS).flatMap((shape) => [1, 2, 3, 6].map((times) => [shape, times] as const)))(
+  "a LOOP pass-through field routes feedback to its seed (%s, times %d)",
+  async (shape, times) => {
+    // The body maps its output `seen` back to the `tag` input it echoed.
+    const backward = spyOn(CodeNode.prototype, "backward").mockImplementation((_context, feedback) => {
+      const routed: Record<string, FeedbackValue[]> = {};
+      for (const message of feedback) {
+        for (const [output, target] of [["n", "n"], ["seen", "tag"]] as const) {
+          if (holds(message, output)) (routed[target] ??= []).push(message[output]!);
+        }
+      }
+      return new BackwardResult({ inputFeedback: routed });
+    });
+    try {
+      const { source, feedback, expected } = PASSTHROUGH_FLOWS[shape]!;
+      const flow = await compiled(source(times));
+      const { engine: built } = ownerEngine(flow, { inputs: { n: 10n, tag: "red" }, growBuilder: buildGrow });
+      const original = copyGraph(built.state.flow);
+      await built.run();
+      const trace = built.state.trace!;
+      const expectedOutput: JsonObject = { n: BigInt(10 - times), tag: "red" };
+      if (shape === "chat-shaped") expectedOutput.seen = "red";
+      expect(trace.terminal!.output).toEqual(expectedOutput);
+      if (shape === "nested-call" && times >= 3) {
+        const ids = [...built.state.flow.nodes.keys()];
+        expect(ids.some((id) => id.startsWith("loop#0/"))).toBe(false);
+        expect(ids.some((id) => id.startsWith(`loop#${times - 1}/`))).toBe(true);
+      }
+
+      const [root, results] = await computeBackward(trace, feedback);
+
+      validateAttributedBackward(trace, feedback, root, results);
+      expect(root.inputFeedback).toEqual(expected);
+      const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
+      expect(await computeBackward(replay.trace!, feedback)).toEqual([root, results]);
+    } finally {
+      backward.mockRestore();
+    }
+  },
+);

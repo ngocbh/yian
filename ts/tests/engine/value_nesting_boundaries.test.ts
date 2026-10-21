@@ -6,7 +6,7 @@
  * `test_bind_params_rejects_a_filled_default_over_the_limit`.
  *
  * Ported at node level, through `evalNode` (`drive`) with a `ScriptedModel` from `models` where
- * Python runs a loaded flow (the run is T4-8): the non-session rows of
+ * Python runs a loaded flow: the non-session rows of
  * `test_a_structured_agent_over_the_limit_self_corrects_under_retries`,
  * `test_a_deep_native_reply_that_misses_the_schema_retries_on_the_schema_error`,
  * `test_an_exhausted_deep_native_schema_miss_is_located_at_the_field` and
@@ -46,15 +46,26 @@
  * schema-missing native reply is stored `completed`, as a prompted one is (Python: `failed`, not
  * stored); the exhausted schema miss fails `agent.output_invalid`, as without memory.
  *
- * Later (T6-6, with RunResult.backward): the learning half of
- * `test_tool_arguments_at_the_limit_run_and_are_learned_from` (it learns from backward feedback).
+ * Ported through `runFlow` and `RunResult.backward`, with episodic memory from `buildMemories`:
+ * the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`,
+ * `test_a_model_value_at_the_limit_is_learned_from`,
+ * `test_a_model_value_over_the_limit_self_corrects_and_backward_learns`,
+ * `test_a_model_value_over_the_limit_fails_the_agent_and_backward_still_learns` (2 rows),
+ * `test_tool_arguments_over_the_limit_fail_the_agent_and_backward_still_learns` (2 rows) and
+ * `test_value_at_the_limit_learns_from_{an_output,an_input,a_record_output}`; without memory:
+ * `test_backward_rejects_feedback_over_the_limit_and_stays_usable`. Changed: the backward runs at
+ * the test's own stack depth (Python lowers the recursion limit by 300 frames; JS has no such
+ * knob). The model is a native `ScriptedModel` from `models`, answering the structured value as
+ * text (Python patches a structured-output fake). The exhausted structured value fails
+ * `agent.output_invalid` (Python: `node.execute`), as above. CODE bodies are TypeScript; the
+ * feedback over the limit is a `TypeCheckError` (Python's `ValueError`).
  *
  * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
  * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
  * matches fragments.
  *
- * Later: the other 25 tests run flows or backward and land with the runner (T4-8), AGENT backward
- * (T6-6) and the node kinds.
+ * Later: the other 17 tests, run-only rows with no backward (CODE, call and map outputs and
+ * bindings, run inputs, replay of an older log).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -67,18 +78,20 @@ import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
+import { buildMemories } from "../../src/memory_host.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow, type RunResult } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
+import { Type, TypeCheckError, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadErrorAsync } from "../compose/declarations.ts";
 import { drive, serving } from "./run_state_fixtures.ts";
-import { effectsOf, runSessionFlow, sessionFlow } from "./session_fakes.ts";
+import { backwardReply, effectsOf, NO_ENV, rejected, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -119,6 +132,97 @@ test("bindParams rejects a filled default over the limit", () => {
   expect(error.failureCode).toBe("binding.evaluate");
   expect(error.message.startsWith("default for 'p' at a.a")).toBe(true);
   expect(error.message).toContain("deeper than 100 levels");
+});
+
+// ---------- learning from values at the limit ----------
+
+/** A flow whose CODE node `deep` returns `["leaf"]` wrapped in `levels` lists. */
+function listFlow(levels: number): string {
+  return `id: nesting
+name: nesting
+nodes:
+  deep:
+    kind: code
+    code: |
+      let v = "leaf";
+      for (let i = 0; i < ${levels}; i++) v = [v];
+      return v;
+output: \${deep.output}
+`;
+}
+
+/** Python's `_memory_flow`: `text` loaded with episodic long-term memory declared on the flow. */
+function memoryFlow(text: string) {
+  return loadFlow(text.replace("name: nesting\n", "name: nesting\nlong_term_memory: episodic\n"));
+}
+
+/** Python's `_assert_learns`: a memory run of `flow` on `inputs` succeeds and learns from `feedback`. */
+async function expectLearns(
+  flow: Awaited<ReturnType<typeof loadFlow>>,
+  inputs: Record<string, unknown>,
+  feedback: unknown,
+  model: ScriptedModel | null = null,
+): Promise<void> {
+  await using memory = await buildMemories(flow);
+  const models = model === null ? undefined : serving(model);
+  const result = await runFlow(flow, inputs, { memory, learnable: true, models, env: NO_ENV });
+  expect(result.status).toBe("succeeded");
+
+  const outcome = await result.backward(feedback);
+
+  expect(outcome.status).toBe("succeeded");
+  expect(outcome.learning!.status).toBe("succeeded");
+}
+
+test("backward rejects feedback over the limit and stays usable", async () => {
+  const result = await runFlow(await loadFlow(listFlow(1)), {}, { learnable: true, env: NO_ENV });
+  expect(result.status).toBe("succeeded");
+  let bad: Value = "bad";
+  for (let i = 0; i < 1500; i++) bad = [bad];
+
+  const error = await rejected(result.backward(bad));
+
+  expect(error).toBeInstanceOf(TypeCheckError);
+  expect((error as Error).message.startsWith("feedback at [0][0]")).toBe(true);
+  expect((error as Error).message).toContain("deeper than 100 levels");
+  expect(result.backwardOutcome).toBeNull();
+  expect((await result.backward("good")).status).toBe("succeeded");
+});
+
+test("a value at the limit learns from an output", async () => {
+  await expectLearns(await memoryFlow(listFlow(100)), {}, "good");
+});
+
+test("a value at the limit learns from an input", async () => {
+  const flow = await memoryFlow(`id: nesting
+name: nesting
+input:
+  x: !object
+nodes:
+  echo:
+    kind: code
+    input:
+      x: \${input.x}
+    code: return inputs["x"]
+output: \${echo.output}
+`);
+  await expectLearns(flow, { x: nestRecord(100) }, "good");
+});
+
+test("a value at the limit learns from a record output", async () => {
+  const flow = await memoryFlow(`id: nesting
+name: nesting
+nodes:
+  deep:
+    kind: code
+    output: {tree: object}
+    code: |
+      let v = "leaf";
+      for (let i = 0; i < 99; i++) v = { a: v };
+      return { tree: v };
+output: \${deep.output.tree}
+`);
+  await expectLearns(flow, {}, { a: "bad" });
 });
 
 // A structured AGENT reply over the limit self-corrects under `retries:`, and fails once they are
@@ -225,10 +329,9 @@ test.each(ROWS)("a structured agent over the limit without retries fails (%s, %d
 
 // ---------- the tool loop's argument checks ----------
 
-/** A run with an AGENT `agent` granted a `lookup` tool that records its arguments. */
-function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) => void } = {}) {
-  const calls: unknown[] = [];
-  const lookup = new FunctionTool({
+/** A `lookup` tool that records the arguments of each call in `calls`. */
+function lookupTool(calls: unknown[]): FunctionTool {
+  return new FunctionTool({
     name: "lookup",
     description: "Look one thing up.",
     parametersJsonSchema: { type: "object", properties: { x: {}, q: {} } },
@@ -237,6 +340,12 @@ function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) =
       return "ok";
     },
   });
+}
+
+/** A run with an AGENT `agent` granted a `lookup` tool that records its arguments. */
+function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) => void } = {}) {
+  const calls: unknown[] = [];
+  const lookup = lookupTool(calls);
   const node = new AgentNode("agent", { prompt: "q", llmConfig: NATIVE, tools: ["lookup"] });
   const outcome = drive(node, {
     models: { env: () => undefined, createModel: () => model },
@@ -290,6 +399,116 @@ test("tool arguments at the limit run", async () => {
 
   expect(await outcome).toEqual(new Output("finished"));
   expect(calls).toEqual([{ q: atLimit }]);
+});
+
+test("tool arguments at the limit are learned from", async () => {
+  const flow = await loadFlow(`id: nesting
+name: nesting
+long_term_memory: episodic
+llm_config: {provider: openai, model: gpt-5.5}
+nodes:
+  w:
+    kind: agent
+    prompt: go
+    tools: [lookup]
+    output: str
+output: \${w.output}
+`);
+  const atLimit = nestRecord(99);
+  const call = new ToolCallPart({ id: "1", name: "lookup", arguments: { q: atLimit } as JsonObject });
+  const model = new ScriptedModel([partsReply(call), partsReply(new TextPart("finished")), backwardReply()], NATIVE);
+  const calls: unknown[] = [];
+  await using memory = await buildMemories(flow);
+  const result = await runFlow(flow, {}, {
+    memory,
+    learnable: true,
+    tools: { lookup: lookupTool(calls) },
+    models: serving(model),
+    env: NO_ENV,
+  });
+  expect([result.status, result.output]).toEqual(["succeeded", "finished"]);
+  expect(calls).toEqual([{ q: atLimit }]);
+
+  const outcome = await result.backward("good");
+
+  expect(outcome.status).toBe("succeeded");
+  expect(outcome.learning!.status).toBe("succeeded");
+  expect(model.requests).toHaveLength(3);
+});
+
+const STRUCTURED_FLOW = `id: nesting
+name: nesting
+llm_config: {provider: openai, model: gpt-5.5}
+nodes:
+  w:
+    kind: agent
+    prompt: go
+    output: {t: object}
+output: \${w.output}
+`;
+
+/** A native model replying the structured `{t: ...}` texts `values`, then an empty reflection. */
+function structured(...values: string[]): ScriptedModel {
+  return new ScriptedModel([...values.map((value) => reply(`{"t": ${value}}`)), backwardReply()], NATIVE);
+}
+
+test("a model value at the limit is learned from", async () => {
+  await expectLearns(await memoryFlow(STRUCTURED_FLOW), {}, "good", structured(deepText(99)));
+});
+
+test("a model value over the limit self corrects and backward learns", async () => {
+  await expectLearns(await memoryFlow(STRUCTURED_FLOW), {}, "good", structured(deepText(126), '{"k": 1}'));
+});
+
+/** `result` failed node `w` with code `code`, naming `where` and the limit. */
+function expectFailedTooDeep(result: RunResult, code: string, where: string): void {
+  expect(result.status).toBe("failed");
+  expect([result.failure!.code, result.failure!.nodeId]).toEqual([code, "w"]);
+  expect(result.failure!.message).toContain(where);
+  expect(result.failure!.message).toContain("deeper than 100 levels");
+}
+
+test.each([126, 1500])("a model value over the limit fails the agent and backward still learns (%d levels)", async (levels) => {
+  const flow = await memoryFlow(STRUCTURED_FLOW);
+  // The first reply and both `retries:` attempts.
+  const model = structured(deepText(levels), deepText(levels), deepText(levels));
+  await using memory = await buildMemories(flow);
+  const result = await runFlow(flow, {}, { memory, learnable: true, models: serving(model), env: NO_ENV });
+
+  expectFailedTooDeep(result, "agent.output_invalid", "structured output at t.a");
+
+  expect((await result.backward("good")).status).toBe("succeeded");
+});
+
+test.each([124, 1500])("tool arguments over the limit fail the agent and backward still learns (%d levels)", async (levels) => {
+  const flow = await memoryFlow(`id: nesting
+name: nesting
+llm_config: {provider: openai, model: gpt-5.5}
+nodes:
+  w:
+    kind: agent
+    prompt: go
+    tools: [lookup]
+    output: str
+output: \${w.output}
+`);
+  const rawArguments = `{"q": ${deepText(levels)}}`;
+  const call = new ToolCallPart({ id: "1", name: "lookup", arguments: null, rawArguments });
+  const model = new ScriptedModel([partsReply(call), backwardReply()], NATIVE);
+  const calls: unknown[] = [];
+  await using memory = await buildMemories(flow);
+  const result = await runFlow(flow, {}, {
+    memory,
+    learnable: true,
+    tools: { lookup: lookupTool(calls) },
+    models: serving(model),
+    env: NO_ENV,
+  });
+
+  expectFailedTooDeep(result, "node.execute", "tool call 'lookup' arguments at q.a");
+  expect(calls).toEqual([]);
+
+  expect((await result.backward("good")).status).toBe("succeeded");
 });
 
 test("a too-deep later call of a streamed reply stops every call of the reply", async () => {

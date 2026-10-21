@@ -8,7 +8,10 @@
  * `test_api_session_history_is_used_after_reopening_storage`,
  * `test_api_summary_cache_survives_reopen_under_current_budget` and
  * `test_more_recent_turns_on_reopen_restores_raw_context`; through `runFlow` and `resumeFlow`:
- * `test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot`.
+ * `test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot`; through `runFlow`,
+ * `RunResult.backward` and `resumeFlow`: `test_explicit_learning_remains_saved_after_reopen`
+ * (2 rows); through `runFlow` and `RunResult.backward`:
+ * `test_api_session_learned_notes_survive_storage_reopen`.
  *
  * Changed: Python's `with <backend>:` is `withBackend`, which closes the backend in `finally`.
  * `test_process_local_backends_never_open_sqlite`: spies on `SQLiteStorage.prototype.ensureOpen`,
@@ -16,10 +19,9 @@
  * `test_snapshot_identity_survives_a_real_process_restart`: the child is a `bun -e` script
  * importing the backend's module that prints the snapshot as `logJson`. The host stop of the
  * resume row aborts `runFlow`'s `signal` once the first reply's stream is read to the end (Python sets
- * the node's stop event inside the model call).
- *
- * Later (T6-6, with RunResult.backward): `test_explicit_learning_remains_saved_after_reopen` (2 rows)
- * and `test_api_session_learned_notes_survive_storage_reopen`.
+ * the node's stop event inside the model call). `test_explicit_learning_remains_saved_after_reopen`:
+ * the reflector is a `ScriptedModel` from the backend's `createModel` option, answering with the
+ * actions' JSON (Python patches `reflective.model_from_config` with a structured-output fake).
  */
 
 import { spawnSync } from "node:child_process";
@@ -37,8 +39,19 @@ import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { rejected, reply, resumeWith, runWith, sentTexts, snapshot, StopAfterFirstReply } from "./session_fakes.ts";
+import {
+  backwardReply,
+  NO_ENV,
+  rejected,
+  reply,
+  resumeWith,
+  runWith,
+  sentTexts,
+  snapshot,
+  StopAfterFirstReply,
+} from "./session_fakes.ts";
 
 const MODEL_CONFIG = { provider: "openai", model: "storage-test-model" };
 const AGENT_FLOW = `id: durable-session
@@ -57,6 +70,17 @@ nodes:
 output: \${agent.output}
 `;
 
+const CODE_FLOW = `id: durable-learning
+name: durable_learning
+long_term_memory: POLICY
+nodes:
+  work:
+    kind: code
+    code: return 7
+    output: int
+output: \${work.output}
+`;
+
 const POLICIES = ["episodic", "reflective", "session"] as const;
 type Policy = (typeof POLICIES)[number];
 type Backend = EpisodicMemory | ReflectiveMemory | SessionMemory;
@@ -71,9 +95,9 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Python's `_backend`: the `policy` backend over `storage`. */
-function backend(policy: Policy, storage: string | null): Backend {
-  if (policy === "reflective") return new ReflectiveMemory({ llmConfig: MODEL_CONFIG, storage });
+/** Python's `_backend`: the `policy` backend over `storage`; a reflective one learns with `createModel`. */
+function backend(policy: Policy, storage: string | null, createModel: (() => ScriptedModel) | null = null): Backend {
+  if (policy === "reflective") return new ReflectiveMemory({ llmConfig: MODEL_CONFIG, storage, createModel });
   return policy === "episodic" ? new EpisodicMemory({ storage }) : new SessionMemory({ storage });
 }
 
@@ -144,6 +168,38 @@ memory.close();
   });
 }
 
+for (const policy of ["episodic", "reflective"] as const) {
+  test(`explicit learning remains saved after reopen: ${policy}`, async () => {
+    const actions = [{ action: "add", lesson_id: "checked-output", text: "Verify the returned output." }];
+    const reflector = () => new ScriptedModel([reply(JSON.stringify({ actions }))], MODEL_CONFIG);
+    const file = path.join(dir, "memory.sqlite");
+    const log = path.join(dir, "run.jsonl");
+    const flow = await loadFlow(CODE_FLOW.replace("POLICY", policy));
+    const field = policy === "episodic" ? "episodes" : "lessons";
+    const recorded = await withBackend(backend(policy, file, reflector), async (memory) => {
+      const options = { memory: new Map([[policy, memory]]), learnable: true, log, env: NO_ENV };
+      const result = await runFlow(flow, {}, options);
+      expect(result.status).toBe("succeeded");
+      expect(result.output).toBe(7n);
+      expect(snapshot(memory)[field]).toEqual([]);
+      await result.backward();
+      expect(result.learning!.status).toBe("succeeded");
+      const learned = snapshot(memory);
+      expect(learned[field]).not.toHaveLength(0);
+      return learned;
+    });
+    const prefix = fs.readFileSync(log);
+    await withBackend(backend(policy, file, reflector), async (reopened) => {
+      expect(snapshot(reopened)).toEqual(recorded);
+      const inspected = await resumeFlow(flow, { log, memory: new Map([[policy, reopened]]), env: NO_ENV });
+      expect(inspected.output).toBe(7n);
+      expect(snapshot(reopened)).toEqual(recorded);
+    });
+    expect(fs.readFileSync(log)).toEqual(prefix);
+    expect(prefix.includes(file)).toBe(false);
+  });
+}
+
 test("api session history is used after reopening storage", async () => {
   const model = new ScriptedModel([reply("reply 1"), reply("reply 2")], MODEL_CONFIG);
   const file = path.join(dir, "private-session.sqlite");
@@ -161,6 +217,30 @@ test("api session history is used after reopening storage", async () => {
     expect(second.learning).toBeNull();
     expect(sentTexts(model, 1)).toEqual(["first", "reply 1", "second"]);
     expect((snapshot(reopened)["conversation"] as JsonObject)["items"]).toHaveLength(6);
+  });
+});
+
+test("api session learned notes survive storage reopen", async () => {
+  const note = "Check the measurement units before answering.";
+  const model = new ScriptedModel([reply("first answer"), backwardReply(note), reply("second answer")], MODEL_CONFIG);
+  const file = path.join(dir, "session.sqlite");
+  const flow = await loadFlow(AGENT_FLOW);
+  const recorded = await withBackend(new SessionMemory({ storage: file }), async (memory) => {
+    const first = await runWith(flow, { question: "first" }, memory, model, { learnable: true });
+    const raw = snapshot(memory)["conversation"];
+    await first.backward("Remember to check the units.");
+    expect(first.learning!.status).toBe("succeeded");
+    const learned = snapshot(memory);
+    expect(learned["conversation"]).toEqual(raw);
+    expect(learned["notes"]).toHaveLength(1);
+    return learned;
+  });
+  await withBackend(new SessionMemory({ storage: file }), async (reopened) => {
+    expect(snapshot(reopened)).toEqual(recorded);
+    const second = await runWith(flow, { question: "second" }, reopened, model);
+    expect(second.output).toBe("second answer");
+    expect(model.requests.at(-1)!.messages[0]!.text()).toContain(note);
+    expect(model.requests).toHaveLength(3);
   });
 });
 

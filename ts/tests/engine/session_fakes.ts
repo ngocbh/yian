@@ -3,7 +3,8 @@
  * `tests/engine/_session_fakes.py`, plus the promise helpers, the hand-built `runAgent` context
  * and the one-AGENT session flow run through `FlowEngine` that the session tests share, and the
  * `runFlow` and `resumeFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`,
- * `resumeWith`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`, `recording`).
+ * `resumeWith`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`, `backwardReply`,
+ * `memorySections`, `recording`).
  */
 
 import { expect } from "bun:test";
@@ -391,6 +392,19 @@ export function sentTexts(model: { requests: readonly { messages: readonly Messa
 /** A text-only assistant reply. */
 export function reply(text: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
+}
+
+/** An AGENT backward reply whose only feedback is the self-feedback `notes`. */
+export function backwardReply(...notes: string[]): Response {
+  return reply(JSON.stringify({ input_feedback: {}, self_feedback: notes, variable_feedback: {} }));
+}
+
+/** The memory sections the system prompt among `messages` shows; none without a memory context. */
+export function memorySections(messages: readonly Message[]): { memory: string; text: string }[] {
+  const system = messages.find((message) => message.role === "system")?.text() ?? "";
+  if (!system.includes("Memory context (canonical JSON")) return [];
+  return (JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { memory: string; text: string }[] })
+    .sections;
 }
 
 /** Model access over `NO_ENV` that records each config it builds from and serves `pick(config)`. */

@@ -31,9 +31,11 @@
  * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
  * `any_tag_on_a_date` is pinned in `tags.test.ts`.
  *
- * Later (T4-8 follow-up): the runs of `test_quoted_or_tagged_dates_keep_their_behavior`,
- * `test_other_untagged_literals_in_untyped_outputs_still_load` and
- * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`.
+ * Run through `loadFlow` and `runFlow`: the quoted-date run of
+ * `test_quoted_or_tagged_dates_keep_their_behavior`, the JSON-literal run of
+ * `test_other_untagged_literals_in_untyped_outputs_still_load` and the text and finite runs of
+ * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`. Changed: int is `bigint`, so the
+ * output `h` is `1n`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -45,6 +47,7 @@ import { forget } from "../../src/defaults.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
+import { runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
@@ -68,6 +71,13 @@ function flow(output: string): string {
 
 /** Load `text` and return its flow. */
 const load = (text: string): ComposedFlow => assembleText(text).flow;
+
+/** Load and run `text`, returning its output and expecting success. */
+async function ok(text: string): Promise<unknown> {
+  const result = await runFlow(await loadFlow(text), {});
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
 
 /** Return each flow output's binding source by name. */
 function outputSources(text: string): Record<string, unknown> {
@@ -120,6 +130,10 @@ describe("dates", () => {
     ["as_of: ${b.output}-2026-01-01", "${b.output}-2026-01-01"],
   ])("a quoted or tagged date loads: %j", (output, expected) => {
     expect(outputSources(flow(`${output}\nh: \${b.output}`))["as_of"]).toBe(expected);
+  });
+
+  test("a quoted date runs as text", async () => {
+    expect(await ok(flow('as_of: "2026-01-01"\nh: ${b.output}'))).toStrictEqual({ as_of: "2026-01-01", h: 1n });
   });
 });
 
@@ -273,14 +287,12 @@ output: \${c.output}
 });
 
 describe("other literals", () => {
-  test("JSON literals in an untyped output load", () => {
-    expect(outputSources(flow("n: 1\ns: x\nl: [1, null]\nm: {k: true}\nh: ${b.output}"))).toStrictEqual({
-      n: 1n,
-      s: "x",
-      l: [1n, null],
-      m: { k: true },
-      h: "${b.output}",
-    });
+  test("JSON literals in an untyped output load and run", async () => {
+    const text = flow("n: 1\ns: x\nl: [1, null]\nm: {k: true}\nh: ${b.output}");
+    const literals = { n: 1n, s: "x", l: [1n, null], m: { k: true } };
+
+    expect(outputSources(text)).toStrictEqual({ ...literals, h: "${b.output}" });
+    expect(await ok(text)).toStrictEqual({ ...literals, h: 1n });
   });
 
   test.each([
@@ -329,10 +341,10 @@ describe("numbers that are not finite", () => {
     errorAt(text, NAN, `output: ${output}`);
   });
 
-  test("quoted or !!str NaN is text, and finite numbers load", () => {
-    expect(outputSources(flow('g: ".nan"\nh: ${b.output}'))["g"]).toBe(".nan");
-    expect(outputSources(flow("g: !!str .nan\nh: ${b.output}"))["g"]).toBe(".nan");
-    expect(outputSources(flow("g: [1.5, -2e10, 1e300]\nh: ${b.output}"))["g"]).toStrictEqual([1.5, -2e10, 1e300]);
+  test("quoted or !!str NaN is text, and finite numbers load and run", async () => {
+    expect(await ok(flow('g: ".nan"\nh: ${b.output}'))).toStrictEqual({ g: ".nan", h: 1n });
+    expect(await ok(flow("g: !!str .nan\nh: ${b.output}"))).toStrictEqual({ g: ".nan", h: 1n });
+    expect(await ok(flow("g: [1.5, -2e10, 1e300]\nh: ${b.output}"))).toStrictEqual({ g: [1.5, -2e10, 1e300], h: 1n });
   });
 });
 

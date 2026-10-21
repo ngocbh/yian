@@ -26,10 +26,58 @@
  *   bool and float rows are `TypeError`s where Python raised a `ValidationError` (a `ValueError`),
  *   and the empty-name row is a `RangeError`.
  *
- * Later: the run, resume and mismatch tests, with the engine.
+ * Covered by `resume/defaults_recorded__a_resume_with_the_same_recorded_defaults_succeeds` (a
+ * TOOL for the CODE, its trace pinning the recorded value): `test_resume_with_same_value_succeeds`
+ * and `test_non_default_value_is_recorded`.
+ *
+ * Ported through `loadFlow`, `runFlow` and `resumeFlow`, each run's `YIAN_*` values set in its
+ * `hostEnv` (Python's `set_defaults` sets them in the process): the run half of
+ * `test_default_run_log_is_unchanged` (`"defaults":{}`, as above),
+ * `test_resume_with_a_different_value_fails`, `test_resume_without_the_variable_fails`,
+ * `test_resume_of_default_run_with_a_variable_set_fails`, the plain-log half of
+ * `test_old_log_resumes_as_all_defaults`,
+ * `test_mismatch_is_reported_before_the_fingerprint` (the zero-retries flow loaded in `withEnv`,
+ * its AGENT a `ScriptedModel` given as `models`), `test_unknown_recorded_name_fails`,
+ * `test_bad_variable_fails_before_load` (the load half sets the process variable, the run half
+ * the run's `env`) and `test_node_budget_over_the_limit_fails_live`. The CODE bodies are
+ * JavaScript. `test_variable_changed_after_first_read_is_ignored` runs with `processEnv`, its
+ * subject: the process's values, once read, ignore a later change to `process.env`.
+ *
+ * Ported over `replayRecords`, the process values installed unchecked (`install`, Python's
+ * `set_defaults.unchecked`): `test_replay_takes_the_node_budget_from_the_record` and
+ * `test_replay_takes_a_recorded_node_budget_from_the_record`.
+ *
+ * Later (the run-start record's `defaults` field): the stripped-log half of
+ * `test_old_log_resumes_as_all_defaults`. Schema 10 requires `defaults` in `run_started`, so the
+ * decoder refuses a record without it (`invalid run_started payload fields; missing=["defaults"]`)
+ * where Python reads an absent field as all defaults.
  */
 
-import { expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+
+import { buildGrow } from "../../src/compile/expand.ts";
+import { flowFingerprint } from "../../src/compile/manifest.ts";
+import { copyGraph } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import {
+  BUILTIN,
+  DefaultsError,
+  DefaultsMismatchError,
+  forget,
+  install,
+  processEnv,
+  withEnv,
+} from "../../src/defaults.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
+import { NodeExpandedRecord, readRunLog } from "../../src/runtime/log.ts";
+import { RunState, replayRecords } from "../../src/runtime/state.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { rejection, serving, textReply } from "./run_state_fixtures.ts";
 
 import {
   decodeRecord,
@@ -41,6 +89,13 @@ import {
 } from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
+
+// Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
+beforeEach(() => install(BUILTIN));
+afterEach(forget);
+
+const dir = mkdtempSync(join(tmpdir(), "yian-defaults-recorded-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
@@ -140,4 +195,248 @@ test("the default run log writes empty defaults", () => {
   expect(encoded).toContain('"defaults":{}');
   expect((decoded.record as RunStartedRecord).defaults).toEqual({});
   expect(encodeRecord(decoded)).toBe(encoded);
+});
+
+// --- runs and resumes --- //
+
+const TWO_STEPS = `
+id: two
+name: two
+nodes:
+  first:
+    kind: code
+    code: |
+      return {n: 1}
+  second:
+    kind: code
+    input:
+      n: \${first.output.n}
+    code: |
+      return {n: inputs["n"] + 1}
+output: \${second.output}
+`;
+
+const MAP = `
+id: fan
+name: fan
+input:
+  xs: !list(int)
+defs:
+  one:
+    input:
+      v: !int
+    nodes:
+      echo:
+        kind: code
+        input:
+          v: \${input.v}
+        code: |
+          return {v: inputs["v"]}
+    output: \${echo.output}
+nodes:
+  each:
+    kind: map
+    over: \${input.xs}
+    call: one
+    input:
+      v: \${item}
+output: \${each.output}
+`;
+
+const AGENT = `
+id: talk
+name: talk
+nodes:
+  ask:
+    kind: agent
+    prompt: say hi
+output: \${ask.output}
+`;
+
+/** An environment holding only the test's credential store and `vars`. */
+const envWith = (vars: Readonly<Record<string, string>> = {}) => hostEnv(dir, vars);
+const AT_5000 = { YIAN_MAX_TOTAL_NODES: "5000" };
+
+let logs = 0;
+/** A fresh log path. */
+const freshLog = () => join(dir, `run-${++logs}.jsonl`);
+
+/** The lines of `path`, each with its newline. */
+const linesOf = (path: string) => readFileSync(path, "utf8").split(/(?<=\n)/);
+
+/** The `run_started` payload of the log at `path`. */
+const runStartedPayload = (path: string) => JSON.parse(linesOf(path)[0]!).payload;
+
+/** Apply `edit` to the `run_started` payload of the log at `path` and write it back canonically. */
+function rewriteRunStarted(path: string, edit: (payload: Record<string, unknown>) => void): void {
+  const lines = linesOf(path);
+  const envelope = parseJson(lines[0]!, "log") as { payload: Record<string, unknown> };
+  edit(envelope.payload);
+  lines[0] = encodeRecord(decodeRecord(logJson(envelope))) + "\n";
+  writeFileSync(path, lines.join(""));
+}
+
+/** Run the two-step flow in `env` into `path`, then keep only the log up to START's success. */
+async function interruptedRun(path: string, env = envWith()): Promise<void> {
+  const result = await runFlow(await loadFlow(TWO_STEPS), {}, { log: path, env });
+  expect(result.status).toBe("succeeded");
+  writeFileSync(path, linesOf(path).slice(0, 3).join(""));
+}
+
+test("the default run log writes empty defaults (run)", async () => {
+  const path = freshLog();
+  expect((await runFlow(await loadFlow(TWO_STEPS), {}, { log: path, env: envWith() })).status).toBe("succeeded");
+  expect(runStartedPayload(path).defaults).toEqual({});
+});
+
+test("resume with a different value fails", async () => {
+  const path = freshLog();
+  await interruptedRun(path, envWith(AT_5000));
+  const before = readFileSync(path);
+
+  const error = await rejection(
+    resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "6000" }) }),
+  );
+
+  expect(error).toBeInstanceOf(DefaultsMismatchError);
+  expect((error as Error).message).toContain("YIAN_MAX_TOTAL_NODES is 6000 here");
+  expect((error as Error).message).toContain("started with 5000");
+  expect(readFileSync(path).equals(before)).toBe(true);
+});
+
+test("resume without the variable fails", async () => {
+  const path = freshLog();
+  await interruptedRun(path, envWith(AT_5000));
+
+  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
+
+  expect(error).toBeInstanceOf(DefaultsMismatchError);
+  expect((error as Error).message).toContain("set YIAN_MAX_TOTAL_NODES=5000");
+});
+
+test("resume of a default run with a variable set fails", async () => {
+  const path = freshLog();
+  await interruptedRun(path);
+
+  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith(AT_5000) }));
+
+  expect(error).toBeInstanceOf(DefaultsMismatchError);
+  expect((error as Error).message).toContain("unset YIAN_MAX_TOTAL_NODES");
+});
+
+test("an old log resumes as all defaults: a plain log", async () => {
+  const plain = freshLog();
+  await interruptedRun(plain);
+  expect((await resumeFlow(await loadFlow(TWO_STEPS), { log: plain, env: envWith() })).output).toEqual({ n: 2n });
+});
+
+test("a mismatch is reported before the fingerprint", async () => {
+  const path = freshLog();
+  const zeroRetriesEnv = envWith({ YIAN_AGENT_RETRIES: "0" });
+  const zeroRetries = await withEnv(zeroRetriesEnv, () => loadFlow(AGENT));
+  const result = await runFlow(zeroRetries, {}, {
+    log: path,
+    env: zeroRetriesEnv,
+    llmConfig: { provider: "anthropic", model: "claude-test" },
+    models: serving(new ScriptedModel([textReply("hi")])),
+  });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const defaultRetries = await loadFlow(AGENT);
+  expect(flowFingerprint(defaultRetries.compiled)).not.toBe(flowFingerprint(zeroRetries.compiled));
+
+  // Resuming a finished run is enough: the check runs before anything else in replay.
+  const error = await rejection(resumeFlow(defaultRetries, { log: path, env: envWith() }));
+
+  expect(error).toBeInstanceOf(DefaultsMismatchError);
+  expect((error as Error).message).toContain("YIAN_AGENT_RETRIES");
+  expect((error as Error).message).not.toContain("fingerprint");
+});
+
+test("an unknown recorded name fails", async () => {
+  const path = freshLog();
+  await interruptedRun(path);
+  rewriteRunStarted(path, (payload) => {
+    payload.defaults = { MAX_NOT_A_THING: 1n };
+  });
+
+  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
+
+  expect(error).toBeInstanceOf(DefaultsMismatchError);
+  expect((error as Error).message).toContain("YIAN_MAX_NOT_A_THING");
+});
+
+/** Run `fn` with `process.env[name]` set to `value`, restoring it after. */
+async function withProcessVariable<T>(name: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const had = Object.hasOwn(process.env, name);
+  const old = process.env[name];
+  process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (had) process.env[name] = old;
+    else delete process.env[name];
+  }
+}
+
+test("a variable changed after the first read is ignored", async () => {
+  // The process's values are already read (installed); the later variable is never read.
+  const path = freshLog();
+  await withProcessVariable("YIAN_MAX_TOTAL_NODES", "5000", async () => {
+    expect((await runFlow(await loadFlow(TWO_STEPS), {}, { log: path, env: processEnv })).status).toBe("succeeded");
+  });
+  expect(runStartedPayload(path).defaults).toEqual({});
+});
+
+test("a bad variable fails before load", async () => {
+  const flow = await loadFlow(TWO_STEPS);
+  await withProcessVariable("YIAN_MAX_TOTAL_NODES", "abc", async () => {
+    forget();
+    const error = await rejection(loadFlow(TWO_STEPS));
+    expect(error).toBeInstanceOf(DefaultsError);
+    expect((error as Error).message).toContain("YIAN_MAX_TOTAL_NODES");
+  });
+  forget();
+
+  const path = freshLog();
+  const error = await rejection(runFlow(flow, {}, { log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "abc" }) }));
+  expect(error).toBeInstanceOf(DefaultsError);
+  expect((error as Error).message).toContain("YIAN_MAX_TOTAL_NODES");
+  expect(existsSync(path)).toBe(false);
+});
+
+test("a node budget over the limit fails live", async () => {
+  const result = await runFlow(await loadFlow(MAP), { xs: [1, 2, 3, 4, 5] }, {
+    env: envWith({ YIAN_MAX_TOTAL_NODES: "3" }),
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.message).toContain("expansion exceeded node budget (3)");
+});
+
+test("replay takes the node budget from the record", async () => {
+  const flow = await loadFlow(MAP);
+  const path = freshLog();
+  expect((await runFlow(flow, { xs: [1, 2, 3, 4, 5] }, { log: path, env: envWith() })).status).toBe("succeeded");
+  const envelopes = readRunLog(path);
+  expect(envelopes.some((envelope) => envelope.record instanceof NodeExpandedRecord)).toBe(true);
+  install({ ...BUILTIN, maxTotalNodes: 2 });
+
+  const state = replayRecords(new RunState(copyGraph(flow.compiled)), envelopes, { growBuilder: buildGrow });
+
+  expect(state.flow.nodes.size).toBeGreaterThan(2);
+  expect(state.runDefaults).toEqual(BUILTIN);
+});
+
+test("replay takes a recorded node budget from the record", async () => {
+  const flow = await loadFlow(MAP);
+  const path = freshLog();
+  expect((await runFlow(flow, { xs: [1, 2, 3, 4, 5] }, { log: path, env: envWith(AT_5000) })).status).toBe(
+    "succeeded",
+  );
+  const envelopes = readRunLog(path);
+  install({ ...BUILTIN, maxTotalNodes: 2 });
+
+  const state = replayRecords(new RunState(copyGraph(flow.compiled)), envelopes, { growBuilder: buildGrow });
+
+  expect(state.runDefaults.maxTotalNodes).toBe(5000);
 });

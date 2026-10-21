@@ -53,7 +53,9 @@
  * learner builds through `models.createModel` under node `__memory__` with consumer
  * `memory:<key>` and reads `models.env`, and each reason its model gives for leaving out replay
  * state reaches `onEvent` once per call as `ReplayDegraded`; each learner retry reaches `onEvent`
- * as `ModelCallRetried`, with and without `models`; a custom factory gets only its config.
+ * as `ModelCallRetried`, with and without `models`; without `models` a learner builds its
+ * default `RouteModel`; one real reflective learn through `models` publishes its retry with the
+ * echoed key redacted; a custom factory gets only its config.
  *
  * Ported, through `runFlow` in an environment holding only the test's credential store:
  * `test_registry_built_for_another_flow_is_rejected` and `test_registry_for_this_flow_runs`, whose
@@ -83,14 +85,18 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallRetried, ReplayDegraded } from "../../src/events.ts";
 import * as yian from "../../src/index.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
-import type { RetryInfo } from "../../src/llm/executor.ts";
+import { type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   DeclSite,
   type JsonObject,
+  LearnContext,
   type Memory,
   MemoryDecl,
+  MemoryEpisode,
+  MemoryEpisodeStatus,
   MemoryOperationError,
   MemorySetupError,
 } from "../../src/memory/contracts.ts";
@@ -543,10 +549,52 @@ test("each learner retry reaches onEvent, with and without models", async () => 
       ),
     );
   }
-  // Without `onEvent` a retry publishes nothing; without `models` the learner keeps its default.
-  await using quiet = await buildMemories(flow);
-  expect(field(quiet.get("lessons"), "onRetry")).toBeUndefined();
-  expect(field(quiet.get("about"), "onRetry")).toBeUndefined();
+  // Without `onEvent` a retry publishes nothing; without `models` a learner builds its default
+  // model, here an ollama route, which needs no key.
+  await using quiet = await buildMemories(flow, { env: () => undefined });
+  for (const key of ["lessons", "about"]) {
+    expect(field(quiet.get(key), "onRetry")).toBeUndefined();
+    expect(await buildLearner(quiet.get(key), { provider: "ollama", model: "qwen" })).toBeInstanceOf(RouteModel);
+  }
+});
+
+test("a real learn through models publishes its retry with the echoed key redacted", async () => {
+  const key = "sk-host-learner-retry-qzpw";
+  const config = { provider: "vllm", model: "m" };
+  const flow = hostFlow([decl("lessons", "reflective")]);
+  const failure = new ProviderError("rate_limit", `Incorrect API key provided: ${key}`, { retryAfter: 0.001 });
+  const noop = JSON.stringify({ actions: [{ action: "noop", lesson_id: null, text: null }] });
+  const reply = new Response({ message: new Message({ role: "assistant", parts: [new TextPart(noop)] }) });
+  const { access, options } = recording(new ScriptedModel([failure, reply], config));
+  // The learner's model is the environment default, read from `models.env`.
+  const vars = new Map([
+    ["YIAN_AUTH_FILE", path.join(tmp, "auth.json")],
+    ["YIAN_DEFAULT_PROVIDER", config.provider],
+    ["YIAN_DEFAULT_MODEL", config.model],
+    ["VLLM_API_KEY", key],
+  ]);
+  const models: ModelAccess = { ...access, env: (name) => vars.get(name) };
+  const events: unknown[] = [];
+  await using registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
+  const session = await registry.get("lessons")!.openRun();
+  try {
+    const episode = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hello" }, {
+      output: { answer: "HELLO" },
+    });
+    expect(await session.learn(new LearnContext("run-1", "lessons", [episode]))).toEqual([]);
+  } finally {
+    await session.close();
+  }
+  expect(options.map(({ nodeId, consumer }) => [nodeId, consumer])).toEqual([["__memory__", "memory:lessons"]]);
+  expect(events).toEqual([
+    new ModelCallRetried({
+      nodeId: "__memory__",
+      consumer: "memory:lessons",
+      attempt: 1,
+      error: { kind: "rate_limit", message: "Incorrect API key provided: [REDACTED]" },
+      retryIn: 0.001,
+    }),
+  ]);
 });
 
 test("a custom factory gets only its config when models and onEvent are given", async () => {

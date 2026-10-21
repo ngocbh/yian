@@ -60,7 +60,8 @@
  * the model is `reflective.busy`, and the learn then fails `reflective.session_closed` when the
  * session closed meanwhile; an episode holding `Infinity` reaches the prompt as `Infinity`;
  * `onRetry` sees a retried `ProviderError`, scrubbed of the call's credentials;
- * `REFLECTION_SCHEMA` is frozen; `boundedJsonMaterial` counts code points; `visibleInteractionJson` writes sorted keys.
+ * `REFLECTION_SCHEMA` is frozen; `boundedJsonMaterial` counts code points;
+ * `visibleInteractionJson` writes sorted keys.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`

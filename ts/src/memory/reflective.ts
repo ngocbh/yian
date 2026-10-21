@@ -1392,7 +1392,7 @@ export class ReflectiveSession implements MemorySession {
       const request = plan.apply(new Request({ messages: [system, user] }));
       let response: Response;
       try {
-        // Every observer gets the retried error scrubbed, as the final one is.
+        // Providers may echo any credential the call sent; a retry observer must not see it.
         const onRetry = memory["onRetry"];
         response = await callWithRetries(model, request, {
           onRetry: onRetry && ((retry) => onRetry({ ...retry, error: scrub(retry.error) })),

@@ -67,7 +67,7 @@ function learnerOptions(key: string, { env, models, onEvent }: Learners) {
       ? null
       : ({ attempt, error: { kind, message }, retryIn }: RetryInfo) =>
           onEvent(new ModelCallRetried({ nodeId: LEARNER_NODE, consumer, attempt, error: { kind, message }, retryIn }));
-  return { env: models?.env ?? env, createModel, onRetry };
+  return { env: models === null ? env : models.env, createModel, onRetry };
 }
 
 /** Attach one cleanup failure, and the notes it carries, to `target`. */

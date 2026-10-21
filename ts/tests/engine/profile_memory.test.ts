@@ -34,9 +34,9 @@
  * good one in the same session, whose `2n` feedback is written as Python's int `2`; the reply
  * parser's messages; feedback holding `Infinity` is `profile.invalid_context` after the model call;
  * `onRetry` sees a retried `ProviderError`, scrubbed of the call's credentials; a commit id whose
- * write failed commits once the store is back; with `YIAN_TEST_NODE` set to a Node binary, the built backend opens a document Bun
- * seeded, learns with a scripted model and commits under Node, and Bun reads the new document and
- * its write log.
+ * write failed commits once the store is back; with `YIAN_TEST_NODE` set to a Node binary, the
+ * built backend opens a document Bun seeded, learns with a scripted model and commits under Node,
+ * and Bun reads the new document and its write log.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`

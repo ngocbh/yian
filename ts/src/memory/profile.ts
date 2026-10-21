@@ -461,7 +461,7 @@ export class ProfileSession implements MemorySession {
       });
     }
     // Providers may echo any credential the call sent; neither a retry observer nor the chained
-    // cause may carry it.
+    // cause must carry it.
     const scrub = <T>(cause: T): T => {
       let sent: readonly string[] = [];
       try {

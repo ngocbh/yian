@@ -11,13 +11,13 @@
  *
  * The loader rows (`test_loader_accepts_builtin_call_over_declared_input`,
  * `test_loader_rejects_undeclared_input_inside_call`, `test_loader_rejects_unknown_builtin`) load
- * with `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`.
- *
- * Later (T4-8 follow-up): `test_prompt_default_fires_in_a_running_flow`.
+ * with `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`;
+ * `test_prompt_default_fires_in_a_running_flow` runs through `loadFlow` and `runFlow`.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import {
   builtinResultType,
   registerTemplateFn,
@@ -28,6 +28,7 @@ import {
 import { evalExpr, ResolveMode, resolveInRecord } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ExpressionError, evalBinding, promptRefs, RequiredError, renderTemplateRecord } from "../../src/expr/index.ts";
+import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
 import { assembleText, loadError } from "../compose/declarations.ts";
 
@@ -182,6 +183,31 @@ test.each(["${x :- y}", "Hi ${x | y}", "${x :- null}"])(
 test("a strict prompt's miss error names the reference", () => {
   expect(expectRenderError("x ${sig.nope} y").message).toContain("${sig.nope}");
   expect(expectRenderError("x ${upper(ghost)} y").message).toContain("${ghost}");
+});
+
+test("a prompt default fires in a running flow", async () => {
+  const flow = await loadFlow(`id: p
+name: p
+input:
+  note: !Optional(str)
+nodes:
+  ask:
+    kind: human_input
+    input:
+      note: \${input.note}
+    prompt: 'Note: \${note :- "none"}'
+    output: str
+output: \${ask.output}
+`);
+  const asked: string[] = [];
+  const ask = (request: { question: string }) => {
+    asked.push(request.question);
+    return "ok";
+  };
+
+  const result = await runFlow(flow, {}, { tools: { ask_user: ask } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(asked).toEqual(["Note: none"]);
 });
 
 // --- render: plain references --- //

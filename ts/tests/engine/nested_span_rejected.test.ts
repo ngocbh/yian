@@ -26,17 +26,22 @@
  * `load-core/engine_nested_span_rejected__prompt_shows_the_rewrite` (the reference validator) are
  * pinned at the end.
  *
- * Later (T4-8 follow-up): the run tests (`test_parentheses_and_coalesce_cover_a_default_chain`,
- * `test_documented_case_conditions_route`, `test_case_on_a_whole_span_routes` and
- * `test_loop_predicate_in_the_bare_spelling_runs`), with their cases
- * `run-core/engine_nested_span_rejected__{a_default_chain,case_on_a_whole_span_routes,
- * documented_case_condition_routes}`.
+ * Ported through `loadFlow` and `runFlow`: the `|` row of
+ * `test_parentheses_and_coalesce_cover_a_default_chain`, the rows of
+ * `test_documented_case_conditions_route` but `n: 50`, `test_case_on_a_whole_span_routes` and
+ * `test_loop_predicate_in_the_bare_spelling_runs` (the int `n` read as `3n`, ints being `bigint`).
+ * Covered by `run-core` cases running the same flows: the `:-` row of
+ * `test_parentheses_and_coalesce_cover_a_default_chain`
+ * (`engine_nested_span_rejected__a_default_chain`) and the `n: 50` row of
+ * `test_documented_case_conditions_route`
+ * (`engine_nested_span_rejected__documented_case_condition_routes`).
  */
 
 import { expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import {
   conditionRefs,
   ExpressionError,
@@ -46,6 +51,7 @@ import {
 import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/expr/grammar.ts";
 import { scanTemplate } from "../../src/expr/template.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -189,7 +195,7 @@ nodes:
     kind: code
     code: "return inputs['v']"
     input:
-      v: \${input.a :- \${input.b}}
+      v: <value>
     output: Optional(str)
 output: \${n.output}
 `;
@@ -201,8 +207,21 @@ function loadFails(text: string, children: ChildFlows = {}): LoadError {
   return error;
 }
 
+/** Load `text` with `loadFlow` and run it on `inputs`; return the output, expecting success. */
+async function runOutput(text: string, inputs: Readonly<Record<string, unknown>> = {}): Promise<unknown> {
+  const result = await runFlow(await loadFlow(text), inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
 test("a binding with a nested span fails to load with the rewrite", () => {
-  expect(loadFails(BINDING).message).toContain("write `${input.a :- input.b}`");
+  expect(loadFails(BINDING.replace("<value>", "${input.a :- ${input.b}}")).message).toContain(
+    "write `${input.a :- input.b}`",
+  );
+});
+
+test("parentheses and coalesce cover a default chain", async () => {
+  expect(await runOutput(BINDING.replace("<value>", '${input.a | input.b | "lit"}'))).toBe("lit");
 });
 
 /** The CASE flow whose `gate` routes on `when`. */
@@ -235,6 +254,26 @@ test.each([
   ['"${score.output:-0} >= 1"', "(score.output:-0) >= 1"],
 ])("a case condition with a nested span fails to load with the rewrite: %s", (when, rewrite) => {
   expect(loadFails(searched(when)).message).toContain(`write \`${rewrite}\``);
+});
+
+test.each<[string, Record<string, unknown>, string]>([
+  ['"score.output > 0 and score.output < 10"', { n: 5 }, "hot"],
+  ['"${score.output > 5}"', { n: 6 }, "hot"],
+  ["${input.approve}", { approve: true }, "hot"],
+  ["${input.approve}", {}, "cold"],
+  ['"(input.n :- 9) >= 1"', {}, "hot"],
+])("documented case conditions route %#: %s", async (when, inputs, taken) => {
+  expect(await runOutput(searched(when), inputs)).toBe(taken);
+});
+
+test("case on a whole span routes", async () => {
+  const text = searched("<when>").replace(
+    "    cases:\n      - when: <when>",
+    "    on: ${input.label}\n    cases:\n      - when: go",
+  );
+
+  expect(await runOutput(text, { label: "go" })).toBe("hot");
+  expect(await runOutput(text)).toBe("cold");
 });
 
 const ASSERTS = `
@@ -295,13 +334,19 @@ nodes:
     input:
       n: 0
       exited: false
-    while: "not \${exited}"
+    while: <predicate>
     max: 5
 output: \${repeat.output}
 `;
 
 test("a loop predicate with a nested span fails to load with the rewrite", () => {
-  expect(loadFails(LOOP, { step: stepBody() }).message).toContain("write `not exited`");
+  expect(loadFails(LOOP.replace("<predicate>", '"not ${exited}"'), { step: stepBody() }).message).toContain(
+    "write `not exited`",
+  );
+});
+
+test("a loop predicate in the bare spelling runs", async () => {
+  expect(await runOutput(LOOP.replace("<predicate>", "not exited"))).toEqual({ n: 3n, exited: true });
 });
 
 const PROMPT = `

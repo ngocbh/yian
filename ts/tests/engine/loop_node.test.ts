@@ -57,7 +57,7 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed } from "../../src/events.ts";
 import { ExpressionError, evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import { MemoryScope } from "../../src/memory/contracts.ts";
-import { Grow, type Node, NodeKind, Output } from "../../src/nodes/base.ts";
+import { Grow, NodeKind, Output } from "../../src/nodes/base.ts";
 import {
   Assertion,
   ContractOrigins,

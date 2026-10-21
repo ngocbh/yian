@@ -12,8 +12,9 @@
  * no counterpart); `test_node_host_stop_bypasses_evaluation_failure_with_identity` is "a node
  * rejecting after its signal aborted rejects `evalNode` with the reason, not a failure".
  *
- * Not ported: `test_public_run_flow_signature_has_no_stop_event`: TS reads no signatures, and
- * `runFlow` takes `{ signal }`.
+ * Not ported: `test_public_run_flow_signature_has_no_stop_event`, the file's only run row: TS
+ * reads no signatures, and `runFlow` takes `{ signal }`. The run boundary's stop rows (an
+ * already-aborted signal, a stop recorded as `RunStopped` and resumed) are in `run.test.ts`.
  *
  * TS-only, the engine's stop (serial and pooled): a host abort records one `RunStopped` (`signal`)
  * listing the in-flight nodes in dispatch order before the drain; a synchronous `onEvent` throw, a

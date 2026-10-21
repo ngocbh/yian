@@ -1144,8 +1144,8 @@ function caseEnv(ctx: CaseContext): Env {
 export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
 // `RESERVED` shrinks as the kinds that read `host` support its keys.
-/** The kind runners. A case whose kind has none fails. */
-export const KINDS: Partial<Record<Kind, KindRunner>> = {
+/** The kind runners, one for every kind. */
+export const KINDS: Record<Kind, KindRunner> = {
   load: runLoad,
   run: runRun,
   resume: runRun,
@@ -2858,6 +2858,8 @@ async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
 // `resume` cases run through `runRun`: `actualRun` cuts or stops their first run and resumes it.
 
 // ---- backward ----
+
+// `backward` cases run through `runRun`: `actualRun` makes their backward calls (`callBackward`).
 
 // ---- expr ----
 

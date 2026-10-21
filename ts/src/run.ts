@@ -250,9 +250,12 @@ export class RunResult {
   ): Promise<BackwardOutcome> {
     const handle = BACKWARD_HANDLES.get(this);
     if (handle === undefined) throw new RangeError("backward requires a run retained with learnable: true");
-    // Taken and bounded before anything walks the feedback recursively.
-    const taken = fromHost(feedback, "feedback");
-    rejectDeepNesting(taken, "feedback");
+    // Taken and bounded before anything walks the feedback recursively, under the run's limits.
+    const taken = withEnv(handle.env, () => {
+      const value = fromHost(feedback, "feedback");
+      rejectDeepNesting(value, "feedback");
+      return value;
+    });
     if (handle.busy) throw new Error("a backward call on this result is already in progress");
     const { apiKey = null, headers = null } = options;
     handle.busy = true;
@@ -439,7 +442,9 @@ export interface RunFlowOptions {
   llmConfig?: Readonly<Record<string, unknown>> | null;
   /**
    * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Each key's
-   * session opens before the log and closes when the run ends.
+   * session opens before the log and closes when the run ends. With `learnable: true`, it is kept
+   * for a later `result.backward` (a plain `Map` copied, a registry by reference), so don't close
+   * a registry before then.
    */
   memory?: ReadonlyMap<string, Memory> | null;
   /** Retain accepted execution for a later explicit backward call (default `false`). */
@@ -950,7 +955,9 @@ export interface ResumeFlowOptions {
   onStream?: StreamHook | null;
   /**
    * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Required when
-   * the run recorded memory and has unfinished work; a finished log opens no memory.
+   * the run recorded memory and has unfinished work; a finished log opens no memory. For a
+   * learnable log, it is kept for a later `result.backward` (a plain `Map` copied, a registry by
+   * reference), so don't close a registry before then.
    */
   memory?: ReadonlyMap<string, Memory> | null;
   /**

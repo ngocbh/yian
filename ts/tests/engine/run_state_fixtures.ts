@@ -773,6 +773,8 @@ export function stateSnapshot(state: RunState): Record<string, unknown> {
     numWorkers: state.numWorkers,
     input: structuredClone(state.input),
     effectiveLlmByStaticPath: structuredClone(state.effectiveLlmByStaticPath),
+    // Sorted: the counts are keyed by head, whatever order the heads were first counted in.
+    unknownIncoming: [...state.unknownIncoming].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   };
 }
 

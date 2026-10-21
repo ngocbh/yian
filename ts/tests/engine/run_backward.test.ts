@@ -52,8 +52,9 @@
  *   `commit` that writes a marker and never settles.
  *
  * TS-only: a run whose `env` sets a non-default `YIAN_*` value records it, and a later
- * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env`; a resume in
- * another `env` is refused.
+ * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env` and bounds its
+ * feedback by that `env`'s nesting limit (51 levels under a limit of 50 is a `TypeCheckError` that
+ * appends nothing); a resume in another `env` is refused.
  *
  * Covered by a case: `test_backward_without_memory_is_explicit_and_repeatable[durable]`
  * (`backward/run_backward__backward_without_memory_is_repeatable`, whose runner writes a log),
@@ -100,6 +101,7 @@ import {
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRecord } from "../../src/runtime/state.ts";
+import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory, FakeSession } from "./memory_fakes.ts";
@@ -929,6 +931,14 @@ test("a later backward replays in the run's env", async () => {
   const result = await run(flow, { text: "hello" }, { learnable: true, log: path, env });
 
   expect((await result.backward("Review.")).status).toBe("succeeded");
+  // The feedback is bounded by the run's limit too, before anything is appended.
+  let deep: unknown = "too deep";
+  for (let level = 0; level < 51; level++) deep = [deep];
+  const before = readFileSync(path);
+  const refused = await rejection(result.backward(deep));
+  expect(refused).toBeInstanceOf(TypeCheckError);
+  expect((refused as Error).message).toContain("50");
+  expect(readFileSync(path)).toEqual(before);
 
   // The value is recorded: a resume in another env is refused, one in the run's env replays.
   expect(await rejection(resume(flow, { log: path }))).toBeInstanceOf(DefaultsMismatchError);

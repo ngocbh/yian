@@ -20,8 +20,11 @@
  * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
  * `test_expansion_deletes_the_spawners_steps_and_starts` (on the shared `initializedSpawner` and
  * `fragment`),
- * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta` and
- * `test_broken_step_state_is_rejected_before_append` (4 rows). Each rejected row names its one
+ * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta`,
+ * `test_broken_step_state_is_rejected_before_append` (4 rows) and
+ * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune` (on the shared
+ * `initializedSpawner`, `parentFlow` and `canonicalChild`; the LOOP seed's iteration is `0n`, and
+ * the replay runs over a `copyGraph` copy of a fresh parent flow). Each rejected row names its one
  * class and full message, where Python matches a part of the message or accepts either class.
  *
  * Ported, the replay tests (through `replayRecords` on a fresh `fanoutFlow()`; the log never
@@ -50,20 +53,20 @@
  * and the `{1: "x"}` row of `test_prepare_node_step_rejects_invalid_steps` (JS object keys are
  * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
  * and a list are both an array).
- *
- * Later (T4-10, it needs `LoopNode.run`):
- * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune`.
  */
 
 import { expect, test } from "bun:test";
 
-import { START_ID } from "../../src/compile/model.ts";
+import { buildGrow } from "../../src/compile/expand.ts";
+import { copyGraph, START_ID } from "../../src/compile/model.ts";
 import { current } from "../../src/defaults.ts";
 import { Grow } from "../../src/nodes/base.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
 import {
   decodeRecord,
   encodeRecord,
   MemoryRunLog,
+  NodeExpandedRecord,
   NodeStepRecord,
   RecordEnvelope,
   SCHEMA_VERSION,
@@ -84,13 +87,16 @@ import {
 import { FileRef, TypeCheckError } from "../../src/typesys/index.ts";
 import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
 import {
+  canonicalChild,
   commitStartSuccess,
   fanoutFlow,
   forwardCapture,
   fragmentBuilder,
+  fragmentIds,
   initializedAndStarted,
   initializedSpawner,
   nodeFailure,
+  parentFlow,
   routeInFlight,
 } from "./run_state_fixtures.ts";
 
@@ -406,6 +412,48 @@ test("an expansion deletes the spawner's steps and starts", () => {
   expect(state.nodeSteps).toEqual(new Map());
   expect(state.nodeStarts).toEqual(new Map());
   expect(state.ready).toEqual(["spawn/child/start"]);
+});
+
+test("LOOP body steps go at the outcome and stay gone after the prune", async () => {
+  const loop = new LoopNode("spawn", {
+    flowId: "child",
+    child: canonicalChild(),
+    childInputs: [],
+    predicateKind: "times",
+    times: 2,
+    maxIters: 2,
+    originId: "spawn",
+  });
+  loop.params = [];
+  const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
+  const expansion = prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow);
+  commitPrepared(log, state, expansion);
+  const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
+
+  commitPrepared(log, state, prepareNodeStarted(state, bodyStart));
+  commitPrepared(log, state, prepareNodeStep(state, bodyStart, FAILED));
+  expect(state.nodeSteps).toEqual(new Map([[bodyStart, [FAILED]]]));
+  commitPrepared(log, state, prepareNodeSucceeded(state, bodyStart, {}));
+  expect(state.nodeSteps).toEqual(new Map());
+  expect(state.nodeStarts).toEqual(new Map());
+  commitPrepared(log, state, prepareNodeStarted(state, bodyEnd));
+  commitPrepared(log, state, prepareNodeSucceeded(state, bodyEnd, null));
+
+  commitPrepared(log, state, prepareNodeStarted(state, "spawn~1"));
+  commitPrepared(log, state, prepareNodeStep(state, "spawn~1", FAILED));
+  const grow = await state.flow.nodes.get("spawn~1")!.run({});
+  const prepared = prepareExpanded(state, "spawn~1", grow as Grow, buildGrow);
+  expect((prepared.record as NodeExpandedRecord).pruneIds).toContain(bodyStart);
+  commitPrepared(log, state, prepared);
+
+  expect(state.flow.nodes.has(bodyStart)).toBe(false);
+  expect(state.nodeSteps).toEqual(new Map());
+  expect(state.nodeStarts).toEqual(new Map());
+  const replayed = replayRecords(new RunState(copyGraph(parentFlow({ spawner: loop }))), log.records(), {
+    growBuilder: buildGrow,
+  });
+  expect(replayed.nodeSteps).toEqual(new Map());
+  expect(replayed.nodeStarts).toEqual(new Map());
 });
 
 /** Return `firstInFlight`'s state after a step, a resume, a second start and a second step. */

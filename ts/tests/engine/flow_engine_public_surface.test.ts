@@ -23,12 +23,16 @@
  * one that rejects after it being ignored, with nothing rejecting unhandled; `stopForCallback`
  * stopping a run with the given error and recording one `RunStopped`, and ignored after the result.
  *
- * Later (T4-10, T4-5): `test_direct_engine_executes_real_dynamic_combinators` (CALL, MAP and LOOP
- * growth). Later (T4-8): `test_flow_engine_is_not_exported_from_the_package_root`.
+ * Later (T4-8): `test_flow_engine_is_not_exported_from_the_package_root`.
  *
  * Changed: `test_direct_agent_uses_its_node_owned_model_factory`: the model factory comes from
  * `FlowEngineOptions.models` (ESM exports can't be patched), and the AGENT is built with the
  * effective config Python's `resolve_llm_cascade` gives (run start bakes it, T4-8).
+ *
+ * Changed: `test_direct_engine_executes_real_dynamic_combinators` (`call`, `map`, `loop`): on
+ * `engine(..., { growBuilder: buildGrow })` over the loaded flows; the CODE references
+ * `tests.engine._compose_codefns:echo` and `:loop_bump` are inline bodies with the same behavior,
+ * since TS load refuses a Python reference, and the LOOP's `n` is `3n`.
  *
  * Not ported: `test_constructor_is_exactly_the_recorded_state_log_surface` (`inspect` and type
  * hints; TS type-checks the options) and `test_checkpoint_era_engine_methods_are_absent` (TS never
@@ -37,8 +41,11 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
+import { buildGrow } from "../../src/compile/expand.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import {
+  NodeExpanded,
   NodeStarted,
   NodeSucceeded,
   type RunEvent,
@@ -307,6 +314,114 @@ test("direct agent uses the run's model factory", async () => {
   expect(configs).toEqual([{ provider: "openai", model: "fake-direct" }]);
   expect(model.requests[0]!.messages).toHaveLength(2);
   expect(events.at(-1)).toEqual(new RunSucceeded({ output: "direct answer" }));
+});
+
+const CHILD_FLOW = `
+id: direct-child
+name: direct_child
+input:
+  topic: !str
+nodes:
+  echo:
+    kind: code
+    code: return inputs["topic"]
+    input:
+      topic: \${input.topic}
+    output: str
+output: \${echo.output}
+`;
+
+const CALL_FLOW = `
+id: direct-call
+name: direct_call
+input:
+  topic: !str
+uses:
+  direct-child: direct-child
+nodes:
+  invoke:
+    kind: call
+    call: direct-child
+    input:
+      topic: \${input.topic}
+output: \${invoke.output}
+`;
+
+const MAP_FLOW = `
+id: direct-map
+name: direct_map
+input:
+  topics: !list(str)
+uses:
+  direct-child: direct-child
+nodes:
+  invoke:
+    kind: map
+    call: direct-child
+    over: \${input.topics}
+    input:
+      topic: \${item}
+output: \${invoke.output}
+`;
+
+// The body increments `n` and sets `exited` once `n` reaches 3: three iterations from the seed.
+const LOOP_FLOW = `
+id: direct-loop
+name: direct_loop
+defs:
+  bump:
+    input:
+      n: !int
+      exited: !bool
+    nodes:
+      step:
+        kind: code
+        code: |
+          const n = inputs["n"] + 1;
+          return { n, exited: n >= 3 };
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: \${step.output}
+nodes:
+  repeat:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+    while: not exited
+    max: 5
+output: \${repeat.output}
+`;
+
+/** Resolve the one test child the direct CALL and MAP runs use. */
+function childResolver(flowId: string) {
+  if (flowId !== "direct-child") throw new Error(`unknown child '${flowId}'`);
+  return loadFlow(CHILD_FLOW);
+}
+
+/** Load one real authorable spawner graph for the named combinator, with its run inputs. */
+async function loadDynamic(kind: string): Promise<[CompiledFlow, Record<string, unknown>]> {
+  if (kind === "call") return [(await loadFlow(CALL_FLOW, { childResolver })).compiled, { topic: "Ada" }];
+  if (kind === "map") return [(await loadFlow(MAP_FLOW, { childResolver })).compiled, { topics: ["Ada", "Grace"] }];
+  return [(await loadFlow(LOOP_FLOW)).compiled, {}];
+}
+
+test.each([
+  ["call", "Ada"],
+  ["map", ["Ada", "Grace"]],
+  ["loop", { n: 3n, exited: true }],
+])("direct engine executes the real dynamic combinator %s", async (kind, expected) => {
+  const [flow, inputs] = await loadDynamic(kind);
+  const events = await engine(flow, { inputs, growBuilder: buildGrow }).run();
+
+  expect(events.some((event) => event instanceof NodeExpanded)).toBe(true);
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+  expect((events.at(-1) as RunSucceeded).output).toEqual(expected);
 });
 
 const unhandled: unknown[] = [];

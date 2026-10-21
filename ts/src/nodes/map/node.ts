@@ -23,8 +23,8 @@
 
 import { type OriginRef, reprText } from "../../diagnostics.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
-import { isList, valueRepr } from "../../typesys/values.ts";
-import { Node, NodeKind } from "../base.ts";
+import { isList, type Value, valueRepr } from "../../typesys/values.ts";
+import { Grow, Node, type NodeCaps, NodeKind } from "../base.ts";
 import { BindingError, rejectInvalidBinding, type ReservedBinder, resolveSource, sourceOrigin } from "../binding.ts";
 import {
   bindingSource,
@@ -163,8 +163,23 @@ export class MapNode extends Node {
     return new Set(["over"]);
   }
 
-  /** The map body; not ported yet. */
-  override forward(): never {
-    throw new Error(`node ${reprText(this.id)} (MapNode) forward is not ported yet (T4-10)`);
+  /**
+   * Describe the map's growth: one `Grow` seeded with one call-arg record per `over` element.
+   *
+   * @param inputs The bound inputs; `inputs.over` is the list `bindReserved` resolved.
+   * @param caps The evaluator's capabilities; `caps.bindItem` binds each element's call-args.
+   * @returns A `Grow` whose seed lists a copy of each element's record in order, with nothing to
+   *   prune; an empty `over` seeds an empty list.
+   * @throws TypeError when `caps.bindItem` is missing, also for an empty `over`.
+   */
+  override forward(inputs: Record<string, unknown>, caps: NodeCaps): Grow {
+    const { bindItem } = caps;
+    if (bindItem === undefined) {
+      throw new TypeError(`MAP node ${reprText(this.id)} was run without the bindItem capability`);
+    }
+    // Per-element call-args go raw: the spliced child START fills omitted inputs from its params'
+    // defaults. The seed is the builder's only durable input; the compile-owned builder constructs
+    // the MAP fan-in.
+    return new Grow((inputs.over as readonly Value[]).map((element, index) => ({ ...bindItem(element, index) })));
   }
 }

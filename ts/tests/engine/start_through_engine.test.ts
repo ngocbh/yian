@@ -10,18 +10,26 @@
  * `test_boundary_assert_violating_value_fails`, `test_boundary_assert_satisfying_value_succeeds`
  * and `test_boundary_assert_reads_typed_default`. Integers are bigints.
  *
+ * Ported, through `loadFlow` and `runFlow` (a CALL whose def asserts its input), serial and pooled:
+ * `test_child_boundary_assert_violation_fails_run` and `test_child_boundary_assert_satisfied_succeeds`.
+ * Changed: the def body's CODE reference is TS's (`./compose_codefns.ts:double`).
+ *
  * Later (T4-8), through `runFlow`: the `run_flow` halves of those four tests, and
  * `test_loadedflow_reusable_across_runs_shared_ir_untouched`.
- * Later (T4-10), through CALL: `test_child_boundary_assert_violation_fails_run` and
- * `test_child_boundary_assert_satisfied_succeeds`.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { type CompiledFlow, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
 
@@ -84,3 +92,66 @@ test("boundary assert reads typed default", async () => {
   const flow = echoFlow("echo", "n", { default: 5n, assert: ["output.n >= 5", "input.n >= 5"] });
   expect((await engine(flow).run()).at(-1)).toEqual(new RunSucceeded({ output: 5n }));
 });
+
+// --- a def's boundary assert fires from the cloned child START ------------------------------ //
+
+const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+
+const CHILD_ASSERT_FLOW = `
+id: d
+name: d
+input:
+  v: !int
+defs:
+  checked:
+    input:
+      n: !int
+    nodes:
+      x:
+        kind: code
+        code: ./compose_codefns.ts:double
+        input:
+          n: \${input.n}
+        output: int
+    output: \${x.output}
+    asserts:
+      - "input.n >= 0"
+nodes:
+  call_it:
+    kind: call
+    call: checked
+    input:
+      n: \${input.v}
+output: \${call_it.output}
+`;
+
+let dir: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "yian-start-engine-"));
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** Run the child-assert flow on `v` with `numWorkers`, with only the test's credential store in its environment. */
+async function runChildAssert(v: number, numWorkers: number) {
+  const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
+  const flow = await loadFlow(CHILD_ASSERT_FLOW, { baseDir: FIXTURES });
+  return runFlow(flow, { v }, { numWorkers, env: (name) => env.get(name) });
+}
+
+for (const numWorkers of [0, 4]) {
+  test(`child boundary assert violation fails run (numWorkers ${numWorkers})`, async () => {
+    const result = await runChildAssert(-1, numWorkers);
+    expect(result.status).toBe("failed");
+    expect(result.failure!.message).toContain("assert failed");
+  });
+
+  test(`child boundary assert satisfied succeeds (numWorkers ${numWorkers})`, async () => {
+    const result = await runChildAssert(5, numWorkers);
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe(10n);
+  });
+}

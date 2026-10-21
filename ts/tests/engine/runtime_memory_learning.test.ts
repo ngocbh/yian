@@ -90,8 +90,8 @@
  *   The spy is restored in `finally`.
  * - `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope`: the expansion and
  *   the replay grow through `buildGrow`; the dynamic scope's class is checked by its constructor.
- *
- * Later (T4-10's MAP run): `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory`.
+ * - `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory`: `ownerEngine` with
+ *   `growBuilder: buildGrow` (Python's `_engine` default).
  */
 
 import { createHash } from "node:crypto";
@@ -107,6 +107,7 @@ import {
   DeclSite,
   EvaluationEvidence,
   LearnContext,
+  MemoryDecl,
   MemoryEpisodeStatus,
   MemoryMutation,
   MemoryOccurrenceKind,
@@ -1228,6 +1229,37 @@ test("owner context projection from replay doesn't reinvoke handlers", async () 
     },
   });
   expect(learning.projectOwnerContexts(replayed.trace!, memories, recorded, "review", root, results)).toEqual(expected);
+});
+
+test("an owner context of an empty MAP retains the growth and the unexecuted child memory", async () => {
+  const child = graph([new FuncNode("work", (inputs) => inputs["x"], { reads: { x: "${input.x}" } })], [
+    [START_ID, "work"],
+  ], { outputs: [new FlowOutput("answer", "${work.output}")] });
+  child.memories = [new MemoryDecl("child_notes", "child_notes", {}, new DeclSite([], ["def", "child"], null))];
+  const mapper = new MapNode("map", { flowId: "child", child });
+  mapper.params = [new Parameter("x")];
+  const { engine: built, memories, stacks: recorded } = ownerEngine(
+    graph([mapper], [[START_ID, "map"]], {
+      wiring: { map: { over: [], x: "${item}" } },
+      outputs: [new FlowOutput("answer", "${map.output}")],
+    }),
+    { growBuilder: buildGrow },
+  );
+  await built.run();
+  const trace = built.state.trace!;
+  const [root, results] = await computeBackward(trace, null);
+  const [childContext, outer] = learning.projectOwnerContexts(trace, memories, recorded, null, root, results);
+
+  expect(outer!.episodes).toHaveLength(5);
+  expect(trace.occurrences).toHaveLength(5);
+  expect(outer!.feedback).toEqual([]);
+  expect(childContext!.episodes).toEqual([]);
+  expect(childContext!.feedback).toEqual([]);
+  const grown = outer!.episodes.filter((episode) =>
+    Bun.deepEquals(episode.output, { kind: "grow", seed: [], prune_ids: [] }),
+  );
+  expect(grown).toHaveLength(1);
+  expect(grown[0]!.ownerStaticPath).toEqual(["map"]);
 });
 
 test.each([false, true])(

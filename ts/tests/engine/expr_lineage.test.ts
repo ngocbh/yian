@@ -25,14 +25,15 @@
  * bounded ancestor` and `projected partial container uses recorded operation positions` build
  * their opaque route by hand (`ValueRoute.literal(x).with({kind: "opaque"})`, the route the
  * evaluator records for a builtin call), so they don't check Python's single builtin call.
+ * `test_equal_map_items_get_distinct_recorded_indices` maps over `${left + right + right}` for
+ * Python's `${left + right * 2}`, since list repetition is a type error in TS: the same six
+ * items, with items 2-5 tracing to `right`, but `right` is read twice.
  *
- * Ported (adapted): `test_reserved_map_over_uses_the_same_capture_path` doesn't check the outcome:
- * MAP's `forward` isn't ported yet, so the evaluation fails after binding, and the capture
- * survives that failure. `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
+ * Ported: `test_reserved_map_over_uses_the_same_capture_path`.
+ *
+ * Ported (adapted): `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
  * is `WAIT capture retains the delivered value`: the source is a date string, which WAIT delivers
  * unchanged, so it checks the outcome, the bound input, the read and the routed feedback.
- *
- * Later (T4-10): `test_equal_map_items_get_distinct_recorded_indices` waits for MAP's `forward`.
  *
  * Not ported:
  * - The normalization half of `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
@@ -71,7 +72,8 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";
-import { Output } from "../../src/nodes/base.ts";
+import { Grow, Output } from "../../src/nodes/base.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { validateRoute } from "../../src/runtime/contracts.ts";
@@ -650,6 +652,30 @@ test("reserved MAP over uses the same capture path", async () => {
   expect(messages(routeFeedback(evaluated.bindings!.route, { over: "Add an item." }, sources.lookup))).toEqual([
     [sources.identities.items!, "Add an item."],
   ]);
+});
+
+test("equal MAP items get distinct recorded indices", async () => {
+  const sources = new Sources({ left: ["same", null], right: ["same", null] });
+  const node = new MapNode("map", { flowId: "child", child: {} });
+  node.params = [new Parameter("x")];
+  const evaluated = await evalNode(node, null, new VariablePool(), {
+    wiringOverride: { over: "${left + right + right}", x: "${item}" },
+    captureBindings: true,
+    sourceResolver: sources.resolve,
+  });
+  const seed = (evaluated.outcome as Grow).seed as ValueRecord[];
+  expect(seed).toEqual([{ x: "same" }, { x: null }, { x: "same" }, { x: null }, { x: "same" }, { x: null }]);
+  expect(evaluated.bindings!.items.map(([index]) => index)).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(sources.reads).toEqual(["left", "right", "right"]);
+  for (const [index, item] of evaluated.bindings!.items) {
+    expect(item.boundInputs).toEqual(seed[index]!);
+    expect(item.evaluatedKeys).toEqual(new Set(["x"]));
+    const expectedSource = sources.identities[index < 2 ? "left" : "right"]!;
+    const expectedFeedback = index % 2 ? [null, "Fix."] : ["Fix.", null];
+    const routed = routeFeedback(item.route, { x: "Fix." }, sources.lookup);
+    expect(messages(routed)).toEqual([[expectedSource, expectedFeedback]]);
+    expect(routed.contributions[0]!.context.map((context) => context.operand)).toContainEqual([index]);
+  }
 });
 
 test("WAIT capture retains the delivered value", async () => {

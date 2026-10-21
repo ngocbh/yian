@@ -272,9 +272,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop, code, tool,
   human_input, wait) as a `Node` subclass; import it from that file. There is no per-kind index,
   and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's, END's, CASE's,
-  CODE's, TOOL's, HUMAN_INPUT's and WAIT's bodies run. The other kinds hold their data, checks
-  and load-time hooks (origins, setup and condition checks, MAP's `over` binding, backward
-  layouts, LOOP `respawn`); their `forward` throws "not ported yet".
+  CALL's, MAP's, LOOP's, CODE's, TOOL's, HUMAN_INPUT's and WAIT's bodies run.
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
   runs an AGENT with its tools and skills (below), and `backward` is not ported yet. Every AGENT has

@@ -39,10 +39,12 @@
  * half goes through `drive`.
  * `test_interrupt_mid_stream_in_a_pooled_run_keeps_partial_text` runs with `numWorkers: 2`; the
  * model pauses after its second word until the host saw it, as Python's thread does.
+ * `test_interrupted_agent_in_a_loop_lets_the_loop_continue` loads its flow and runs `runFlow`, with
+ * the model and its provider passed in (`models`, `llmConfig`) where Python patches
+ * `model_from_config`; the fold is inline code, as the fixtures have no `reply_fold`.
  *
  * Later: `test_steers_are_recorded_with_the_next_model_request` and every `memory=True` half
- * (T6-6, session memory); `test_interrupted_agent_in_a_loop_lets_the_loop_continue` (T4-10, LOOP);
- * `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
+ * (T6-6, session memory); `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
  * `test_resume_reuses_a_finished_steered_node_without_calling_the_inbox` and
  * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer` (T4-8, the run boundary and resume).
  *
@@ -68,6 +70,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import {
   ModelCallFinished,
@@ -100,6 +103,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { Scheduler } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
@@ -549,6 +553,78 @@ test("an interrupt for a finished node is ignored", async () => {
   const model = new ScriptedModel([reply("chat done"), reply("summary")], CONFIG);
   expect(await run(chatFlow({ after: true }), model, { steering, onEvent })).toBe("summary");
   expect(shown(model.requests[1]!.messages).at(-1)).toEqual(["user", "summarize: chat done"]);
+});
+
+// Python's `test_agent_in_loop.FLOW` with a steerable agent: two LOOP turns, each an AGENT reply
+// folded into the transcript.
+const LOOP_FLOW = `
+id: t
+name: t
+input:
+  seed: !str
+defs:
+  body:
+    input:
+      transcript: !str
+      exited: !bool
+    nodes:
+      reply:
+        kind: agent
+        steerable: true
+        tools: [ping]
+        input:
+          transcript: \${input.transcript}
+        output: str
+        prompt: "history \${transcript}"
+      fold:
+        kind: code
+        code: |
+          return { transcript: inputs.transcript + "|" + inputs.reply, exited: inputs.exited }
+        input:
+          transcript: \${input.transcript}
+          reply:      \${reply.output}
+          exited:     \${input.exited}
+        output:
+          transcript: str
+          exited: bool
+    output: \${fold.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      transcript: \${input.seed}
+      exited: false
+    times: 2
+output: \${loop.output.transcript}
+`;
+
+test("an interrupted agent in a loop lets the loop continue", async () => {
+  const steering = new Inbox();
+  let started = 0;
+  // The first occurrence is interrupted during its model call, so its ping call is skipped.
+  const onEvent = (event: unknown) => {
+    if (event instanceof ModelCallStarted && ++started === 1) steering.interrupt(event.nodeId);
+  };
+  const ping = new FunctionTool({
+    name: "ping",
+    description: "Ping.",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: () => "pong",
+  });
+  const model = new ScriptedModel([reply("partial", ["ping", {}, "p-1"]), reply("turn2")], CONFIG);
+  const result = await runFlow(await loadFlow(LOOP_FLOW), { seed: "s" }, {
+    steering,
+    tools: { ping },
+    onEvent,
+    llmConfig: CONFIG,
+    models: serving(model),
+    env: () => undefined,
+  });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("s|partial|turn2");
+  // Each LOOP occurrence has its own node id, so the interrupt stayed with the first.
+  expect(new Set(steering.calls.map(([, nodeId]) => nodeId)).size).toBe(2);
 });
 
 test("a too-deep tool call fails the node even with the interrupt set", async () => {

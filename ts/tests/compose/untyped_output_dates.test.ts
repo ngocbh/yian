@@ -19,7 +19,7 @@
  * read (the other rows of `test_a_non_finite_number_in_an_untyped_output_is_a_load_error`,
  * `test_a_nested_or_core_tagged_non_finite_number_is_a_load_error`, whose `!!omap [{a: .nan}]` row
  * is refused as `!!omap`, and `test_a_non_finite_number_as_the_whole_output_is_a_load_error`), and
- * `!float .nan`, which Python refuses at run (the load half of
+ * `!float .nan`, where Python loads and the run fails with `binding.evaluate` (the `tagged` run of
  * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`), and the `.nan` of
  * `test_a_non_finite_number_in_a_body_output_is_a_load_error` (through `loadFlow`, located at the
  * value as Python locates it). So do the inline CALL, MAP and LOOP rows of

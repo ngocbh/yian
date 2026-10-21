@@ -26,9 +26,9 @@
  * `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry` prefix comes from the
  * scope's def loading).
  *
- * Changed: the error rows pin the whole message where Python matches its start, and the last frame's label and range where Python
- * checks the first frame's line. CODE bodies are written in TS and code refs name
- * `./fixtures/compose_codefns.ts`, as the harvested cases write them.
+ * Changed: the error rows pin the whole message where Python matches its start, and the last
+ * frame's label and range where Python checks the first frame's line. CODE bodies are written in
+ * TS and code refs name `./fixtures/compose_codefns.ts`, as the harvested cases write them.
  *
  * Not ported here: the literal rows the tags reader (`readTaggedValue`, tested in `tags.test.ts`)
  * decides while the binding is split, before this check runs. Pinned in `tags.test.ts` through
@@ -56,7 +56,8 @@
  * `run-core` cases running the same flows: its `no` row
  * (`compose_typed_bindings_check__unquoted_no_for_str_is_text`),
  * `test_escaped_template_binds_its_text`
- * (`compose_typed_bindings_check__escaped_template_binds_its_text`) and the run half of `test_optional_into_non_optional_loads_and_fails_at_runtime`
+ * (`compose_typed_bindings_check__escaped_template_binds_its_text`) and the run half of
+ * `test_optional_into_non_optional_loads_and_fails_at_runtime`
  * (`compose_typed_bindings_check__optional_into_non_optional_fails_at_runtime`, failing with
  * `binding.type` at `use`).
  */

@@ -44,8 +44,8 @@
  *
  * Changed: the `child` and `child_int` defs of the load-only rows are hand-built children
  * (`handChild`) with the defs' signatures and output contracts. The CODE bodies are TS: a body
- * builds a file with the `FileRef` it imports from `src/typesys/values.ts`, where Python's body
- * calls `__import__`.
+ * returns a file in its plain form, `{uri, mime, name}`, which a `file` slot reads as a file,
+ * where Python's body builds a `FileRef` through `__import__`.
  *
  * Pinned at the end, the harvested `load-core/compose_file_field_reads__*` cases the reference
  * validator and the typed-binding check decide, the `child` def built by hand (`assembledWith`).
@@ -121,13 +121,9 @@ test("projectOutputContract types the fields of a file", () => {
 
 // ---------- other names are located load errors at every reader ----------
 
-// A CODE body has no `FileRef` in scope, so it imports this module to build one, as Python's
-// body calls `__import__` on `yian.typesys.values`. The extension follows this file's (`.ts` from
-// source, `.js` when built), so the body gets the module instance the run uses.
-const VALUES_EXT = import.meta.url.endsWith(".ts") ? "ts" : "js";
-const VALUES_URL = new URL(`../../src/typesys/values.${VALUES_EXT}`, import.meta.url).href;
-const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
-const NAMED_F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f", mime: "text/plain", name: "a.txt" })`;
+// A CODE body returns a file in its plain form, which a `file` slot reads as a file.
+const F = `{ uri: "f", mime: null, name: null }`;
+const NAMED_F = `{ uri: "f", mime: "text/plain", name: "a.txt" }`;
 const URII = "reads field 'urii' on a file, which has only uri, mime, and name";
 
 /**
@@ -151,7 +147,7 @@ const CHILD_DEFS = `defs:
     input:
       s: !int
     nodes:
-      k: {kind: code, input: {s: "\${input.s}"}, code: "return 1n", output: int}
+      k: {kind: code, input: {s: "\${input.s}"}, code: "return 1", output: int}
     output: \${k.output}
 `;
 

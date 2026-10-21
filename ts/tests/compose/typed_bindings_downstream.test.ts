@@ -33,8 +33,8 @@
  * Changed: the error rows pin the whole message, where Python matches a fragment. CODE bodies are
  * TS; ints reach them as numbers and a flow's int output is a `bigint`. In
  * `test_typed_inline_loop_seed_types_the_body_parameter` the carried `r` ends as the int `1n`
- * (Python `1.0`): the body's number 1 is read as an int, and a whole number in a `float` slot
- * stays an int (decisions 30 and 38).
+ * (Python `1.0`): a whole host number reads as an int, and CODE inputs and outputs follow that
+ * (decisions 9A and 45), and an int in a `float` slot stays an int (decision 38).
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -99,11 +99,7 @@ const load = (text: string) => assembleText(text);
 const run = async (text: string) => runFlow(await loadFlow(text), {});
 
 /** Load and run `text`, returning its output and expecting success. */
-async function ok(text: string): Promise<unknown> {
-  const result = await run(text);
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  return result.output;
-}
+const ok = async (text: string): Promise<unknown> => okLoaded(await loadFlow(text));
 
 /** Expect `result` to have failed with `code` at `nodeId`. */
 function expectFailed(result: RunResult, code: FailureCode, nodeId: string): void {

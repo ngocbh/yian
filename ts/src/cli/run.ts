@@ -1581,7 +1581,7 @@ export async function check(
 export async function status(log: string, { json }: { json: boolean }, io: CliIo): Promise<number> {
   let inspection: RunInspection;
   try {
-    inspection = inspectRun(log, { env: io.env });
+    inspection = inspectRun(log);
   } catch (error) {
     let message: string;
     if (error instanceof RangeError) message = error.message;
@@ -1596,7 +1596,7 @@ export async function status(log: string, { json }: { json: boolean }, io: CliIo
   }
   const { status: runStatus, inFlight, interruptedAttempts } = inspection;
   if (json) {
-    // `bigint` counts, so the document writes them as ints.
+    // `printJson` writes a number as a float and a `bigint` as an int.
     const counts = Object.fromEntries([...interruptedAttempts].map(([node, n]) => [node, BigInt(n)]));
     await printJson({ status: runStatus, in_flight: inFlight, interrupted_attempts: counts }, io.stdout);
     return 0;

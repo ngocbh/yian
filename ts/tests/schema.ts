@@ -12,7 +12,10 @@ export type Schema = Record<string, unknown>;
 
 /** How `validate` reads a schema. */
 export interface ValidateOptions {
-  /** Refuse any key a subschema's `properties` doesn't list, as if it had `additionalProperties: false`. */
+  /**
+   * Refuse any key a subschema's `properties` doesn't list, as if it had `additionalProperties:
+   * false`, unless its `additionalProperties` is a schema, which checks those keys instead.
+   */
   closed?: boolean;
 }
 

@@ -56,7 +56,7 @@ import { registeredTools } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
-import { Terminal } from "./terminal.ts";
+import { Terminal, TerminalStopped } from "./terminal.ts";
 import {
   type CliIo,
   CommandEnv,
@@ -819,29 +819,70 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * stderr and exits 1. Under `json`, stdout holds one document: the output (`status: "succeeded"`),
  * the failure (`status: "failed"`) or the error (`compose.load`, `run.cancelled`, `run.setup`).
  *
+ * SIGINT, SIGTERM or SIGHUP from the command's start, Ctrl-C at a prompt during the run, or
+ * `io.stop` aborting stops the run: `cancelled by user` on stderr, exit 130, no document. The
+ * end of input at a prompt during the run prints `run cancelled` and exits 1 (`run.cancelled`).
+ * The first stop wins.
+ *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
  *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
  *   inputs.
  */
 export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
+  const controller = new AbortController();
+  // From the command's start, so a signal during the load or the prompts stops the run too.
+  const disposeSignals = stopOnSignals(controller);
+  const stop = io.stop;
+  const forwardStop = () => controller.abort(stop!.reason);
+  if (stop?.aborted) forwardStop();
+  else stop?.addEventListener("abort", forwardStop, { once: true });
+  // Building it has no side effects; the terminal pauses it while a prompt is up.
+  const { quiet, verbose } = options;
+  const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
+  const state = { started: false };
   // Building it touches neither stream; it reads keys only when it prompts.
-  const terminal = new Terminal({ input: io.stdin, output: io.stderrStream });
+  const terminal = new Terminal({
+    input: io.stdin,
+    output: io.stderrStream,
+    // Before the run, a stopped prompt answers null and the command reports it.
+    onStop: (reason) => {
+      if (!state.started) return;
+      const why = reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof");
+      controller.abort(why);
+    },
+    onActive: (active) => {
+      if (active) reporter?.pause();
+      else if (!controller.signal.aborted) reporter?.resume();
+    },
+  });
   try {
-    return await startRun(flowPath, options, io, terminal);
+    return await startRun(flowPath, options, io, { terminal, controller, reporter, state });
   } finally {
     terminal.close();
+    disposeSignals();
+    stop?.removeEventListener("abort", forwardStop);
+    reporter?.stop();
   }
 }
 
-/** `run`'s body, prompting at `terminal`. */
+/** What `run` builds for its body: the terminal, the run's stop, progress, whether it started. */
+interface RunHost {
+  terminal: Terminal;
+  controller: AbortController;
+  reporter: ProgressReporter | null;
+  state: { started: boolean };
+}
+
+/** `run`'s body, prompting at `host.terminal`, stopped through `host.controller`. */
 async function startRun(
   flowPath: string,
   options: RunOptions,
   io: CliIo,
-  terminal: Terminal,
+  host: RunHost,
 ): Promise<number> {
+  const { terminal, controller, reporter } = host;
   validateRunLogOptions(options);
-  const { json, quiet, verbose, engineTrace } = options;
+  const { json, quiet, engineTrace } = options;
   const fail = async (diagnostic: Diagnostic) => {
     if (json) await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
     return 1;
@@ -936,7 +977,6 @@ async function startRun(
         const banner = flowBanner(flow, io.stderr, io.env);
         if (banner !== null) await io.stderr.write(banner);
       }
-      const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
       // Recovering a run isn't ported yet; until then `--resume` runs nothing.
       if (options.resume !== undefined) {
         throw new Error("yian run --resume is not ported to TypeScript yet");
@@ -949,6 +989,8 @@ async function startRun(
         if (!(error instanceof RangeError)) throw error;
         throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
       }
+      // A signal during the load stops the command before it prompts.
+      controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;
       const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
       if (gathered === null) {
@@ -971,9 +1013,12 @@ async function startRun(
         return fail(new Diagnostic({ code: "run.setup", message: error.message }));
       }
 
+      // Not after the log path is printed: a stopped run creates no log.
+      controller.signal.throwIfAborted();
       const runId = defaultRunId();
       const log = options.log ?? defaultRunLogPath(runId, io.env);
       await reportRunLog(log, io.stderr, io.env);
+      host.state.started = true;
       try {
         return await runFlow(flow, supplied, {
           log,
@@ -985,6 +1030,7 @@ async function startRun(
           tools: { ...registeredTools(), ...granted, ask_user: terminal.askUser },
           skills,
           env: commandEnv.read,
+          signal: controller.signal,
         });
       } finally {
         // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
@@ -992,6 +1038,16 @@ async function startRun(
       }
     });
   } catch (error) {
+    if (error instanceof HostStop) {
+      // No document: as Ctrl-C, the stop ends the command with nothing on stdout.
+      await io.stderr.write(`${paint("cancelled by user", "yellow", io.stderr, io.env)}\n`);
+      return 130;
+    }
+    // The end of input isn't Ctrl-C: the same outcome as a cancelled prompt before the run.
+    if (error instanceof TerminalStopped && error.reason === "eof") {
+      await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
+      return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+    }
     if (!isSetupError(error)) throw error;
     return setupFailed(error);
   }

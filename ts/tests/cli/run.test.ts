@@ -14,12 +14,13 @@
 // TS's, and a non-string output prints in yian's text form, not Python's repr. Added here: the
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
-// `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents and its
-// `run failed:` setup errors. `status` is covered up to the run inspection, which isn't ported
-// yet; from tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
+// `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
+// `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`). `status` is
+// covered up to the run inspection, which isn't ported yet; from tests/cli/test_run_log_options.py,
+// the run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
+import { EventEmitter, getEventListeners } from "node:events";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -784,6 +785,61 @@ describe("run's input prompts on a TTY", () => {
         error: { code: "run.cancelled", message: "run cancelled" },
       });
     }
+  });
+});
+
+const ASK_FLOW =
+  "id: ask\nname: ask\nnodes:\n  ok:\n    kind: human_input\n" +
+  '    prompt: "Proceed?"\n    output: str\noutput: ${ok.output}\n';
+
+// A WAIT that never ends on its own, after a node whose progress line says the run is going.
+const PAUSE_FLOW =
+  "id: pause\nname: pause\nnodes:\n  first: {kind: code, output: str, code: return 'x'}\n" +
+  '  settle: {kind: wait, until: "2999-01-01", depends_on: [first]}\noutput: ${first.output}\n';
+
+describe("run's stops", () => {
+  test("Ctrl-C at a prompt during the run: cancelled by user, exit 130, no document", async () => {
+    const ctrlC = (keys: FakeInput) => keys.write("\x03");
+    const { code, stdout, stderr, input } = await runOnTty(ASK_FLOW, ["--json"], ctrlC);
+    expect(code).toBe(130);
+    expect(stdout).toBe("");
+    expect(stderr.endsWith("cancelled by user\n")).toBe(true);
+    expect(input.rawCalls).toEqual([true, false]);
+  });
+
+  test("an already aborted io.stop stops the run before its log exists", async () => {
+    const flow = file("flow.yaml", ECHO_FLOW);
+    const log = join(tmp, "run.jsonl");
+    const { io, stdout, stderr } = testIo();
+    const stop = new AbortController();
+    stop.abort(new HostStop("SIGTERM"));
+    const argv = ["run", flow, "--json", "-q", "--log", log, "--input", "topic=clouds"];
+    expect(await main(argv, { ...io, stop: stop.signal })).toBe(130);
+    expect(stdout()).toBe("");
+    expect(stderr()).toBe("cancelled by user\n");
+    expect(existsSync(log)).toBe(false);
+  });
+
+  test("io.stop aborting mid-run stops it; its and the signals' listeners are gone", async () => {
+    const flow = file("flow.yaml", PAUSE_FLOW);
+    const log = join(tmp, "run.jsonl");
+    const stop = new AbortController();
+    const chunks: string[] = [];
+    const stderr: Writer = {
+      write: async (text) => {
+        chunks.push(text);
+        if (text.includes("✓ first")) stop.abort(new HostStop("SIGTERM"));
+      },
+    };
+    const signalListeners = () =>
+      ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => process.listenerCount(name));
+    const before = signalListeners();
+    const io: CliIo = { ...testIo().io, stderr, stop: stop.signal };
+    expect(await main(["run", flow, "--log", log], io)).toBe(130);
+    expect(chunks.at(-1)).toBe("cancelled by user\n");
+    expect(existsSync(log)).toBe(true);
+    expect(getEventListeners(stop.signal, "abort")).toHaveLength(0);
+    expect(signalListeners()).toEqual(before);
   });
 });
 

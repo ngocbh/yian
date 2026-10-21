@@ -12,7 +12,8 @@
  * re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering` (`nodes/base.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
- *                nodes, platform, runtime, skills, tools, typesys.
+ *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
+ *                typesys.
  * Never imports: the CLI.
  */
 
@@ -74,7 +75,6 @@ import {
   MemorySetupError,
   type MemorySpec,
   type MemoryStack,
-  sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
 import type { Node, Steering } from "./nodes/base.ts";
@@ -309,14 +309,10 @@ export async function runFlow(
     requireSteering(steering);
     checkTestOptions(options);
     const runServers = await openRunServers(unopened, signal);
-    let primary: { error: unknown } | null = null;
     try {
       return await startRun(flow, inputs, { ...options, skills }, runDefaults);
-    } catch (error) {
-      primary = { error };
-      throw error;
     } finally {
-      await closeRunServers(runServers, primary);
+      await closeRunServers(runServers);
     }
   });
 }
@@ -619,18 +615,13 @@ async function startRun(
   const startWiringOverride = Object.fromEntries(Object.keys(coerced).map((name) => [name, `\${input.${name}}`]));
 
   let memoryRuntime: MemoryRuntime | null = null;
-  let memoryTable: readonly MemorySpec[] | null = null;
-  let memoryStackSet: readonly MemoryStack[] | null = null;
+  let layout: MemoryLayoutParts | null = null;
   if (memory !== null) {
-    let memoryOrigins: Map<string, OriginRef | null>;
-    [memoryTable, memoryOrigins, memoryStackSet] = resolveRuntimeMemoryLayout(privateFlow, {
-      effectiveLlm,
-      callTimeKnown: known,
-    });
-    checkRegistryTypes(memory, memoryTable);
+    layout = resolveRuntimeMemoryLayout(privateFlow, effectiveLlm, known);
+    checkRegistryTypes(memory, layout.memories);
     memoryRuntime = await MemoryRuntime.open({
-      memories: memoryTable,
-      origins: memoryOrigins,
+      memories: layout.memories,
+      origins: layout.origins,
       memory,
       snapshots: null,
     });
@@ -649,10 +640,10 @@ async function startRun(
       effectiveLlmByStaticPath: effectiveLlm,
       callTimeLlm,
       numWorkers,
-      memorySnapshots: memoryRuntime === null ? null : memoryRuntime.snapshots,
+      memorySnapshots: memoryRuntime?.snapshots ?? null,
       learnable,
-      memories: memoryTable,
-      memoryStacks: memoryStackSet,
+      memories: layout?.memories ?? null,
+      memoryStacks: layout?.stacks ?? null,
       defaults: nonDefaults(runDefaults),
     });
 
@@ -1025,44 +1016,41 @@ export function staticNodes(flow: Flow, path: readonly string[] = []): [string, 
 }
 
 /** A layout's record-facing key table, per-key origins and stacks. */
-type MemoryLayoutParts = [readonly MemorySpec[], Map<string, OriginRef | null>, readonly MemoryStack[]];
+type MemoryLayoutParts = {
+  memories: readonly MemorySpec[];
+  origins: Map<string, OriginRef | null>;
+  stacks: readonly MemoryStack[];
+};
 
 /**
- * @internal Derive the key table, origins and stacks, and stamp one private graph.
+ * Derive the key table, origins and stacks, and stamp one private graph.
  *
- * With `effectiveLlm`, first check that each session key resolves one conversation compatibility
- * across its placements; `callTimeKnown` gives the provider of each placement resolved only when
- * it runs, when run start knows it (`checkSessionCompatibility`).
+ * First check that each session key resolves one conversation compatibility across its
+ * placements; `callTimeKnown` gives the provider of each placement resolved only when it runs,
+ * when run start knows it (`checkSessionCompatibility`).
  *
  * @param flow The run's private flow copy; its nodes get their memory scopes.
  * @throws MemorySetupError when the layout breaks a rule or two placements of a session key
  *   resolve different providers.
  */
-export function resolveRuntimeMemoryLayout(
+function resolveRuntimeMemoryLayout(
   flow: CompiledFlow,
-  options: {
-    effectiveLlm?: Readonly<Record<string, Readonly<AgentConfig>>> | null;
-    callTimeKnown?: ReadonlyMap<string, string | null> | null;
-  } = {},
+  effectiveLlm: Readonly<Record<string, Readonly<AgentConfig>>>,
+  callTimeKnown: ReadonlyMap<string, string | null>,
 ): MemoryLayoutParts {
-  const { effectiveLlm = null, callTimeKnown = null } = options;
   const resolved = resolveMemoryLayout(flow);
-  if (effectiveLlm !== null) {
-    checkSessionCompatibility(resolved, effectiveLlm, {
-      callTimeKnown: callTimeKnown === null ? null : Object.fromEntries(callTimeKnown),
-    });
-  }
+  checkSessionCompatibility(resolved, effectiveLlm, { callTimeKnown: Object.fromEntries(callTimeKnown) });
   applyMemoryLayout(flow, resolved);
   return memoryLayoutParts(resolved);
 }
 
 /** Return one layout's record-facing key table, per-key origins and stacks. */
 function memoryLayoutParts(resolved: ResolvedMemoryLayout): MemoryLayoutParts {
-  return [
-    resolved.memories.map((memory) => memory.spec),
-    new Map(resolved.memories.map((memory) => [memory.key, memory.origin])),
-    memoryStacks(resolved),
-  ];
+  return {
+    memories: resolved.memories.map((memory) => memory.spec),
+    origins: new Map(resolved.memories.map((memory) => [memory.key, memory.origin])),
+    stacks: memoryStacks(resolved),
+  };
 }
 
 /**
@@ -1082,53 +1070,6 @@ function checkRegistryTypes(memory: ReadonlyMap<string, Memory>, specs: readonly
       );
     }
   }
-}
-
-/**
- * @internal Purely resolve memory on the authored static program, never replayed growth.
- *
- * Nothing is stamped, so a def called from several nodes needs no de-aliasing; the table, origins
- * and stacks equal those a fresh run records.
- *
- * @throws TypeError when `flow` isn't a `ComposedFlow`.
- * @throws MemorySetupError when the layout breaks a rule.
- */
-export function resolveAuthoredMemoryLayout(flow: ComposedFlow): MemoryLayoutParts {
-  if (!(flow instanceof ComposedFlow)) throw new TypeError("memory layout resolution expects a ComposedFlow");
-  return memoryLayoutParts(resolveMemoryLayout(flow.compiled));
-}
-
-/**
- * @internal Reject a recorded key table or stack set that the flow does not resolve.
- *
- * @param subject What the flow is, for the message.
- * @throws RangeError when the recorded table or stacks differ from the resolved ones.
- */
-export function checkRecordedMemoryTable(
-  recordedMemories: readonly MemorySpec[] | null,
-  recordedStacks: readonly MemoryStack[] | null,
-  memories: readonly MemorySpec[],
-  stacks: readonly MemoryStack[],
-  options: { subject: string },
-): void {
-  const sameSpecs =
-    recordedMemories !== null &&
-    recordedMemories.length === memories.length &&
-    recordedMemories.every((spec, i) => sameMemorySpec(spec, memories[i]!));
-  const sameStacks =
-    recordedStacks !== null &&
-    recordedStacks.length === stacks.length &&
-    recordedStacks.every(
-      (stack, i) => sameStrings(stack.locator, stacks[i]!.locator) && sameStrings(stack.memories, stacks[i]!.memories),
-    );
-  if (!sameSpecs || !sameStacks) {
-    throw new RangeError(`recorded memory table or stacks do not match the ${options.subject}`);
-  }
-}
-
-/** Whether two string arrays hold the same items in the same order. */
-function sameStrings(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((item, i) => item === b[i]);
 }
 
 /**
@@ -1273,32 +1214,20 @@ async function openRunServers(
       opened.push(server);
     }
   } catch (error) {
-    await closeRunServers(opened, { error });
+    await closeRunServers(opened);
     throw error;
   }
   return opened;
 }
 
 /**
- * Close the run's servers while preserving one initiating error.
+ * Close the run's servers in order.
  *
- * @param servers The servers the run opened.
- * @param primary The error ending the run, which a close error is noted on; `null` throws the
- *   first close error instead.
- * @throws the first close error, with any later ones noted on it, when `primary` is `null`.
+ * Python's `_close_run_servers` also guards each close and notes its error on the run's; here
+ * `McpServer.close()` never rejects, so there is nothing to note.
  */
-async function closeRunServers(servers: readonly McpServer[], primary: { error: unknown } | null): Promise<void> {
-  let pending = primary;
-  for (const server of servers) {
-    // `close()` never rejects; this keeps an unexpected error from skipping the rest.
-    try {
-      await server.close();
-    } catch (cleanupError) {
-      if (pending === null) pending = { error: cleanupError };
-      else noteCleanupError(pending.error, `MCP server '${server.label}' close`, cleanupError);
-    }
-  }
-  if (primary === null && pending !== null) throw pending.error;
+async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
+  for (const server of servers) await server.close();
 }
 
 /**
@@ -1312,14 +1241,11 @@ async function closeRunResources(
 ): Promise<void> {
   let pending = primary;
   if (memoryRuntime !== null) {
-    if (primary !== null) {
-      await memoryRuntime.closePreserving(primary);
-    } else {
-      try {
-        await memoryRuntime.close();
-      } catch (cleanupError) {
-        pending = { error: cleanupError };
-      }
+    try {
+      await memoryRuntime.close();
+    } catch (cleanupError) {
+      if (pending === null) pending = { error: cleanupError };
+      else noteCleanupError(pending.error, "memory-session close", cleanupError);
     }
   }
   if (log !== null) closeOwnedLog(log, pending);

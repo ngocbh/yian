@@ -3,8 +3,7 @@
  * extend a flow, each re-exported from the module that defines it.
  *
  * Python's `__all__` (and its lazy `_EXPORTS` table, which lists the same names with their
- * defining modules) maps one to one, Python module -> TS module; none is in design 3.2.7's dropped
- * list:
+ * defining modules) maps one to one, Python module -> TS module; the port keeps every one of them:
  *
  * - `compose`: `load_flow` -> `loadFlow` (`compose/loader`), `LoadError` (`compose/helpers/errors`),
  *   `ComposedFlow` (`compose/build/pipeline`);

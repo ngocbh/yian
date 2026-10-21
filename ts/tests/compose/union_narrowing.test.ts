@@ -93,13 +93,16 @@
  * `'biy'` / `did you mean 'buy'?`), and the cycle's nodes and the uncovered tags as JSON text,
  * `["b","c"]` and `["hold","sell"]` (Python `['b', 'c']` and `['hold', 'sell']`).
  *
- * Later (T4-8 follow-up): `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` and
- * `test_a_partly_shared_union_branch_runs` (runs).
+ * Ported through `loadFlow` and `runFlow`, `d`'s CODE body in TS:
+ * `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` (both runs) and
+ * `test_a_partly_shared_union_branch_runs`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
@@ -610,6 +613,37 @@ test("a when check the routing rules out is an error", () => {
   );
 });
 
+/** A flow with `TYPEDEFS`, whose CODE node `d` runs `body` to return a `Decision`, then `nodes`. */
+const runnable = (body: string, ...nodes: string[]) =>
+  "id: p\nname: p\n" +
+  TYPEDEFS +
+  "input:\n  s: !str\nnodes:\n" +
+  "  d:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Decision\n    code: |\n" +
+  body +
+  nodes.join("") +
+  "output: ${route.output}\n";
+
+const SELL_RETURN = "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n";
+
+test.each([
+  ["buy", "branch"],
+  ["sell", "else"],
+])("a searched when with a tag check and a member read runs: %s", async (s, expected) => {
+  const text = runnable(
+    "      if (inputs['s'] === 'buy')\n" +
+      "          return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}\n" +
+      SELL_RETURN,
+    searched([`"d.output.action == 'buy' and d.output.limit > 5"`, "t"]),
+    "  t:\n    kind: code\n    output: str\n    code: return 'branch'\n",
+    "  e:\n    kind: code\n    output: str\n    code: return 'else'\n",
+  );
+
+  const result = await runFlow(await loadFlow(text), { s });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe(expected);
+});
+
 // --- calls --- //
 
 test("a call target under buy passes a buy order", () => {
@@ -872,6 +906,20 @@ test("an on inside a partly shared union branch covers the shared tags", () => {
       code("e"),
     ),
   );
+});
+
+test("a partly shared union branch runs", async () => {
+  const text = runnable(
+    SELL_RETURN,
+    searched(["isinstance(d.output, Rest)", "t"]),
+    "  t:\n    kind: code\n    input:\n      n: ${d.output.note}\n    output: str\n    code: return inputs['n']\n",
+    code("e"),
+  );
+
+  const result = await runFlow(await loadFlow(text), { s: "x" });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("n");
 });
 
 test("a partly shared union branch passes the shared members to a call", () => {

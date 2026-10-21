@@ -293,6 +293,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `agent.output_invalid`. With tools or skills it runs the tool loop: consecutive calls whose tool
   is concurrency-safe (`isConcurrencySafe`, and `load_skill`) run together as a group, and an
   unsafe call runs alone. A memory transcript still throws "not ported yet".
+- Before each wait between model-call attempts, an AGENT with `caps.steps` records a
+  `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
+  from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
+  is. Nothing reads these steps yet, so a resumed AGENT restarts. Each reason the built model gives
+  for leaving out replay state (`onReplayDegraded`, passed to `ModelAccess.createModel`) reaches
+  `emitEvent` once per invocation, as the in-loop `ReplayDegraded`.
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.

@@ -186,7 +186,11 @@ run before appending any record.
   (`None` when unreported) and `error` is an exception type name only, or
   `"interrupted"` for a tool call a [steering](#steering) interrupt skipped.
   Changed (TS yian): `conformance/schema/events.schema.json` describes each
-  event's JSON form, with the snake_case keys hosts forward.
+  event's JSON form, with the snake_case keys hosts forward. `ReplayDegraded`
+  (`node_id`, `reason`) is in-loop too: the AGENT's model left out replay state
+  it couldn't send back (another provider's or account's reasoning, an unknown
+  record version), while the replayed turns' text and tool calls were still
+  sent. It arrives once per reason per node start.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
   chat replies stream visible text as `StreamChunk(node_id, "text", chunk,
@@ -2476,6 +2480,20 @@ rejected.
 Runtime neither reconstructs a transcript from the run log nor fabricates results
 for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.
+
+Changed (TS yian): before each wait between an AGENT's model-call attempts (a
+transport retry under `YIAN_MODEL_RETRIES`), the node records a `NodeStepRecord`
+step `{"model_attempt": {"call": n, "attempt": k, "status": "failed", "error":
+{"kind": ..., "message": ...}, "partial": ..., "retry_in": s}}`. `call` numbers the
+node's model calls, chat and structured alike, from 1 in each node start; `attempt`
+is the attempt that failed; `error` holds the provider error's kind (`server`,
+`rate_limit`, `timeout`, ...) and its message, scrubbed of the credentials the call
+may have sent, as the node's failure is; `partial` is the `yian.message.v1`
+assistant message of what arrived before the failure, or `null` before the first
+event; and `retry_in` is the wait in seconds. A call that succeeds at once writes no
+step. The partial message never joins the model's history or the node's output. A
+resumed AGENT doesn't read these steps yet: it restarts, as above, and numbers its
+calls from 1 again.
 
 After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last

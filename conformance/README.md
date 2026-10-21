@@ -309,7 +309,9 @@ A case can't hold code, so its host is declared under `host`.
   doesn't declare a tool named `ask_user`.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
-  and none for a `retry_after` wait. The same rules apply.
+  and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
+  apply. Model-retry draws are TS-only: the Python runner gives `jitter` to TOOL retries alone, so
+  a case that draws for a model retry is `python_skip`.
   Without `jitter`, draws are the implementation's own, and the case doesn't depend on them.
 - **`models`**: scripted model calls, `{<node id>: {<consumer>: [<entry>, ...]}}`; each call
   takes the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),

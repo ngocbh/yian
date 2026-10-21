@@ -1005,7 +1005,7 @@ describe("main", () => {
 
   test("fails a case using a reserved key before setting it up", async () => {
     const files = {
-      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, steering: {}}\nexpect: {output: {}}\n",
+      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, stop: {}}\nexpect: {output: {}}\n",
       "r/memory.yaml": "kind: run\nflow: x\nexpect: {output: {}, memory: {}}\n",
       "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
     };
@@ -1016,7 +1016,7 @@ describe("main", () => {
     expect(await run([], files, {}, { run: passing })).toEqual({
       code: 1,
       out: [
-        "FAIL r/host: `host.steering` is not supported by the TS runner yet",
+        "FAIL r/host: `host.stop` is not supported by the TS runner yet",
         "FAIL r/memory: `expect.memory` is not supported by the TS runner yet",
         "3 cases: 1 passed, 2 failed, 0 pending",
       ],

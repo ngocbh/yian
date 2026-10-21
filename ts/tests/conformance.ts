@@ -51,6 +51,7 @@ import {
   reprText,
 } from "../src/diagnostics.ts";
 import type { RunEvent, StreamChunk } from "../src/events.ts";
+import type { Steering } from "../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
 import {
   type ChatModel,
@@ -185,9 +186,9 @@ const RUN_KEYS: ReadonlySet<string> = new Set([
 ]);
 const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
 // Host keys the format reserves and this runner doesn't support yet.
-const RESERVED_HOST_KEYS: readonly string[] = ["steering", "stop", "memory", "skills"];
+const RESERVED_HOST_KEYS: readonly string[] = ["stop", "memory", "skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "steering", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -1467,15 +1468,120 @@ function requestDifference(what: string, expected: Value, request: Request): str
   return difference(what, v1Request(request), expected, { byValue: true });
 }
 
+/** A point of the run a `host.steering` action waits for: its `after`. */
+type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint };
+
+/**
+ * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id.
+ *
+ * An action without `after` is queued at once, the others when the run reaches their point.
+ * Steers are drained once; an interrupt aborts the node's interrupt signal, which stays aborted.
+ * Calls are counted, and points reached, only once `armed`, so that runs before the main one
+ * neither count nor steer.
+ */
+class Inbox implements Steering {
+  armed = false;
+  readonly #steers = new Map<string, string[]>();
+  readonly #interrupts = new Map<string, AbortController>();
+  readonly #counts = new Map<string, number>();
+  readonly #pending: { label: string; node: string; action: Case }[] = [];
+
+  constructor(steering: Case) {
+    for (const [node, actions] of Object.entries(steering)) {
+      (actions as Case[]).forEach((action, index) => {
+        if (Object.hasOwn(action, "after")) {
+          this.#pending.push({ label: `host.steering.${node}[${index}]`, node, action });
+        } else {
+          this.#act(node, action);
+        }
+      });
+    }
+  }
+
+  /** Queue `action`'s steers for `node`, or abort its interrupt signal. */
+  #act(node: string, action: Case): void {
+    const steers = this.#steers.get(node) ?? [];
+    this.#steers.set(node, [...steers, ...(get(action, "steer", []) as string[])]);
+    if (action["interrupt"] === true) this.#controller(node).abort();
+  }
+
+  /** Return `node`'s interrupt controller, made on first use. */
+  #controller(node: string): AbortController {
+    let controller = this.#interrupts.get(node);
+    if (controller === undefined) this.#interrupts.set(node, (controller = new AbortController()));
+    return controller;
+  }
+
+  /** Count a `model_call` or `tool_call` of `node`; return its number, `null` unarmed. */
+  count(node: string, what: "model_call" | "tool_call"): bigint | null {
+    if (!this.armed) return null;
+    const key = `${what} ${node}`;
+    const number = (this.#counts.get(key) ?? 0) + 1;
+    this.#counts.set(key, number);
+    return BigInt(number);
+  }
+
+  /** Act on the pending actions of `node` whose `after` is `point`. */
+  reached(node: string, point: Point): void {
+    const due = this.#pending.filter((each) => each.node === node && same(each.action["after"], point));
+    for (const item of due) {
+      this.#pending.splice(this.#pending.indexOf(item), 1);
+      this.#act(node, item.action);
+    }
+  }
+
+  /** Remove and return the steers queued for `nodeId`. */
+  drain(nodeId: string): readonly string[] {
+    const steers = this.#steers.get(nodeId) ?? [];
+    this.#steers.delete(nodeId);
+    return steers;
+  }
+
+  /** The signal aborted once `nodeId`'s interrupt is set. */
+  interruptSignal(nodeId: string): AbortSignal {
+    return this.#controller(nodeId).signal;
+  }
+
+  /** Return a message per action whose point was never reached. */
+  left(): string[] {
+    return this.#pending.map(({ label }) => `\`${label}\` was never reached`);
+  }
+}
+
+/**
+ * Yield `events`, a scripted call's, reaching its `inbox` points at `[node, number]`, its model
+ * call: chunk `k` once its events are delivered (a `reply`, whose events are one chunk, after all
+ * of them; a `chunks` entry's, one event each), then the end of the call when it doesn't raise.
+ */
+async function* reaching(
+  events: EventStream,
+  reply: boolean,
+  inbox: Inbox,
+  [node, number]: [string, bigint],
+): AsyncGenerator<Event> {
+  let chunk = 0n;
+  while (true) {
+    const result = await events.next();
+    if (result.done) break;
+    yield result.value;
+    // Reached when the next event is asked for, which is after the AGENT has read this one.
+    if (!reply) inbox.reached(node, { model_call: number, chunk: ++chunk });
+  }
+  if (reply) inbox.reached(node, { model_call: number, chunk: 1n });
+  inbox.reached(node, { model_call: number });
+}
+
 /**
  * Return a builder of chat models that serve each call the next `host.models` entry of its node
  * and consumer (`modelKey`), taken through `take` when the call is made. A call's request that
  * differs from its entry's `request` is added to `problems`. A call `take` refuses fails at its
- * stream's first read, as a provider's failure does.
+ * stream's first read, as a provider's failure does. An `agent` call reaches its `inbox` points
+ * (`reaching`).
  */
 function scriptedModels(
   take: (label: string, what: string) => Value,
   problems: string[],
+  inbox: Inbox,
 ): (provider: string, model: string, nodeId: string) => ChatModel {
   const taken = new Map<string, number>();
   return (provider, model, nodeId) => ({
@@ -1501,7 +1607,12 @@ function scriptedModels(
         const text = requestDifference(what, entry["request"]!, request);
         if (text) problems.push(text);
       }
-      return new ScriptedModel([scriptedReply(entry)], { provider, model }).stream(request, options);
+      const scriptedModel = new ScriptedModel([scriptedReply(entry)], { provider, model });
+      const events = scriptedModel.stream(request, options);
+      const number = consumer === "agent" ? inbox.count(node, "model_call") : null;
+      if (number === null) return events;
+      const reply = Object.hasOwn(entry, "reply");
+      return new EventStream(reaching(events, reply, inbox, [node, number]), () => events.close());
     },
   });
 }
@@ -1544,13 +1655,16 @@ interface Host {
   random: (() => number) | null;
   /** Builds every model the run calls; no call reaches a provider. */
   models: ModelAccess;
+  /** The `host.steering` inbox. */
+  inbox: Inbox;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
   calls: Map<string, Case[]>;
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
   taken: { label: string; entry: Value; sequence: number }[];
   /**
    * Throw a `CaseFailure` when a script ran out or was missing or a model call's request differed
-   * from its entry's; return a message per script with entries left.
+   * from its entry's; return a message per script with entries left and per `host.steering`
+   * action never reached.
    */
   check: () => string[];
 }
@@ -1560,13 +1674,15 @@ interface Host {
  * each `ask_user` call takes the next `host.human` answer of its node and each backoff the next
  * `host.jitter` draw and each model call the next `host.models` entry of its node and consumer.
  * Every model the run builds is the scripted one, after its config is resolved and checked with
- * `env`. `log` is the run's log file.
+ * `env`. Each stub call reaches its `host.steering` point once it takes its entry. `log` is the
+ * run's log file.
  */
 function host(case_: Case, log: string, env: Env): Host {
   const spec = get(case_, "host", {}) as Case;
   const calls = new Map<string, Case[]>();
   const problems: string[] = [];
   const taken: Host["taken"] = [];
+  const inbox = new Inbox(get(spec, "steering", {}) as Case);
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
       `host.human.${node}`,
@@ -1595,7 +1711,10 @@ function host(case_: Case, log: string, env: Env): Host {
     let list = calls.get(name);
     if (list === undefined) calls.set(name, (list = []));
     list.push(record);
-    return take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+    const number = inbox.count(ctx.node, "tool_call");
+    const entry = take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+    if (number !== null) inbox.reached(ctx.node, { tool_call: number });
+    return entry;
   };
 
   const tools: [string, ToolEntry][] = [];
@@ -1637,7 +1756,7 @@ function host(case_: Case, log: string, env: Env): Host {
       scripts.set(`host.models.${node}.${consumer}`, [...(script as Value[])]);
     }
   }
-  const scripted = scriptedModels(take, problems);
+  const scripted = scriptedModels(take, problems, inbox);
   // Installed even without `host.models`, so an unscripted model call never reaches a provider.
   const models: ModelAccess = {
     env,
@@ -1657,9 +1776,10 @@ function host(case_: Case, log: string, env: Env): Host {
       .map(([label, script]) => {
         const entries = script.length === 1 ? "entry" : "entries";
         return `\`${label}\` has ${script.length} ${entries} left`;
-      });
+      })
+      .concat(inbox.left());
   };
-  return { tools: Object.fromEntries(tools), random, models, calls, taken, check };
+  return { tools: Object.fromEntries(tools), random, models, inbox, calls, taken, check };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -1977,7 +2097,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
   const env = caseEnv(ctx);
-  const { tools, random, models, calls, check } = host(case_, log, env);
+  const { tools, random, models, inbox, calls, check } = host(case_, log, env);
   const run = get(case_, "run", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
@@ -1989,6 +2109,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     tools,
     random,
     models,
+    // Only with `host.steering`, as Python passes it.
+    ...(Object.hasOwn(get(case_, "host", {}) as Case, "steering") ? { steering: inbox } : {}),
     scheduler: virtualScheduler(Date.now()),
     onEvent: (event) => {
       events.push(event);
@@ -1999,6 +2121,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   };
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
+  inbox.armed = true;
   try {
     result = await runFlow(flow, get(case_, "inputs", {}) as Case, options);
   } catch (error) {

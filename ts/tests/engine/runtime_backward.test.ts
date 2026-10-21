@@ -125,7 +125,8 @@
  * Changed:
  * - `test_map_whole_list_context_and_item_order_survive_reversed_completion`: Python's thread
  *   event is a promise the `onEvent` observer resolves when `map#1`'s END succeeds; item 0's
- *   `forward` awaits it with no timeout of its own (the test's timeout bounds it).
+ *   `forward` waits on it for at most 2 s (Python's 5 s, under Bun's 5 s test timeout), then
+ *   rejects, so the run ends and the spies are restored.
  * - `test_empty_map_retains_synthetics_without_inventing_item_contributors`: the child body that
  *   must not run throws an `Error`, Python's `AssertionError`.
  * - `test_map_bounded_projected_file_lists_compose_before_stopping` (2 rows): `+ []` is ported;
@@ -2754,11 +2755,6 @@ test("a backward context the trace can't build escapes unchanged before the call
 
 // computeBackward through CASE, AGENT, and CALL, MAP and LOOP growth.
 
-/** Return the compiled flow `loadFlow` composes from `text`. */
-async function compiled(text: string): Promise<CompiledFlow> {
-  return (await loadFlow(text)).compiled;
-}
-
 /** Return whether `value` is a record holding `key`. */
 function holds(value: unknown, key: string): value is Readonly<Record<string, FeedbackValue>> {
   return typeof value === "object" && value !== null && !Array.isArray(value) && key in value;
@@ -2769,7 +2765,18 @@ test("a MAP's whole-list context and item order survive reversed completion", as
   const originalForward = CodeNode.prototype.forward;
   const calls = new Map<number | null, [BackwardContext, readonly FeedbackValue[]]>();
   const forward = spyOn(CodeNode.prototype, "forward").mockImplementation(async function (this: CodeNode, inputs) {
-    if (this.executionScope!.occurrencePath.at(-1)!.index === 0) await secondDone.promise;
+    if (this.executionScope!.occurrencePath.at(-1)!.index === 0) {
+      // Bounded, so a run where map#1 never finishes still ends and `finally` restores the spies.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("map#1 never finished")), 2000);
+      });
+      try {
+        await Promise.race([secondDone.promise, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     return originalForward.call(this, inputs);
   });
   const backward = spyOn(CodeNode.prototype, "backward").mockImplementation((context, feedback) => {
@@ -3074,7 +3081,7 @@ test("LOOP carried routes use the same fold after live pruning", async () => {
     });
   });
   try {
-    const flow = await compiled(`id: carried
+    const flow = (await loadFlow(`id: carried
 name: carried
 input:
   n: !int
@@ -3097,7 +3104,7 @@ nodes:
     times: 2
     input: {n: '\${input.n}'}
 output: \${loop.output}
-`);
+`)).compiled;
     const { engine: built, memories, stacks } = ownerEngine(flow, { inputs: { n: 3n }, growBuilder: buildGrow });
     const original = copyGraph(built.state.flow);
     await built.run();
@@ -3110,7 +3117,7 @@ output: \${loop.output}
     expect(calls).toHaveLength(2);
     expect(new Set(calls).size).toBe(2);
     const drivers = trace.occurrences.filter((item) =>
-      Bun.deepEquals(item.record.forwardCapture!.scope?.staticPath, ["loop"]),
+      Bun.deepEquals(item.record.forwardCapture!.scope!.staticPath, ["loop"]),
     );
     expect(drivers).toHaveLength(3);
     const reached = new Set(results.filter((result) => result.invoked).map((result) => sourceKey(result.source)));
@@ -3360,7 +3367,7 @@ test.each(Object.keys(PASSTHROUGH_FLOWS).flatMap((shape) => [1, 2, 3, 6].map((ti
     });
     try {
       const { source, feedback, expected } = PASSTHROUGH_FLOWS[shape]!;
-      const flow = await compiled(source(times));
+      const flow = (await loadFlow(source(times))).compiled;
       const { engine: built } = ownerEngine(flow, { inputs: { n: 10n, tag: "red" }, growBuilder: buildGrow });
       const original = copyGraph(built.state.flow);
       await built.run();

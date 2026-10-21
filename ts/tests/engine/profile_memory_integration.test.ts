@@ -10,10 +10,9 @@
  * Later (T6-6, with RunResult.backward): `test_recall_learn_and_commit_through_a_public_run`,
  * `test_nested_declarations_of_one_key_show_and_rewrite_the_document_once`,
  * `test_profile_notes_and_a_session_transcript_share_one_agent_context`,
- * `test_human_edit_during_learning_fails_the_commit_without_a_model` and
- * `test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document`.
- *
- * Later (T6-6, with resumeFlow): `test_resume_reopens_the_recorded_version_for_backward` and
+ * `test_human_edit_during_learning_fails_the_commit_without_a_model`,
+ * `test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document`, and, through
+ * `resumeFlow` too, `test_resume_reopens_the_recorded_version_for_backward` and
  * `test_an_attempt_killed_after_its_write_is_unknown_and_findable_in_provenance`.
  */
 

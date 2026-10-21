@@ -15,7 +15,51 @@
  * value that holds NaN, turning a `-0` at an `object` position into `0`, and keeping a file
  * form whose text holds a lone surrogate.
  *
- * Later: flow runs (with the runner).
+ * Ported, each flow loaded with its `defs:` and run through `runFlow` (with `learnable` where
+ * Python passes it): `test_a_map_over_a_list_of_files_into_a_file_input_succeeds`,
+ * `test_a_loop_carrying_a_file_succeeds`, `test_a_call_into_a_list_of_files_input_succeeds`,
+ * `test_a_call_body_returning_a_record_with_a_file_succeeds`, for learnable false and true
+ * `test_a_map_body_reads_its_file_input_as_a_file`,
+ * `test_a_call_body_reads_its_list_of_files_input_as_files`,
+ * `test_the_parent_reads_a_file_a_call_body_returns`,
+ * `test_the_parent_reads_the_typed_file_of_a_partial_record_body_output`,
+ * `test_the_parent_reads_a_file_a_loop_carries` and
+ * `test_a_loop_reads_a_file_in_a_carried_object_as_a_mapping_on_every_iteration`, and for each
+ * learnable and body output `test_a_partial_loop_compares_an_omitted_file_with_a_returned_one` (4)
+ * and `test_a_partial_loop_compares_a_carried_file_the_body_does_not_take` (4). The CODE bodies
+ * are TS: a body builds a file with the `FileRef` it imports from `src/typesys/values.ts` (as
+ * Python's body calls `__import__`) and reads `x.constructor.name` where Python reads
+ * `type(x).__name__`; ints arrive as `number` (decision 45) and the outputs' ints are bigints.
+ *
+ * Later (T4-8): needs `resumeFlow`: the `_LOOP_FLOW` row of
+ * `test_resuming_a_finished_run_with_files_replays_its_output` and
+ * `test_a_log_whose_loop_default_was_digested_as_a_mapping_still_resumes`.
+ *
+ * Later (T4-8): flow runs: the runs with no CALL, MAP or LOOP,
+ * `test_a_tagged_union_of_a_file_and_an_object_member_loads`,
+ * `test_an_object_binding_delivers_a_nested_file_as_its_mapping`,
+ * `test_an_object_output_binding_over_a_record_with_a_file_succeeds`,
+ * `test_a_file_binding_delivers_the_json_form_as_a_file`, `test_a_float_binding_still_delivers_an_int`,
+ * `test_a_constructor_in_a_flow_delivers_a_nested_file_as_its_mapping`,
+ * `test_a_binding_reads_the_fields_of_a_file`, `test_a_template_binding_reads_the_uri_of_a_file`,
+ * `test_a_prompt_reads_the_name_of_a_file`, `test_a_case_routes_on_the_uri_of_a_file` (2),
+ * `test_a_flow_assert_reads_the_uri_of_a_file`, `test_a_node_pre_assert_reads_the_uri_of_a_file`,
+ * `test_a_node_post_assert_reads_the_uri_of_a_file_in_its_output`,
+ * `test_another_field_of_a_file_is_missing_like_a_missing_key` (2),
+ * `test_render_as_json_writes_a_file_as_its_mapping`,
+ * `test_a_run_reads_the_fields_of_a_file_through_its_trace` (2),
+ * `test_a_reader_sees_the_files_of_a_typed_output` (2),
+ * `test_the_success_event_holds_the_files_of_a_typed_output` (2),
+ * `test_an_untyped_output_holding_files_is_read_as_mappings` (2),
+ * `test_a_flow_input_file_reaches_code_as_a_file` (2),
+ * `test_backward_context_holds_the_files_of_a_typed_output_as_json`,
+ * `test_the_run_result_holds_the_files_of_a_typed_output` (6) and
+ * `test_the_run_result_holds_the_files_of_an_untyped_output_as_mappings` (2); and the resume rows
+ * `test_resuming_a_run_with_a_typed_list_of_files_succeeds`, the `_READER_FLOW` row of
+ * `test_resuming_a_finished_run_with_files_replays_its_output`,
+ * `test_a_reader_after_resume_sees_the_files_of_a_replayed_output` (2),
+ * `test_resuming_an_unfinished_run_returns_the_files_of_a_typed_output` (2) and
+ * `test_resuming_a_finished_run_returns_the_files_of_a_typed_output` (6).
  *
  * Not ported: the hash half of `test_a_source_entry_with_a_record_reading_type_is_hashable`, since
  * a `SourceEntry` has no hash (maps key sources by `sourceKey`); the `field_of` rows on dict
@@ -33,6 +77,7 @@ import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { SourceEntry, sameSourceEntry } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -50,6 +95,7 @@ import {
   type ValueRecord,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { loadConformanceFlow } from "../compose/declarations.ts";
 
 const REGISTRY = readTypedefs({
   Rec: { f: "file", n: "int" },
@@ -319,6 +365,155 @@ describe("untagged unions whose members can share a file", () => {
   });
 });
 
+// --- flows that carry files in typed containers --- //
+
+// A CODE body has no `FileRef` in scope, so it imports this module to build one, as Python's
+// body calls `__import__` on `yian.typesys.values`.
+const VALUES_URL = new URL("../../src/typesys/values.ts", import.meta.url).href;
+const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
+
+/** Load and run `text` with no inputs, asserting it succeeded; return its output. */
+async function okRun(text: string, options: { learnable?: boolean } = {}): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text), {}, options);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+test("a map over a list of files into a file input succeeds", async () => {
+  const output = await okRun(`\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !file
+    nodes:
+      c:
+        kind: code
+        input:
+          f: \${input.f}
+        code: |
+          return 'ok'
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}, ${F}]
+  m:
+    kind: map
+    over: \${a.output}
+    call: body
+    input:
+      f: \${item}
+output: \${m.output}
+`);
+
+  expect(output).toEqual(["ok", "ok"]);
+});
+
+test("a loop carrying a file succeeds", async () => {
+  const output = await okRun(`\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !file
+      n: !int
+    nodes:
+      c:
+        kind: code
+        input:
+          f: \${input.f}
+          n: \${input.n}
+        output:
+          f: file
+          n: int
+        code: |
+          return { f: inputs['f'], n: inputs['n'] + 1 }
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: file
+    code: |
+      return ${F}
+  l:
+    kind: loop
+    times: 3
+    call: body
+    input:
+      f: \${a.output}
+      n: 0
+output: \${l.output}
+`);
+
+  expect((output as ValueRecord)["n"]).toBe(3n);
+});
+
+test("a call into a list of files input succeeds", async () => {
+  const output = await okRun(`\
+id: p
+name: p
+defs:
+  body:
+    input:
+      fs: !list(file)
+    nodes:
+      c:
+        kind: code
+        input:
+          fs: \${input.fs}
+        code: |
+          return inputs['fs'].length
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}]
+  k:
+    kind: call
+    call: body
+    input:
+      fs: \${a.output}
+output: \${k.output}
+`);
+
+  expect(output).toBe(1n);
+});
+
+test("a call body returning a record with a file succeeds", async () => {
+  await okRun(`\
+id: p
+name: p
+defs:
+  body:
+    nodes:
+      c:
+        kind: code
+        output:
+          f: file
+        code: |
+          return { f: ${F} }
+    output: \${c.output}
+nodes:
+  k:
+    kind: call
+    call: body
+  d:
+    kind: code
+    input:
+      f: \${k.output.f}
+    code: |
+      return 'ok'
+output: \${d.output}
+`);
+});
+
 // --- typed bindings deliver the slot's file representation --- //
 
 /** Bind one parameter to `!declared ${a.output}` over a pool holding `output`. */
@@ -427,6 +622,198 @@ describe("FileRef", () => {
   });
 });
 
+// --- committed values and trace reads decode a file through the target's type --- //
+
+test.each([false, true])("a map body reads its file input as a file: learnable %p", async (learnable) => {
+  const output = await okRun(
+    `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !file
+    nodes:
+      c:
+        kind: code
+        input:
+          x: \${input.f}
+        code: |
+          return inputs['x'].constructor.name
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}, ${F}]
+  m:
+    kind: map
+    over: \${a.output}
+    call: body
+    input:
+      f: \${item}
+output: \${m.output}
+`,
+    { learnable },
+  );
+
+  expect(output).toEqual(["FileRef", "FileRef"]);
+});
+
+test.each([false, true])("a call body reads its list of files input as files: learnable %p", async (learnable) => {
+  const output = await okRun(
+    `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      fs: !list(file)
+    nodes:
+      c:
+        kind: code
+        input:
+          fs: \${input.fs}
+        code: |
+          return inputs['fs'].map((x) => x.constructor.name)
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}]
+  k:
+    kind: call
+    call: body
+    input:
+      fs: \${a.output}
+output: \${k.output}
+`,
+    { learnable },
+  );
+
+  expect(output).toEqual(["FileRef"]);
+});
+
+test.each([false, true])("the parent reads a file a call body returns: learnable %p", async (learnable) => {
+  const output = await okRun(
+    `\
+id: p
+name: p
+defs:
+  body:
+    nodes:
+      c:
+        kind: code
+        output:
+          f: file
+        code: |
+          return { f: ${F} }
+    output: \${c.output}
+nodes:
+  k:
+    kind: call
+    call: body
+  d:
+    kind: code
+    input:
+      x: \${k.output.f}
+    code: |
+      return inputs['x'].constructor.name
+output: \${d.output}
+`,
+    { learnable },
+  );
+
+  expect(output).toBe("FileRef");
+});
+
+test.each([false, true])(
+  "the parent reads the typed file of a partial record body output: learnable %p",
+  async (learnable) => {
+    const output = await okRun(
+      `\
+id: p
+name: p
+defs:
+  body:
+    nodes:
+      c:
+        kind: code
+        code: |
+          return { f: ${F}, g: ${F} }
+    output:
+      f: !file \${c.output.f}
+      g: \${c.output.g}
+nodes:
+  k:
+    kind: call
+    call: body
+  d:
+    kind: code
+    input:
+      f: \${k.output.f}
+      g: \${k.output.g}
+    code: |
+      return [inputs['f'].constructor.name, inputs['g']]
+output: \${d.output}
+`,
+      { learnable },
+    );
+
+    expect(output).toEqual(["FileRef", form()]);
+  },
+);
+
+const LOOP_FLOW = `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !file
+      n: !int
+    nodes:
+      c:
+        kind: code
+        input:
+          f: \${input.f}
+          n: \${input.n}
+        output:
+          f: file
+          n: int
+        code: |
+          return { f: inputs['f'], n: inputs['n'] + 1 }
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: file
+    code: |
+      return ${F}
+  l:
+    kind: loop
+    times: 2
+    call: body
+    input:
+      f: \${a.output}
+      n: 0
+  d:
+    kind: code
+    input:
+      x: \${l.output.f}
+      n: \${l.output.n}
+    code: |
+      return [inputs['x'].constructor.name, inputs['n']]
+output: \${d.output}
+`;
+
+test.each([false, true])("the parent reads a file a loop carries: learnable %p", async (learnable) => {
+  expect(await okRun(LOOP_FLOW, { learnable })).toEqual(["FileRef", 2n]);
+});
+
 /** A `times` loop `lp` over typed `f: file` and `n: int` whose body returns only `n`. */
 function partialFileLoop(): LoopNode {
   const node = new LoopNode("lp", {
@@ -453,6 +840,167 @@ test("a partial loop keeps an omitted file as a file", () => {
   expect(Object.getPrototypeOf(byName.get("f")!.default)).toBe(FileRef.prototype);
   expect(byName.get("n")!.hasDefault).toBe(false);
 });
+
+const BODY_OUTPUTS: Record<string, string> = {
+  whole: "${c.output}",
+  typed: "\n      g: !file ${c.output.g}\n      n: !int ${c.output.n}",
+};
+
+/** Each `[learnable, body output name]` pair. */
+const LEARNABLE_BY_BODY_OUTPUT = Object.keys(BODY_OUTPUTS)
+  .sort()
+  .flatMap((body) => [false, true].map((learnable) => [learnable, body] as [boolean, string]));
+
+test.each(LEARNABLE_BY_BODY_OUTPUT)(
+  "a partial loop compares an omitted file with a returned one: learnable %p, body output %s",
+  async (learnable, bodyOutput) => {
+    // The body returns `g` and `n` but not `f`, so `f` is carried from the seed.
+    const output = await okRun(
+      `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !file
+      n: !int
+    nodes:
+      c:
+        kind: code
+        input:
+          f: \${input.f}
+          n: \${input.n}
+        output:
+          g: file
+          n: int
+        code: |
+          return { g: inputs['f'], n: inputs['n'] + 1 }
+    output: ${BODY_OUTPUTS[bodyOutput]}
+nodes:
+  a:
+    kind: code
+    output: file
+    code: |
+      return ${F}
+  l:
+    kind: loop
+    until: f == g
+    max: 3
+    call: body
+    input:
+      f: \${a.output}
+      g: !file \${a.output}
+      n: 0
+output: \${l.output.n}
+`,
+      { learnable },
+    );
+
+    expect(output).toBe(1n);
+  },
+);
+
+test.each(LEARNABLE_BY_BODY_OUTPUT)(
+  "a partial loop compares a carried file the body does not take: learnable %p, body output %s",
+  async (learnable, bodyOutput) => {
+    // The untyped `h` makes the loop's contract a partial record. The body takes only `n`,
+    // so `f` is carried from the seed with no body input to read it through.
+    const output = await okRun(
+      `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      n: !int
+    nodes:
+      c:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          g: file
+          n: int
+        code: |
+          return { g: ${F}, n: inputs['n'] + 1 }
+    output: ${BODY_OUTPUTS[bodyOutput]}
+nodes:
+  a:
+    kind: code
+    output: file
+    code: |
+      return ${F}
+  u:
+    kind: code
+    code: |
+      return ${F}
+  l:
+    kind: loop
+    until: f == g
+    max: 3
+    call: body
+    input:
+      f: \${a.output}
+      g: !file \${a.output}
+      h: \${u.output}
+      n: 0
+output: \${l.output.n}
+`,
+      { learnable },
+    );
+
+    expect(output).toBe(1n);
+  },
+);
+
+test.each([false, true])(
+  "a loop reads a file in a carried object as a mapping on every iteration: learnable %p",
+  async (learnable) => {
+    // The seed binds `f` from `r`'s live output, where `f.x` is a file; from the second
+    // iteration `f` comes back through the body's `object` output. Both must read alike.
+    const output = await okRun(
+      `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !object
+      n: !int
+    nodes:
+      c:
+        kind: code
+        input:
+          n: \${input.n}
+        output: int
+        code: |
+          return inputs['n'] + 1
+    output:
+      f: \${input.f}
+      n: \${c.output}
+nodes:
+  r:
+    kind: code
+    output:
+      x: file
+    code: |
+      return { x: ${F} }
+  l:
+    kind: loop
+    while: isinstance(f.x, object) and n < 2
+    max: 3
+    call: body
+    input:
+      f: \${r.output}
+      n: 0
+output: \${l.output.n}
+`,
+      { learnable },
+    );
+
+    expect(output).toBe(2n);
+  },
+);
 
 test("a source entry with a record reading type differs from one without it", () => {
   const files = new Type({ kind: ValueKind.OBJECT, fields: new Map([["f", FILE]]), required: new Set() });

@@ -48,7 +48,7 @@
  * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
  * matches fragments.
  *
- * Later: the other tests run flows or backward and land with the runner (T4-8), AGENT backward
+ * Later: the other 25 tests run flows or backward and land with the runner (T4-8), AGENT backward
  * (T6-6) and the node kinds.
  */
 

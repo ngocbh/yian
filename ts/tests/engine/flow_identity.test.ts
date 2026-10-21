@@ -155,8 +155,9 @@
  * `test_loaded_zero_and_one_field_records_differ_from_their_value_forms`,
  * `test_call_over_a_single_node_def_keeps_its_fingerprint`,
  * `test_loaded_value_output_and_single_node_def_use_a_value_end` and
- * `test_loop_with_max_keeps_its_fingerprint`; the pinned fingerprints are TS pins, and the inline
- * CODE bodies are TS (`+ 1n`, as ints arrive as `bigint`s).
+ * `test_loop_with_max_keeps_its_fingerprint`; the pinned fingerprints are TS pins: the manifest
+ * writes an inline CODE body as `{inline: <body>}` (design 6.7) where Python writes the bare text,
+ * and the inline bodies are TS (`+ 1n`); with both put back, Python's pins reproduce.
  *
  * Later (T4): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
  *

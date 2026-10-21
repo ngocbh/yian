@@ -621,6 +621,62 @@ describe("run outcomes", () => {
   });
 });
 
+// Two nodes that start together, so a TTY shows two spinner lines.
+const PARALLEL_FLOW =
+  "id: par\nname: par\nnodes:\n  a: {kind: code, output: str, code: return 'a'}\n" +
+  "  b: {kind: code, output: str, code: return 'b'}\noutput:\n  a: ${a.output}\n  b: ${b.output}\n";
+
+describe("run setup errors", () => {
+  test("on a TTY the run failed: line comes after the spinners are erased", async () => {
+    const flow = file("flow.yaml", PARALLEL_FLOW);
+    const chunks: string[] = [];
+    let broke = false;
+    // A stderr whose spinner draw for `b` throws: the reporter's error rejects the run while
+    // spinner lines are on screen.
+    const stderr: Writer = {
+      isTTY: true,
+      write: (text) => {
+        if (!broke && text.includes("⠋ b")) {
+          broke = true;
+          throw new TypeError("stderr broke");
+        }
+        chunks.push(text);
+        return Promise.resolve();
+      },
+    };
+    const io: CliIo = {
+      stdout: sink().out,
+      stderr,
+      stdin: new PassThrough(),
+      env: (name) => (name === "NO_COLOR" ? "1" : undefined),
+    };
+    expect(await main(["run", flow, "-q", "--log", join(tmp, "run.jsonl")], io)).toBe(0);
+    chunks.length = 0;
+    broke = false;
+    expect(await main(["run", flow, "--log", join(tmp, "run2.jsonl")], io)).toBe(1);
+    const last = chunks.at(-1)!;
+    expect(last).toBe("run failed: stderr broke\n");
+    expect(chunks.slice(0, -1).some((chunk) => chunk.startsWith("\r\x1b[K"))).toBe(true);
+  });
+
+  test("--engine-trace prints the stack box after run failed:", async () => {
+    const { code, stderr } = await runFlowCli(ECHO_FLOW, [
+      "-q",
+      "--engine-trace",
+      "--input",
+      "topic=clouds",
+      "--input",
+      "topik=x",
+    ]);
+    expect(code).toBe(1);
+    const failed = stderr.indexOf("run failed: ");
+    expect(failed).toBeGreaterThan(-1);
+    expect(stderr.indexOf("─ traceback ")).toBeGreaterThan(failed);
+    expect(stderr).toContain("RangeError");
+    expect(stderr).toContain("    at ");
+  });
+});
+
 describe("run --json", () => {
   test("succeeded: the output in the codec form, only the document on stdout", async () => {
     const { code, stdout } = await runFlowCli(ECHO_FLOW, ["--json", "--input", "topic=clouds"]);

@@ -154,7 +154,7 @@ export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
   return document;
 }
 
-/** Return `text`, an engine stack, in a box titled `traceback`, ending in a newline. */
+/** Return `text`, a stack or captured traceback, in a box titled `traceback`, ending in a newline. */
 function tracebackBox(text: string, out: Writer, env: Env): string {
   const lines = splitLines(text.trimEnd());
   const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
@@ -638,13 +638,19 @@ function isSetupError(error: unknown): error is Error {
  */
 export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
   validateRunLogOptions(options);
-  const { json, quiet, engineTrace } = options;
+  const { json, quiet, verbose, engineTrace } = options;
   const fail = async (diagnostic: Diagnostic) => {
     if (json) await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
     return 1;
   };
   const writeStack = async (error: Error) => {
     if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
+  };
+  const setupFailed = async (error: Error) => {
+    const label = paint("run failed: ", "red bold", io.stderr, io.env);
+    await io.stderr.write(`${label}${paint(error.message, "red", io.stderr, io.env)}\n`);
+    await writeStack(error);
+    return fail(new Diagnostic({ code: "run.setup", message: error.message }));
   };
   let text: string;
   try {
@@ -671,7 +677,6 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
     const banner = flowBanner(flow, io.stderr, io.env);
     if (banner !== null) await io.stderr.write(banner);
   }
-  const { verbose } = options;
   const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
   // Recovering a run isn't ported yet; until then `--resume` runs nothing.
   if (options.resume !== undefined) {
@@ -680,27 +685,33 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
   const commandEnv = new CommandEnv(io.env);
   const supplied = mergeInputs(options.inputs, options.inputValues);
 
-  let result: RunResult;
+  const runId = defaultRunId();
+  let log: string;
   try {
-    const runId = defaultRunId();
-    const log = options.log ?? defaultRunLogPath(runId, io.env);
-    await reportRunLog(log, io.stderr, io.env);
-    result = await runFlow(flow, supplied, {
-      log,
-      runId,
-      numWorkers: options.numWorkers ?? 8,
-      onEvent: reporter === null ? null : (event) => reporter.handle(event),
-      tools: { ...registeredTools() },
-      env: commandEnv.read,
-    });
+    log = options.log ?? defaultRunLogPath(runId, io.env);
   } catch (error) {
     if (!isSetupError(error)) throw error;
-    const label = paint("run failed: ", "red bold", io.stderr, io.env);
-    await io.stderr.write(`${label}${paint(error.message, "red", io.stderr, io.env)}\n`);
-    await writeStack(error);
-    return fail(new Diagnostic({ code: "run.setup", message: error.message }));
-  } finally {
-    reporter?.stop();
+    return setupFailed(error);
+  }
+  await reportRunLog(log, io.stderr, io.env);
+  let result: RunResult;
+  try {
+    try {
+      result = await runFlow(flow, supplied, {
+        log,
+        runId,
+        numWorkers: options.numWorkers ?? 8,
+        onEvent: reporter === null ? null : (event) => reporter.handle(event),
+        tools: { ...registeredTools() },
+        env: commandEnv.read,
+      });
+    } finally {
+      // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+      reporter?.stop();
+    }
+  } catch (error) {
+    if (!isSetupError(error)) throw error;
+    return setupFailed(error);
   }
 
   if (result.status === "succeeded") {

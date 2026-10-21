@@ -33,7 +33,8 @@
  * type (a literal shown by its value, a long one cut), a disjoint output, skills without a map, a
  * missing skill, a skill keyed by another name, and a bad template span named by its subject; a
  * boundary callback whose promise rejects stops the run, and one that throws rejects the run with
- * no stop record; an `llmConfig` that isn't a record is refused.
+ * no stop record; an `llmConfig` that isn't a record is refused. `run_skills.test.ts` ports
+ * `test_run_skills.py` itself.
  *
  * The run-start LLM chain, where an AGENT's model is a `ScriptedModel` from `models`. TS rows
  * this file owns, not ports of their Python files: an AGENT with no provider fails before the log

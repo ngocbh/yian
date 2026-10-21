@@ -10,7 +10,7 @@ import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-import type { Message } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import {
   ConversationInvocation,
   ConversationItem,
@@ -338,4 +338,9 @@ export function runWith(
 /** The texts of the messages of `model`'s request `index` (the last by default) after its system prompt. */
 export function sentTexts(model: { requests: readonly { messages: readonly Message[] }[] }, index = -1): string[] {
   return model.requests.at(index)!.messages.slice(1).map((message) => message.text());
+}
+
+/** A text-only assistant reply. */
+export function reply(text: string): Response {
+  return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
 }

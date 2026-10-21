@@ -48,6 +48,7 @@ import {
 } from "../../src/memory/index.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
@@ -708,6 +709,15 @@ export function expectIndexMatchesRebuild(state: RunState): void {
   }
 }
 
+/** Expect `state.unknownIncoming` to equal a recount of each live node's `UNKNOWN` incoming edges. */
+export function expectUnknownIncomingMatchesRecount(state: RunState): void {
+  const recount = new Map<string, number>();
+  for (const edge of state.flow.edges) {
+    if (state.edgeState.get(edge.id) === NodeState.UNKNOWN) recount.set(edge.to, (recount.get(edge.to) ?? 0) + 1);
+  }
+  expect(Object.fromEntries(state.unknownIncoming)).toEqual(Object.fromEntries(recount));
+}
+
 /** The memory key and policy type `ownerEngine` records. */
 export const POLICY = "reflective";
 
@@ -763,6 +773,8 @@ export function stateSnapshot(state: RunState): Record<string, unknown> {
     numWorkers: state.numWorkers,
     input: structuredClone(state.input),
     effectiveLlmByStaticPath: structuredClone(state.effectiveLlmByStaticPath),
+    // Sorted: the counts are keyed by head, whatever order the heads were first counted in.
+    unknownIncoming: [...state.unknownIncoming].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   };
 }
 

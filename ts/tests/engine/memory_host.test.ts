@@ -71,7 +71,8 @@
  * throwing `onEvent` at `RunStarted`: `test_resume_checks_registry_types_too` and
  * `test_resume_accepts_one_callee_called_from_two_nodes` (every case).
  *
- * Later (T4-8, `RunResult.backward`): `test_backward_checks_registry_types_too`.
+ * Ported, through `runFlow`, `resumeFlow` and `RunResult.backward` in that environment:
+ * `test_backward_checks_registry_types_too`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -1064,4 +1065,19 @@ test.each(["def", "uses"])("resume accepts one callee called from two nodes: %s"
   const resumed = await resume(await load(), log, registry);
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toBe(2n);
+});
+
+test("backward checks registry types too", async () => {
+  const flow = await runnableFlow("{notes: episodic}");
+  const log = path.join(tmp, "run.jsonl");
+  {
+    await using registry = await buildMemories(flow);
+    expect((await run(flow, registry, { learnable: true, log })).status).toBe("succeeded");
+  }
+  const before = fs.readFileSync(log);
+  await using other = await buildMemories(await runnableFlow("{notes: reflective}"));
+  // A finished run opens no memory on resume; backward is where it is used.
+  const resumed = await resume(flow, log, other);
+  await setupError(() => resumed.backward("Review."), /'notes'.*'episodic'.*'reflective'/);
+  expect(fs.readFileSync(log)).toEqual(before);
 });

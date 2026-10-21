@@ -1131,7 +1131,7 @@ export interface CaseContext {
   crashSweep?: boolean;
   /** The path of the case's golden log, `<group>/<name>.log.jsonl` beside it. */
   golden?: string;
-  /** Whether `--write-logs` asks a `run` or `resume` case to write its golden log. */
+  /** Whether `--write-logs` asks a `run`, `resume` or `backward` case to write its golden log. */
   writeLogs?: boolean;
 }
 
@@ -1144,15 +1144,12 @@ function caseEnv(ctx: CaseContext): Env {
 export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
 // `RESERVED` shrinks as the kinds that read `host` support its keys.
-/**
- * The kind runners. A case whose kind has none fails. A kind is added by replacing its comment
- * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
- */
-export const KINDS: Partial<Record<Kind, KindRunner>> = {
+/** The kind runners, one for every kind. */
+export const KINDS: Record<Kind, KindRunner> = {
   load: runLoad,
   run: runRun,
   resume: runRun,
-  // backward: not run yet
+  backward: runRun,
   expr: runExpr,
   value: runValue,
   defaults: runDefaults,
@@ -1267,7 +1264,8 @@ export interface MainOptions {
  * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
  * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`,
- * which needs `--case`, writes each selected `run` and `resume` case's golden log (`goldenLog`).
+ * which needs `--case`, writes each selected `run`, `resume` and `backward` case's golden log
+ * (`goldenLog`).
  */
 export async function main(
   argv: readonly string[],
@@ -2355,11 +2353,50 @@ async function recall(memory: MemoryRegistry, key: string): Promise<string> {
 }
 
 /**
+ * Call `result.backward` once per `backward` entry, `{feedback, api_key, headers}`, in order;
+ * return each call's outcome, as the `backward_finished` record it appended to `log` projects
+ * (`trace`), or `{raises}` when the call raised. Fails the case when a call appends other than one
+ * `backward_finished` record.
+ */
+async function callBackward(
+  result: RunResult,
+  log: string,
+  entries: readonly Case[],
+  flow: ComposedFlow,
+): Promise<Value[]> {
+  const finished = () => {
+    const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
+    return trace(lines, flow).filter(([kind]) => kind === "backward_finished");
+  };
+  const outcomes: Value[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const before = finished().length;
+    try {
+      await result.backward(entry["feedback"], {
+        apiKey: (get(entry, "api_key") ?? null) as string | null,
+        headers: (get(entry, "headers") ?? null) as Record<string, string> | null,
+      });
+    } catch (error) {
+      if (error instanceof CaseFailure) throw error;
+      outcomes.push({ raises: raised(error) });
+      continue;
+    }
+    const after = finished();
+    if (after.length !== before + 1) {
+      throw new CaseFailure(
+        `backward call ${index + 1} appended ${after.length - before} \`backward_finished\` records, not one`,
+      );
+    }
+    outcomes.push((after.at(-1)![2] as Case)["outcome"]!);
+  }
+  return outcomes;
+}
+
+/**
  * Run each `host.memory.before` entry in order, logged to `before-<n>.jsonl` in the case
- * directory, with `options` and memories from `memories()`, closed after the run. Return the log
- * texts by where they are reported and each run's trace (grouped when the run is pooled). A raise
- * fails the case, and so does an entry with `backward` (before any run), which needs
- * `RunResult.backward`.
+ * directory, with `options` and memories from `memories()`, closed after the run's backward calls
+ * (`callBackward`). Return the log texts by where they are reported and each run's trace (grouped
+ * when the run is pooled). A raise, the run's or a backward call's, fails the case.
  */
 async function beforeRuns(
   case_: Case,
@@ -2372,28 +2409,28 @@ async function beforeRuns(
   const traces: Value[][][] = [];
   const memory = get(get(case_, "host", {}) as Case, "memory", {}) as Case;
   const before = get(memory, "before", []) as Case[];
-  // Checked before any run: backward calls need `RunResult.backward`, which isn't ported yet.
-  const learning = before.findIndex((entry) => Object.hasOwn(entry, "backward"));
-  if (learning !== -1) {
-    throw new CaseFailure(
-      `\`host.memory.before[${learning}].backward\` is not supported by the TS runner yet`,
-    );
-  }
   for (const [index, entry] of before.entries()) {
     const where = `host.memory.before[${index}]`;
     const log = join(ctx.dir, `before-${index + 1}.jsonl`);
     const run = entry["run"] as Case;
+    let outcomes: Value[];
     try {
       const registry = await memories();
       try {
         const inputs = get(entry, "inputs", {}) as Case;
         const args = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
-        await runFlow(flow, inputs, { ...options, ...args, log, memory: registry });
+        const result = await runFlow(flow, inputs, { ...options, ...args, log, memory: registry });
+        outcomes = await callBackward(result, log, get(entry, "backward", []) as Case[], flow);
       } finally {
         await registry?.close();
       }
     } catch (error) {
+      if (error instanceof CaseFailure) throw error;
       throw new CaseFailure(`\`${where}\` raised\n${failureText(error)}`);
+    }
+    const refused = outcomes.find((outcome) => isMapping(outcome) && Object.hasOwn(outcome, "raises"));
+    if (refused !== undefined) {
+      throw new CaseFailure(`\`${where}\` backward raised ${spell((refused as Case)["raises"])}`);
     }
     const text = readFileSync(log, "utf8");
     logs[`the log of \`${where}\``] = text;
@@ -2411,14 +2448,14 @@ async function beforeRuns(
  * `host.crash_after_record` (or, for `end`, runs to its end; with `host.stop`, is stopped) and
  * resumed with the `resume` arguments. Return the results: `trace`, `events`, `stream` (the
  * resume's), `tool_calls` (every run's), `output` or the host error as `raises` and `error` (never
- * compared), `memory` when `expect.memory` lists keys, and `left`, a message per script with
- * entries left.
+ * compared), `backward` for a `backward` case (each call's outcome, `callBackward`), `memory` when
+ * `expect.memory` lists keys, and `left`, a message per script with entries left.
  *
  * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run (each `before` run,
  * the main run, and for a `resume` case the cut run and the resume) gets the flow's memories built
- * afresh under `<case dir>/memory`, closed after the run; a failure building the cut run's is the
- * case's `raises`, and nothing resumes. `expect.memory` is read from memories built after the main
- * run. Learner events are kept apart, never compared.
+ * afresh under `<case dir>/memory`, closed after the run's backward calls; a failure building the
+ * cut run's is the case's `raises`, and nothing resumes. `expect.memory` is read from memories
+ * built after the main run's. Learner events are kept apart, never compared.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
@@ -2479,6 +2516,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       start = (memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory });
     }
   }
+  let outcomes: Value[] = [];
   if (!Object.hasOwn(caught, "raises")) {
     let memory: MemoryRegistry | null = null;
     try {
@@ -2487,8 +2525,14 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     } catch (error) {
       caught = { raises: raised(error), error };
     }
-    // Outside the `try`, so a close error never replaces the run's `raises`.
-    await memory?.close();
+    // The memories stay open for the backward calls, and close even when one fails the case; the
+    // close is outside the run's `try`, so a close error never replaces its `raises`.
+    try {
+      const entries = get(case_, "backward", []) as Case[];
+      if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
+    } finally {
+      await memory?.close();
+    }
   }
   const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
   let recalled: Record<string, string> | undefined;
@@ -2516,6 +2560,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     stream: chunks.map((chunk) => fields(chunk, flow)),
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
+    ...(case_["kind"] === "backward" ? { backward: outcomes } : {}),
     ...(recalled !== undefined ? { memory: recalled } : {}),
   };
   checkSecrets(case_, {
@@ -2553,7 +2598,7 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
   }
-  for (const name of ["trace", "events", "stream", "tool_calls", "memory"]) {
+  for (const name of ["trace", "events", "stream", "tool_calls", "backward", "memory"]) {
     // Only a run's events, stream and tool calls compare numbers by value; the trace keeps kinds.
     const byValue = ["events", "stream", "tool_calls"].includes(name);
     if (Object.hasOwn(expect, name)) compare(name, actual[name], expect[name], { byValue });
@@ -2813,6 +2858,8 @@ async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
 // `resume` cases run through `runRun`: `actualRun` cuts or stops their first run and resumes it.
 
 // ---- backward ----
+
+// `backward` cases run through `runRun`: `actualRun` makes their backward calls (`callBackward`).
 
 // ---- expr ----
 

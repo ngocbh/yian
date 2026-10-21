@@ -1354,6 +1354,19 @@ naming where it sits (`feedback at note: integer with 5000 digits is larger than
 allows (4300 digits)`); feedback that does not match the output's shape, or nests
 deeper than 100 levels, raises `ValueError`.
 
+Changed (TS yian): `await result.backward(feedback, { apiKey, headers })` returns a Promise of the
+`BackwardOutcome`, and its errors are rejections. `feedback` is taken through host intake (see
+[Types → host intake](typing.md#two-constructors-infer-vs-check)), so a whole `number` arrives as an
+int (`{n: 3}` holds `3n`), and a value that isn't a yian value, or nests deeper than
+`YIAN_MAX_VALUE_NESTING` levels as the run's `env` sets it, is refused with `TypeCheckError`. A
+message that is not a string, object, list or `null` raises `TypeError`; feedback that doesn't match
+the output's shape, a result not retained with `learnable: true`, and headers that don't fit raise
+`RangeError`, not `ValueError`. There is no int digit limit. A second call on the same result while one is in
+progress rejects with an `Error` ("a backward call on this result is already in progress") and
+appends nothing. The `learning` and `backwardOutcome` getters read the last accepted attempt this
+result observed, so they change when a call settles, whether it resolves or rejects after its
+attempt was accepted.
+
 This complete example needs no model or memory backend:
 
 ```python

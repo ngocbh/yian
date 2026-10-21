@@ -153,13 +153,21 @@
  *
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
- * Later (T4-8): `test_historical_backward_prepares_recorded_schema_bytes` (the recorded backward
- * log lines).
+ * Ported, through `run.ts`: `test_historical_backward_prepares_recorded_schema_bytes` (7 rows).
+ * Changed: Python reads recorded schema-9 lines; schema 10 is the only TS schema, so a live
+ * learnable `runFlow` of the source test's flow (memory `test` served by `FakeMemory`) and its
+ * `RunResult.backward` write the lines (the failed rows' commit throws a `MemoryOperationError`);
+ * each prefix replays through `replayRunLog` from a `MemoryRunLog`, and the next line is prepared
+ * and committed through the internal `HistoricalLogCursor`.
  */
 
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
 import { type FeedbackValue, SourceRef } from "../../src/expr/lineage.ts";
@@ -168,6 +176,7 @@ import {
   LearningFailure,
   LearningResult,
   MemoryMutation,
+  MemoryOperationError,
   MemoryOperationFailure,
   MemorySnapshotEnvelope,
   MemorySpec,
@@ -175,6 +184,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
+import { replayRunLog, runFlow } from "../../src/run.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import {
   AttributedBackwardResult,
@@ -213,6 +223,7 @@ import {
 } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  HistoricalLogCursor,
   PreparedTransition,
   prepareNodeStarted,
   prepareNodeSucceeded,
@@ -222,6 +233,8 @@ import {
 } from "../../src/runtime/state.ts";
 import { TraceDelta, type TraceDeltaFields } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { FakeMemory } from "./memory_fakes.ts";
 import {
   commitStartSuccess,
   engine,
@@ -2066,5 +2079,59 @@ test("backward replay matches every accepted prefix without callbacks", async ()
     expect(replay.trace!.nextSequence).toBe(length);
     expect(replay.nextSequence).toBe(length);
     expect(replay.result).toEqual(state.result);
+  }
+});
+
+const HISTORICAL_FLOW = `id: historical-backward
+name: historical_backward
+long_term_memory: test
+nodes:
+  work:
+    kind: code
+    code: return 3
+    output: int
+output: \${work.output}
+`;
+
+test.each([
+  ["started", false, 7, "backward_started"],
+  ["ready", false, 8, "backward_ready"],
+  ["requested", false, 9, "memory_commit_requested"],
+  ["succeeded", false, 10, "memory_commit_succeeded"],
+  ["finished", false, 11, "backward_finished"],
+  ["failed", true, 10, "memory_commit_failed"],
+  ["failed-finished", true, 11, "backward_finished"],
+] as const)("a historical backward record prepares its recorded line: %s", async (_id, failed, index, kind) => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-backward-records-"));
+  try {
+    const flow = await loadFlow(HISTORICAL_FLOW);
+    const path = join(dir, "run.jsonl");
+    const backend = new FakeMemory({
+      commitOutcomes: failed ? [new MemoryOperationError("commit", "declined", "Not now.", true)] : [],
+    });
+    const result = await runFlow(flow, {}, {
+      log: path,
+      learnable: true,
+      numWorkers: 0,
+      memory: new Map([["test", backend]]),
+      env: hostEnv(dir),
+    });
+    await result.backward("Review.");
+    const wires = readFileSync(path, "utf8").split("\n").slice(0, index + 1);
+    const last = wires.at(-1)!;
+    expect(decodeRecord(last).kind).toBe(kind);
+
+    const state = replayRunLog(flow, MemoryRunLog.fromRecords(wires.slice(0, -1).map((wire) => decodeRecord(wire))));
+    const before = state.backwardState;
+    const prepared = prepareRecord(state, decodeRecord(last).record);
+    expect(prepared._plan.envelopeJson).toBe(last);
+    expect(state.backwardState).toBe(before);
+    const cursor = new HistoricalLogCursor(wires);
+    for (const wire of wires.slice(0, -1)) cursor.append(decodeRecord(wire).record);
+    commitPrepared(cursor, state, prepared);
+    expect(state.nextSequence).toBe(index + 1);
+    expect(state.backwardState).not.toBe(before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

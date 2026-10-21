@@ -4,7 +4,7 @@
  * `tests/test_conformance.py`, which `conformance.ts` is, except for
  * `test_steering_unreached_action_fails`, which no case can cover (a passing case reaches every
  * action), and `test_memory_expect_refuses_a_session_key`. TS-only: an undeclared `expect.memory`
- * key fails the case, and a `host.memory.before` entry with backward calls is refused.
+ * key fails the case, and a `host.memory.before` entry whose backward call raises fails it.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -1005,13 +1005,11 @@ describe("run", () => {
     await expect(read).rejects.toThrow("`expect.memory.nope` names no memory the flow declares");
   });
 
-  test("a `before` entry with backward calls fails the case before any run", async () => {
-    const before = "{before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: f}]}]}";
+  test("a `before` entry whose backward call raises fails the case", async () => {
+    const before = "{before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: [1]}]}]}";
     const failed = runCase(MEMORY_CASE("", before, "{}"));
     await expect(failed).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failed).rejects.toThrow(
-      "`host.memory.before[0].backward` is not supported by the TS runner yet",
-    );
+    await expect(failed).rejects.toThrow("`host.memory.before[0]` backward raised {\"class\":");
   });
 });
 

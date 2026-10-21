@@ -715,10 +715,9 @@ Flags, each repeatable (values of one flag are alternatives; different flags all
 `--diagnostic-code` never hide a case file that can't be read; `--group` and `--case`, read from
 its path, still select or skip it. `--crash-sweep` also gives each eligible `run` case a crash
 sweep: the run is cut after each record but the last, resumed, and checked. `--write-logs` (for
-development; it needs `--case`) writes each selected `run` or `resume` case's golden log,
-`<name>.log.jsonl` beside the case, which later runs compare byte for byte.
+development; it needs `--case`) writes each selected `run`, `resume` or `backward` case's golden
+log, `<name>.log.jsonl` beside the case, which later runs compare byte for byte.
 
-The runner runs every kind but `backward`. A `run` or `resume` case's `host` may hold `tools`,
-`human`, `jitter`, `models`, `memory`, `steering` and `stop`, and its `expect` may hold `memory`
-(a `host.memory.before` entry with `backward` fails until `RunResult.backward` is ported); a case
-using `host.skills` fails before it is set up.
+The runner runs every kind. A `run`, `resume` or `backward` case's `host` may hold `tools`,
+`human`, `jitter`, `models`, `memory`, `steering` and `stop`, and its `expect` may hold `memory`; a
+case using `host.skills` fails before it is set up.

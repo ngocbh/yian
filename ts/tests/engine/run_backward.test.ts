@@ -1,0 +1,948 @@
+/**
+ * Explicit public backward attempts over retained forward run authority: a port of
+ * `tests/engine/test_run_backward.py`, through `runFlow`, `resumeFlow` and `RunResult.backward` in
+ * an environment holding only the test's credential store. Memory keys are served by the shared
+ * `FakeMemory` (Python's `_Memory`).
+ *
+ * Ported: `test_backward_without_memory_is_explicit_and_repeatable[memory]`, the backward half of
+ * `test_forward_returns_before_any_learning_or_commit`,
+ * `test_same_handle_rejects_nested_backward_before_a_second_commit`,
+ * `test_same_handle_rejects_concurrent_backward_without_waiting` (2 rows),
+ * `test_delayed_backward_anchors_the_log_at_acquisition` (4 rows),
+ * `test_acquisition_uses_the_captured_locator_if_opener_changes_cwd` (2 rows),
+ * `test_prefix_export_failure_preserves_primary_and_prevents_stale_retry` (6 rows),
+ * `test_accepted_append_error_refreshes_the_actual_prefix` (8 rows),
+ * `test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots`,
+ * `test_terminal_resume_retains_mapping_references_without_opening_them`,
+ * `test_cancelled_backward_retains_started_and_releases_resources`,
+ * `test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation`,
+ * `test_delayed_backward_uses_private_program_and_canonical_values` (2 rows),
+ * `test_distinct_durable_handles_keep_file_lock_exclusion`,
+ * `test_handle_guard_covers_prefix_export_and_log_cleanup` (2 rows),
+ * `test_cleanup_error_preserves_finished_authority_and_releases_guard` (4 rows),
+ * `test_invalid_feedback_on_stale_handle_preserves_its_observation` (2 rows),
+ * `test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure`,
+ * `test_resumed_interrupted_observation_keeps_identity_on_invalid_feedback` (2 rows),
+ * `test_nonretained_result_rejects_backward`, `test_terminal_resume_only_reconstructs_backward_outcome`,
+ * `test_terminal_resume_inspects_every_unfinished_backward_prefix` (4 rows) and
+ * `test_killed_attempt_does_not_block_a_later_attempt` (2 rows).
+ *
+ * Changed:
+ * - `backward` is async and the guard is a flag, so "concurrent" is a second call while the first
+ *   awaits its learner, and a nested call rejects (Python: a thread and a lock). Python's
+ *   `RuntimeError` is an `Error`, its `ValueError` a `RangeError`, its `MemoryError` and other host
+ *   faults an `Error`; the busy file lock is the `Error` naming the locked log (Python:
+ *   `BlockingIOError`). Field names are camelCase (`inputFeedback`, `backwardOutcome`).
+ * - The export and close faults patch `records()` and `close()` of the log class (Python:
+ *   `__iter__` and `close`); the accepted-append fault patches `append`; the session close fault
+ *   patches `FakeSession.prototype.close`; each is restored in `finally`. The opener changing the
+ *   directory spies on `JsonlRunLog.create`/`resume`. Directory changes use `process.chdir`,
+ *   restored after each test.
+ * - `test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots`: `FakeSession`'s
+ *   snapshot is frozen, so the row doesn't change it after the run (the recorded snapshot is still
+ *   what each attempt restores).
+ * - `test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation`: the mismatched
+ *   restore returns a new session holding another snapshot (Python changes the opened session's).
+ * - `test_delayed_backward_uses_private_program_and_canonical_values`: `runId` and `log` are
+ *   read-only, so only the mutable values are changed.
+ * - `test_cancelled_backward_retains_started_and_releases_resources`: one row, the learner throws an
+ *   `AbortError` (JS has one cancellation error; Python's two rows are its two classes).
+ * - `test_killed_attempt_does_not_block_a_later_attempt`: the child is this runtime running a
+ *   script written to the test's directory, which blocks in a `FakeMemory` learner or a session's
+ *   `commit` that writes a marker and never settles.
+ *
+ * TS-only: a run whose `env` sets a non-default `YIAN_*` value records it, and a later
+ * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env` and bounds its
+ * feedback by that `env`'s nesting limit (51 levels under a limit of 50 is a `TypeCheckError` that
+ * appends nothing); a resume in another `env` is refused.
+ *
+ * Covered by a case: `test_backward_without_memory_is_explicit_and_repeatable[durable]`
+ * (`backward/run_backward__backward_without_memory_is_repeatable`, whose runner writes a log),
+ * the forward half of `test_forward_returns_before_any_learning_or_commit`
+ * (`run-memory/run_backward__forward_never_learns`; its backward half is ported here),
+ * `test_invalid_feedback_does_not_change_latest_outcome`
+ * (`backward/backward_recovery__invalid_root_feedback_appends_nothing`) and
+ * `test_failed_forward_and_successful_backward_have_separate_statuses`
+ * (`backward/run_backward__a_failed_forward_and_a_successful_backward`).
+ */
+
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { DefaultsMismatchError } from "../../src/defaults.ts";
+import { RunStarted, RunSucceeded } from "../../src/events.ts";
+import { MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
+import {
+  replayRunLog,
+  type ResumeFlowOptions,
+  type RunFlowOptions,
+  type RunResult,
+  resumeFlow,
+  runFlow,
+} from "../../src/run.ts";
+import { computeBackward } from "../../src/runtime/backward.ts";
+import { MemoryProposal } from "../../src/runtime/contracts.ts";
+import { memoryCommitId } from "../../src/runtime/learning.ts";
+import {
+  BackwardFinishedRecord,
+  BackwardReadyRecord,
+  BackwardStartedRecord,
+  JsonlRunLog,
+  MemoryCommitRequestedRecord,
+  MemoryCommitSucceededRecord,
+  MemoryRunLog,
+  type RecordEnvelope,
+  type RunRecord,
+} from "../../src/runtime/log.ts";
+import { commitPrepared, prepareRecord } from "../../src/runtime/state.ts";
+import { TypeCheckError } from "../../src/typesys/values.ts";
+
+import { hostEnv } from "./mcp_helpers.ts";
+import { FakeMemory, FakeSession } from "./memory_fakes.ts";
+import { rejection } from "./run_state_fixtures.ts";
+
+const IDENTITY = "id: identity\nname: identity\ninput:\n  text: !str\nnodes: {}\noutput: ${input.text}\n";
+const WITH_MEMORY = IDENTITY.replace("name: identity", "name: identity\nlong_term_memory: test");
+const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+let dir: string;
+let cwd: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "yian-run-backward-"));
+  cwd = process.cwd();
+});
+
+afterEach(() => {
+  process.chdir(cwd);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** `runFlow` in `hostEnv(dir)` unless `options` sets `env`. */
+function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
+  return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
+}
+
+/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
+function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
+  return resumeFlow(flow, { env: hostEnv(dir), ...options });
+}
+
+/** A `Map` serving the memory key `test` with `backend`. */
+function testMemory(backend: unknown): Map<string, FakeMemory> {
+  return new Map([["test", backend as FakeMemory]]);
+}
+
+/** The records of the closed durable log at `path`, proving its lock was released. */
+function records(path: string): RunRecord[] {
+  const log = JsonlRunLog.resume(path);
+  try {
+    return log.records().map((envelope) => envelope.record);
+  } finally {
+    log.close();
+  }
+}
+
+/** The attempt ids of the `BackwardStarted` records at `path`. */
+function startedAttempts(path: string): number[] {
+  return records(path).flatMap((record) => (record instanceof BackwardStartedRecord ? [record.attemptId] : []));
+}
+
+/** A learner refusal the attempt records as failed. */
+function declined(): MemoryOperationError {
+  return new MemoryOperationError("learner", "declined", "Try again.", true);
+}
+
+/** Replace `owner.prototype[name]` with `replacement(original)` while `fn` runs. */
+async function patched<T>(
+  owner: { prototype: object },
+  name: string,
+  replacement: (original: Function) => Function,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prototype = owner.prototype as Record<string, Function>;
+  const original = prototype[name]!;
+  prototype[name] = replacement(original);
+  try {
+    return await fn();
+  } finally {
+    prototype[name] = original;
+  }
+}
+
+/** Whether `log` holds a `BackwardStarted` record. */
+function hasBackwardStarted(log: { records(): readonly RecordEnvelope[] }, original: Function): boolean {
+  return (original.call(log) as readonly RecordEnvelope[]).some((envelope) => envelope.record instanceof BackwardStartedRecord);
+}
+
+test("test_backward_without_memory_is_explicit_and_repeatable[memory]", async () => {
+  const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true });
+  expect(result.backwardOutcome).toBeNull();
+  expect(result.learning).toBeNull();
+  const before = [result.input, result.status, result.output, result.failure, [...result.events]];
+
+  const outcome = await result.backward("Too long.");
+  expect(outcome.status).toBe("succeeded");
+  expect(outcome.feedback!.inputFeedback).toEqual({ text: ["Too long."] });
+  expect(result.backwardOutcome).toBe(outcome);
+  expect(result.learning).toBeNull();
+  expect([result.input, result.status, result.output, result.failure, result.events]).toEqual(before);
+  expect(Object.isFrozen(outcome)).toBe(true);
+  const again = await result.backward("Again.");
+  expect(again.status).toBe("succeeded");
+  expect(again.feedback!.inputFeedback).toEqual({ text: ["Again."] });
+  expect(result.backwardOutcome).toBe(again);
+});
+
+test("test_forward_returns_before_any_learning_or_commit (the backward half)", async () => {
+  const path = join(dir, "run.jsonl");
+  const memory = new FakeMemory();
+  const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
+    learnable: true,
+    log: path,
+    memory: testMemory(memory),
+  });
+  expect(memory.learnContexts).toEqual([]);
+  expect(memory.commitCalls).toEqual([]);
+  expect(memory.closeCount).toBe(1);
+  const forward = records(path);
+
+  await result.backward("Review.");
+
+  expect(memory.learnContexts).toHaveLength(1);
+  expect(memory.commitCalls).toHaveLength(1);
+  expect(memory.learnContexts[0]!.episodes).toHaveLength(2);
+  expect(result.learning!.status).toBe("succeeded");
+  const after = records(path);
+  expect(after.slice(0, forward.length)).toEqual(forward);
+  expect(after.slice(forward.length).map((record) => record.constructor)).toEqual([
+    BackwardStartedRecord,
+    BackwardReadyRecord,
+    MemoryCommitRequestedRecord,
+    MemoryCommitSucceededRecord,
+    BackwardFinishedRecord,
+  ]);
+});
+
+test("test_same_handle_rejects_nested_backward_before_a_second_commit", async () => {
+  const rejected: unknown[] = [];
+  let result: RunResult;
+  const backend = new FakeMemory({
+    learnOutcomes: [
+      () => {
+        result.backward("Nested review.").catch((error: unknown) => rejected.push(error));
+        return [];
+      },
+    ],
+  });
+  result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, { learnable: true, memory: testMemory(backend) });
+
+  expect((await result.backward("Outer review.")).status).toBe("succeeded");
+
+  expect(backend.commitCalls).toHaveLength(1);
+  expect(backend.learnContexts).toHaveLength(1);
+  expect(rejected).toHaveLength(1);
+  expect((rejected[0] as Error).message).toBe("a backward call on this result is already in progress");
+  expect(backend.closeCount).toBe(2);
+  expect((await result.backward("Later review.")).status).toBe("succeeded");
+  expect(backend.commitCalls).toHaveLength(2);
+  expect(backend.closeCount).toBe(3);
+});
+
+for (const durable of [false, true]) {
+  test(`test_same_handle_rejects_concurrent_backward_without_waiting[${durable}]`, async () => {
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const backend = new FakeMemory({
+      learnOutcomes: [
+        async () => {
+          enter();
+          await released;
+          return [];
+        },
+      ],
+    });
+    const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
+      learnable: true,
+      log: durable ? join(dir, "run.jsonl") : null,
+      memory: testMemory(backend),
+    });
+
+    const pending = result.backward("First review.");
+    try {
+      await entered;
+      const error = await rejection(result.backward("Concurrent review."));
+      expect((error as Error).message).toBe("a backward call on this result is already in progress");
+      expect(backend.learnContexts).toHaveLength(1);
+      expect(backend.commitCalls).toEqual([]);
+    } finally {
+      release();
+    }
+    expect((await pending).status).toBe("succeeded");
+    expect(backend.commitCalls).toHaveLength(1);
+    expect(backend.closeCount).toBe(2);
+  });
+}
+
+for (const acquisition of ["fresh_event", "fresh_after", "resume_event", "resume_after"]) {
+  test(`test_delayed_backward_anchors_the_log_at_acquisition[${acquisition}]`, async () => {
+    const acquired = join(dir, "acquired");
+    const elsewhere = join(dir, "elsewhere");
+    mkdirSync(acquired);
+    mkdirSync(elsewhere);
+    process.chdir(acquired);
+    const flow = await loadFlow(IDENTITY);
+    const moveAfterForward = (event: unknown) => {
+      if (event instanceof RunSucceeded) process.chdir(elsewhere);
+    };
+
+    let result: RunResult;
+    if (acquisition === "resume_event") {
+      const interrupted = new Error("interrupt before forward evaluation");
+      const stopAfterStart = (event: unknown) => {
+        if (event instanceof RunStarted) throw interrupted;
+      };
+      expect(
+        await rejection(run(flow, { text: "hello" }, { learnable: true, log: "run.jsonl", onEvent: stopAfterStart })),
+      ).toBe(interrupted);
+      result = await resume(flow, { log: "run.jsonl", onEvent: moveAfterForward });
+    } else if (acquisition === "resume_after") {
+      await run(flow, { text: "hello" }, { learnable: true, log: "run.jsonl" });
+      result = await resume(flow, { log: "run.jsonl" });
+    } else {
+      result = await run(flow, { text: "hello" }, {
+        learnable: true,
+        log: "run.jsonl",
+        onEvent: acquisition === "fresh_event" ? moveAfterForward : null,
+      });
+    }
+    process.chdir(elsewhere);
+
+    expect(result.log).toBe("run.jsonl");
+    expect((await result.backward("Review.")).feedback!.inputFeedback).toEqual({ text: ["Review."] });
+    expect(records(join(acquired, "run.jsonl")).at(-1)).toBeInstanceOf(BackwardFinishedRecord);
+    expect(existsSync(join(elsewhere, "run.jsonl"))).toBe(false);
+  });
+}
+
+for (const opening of ["create", "resume"] as const) {
+  test(`test_acquisition_uses_the_captured_locator_if_opener_changes_cwd[${opening}]`, async () => {
+    const acquired = join(dir, "acquired");
+    const elsewhere = join(dir, "elsewhere");
+    mkdirSync(acquired);
+    mkdirSync(elsewhere);
+    process.chdir(acquired);
+    const flow = await loadFlow(IDENTITY);
+    let otherPrefix: string | null = null;
+    if (opening === "resume") {
+      await run(flow, { text: "hello" }, { learnable: true, log: "run.jsonl" });
+      await run(flow, { text: "other run" }, { learnable: true, log: join(elsewhere, "run.jsonl") });
+      otherPrefix = readFileSync(join(elsewhere, "run.jsonl"), "utf8");
+    }
+    const original = JsonlRunLog[opening];
+    const spy = spyOn(JsonlRunLog, opening).mockImplementation(((path: string, runId?: string) => {
+      process.chdir(elsewhere);
+      return (original as (path: string, runId?: string) => JsonlRunLog).call(JsonlRunLog, path, runId);
+    }) as never);
+    let result: RunResult;
+    try {
+      result =
+        opening === "create"
+          ? await run(flow, { text: "hello" }, { learnable: true, log: "run.jsonl" })
+          : await resume(flow, { log: "run.jsonl" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(result.output).toBe("hello");
+    expect(result.log).toBe("run.jsonl");
+    expect((await result.backward("Review.")).feedback!.inputFeedback).toEqual({ text: ["Review."] });
+    expect(records(join(acquired, "run.jsonl")).at(-1)).toBeInstanceOf(BackwardFinishedRecord);
+    if (otherPrefix === null) expect(existsSync(join(elsewhere, "run.jsonl"))).toBe(false);
+    else expect(readFileSync(join(elsewhere, "run.jsonl"), "utf8")).toBe(otherPrefix);
+  });
+}
+
+for (const durable of [false, true]) {
+  for (const phase of ["learner", "commit", "finished"]) {
+    test(`test_prefix_export_failure_preserves_primary_and_prevents_stale_retry[${durable}-${phase}]`, async () => {
+      const primary = new Error(phase === "learner" ? "learner failed" : "backend failed");
+      const exportError = new Error("prefix export failed");
+      const closeError = new Error("log close failed");
+      const backend = new FakeMemory({
+        learnOutcomes: phase === "learner" ? [primary] : [],
+        commitOutcomes: phase === "commit" ? [primary] : [],
+      });
+      const flow = await loadFlow(WITH_MEMORY);
+      const path = durable ? join(dir, "export.jsonl") : null;
+      const result = await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(backend) });
+      const logType = durable ? JsonlRunLog : MemoryRunLog;
+      const closed: unknown[] = [];
+
+      const error = await patched(
+        logType,
+        "records",
+        (original) =>
+          function (this: MemoryRunLog) {
+            if (hasBackwardStarted(this, original)) throw exportError;
+            return original.call(this);
+          },
+        () =>
+          patched(
+            logType,
+            "close",
+            (original) =>
+              function (this: MemoryRunLog) {
+                original.call(this);
+                closed.push(this);
+                throw closeError;
+              },
+            () => rejection(result.backward("Review.")),
+          ),
+      );
+
+      expect(error).toBe(phase === "finished" ? exportError : primary);
+      expect(closed).toHaveLength(1);
+      expect(backend.closeCount).toBe(2);
+      expect(result.backwardOutcome).not.toBeNull();
+      expect(result.backwardOutcome!.status).toBe(phase === "finished" ? "succeeded" : "failed");
+      if (phase === "commit") expect(result.learning!.policies[0]!.status).toBe("unknown");
+      const [learned, committed] = [backend.learnContexts.length, backend.commitCalls.length];
+
+      const stale = await rejection(result.backward("Do not retry stale history."));
+      expect((stale as Error).message).toBe("backward handle is unavailable after an accepted-prefix refresh failure");
+      expect([backend.learnContexts.length, backend.commitCalls.length]).toEqual([learned, committed]);
+      if (durable) expect((await resume(flow, { log: path! })).backwardOutcome).toEqual(result.backwardOutcome);
+    });
+  }
+}
+
+const ACCEPTED_APPENDS = [
+  [BackwardStartedRecord, "unrequested"],
+  [MemoryCommitRequestedRecord, "unknown"],
+  [MemoryCommitSucceededRecord, "succeeded"],
+  [BackwardFinishedRecord, "finished"],
+] as const;
+
+for (const durable of [false, true]) {
+  for (const [recordType, disposition] of ACCEPTED_APPENDS) {
+    test(`test_accepted_append_error_refreshes_the_actual_prefix[${durable}-${recordType.name}]`, async () => {
+      const backend = new FakeMemory();
+      const path = durable ? join(dir, "accepted.jsonl") : null;
+      const flow = await loadFlow(WITH_MEMORY);
+      const result = await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(backend) });
+      const failure = new Error("append accepted before returning");
+      let failOnce = true;
+
+      const error = await patched(
+        durable ? JsonlRunLog : MemoryRunLog,
+        "append",
+        (original) =>
+          function (this: MemoryRunLog, record: RunRecord) {
+            const envelope = original.call(this, record);
+            if (failOnce && record instanceof recordType) {
+              failOnce = false;
+              throw failure;
+            }
+            return envelope;
+          },
+        () => rejection(result.backward("Review.")),
+      );
+
+      expect(error).toBe(failure);
+      expect(result.backwardOutcome).not.toBeNull();
+      if (disposition === "finished") {
+        expect(result.backwardOutcome!.status).toBe("succeeded");
+        expect(result.learning!.status).toBe("succeeded");
+      } else {
+        expect(result.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+        expect(result.learning!.status).toBe("incomplete");
+        expect(result.learning!.policies[0]!.status).toBe(disposition);
+      }
+      if (durable) expect((await resume(flow, { log: path! })).backwardOutcome).toEqual(result.backwardOutcome);
+      const [learned, committed] = [backend.learnContexts.length, backend.commitCalls.length];
+      if (disposition === "unrequested") expect([learned, committed]).toEqual([0, 0]);
+      expect((await result.backward("Later whole pass.")).status).toBe("succeeded");
+      expect([backend.learnContexts.length, backend.commitCalls.length]).toEqual([learned + 1, committed + 1]);
+    });
+  }
+}
+
+test("test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots", async () => {
+  const backend = new FakeMemory({ learnOutcomes: [declined(), []] });
+  const replacement = new FakeMemory();
+  const mapping = testMemory(backend);
+  const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, { learnable: true, memory: mapping });
+  expect(backend.sessions).toHaveLength(1);
+  expect(backend.sessions[0]!.closed).toBe(true);
+  mapping.set("test", replacement);
+
+  expect((await result.backward("First review.")).status).toBe("failed");
+  expect((await result.backward("Fresh review.")).status).toBe("succeeded");
+
+  expect(backend.openSnapshots).toEqual([null, { namespace: "test" }, { namespace: "test" }]);
+  expect(new Set(backend.sessions).size).toBe(3);
+  expect(backend.sessions.every((session) => session.closed)).toBe(true);
+  expect(backend.learnContexts).toHaveLength(2);
+  expect(backend.commitCalls).toHaveLength(1);
+  expect(replacement.sessions).toEqual([]);
+});
+
+test("test_terminal_resume_retains_mapping_references_without_opening_them", async () => {
+  const path = join(dir, "terminal.jsonl");
+  const flow = await loadFlow(WITH_MEMORY);
+  const original = new FakeMemory();
+  await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(original) });
+  const missing = await resume(flow, { log: path });
+  const prefix = readFileSync(path);
+
+  expect(await rejection(missing.backward("Review."))).toBeInstanceOf(MemorySetupError);
+
+  expect(readFileSync(path)).toEqual(prefix);
+  expect(missing.backwardOutcome).toBeNull();
+  const backend = new FakeMemory();
+  const replacement = new FakeMemory();
+  const mapping = testMemory(backend);
+  const inspected = await resume(flow, { log: path, memory: mapping });
+  expect(backend.sessions).toEqual([]);
+  expect(readFileSync(path)).toEqual(prefix);
+  mapping.set("test", replacement);
+
+  expect((await inspected.backward("Review.")).status).toBe("succeeded");
+
+  expect(backend.openSnapshots).toEqual([{ namespace: "test" }]);
+  expect(backend.sessions).toHaveLength(1);
+  expect(backend.sessions[0]!.closed).toBe(true);
+  expect(replacement.sessions).toEqual([]);
+  expect(original.learnContexts).toEqual([]);
+});
+
+test("test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation", async () => {
+  const path = join(dir, "restore.jsonl");
+  const interrupted = new Error("interrupted learner");
+  const backend = new FakeMemory({ learnOutcomes: [interrupted, []] });
+  const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
+    learnable: true,
+    log: path,
+    memory: testMemory(backend),
+  });
+  expect(await rejection(result.backward("First review."))).toBe(interrupted);
+  const [previous, learning, prefix] = [result.backwardOutcome, result.learning, readFileSync(path)];
+  const openRun = backend.openRun;
+  backend.openRun = (options = {}) => {
+    openRun.call(backend, options);
+    const session = new FakeSession(backend, { namespace: "wrong snapshot" });
+    backend.sessions.push(session);
+    return session;
+  };
+
+  try {
+    expect(await rejection(result.backward("Review after restoration."))).toBeInstanceOf(MemorySetupError);
+  } finally {
+    backend.openRun = openRun;
+  }
+
+  expect(result.backwardOutcome).toBe(previous);
+  expect(result.learning).toBe(learning);
+  expect(readFileSync(path)).toEqual(prefix);
+  expect(backend.sessions.at(-1)!.closed).toBe(true);
+  expect(backend.learnContexts).toHaveLength(1);
+  expect(backend.commitCalls).toEqual([]);
+  expect((await result.backward("Fresh review.")).status).toBe("succeeded");
+  expect(startedAttempts(path)).toEqual([1, 2]);
+});
+
+for (const durable of [false, true]) {
+  test(`test_delayed_backward_uses_private_program_and_canonical_values[${durable}]`, async () => {
+    const flow = await loadFlow(IDENTITY.replace("text: !str", "text: !object"));
+    const supplied = { text: { items: [1, 2] } };
+    const result = await run(flow, supplied, { learnable: true, log: durable ? join(dir, "private.jsonl") : null });
+    supplied.text.items.push(3);
+    expect(result.input).toEqual({ text: { items: [1n, 2n] } });
+    (result.input as { text: { items: unknown[] } }).text.items.push(4n);
+    (result.output as { items: unknown[] }).items.push(5n);
+    flow.compiled.wiring.set(flow.compiled.endId, new Map());
+    flow.compiled.nodes.clear();
+
+    const outcome = await result.backward({ items: ["Review first.", null] });
+
+    expect(outcome.status).toBe("succeeded");
+    expect(outcome.feedback!.inputFeedback).toEqual({ text: [{ items: ["Review first.", null] }] });
+    expect(result.output).toEqual({ items: [1n, 2n, 5n] });
+    expect(result.input).toEqual({ text: { items: [1n, 2n, 4n] } });
+  });
+}
+
+test("test_distinct_durable_handles_keep_file_lock_exclusion", async () => {
+  const path = join(dir, "locked.jsonl");
+  const rejected: unknown[] = [];
+  let second: RunResult;
+  const flow = await loadFlow(WITH_MEMORY);
+  const backend = new FakeMemory({
+    learnOutcomes: [
+      async () => {
+        rejected.push(await rejection(second.backward("Nested on another handle.")));
+        return [];
+      },
+    ],
+  });
+  const first = await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(backend) });
+  second = await resume(flow, { log: path, memory: testMemory(backend) });
+
+  expect((await first.backward("Review.")).status).toBe("succeeded");
+
+  expect(rejected).toHaveLength(1);
+  expect((rejected[0] as Error).message).toBe(`run log ${path} is locked by another writer (is the run still active?)`);
+  expect(backend.learnContexts).toHaveLength(1);
+  expect(backend.commitCalls).toHaveLength(1);
+  expect(second.backwardOutcome).toBeNull();
+  expect((await resume(flow, { log: path })).backwardOutcome).toEqual(first.backwardOutcome);
+});
+
+for (const phase of ["export", "close"]) {
+  test(`test_handle_guard_covers_prefix_export_and_log_cleanup[${phase}]`, async () => {
+    const backend = new FakeMemory();
+    const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
+      learnable: true,
+      memory: testMemory(backend),
+    });
+    const nested: Promise<unknown>[] = [];
+    const readRecords = MemoryRunLog.prototype.records;
+
+    const outcome = await patched(
+      MemoryRunLog,
+      phase === "export" ? "records" : "close",
+      (original) =>
+        function (this: MemoryRunLog) {
+          if (hasBackwardStarted(this, readRecords)) nested.push(rejection(result.backward("Nested during cleanup.")));
+          return original.call(this);
+        },
+      () => result.backward("Review."),
+    );
+
+    expect(outcome.status).toBe("succeeded");
+    const rejected = await Promise.all(nested);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as Error).message).toBe("a backward call on this result is already in progress");
+    expect(backend.learnContexts).toHaveLength(1);
+    expect(backend.commitCalls).toHaveLength(1);
+  });
+}
+
+for (const resource of ["session", "log"]) {
+  for (const learnerFails of [false, true]) {
+    test(`test_cleanup_error_preserves_finished_authority_and_releases_guard[${learnerFails}-${resource}]`, async () => {
+      const backend = new FakeMemory({ learnOutcomes: learnerFails ? [declined(), []] : [] });
+      const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
+        learnable: true,
+        memory: testMemory(backend),
+      });
+      const failure = new Error("cleanup failed");
+
+      const error = await patched(
+        resource === "session" ? FakeSession : MemoryRunLog,
+        "close",
+        (original) =>
+          function (this: unknown) {
+            original.call(this);
+            throw failure;
+          },
+        () => rejection(result.backward("Review.")),
+      );
+
+      expect(error).toBe(failure);
+      expect(result.backwardOutcome!.status).toBe(learnerFails ? "failed" : "succeeded");
+      expect(backend.sessions.every((session) => session.closed)).toBe(true);
+      expect((await result.backward("Fresh review.")).status).toBe("succeeded");
+      expect(backend.learnContexts).toHaveLength(2);
+      expect(backend.commitCalls).toHaveLength(learnerFails ? 1 : 2);
+    });
+  }
+}
+
+test("test_cancelled_backward_retains_started_and_releases_resources", async () => {
+  const failure = new DOMException("cancelled", "AbortError");
+  const backend = new FakeMemory({ learnOutcomes: [failure, []] });
+  const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
+    learnable: true,
+    memory: testMemory(backend),
+  });
+
+  expect(await rejection(result.backward("Interrupted review."))).toBe(failure);
+
+  expect(result.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+  expect(result.backwardOutcome!.feedback).toBeNull();
+  expect(backend.sessions.every((session) => session.closed)).toBe(true);
+  expect(backend.commitCalls).toEqual([]);
+  expect((await result.backward("Fresh whole pass.")).status).toBe("succeeded");
+  expect(backend.learnContexts).toHaveLength(2);
+  expect(backend.commitCalls).toHaveLength(1);
+});
+
+for (const previousFailure of [false, true]) {
+  test(`test_invalid_feedback_on_stale_handle_preserves_its_observation[${previousFailure}]`, async () => {
+    const path = join(dir, "stale.jsonl");
+    const flow = await loadFlow(previousFailure ? WITH_MEMORY : IDENTITY);
+    const backend = new FakeMemory({ learnOutcomes: [declined(), []] });
+    const memory = previousFailure ? testMemory(backend) : null;
+    const first = await run(flow, { text: "hello" }, { learnable: true, log: path, memory });
+    if (previousFailure) expect((await first.backward("First review.")).status).toBe("failed");
+    const [previous, previousLearning] = [first.backwardOutcome, first.learning];
+    const second = await resume(flow, { log: path, memory });
+    expect((await second.backward("New review.")).status).toBe("succeeded");
+    const prefix = readFileSync(path);
+    const [learned, committed] = [backend.learnContexts.length, backend.commitCalls.length];
+
+    expect(await rejection(first.backward([null]))).toBeInstanceOf(RangeError);
+
+    expect(first.backwardOutcome).toBe(previous);
+    expect(first.learning).toBe(previousLearning);
+    expect(readFileSync(path)).toEqual(prefix);
+    expect([backend.learnContexts.length, backend.commitCalls.length]).toEqual([learned, committed]);
+  });
+}
+
+test("test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure", async () => {
+  const path = join(dir, "accepted.jsonl");
+  const flow = await loadFlow(WITH_MEMORY);
+  const failure = new Error("learner allocation failed");
+  const backend = new FakeMemory({ learnOutcomes: [declined(), failure] });
+  const memory = testMemory(backend);
+  const first = await run(flow, { text: "hello" }, { learnable: true, log: path, memory });
+  const second = await resume(flow, { log: path, memory });
+  expect((await second.backward("First review.")).status).toBe("failed");
+  expect(first.backwardOutcome).toBeNull();
+  expect(first.learning).toBeNull();
+
+  expect(await rejection(first.backward("New review."))).toBe(failure);
+
+  expect(first.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+  expect(first.learning!.status).toBe("incomplete");
+  const last = records(path).at(-1);
+  expect(last).toBeInstanceOf(BackwardStartedRecord);
+  expect((last as BackwardStartedRecord).attemptId).toBe(2);
+  const inspected = await resume(flow, { log: path });
+  expect(first.backwardOutcome).toEqual(inspected.backwardOutcome);
+  expect(first.learning).toEqual(inspected.learning);
+});
+
+for (const otherFinishes of [false, true]) {
+  test(`test_resumed_interrupted_observation_keeps_identity_on_invalid_feedback[${otherFinishes}]`, async () => {
+    const path = join(dir, "interrupted.jsonl");
+    const flow = await loadFlow(WITH_MEMORY);
+    const interrupted = new Error("interrupted learner");
+    const backend = new FakeMemory({ learnOutcomes: [interrupted, []] });
+    const memory = testMemory(backend);
+    const original = await run(flow, { text: "hello" }, { learnable: true, log: path, memory });
+    expect(await rejection(original.backward("First review."))).toBe(interrupted);
+    const resumed = await resume(flow, { log: path, memory });
+    const [previous, previousLearning] = [resumed.backwardOutcome, resumed.learning];
+    expect(previous!.failure!.code).toBe("backward.interrupted");
+    expect(previousLearning!.status).toBe("incomplete");
+    if (otherFinishes) {
+      const other = await resume(flow, { log: path, memory });
+      expect((await other.backward("New review.")).status).toBe("succeeded");
+    }
+    const prefix = readFileSync(path);
+    const [learned, committed] = [backend.learnContexts.length, backend.commitCalls.length];
+
+    expect(await rejection(resumed.backward([null]))).toBeInstanceOf(RangeError);
+
+    expect(resumed.backwardOutcome).toBe(previous);
+    expect(resumed.learning).toBe(previousLearning);
+    expect(readFileSync(path)).toEqual(prefix);
+    expect([backend.learnContexts.length, backend.commitCalls.length]).toEqual([learned, committed]);
+  });
+}
+
+test("test_nonretained_result_rejects_backward", async () => {
+  const result = await run(await loadFlow(IDENTITY), { text: "hello" });
+
+  const error = await rejection(result.backward("Review."));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("backward requires a run retained with learnable: true");
+  expect(result.learning).toBeNull();
+  expect(result.backwardOutcome).toBeNull();
+});
+
+test("test_terminal_resume_only_reconstructs_backward_outcome", async () => {
+  const path = join(dir, "run.jsonl");
+  const flow = await loadFlow(WITH_MEMORY);
+  const memory = new FakeMemory();
+  const result = await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(memory) });
+  let before = records(path);
+  let inspected = await resume(flow, { log: path });
+  expect(inspected.backwardOutcome).toBeNull();
+  expect(inspected.learning).toBeNull();
+  expect(records(path)).toEqual(before);
+  expect(memory.openSnapshots).toEqual([null]);
+
+  const outcome = await result.backward("Review.");
+  before = records(path);
+  inspected = await resume(flow, { log: path, memory: testMemory({}) });
+
+  expect(inspected.backwardOutcome).toEqual(outcome);
+  expect(inspected.learning).toEqual(outcome.learning);
+  expect(inspected.events).toEqual([]);
+  expect(inspected.output).toBe("hello");
+  expect(records(path)).toEqual(before);
+  expect(memory.openSnapshots).toEqual([null, { namespace: "test" }]);
+});
+
+for (const prefix of ["started", "ready", "requested", "confirmed"]) {
+  test(`test_terminal_resume_inspects_every_unfinished_backward_prefix[${prefix}]`, async () => {
+    const path = join(dir, "prefix.jsonl");
+    const flow = await loadFlow(WITH_MEMORY);
+    const memory = new FakeMemory();
+    await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(memory) });
+    const log = JsonlRunLog.resume(path);
+    let expected: unknown;
+    try {
+      const state = replayRunLog(flow, log);
+      const [root, attributed] = await computeBackward(state.trace!, "Review.");
+      commitPrepared(log, state, prepareRecord(state, new BackwardStartedRecord(1, "Review.")));
+      if (prefix !== "started") {
+        const proposals = state.memories!.map((spec) => new MemoryProposal(spec.key, []));
+        commitPrepared(log, state, prepareRecord(state, new BackwardReadyRecord(1, root, attributed, proposals)));
+      }
+      if (prefix === "requested" || prefix === "confirmed") {
+        const identity = memoryCommitId(state.runId!, "test", [], 1);
+        commitPrepared(log, state, prepareRecord(state, new MemoryCommitRequestedRecord("test", identity, [], 1)));
+        if (prefix === "confirmed") {
+          commitPrepared(log, state, prepareRecord(state, new MemoryCommitSucceededRecord("test", identity, 1)));
+        }
+      }
+      expected = state.backwardState.outcome;
+    } finally {
+      log.close();
+    }
+    const before = readFileSync(path);
+
+    const inspected = await resume(flow, { log: path });
+
+    expect(inspected.backwardOutcome).toEqual(expected as never);
+    expect(inspected.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+    expect(inspected.learning!.status).toBe("incomplete");
+    expect(inspected.learning!.policies[0]!.status).toBe(
+      ({ started: "unrequested", ready: "unrequested", requested: "unknown", confirmed: "succeeded" } as const)[
+        prefix as "started"
+      ],
+    );
+    expect(inspected.events).toEqual([]);
+    expect(readFileSync(path)).toEqual(before);
+    expect(memory.openSnapshots).toEqual([null]);
+    expect(memory.learnContexts).toEqual([]);
+    expect(memory.commitCalls).toEqual([]);
+  });
+}
+
+for (const phase of ["learn", "commit"]) {
+  test(
+    `test_killed_attempt_does_not_block_a_later_attempt[${phase}]`,
+    async () => {
+      const path = join(dir, "run.jsonl");
+      const marker = join(dir, "blocked");
+      const flow = await loadFlow(WITH_MEMORY);
+      const first = new FakeMemory();
+      const firstResult = await run(flow, { text: "hello" }, { learnable: true, log: path, memory: testMemory(first) });
+      expect((await firstResult.backward("First review.")).status).toBe("succeeded");
+
+      const script = join(dir, "child.mjs");
+      const url = (relative: string) => JSON.stringify(pathToFileURL(join(TS_ROOT, relative)).href);
+      writeFileSync(
+        script,
+        `const { writeFileSync } = await import("node:fs");
+const { loadFlow } = await import(${url("src/compose/loader.ts")});
+const { resumeFlow } = await import(${url("src/run.ts")});
+const { FakeMemory, FakeSession } = await import(${url("tests/engine/memory_fakes.ts")});
+const auth = ${JSON.stringify(join(dir, "auth.json"))};
+const block = () => {
+  writeFileSync(${JSON.stringify(marker)}, ${JSON.stringify(phase)});
+  return new Promise(() => {});
+};
+const backend = new FakeMemory(${phase === "learn" ? "{ learnOutcomes: [block] }" : "{}"});
+${phase === "commit" ? "FakeSession.prototype.commit = block;" : ""}
+const flow = await loadFlow(${JSON.stringify(WITH_MEMORY)});
+const env = (name) => (name === "YIAN_AUTH_FILE" ? auth : undefined);
+const resumed = await resumeFlow(flow, { log: ${JSON.stringify(path)}, memory: new Map([["test", backend]]), env });
+await resumed.backward("Second review.");
+`,
+      );
+      const child: ChildProcess = spawn(process.execPath, [script], { cwd: TS_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+      let output = "";
+      child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+      child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+      const closed = new Promise((resolve) => child.on("close", resolve));
+      try {
+        const deadline = Date.now() + 15_000;
+        while (!existsSync(marker)) {
+          if (child.exitCode !== null) throw new Error(`the child exited before blocking:\n${output}`);
+          if (Date.now() > deadline) throw new Error(`the child never reached the blocking call:\n${output}`);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } finally {
+        child.kill("SIGKILL");
+        await closed;
+      }
+
+      const third = new FakeMemory();
+      const resumed = await resume(flow, { log: path, memory: testMemory(third) });
+      const projected = resumed.backwardOutcome!;
+      expect(projected.status).toBe("failed");
+      expect(projected.failure!.code).toBe("backward.interrupted");
+      const outcome = await resumed.backward("Third review.");
+      expect(outcome.status).toBe("succeeded");
+      expect(resumed.backwardOutcome).toBe(outcome);
+      const all = records(path);
+      expect(startedAttempts(path)).toEqual([1, 2, 3]);
+      const finished = new Map(
+        all.flatMap((record) => (record instanceof BackwardFinishedRecord ? [[record.attemptId, record.outcome]] : [])),
+      );
+      expect(finished.get(1)!.status).toBe("succeeded");
+      expect(finished.get(3)!.status).toBe("succeeded");
+      expect(finished.get(2)).toEqual(projected);
+      expect(finished.get(2)!.learning!.policies[0]!.status).toBe(phase === "commit" ? "unknown" : "unrequested");
+      const requests = all.filter((record) => record instanceof MemoryCommitRequestedRecord) as MemoryCommitRequestedRecord[];
+      expect(requests.map((request) => request.attemptId)).toEqual(phase === "commit" ? [1, 2, 3] : [1, 3]);
+      expect(new Set(requests.map((request) => request.commitId)).size).toBe(requests.length);
+      expect(third.commitCalls.map(([commitId]) => commitId)).toEqual([requests.at(-1)!.commitId]);
+    },
+    30_000,
+  );
+}
+
+test("a later backward replays in the run's env", async () => {
+  const path = join(dir, "env.jsonl");
+  const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "50" });
+  const flow = await loadFlow(IDENTITY, { env });
+  const result = await run(flow, { text: "hello" }, { learnable: true, log: path, env });
+
+  expect((await result.backward("Review.")).status).toBe("succeeded");
+  // The feedback is bounded by the run's limit too, before anything is appended.
+  let deep: unknown = "too deep";
+  for (let level = 0; level < 51; level++) deep = [deep];
+  const before = readFileSync(path);
+  const refused = await rejection(result.backward(deep));
+  expect(refused).toBeInstanceOf(TypeCheckError);
+  expect((refused as Error).message).toContain("50");
+  expect(readFileSync(path)).toEqual(before);
+
+  // The value is recorded: a resume in another env is refused, one in the run's env replays.
+  expect(await rejection(resume(flow, { log: path }))).toBeInstanceOf(DefaultsMismatchError);
+  const resumed = await resume(flow, { log: path, env });
+  expect((await resumed.backward("Again.")).status).toBe("succeeded");
+  expect(startedAttempts(path)).toEqual([1, 2]);
+});

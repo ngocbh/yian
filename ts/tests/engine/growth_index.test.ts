@@ -10,14 +10,21 @@
  * which the engine publishes once the reducer has applied the growth. A failed check stops the run
  * and `run()` rejects with it. Integers are bigints (decision 4a), and `slow`'s `time.sleep(0.05)`
  * is an awaited 50 ms `setTimeout`.
+ *
+ * TS-only: each row also checks the running join counts (`state.unknownIncoming`) against a
+ * recount after every growth and its prune, live and on a replay of each record prefix that ends
+ * at a growth.
  */
 
 import { expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
+import { copyGraph } from "../../src/compile/model.ts";
 import { NodeExpanded, type RunEvent, RunSucceeded } from "../../src/events.ts";
+import { NodeExpandedRecord } from "../../src/runtime/log.ts";
+import { replayRecords, RunState } from "../../src/runtime/state.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
-import { engine, expectIndexMatchesRebuild } from "./run_state_fixtures.ts";
+import { engine, expectIndexMatchesRebuild, expectUnknownIncomingMatchesRecount } from "./run_state_fixtures.ts";
 
 // The body output reads only `bump`, so later drivers prune iterations whose `slow`
 // side chain is still running; the reducer defers and later retires them.
@@ -125,16 +132,18 @@ const ROWS: [string, string, Record<string, unknown>, number, boolean][] = [
 ];
 
 for (const [id, source, inputs, numWorkers, defers] of ROWS) {
-  test(`growth index matches a rebuild after every growth: ${id}`, async () => {
+  test(`growth index and join counts match a rebuild after every growth: ${id}`, async () => {
     const checked: string[] = [];
     const deferred: ReadonlySet<string>[] = [];
-    const eng = engine((await loadConformanceFlow(source)).compiled, {
+    const compiled = (await loadConformanceFlow(source)).compiled;
+    const eng = engine(copyGraph(compiled), {
       inputs,
       numWorkers,
       growBuilder: buildGrow,
       onEvent: (event: RunEvent) => {
         if (!(event instanceof NodeExpanded)) return;
         expectIndexMatchesRebuild(eng.state);
+        expectUnknownIncomingMatchesRecount(eng.state);
         checked.push(event.nodeId);
         deferred.push(new Set(eng.state.deferredPrune));
       },
@@ -143,5 +152,16 @@ for (const [id, source, inputs, numWorkers, defers] of ROWS) {
     expect(checked.length).toBeGreaterThan(6);
     // The deferred cases keep unfinished pruned work live across growths.
     expect(deferred.some((ids) => ids.size > 0)).toBe(defers);
+
+    const records = eng.log.records();
+    let replayed = 0;
+    records.forEach((envelope, index) => {
+      if (!(envelope.record instanceof NodeExpandedRecord)) return;
+      const prefix = records.slice(0, index + 1);
+      const replay = replayRecords(new RunState(copyGraph(compiled)), prefix, { growBuilder: buildGrow });
+      expectUnknownIncomingMatchesRecount(replay);
+      replayed += 1;
+    });
+    expect(replayed).toBe(checked.length);
   });
 }

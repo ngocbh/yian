@@ -15,7 +15,8 @@
  * `test_summary_uses_unbound_model_and_current_instructions_and_grants`,
  * `test_summary_failure_never_enters_answer_structured_retry` (native and prompt),
  * `test_structured_correction_attempts_are_one_whole_recent_turn` (native and prompt) and
- * `test_tool_then_structured_uses_summary_once_and_safe_current_projection` (native and prompt).
+ * `test_tool_then_structured_uses_summary_once_and_safe_current_projection` (native and prompt);
+ * through `runFlow`: `test_refused_summary_call_fails_provider_auth` (2 rows).
  *
  * Changed: the invalid replies are what a `yian.message.v1` reply can hold: empty and blank text,
  * reasoning only, a parsed and an unparsed tool call, and a media part; Python's opaque-payload,
@@ -30,7 +31,8 @@
  * `test_tool_then_structured_uses_summary_once_and_safe_current_projection` the malformed final reply
  * holds an unparsed tool call (Python: a hidden `function_call`), both strategies' structured
  * attempts are model replies of the same script (TS's native plan answers in text), and the
- * tool's effect is checked `completed`.
+ * tool's effect is checked `completed`. The refused summary call is a `ProviderError` of kind
+ * `auth` (Python: LangChain's `AuthenticationError`), reported by that name.
  *
  * TS-only: the summary request is the prompt with the budget and the projection as a user message,
  * published with purpose `history_summary` and its own retry settings; the summary goes first as a
@@ -39,13 +41,13 @@
  * Not ported: the `"not a message"` row of
  * `test_invalid_summary_reply_is_an_ordinary_invocation_failure`: a `Response` is always an
  * assistant message.
- *
- * Later (T6-6, through runFlow): `test_refused_summary_call_fails_provider_auth`.
  */
 
 import { expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { ModelCallFinished, ModelCallStarted } from "../../src/events.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import {
   MediaPart,
   Message,
@@ -78,8 +80,10 @@ import {
   agentContext,
   type Mutable,
   NEVER,
+  PLAIN_FLOW,
   rejected,
   request,
+  runWith,
   snapshot,
   withHarness,
   withTurn,
@@ -564,5 +568,25 @@ for (const [label, config] of STRATEGIES) {
     expect(tools.map((effect: Mutable) => effect.status)).toEqual(["completed"]);
     const asked = raw.items.filter((item: Mutable) => logJson(item.payload.message).includes('"current question"'));
     expect(asked).toHaveLength(1);
+  });
+}
+
+for (const observed of [false, true]) {
+  test(`a refused summary call fails provider auth: ${observed ? "observed" : "unobserved"}`, async () => {
+    const model = new ScriptedModel([reply("first"), new ProviderError("auth", "unauthorized", { status: 401 })]);
+    const memory = summarizing();
+    const flow = await loadFlow(PLAIN_FLOW);
+    expect((await runWith(flow, { question: "q1" }, memory, model)).output).toBe("first");
+    const events: unknown[] = [];
+    const result = await runWith(flow, { question: "q2" }, memory, model, {
+      onEvent: observed ? (event) => void events.push(event) : null,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.failure!.code).toBe("provider.auth");
+    expect(model.requests).toHaveLength(2);
+    if (observed) {
+      const finished = events.filter((event) => event instanceof ModelCallFinished);
+      expect(finished.map((event) => [event.purpose, event.error])).toEqual([["history_summary", "ProviderError"]]);
+    }
   });
 }

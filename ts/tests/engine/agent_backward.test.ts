@@ -58,6 +58,7 @@
 import { expect, test } from "bun:test";
 
 import { copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { ModelCallRetried, ReplayDegraded } from "../../src/events.ts";
 import { legacyConnectionConfig } from "../../src/llm_clients/connection.ts";
@@ -490,12 +491,18 @@ test("AGENT backward publishes a retried call as ModelCallRetried, scrubbed", as
   const failure = new ProviderError("server", "boom for sk-backward-secret", { retryAfter: 0.001 });
   const chat = new ScriptedModel([failure, reply({ self_feedback: ["Retried."] })]);
   const seen: unknown[] = [];
-
-  const result = await backwardAgent(context(), ["Review."], {
-    models: serving(chat),
-    apiKey: "sk-backward-secret",
-    onEvent: (event) => void seen.push(event),
-  });
+  // One retry whatever YIAN_MODEL_RETRIES the environment sets.
+  install({ ...BUILTIN, modelRetries: 1 });
+  let result: BackwardResult;
+  try {
+    result = await backwardAgent(context(), ["Review."], {
+      models: serving(chat),
+      apiKey: "sk-backward-secret",
+      onEvent: (event) => void seen.push(event),
+    });
+  } finally {
+    forget();
+  }
 
   expect(result.selfFeedback).toEqual(["Retried."]);
   expect(chat.requests).toHaveLength(2);

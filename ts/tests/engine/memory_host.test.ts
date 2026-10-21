@@ -80,7 +80,7 @@ import path from "node:path";
 import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { processEnv } from "../../src/defaults.ts";
+import { BUILTIN, forget, install, processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallRetried, ReplayDegraded } from "../../src/events.ts";
 import * as yian from "../../src/index.ts";
@@ -577,12 +577,15 @@ test("a real learn through models publishes its retry with the echoed key redact
   const events: unknown[] = [];
   await using registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
   const session = await registry.get("lessons")!.openRun();
+  // One retry whatever YIAN_MODEL_RETRIES the environment sets.
+  install({ ...BUILTIN, modelRetries: 1 });
   try {
     const episode = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hello" }, {
       output: { answer: "HELLO" },
     });
     expect(await session.learn(new LearnContext("run-1", "lessons", [episode]))).toEqual([]);
   } finally {
+    forget();
     await session.close();
   }
   expect(options.map(({ nodeId, consumer }) => [nodeId, consumer])).toEqual([["__memory__", "memory:lessons"]]);

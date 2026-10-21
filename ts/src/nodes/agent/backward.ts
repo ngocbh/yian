@@ -113,6 +113,7 @@ function parseResult(text: string): BackwardResult {
   // A message sits under the response object, its channel object, and its batch array, so those
   // three levels don't count against the message's own nesting.
   rejectDeepNesting(value, "backward response", { enclosingLevels: -3 });
+  // Python checks for over-long ints next; TS has no digit limit (`parseJson` reads any int).
   const keys = isRecord(value) ? Object.keys(value) : null;
   if (keys === null || keys.length !== CHANNELS.length || !CHANNELS.every((name) => keys.includes(name))) {
     throw new RangeError("backward response must contain exactly the three feedback channels");
@@ -145,9 +146,10 @@ function modelVisible(inputs: Readonly<Record<string, unknown>> | null): Readonl
  *
  * The prompt is the text form of the recorded material (`writeAsText`). The model is built
  * through `options.models` (default `defaultModelAccess()`) with consumer `"backward"` under the
- * context's node id; the call can't be stopped. Each retry of the call publishes a
- * `ModelCallRetried`, and each reason the model gives for leaving out replay state one
- * `ReplayDegraded`, through `options.onEvent`.
+ * context's node id (`""` for a context without one; a trace's context always has one); the call
+ * can't be stopped. Each retry of the call publishes a `ModelCallRetried`, and each reason the
+ * model gives for leaving out replay state one `ReplayDegraded`, through `options.onEvent`; a
+ * throw from `onEvent` during a retry fails the call.
  *
  * @param context Accepted inputs/output or failure, inventories, render locals, model
  *   configuration, and inert visible evidence.
@@ -236,9 +238,12 @@ export async function backwardAgent(
       },
     });
     const response = await callWithRetries(model, request, {
+      // Returned, so the call awaits a promise from `onEvent`, as the learners' retries do; its
+      // throw surfaces as the call's failure.
       onRetry: ({ attempt, error, retryIn }) => {
         const { kind, message } = scrub(error);
-        onEvent?.(new ModelCallRetried({ nodeId, consumer: "backward", attempt, error: { kind, message }, retryIn }));
+        const event = new ModelCallRetried({ nodeId, consumer: "backward", attempt, error: { kind, message }, retryIn });
+        return onEvent?.(event);
       },
     });
     reply = response.message;

@@ -256,7 +256,8 @@ function builtin(memory: ResolvedMemory, path: string | null, createParent: bool
  * @param options.onEvent Receives each learner retry as a `ModelCallRetried` (the error scrubbed
  *   of the call's credentials) and, with `models`, each reason a learner's model gives for leaving
  *   out replay state as one `ReplayDegraded` per call, both under node `"__memory__"`. Learners run
- *   outside any run, so their events reach this callback, never a run's `onEvent`.
+ *   outside any run, so their events reach this callback, never a run's `onEvent`. A throw from it
+ *   during a retry fails that learner call (`reflective.provider` or `profile.provider`).
  * @returns Map from memory key to backend, plus declared types.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `root` isn't a string.
  * @throws MemorySetupError when the table is invalid, or a key can't be built as asked (including

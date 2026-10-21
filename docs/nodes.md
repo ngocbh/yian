@@ -93,6 +93,11 @@ execution. A reached accepted occurrence receives its detached `BackwardContext`
 and an ordered tuple of ordinary feedback messages. The default returns empty
 channels and stops propagation.
 
+Changed (TS yian): `backward(context, feedback, options)` may return a promise, and its optional
+third argument is `BackwardOptions { models, onEvent }`: the `ModelAccess` a hook that calls a
+model builds through (AGENT backward defaults it to `defaultModelAccess()`), and the observer for
+the transient events it publishes (`ModelCallRetried`, `ReplayDegraded`).
+
 An override returns a `BackwardResult` with three channels: `input_feedback`,
 `self_feedback`, and `variable_feedback`. The runtime validates the complete result
 against the captured declaration names and recorded value shapes before routing

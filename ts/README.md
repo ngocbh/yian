@@ -423,12 +423,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   a Node system error from the store is `profile.store_unavailable` and a `RangeError`
   `profile.store_invalid`; lengths count code points; the snapshot's `version` is `1n`; there is
   no `with` form.
-- `src/memory_host.ts` holds `MemoryRegistry` and `buildMemories`, which build the memories a
-  flow declares for one host. It sits at the top of `src/`, not under `memory/`, because it reads
-  the compiled memory table, and nothing under `memory/` imports it. Changed: `buildMemories` and `close()` are async;
-  the registry and its `types` are read-only `Map` subclasses; `storage`, `supplied` and
-  `factories` are plain records; a factory gets `toHost(config)` and may be async; `env` reaches
-  reflective and profile memory; `await using` closes the registry.
+- `src/memory_host.ts` holds `MemoryRegistry` and `buildMemories`, which build the memories a flow
+  declares for one host. It sits at the top of `src/`, not under `memory/`, because it reads the
+  compiled memory table, and nothing under `memory/` imports it. Changed: `buildMemories` and
+  `close()` are async; the registry and its `types` are read-only `Map` subclasses; `storage`,
+  `supplied` and `factories` are plain records; a factory gets `toHost(config)` and may be async;
+  `env` reaches reflective and profile memory; `models` builds their learners' models (node
+  `__memory__`, consumer `memory:<key>`) and `onEvent` receives their `ModelCallRetried` and
+  `ReplayDegraded` events; `await using` closes the registry.
 
 ## Runtime
 
@@ -565,23 +567,22 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Changed: a session's `commit` may resolve to `undefined` or `null`.
 - Changed: a restored snapshot must equal the recorded one by value and type (`1` and `1.0` differ,
   where Python's `==` treats them equal).
-- `src/runtime/backward.ts` holds `computeBackward(trace, rootFeedback, { cache })`: one reverse
-  walk over the accepted occurrences that gathers each occurrence's messages, calls its retained
-  backward handler once (awaited; it may return a promise), validates the whole result before
-  routing input feedback, and returns the root projection with every occurrence's attributed result
-  (unreached ones uninvoked); a handler's throw is a `backward.execute` `BackwardComputeError` and a
-  refused result `backward.result`, while trace faults escape unattributed.
-  `computeBackward` and `driveBackward` take `models` and `onEvent` too and pass them to each
-  handler as its `BackwardOptions`.
-  `driveBackward(state, log, feedback, { openMemory })` runs one new explicit attempt when a host
-  calls it: it prepares its first record (an interrupted `BackwardFinished` for an unfinished
-  earlier attempt, else `BackwardStarted`) as a gate, opens the memory runtime (only when memories
-  are enabled; the opener may be async) and checks it against the recorded table and snapshots,
-  then commits that record (and `BackwardStarted` after an interrupted one), computes, projects
-  owner contexts, stages every key's proposal, commits `BackwardReady`, requests and observes each
-  key's commit in table order, and commits `BackwardFinished`; each record is prepared
-  and committed with no await in between, and the runtime is always closed, keeping the initiating
-  error.
+- `src/runtime/backward.ts` holds
+  `computeBackward(trace, rootFeedback, { cache, models, onEvent })`: one reverse walk over the
+  accepted occurrences that gathers each occurrence's messages, calls its retained backward handler
+  once with `{ models, onEvent }` (awaited; it may return a promise), validates the whole result
+  before routing input feedback, and returns the root projection with every occurrence's attributed
+  result (unreached ones uninvoked); a handler's throw is a `backward.execute`
+  `BackwardComputeError` and a refused result `backward.result`, while trace faults escape
+  unattributed. `driveBackward(state, log, feedback, { openMemory, models, onEvent })` runs one new
+  explicit attempt when a host calls it: it prepares its first record (an interrupted
+  `BackwardFinished` for an unfinished earlier attempt, else `BackwardStarted`) as a gate, opens the
+  memory runtime (only when memories are enabled; the opener may be async) and checks it against the
+  recorded table and snapshots, then commits that record (and `BackwardStarted` after an interrupted
+  one), computes, projects owner contexts, stages every key's proposal, commits `BackwardReady`,
+  requests and observes each key's commit in table order, and commits `BackwardFinished`; each
+  record is prepared and committed with no await in between, and the runtime is always closed,
+  keeping the initiating error.
 - Changed: a handler's throw is `backward.execute` whatever it is (a `CapabilityFault` included; no
   host-control unwrapping).
 - Changed: a drive finishes only its own attempt: the attempt id is captured once, so a drive

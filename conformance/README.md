@@ -335,11 +335,13 @@ A case can't hold code, so its host is declared under `host`.
   its class name is TS's own, so a case with such a raise doesn't pin `ModelCallFinished.error`.
   Without `status`, it is a plain error named `class`, never retried.
   TS seats a call from the call itself, since its model is built per node: the node id is the
-  one the model was built for, and the consumer is `structured_retry` when the request's last
-  message is a user message starting `Your previous output was invalid:` (the correction a
-  structured call adds after an invalid reply), else `compose` for a node id ending in
-  `__compose` and `agent` for any other. TS doesn't serve `backward`, `summary` or
-  `memory:<key>` calls yet. Every TS model call streams, so no `chunks` entry is summed; the text
+  one the model was built for, and the consumer is the one it was built for when it has one
+  (`ModelAccess.createModel`'s `consumer`: `backward`, or `memory:<key>` under `__memory__`),
+  else `summary` when the request's first message is a system message starting `Summarize the
+  historical conversation` (the AGENT's summary prompt), else `structured_retry` when the
+  request's last message is a user message starting `Your previous output was invalid:` (the
+  correction a structured call adds after an invalid reply), else `compose` for a node id ending
+  in `__compose` and `agent` for any other. Every TS model call streams, so no `chunks` entry is summed; the text
   chunks of an entry build one text part, ahead of its tool calls.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
   <JSON Schema>}` (Python's schema:
@@ -381,6 +383,10 @@ A case can't hold code, so its host is declared under `host`.
   shared by all runs in order; `tool_calls` lists every run's calls; `trace`, `events`,
   `stream`, `output` and `backward` are the main run's. A profile is seeded by a `files` entry
   at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
+  In TS, the memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
+  scripted model access; the events `onEvent` gets (the learners' `ModelCallRetried` and
+  `ReplayDegraded`, TS-only) are kept apart and never compared with `expect.events`. The TS
+  runner doesn't make backward calls yet, so a `before` entry with `backward` fails the case.
 - **`steering`**: `{<node id>: [<action>, ...]}`, the host inbox a steerable AGENT polls (Python:
   the `steering` argument of `run_flow` and `resume_flow`). The node id is the occurrence id, as
   in `tool_calls`' `node` (`loop#0/chat` inside a LOOP or MAP). An action is

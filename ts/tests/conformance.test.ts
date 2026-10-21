@@ -285,6 +285,37 @@ describe("checkCase", () => {
       `\`host.models.n.x\`: the consumer must be one of ${CONSUMER_LIST}`,
     ],
     [`${RUN}host: {models: {n: {"memory:a": []}}}`, MEMORY_CONSUMER],
+    [`${RUN}host: {memory: 1}`, "`host.memory` must be a mapping"],
+    [`${RUN}host: {memory: {after: []}}`, "unknown key `host.memory.after`"],
+    [`${RUN}host: {memory: {before: {}}}`, "`host.memory.before` must be a list"],
+    [`${RUN}host: {memory: {before: [{run: {}}]}}`, "`host.memory.before[0].run.run_id` is required"],
+    [`${RUN}host: {memory: {before: [{}]}}`, "`host.memory.before[0].run` is required"],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r}, x: 1}]}}`,
+      "unknown key `host.memory.before[0].x`",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r}, inputs: 1}]}}`,
+      "`host.memory.before[0].inputs` must be a mapping",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r, context: x}}]}}`,
+      "`host.memory.before[0].run.context` must be `present`",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r, api_key: k}}]}}`,
+      "unknown key `host.memory.before[0].run.api_key`",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r, learnable: true}, backward: []}]}}`,
+      "`host.memory.before[0].backward` must be a non-empty list",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r}, backward: [{feedback: f}]}]}}`,
+      "`host.memory.before[0].backward` needs `host.memory.before[0].run.learnable: true`",
+    ],
+    [EXPECT("memory: {a: x}"), "`expect.memory` needs `host.memory`"],
+    [`${EXPECT("memory: {a: 1}")}host: {memory: {}}`, "`expect.memory` values must be text"],
     [`${RUN}host: {models: {__memory__: {agent: []}}}`, MEMORY_CONSUMER],
     [`${RUN}host: {models: {n: {agent: {}}}}`, "`host.models.n.agent` must be a list"],
     [MODEL("1"), `\`${AT}\` must be a mapping`],
@@ -508,6 +539,10 @@ describe("checkCase", () => {
       `{usage: ${USAGE}}, {finish: null}]}`),
     MODEL("{chunks: [], raise: {class: ConnectionError, message: m}}"),
     MODEL("{chunks: [{text: a}], raise: {class: X, message: m, status: 503}}"),
+    `${RUN}host: {memory: {}}`,
+    `${EXPECT("memory: {a: x}")}host: {memory: {before: [{inputs: {q: a}, ` +
+      "run: {run_id: r, num_workers: 0, learnable: true, context: present}, " +
+      "backward: [{feedback: f, api_key: k, headers: {}}]}]}}",
     `${RUN}host: {models: {__memory__: {"memory:a/b": []}, n: {compose: [], ` +
       "structured_retry: []}}}",
     STEER("[{steer: [x]}, {after: {model_call: 1, chunk: 2}, interrupt: true}, " +
@@ -921,6 +956,31 @@ describe("run", () => {
   });
 });
 
+describe("run memory", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a `before` run with backward calls fails the case: RunResult.backward isn't run yet", async () => {
+    const case_ = prepare(checkCase(readCase(
+      "kind: run\nflow: |\n  id: m\n  name: m\n" +
+        "  llm_config: {provider: openai, model: gpt-5.5}\n" +
+        "  nodes:\n    chat:\n      kind: agent\n      prompt: Go.\n      output: str\n" +
+        "  output: ${chat.output}\n" +
+        "host:\n  memory:\n    before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: f}]}]\n" +
+        "expect: {output: {status: succeeded, output: done}}\n",
+    )));
+    const ctx = setUp(case_, join(tmpdir(), "none"));
+    made.push(ctx.dir);
+    const failed = RUNNERS.run!(case_, ctx);
+    await expect(failed).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failed).rejects.toThrow(
+      "`host.memory.before[0].backward` needs RunResult.backward, not in the TS runner yet",
+    );
+  });
+});
+
 describe("main", () => {
   const FILES: Record<string, string> = {
     "a/ok.yaml": "kind: expr\nexpr: pass\nexpect: {value: 1}\n",
@@ -1049,7 +1109,7 @@ describe("main", () => {
   test("fails a case using a reserved key before setting it up", async () => {
     const files = {
       "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, stop: {}}\nexpect: {output: {}}\n",
-      "r/memory.yaml": "kind: run\nflow: x\nexpect: {output: {}, memory: {}}\n",
+      "r/skills.yaml": "kind: run\nflow: x\nhost: {skills: {}}\nexpect: {output: {}}\n",
       "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
     };
     const ids: string[] = [];
@@ -1060,7 +1120,7 @@ describe("main", () => {
       code: 1,
       out: [
         "FAIL r/host: `host.stop` is not supported by the TS runner yet",
-        "FAIL r/memory: `expect.memory` is not supported by the TS runner yet",
+        "FAIL r/skills: `host.skills` is not supported by the TS runner yet",
         "3 cases: 1 passed, 2 failed, 0 pending",
       ],
       err: [],

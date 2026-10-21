@@ -2348,14 +2348,14 @@ A record the envelope or the codec refuses raises its `RangeError` or `TypeError
 anything is written and doesn't poison the log. A damaged record in a log being read
 raises a `RangeError` naming the path, the 1-based line and the seq.
 
-Changed (TS yian): each record is fsynced before it counts, so a durable run pays one
-sync per record. On a 2026 MacBook Pro (Apple M4 Pro, APFS), Node's `fsyncSync` is
-`fcntl(F_FULLFSYNC)`, which also flushes the drive's cache, and costs about 4.2 ms per
-record: a 10,000-item MAP (with `YIAN_MAX_TOTAL_NODES` raised past its default of 10,000)
-writes 60,011 records and spends about 250 s in sync, 254 s in all against 4 s with a
-memory log, serial or with 8 workers. Bun's `fsyncSync` is a plain `fsync`, which on
-macOS leaves the data in the drive's cache: about 52 µs per record, so the same MAP
-spends about 3 s in sync.
+Each record is fsynced before it counts, in both runtimes, so a durable run pays one sync per
+record. Changed (TS yian): on macOS, Node's `fsyncSync` is `fcntl(F_FULLFSYNC)`, which also
+flushes the drive's cache, so a sync costs about 80 times what Python's `os.fsync` and Bun's
+`fsyncSync` (a plain `fsync`, which leaves the data in the drive's cache) cost. On an Apple M4 Pro
+MacBook Pro (Mac16,8, APFS), measured 2026-10, Node pays about 4.2 ms per record: a 10,000-item
+MAP (with `YIAN_MAX_TOTAL_NODES` raised past its default of 10,000) writes 60,011 records and
+spends about 250 s in sync, 254 s in all against 4 s with a memory log, serial or with 8
+workers. Bun pays about 52 µs per record, so the same MAP spends about 3 s in sync.
 
 !!! warning "Run logs may contain sensitive data"
     Canonical records retain caller inputs, node outputs (including human, tool,

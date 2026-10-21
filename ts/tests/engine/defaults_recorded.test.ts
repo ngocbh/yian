@@ -47,10 +47,10 @@
  * `set_defaults.unchecked`): `test_replay_takes_the_node_budget_from_the_record` and
  * `test_replay_takes_a_recorded_node_budget_from_the_record`.
  *
- * Later (the run-start record's `defaults` field): the stripped-log half of
- * `test_old_log_resumes_as_all_defaults`. Schema 10 requires `defaults` in `run_started`, so the
- * decoder refuses a record without it (`invalid run_started payload fields; missing=["defaults"]`)
- * where Python reads an absent field as all defaults.
+ * Changed: the stripped-log half of `test_old_log_resumes_as_all_defaults`. Schema 10 requires
+ * `defaults` in `run_started` and TS reads only schema 10, so the decoder refuses a record without
+ * it (`invalid run_started payload fields; missing=["defaults"]`) where Python reads an absent
+ * field as all defaults; the row pins that refusal, which leaves the log unchanged.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -328,6 +328,24 @@ test("an old log resumes as all defaults: a plain log", async () => {
   const plain = freshLog();
   await interruptedRun(plain);
   expect((await resumeFlow(await loadFlow(TWO_STEPS), { log: plain, env: envWith() })).output).toEqual({ n: 2n });
+});
+
+test("an old log resumes as all defaults: a stripped log is refused (Changed)", async () => {
+  const stripped = freshLog();
+  await interruptedRun(stripped, envWith(AT_5000));
+  // Written raw: the codec would refuse the stripped record.
+  const lines = linesOf(stripped);
+  const envelope = parseJson(lines[0]!, "codec") as { payload: Record<string, unknown> };
+  delete envelope.payload.defaults;
+  lines[0] = logJson(envelope) + "\n";
+  writeFileSync(stripped, lines.join(""));
+  const before = readFileSync(stripped);
+
+  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: stripped, env: envWith() }));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toContain('invalid run_started payload fields; missing=["defaults"]');
+  expect(readFileSync(stripped).equals(before)).toBe(true);
 });
 
 test("a mismatch is reported before the fingerprint", async () => {

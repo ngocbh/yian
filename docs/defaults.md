@@ -122,8 +122,8 @@ load, run, and resume with stack to spare:
   learnable run logs a CALL binding's expression as a route two JSON levels deep per
   call, and the run log's encoder refuses to write past 255 levels, so a 125-level
   call expression could not be logged. Changed (TS yian): yian's JSON writer and reader
-  don't recurse, so the log encoder reason is gone; the limit stays for the value walkers
-  not yet ported.
+  don't recurse, so the log encoder reason is gone; the other value walkers handle at least
+  1,587 levels (see the table below), and the maximum stays 100.
 - `YIAN_MAX_CALL_NESTING` can only be lowered (maximum 50). Loading, running, and
   resuming walk a chain of bodies at about 10 frames per level; 50 levels load, run,
   and resume within Python's default recursion limit, and deeper chains are not
@@ -134,8 +134,9 @@ load, run, and resume with stack to spare:
   1 MiB stack on Node (see the table below); the maximum stays 50.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
-  Changed (TS yian): the `yaml` package composes about 500 levels on Node but 5000 on
-  Bun's main thread; the limit keeps the deepest accepted document the same on both.
+  Changed (TS yian): under a 1 MiB stack the `yaml` package composes 793 levels on Node and
+  818 on Bun, 3,975 in a Bun `Worker` (see the table below); the limit keeps the deepest
+  accepted document the same on both.
 - `YIAN_MAX_TYPE_NESTING` may be raised to 125, the depth proven for type text: type
   text nested 125 levels still parses, and text nested 150 levels does not. A record
   type in `output:` counts its record levels against the same limit. Copies of a flow
@@ -158,7 +159,8 @@ load, run, and resume with stack to spare:
 Changed (TS yian): the limits keep the deepest accepted input the same on Node and Bun,
 whose stacks differ. Each maximum sits well below the deepest input measured to work
 with every limit lifted: the flow loads, runs to a durable log, replays, and resumes from
-a crash prefix of its log. The table gives the deepest level that worked under Node 22
+a crash prefix of its log. The `YIAN_MAX_AGENT_OUTPUT_NESTING` row has no run: it builds the
+structured reply schema and reads a reply. The table gives the deepest level that worked under Node 22
 with `ulimit -s 1024` (a 1 MiB stack), inside a Bun 1.4 `Worker`, and on Bun's main
 thread with `ulimit -s 1024`; "at least" marks a level whose probing stopped on time
 before the overflow depth was narrowed down.

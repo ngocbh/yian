@@ -1412,9 +1412,18 @@ describe("main", () => {
 
   test("sweeps an eligible run case with --crash-sweep", async () => {
     const files = { "a/two.yaml": TWO_NODES };
-    const { code, out } = await run(["--crash-sweep"], files, {}, { run: RUNNERS.run! });
+    // The sweep's logs, counted before `main` removes the case directory.
+    const cuts: string[][] = [];
+    const counting: KindRunner = async (case_, ctx) => {
+      await RUNNERS.run!(case_, ctx);
+      cuts.push(readdirSync(ctx.dir).filter((name) => /^sweep-[0-9]+\.jsonl$/.test(name)));
+    };
+    const { code, out } = await run(["--crash-sweep"], files, {}, { run: counting });
     expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
     expect(code).toBe(0);
+    expect(cuts.map((names) => names.length)).toEqual([8]);
+    expect((await run([], files, {}, { run: counting })).code).toBe(0);
+    expect(cuts.map((names) => names.length)).toEqual([8, 0]);
   });
 });
 
@@ -1462,6 +1471,18 @@ describe("crashSweep", () => {
     const failure = crashSweep(case_, ctx, { beforeResume: dropSecond });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 2)");
+  });
+
+  test("fails the strong oracle when a recorded value changes before the resume", async () => {
+    const [case_, ctx] = twoNodes();
+    const rewrite = (log: string) => {
+      const text = readFileSync(log, "utf8");
+      const recorded = '"value":{"kind":"str","value":"x"}';
+      writeFileSync(log, text.replace(recorded, recorded.replace('"x"', '"z"')));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("output (crash sweep, cut after record 4) differs");
   });
 });
 

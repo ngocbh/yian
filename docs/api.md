@@ -2570,8 +2570,8 @@ interrupted attempts, including the one this resume retries: starts with no outc
 resume, unless a `RunStoppedRecord` covered them. A host stop or a failing host callback records
 that stop before the run winds down, so only a crash (or a host fault that isn't a callback)
 counts. Nodes running beside a crashing node are counted too: the crash interrupts every start in
-flight, not only the one that was running when the process died. A stopped run resumes with
-`interrupted` 0 for the nodes the stop covered. yian sets no limit; a host that resumes on its own
+flight, not only the one that was running when the process died. A stop adds nothing to the
+count of the nodes it covered (a node never interrupted resumes with `interrupted` 0). yian sets no limit; a host that resumes on its own
 decides how many interruptions to tolerate. `RunResult.interruptedAttempts` and `inspectRun` hold
 the same counts.
 

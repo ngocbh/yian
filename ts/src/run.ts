@@ -815,7 +815,12 @@ export interface ResumeFlowOptions {
  *   count is negative, `apiKey` or `headers` is refused or their header names aren't the recorded
  *   ones (the message never echoes a value), a recorded agent config has an invalid field, the
  *   recorded memory table doesn't match the flow, or, for an unfinished run, a tool or skill
- *   check of `runFlow` fails or a `tools` server was opened by another run in progress.
+ *   check of `runFlow` fails, a `tools` server was opened by another run in progress, or a started
+ *   call-time agent resolves to another config than the one it recorded (`node '<path>'
+ *   llm_config: recorded config differs from the recomputed one; ...`), before its model call.
+ * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
+ *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
+ *   can't be read.
  * @throws MemorySetupError when the run recorded memory and has unfinished work, and `memory` is
  *   missing, lacks a key, is a `MemoryRegistry` built for another flow, or can't reproduce the
  *   recorded snapshots.

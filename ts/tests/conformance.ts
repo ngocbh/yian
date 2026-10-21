@@ -2276,6 +2276,29 @@ async function cutAt(last: number, start: () => Promise<unknown>, at = ""): Prom
 }
 
 /**
+ * Run a `resume` case's first run with `start`: cut after record `host.crash_after_record`, run to
+ * its end for `end`, or stopped at its `host.stop` point. Throw a `CaseFailure` unless it ended as
+ * the case says.
+ */
+async function cutFirstRun(
+  spec: Case,
+  start: () => Promise<unknown>,
+  stop: { error: ConformanceStop } | null,
+): Promise<void> {
+  const last = get(spec, "crash_after_record");
+  if (typeof last === "bigint") {
+    await cutAt(Number(last), start);
+    return;
+  }
+  const outcome = await settle(start);
+  if (stop !== null && outcome === ENDED) throw new CaseFailure("the run ended before its `host.stop` point");
+  if (outcome !== (stop === null ? ENDED : stop.error)) {
+    const before = stop === null ? "its end" : "its stop";
+    throw new CaseFailure(`the run raised before ${before}\n${failureText(outcome)}`);
+  }
+}
+
+/**
  * Return the options every run of a case gets: its log, environment and host (`steering` only
  * with `host.steering`, as Python passes it), on a virtual clock that starts at `start`, with
  * `events` and `chunks` collecting what it publishes.
@@ -2393,8 +2416,9 @@ async function beforeRuns(
  *
  * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run (each `before` run,
  * the main run, and for a `resume` case the cut run and the resume) gets the flow's memories built
- * afresh under `<case dir>/memory`, closed after the run; `expect.memory` is read from memories
- * built after the main run. Learner events are kept apart, never compared.
+ * afresh under `<case dir>/memory`, closed after the run; a failure building the cut run's is the
+ * case's `raises`, and nothing resumes. `expect.memory` is read from memories built after the main
+ * run. Learner events are kept apart, never compared.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
@@ -2426,46 +2450,45 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const { random, scheduler } = hooks;
   const shared: RunFlowOptions = { env, tools, random, models, scheduler };
   const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
-  /** Run `go` with the memories built afresh, closed after it. */
-  const withMemories = async (go: (memory: MemoryRegistry | null) => Promise<RunResult>) => {
-    const memory = await memories();
-    try {
-      return await go(memory);
-    } finally {
-      await memory?.close();
-    }
-  };
   const inputs = get(case_, "inputs", {}) as Case;
   const signal = stop === null ? {} : { signal: stop.signal };
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
-  let start = () =>
-    withMemories((memory) => runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory }));
-  inbox.armed = true;
-  if (case_["kind"] === "resume") {
-    const last = get(spec, "crash_after_record");
-    if (typeof last === "bigint") {
-      await cutAt(Number(last), start);
-    } else {
-      const outcome = await settle(start);
-      if (stop !== null && outcome === ENDED) {
-        throw new CaseFailure("the run ended before its `host.stop` point");
-      }
-      if (outcome !== (stop === null ? ENDED : stop.error)) {
-        const before = stop === null ? "its end" : "its stop";
-        throw new CaseFailure(`the run raised before ${before}\n${failureText(outcome)}`);
-      }
-    }
-    events.length = 0;
-    chunks.length = 0;
-    const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
-    start = () => withMemories((memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory }));
-  }
+  let start = (memory: MemoryRegistry | null) =>
+    runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory });
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
-  try {
-    result = await start();
-  } catch (error) {
-    caught = { raises: raised(error), error };
+  inbox.armed = true;
+  if (case_["kind"] === "resume") {
+    let cutMemory: MemoryRegistry | null = null;
+    try {
+      cutMemory = await memories();
+    } catch (error) {
+      // The cut run's memories failing to build is the case's `raises`; nothing resumes.
+      caught = { raises: raised(error), error };
+    }
+    if (!Object.hasOwn(caught, "raises")) {
+      // A close error escapes as the case's own error, as Python's `with` lets it.
+      try {
+        await cutFirstRun(spec, () => start(cutMemory), stop);
+      } finally {
+        await cutMemory?.close();
+      }
+      events.length = 0;
+      chunks.length = 0;
+      const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
+      start = (memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory });
+    }
+  }
+  if (!Object.hasOwn(caught, "raises")) {
+    let memory: MemoryRegistry | null = null;
+    try {
+      memory = await memories();
+      result = await start(memory);
+    } catch (error) {
+      caught = { raises: raised(error), error };
+    }
+    // Outside the `try`, so a close error never replaces the run's `raises`.
+    await memory?.close();
   }
   const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
   let recalled: Record<string, string> | undefined;
@@ -2761,7 +2784,9 @@ export async function crashSweep(
     beforeResume(log);
     let resumed: RunResult;
     try {
-      resumed = await resumeFlow(flow, hooks);
+      // The cut run's `context`, which the log doesn't hold, as a `resume` case passes it again.
+      const context = args.context === undefined ? {} : { context: args.context };
+      resumed = await resumeFlow(flow, { ...hooks, ...context });
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }

@@ -589,10 +589,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   overtaken by another while it awaits (its opener, a handler, a learner or a commit) is refused
   after that await and appends nothing further (Python re-reads the current attempt, which is the
   same while synchronous).
-- `src/run.ts` (`yian/run`) holds `runFlow` and `RunResult`. `runFlow` takes the inputs and
-  `llmConfig` through host intake, checks the run's tools, skills and model configs, opens its
-  memory sessions and MCP servers, creates the log and drives a `FlowEngine` to a result, then
-  closes what it opened.
+- `src/run.ts` (`yian/run`) holds `runFlow`, `resumeFlow`, `inspectRun` and `RunResult`.
+  `runFlow` takes the inputs and `llmConfig` through host intake, checks the run's tools, skills
+  and model configs, opens its memory sessions and MCP servers, creates the log and drives a
+  `FlowEngine` to a result, then closes what it opened. `resumeFlow` locks an existing log,
+  replays it on a private copy of the flow and drives the rest (a finished log returns its result
+  and appends nothing). `inspectRun` reads a log's status, in-flight nodes and interrupted counts
+  without taking its lock.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

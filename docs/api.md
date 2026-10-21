@@ -194,6 +194,16 @@ run before appending any record.
   it couldn't send back (another provider's or account's reasoning, an unknown
   record version), while the replayed turns' text and tool calls were still
   sent. It arrives once per reason per node start.
+  Changed (TS yian): `ModelCallRetried` (`node_id`, `consumer`, `attempt`,
+  `error: {kind, message}`, `retry_in`) reports a model call outside a forward
+  node that failed with a retryable error and is sent again after `retry_in`
+  seconds; it arrives before the wait. `consumer` is `"backward"` for AGENT
+  backward (under the AGENT's `node_id`) or `"memory:<key>"` for a memory's
+  learner (under `node_id` `"__memory__"`), and `error` is the provider error's
+  kind and message, scrubbed of credentials. It is transient and not in
+  `IN_LOOP_EVENTS`, since it comes from outside a node. A `ReplayDegraded`
+  published during backward or with `node_id` `"__memory__"` comes from outside a
+  forward node too. Python yian publishes no retry event.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
   chat replies stream visible text as `StreamChunk(node_id, "text", chunk,

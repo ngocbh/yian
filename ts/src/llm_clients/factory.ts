@@ -638,16 +638,26 @@ export interface ModelAccess {
    * Build the chat model `config` (a record of host values) selects for node `nodeId`; `signal`
    * aborts any credential read the build makes, and the model calls `onReplayDegraded` with the
    * reason each time it leaves out replay state it can't send back.
+   *
+   * `consumer` names a model built outside a forward node, so a host can route its calls:
+   * `"backward"` for AGENT backward (with the AGENT's `nodeId`), or `"memory:<key>"` for the
+   * learner of the reflective or profile memory under `<key>` (with `nodeId` `"__memory__"`).
+   * It is absent for a node's own forward calls.
    */
   createModel(
     config: Readonly<Record<string, unknown>>,
-    options: { nodeId: string; signal: AbortSignal; onReplayDegraded?: (reason: ReplayDegradedReason) => void },
+    options: {
+      nodeId: string;
+      signal: AbortSignal;
+      onReplayDegraded?: (reason: ReplayDegradedReason) => void;
+      consumer?: string;
+    },
   ): ChatModel | Promise<ChatModel>;
 }
 
 /**
  * Return the model access that builds through `chatModelFromConfig` with `env` (default
- * `processEnv`), passing on `signal` and `onReplayDegraded`.
+ * `processEnv`), passing on `signal` and `onReplayDegraded`; it ignores `consumer`.
  */
 export function defaultModelAccess(env: Env = processEnv): ModelAccess {
   return {

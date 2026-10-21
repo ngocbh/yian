@@ -110,19 +110,31 @@
  * output an untyped producer's, so the loop's contract is a partial record) and the downstream
  * half of `test_merged_contract_types_omitted_field_from_its_seed`.
  *
- * Later (T4): the run halves
- * of the rows above, `test_predicate_field_on_omitted_typed_seed_builds`,
- * `test_predicate_member_field_read_guarded_by_isinstance_builds`,
- * `test_predicate_while_read_guarded_through_or_and_not_builds`,
- * `test_predicate_tag_comparison_narrows_a_read`, `test_predicate_while_is_checked_against_the_seed_too`,
+ * The runs, each loading the flow with the defs Python writes in it (`withDefs`, or the flow's own
+ * inline body) and running it through `runFlow`: `test_predicate_nested_field_read_builds` (2),
+ * `test_predicate_member_field_read_guarded_by_isinstance_builds` (4),
+ * `test_predicate_while_read_guarded_through_or_and_not_builds` (2), the run halves of
+ * `test_predicate_tagged_member_field_error_points_at_isinstance` and
+ * `test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type`,
+ * `test_predicate_tag_comparison_narrows_a_read` (2),
+ * `test_predicate_while_is_checked_against_the_seed_too` (6),
  * `test_predicate_isinstance_of_a_partly_shared_union_reads_the_shared_fields`, the run halves of
- * `test_constant_seed_that_fits_the_body_input_loads_and_runs`,
+ * `test_constant_seed_that_fits_the_body_input_loads_and_runs` (6),
  * `test_inline_body_constant_seed_fits_its_generated_parameter`,
- * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs`,
+ * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs` (8),
  * `test_carried_field_the_body_does_not_read_is_not_checked`,
- * `test_inline_body_reference_seed_fits_its_generated_parameter` and
- * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input`, and the run half of
- * `test_loop_seed_reads_the_case_narrowed_type`.
+ * `test_inline_body_reference_seed_fits_its_generated_parameter`,
+ * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` (both body inputs, both
+ * runs each) and `test_loop_seed_reads_the_case_narrowed_type`. The CODE bodies are TS, ints
+ * arriving as `number` (decision 45); the runs' ints are bigints (decision 4a). Changed: the float
+ * rows of the two fitting-seed groups give an int (`("float", "5")` outputs `5n`, decision 38).
+ *
+ * Not ported: the run halves of `test_one_field_body_record_returns_only_that_carried_field`,
+ * covered by `run-loop/engine_loop_build__one_field_body_record_returns_only_that_field`, and of
+ * `test_value_body_returns_the_referenced_record_beside_a_carried_result`, covered by
+ * `run-loop/engine_loop_build__value_body_returns_the_referenced_record`;
+ * `test_predicate_field_on_omitted_typed_seed_builds`, covered by
+ * `run-loop/engine_loop_build__while_reads_a_carried_over_field`.
  */
 
 import { expect, test } from "bun:test";
@@ -133,6 +145,7 @@ import { type BindingContractReader, BuildContext, type BuildResult } from "../.
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { isExactly, type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -140,6 +153,7 @@ import {
   assembleText,
   type CaseRow,
   handChild,
+  loadConformanceFlow,
   loadError,
   nodesOf,
   parametersFromYaml,
@@ -153,6 +167,19 @@ const STR = new ValueContract(Type.scalar(ValueKind.STRING));
 function swap(text: string, old: string, replacement: string): string {
   if (!text.includes(old)) throw new Error(`stale needle: ${old}`);
   return text.replace(old, replacement);
+}
+
+/**
+ * `text` with `defs` (each entry indented under `defs:`) before its top-level `nodes:`: the runs
+ * load the flow with the defs Python writes in it, where the build rows build each def by hand.
+ */
+const withDefs = (text: string, defs: string) => swap(text, "\nnodes:\n", `\ndefs:\n${defs}nodes:\n`);
+
+/** Load `text` and run it on `inputs`, expecting it to succeed; return its output. */
+async function runOutput(text: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text), inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
 }
 
 /**
@@ -1072,7 +1099,7 @@ nodes:
           state:
             count: int
         code: |
-          return {"state": {"count": inputs["s"]["count"] + 1n}}
+          return {"state": {"count": inputs["s"]["count"] + 1}}
     output: \${bump.output}
 output: \${repeat.output}
 `;
@@ -1095,6 +1122,10 @@ test.each(["while: state.count < 3", "until: state.count >= 3"])(
     buildNested(pred);
   },
 );
+
+test.each(["while: state.count < 3", "until: state.count >= 3"])("predicate nested field read builds: %s", async (pred) => {
+  expect(await runOutput(swap(NESTED_STATE, "PRED", pred))).toEqual({ state: { count: 3n } });
+});
 
 test.each([
   ["while: state.cuont < 3", "while"],
@@ -1185,8 +1216,8 @@ nodes:
           n: int
           r: Step
         code: |
-          const n = inputs["n"] + 1n
-          return {"n": n, "r": n >= 3n ? {"answer": "ok"} : {"hint": "again"}}
+          const n = inputs["n"] + 1
+          return {"n": n, "r": n >= 3 ? {"answer": "ok"} : {"hint": "again"}}
     output: \${step.output}
 output: \${ask.output}
 `;
@@ -1240,6 +1271,23 @@ function askError(state: string, pred: string): string {
 const MEMBER_ONLY =
   "loop node 'ask': `until:` reference ${r.answer} reads field 'answer', which only 1 of 2 union members have; " +
   "check the member first with `isinstance(r, <Type>) and ...`";
+
+test.each([
+  "until: isinstance(r, Done) and r.answer == 'ok'",
+  "until: ${isinstance(r, Done) and r.answer == 'ok'}",
+  // `or` and `not` narrow too: each read runs only once the checks before it decide.
+  "until: n > 5 or isinstance(r, Done) and r.answer == 'ok'",
+  "until: not isinstance(r, More) and r.answer == 'ok'",
+])("predicate member field read guarded by isinstance builds: %s", async (pred) => {
+  expect(await runOutput(swap(UNION_STATE, "PRED", pred))).toEqual({ n: 3n, r: { answer: "ok" } });
+});
+
+test.each(["while: not (isinstance(r, Done) and r.answer == 'ok')", "while: isinstance(r, More) or r.answer != 'ok'"])(
+  "predicate while read guarded through or and not builds: %s",
+  async (pred) => {
+    expect(await runOutput(swap(UNION_STATE, "PRED", pred))).toEqual({ n: 3n, r: { answer: "ok" } });
+  },
+);
 
 test.each([
   "until: r.answer == 'ok'",
@@ -1299,6 +1347,19 @@ test("a predicate's tagged member field error points at isinstance", () => {
   );
   buildAsk(TAGGED_STATE, "until: isinstance(r, Done) and r.answer == 'ok'");
 });
+
+test("predicate tagged member field error points at isinstance (runs)", async () => {
+  const output = await runOutput(swap(TAGGED_STATE, "PRED", "until: isinstance(r, Done) and r.answer == 'ok'"));
+
+  expect(output).toEqual({ n: 3n, r: { kind: "done", answer: "ok" } });
+});
+
+test.each(["until: r.kind == 'done' and r.answer == 'ok'", "while: r.kind != 'done' or r.answer != 'ok'"])(
+  "predicate tag comparison narrows a read: %s",
+  async (pred) => {
+    expect(await runOutput(swap(TAGGED_STATE, "PRED", pred))).toEqual({ n: 3n, r: { kind: "done", answer: "ok" } });
+  },
+);
 
 /** The message of a tag comparison against `"dnoe"`, which is no tag of `r.kind`. */
 const NOT_A_TAG =
@@ -1368,6 +1429,46 @@ nodes:
 output: \${ask.output}
 `;
 
+// `SEEDED_BODY` with the `body` def Python writes and the `prev` node a seed may reference.
+const SEEDED_FLOW = swap(
+  SEEDED_BODY,
+  "\nnodes:\n",
+  `
+defs:
+  body:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+          r: Done
+        code: |
+          return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
+    output: \${step.output}
+nodes:
+  prev:
+    kind: code
+    code: 'return {hint: "x"}'
+`,
+);
+
+test.each([
+  ["null", "while: not isinstance(r, Done)"],
+  ['{"hint": "start"}', "while: not isinstance(r, Done)"],
+  ["${prev.output}", "while: not isinstance(r, Done)"],
+  ['{"hint": "start"}', "while: isinstance(r, More)"],
+  ["${prev.output}", "while: isinstance(r, More)"],
+  ['{"hint": "start"}', "while: isinstance(r, More) and r.hint == 'start'"],
+])("predicate while is checked against the seed too: %s %s", async (seed, pred) => {
+  const output = await runOutput(swap(swap(SEEDED_FLOW, "PRED", pred), "SEED", seed));
+
+  expect(output).toEqual({ n: 1n, r: { answer: "ok" } });
+});
+
 test.each([
   [
     "typed seed",
@@ -1414,6 +1515,18 @@ test("a predicate's isinstance check on an object field checks reads on the type
     expect(askError(OBJECT_STATE, pred)).toBe(message);
   }
   buildAsk(OBJECT_STATE, "until: isinstance(r, Done) and r.answer == 'ok'");
+});
+
+test("predicate isinstance check on an object field checks reads on the type (runs)", async () => {
+  const output = await runOutput(swap(OBJECT_STATE, "PRED", "until: isinstance(r, Done) and r.answer == 'ok'"));
+
+  expect(output).toEqual({ n: 3n, r: { answer: "ok" } });
+});
+
+test("predicate isinstance of a partly shared union reads the shared fields", async () => {
+  const pred = "until: isinstance(r, Finished) and r.answer == 'ok'";
+
+  expect(await runOutput(swap(PARTLY_SHARED_STATE, "PRED", pred))).toEqual({ n: 3n, r: { answer: "ok" } });
 });
 
 test("a predicate's isinstance of a partly shared union rejects a member-only field", () => {
@@ -1521,6 +1634,23 @@ function seededBody(nType: string): ComposedFlow {
   });
 }
 
+/** The runnable `body` def of `seeded`: `n: <nType>` and `k: int` in, `{k: k + 1}` out. */
+const seededDef = (nType: string) => `  body:
+    input:
+      n: !${nType}
+      k: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+          k: \${input.k}
+        output:
+          k: int
+        code: 'return {k: inputs["k"] + 1}'
+    output: \${step.output}
+`;
+
 /** Assemble `text` with `body` as the `body` def. */
 function loadSeeded(text: string, body: ComposedFlow): ComposedFlow {
   return assembleText(text, "flow.yaml", { children: { body } }).flow;
@@ -1580,8 +1710,20 @@ test.each([
   expect(loadSeeded(seeded(seed), seededBody(nType)).compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
 });
 
-test("an inline body's constant seed fits its generated parameter", () => {
-  const { flow } = assembleText(`id: p
+test.each<[string, string, unknown]>([
+  ["int", "1", 1n],
+  // A whole number in a float slot stays an int.
+  ["float", "5", 5n],
+  ["Optional(int)", "null", null],
+  ["Optional(int)", "${null}", null],
+  ["str", '"2026-01-01"', "2026-01-01"],
+  ["int", "${1 + 2}", 3n],
+])("constant seed that fits the body input loads and runs: %s %s", async (nType, seed, n) => {
+  expect(await runOutput(withDefs(seeded(seed), seededDef(nType)))).toEqual({ n, k: 1n, extra: "abc" });
+});
+
+// An inline body over a text seed: its generated parameter `n` is typed `str` from the seed.
+const INLINE_CONSTANT_SEED = `id: p
 name: p
 nodes:
   loop:
@@ -1599,9 +1741,16 @@ nodes:
         code: 'return {n: inputs["n"]}'
     output: \${step.output}
 output: \${loop.output}
-`);
+`;
+
+test("an inline body's constant seed fits its generated parameter", () => {
+  const { flow } = assembleText(INLINE_CONSTANT_SEED);
 
   expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
+});
+
+test("inline body constant seed fits its generated parameter", async () => {
+  expect(await runOutput(INLINE_CONSTANT_SEED)).toEqual({ n: "abc" });
 });
 
 test("a text seed into the int input of a full loop is a load error", () => {
@@ -1666,14 +1815,41 @@ test.each([
   );
 });
 
+/** The flow inputs of the reference-seed runs. */
+const SEED_INPUTS = { s: "x", m: 3n, i: 2n };
+
+test.each<[string, string, unknown]>([
+  ["int", "${input.i}", 2n],
+  // A whole number in a float slot stays an int.
+  ["float", "${input.i}", 2n],
+  ["Optional(int)", "${input.m}", 3n],
+  // A typed binding accepts the narrowing and checks it when the body starts.
+  ["int", "!int ${input.m}", 3n],
+  ["int", "${input.m :- 0}", 3n],
+  ["int", "${input.m | 0}", 3n],
+  ["str", '"x${input.i}"', "x2"],
+  // A non-null literal fills a strict input whatever its tag, as for a CALL argument.
+  ["int", "!Optional(int) 5", 5n],
+])("reference or typed seed that fits the body input loads and runs: %s %s", async (nType, seed, n) => {
+  const output = await runOutput(withDefs(seeded(seed, { inputs: true }), seededDef(nType)), SEED_INPUTS);
+
+  expect(output).toEqual({ n, k: 1n, extra: "abc" });
+});
+
 test("a carried field the body does not read is not checked", () => {
   const flow = loadSeeded(seeded("1", { inputs: true, extra: "${input.m}" }), seededBody("int"));
 
   expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
 });
 
-test("an inline body's reference seed fits its generated parameter", () => {
-  const { flow } = assembleText(`id: p
+test("carried field the body does not read is not checked", async () => {
+  const text = withDefs(seeded("1", { inputs: true, extra: "${input.m}" }), seededDef("int"));
+
+  expect(await runOutput(text, SEED_INPUTS)).toEqual({ n: 1n, k: 1n, extra: 3n });
+});
+
+// An inline body over a reference seed: its generated parameter `n` is typed `Optional(int)`.
+const INLINE_REFERENCE_SEED = `id: p
 name: p
 input:
   m: !Optional(int)
@@ -1693,17 +1869,20 @@ nodes:
         code: 'return {n: inputs["n"]}'
     output: \${step.output}
 output: \${loop.output}
-`);
+`;
+
+test("an inline body's reference seed fits its generated parameter", () => {
+  const { flow } = assembleText(INLINE_REFERENCE_SEED);
 
   expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
 });
 
-test.each(["str", "Optional(str)"])(
-  "a while null check lets an optional seed fill a strict body input: cursor %s",
-  (cursor) => {
-    // `while:` keeps a null cursor out of the body, so the `Optional` seed fills a strict input, and
-    // an `Optional` body input works as before.
-    const text = `id: p
+test("inline body reference seed fits its generated parameter", async () => {
+  expect(await runOutput(INLINE_REFERENCE_SEED, { m: 3n })).toEqual({ n: 3n });
+});
+
+// Pagination: `while:` keeps a null cursor out of the `page` def.
+const PAGES = `id: p
 name: p
 input:
   start: !Optional(str)
@@ -1718,17 +1897,54 @@ nodes:
     call: page
 output: \${loop.output}
 `;
+
+test.each(["str", "Optional(str)"])(
+  "a while null check lets an optional seed fill a strict body input: cursor %s",
+  (cursor) => {
+    // `while:` keeps a null cursor out of the body, so the `Optional` seed fills a strict input, and
+    // an `Optional` body input works as before.
     const page = handChild({
       inputs: params(`  cursor: !${cursor}\n  seen: !int\n`),
       producers: { step: record({ cursor: "Optional(str)", seen: "int" }) },
       output: "${step.output}",
     });
 
-    const { flow } = assembleText(text, "flow.yaml", { children: { page } });
+    const { flow } = assembleText(PAGES, "flow.yaml", { children: { page } });
 
     expect(flow.compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
   },
 );
+
+test("while null check lets an optional seed fill a strict body input", async () => {
+  // Each body input runs with a cursor and without one.
+  for (const cursor of ["str", "Optional(str)"]) {
+    const page = `  page:
+    input:
+      cursor: !${cursor}
+      seen: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          cursor: !str \${input.cursor}
+          seen: \${input.seen}
+        output:
+          cursor: Optional(str)
+          seen: int
+        code: 'return {cursor: null, seen: inputs["seen"] + 1}'
+    output: \${step.output}
+`;
+    const flow = await loadConformanceFlow(withDefs(PAGES, page));
+    for (const [start, seen] of [
+      ["c1", 1n],
+      [null, 0n],
+    ] as const) {
+      const result = await runFlow(flow, { start });
+      expect(result.status, result.failure?.message).toBe("succeeded");
+      expect(result.output).toEqual({ cursor: null, seen });
+    }
+  }
+});
 
 /**
  * A LOOP routed by a `case` on a `Union(Buy, Hold)` producer, seeding the whole record into a body
@@ -1785,6 +2001,26 @@ test("a loop seed reads the case-narrowed type", () => {
     "loop node 'loop': binding 'order' — child expects '{\"kind\":Literal(buy),\"qty\":int}', " +
       "source is '{\"kind\":Literal(hold),\"note\":str}'",
   );
+});
+
+test("loop seed reads the case narrowed type", async () => {
+  const body = `  body:
+    input:
+      order: !Buy
+      k: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          order: \${input.order}
+          k: \${input.k}
+        output:
+          k: int
+        code: 'return {k: inputs["k"] + inputs["order"]["qty"]}'
+    output: \${step.output}
+`;
+
+  expect(await runOutput(withDefs(narrowedLoop("loop", "e"), body), { s: "b" })).toBe(2n);
 });
 
 // ---------- harvested conformance cases ----------

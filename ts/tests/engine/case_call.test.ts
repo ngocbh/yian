@@ -10,8 +10,8 @@
  * flow call inside its `${...}` is a LoadError that says to call the flow as the branch
  * (`then: call(take, ...)`).
  *
- * Changed: the flows assemble with `assembleText`, each `defs:` callee built by hand (`handChild`)
- * with the signature the row reads, where Python loads them.
+ * Changed: the load rows assemble their flows with `assembleText`, each `defs:` callee built by hand
+ * (`handChild`) with the signature the row reads, where Python loads them.
  * `test_private_callee_in_case_target_is_rejected_at_branch_before_resolution` pins the whole
  * message; the scope's resolver throws a plain `Error` for any callee, so a private callee that
  * reached resolution would fail the row without a monkeypatch.
@@ -24,12 +24,16 @@
  * TS-only: the harvested `load-case/engine_case_call__*` cases, pinned at the end (their `take`
  * def built by hand).
  *
- * Later (T4): `test_then_call_directive_branch_runs_taken_value`,
- * `test_else_call_directive_branch_runs_taken_value`,
+ * The runs, each loading the flow with its real `take` def (`loadConformanceFlow`) and running it
+ * through `runFlow`: `test_then_call_directive_branch_runs_taken_value`,
  * `test_case_output_over_call_directive_then_taken`,
- * `test_case_output_over_call_directive_else_taken`,
- * `test_nested_then_call_directive_branch_runs_taken_value` and
- * `test_the_call_directive_a_span_flow_call_points_at_loads` (runs).
+ * `test_case_output_over_call_directive_else_taken` and
+ * `test_the_call_directive_a_span_flow_call_points_at_loads`.
+ *
+ * Not ported: `test_else_call_directive_branch_runs_taken_value`, covered by
+ * `run-case/engine_case_call__an_else_call_branch_runs_the_taken_value`, and
+ * `test_nested_then_call_directive_branch_runs_taken_value`, covered by
+ * `run-case/engine_case_call__a_nested_then_call_branch_runs_the_taken_value`.
  */
 
 import { expect, test } from "bun:test";
@@ -39,6 +43,7 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "../../src/compose/desugar/inline_bodies.ts";
 import { yamlQuoted } from "../../src/compose/helpers/tags.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -46,6 +51,7 @@ import {
   assembleText,
   type CaseRow,
   handChild,
+  loadConformanceFlow,
   loadError,
   parametersFromYaml,
   runCase,
@@ -81,6 +87,9 @@ defs:
 /** Assemble `text` with the hand-built callees `children`; return the compiled flow. */
 const load = (text: string, children: Record<string, ComposedFlow> = { take: TAKE }) =>
   assembleText(text, "flow.yaml", { children }).flow.compiled;
+
+/** Load `text` with its real defs and run it on `inputs`; return the result. */
+const run = async (text: string, inputs: Record<string, unknown>) => runFlow(await loadConformanceFlow(text), inputs);
 
 /** Return the full message for a value branch of `gate`. */
 const valueBranch = (label: string, entry: string, shown: string) =>
@@ -201,6 +210,12 @@ test("then else call directive desugars to synth branch nodes", () => {
   expect(controlTargets).toEqual(["__call_0", "__call_1"]);
 });
 
+test("then call directive branch runs taken value", async () => {
+  const out = await run(FLOW_DIRECTIVE, { score: 0.9 });
+  expect(out.status).toBe("succeeded");
+  expect(out.output).toBe("took:pro");
+});
+
 test("non bare then call directive is rejected", () => {
   // A route target must resolve to ONE node id: a coalesce of call(...) directives is loud.
   const text = `
@@ -294,6 +309,20 @@ output: \${gate.output}
   expect(loadError(() => load(text, {})).message).toBe(valueBranch("then", "gate_then_0", '!str "call(take"'));
 });
 
+test("case output over call directive then taken", async () => {
+  // ${gate.output} over a call(...)-desugared `then:`, the taken then value comes back.
+  const out = await run(FLOW_DIRECTIVE, { score: 0.9 });
+  expect(out.status).toBe("succeeded");
+  expect(out.output).toBe("took:pro");
+});
+
+test("case output over call directive else taken", async () => {
+  // ${gate.output} over a call(...)-desugared `else:`, the taken else value comes back.
+  const out = await run(FLOW_DIRECTIVE, { score: 0.2 });
+  expect(out.status).toBe("succeeded");
+  expect(out.output).toBe("took:con");
+});
+
 test("nested then call directive lifts two synth nodes", () => {
   // The nested then: target lifts BOTH the inner and outer call as synth nodes; the else: lifts one
   // more: three synth call nodes in all, the gate's then-edge on the outer.
@@ -362,6 +391,11 @@ test.each([
   const error = loadError(() => load(text));
   expect(error.message).toBe(spanFlowCall(label));
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, `${label}: ${branch}`));
+});
+
+test("the call directive a span flow call points at loads", async () => {
+  const text = SPAN_CALL_FLOW.replace("THEN", 'call(take, stance="pro")').replace("ELSE", 'call(take, stance="con")');
+  expect((await run(text, { score: 0.9 })).output).toBe("took:pro");
 });
 
 test("malformed branch call holding a span offers no text rewrite", () => {

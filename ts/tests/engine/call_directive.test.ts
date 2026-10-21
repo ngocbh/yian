@@ -22,8 +22,12 @@
  * `parseYamlLiteral`. The private-callee rows check that the scope's resolver is never reached (it
  * throws) instead of monkeypatching `_resolve_child`.
  *
- * Later (T4): `test_quoted_binding_runs_as_text`, `test_quoted_flow_output_runs_as_text` (runs),
- * and the run half of `test_unquoted_directive_holding_a_separator_is_a_call_not_a_typed_binding`.
+ * The runs, each loading the flow (`loadConformanceFlow`) and running it through `runFlow`:
+ * `test_quoted_binding_runs_as_text` (4) and `test_quoted_flow_output_runs_as_text`.
+ *
+ * Not ported: the run half of
+ * `test_unquoted_directive_holding_a_separator_is_a_call_not_a_typed_binding`, covered by
+ * `run-map-call/engine_call_directive__an_unquoted_call_with_a_separator_runs`.
  *
  * TS-only: the recognizer rows those tests reach through `desugarInlineCalls`, each matching the
  * whole message, and direct rows for `findParenEnd`, `splitCallsAware` and `InlineCall`; the
@@ -46,7 +50,16 @@ import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { findParenEnd, InlineCall, splitCallsAware } from "../../src/expr/template.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
-import { assembled, assembleText, handChild, loadError, parametersFromYaml, runCase } from "../compose/declarations.ts";
+import { runFlow } from "../../src/run.ts";
+import {
+  assembled,
+  assembleText,
+  handChild,
+  loadConformanceFlow,
+  loadError,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -670,6 +683,17 @@ output: ${output}
 }
 
 test.each([
+  ["'call(f, x=1'", "call(f, x=1"],
+  ['"call(f) tail"', "call(f) tail"],
+  ['"call(f, x=1)"', "call(f, x=1)"],
+  ["|\n        call(f", "call(f\n"],
+])("quoted binding %p runs as text", async (binding, text) => {
+  const out = await runFlow(await loadConformanceFlow(echoFlow(binding)), {});
+  expect(out.status).toBe("succeeded");
+  expect(out.output).toBe(text);
+});
+
+test.each([
   ["call(f, x=1", "`call(` is never closed"],
   ["call(f) tail", "text follows the closing `)`: 'tail'"],
 ])("unquoted malformed binding %p is a located load error", (binding, problem) => {
@@ -677,6 +701,12 @@ test.each([
   expect(error.message).toContain(`use: ${problem}`);
   expect(error.message).toContain('If you meant the text, quote the whole value: `"call(f');
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(8);
+});
+
+test("quoted flow output runs as text", async () => {
+  const out = await runFlow(await loadConformanceFlow(echoFlow("hi", "'call(f'")), {});
+  expect(out.status).toBe("succeeded");
+  expect(out.output).toBe("call(f");
 });
 
 test("unquoted malformed flow output is loud", () => {

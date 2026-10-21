@@ -6,9 +6,10 @@
  * halves assemble the flow (`assembleText`), each `defs:` callee built by hand (`handChild`) with
  * the signature the row reads; the direct row drives `desugarInlineCalls`.
  *
- * Changed: Python loads and runs each flow; these rows check the load: the synth node, its edges,
- * and the argument binding a run would read. `test_inline_call_seed_21_loads` is the harvested
- * `load-map-call/seed_21_inline_call`, pinned at the end. `test_inline_call_e06_type_mismatch_is_loud`
+ * Changed: Python loads and runs each flow; the load rows check the load (the synth node, its
+ * edges, and the argument binding a run would read), and the runs are listed below.
+ * `test_inline_call_seed_21_loads` is the harvested `load-map-call/seed_21_inline_call`, pinned at
+ * the end. `test_inline_call_e06_type_mismatch_is_loud`
  * pins the whole message, where Python matches fragments; its harvested case
  * `load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected` is
  * pinned at the end too.
@@ -18,7 +19,25 @@
  * loads the external flow) and `test_inline_call_inside_defs_body_runs` (the def's synth call is
  * read off the baked child), and `test_inline_call_unknown_callee_is_loud`, which pins the whole
  * message where Python matches fragments.
- * Later (T4): the run half of every load-and-run row.
+ *
+ * The runs, each loading the flow with its real `defs:` (or, for the external flow, through
+ * `childResolver`) and running it through `runFlow`: `test_inline_call_in_node_input_runs`,
+ * `test_inline_call_literal_arg_runs` and the run halves of `test_inline_call_fan_in_infers_edges`
+ * and `test_inline_call_resolves_through_external_resolver`.
+ *
+ * Not ported: the run halves of `test_inline_call_in_loop_input_synthesizes_wires_and_runs`,
+ * covered by `run-map-call/engine_inline_calls__inline_call_in_a_loop_seed`;
+ * `test_nested_inline_calls_run`, covered by `run-map-call/engine_inline_calls__nested_inline_calls`;
+ * `test_inline_call_in_flow_output_runs`, covered by
+ * `run-map-call/engine_inline_calls__inline_call_in_a_flow_output`;
+ * `test_quoted_interpolated_arg_strips_quotes_like_named_form`, covered by
+ * `run-map-call/engine_inline_calls__quoted_interpolated_argument`;
+ * `test_inline_call_in_mapped_call_over_runs`, covered by
+ * `run-map-call/engine_inline_calls__inline_call_in_a_map_over`;
+ * `test_two_host_sites_mint_unique_ids_and_both_run`, covered by
+ * `run-map-call/engine_inline_calls__two_sites_get_unique_ids`; and
+ * `test_inline_call_inside_defs_body_runs`, covered by
+ * `run-map-call/engine_inline_calls__inline_call_inside_a_def_body`.
  *
  * The origin rows locate each synth call node and its argument bindings at the authored binding
  * the `call(...)` was written in: the load halves of
@@ -46,6 +65,7 @@ import { forget } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -59,6 +79,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
+import { childResolver } from "./run_state_fixtures.ts";
 
 afterEach(() => forget());
 
@@ -95,6 +116,15 @@ const ENRICH = { enrich: def("  topic: !str\n", "str") };
 const load = (text: string, children: Record<string, ComposedFlow> = ENRICH) =>
   assembleText(text, "flow.yaml", { children }).flow.compiled;
 
+/** Load `text` (through `resolver` when given) and run it on `inputs`; return the result. */
+async function run(
+  text: string,
+  inputs: Record<string, unknown>,
+  resolver?: ReturnType<typeof childResolver>,
+) {
+  return runFlow(await loadConformanceFlow(text, resolver ? { childResolver: resolver } : {}), inputs);
+}
+
 /** The `[from, to]` pairs of a compiled flow's edges. */
 const edgePairs = (compiled: ReturnType<typeof load>) => compiled.edges.map((edge) => [edge.from, edge.to]);
 
@@ -121,6 +151,29 @@ nodes:
 output: \${use.output}
 `);
   expect(callees(compiled)).toEqual({ __call_0: "enrich" }); // the inline call became a synth node
+});
+
+test("inline call in node input runs", async () => {
+  const result = await run(
+    `
+id: ic1
+name: ic1
+input:
+  topic: !str
+${ENRICH_DEF}
+nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(enrich, topic=\${input.topic})
+    output: str
+output: \${use.output}
+`,
+    { topic: "ACME" },
+  );
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("ACME");
 });
 
 test("inline call in human_input synthesizes and wires the call", () => {
@@ -209,6 +262,29 @@ output: \${use.output}
   expect(compiled.wiring.get("__call_0")!.get("topic")!.source).toBe("HARDCODED");
 });
 
+test("inline call literal arg runs", async () => {
+  // A bare literal arg (string) flows like the named form's `input: {topic: HARD}`.
+  const result = await run(
+    `
+id: ic_lit
+name: ic_lit
+input:
+  topic: !str
+${ENRICH_DEF}
+nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(enrich, topic="HARDCODED")
+    output: str
+output: \${use.output}
+`,
+    { topic: "ACME" },
+  );
+  expect(result.output).toBe("HARDCODED");
+});
+
 test("inline call fan-in infers edges", () => {
   const compiled = load(`
 id: ic_fanin
@@ -233,6 +309,35 @@ output: \${use.output}
 `);
   expect(edgePairs(compiled)).toContainEqual(["y", "__call_0"]); // y -> synth call (the fan-in)
   expect(edgePairs(compiled)).toContainEqual(["__call_0", "use"]); // synth call -> consumer
+});
+
+test("inline call fan-in infers edges (runs)", async () => {
+  const result = await run(
+    `
+id: ic_fanin
+name: ic_fanin
+input:
+  topic: !str
+${ENRICH_DEF}
+nodes:
+  y:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(enrich, topic=\${y.output})
+    output: str
+output: \${use.output}
+`,
+    { topic: "ACME" },
+  );
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("ACME");
 });
 
 test("nested inline calls load", () => {
@@ -316,6 +421,43 @@ output: \${use.output}
   });
   expect(asked).toEqual(["ext_flow"]);
   expect(callees(loaded.compiled)).toEqual({ __call_0: "ext_flow" });
+});
+
+test("inline call resolves through external resolver (runs)", async () => {
+  const external = `
+id: ext_flow
+name: ext_flow
+input:
+  topic: !str
+nodes:
+  x:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+output: \${x.output}
+`;
+  const text = `
+id: ic_ext
+name: ic_ext
+input:
+  topic: !str
+uses:
+  ext_flow: ext_flow
+nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(ext_flow, topic=\${input.topic})
+    output: str
+output: \${use.output}
+`;
+  // The resolver knows only `ext_flow`, so asking for any other flow fails the load.
+  const result = await run(text, { topic: "ACME" }, childResolver({ ext_flow: external }));
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("ACME");
 });
 
 test("inline call inside defs body loads", async () => {

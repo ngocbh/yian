@@ -95,11 +95,11 @@
  * `load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts`.
  *
  * Ported through `loadFlow` (the fixture CODE references resolve against the conformance dir):
+ * `test_eager_def_inline_child_bad_output_preserves_absolute_range`,
+ * `test_inline_call_resolver_failure_uses_friendly_child_label`, and the load halves of
  * `test_inline_multinode_body_matches_named_def_signature_and_runtime`,
  * `test_eager_def_inline_call_uses_origin_and_shared_scope`,
  * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`,
- * `test_eager_def_inline_child_bad_output_preserves_absolute_range`,
- * `test_inline_call_resolver_failure_uses_friendly_child_label`, and the load halves of
  * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` and
  * `test_nested_inline_composites_register_four_lexical_children_once`, the rows counting
  * registrations and resolutions with spies on `CallableScope.prototype`'s `registerPrivate` and
@@ -111,9 +111,36 @@
  * row leaves out the def's cached identity). Where Python checks a message fragment, the row
  * pins the whole message.
  *
- * Later (T4, runs): the run half of every row above that runs, and
- * `test_inline_call_and_loop_outer_post_asserts_still_fire` (run only). The date row's run half
- * returns the dates as text (rule `dates`).
+ * The runs, each loading the flow (`loadConformanceFlow`, with any `defs:` Python writes in it) and
+ * running it through `runFlow`: the run halves of
+ * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope`,
+ * `test_eager_def_inline_call_uses_origin_and_shared_scope`,
+ * `test_nested_inline_composites_register_four_lexical_children_once` and
+ * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`, each spying on
+ * `CallableScope.prototype` to check the run registers and resolves no private flow beyond the
+ * load's (Python counts after the run); of `test_typed_inline_call_preserves_nullable_parent_scalar`
+ * (2), `test_typed_inline_call_canonicalizes_literal_record_and_retains_input_order`,
+ * `test_forward_producer_type_builds_once_and_keeps_source_order` (the producer built once across
+ * the load and the run), `test_producer_declared_none_type_is_not_treated_as_missing_output`,
+ * `test_inline_alias_and_merge_occurrences_run_as_distinct_private_children`,
+ * `test_inline_nested_containers_are_evaluated_at_edges_and_runtime`,
+ * `test_inline_optional_record_paths_make_generated_inputs_nullable` (both runs),
+ * `test_inline_input_inference_projects_known_partial_loop_field` (with the real `body` def),
+ * `test_inline_map_opaque_over_without_direct_item_walk_loads_and_runs`,
+ * `test_inline_map_proves_list_any_date_element_and_runs`,
+ * `test_basic_inline_loop_times_bakes_private_child_signature_and_runs` and
+ * `test_inline_loop_predicates_run_to_the_same_carried_result`; and
+ * `test_inline_call_and_loop_outer_post_asserts_still_fire` (2, run only). The runs' ints are
+ * bigints (decision 4a). Changed: the date row's dates go in and come out as text (rule `dates`).
+ *
+ * Not ported: the run halves of `test_inline_multinode_body_matches_named_def_signature_and_runtime`,
+ * covered by `run-map-call/engine_inline_composite_bodies__inline_body_runs_like_the_named_def`;
+ * `test_inline_map_literal_over_runs_with_inferred_item_type`, covered by
+ * `run-map-call/engine_inline_composite_bodies__inline_map_over_a_literal_list`;
+ * `test_inline_map_typed_producer_maps_whole_item_and_field_in_parallel_order`, covered by
+ * `run-map-call/engine_inline_composite_bodies__parallel_inline_map_keeps_item_order`; and
+ * `test_inline_map_nullable_root_and_intermediate_infer_optional_and_intermediate_runs_none`,
+ * covered by `run-map-call/engine_inline_composite_bodies__inline_map_item_paths_through_nulls`.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -137,10 +164,12 @@ import { CallableScope, defAssemblyCursor } from "../../src/compose/loader.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
+import { RunFailed } from "../../src/events.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -981,9 +1010,34 @@ async function recordPrivateScope<T>(load: () => Promise<T>) {
   }
 }
 
-test("a zero-input inline call loads in one file scope", async () => {
-  const { result: flow, registrations, resolutions } = await recordPrivateScope(() =>
-    loadConformanceFlow(`id: inline-call-zero-input
+/** Load `text` and run it on `inputs`; expect it to succeed; return its output. */
+async function runOutput(text: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text), inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+/**
+ * Load `text` and run it on `inputs` with `numWorkers` (`recordPrivateScope` around the run);
+ * expect the run to register and resolve no private flow beyond the load's, and to succeed; return
+ * its output.
+ */
+async function runOutputRegisteringNoMore(
+  text: string,
+  inputs: Record<string, unknown> = {},
+  numWorkers?: number,
+): Promise<unknown> {
+  const loaded = await loadConformanceFlow(text);
+  const { result, registrations, resolutions } = await recordPrivateScope(() =>
+    runFlow(loaded, inputs, numWorkers === undefined ? {} : { numWorkers }),
+  );
+  expect(registrations).toEqual([]);
+  expect(resolutions).toEqual([]);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+const ZERO_INPUT = `id: inline-call-zero-input
 name: inline_call_zero_input
 nodes:
   wrapper:
@@ -997,8 +1051,10 @@ nodes:
         output: str
     output: \${constant.output}
 output: \${wrapper.output}
-`),
-  );
+`;
+
+test("a zero-input inline call loads in one file scope", async () => {
+  const { result: flow, registrations, resolutions } = await recordPrivateScope(() => loadConformanceFlow(ZERO_INPUT));
 
   const owner = ["root", "node", "wrapper", "inline"];
   const flowId = inlineFlowId(owner);
@@ -1014,8 +1070,12 @@ output: \${wrapper.output}
   expect(resolutions[0]![1]).toBe(flowId);
 });
 
-test("a typed inline call preserves a nullable parent scalar", () => {
-  const { flow } = assembleText(`id: inline-call-nullable-input
+test("a zero-input inline call runs in one file scope", async () => {
+  // The run registers and resolves nothing more: the load's one registration and resolution stand.
+  expect(await runOutputRegisteringNoMore(ZERO_INPUT)).toBe("inline-ok");
+});
+
+const NULLABLE_INPUT = `id: inline-call-nullable-input
 name: inline_call_nullable_input
 input:
   maybe: !Optional(int)
@@ -1033,15 +1093,21 @@ nodes:
         output: Optional(int)
     output: \${echo.output}
 output: \${wrapper.output}
-`);
+`;
+
+test("a typed inline call preserves a nullable parent scalar", () => {
+  const { flow } = assembleText(NULLABLE_INPUT);
 
   expect(driver<CallNode>(flow, "wrapper").childInputs).toEqual([
     parameter("value", new Type({ kind: ValueKind.INTEGER, nullable: true })),
   ]);
 });
 
-test("a typed inline call canonicalizes a literal record and keeps its input order", () => {
-  const { flow } = assembleText(`id: inline-call-record-input
+test.each([null, 7n])("a typed inline call runs a nullable parent scalar: %p", async (value) => {
+  expect(await runOutput(NULLABLE_INPUT, { maybe: value })).toBe(value);
+});
+
+const RECORD_INPUT = `id: inline-call-record-input
 name: inline_call_record_input
 nodes:
   wrapper:
@@ -1066,7 +1132,10 @@ nodes:
           marker: str
     output: \${echo.output}
 output: \${wrapper.output}
-`);
+`;
+
+test("a typed inline call canonicalizes a literal record and keeps its input order", () => {
+  const { flow } = assembleText(RECORD_INPUT);
 
   const wrapper = driver<CallNode>(flow, "wrapper");
   expect(wrapper.childInputs.map((param) => param.name)).toEqual(["payload", "marker"]);
@@ -1087,12 +1156,11 @@ output: \${wrapper.output}
   expect(parameterType(marker)).toEqual(Type.scalar(ValueKind.STRING));
 });
 
-test("a forward producer's type builds it once and keeps source order", () => {
-  const builds = spyOn(CodeDescriptor.prototype, "build");
-  let flow: ComposedFlow;
-  let producerBuilds: number;
-  try {
-    ({ flow } = assembleText(`id: inline-call-forward-producer
+test("a typed inline call runs a literal record", async () => {
+  expect(await runOutput(RECORD_INPUT)).toEqual({ payload: { z: "tail", a: 3n }, marker: "before" });
+});
+
+const FORWARD_PRODUCER = `id: inline-call-forward-producer
 name: inline_call_forward_producer
 nodes:
   consumer:
@@ -1114,7 +1182,14 @@ nodes:
       topic: forward-value
     output: str
 output: \${consumer.output}
-`));
+`;
+
+test("a forward producer's type builds it once and keeps source order", () => {
+  const builds = spyOn(CodeDescriptor.prototype, "build");
+  let flow: ComposedFlow;
+  let producerBuilds: number;
+  try {
+    ({ flow } = assembleText(FORWARD_PRODUCER));
     producerBuilds = builds.mock.contexts.filter((desc) => (desc as CodeDescriptor).id === "producer").length;
   } finally {
     builds.mockRestore();
@@ -1128,8 +1203,22 @@ output: \${consumer.output}
   ]);
 });
 
-test("a producer declared `None` is not treated as a missing output", () => {
-  const { flow } = assembleText(`id: inline-call-none-producer
+test("a forward producer runs, built once", async () => {
+  const builds = spyOn(CodeDescriptor.prototype, "build");
+  let output: unknown;
+  let producerBuilds: number;
+  try {
+    output = await runOutput(FORWARD_PRODUCER);
+    producerBuilds = builds.mock.contexts.filter((desc) => (desc as CodeDescriptor).id === "producer").length;
+  } finally {
+    builds.mockRestore();
+  }
+
+  expect(producerBuilds).toBe(1); // the run builds nothing again
+  expect(output).toBe("forward-value");
+});
+
+const NONE_PRODUCER = `id: inline-call-none-producer
 name: inline_call_none_producer
 nodes:
   consumer:
@@ -1150,9 +1239,16 @@ nodes:
       return null
     output: "None"
 output: \${consumer.output}
-`);
+`;
+
+test("a producer declared `None` is not treated as a missing output", () => {
+  const { flow } = assembleText(NONE_PRODUCER);
 
   expect(driver<CallNode>(flow, "consumer").childInputs).toEqual([parameter("value", Type.scalar(ValueKind.NONE))]);
+});
+
+test("a producer declared `None` runs to null", async () => {
+  expect(await runOutput(NONE_PRODUCER)).toBeNull();
 });
 
 test("an inline signature self-cycle names the binding path, at its range", () => {
@@ -1261,8 +1357,7 @@ test.each([
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(inputRange(source, "consumer", "value"));
 });
 
-test("alias and merge occurrences assemble as distinct private children", () => {
-  const { flow } = assembleText(`id: inline-alias-merge
+const ALIAS_MERGE = `id: inline-alias-merge
 name: inline_alias_merge
 nodes:
   first: &body
@@ -1286,15 +1381,21 @@ output:
   first: \${first.output}
   second: \${second.output}
   merged: \${merged.output}
-`);
+`;
+
+test("alias and merge occurrences assemble as distinct private children", () => {
+  const { flow } = assembleText(ALIAS_MERGE);
 
   const calls = ["first", "second", "merged"].map((nodeId) => driver<CallNode>(flow, nodeId));
   expect(new Set(calls.map((node) => node.flowId)).size).toBe(3);
   expect(new Set(calls.map((node) => node.child)).size).toBe(3);
 });
 
-test("nested containers in an inline binding are wired at the edges", () => {
-  const { flow } = assembleText(`id: inline-nested-containers
+test("alias and merge occurrences run as distinct private children", async () => {
+  expect(await runOutput(ALIAS_MERGE)).toEqual({ first: "base", second: "base", merged: "merged" });
+});
+
+const NESTED_CONTAINERS = `id: inline-nested-containers
 name: inline_nested_containers
 input:
   x: !str
@@ -1328,13 +1429,24 @@ nodes:
           deep: list(str)
     output: \${echo.output}
 output: \${wrapper.output}
-`);
+`;
+
+test("nested containers in an inline binding are wired at the edges", () => {
+  const { flow } = assembleText(NESTED_CONTAINERS);
 
   expect(flow.compiled.edges).toContainEqual(expect.objectContaining({ from: "producer", to: "wrapper" }));
 });
 
-test("optional record paths make generated inputs nullable", () => {
-  const { flow } = assembleText(`id: inline-optional-record-paths
+test("nested containers in an inline binding are evaluated at runtime", async () => {
+  expect(await runOutput(NESTED_CONTAINERS, { x: "parent" })).toEqual({
+    producer: "resolved",
+    parent: "parent",
+    dollars: "$",
+    deep: ["resolved", "got parent"],
+  });
+});
+
+const OPTIONAL_RECORD_PATHS = `id: inline-optional-record-paths
 name: inline_optional_record_paths
 typedefs:
   Inner:
@@ -1363,7 +1475,10 @@ nodes:
           nested: Optional(str)
     output: \${collect.output}
 output: \${wrapper.output}
-`);
+`;
+
+test("optional record paths make generated inputs nullable", () => {
+  const { flow } = assembleText(OPTIONAL_RECORD_PATHS);
 
   expect(
     driver<CallNode>(flow, "wrapper").childInputs.map((param) => [
@@ -1375,6 +1490,16 @@ output: \${wrapper.output}
     ["root_value", false, true],
     ["nested_value", false, true],
   ]);
+});
+
+test("optional record paths run to null and to their values", async () => {
+  expect(await runOutput(OPTIONAL_RECORD_PATHS, { root: null, outer: { inner: null } })).toEqual({
+    root: null,
+    nested: null,
+  });
+  expect(
+    await runOutput(OPTIONAL_RECORD_PATHS, { root: { value: "root" }, outer: { inner: { value: "nested" } } }),
+  ).toEqual({ root: "root", nested: "nested" });
 });
 
 test("inline input inference projects a known field of a partial LOOP output", () => {
@@ -1414,6 +1539,45 @@ output: \${wrapper.output}
   );
 
   expect(driver<CallNode>(flow, "wrapper").childInputs).toEqual([parameter("value", Type.scalar(ValueKind.INTEGER))]);
+});
+
+test("inline input inference runs a known field of a partial LOOP output", async () => {
+  // The flow with the `body` def Python writes, its `note` an expression output.
+  const output = await runOutput(`id: inline-partial-producer-field
+name: inline_partial_producer_field
+defs:
+  body:
+    input:
+      n: !int
+      note: !str
+    nodes: {}
+    output:
+      n: \${input.n}
+      note: \${input.note + "!"}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: 7
+      note: seed
+    times: 1
+  wrapper:
+    kind: call
+    input:
+      value: \${loop.output.n}
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.value}
+        output: int
+    output: \${echo.output}
+output: \${wrapper.output}
+`);
+
+  expect(output).toBe(7n);
 });
 
 test("an inline multi-node body matches the named def's signature", async () => {
@@ -1474,8 +1638,7 @@ ${body}output:
   expect(bodyIds(inline)).toEqual(["echo", "pack"]);
 });
 
-test("an eager def's inline call takes its origin and shares the file scope", async () => {
-  const source = `id: eager-def-inline-call
+const EAGER_DEF_INLINE_CALL = `id: eager-def-inline-call
 name: eager_def_inline_call
 defs:
   outer:
@@ -1497,13 +1660,20 @@ nodes:
     call: outer
 output: \${invoke.output}
 `;
-  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() => loadConformanceFlow(source));
+
+test("an eager def's inline call takes its origin and shares the file scope", async () => {
+  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(EAGER_DEF_INLINE_CALL),
+  );
 
   const owner = ["def", "outer", "node", "wrapper", "inline"];
   const flowId = inlineFlowId(owner);
   const wrapper = (driver<CallNode>(loaded, "invoke").child as CompiledFlow).nodes.get("wrapper") as CallNode;
-  const keyRange = SourceDocument.parse(source).root.child("defs").child("outer").child("nodes").child("wrapper")
-    .keyRange!;
+  const keyRange = SourceDocument.parse(EAGER_DEF_INLINE_CALL)
+    .root.child("defs")
+    .child("outer")
+    .child("nodes")
+    .child("wrapper").keyRange!;
   expect(wrapper.flowId).toBe(flowId);
   expect(wrapper.childInputs).toEqual([]);
   expect(wrapper.origin).not.toBeNull();
@@ -1514,6 +1684,11 @@ output: \${invoke.output}
   expect(registrations[0]).toEqual([scope, flowId, owner, "inline body of node 'wrapper'"]);
   expect(registrations[0]![0]).toBe(scope);
   expect(resolutions[0]![1]).toBe(flowId);
+});
+
+test("an eager def's inline call runs in the shared file scope", async () => {
+  // The run registers and resolves nothing more: the load's one registration and resolution stand.
+  expect(await runOutputRegisteringNoMore(EAGER_DEF_INLINE_CALL)).toBe("inline-ok");
 });
 
 test("a def's assembly cursor fallback restores only node surfaces", () => {
@@ -1565,8 +1740,7 @@ output: \${each.output}
   expect(driver<MapNode>(flow, "each").childInputs).toEqual([parameter("value", Type.scalar(ValueKind.INTEGER))]);
 });
 
-test("an inline MAP over an opaque list loads when no binding walks the item directly", () => {
-  const { flow } = assembleText(`id: inline-map-opaque-over-no-item
+const OPAQUE_OVER = `id: inline-map-opaque-over-no-item
 name: inline_map_opaque_over_no_item
 input:
   primary: !list(str)
@@ -1605,13 +1779,25 @@ nodes:
             nested: str
     output: \${collect.output}
 output: \${each.output}
-`);
+`;
+
+test("an inline MAP over an opaque list loads when no binding walks the item directly", () => {
+  const { flow } = assembleText(OPAQUE_OVER);
 
   expect(driver<MapNode>(flow, "each").childInputs.map((param) => param.name)).toEqual([
     "constant",
     "parent",
     "template",
     "literal",
+  ]);
+});
+
+test("an inline MAP over an opaque list runs when no binding walks the item directly", async () => {
+  const output = await runOutput(OPAQUE_OVER, { primary: ["first", "second"], fallback: ["unused"], prefix: "P" });
+
+  expect(output).toEqual([
+    { constant: "fixed", parent: "P", template: "item first", literal: { nested: "P" } },
+    { constant: "fixed", parent: "P", template: "item second", literal: { nested: "P" } },
   ]);
 });
 
@@ -1772,8 +1958,7 @@ output: \${each.output}
   expect(parameterType(each.childInputs[1]!)).toEqual(Type.scalar(ValueKind.STRING));
 });
 
-test("an inline MAP proves a `list(date)` element, which reads as text", () => {
-  const { flow } = assembleText(`id: inline-map-date-items
+const DATE_ITEMS = `id: inline-map-date-items
 name: inline_map_date_items
 input:
   days: !list(date)
@@ -1792,12 +1977,19 @@ nodes:
         output: date
     output: \${echo.output}
 output: \${each.output}
-`);
+`;
+
+test("an inline MAP proves a `list(date)` element, which reads as text", () => {
+  const { flow } = assembleText(DATE_ITEMS);
 
   expect(parameterType(flow.input[0]!)).toEqual(
     new Type({ kind: ValueKind.LIST_ANY, element: Type.scalar(ValueKind.DATE) }),
   );
   expect(parameterType(driver<MapNode>(flow, "each").childInputs[0]!)).toEqual(Type.scalar(ValueKind.DATE));
+});
+
+test("an inline MAP over a `list(date)` runs, its dates as text", async () => {
+  expect(await runOutput(DATE_ITEMS, { days: ["2026-08-15", "2026-08-16"] })).toEqual(["2026-08-15", "2026-08-16"]);
 });
 
 test("a MAP list with no element type fails at the item binding", () => {
@@ -1952,6 +2144,18 @@ ${LOOP_BODY}`);
   expect([repeat.times, repeat.maxIters]).toEqual([2, 2]);
 });
 
+test("a basic inline LOOP with `times:` runs", async () => {
+  const output = await runOutput(`id: inline-loop-times
+name: inline_loop_times
+nodes:
+  repeat:
+    kind: loop
+    times: 2
+${LOOP_BODY}`);
+
+  expect(output).toEqual({ n: 2n, exited: false });
+});
+
 test("an inline LOOP with `until:` loads with that predicate kind", () => {
   const { flow } = assembleText(`id: inline-loop-predicate
 name: inline_loop_predicate
@@ -1965,9 +2169,20 @@ ${LOOP_BODY}`);
   expect(driver<LoopNode>(flow, "repeat").predicateKind).toBe("until");
 });
 
-test("nested inline composites register four lexical children once", async () => {
-  const { result: flow, registrations, resolutions } = await recordPrivateScope(() =>
-    loadConformanceFlow(`id: nested-inline-composites
+test.each(["until: ${exited}"])("an inline LOOP predicate runs to the same carried result: %s", async (predicate) => {
+  const output = await runOutput(`id: inline-loop-predicate
+name: inline_loop_predicate
+nodes:
+  repeat:
+    kind: loop
+    ${predicate}
+    max: 10
+${LOOP_BODY}`);
+
+  expect(output).toEqual({ n: 3n, exited: true });
+});
+
+const NESTED_COMPOSITES = `id: nested-inline-composites
 name: nested_inline_composites
 input:
   items: !list(int)
@@ -2018,7 +2233,11 @@ nodes:
 output:
   mapped: \${outer_call.output}
   looped: \${outer_loop.output}
-`),
+`;
+
+test("nested inline composites register four lexical children once", async () => {
+  const { result: flow, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(NESTED_COMPOSITES),
   );
 
   const outerCallOwner = ["root", "node", "outer_call", "inline"];
@@ -2045,6 +2264,12 @@ output:
   ]);
 });
 
+test("nested inline composites run without registering again", async () => {
+  const output = await runOutputRegisteringNoMore(NESTED_COMPOSITES, { items: [3n, 1n, 2n] }, 4);
+
+  expect(output).toEqual({ mapped: [3n, 1n, 2n], looped: { n: 2n, exited: false } });
+});
+
 /**
  * Expect `registrations` and `resolutions` (from `recordPrivateScope`) to register and resolve
  * each of `expected`'s `[owner, label]` once, under its owner's flow id, all in one scope.
@@ -2062,9 +2287,7 @@ function expectRegisteredOnce(
   for (const [entryScope] of [...registrations, ...resolutions]) expect(entryScope).toBe(scope);
 }
 
-test("an eager def's nested inline calls use their exact lexical owners, once", async () => {
-  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() =>
-    loadConformanceFlow(`id: eager-def-nested-inline-calls
+const EAGER_DEF_NESTED = `id: eager-def-nested-inline-calls
 name: eager_def_nested_inline_calls
 defs:
   outer:
@@ -2089,7 +2312,11 @@ nodes:
     kind: call
     call: outer
 output: \${invoke.output}
-`),
+`;
+
+test("an eager def's nested inline calls use their exact lexical owners, once", async () => {
+  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(EAGER_DEF_NESTED),
   );
 
   const outerOwner = ["def", "outer", "node", "outer_call", "inline"];
@@ -2102,6 +2329,10 @@ output: \${invoke.output}
     [outerOwner, "inline body of node 'outer_call'"],
     [innerOwner, "inline body of node 'inner_call'"],
   ]);
+});
+
+test("an eager def's nested inline calls run without registering again", async () => {
+  expect(await runOutputRegisteringNoMore(EAGER_DEF_NESTED)).toBe("nested-inline-ok");
 });
 
 test.each([
@@ -2166,6 +2397,59 @@ ${nodeBody}output: \${composite.output}
   expect(error.message).toBe(
     `node 'composite' (kind=${kind}): field 'llm_config' is not allowed (allowed: ${allowed})`,
   );
+});
+
+test.each([
+  [
+    "call",
+    `    kind: call
+    asserts:
+      - output == 999
+    nodes:
+      inner:
+        kind: code
+        code: |
+          return 1
+        output: int
+    output: \${inner.output}
+`,
+  ],
+  [
+    "loop",
+    `    kind: loop
+    times: 1
+    input:
+      n: 0
+      exited: false
+    asserts:
+      - output.n == 999
+    nodes:
+      inner:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:loop_bump
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: \${inner.output}
+`,
+  ],
+])("an inline %s's outer post asserts still fire", async (_kind, nodeBody) => {
+  const source = `id: inline-outer-assert
+name: inline_outer_assert
+nodes:
+  composite:
+${nodeBody}output: \${composite.output}
+`;
+
+  const result = await runFlow(await loadConformanceFlow(source), {});
+
+  expect(result.status).toBe("failed");
+  const failures = result.events.filter((event) => event instanceof RunFailed);
+  expect(failures.length).toBeGreaterThan(0);
+  expect(failures.at(-1)!.failure.causeType).toBe("NodeAssertFailed");
 });
 
 test.each([

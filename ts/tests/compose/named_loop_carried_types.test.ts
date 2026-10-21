@@ -27,9 +27,20 @@
  * `test_while_loop_ending_on_null_over_a_typed_seed_runs`,
  * `test_while_loop_ending_on_null_into_an_optional_input_runs`,
  * `test_optional_returned_into_an_optional_input_runs`, `test_null_seed_into_an_optional_input_runs`
- * and `test_a_partial_loop_runs`.
+ * and `test_a_partial_loop_runs`, and the run halves of
+ * `test_typed_seed_with_an_optional_returned_field_runs`,
+ * `test_while_loop_ending_on_null_over_a_typed_seed_runs`,
+ * `test_while_loop_ending_on_null_into_an_optional_input_runs`,
+ * `test_optional_returned_into_an_optional_input_runs`, `test_null_seed_into_an_optional_input_runs`
+ * and `test_a_partial_loop_runs`, through `runFlow` on the same flow text.
  *
- * Changed: the error rows pin the whole message where Python matches fragments.
+ * Changed: the error rows pin the whole message where Python matches fragments. The CODE bodies are
+ * TS, ints arriving as `number` (decision 45); the runs' ints are bigints (decision 4a).
+ *
+ * Not ported: the run halves of `test_typed_seed_leaves_a_returned_null_to_the_input_check`, covered
+ * by `run-loop/compose_named_loop_carried_types__a_returned_null_fails_the_next_turn`, and of
+ * `test_while_loop_ending_on_null_over_an_untyped_seed_runs`, covered by
+ * `run-loop/compose_named_loop_carried_types__while_loop_ends_on_a_returned_null`.
  *
  * Pinned at the end:
  * `load-loop/compose_named_loop_carried_types__{any_returned_into_an_int_input_is_rejected,
@@ -38,16 +49,16 @@
  * int_returned_into_a_float_input_loads,typed_seed_with_an_optional_typedef_field_loads}`, and
  * `load-loop/compose_named_loop_carried_types__a_loop_in_a_def_gets_the_carried_type_check` with
  * every frame.
- *
- * Later (T4): the run halves of the load-half rows above.
  */
 
 import { expect, test } from "bun:test";
 
+import { runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   runCase,
 } from "./declarations.ts";
@@ -100,7 +111,7 @@ output: \${repeat.output}
 `;
 }
 
-const PAGINATE = 'inputs["n"] >= 2n ? null : inputs["n"] + 1n';
+const PAGINATE = 'inputs["n"] >= 2 ? null : inputs["n"] + 1';
 const WHILE = "while: ${n != null}\n    max: 10";
 
 /** Assemble `namedLoop(bodyIn, bodyOut, ...)`. */
@@ -113,6 +124,9 @@ function load(
   const { ret = "null", ...loop } = options;
   assembleText(namedLoop(bodyIn, bodyOut, ret, seed, loop));
 }
+
+/** Run `text` on `{z: 0}`, as each Python run row does. */
+const run = async (text: string) => runFlow(await loadConformanceFlow(text), { z: 0n });
 
 /** The message of the load error `load(...)` raises. */
 const message = (bodyIn: string, bodyOut: string, seed: string) =>
@@ -131,29 +145,52 @@ test.each(["${input.z}", "0", "${input.z :- 0}"])(
 );
 
 test("a typed seed leaves a returned null to the input check", () => {
-  // The load half; the run half (the next turn's input check fails) is T4's.
+  // The load half; the run half (the next turn's input check fails) is the harvested
+  // run-loop/compose_named_loop_carried_types__a_returned_null_fails_the_next_turn.
   load("int", "Optional(int)", "!int ${input.z}");
 });
 
 test("a typed seed with an optional returned field loads", () => {
-  // Python's test_typed_seed_with_an_optional_returned_field_runs; the run half is T4's.
-  load("int", "Optional(int)", "!int ${input.z}", { ret: 'inputs["n"] + 1n' });
+  // The load half of Python's test_typed_seed_with_an_optional_returned_field_runs.
+  load("int", "Optional(int)", "!int ${input.z}", { ret: 'inputs["n"] + 1' });
+});
+
+test("typed seed with an optional returned field runs", async () => {
+  const result = await run(namedLoop("int", "Optional(int)", 'inputs["n"] + 1', "!int ${input.z}"));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: 2n });
 });
 
 test("a while loop ending on null over an untyped seed loads", () => {
   // Python's test_while_loop_ending_on_null_over_an_untyped_seed_runs: the `while:` null check
-  // keeps the returned null out of the body's `n: int`. The run half is T4's.
+  // keeps the returned null out of the body's `n: int`. The run half is the harvested
+  // run-loop/compose_named_loop_carried_types__while_loop_ends_on_a_returned_null.
   assembleText(namedLoop("int", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }));
 });
 
 test("a while loop ending on null over a typed seed loads", () => {
-  // Python's test_while_loop_ending_on_null_over_a_typed_seed_runs; the run half is T4's.
+  // The load half of Python's test_while_loop_ending_on_null_over_a_typed_seed_runs.
   assembleText(namedLoop("int", "Optional(int)", PAGINATE, "!int ${input.z}", { driver: WHILE }));
 });
 
+test("while loop ending on null over a typed seed runs", async () => {
+  const result = await run(namedLoop("int", "Optional(int)", PAGINATE, "!int ${input.z}", { driver: WHILE }));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: null });
+});
+
 test("a while loop ending on null into an optional input loads", () => {
-  // Python's test_while_loop_ending_on_null_into_an_optional_input_runs; the run half is T4's.
+  // The load half of Python's test_while_loop_ending_on_null_into_an_optional_input_runs.
   assembleText(namedLoop("Optional(int)", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }));
+});
+
+test("while loop ending on null into an optional input runs", async () => {
+  const result = await run(namedLoop("Optional(int)", "Optional(int)", PAGINATE, "${input.z}", { driver: WHILE }));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: null });
 });
 
 test.each(["${input.z}", "!int ${input.z}"])("a float returned into an int input is rejected (%s)", (seed) => {
@@ -189,13 +226,27 @@ test("an Optional(Any) returned into an Any input over a typed seed loads", () =
 });
 
 test("an optional returned into an optional input loads", () => {
-  // Python's test_optional_returned_into_an_optional_input_runs; the run half is T4's.
+  // The load half of Python's test_optional_returned_into_an_optional_input_runs.
   load("Optional(int)", "Optional(int)", "${input.z}");
 });
 
+test("optional returned into an optional input runs", async () => {
+  const result = await run(namedLoop("Optional(int)", "Optional(int)", "null", "${input.z}"));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: null });
+});
+
 test("a null seed into an optional input loads", () => {
-  // Python's test_null_seed_into_an_optional_input_runs; the run half is T4's.
+  // The load half of Python's test_null_seed_into_an_optional_input_runs.
   load("Optional(int)", "Optional(int)", "${null}");
+});
+
+test("null seed into an optional input runs", async () => {
+  const result = await run(namedLoop("Optional(int)", "Optional(int)", "null", "${null}"));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: null });
 });
 
 test("an int returned into a float input loads", () => {
@@ -242,7 +293,7 @@ defs:
           n: int
           m: int
         code: |
-          return {"n": inputs["n"] + 1n, "m": 0}
+          return {"n": inputs["n"] + 1, "m": 0}
     output: \${bump.output}
 nodes:
   repeat:
@@ -257,10 +308,8 @@ output: \${repeat.output}
   );
 });
 
-test("a partial loop loads", () => {
-  // Python's test_a_partial_loop_runs; the run half is T4's.
-  assembleText(
-    `
+/** A loop whose body takes `n` and `m` but returns only `n`. */
+const PARTIAL = `
 id: partial
 name: partial
 input:
@@ -278,7 +327,7 @@ defs:
         output:
           n: int
         code: |
-          return {"n": inputs["n"] + 1n}
+          return {"n": inputs["n"] + 1}
     output: \${bump.output}
 nodes:
   repeat:
@@ -289,8 +338,18 @@ nodes:
       n: \${input.z}
       m: 5
 output: \${repeat.output}
-`,
-  );
+`;
+
+test("a partial loop loads", () => {
+  // The load half of Python's test_a_partial_loop_runs.
+  assembleText(PARTIAL);
+});
+
+test("a partial loop runs", async () => {
+  const result = await run(PARTIAL);
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: 2n, m: 5n });
 });
 
 test("a loop inside a called body is rejected", () => {

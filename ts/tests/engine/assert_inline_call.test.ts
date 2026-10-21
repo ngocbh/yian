@@ -6,7 +6,9 @@
  * is minted: the call is an ordinary, author-named node in the flow. The load half assembles the
  * flow (`assembleText`), the `dbl` def built by hand (`handChild`).
  *
- * Later (T4): `test_inline_call_assert_passes`, `test_inline_call_assert_fails_post` (runs).
+ * The runs, loading the flow with its real `dbl` def (`loadConformanceFlow`) and running it through
+ * `runFlow`: `test_inline_call_assert_passes` and `test_inline_call_assert_fails_post`. Their ints
+ * are bigints (decision 4a).
  *
  * TS-only: the harvested `load-map-call/engine_assert_inline_call__named_call_node_assert_loads`,
  * pinned at the end.
@@ -17,8 +19,16 @@ import { afterEach, expect, test } from "bun:test";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembledWith, assembleText, handChild, parametersFromYaml, runCase } from "../compose/declarations.ts";
+import {
+  assembledWith,
+  assembleText,
+  handChild,
+  loadConformanceFlow,
+  parametersFromYaml,
+  runCase,
+} from "../compose/declarations.ts";
 
 afterEach(() => forget());
 
@@ -74,6 +84,19 @@ test("named call node assert loads", () => {
   const { flow } = assembleText(FLOW, "flow.yaml", { children: { dbl: dbl() } });
   // The assert reads an author-named call node; no synth node is minted.
   expect([...flow.compiled.nodes.keys()]).toEqual(["main", "dbl_call", "__start__", "__end__"]);
+});
+
+test("inline call assert passes", async () => {
+  const out = await runFlow(await loadConformanceFlow(FLOW), { v: 5n });
+  expect(out.status).toBe("succeeded");
+  expect(out.output).toBe(10n);
+});
+
+test("inline call assert fails post", async () => {
+  const out = await runFlow(await loadConformanceFlow(FLOW), { v: -3n }); // dbl(-3) = -6, violates `>= 0`
+  expect(out.status).not.toBe("succeeded");
+  expect(out.failure).not.toBeNull();
+  expect(out.failure!.message.toLowerCase()).toContain("assert");
 });
 
 // ---------- harvested conformance cases ----------

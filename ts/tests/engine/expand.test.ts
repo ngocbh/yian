@@ -18,8 +18,7 @@
  * - ints are `bigint`s (the child's value is `80n`), and the budget is `BUILTIN.maxTotalNodes`
  *   (Python's `Defaults()`).
  *
- * Later (T4-10, after T4-8's `resumeFlow`):
- * `test_deep_static_call_map_chain_resumes_after_its_last_expansion`.
+ * Later (T4-8): needs `resumeFlow`: `test_deep_static_call_map_chain_resumes_after_its_last_expansion`.
  */
 
 import { expect, test } from "bun:test";

@@ -48,19 +48,26 @@
  * record, a partly typed record (its opaque fields skipped) and anything else; `whileNonNullPaths`
  * giving a path checked twice once and in order, and nothing for a condition that doesn't parse.
  *
- * Later (T4): the run halves of
- * `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed`,
- * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check`,
- * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`,
+ * The runs, each loading the flow with the defs Python writes in it (`withDefs`) and running it
+ * through `runFlow`: both runs of
  * `test_optional_seed_fills_a_strict_body_input_under_a_while_null_check`,
- * `test_every_seed_shape_is_narrowed_by_a_while_null_check`,
- * `test_while_null_check_keeps_the_case_narrowed_seed`,
- * `test_partial_loop_seed_check_alone_decides_a_carried_over_field`,
- * `test_nested_null_check_narrows_the_record_above_it`,
- * `test_while_null_check_lets_a_seed_record_omit_the_checked_field`,
- * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry` and
- * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`; and all of
- * `test_optional_seed_pagination_resumes_after_its_first_expansion`.
+ * `test_every_seed_shape_is_narrowed_by_a_while_null_check` (3, every run),
+ * `test_while_null_check_keeps_the_case_narrowed_seed` (both runs),
+ * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`,
+ * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` (both runs),
+ * `test_nested_null_check_narrows_the_record_above_it` (both runs),
+ * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry`,
+ * `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed` (both runs),
+ * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check` and
+ * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs` (flat, nested; every run).
+ * The CODE bodies are TS, ints arriving as `number` (decision 45), a Python `assert` throwing an
+ * `Error`; the runs' ints are bigints (decision 4a).
+ *
+ * Not ported: the run of `test_while_null_check_lets_a_seed_record_omit_the_checked_field`, covered
+ * by `run-loop/engine_loop_null_narrowing__an_absent_checked_field_reads_as_null` (its events pin
+ * that the body never starts).
+ *
+ * Later (T4-8): needs `resumeFlow`: `test_optional_seed_pagination_resumes_after_its_first_expansion`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -69,8 +76,10 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs, nullableAt, whileNonNullPaths } from "../../src/compose/nodes/loop.ts";
 import { forget } from "../../src/defaults.ts";
+import { NodeStarted } from "../../src/events.ts";
 import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { type RunResult, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -78,6 +87,7 @@ import {
   assembleText,
   type ChildFlows,
   handChild,
+  loadConformanceFlow,
   loadError,
   nodesOf,
   parametersFromYaml,
@@ -210,8 +220,57 @@ function load(text: string, children: ChildFlows = { fetch_page: pagesBody() }):
   return assembleText(text, "flow.yaml", { children }).flow;
 }
 
+// ---------- the runs ----------
+
+/**
+ * `text` with `defs` (each entry indented under `defs:`) before its `nodes:`: the runs load the flow
+ * with the defs Python writes in it, where the rows above build each def by hand.
+ */
+const withDefs = (text: string, defs: string) => text.replace(/^nodes:$/m, `defs:\n${defs}nodes:`);
+
+/**
+ * The runnable `fetch_page` def, `cursor: str` in, `output` out. Its CODE node fails on a null
+ * cursor, so a run that succeeds shows the null never entered the body.
+ */
+const fetchPageDef = (output: string) => `  fetch_page:
+    input:
+      cursor: !str
+    nodes:
+      get:
+        kind: code
+        input:
+          cursor: \${input.cursor}
+        output: Optional(str)
+        code: |
+          if (inputs["cursor"] === null) throw new Error("body saw a null cursor")
+          return ({p1: "p2", p2: null})[inputs["cursor"]] ?? null
+    output: ${output}
+`;
+
+/** The named pagination body: it returns `{cursor: <get's output>}`. */
+const FETCH_PAGE = fetchPageDef("\n      cursor: ${get.output}");
+
+/** Count the body's CODE node runs in a finished run. */
+function bodyRuns(result: RunResult): number {
+  return result.events.filter((event) => event instanceof NodeStarted && event.nodeId.endsWith("/get")).length;
+}
+
 test("an optional seed fills a strict body input under a while null check", () => {
   expect(load(page()).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test("optional seed fills a strict body input under a while null check", async () => {
+  const flow = await loadConformanceFlow(withDefs(page(), FETCH_PAGE));
+
+  for (const [start, runs] of [
+    [null, 0],
+    ["p1", 2],
+  ] as const) {
+    const result = await runFlow(flow, { start });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual({ cursor: null });
+    expect(bodyRuns(result)).toBe(runs);
+  }
 });
 
 test.each<[string, string]>([
@@ -222,8 +281,48 @@ test.each<[string, string]>([
   expect(load(page({ seed, inputs })).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
 });
 
+test.each<[string, string, [Record<string, string | null>, number][]]>([
+  [
+    "!Optional(str) ${input.start}",
+    "start: !Optional(str)",
+    [
+      [{ start: null }, 0],
+      [{ start: "p1" }, 2],
+    ],
+  ],
+  [
+    "${input.a :- input.b}",
+    "a: !Optional(str)\n  b: !Optional(str)",
+    [
+      [{ a: null, b: null }, 0],
+      [{ a: null, b: "p1" }, 2],
+      [{ a: "p2", b: null }, 1],
+    ],
+  ],
+  ["null", "start: !Optional(str)", [[{ start: null }, 0]]],
+])("every seed shape is narrowed by a while null check (runs): %s", async (seed, inputs, runs) => {
+  const flow = await loadConformanceFlow(withDefs(page({ seed, inputs }), FETCH_PAGE));
+
+  for (const [flowInputs, count] of runs) {
+    const result = await runFlow(flow, flowInputs);
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual({ cursor: null });
+    expect(bodyRuns(result)).toBe(count);
+  }
+});
+
 test("a while null check admits a null seed the body output can carry", () => {
   expect(load(page({ seed: "null" })).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test("while null check admits a null seed the body output can carry", async () => {
+  const result = await runFlow(await loadConformanceFlow(withDefs(page({ seed: "null" }), FETCH_PAGE)), {
+    start: null,
+  });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ cursor: null });
+  expect(bodyRuns(result)).toBe(0);
 });
 
 test("a while null check rejects a null seed the zero-iteration output cannot carry", () => {
@@ -250,6 +349,16 @@ const RETURNED_MESSAGE =
 
 test("a returned null fits a strict body input under a while null check (loads)", () => {
   expect(load(page({ seed: "p1" })).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test("returned null fits a strict body input under a while null check", async () => {
+  const result = await runFlow(await loadConformanceFlow(withDefs(page({ seed: "p1" }), FETCH_PAGE)), {
+    start: null,
+  });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ cursor: null });
+  expect(bodyRuns(result)).toBe(2);
 });
 
 test("an until null check narrows neither the seed nor a returned field", () => {
@@ -345,6 +454,36 @@ test("a partial loop's seed check alone decides a carried-over field", () => {
   expect(error.message).toBe("loop node 'loop': binding 'cursor' — child expects 'str', source is 'Optional(str)'");
 });
 
+test("partial loop seed check alone decides a carried over field", async () => {
+  const step = `  step:
+    input:
+      cursor: !str
+      n: !int
+    nodes:
+      get:
+        kind: code
+        input:
+          cursor: \${input.cursor}
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          if (inputs["cursor"] === null) throw new Error("assert")
+          return {n: inputs["n"] + 1}
+    output: \${get.output}
+`;
+  const flow = await loadConformanceFlow(withDefs(partial("while: cursor != null and n < 2"), step));
+
+  for (const [start, n] of [
+    [null, 0n],
+    ["c", 2n],
+  ] as const) {
+    const result = await runFlow(flow, { start });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual({ cursor: start, n });
+  }
+});
+
 /** The `Page` (`next` optional) and `Strict` (`next` required) records the paging rows read. */
 const PAGES = readTypedefs({ Page: { next: "Optional(str)", n: "int" }, Strict: { next: "str", n: "int" } });
 
@@ -398,6 +537,47 @@ test("a nested null check narrows the record above it", () => {
   const flow = load(NESTED, { step: strictStep("Optional(Page)"), seed: seedDef() });
 
   expect(flow.compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+});
+
+test("nested null check narrows the record above it", async () => {
+  const defs = `  step:
+    input:
+      page: !Strict
+    nodes:
+      get:
+        kind: code
+        input:
+          page: \${input.page}
+        output:
+          page: Optional(Page)
+        code: |
+          if (inputs["page"]["next"] === null) throw new Error("assert")
+          const n = inputs["page"]["n"] + 1
+          return {page: {next: n >= 2 ? null : "c", n}}
+    output: \${get.output}
+  seed:
+    input:
+      s: !Optional(str)
+    nodes:
+      mk:
+        kind: code
+        input:
+          s: \${input.s}
+        output: Optional(Page)
+        code: |
+          return inputs["s"] === null ? null : {next: inputs["s"], n: 0}
+    output: \${mk.output}
+`;
+  const flow = await loadConformanceFlow(withDefs(NESTED, defs));
+
+  for (const [start, output] of [
+    [null, { page: null }],
+    ["c", { page: { next: null, n: 2n } }],
+  ] as const) {
+    const result = await runFlow(flow, { start });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual(output);
+  }
 });
 
 test("a nested null check keeps the carried type of the returned record", () => {
@@ -522,6 +702,39 @@ test("a while null check keeps the case-narrowed seed", () => {
   );
 });
 
+test("while null check keeps the case narrowed seed", async () => {
+  const body = `  body:
+    input:
+      order: !Buy
+      cursor: !str
+      k: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          order: \${input.order}
+          cursor: \${input.cursor}
+          k: \${input.k}
+        output:
+          cursor: Optional(str)
+          k: int
+        code: |
+          if (inputs["cursor"] === null) throw new Error("assert")
+          return {cursor: null, k: inputs["k"] + inputs["order"]["qty"]}
+    output: \${step.output}
+`;
+  const flow = await loadConformanceFlow(withDefs(routed("loop", "e"), body));
+
+  for (const [start, k] of [
+    ["c1", 2n],
+    [null, 0n],
+  ] as const) {
+    const result = await runFlow(flow, { s: "b", start });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toBe(k);
+  }
+});
+
 // ---------- inline bodies ----------
 
 /**
@@ -578,6 +791,25 @@ test("a tag in the inline body admits the while-null-checked seed", () => {
   expect(inlineInputs(flow)).toEqual([["cursor", "Optional(str)", false]]);
 });
 
+/** The inline pagination body's runnable `fetch_page` def: it returns its `get` node's output. */
+const INLINE_FETCH_PAGE = fetchPageDef("${get.output}");
+
+test("a tag in the inline body admits the while null checked seed", async () => {
+  const flow = await loadConformanceFlow(
+    withDefs(inlinePages({ argument: "!str ${input.cursor}" }), INLINE_FETCH_PAGE),
+  );
+
+  for (const [start, runs] of [
+    [null, 0],
+    ["p1", 2],
+  ] as const) {
+    const result = await runFlow(flow, { start });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual({ cursor: null });
+    expect(bodyRuns(result)).toBe(runs);
+  }
+});
+
 test("an inline body reads a while-null-checked seed as its seed types it", () => {
   // The body's generated input is `Optional(str)` from the seed, and the `while:` does not change
   // it, so a strict CALL argument in the body still rejects it.
@@ -590,6 +822,16 @@ test("an inline body may return null into a literal seed under a while null chec
   const flow = loadInline(inlinePages({ seed: "p1" }));
 
   expect(inlineInputs(flow)).toEqual([["cursor", "str", true]]);
+});
+
+test("inline body returns null into a literal seed under a while null check", async () => {
+  const flow = await loadConformanceFlow(withDefs(inlinePages({ seed: "p1" }), INLINE_FETCH_PAGE));
+
+  const result = await runFlow(flow, { start: null });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ cursor: null });
+  expect(bodyRuns(result)).toBe(2);
 });
 
 test("an inline returned field of the wrong type names the seed type", () => {
@@ -611,10 +853,8 @@ test("an inline body under until reads the seed as optional", () => {
   );
 });
 
-test.each<[string, string, [string, string, boolean][]]>([
-  [
-    "flat",
-    `id: p
+// Inline bodies that return a null-checked field unchanged, flat and nested in a record.
+const PASS_THROUGH = `id: p
 name: p
 input:
   tok: !Optional(str)
@@ -632,20 +872,13 @@ nodes:
         input:
           n: \${input.n}
         output: int
-        code: return inputs["n"] + 1n
+        code: return inputs["n"] + 1
     output:
       token: \${input.token}
       n: \${step.output}
 output: \${pages.output}
-`,
-    [
-      ["token", "Optional(str)", false],
-      ["n", "int", true],
-    ],
-  ],
-  [
-    "nested",
-    `id: p
+`;
+const NESTED_PASS_THROUGH = `id: p
 name: p
 typedefs:
   Page:
@@ -667,12 +900,25 @@ nodes:
         input:
           k: \${input.k}
         output: int
-        code: return inputs["k"] + 1n
+        code: return inputs["k"] + 1
     output:
       page: \${input.page}
       k: \${step.output}
 output: \${pages.output}
-`,
+`;
+
+test.each<[string, string, [string, string, boolean][]]>([
+  [
+    "flat",
+    PASS_THROUGH,
+    [
+      ["token", "Optional(str)", false],
+      ["n", "int", true],
+    ],
+  ],
+  [
+    "nested",
+    NESTED_PASS_THROUGH,
     [
       ["page", 'Optional({"n":int,"next":Optional(str)})', false],
       ["k", "int", true],
@@ -680,6 +926,33 @@ output: \${pages.output}
   ],
 ])("an inline body returning a while-null-checked field unchanged loads: %s", (_name, source, inputs) => {
   expect(inlineInputs(assembleText(source).flow)).toEqual(inputs);
+});
+
+test.each<[string, string, [Record<string, unknown>, unknown][]]>([
+  [
+    "flat",
+    PASS_THROUGH,
+    [
+      [{ tok: null }, { token: null, n: 0n }],
+      [{ tok: "t" }, { token: "t", n: 2n }],
+    ],
+  ],
+  [
+    "nested",
+    NESTED_PASS_THROUGH,
+    [
+      [{ start: null }, { page: null, k: 0n }],
+      [{ start: { next: "x", n: 0n } }, { page: { next: "x", n: 0n }, k: 2n }],
+    ],
+  ],
+])("inline body returning a while null checked field unchanged runs: %s", async (_name, source, runs) => {
+  const flow = await loadConformanceFlow(source);
+
+  for (const [flowInputs, output] of runs) {
+    const result = await runFlow(flow, flowInputs);
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual(output);
+  }
 });
 
 // ---------- nullableAt ----------

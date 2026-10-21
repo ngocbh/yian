@@ -301,9 +301,10 @@ A case can't hold code, so its host is declared under `host`.
   a time is a valid schedule. A script is a list of entries, taken one per call
   in order, or a mapping from node id to such a list, taken by the calling node (for tools that
   several nodes call at once). An entry is `{return: <value>}` or `{raise: {class: <name>,
-  message: <text>, retry_after: <seconds>}}` (`retry_after` only for `TransientToolError`). The
-  classes are `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolCheckError`,
-  `TimeoutError` and `ConnectionError`; any other name raises a plain error with that class name.
+  message: <text>, retry_after: <seconds>}}` (`retry_after`, a finite non-negative number of
+  seconds, only for `TransientToolError`). The classes are `PermanentToolError`,
+  `TransientToolError`, `ReportedToolError`, `ToolCheckError`, `TimeoutError` and
+  `ConnectionError`; any other name raises a plain error with that class name.
   A call after the last entry fails the case before any result is compared, since it is the
   case's own error; an entry left unused fails it after the comparisons.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's `ask_user` tool gives to the

@@ -51,6 +51,9 @@ import {
   reprText,
 } from "../src/diagnostics.ts";
 import type { RunEvent, StreamChunk } from "../src/events.ts";
+import { EventStream } from "../src/llm/events.ts";
+import { checkModelConfig, resolveModelConfig } from "../src/llm_clients/connection.ts";
+import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import {
   constructorNames,
   evalExpr,
@@ -75,7 +78,7 @@ import type { AskUserHandler, AskUserRequest, ToolEntry } from "../src/tools/reg
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
-import { buildValueAs, FileRef, isRecord } from "../src/typesys/values.ts";
+import { buildValueAs, FileRef, fromHost, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
 import { validate } from "./schema.ts";
 import type { Schema } from "./schema.ts";
@@ -1144,6 +1147,8 @@ interface Host {
   tools: Record<string, ToolEntry>;
   /** The draws retry backoffs take, from `host.jitter`; `null` for the implementation's own. */
   random: (() => number) | null;
+  /** Builds every model the run calls; no call reaches a provider. */
+  models: ModelAccess;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
   calls: Map<string, Case[]>;
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
@@ -1158,9 +1163,10 @@ interface Host {
 /**
  * Return the case's host: each stub tool call is recorded and takes its script's next entry, as
  * each `ask_user` call takes the next `host.human` answer of its node and each backoff the next
- * `host.jitter` draw. `log` is the run's log file.
+ * `host.jitter` draw. Every model the run builds, from `env` after its config is resolved and
+ * checked, fails the case when called. `log` is the run's log file.
  */
-function host(case_: Case, log: string): Host {
+function host(case_: Case, log: string, env: Env): Host {
   const spec = get(case_, "host", {}) as Case;
   const calls = new Map<string, Case[]>();
   const problems: string[] = [];
@@ -1172,19 +1178,20 @@ function host(case_: Case, log: string): Host {
     ]),
   );
 
+  const refuse = (problem: string, message: string): never => {
+    problems.push(problem);
+    // Permanent, so a TOOL node doesn't retry the overrun; a model call's overrun fails its
+    // AGENT. `check()` reports it either way.
+    throw new PermanentToolError(message);
+  };
+
   const take = (label: string, what: string): Value => {
     const script = scripts.get(label);
-    if (script === undefined) {
-      problems.push(`${what} found no \`${label}\` list`);
-    } else if (script.length === 0) {
-      problems.push(`${what} found \`${label}\` used up`);
-    } else {
-      const entry = script.shift()!;
-      taken.push({ label, entry, sequence: nextSequence(log) });
-      return entry;
-    }
-    // Permanent, so a TOOL node doesn't retry the overrun; `check()` reports it either way.
-    throw new PermanentToolError(`\`${label}\` is used up`);
+    if (script === undefined) return refuse(`${what} found no \`${label}\` list`, `\`${label}\` is used up`);
+    if (script.length === 0) return refuse(`${what} found \`${label}\` used up`, `\`${label}\` is used up`);
+    const entry = script.shift()!;
+    taken.push({ label, entry, sequence: nextSequence(log) });
+    return entry;
   };
 
   const call = (name: string, label: string, ctx: ToolContext, args: Case): Value => {
@@ -1229,6 +1236,20 @@ function host(case_: Case, log: string): Host {
     random = () => Number(take("host.jitter", "a backoff draw"));
   }
 
+  // Installed even without `host.models`, so an unscripted model call never reaches a provider.
+  const models: ModelAccess = {
+    env,
+    createModel: (config, { nodeId }) => {
+      // The script replaces only the provider: the config is resolved and checked as yian's own
+      // factory does, so its errors stay yian's.
+      const values = fromHost(config, "llm_config") as Record<string, unknown>;
+      const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
+      const what = `a model call for \`agent\` from node ${reprText(nodeId)} found no \`host.models\` list`;
+      const stream = () => new EventStream({ next: () => refuse(what, what) });
+      return { provider: validated.provider!, model: validated.model!, stream };
+    },
+  };
+
   const check = (): string[] => {
     if (problems.length > 0) throw new CaseFailure(problems.join("\n"));
     return [...scripts]
@@ -1238,7 +1259,7 @@ function host(case_: Case, log: string): Host {
         return `\`${label}\` has ${script.length} ${entries} left`;
       });
   };
-  return { tools: Object.fromEntries(tools), random, calls, taken, check };
+  return { tools: Object.fromEntries(tools), random, models, calls, taken, check };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -1560,7 +1581,8 @@ function placeholders(results: Record<string, unknown>, runId: string | null): R
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
-  const { tools, random, calls, check } = host(case_, log);
+  const env = caseEnv(ctx);
+  const { tools, random, models, calls, check } = host(case_, log, env);
   const run = get(case_, "run", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
@@ -1568,9 +1590,10 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const options: RunFlowOptions = {
     ...runOptions(run),
     log,
-    env: caseEnv(ctx),
+    env,
     tools,
     random,
+    models,
     scheduler: virtualScheduler(Date.now()),
     onEvent: (event) => {
       events.push(event);

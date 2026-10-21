@@ -1,0 +1,99 @@
+# From tests/engine/test_episodic_memory_integration.py::test_backward_commits_episode_recalled_by_a_fresh_run.
+# Pins: the episode an earlier run's backward commits is recalled into a later run's system prompt:
+# the stored entry as canonical JSON, with its entry_id (the SHA-256 of the episode's identity) and
+# the float input `weight` written `1.0`.
+kind: run
+flow: |
+  id: episodic-history
+  name: episodic_history
+  llm_config: {provider: openai, model: test-model}
+  input:
+    topic: !str
+  nodes:
+    answer:
+      kind: agent
+      long_term_memory:
+        episodic: {type: episodic, config: {max_episodes: 4, recall_limit: 2}}
+      input: {topic: "${input.topic}", weight: "${1.0}"}
+      prompt: Explain ${topic}.
+      output: str
+  output: ${answer.output}
+inputs:
+  topic: queue ordering
+run:
+  run_id: r2
+  num_workers: 0
+host:
+  memory:
+    before:
+    - inputs:
+        topic: queue ordering
+      run:
+        run_id: r1
+        num_workers: 0
+        learnable: true
+      backward:
+      - feedback: null
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: Use a queue to preserve arrival order.
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: Use a queue again.
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: |-
+                You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+
+                Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"episodic","text":"{\"entry_id\":\"f917ea78ddef070bd304628d93aad0a209eb7fc7f93062b8899df432edd33681\",\"episode\":{\"base_system_prompt\":\"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.\",\"execution_seq\":3,\"failure\":null,\"inputs\":{\"topic\":\"queue ordering\",\"weight\":1.0},\"interactions\":[{\"kind\":\"model_text\",\"text\":\"Use a queue to preserve arrival order.\"}],\"memory_sections\":[],\"occurrence_path\":[],\"output\":\"Use a queue to preserve arrival order.\",\"owner_static_path\":[\"answer\"],\"prompt\":\"Explain queue ordering.\",\"run_id\":\"r1\",\"status\":\"succeeded\"}}"}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Explain queue ordering.
+expect:
+  output:
+    status: succeeded
+    output: Use a queue again.
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        answer:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: test-model
+          provider: openai
+      inputs:
+        topic: queue ordering
+      learnable: false
+      num_workers: 0
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        topic: queue ordering
+  - [node_started, answer]
+  - - node_succeeded
+    - answer
+    - value: Use a queue again.
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: Use a queue again.

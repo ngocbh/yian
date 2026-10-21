@@ -1,0 +1,92 @@
+# From tests/engine/test_run_memory.py::test_unfinished_primary_resume_uses_static_layout_after_map_growth
+# (serial here, and a built-in episodic memory for the test's fake one).
+# Pins: a run with a flow-level memory cut after a MAP's expansion (record 4) resumes to the same
+# output: the memory layout the resume checks is the flow's static one, not the grown nodes.
+kind: resume
+flow: |
+  id: memory-map
+  name: memory_map
+  long_term_memory: episodic
+  input:
+    values: !list(int)
+  defs:
+    increment:
+      input:
+        value: !int
+      nodes: {}
+      output: ${input.value + 1}
+  nodes:
+    each:
+      kind: map
+      call: increment
+      over: ${input.values}
+      input:
+        value: ${item}
+  output: ${each.output}
+inputs:
+  values: [1, 4]
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  crash_after_record: 4
+  memory: {}
+expect:
+  output:
+    status: succeeded
+    output: [2, 5]
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+      inputs:
+        values: [1, 4]
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value:
+        values: [1, 4]
+  - [node_started, each]
+  - - node_expanded
+    - each
+    - prune_ids: []
+      seed:
+      - value: 1
+      - value: 4
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: []
+  - [node_started, each/__start__]
+  - - node_succeeded
+    - each/__start__
+    - value: {}
+  - [node_started, each#0/__start__]
+  - - node_succeeded
+    - each#0/__start__
+    - value:
+        value: 1
+  - [node_started, each#1/__start__]
+  - - node_succeeded
+    - each#1/__start__
+    - value:
+        value: 4
+  - [node_started, each#0/__end__]
+  - - node_succeeded
+    - each#0/__end__
+    - value: 2
+  - [node_started, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - value: 5
+  - [node_started, each/__end__]
+  - - node_succeeded
+    - each/__end__
+    - commit_target: each
+      value: [2, 5]
+  - [node_started, __end__]
+  - - node_succeeded
+    - __end__
+    - value: [2, 5]
+resume: {}

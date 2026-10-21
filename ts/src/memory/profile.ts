@@ -207,8 +207,8 @@ export class ProfileMemory implements Memory {
    *   `processEnv`.
    * @param options.createModel Build the learner's model from the config Python passes to
    *   `model_from_config`; default `chatModelFromConfig(config, {env})`.
-   * @param options.onRetry Called before the learner's model call is retried; unset publishes
-   *   nothing.
+   * @param options.onRetry Called before the learner's model call is retried, with the error
+   *   scrubbed of the call's credentials; unset publishes nothing.
    * @throws TypeError when `store` lacks `read`/`write` or `llmConfig` isn't a record.
    * @throws DefaultsError when a budget is unset and a `YIAN_` variable holds a value it doesn't
    *   accept.
@@ -460,20 +460,27 @@ export class ProfileSession implements MemorySession {
         cause: scrubCallCredentials(cause, config, { env }),
       });
     }
-    let response: Response;
-    try {
-      response = await callWithRetries(model, request, { onRetry: memory["onRetry"] });
-    } catch (cause) {
-      // Providers may echo any credential the call sent; the chained cause must not carry it.
+    // Providers may echo any credential the call sent; neither a retry observer nor the chained
+    // cause may carry it.
+    const scrub = <T>(cause: T): T => {
       let sent: readonly string[] = [];
       try {
         if (model instanceof RouteModel) sent = model.route.auth.credentials();
       } catch {
         // A failing read leaves `sent` empty rather than replacing the error being mapped.
       }
+      return scrubCallCredentials(cause, config, { env, sent });
+    };
+    const onRetry = memory["onRetry"];
+    let response: Response;
+    try {
+      response = await callWithRetries(model, request, {
+        onRetry: onRetry && ((retry) => onRetry({ ...retry, error: scrub(retry.error) })),
+      });
+    } catch (cause) {
       throw error("learn", "profile.provider", "profile learner invocation failed", {
         retryable: true,
-        cause: scrubCallCredentials(cause, config, { env, sent }),
+        cause: scrub(cause),
       });
     }
     const text = parseReply(response, currentText, memory.maxChars);

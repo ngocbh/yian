@@ -10,10 +10,12 @@ import { type ResolvedMemory, resolveMemoryLayout } from "./compile/memory_layou
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { type Env, processEnv } from "./defaults.ts";
 import { compareCodeUnits, reprText } from "./diagnostics.ts";
+import { ModelCallRetried, ReplayDegraded } from "./events.ts";
+import type { RetryInfo } from "./llm/executor.ts";
+import type { ModelAccess } from "./llm_clients/factory.ts";
 import {
   BUILTIN_MEMORY_CONFIG_KEYS,
   isMemory,
-  type JsonObject,
   type Memory,
   MemoryOperationError,
   MemorySetupError,
@@ -29,6 +31,44 @@ import { jsTypeName, toHost, type Value, writeAsJson } from "./typesys/values.ts
 
 /** A constructor for one custom memory type, called with the declared config. */
 export type MemoryFactory = (config: Record<string, unknown>) => Memory | Promise<Memory>;
+
+/** Where the learners of one build get their environment and models and send their events. */
+interface Learners {
+  env: Env;
+  models: ModelAccess | null;
+  onEvent: ((event: ModelCallRetried | ReplayDegraded) => void) | null;
+}
+
+/** The node id a learner's model and events are attributed to. */
+const LEARNER_NODE = "__memory__";
+
+/** The `env`, `createModel` and `onRetry` options of the learner of the memory under `key`. */
+function learnerOptions(key: string, { env, models, onEvent }: Learners) {
+  const consumer = `memory:${key}`;
+  const createModel =
+    models === null
+      ? null
+      : (config: Readonly<Record<string, unknown>>) => {
+          const degraded = new Set<string>();
+          return models.createModel(config, {
+            nodeId: LEARNER_NODE,
+            consumer,
+            // A learner's call can't be stopped.
+            signal: new AbortController().signal,
+            onReplayDegraded: (reason) => {
+              if (degraded.has(reason)) return;
+              degraded.add(reason);
+              onEvent?.(new ReplayDegraded({ nodeId: LEARNER_NODE, reason }));
+            },
+          });
+        };
+  const onRetry =
+    onEvent === null
+      ? null
+      : ({ attempt, error: { kind, message }, retryIn }: RetryInfo) =>
+          onEvent(new ModelCallRetried({ nodeId: LEARNER_NODE, consumer, attempt, error: { kind, message }, retryIn }));
+  return { env: models?.env ?? env, createModel, onRetry };
+}
 
 /** Attach one cleanup failure, and the notes it carries, to `target`. */
 function noteCleanup(target: unknown, cleanup: unknown, label: string): void {
@@ -175,18 +215,21 @@ function setupError(memory: ResolvedMemory, message: string, options: { cause?: 
 }
 
 /**
- * Construct one built-in backend, its YAML config keys in camelCase.
+ * Construct one built-in backend, its YAML config keys in camelCase; a reflective or profile
+ * learner gets its environment, model and retry observer from `learners`.
  *
  * @throws as the backend's constructor does.
  */
-function builtin(type: string, config: JsonObject, path: string | null, createParent: boolean, env: Env): Memory {
+function builtin(memory: ResolvedMemory, path: string | null, createParent: boolean, learners: Learners): Memory {
+  const { type, config } = memory;
   const camel = (key: string) => key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
   const options = Object.fromEntries(Object.entries(config).map(([key, value]) => [camel(key), value]));
   if (type === "episodic") return new EpisodicMemory({ ...options, storage: path, createParent });
-  if (type === "reflective") return new ReflectiveMemory({ ...options, storage: path, createParent, env });
   if (type === "session") return new SessionMemory({ ...options, storage: path, createParent });
+  const learner = learnerOptions(memory.key, learners);
+  if (type === "reflective") return new ReflectiveMemory({ ...options, storage: path, createParent, ...learner });
   const store = path === null ? new InMemoryMarkdownStore() : new FileMarkdownStore(path, { createParent });
-  return new ProfileMemory(store, { ...options, env });
+  return new ProfileMemory(store, { ...options, ...learner });
 }
 
 /**
@@ -206,7 +249,14 @@ function builtin(type: string, config: JsonObject, path: string | null, createPa
  * @param options.factories Constructors for custom types, called with the declared config as a
  *   host value (safe ints as `number`) and awaited.
  * @param options.env The environment reflective and profile memory read model defaults and
- *   credentials from; default `processEnv`.
+ *   credentials from; default `processEnv`. `models.env` wins when `models` is given.
+ * @param options.models Builds the reflective and profile learners' models, under node
+ *   `"__memory__"` with consumer `"memory:<key>"`; their calls can't be stopped. Unset, a learner
+ *   builds through `chatModelFromConfig` with the environment.
+ * @param options.onEvent Receives each learner retry as a `ModelCallRetried` (the error scrubbed
+ *   of the call's credentials) and, with `models`, each reason a learner's model gives for leaving
+ *   out replay state as one `ReplayDegraded` per call, both under node `"__memory__"`. Learners run
+ *   outside any run, so their events reach this callback, never a run's `onEvent`.
  * @returns Map from memory key to backend, plus declared types.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `root` isn't a string.
  * @throws MemorySetupError when the table is invalid, or a key can't be built as asked (including
@@ -222,12 +272,16 @@ export async function buildMemories(
     supplied = {},
     factories = {},
     env = processEnv,
+    models = null,
+    onEvent = null,
   }: {
     root?: string | null;
     storage?: Readonly<Record<string, string>> | null;
     supplied?: Readonly<Record<string, Memory>> | null;
     factories?: Readonly<Record<string, MemoryFactory>> | null;
     env?: Env;
+    models?: ModelAccess | null;
+    onEvent?: ((event: ModelCallRetried | ReplayDegraded) => void) | null;
   } = {},
 ): Promise<MemoryRegistry> {
   if (!(flow instanceof ComposedFlow)) throw new TypeError("flow must be a ComposedFlow");
@@ -286,7 +340,7 @@ export async function buildMemories(
     for (const memory of table) {
       memories.set(
         memory.key,
-        await buildOne(memory, paths as Map<string, string>, given, makers, owned, base, seen, env),
+        await buildOne(memory, paths as Map<string, string>, given, makers, owned, base, seen, { env, models, onEvent }),
       );
     }
   } catch (primary) {
@@ -315,7 +369,7 @@ async function buildOne(
   owned: object[],
   base: string | null,
   seen: Map<string, string>,
-  env: Env,
+  learners: Learners,
 ): Promise<Memory> {
   if (supplied.has(memory.key)) {
     if (storage.has(memory.key)) {
@@ -369,7 +423,7 @@ async function buildOne(
   }
   let value: Memory;
   try {
-    value = builtin(memory.type, memory.config, path, createParent, env);
+    value = builtin(memory, path, createParent, learners);
   } catch (error) {
     if (error instanceof MemoryOperationError) {
       throw setupError(memory, `storage ${reprText(path ?? "")} is not a local file path`, { cause: error });

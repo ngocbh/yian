@@ -59,8 +59,8 @@
  * defect, and a reply with absent `lesson_id`/`text` accepted; `close()` while `learn` awaits
  * the model is `reflective.busy`, and the learn then fails `reflective.session_closed` when the
  * session closed meanwhile; an episode holding `Infinity` reaches the prompt as `Infinity`;
- * `onRetry` sees a retried `ProviderError`; `REFLECTION_SCHEMA` is frozen;
- * `boundedJsonMaterial` counts code points; `visibleInteractionJson` writes sorted keys.
+ * `onRetry` sees a retried `ProviderError`, scrubbed of the call's credentials;
+ * `REFLECTION_SCHEMA` is frozen; `boundedJsonMaterial` counts code points; `visibleInteractionJson` writes sorted keys.
  *
  * Changed:
  * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
@@ -1103,6 +1103,26 @@ test("onRetry sees a retried provider error", async () => {
   });
   expect(await learnOnce(memory)).toEqual([]);
   expect(retries.map((retry) => [retry.attempt, retry.error])).toEqual([[1, retried]]);
+});
+
+test("onRetry sees the retried error scrubbed of the call's credentials", async () => {
+  const key = "sk-variable-reflect-retry";
+  const env = baseEnv({ VLLM_API_KEY: key });
+  const config = { provider: "vllm", model: "m" };
+  const retried = new ProviderError("rate_limit", `Incorrect API key provided: ${key}`, { retryAfter: 0.001 });
+  const retries: RetryInfo[] = [];
+  const memory = new ReflectiveMemory({
+    env,
+    llmConfig: config,
+    createModel: () => new ScriptedModel([retried, reply(NOOP)], config),
+    onRetry: (retry) => {
+      retries.push(retry);
+    },
+  });
+  expect(await learnOnce(memory)).toEqual([]);
+  expect(retries.map(({ attempt, error }) => [attempt, error.kind, error.message])).toEqual([
+    [1, "rate_limit", "Incorrect API key provided: [REDACTED]"],
+  ]);
 });
 
 test("learn errors scrub the key variable and saved login", async () => {

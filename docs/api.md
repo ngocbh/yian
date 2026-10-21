@@ -204,6 +204,9 @@ run before appending any record.
   `IN_LOOP_EVENTS`, since it comes from outside a node. A `ReplayDegraded`
   published during backward or with `node_id` `"__memory__"` comes from outside a
   forward node too. Python yian publishes no retry event.
+  Changed (TS yian): a learner's `ModelCallRetried` and `ReplayDegraded`
+  reach the `onEvent` given to `buildMemories`, never a run's `on_event`, since
+  learners run outside any run.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
   chat replies stream visible text as `StreamChunk(node_id, "text", chunk,

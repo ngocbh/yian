@@ -33,8 +33,8 @@
  * messages; two concurrent commits of one id write once; a failed commit (version mismatch) then a
  * good one in the same session, whose `2n` feedback is written as Python's int `2`; the reply
  * parser's messages; feedback holding `Infinity` is `profile.invalid_context` after the model call;
- * `onRetry` sees a retried `ProviderError`; a commit id whose write failed commits once the store
- * is back; with `YIAN_TEST_NODE` set to a Node binary, the built backend opens a document Bun
+ * `onRetry` sees a retried `ProviderError`, scrubbed of the call's credentials; a commit id whose
+ * write failed commits once the store is back; with `YIAN_TEST_NODE` set to a Node binary, the built backend opens a document Bun
  * seeded, learns with a scripted model and commits under Node, and Bun reads the new document and
  * its write log.
  *
@@ -921,6 +921,23 @@ test("onRetry sees a retried provider error", async () => {
   const batch = await withRun(memory, (session) => session.learn(learnContext([], feedbackOf("Be brief."))));
   expect(batch.length).toBe(1);
   expect(retries.map((retry) => [retry.attempt, retry.error])).toEqual([[1, retried]]);
+});
+
+test("onRetry sees the retried error scrubbed of the call's credentials", async () => {
+  const key = "sk-sentinel-profile-retry";
+  const retried = new ProviderError("rate_limit", `Incorrect API key provided: ${key}`, { retryAfter: 0.001 });
+  const retries: RetryInfo[] = [];
+  const memory = await newMemory("# Ada\n", {
+    llmConfig: { ...CONFIG, api_key: key },
+    createModel: () => new ScriptedModel([retried, textReply("<profile># Ada\nBrief.</profile>")], CONFIG),
+    onRetry: (retry) => {
+      retries.push(retry);
+    },
+  });
+  await withRun(memory, (session) => session.learn(learnContext([], feedbackOf("Be brief."))));
+  expect(retries.map(({ attempt, error }) => [attempt, error.kind, error.message])).toEqual([
+    [1, "rate_limit", "Incorrect API key provided: [REDACTED]"],
+  ]);
 });
 
 /** The `ts/` directory. */

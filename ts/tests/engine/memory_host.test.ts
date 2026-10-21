@@ -49,7 +49,11 @@
  * reported like a sync failure; two overlapping `close()` calls close each object once and both
  * reject with the same first failure, and a later call retries it; an async factory is awaited; an
  * async factory rejecting `TypeError` is "rejected its config"; a wrapped failure keeps its cause;
- * `env` reaches reflective and profile memory and defaults to `processEnv`.
+ * `env` reaches reflective and profile memory and defaults to `processEnv`; with `models`, a
+ * learner builds through `models.createModel` under node `__memory__` with consumer
+ * `memory:<key>` and reads `models.env`, and each reason its model gives for leaving out replay
+ * state reaches `onEvent` once per call as `ReplayDegraded`; each learner retry reaches `onEvent`
+ * as `ModelCallRetried`, with and without `models`; a custom factory gets only its config.
  *
  * Ported, through `runFlow` in an environment holding only the test's credential store:
  * `test_registry_built_for_another_flow_is_rejected` and `test_registry_for_this_flow_runs`, whose
@@ -76,7 +80,12 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { ModelCallRetried, ReplayDegraded } from "../../src/events.ts";
 import * as yian from "../../src/index.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import type { RetryInfo } from "../../src/llm/executor.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   DeclSite,
   type JsonObject,
@@ -472,6 +481,89 @@ test("env reaches reflective and profile memory and defaults to processEnv", asy
   await using defaulted = await buildMemories(flow);
   expect(field(defaulted.get("lessons"), "env")).toBe(processEnv);
   expect(field(defaulted.get("about"), "env")).toBe(processEnv);
+});
+
+/** A `ModelAccess` returning `model` that records the options of each `createModel` call. */
+function recording(model = new ScriptedModel([])) {
+  const options: Parameters<ModelAccess["createModel"]>[1][] = [];
+  const access: ModelAccess = {
+    env: () => undefined,
+    createModel: (_config, given) => {
+      options.push(given);
+      return model;
+    },
+  };
+  return { access, model, options };
+}
+
+/** Call one backend's learner `createModel` with `config`. */
+function buildLearner(memory: Memory | undefined, config: Record<string, unknown>): unknown {
+  return (field(memory, "createModel") as (config: Record<string, unknown>) => unknown)(config);
+}
+
+test("a learner builds through models under its memory key", async () => {
+  const flow = hostFlow([decl("lessons", "reflective"), decl("about", "profile")]);
+  const { access, model, options } = recording();
+  const events: unknown[] = [];
+  const env = (_name: string): string | undefined => "unused";
+  await using registry = await buildMemories(flow, { env, models: access, onEvent: (event) => events.push(event) });
+  for (const key of ["lessons", "about"]) {
+    expect(field(registry.get(key), "env")).toBe(access.env);
+    expect(await buildLearner(registry.get(key), { provider: "ollama", model: "qwen" })).toBe(model);
+    const given = options.at(-1)!;
+    expect([given.nodeId, given.consumer, given.signal.aborted]).toEqual(["__memory__", `memory:${key}`, false]);
+    given.onReplayDegraded!("other_provider");
+    given.onReplayDegraded!("other_provider");
+  }
+  expect(events).toEqual([
+    new ReplayDegraded({ nodeId: "__memory__", reason: "other_provider" }),
+    new ReplayDegraded({ nodeId: "__memory__", reason: "other_provider" }),
+  ]);
+});
+
+test("each learner retry reaches onEvent, with and without models", async () => {
+  const flow = hostFlow([decl("lessons", "reflective"), decl("about", "profile")]);
+  const retry: RetryInfo = { attempt: 2, error: new ProviderError("rate_limit", "slow down"), partial: null, retryIn: 0.5 };
+  for (const models of [recording().access, undefined]) {
+    const events: unknown[] = [];
+    await using registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
+    for (const key of ["lessons", "about"]) {
+      await (field(registry.get(key), "onRetry") as (retry: RetryInfo) => unknown)(retry);
+    }
+    expect(events).toEqual(
+      ["lessons", "about"].map(
+        (key) =>
+          new ModelCallRetried({
+            nodeId: "__memory__",
+            consumer: `memory:${key}`,
+            attempt: 2,
+            error: { kind: "rate_limit", message: "slow down" },
+            retryIn: 0.5,
+          }),
+      ),
+    );
+  }
+  // Without `onEvent` a retry publishes nothing; without `models` the learner keeps its default.
+  await using quiet = await buildMemories(flow);
+  expect(field(quiet.get("lessons"), "onRetry")).toBeUndefined();
+  expect(field(quiet.get("about"), "onRetry")).toBeUndefined();
+});
+
+test("a custom factory gets only its config when models and onEvent are given", async () => {
+  const flow = hostFlow([decl("vec", "vector", { top_k: 3n })]);
+  const got: unknown[][] = [];
+  await using registry = await buildMemories(flow, {
+    models: recording().access,
+    onEvent: () => {},
+    factories: {
+      vector: (...args) => {
+        got.push(args);
+        return new Custom(args[0]);
+      },
+    },
+  });
+  expect(got).toEqual([[{ top_k: 3 }]]);
+  expect(registry.get("vec")).toBeInstanceOf(Custom);
 });
 
 test("supplied wins and is not closed", async () => {

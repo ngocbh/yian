@@ -15,15 +15,23 @@
  * grant a real `noop` tool in the run's `ToolSet`, where Python patches `ToolSet.resolve`; the
  * model answers without calling it, then (structured) gives the value in a second request.
  *
- * Later (T4-8), through `loadFlow`, `runFlow` and `resumeFlow`:
- * `test_run_flow_sends_the_rendered_persona`,
- * `test_resume_replays_a_finished_node_with_its_recorded_system_prompt`,
+ * Ported through `loadFlow`, `runFlow` and `resumeFlow`, in `hostEnv`, a `ScriptedModel` given as
+ * `models`: `test_run_flow_sends_the_rendered_persona`,
+ * `test_resume_replays_a_finished_node_with_its_recorded_system_prompt` (its backward through
+ * `RunResult.backward`, the resumed model serving the backward replies too),
  * `test_retry_after_a_mid_node_crash_renders_the_same_system_prompt` and
- * `test_resume_refuses_a_flow_whose_system_prompt_changed`.
+ * `test_resume_refuses_a_flow_whose_system_prompt_changed`. Changed: the process loss is
+ * `crashAfter`'s log refusing the append of the crashed node's success, after its model answered
+ * (Python: the model call raises); the fingerprint refusal is a `RangeError` (Python's `ValueError`).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import {
@@ -37,7 +45,9 @@ import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode, type EvalNodeOptions } from "../../src/runtime/eval_node.ts";
+import { NodeSucceededRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { systemPromptWithSkills } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -45,7 +55,11 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
-import { nodeFlow, serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { crashAfter, nodeFlow, rejection, serving, textReply } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-agent-system-prompt-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -188,4 +202,115 @@ test("a null system prompt value fails the node before any model call", async ()
 
   expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
   expect(models.built).toBe(0);
+});
+
+// --- through YAML, the run log, and recovery --- //
+
+const CHAT = `\
+id: chat
+name: chat
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  name: !str
+  title: !str
+  message: !str
+nodes:
+  reply:
+    kind: agent
+    input: {name: "\${input.name}", title: "\${input.title}", message: "\${input.message}"}
+    system_prompt: "SYSTEM"
+    prompt: \${message}
+    output: str
+  after:
+    kind: agent
+    input: {draft: "\${reply.output}"}
+    prompt: "polish: \${draft}"
+    output: str
+output: \${after.output}
+`;
+const INPUTS = { name: "Ada", title: "CTO", message: "How are we doing?" };
+// The records before `reply`'s success and before `after`'s: RunStarted, START's start and
+// success, then each agent's start.
+const BEFORE_REPLY_SUCCESS = 4;
+const BEFORE_AFTER_SUCCESS = 6;
+
+/** Load the chat flow with `template` as `reply`'s system prompt. */
+function chatFlow(template: string = TEMPLATE) {
+  return loadFlow(CHAT.replace('"SYSTEM"', JSON.stringify(template)));
+}
+
+/** Run options serving `model` in `hostEnv`. */
+function served(model: ScriptedModel) {
+  return { models: serving(model), env: hostEnv(dir) };
+}
+
+/** The recorded evidence of `reply`'s success in the log at `path`. */
+function replyEvidence(path: string) {
+  const records = readRunLog(path)
+    .map((envelope) => envelope.record)
+    .filter((record) => record instanceof NodeSucceededRecord && record.nodeId === "reply");
+  expect(records).toHaveLength(1);
+  return (records[0] as NodeSucceededRecord).evidence!;
+}
+
+test("run flow sends the rendered persona", async () => {
+  const model = scripted("draft", "final");
+  const result = await runFlow(await chatFlow(), INPUTS, served(model));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("final");
+  expect(systems(model)).toEqual([RENDERED, DEFAULT_SYSTEM]);
+});
+
+test("resume replays a finished node with its recorded system prompt", async () => {
+  const path = join(dir, "replays.jsonl");
+  const flow = await chatFlow();
+  await crashAfter(BEFORE_AFTER_SUCCESS, () =>
+    runFlow(flow, INPUTS, { log: path, learnable: true, ...served(scripted("draft", "lost")) }),
+  );
+
+  // The resumed model also serves the backward calls.
+  const model = scripted(
+    "final",
+    JSON.stringify({ input_feedback: { draft: ["Too stiff."] }, self_feedback: [], variable_feedback: {} }),
+    JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} }),
+  );
+  const resumed = await resumeFlow(flow, { log: path, ...served(model) });
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("final");
+  expect(model.requests.map((request) => request.messages.at(-1)!.text())).toEqual(["polish: draft"]);
+  expect(replyEvidence(path).baseSystemPrompt).toBe(RENDERED);
+
+  // Backward on the resumed run reads the system prompt recorded before the crash.
+  await resumed.backward("Warmer, please.");
+  const material = JSON.parse(model.requests[2]!.messages[1]!.text());
+  expect(material.forward.node_id).toBe("reply");
+  expect(material.forward.evaluation_evidence.base_system_prompt).toBe(RENDERED);
+});
+
+test("retry after a mid node crash renders the same system prompt", async () => {
+  const path = join(dir, "retry.jsonl");
+  const flow = await chatFlow();
+  const first = scripted("lost");
+  await crashAfter(BEFORE_REPLY_SUCCESS, () => runFlow(flow, INPUTS, { log: path, learnable: true, ...served(first) }));
+  expect(systems(first)[0]).toBe(RENDERED);
+
+  const retry = scripted("draft", "final");
+  const resumed = await resumeFlow(flow, { log: path, ...served(retry) });
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("final");
+  expect(systems(retry)[0]).toBe(RENDERED);
+  expect(replyEvidence(path).baseSystemPrompt).toBe(RENDERED);
+});
+
+test("resume refuses a flow whose system prompt changed", async () => {
+  const path = join(dir, "changed.jsonl");
+  await crashAfter(BEFORE_AFTER_SUCCESS, async () =>
+    runFlow(await chatFlow(), INPUTS, { log: path, ...served(scripted("draft", "lost")) }),
+  );
+
+  const error = await rejection(resumeFlow(await chatFlow("You are ${name}."), { log: path, ...served(scripted()) }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toContain("flow fingerprint mismatch");
 });

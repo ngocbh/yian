@@ -161,6 +161,7 @@ import {
   FailingLog,
   fragment,
   fragmentBuilder,
+  fragmentIds,
   initializedSpawner,
   parentFlow,
   reducerSnapshot,
@@ -632,11 +633,6 @@ test("growth record replay requires the injected builder", () => {
 
   expectError(() => prepareRecord(state, record), TypeError, /grow_builder/);
 });
-
-/** The fragment start and end ids of a prepared growth's plan. */
-function fragmentIds(prepared: PreparedTransition): { fragmentStartId: string; fragmentEndId: string } {
-  return (prepared._plan as { delta: { fragmentStartId: string; fragmentEndId: string } }).delta;
-}
 
 test.each(["call", "map", "loop"])("actual buildGrow splices %s with FIFO order and depth", (kind) => {
   const child = canonicalChild();

@@ -91,8 +91,7 @@
  * - `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope`: the expansion and
  *   the replay grow through `buildGrow`; the dynamic scope's class is checked by its constructor.
  * - `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory`: `ownerEngine` with
- *   `growBuilder: buildGrow` (Python's `_engine` default); the child's memory declaration is
- *   assigned on the child.
+ *   `growBuilder: buildGrow` (Python's `_engine` default).
  */
 
 import { createHash } from "node:crypto";

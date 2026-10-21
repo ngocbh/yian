@@ -40,7 +40,7 @@ import { expansionDigest } from "../../src/compile/manifest.ts";
 import { copyGraph, END_ID, Flow, GrowthRejected } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
-import { Grow, type Node, NodeKind } from "../../src/nodes/base.ts";
+import { Grow, NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";

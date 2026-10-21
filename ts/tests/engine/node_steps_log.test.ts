@@ -93,6 +93,7 @@ import {
   fanoutFlow,
   forwardCapture,
   fragmentBuilder,
+  fragmentIds,
   initializedAndStarted,
   initializedSpawner,
   nodeFailure,
@@ -428,9 +429,7 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
   const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
   const expansion = prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow);
   commitPrepared(log, state, expansion);
-  const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = (
-    expansion._plan as { delta: { fragmentStartId: string; fragmentEndId: string } }
-  ).delta;
+  const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
 
   commitPrepared(log, state, prepareNodeStarted(state, bodyStart));
   commitPrepared(log, state, prepareNodeStep(state, bodyStart, FAILED));

@@ -416,7 +416,7 @@ test.each([
   ["map", ["Ada", "Grace"]],
   ["loop", { n: 3n, exited: true }],
 ])("direct engine executes the real dynamic combinator %s", async (kind, expected) => {
-  const [flow, inputs] = await loadDynamic(kind as string);
+  const [flow, inputs] = await loadDynamic(kind);
   const events = await engine(flow, { inputs, growBuilder: buildGrow }).run();
 
   expect(events.some((event) => event instanceof NodeExpanded)).toBe(true);

@@ -67,6 +67,7 @@ import {
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
+  type PreparedTransition,
   prepareRunStarted,
   type RunStartData,
   RunState,
@@ -1039,6 +1040,11 @@ export function fragment(spawnerId: string, suffix: string = "child"): Flow {
 /** A builder returning `fragment(spawner.id)`. */
 export const fragmentBuilder: GrowBuilder = (spawner) => fragment(spawner.id);
 
+/** The fragment start and end ids of a prepared growth's plan. */
+export function fragmentIds(prepared: PreparedTransition): { fragmentStartId: string; fragmentEndId: string } {
+  return (prepared._plan as { delta: { fragmentStartId: string; fragmentEndId: string } }).delta;
+}
+
 /**
  * Return a real manifestable child flow, as `buildGrow` accepts; with `optionalInput`, its START
  * declares an optional text input `optional` defaulting to `fallback` (Python's
@@ -1068,7 +1074,7 @@ export function canonicalChild(options: { optionalInput?: boolean } = {}): Compi
 }
 
 /** A required int parameter that coerces supplied strings. */
-function intParameter(name: string): Parameter {
+export function intParameter(name: string): Parameter {
   return new Parameter(name, {
     contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
     required: true,

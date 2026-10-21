@@ -31,12 +31,11 @@ import { BUILTIN } from "../../src/defaults.ts";
 import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Binding, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { childFlow, engine, parentWithSpawner } from "./run_state_fixtures.ts";
+import { childFlow, engine, intParameter, parentWithSpawner } from "./run_state_fixtures.ts";
 
 test("rensInternal re-namespaces input and output heads", () => {
   // `${input.k}` reads the namespaced child START's output object; `${x.output}` is node-first.
@@ -201,18 +200,7 @@ test.each([0, 4])("deep static CALL/MAP chain loads and succeeds (%p workers)", 
  */
 function wideChild(n: number): CompiledFlow {
   const nodes = new Map<string, Node>([
-    [
-      START_ID,
-      new StartNode(START_ID, {
-        params: [
-          new Parameter("x", {
-            contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
-            required: true,
-            coerceStrings: true,
-          }),
-        ],
-      }),
-    ],
+    [START_ID, new StartNode(START_ID, { params: [intParameter("x")] })],
     [END_ID, EndNode.value(END_ID, { outputName: "out" })],
   ]);
   const edges: Edge[] = [];

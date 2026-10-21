@@ -9,11 +9,12 @@
  * stores a `Message` as a `ConversationItem` and reads it back strictly; and the memory boundary,
  * which keeps codec and backend faults apart from errors a model retry may handle; and recording
  * model calls and tool effects in the turn: each request stored before the call, then its reply,
- * result or sanitized failure, a pending stop recorded `interrupted`, and a failed observation
- * never hiding the call's own error; and projecting stored history for the model: whole model
- * exchanges with context-only repairs for missing tool results, inert text for unpairable calls
- * and a status line for unfinished work, optionally condensed by a summary the current model writes
- * when the turn supports `prepareHistory`.
+ * result or sanitized failure, a pending stop recorded `interrupted`, a failed observation never
+ * hiding the call's own error, and a tool group's settled calls observed in call order; and
+ * projecting stored history for the model: whole model exchanges with context-only repairs for
+ * missing tool results, inert text for unpairable calls and a status line for unfinished work,
+ * optionally condensed by a summary the current model writes when the turn supports
+ * `prepareHistory`.
  *
  * The descriptor's `message_format` is `MESSAGE_FORMAT` of `llm/messages.ts` (`yian.message.v1`),
  * not Python yian's `yian.langchain-message.v1`: TS stores its own message shape and never reads
@@ -461,10 +462,14 @@ export async function interruptTurn(turn: ConversationTurn | null | undefined): 
   });
 }
 
+/** How one tool call ended: it returned `value` (a `ReportedToolError` when `reported`), or threw `error`. */
+export type ToolOutcome = { readonly value: unknown; readonly reported: boolean } | { readonly error: unknown };
+
 /**
  * Persist one tool call separately from representing its result.
  *
- * Without a turn, `invoke` runs and the stop is checked.
+ * Without a turn, `invoke` runs and the stop is checked. With one, the call is requested
+ * (`requestTool`), run, then observed (`settleToolEffect`).
  *
  * @param invoke The tool's checked invocation.
  * @param options.signal The node's stop signal; a stop is pending once it aborted.
@@ -495,30 +500,65 @@ export async function invokeToolEffect(
     signal?.throwIfAborted();
     return toolMessage(options, toolText(name, result), false);
   }
-  const ordinal = await memoryBoundary(() => turn.request("tool", toolPayload(options)), signal);
-  let result: unknown;
-  // A reported tool error is an object, so `null` means the tool returned.
-  let reported: unknown = null;
+  const ordinal = await requestTool(turn, options);
+  let outcome: ToolOutcome;
   try {
-    result = await invoke();
+    outcome = { value: await invoke(), reported: false };
   } catch (error) {
-    if (!isReportedToolError(error)) {
-      await observeFailure(turn, ordinal, "tool", error, signal);
-      throw error;
-    }
-    // A stop pending when the tool reports its error wins, as it does for a failure.
-    if (signal?.aborted) {
-      await recordFailure(turn, ordinal, "tool", signal.reason, true, signal);
-      throw signal.reason;
-    }
-    reported = error;
+    outcome = isReportedToolError(error) ? { value: error, reported: true } : { error };
+  }
+  return await settleToolEffect(turn, ordinal, outcome, options);
+}
+
+/**
+ * Store the request of one tool call before it runs.
+ *
+ * @param options.signal The node's stop signal; a stop the turn throws passes through.
+ * @returns The effect's ordinal.
+ * @throws CapabilityFault when memory access fails.
+ */
+export function requestTool(
+  turn: ConversationTurn,
+  options: ToolCallIdentity & { signal?: AbortSignal },
+): Promise<number> {
+  return memoryBoundary(() => turn.request("tool", toolPayload(options)), options.signal);
+}
+
+/**
+ * Observe how one requested tool call ended, and return its represented result.
+ *
+ * A failed call is recorded `failed` and its error thrown; a returned call or a reported error is
+ * represented and observed `completed` with its result. With a stop pending, a failed call (other
+ * than a `CapabilityFault`) or a reported error is recorded `interrupted` and the stop thrown,
+ * while a returned call keeps its result before the stop is thrown.
+ *
+ * @param options.signal The node's stop signal; a stop is pending once it aborted.
+ * @returns The represented result as a tool message, already stored.
+ * @throws What `invokeToolEffect` throws after its call ran.
+ */
+export async function settleToolEffect(
+  turn: ConversationTurn,
+  ordinal: number,
+  outcome: ToolOutcome,
+  options: ToolCallIdentity & { signal?: AbortSignal },
+): Promise<Message> {
+  const { name, signal } = options;
+  if ("error" in outcome) {
+    await observeFailure(turn, ordinal, "tool", outcome.error, signal);
+    throw outcome.error;
+  }
+  const { value, reported } = outcome;
+  // A stop pending when the tool reports its error wins, as it does for a failure.
+  if (reported && signal?.aborted) {
+    await recordFailure(turn, ordinal, "tool", signal.reason, true, signal);
+    throw signal.reason;
   }
   let message: Message;
   let item: ConversationItem;
   try {
-    const text = reported === null ? toolText(name, result) : reportedText(name, reported);
+    const text = reported ? reportedText(name, value) : toolText(name, value);
     ({ message, item } = await memoryBoundary(() => {
-      const message = toolMessage(options, text, reported !== null);
+      const message = toolMessage(options, text, reported);
       return { message, item: encodeMessage(message, options.modelExchangeId) };
     }, signal));
   } catch (primary) {
@@ -528,6 +568,41 @@ export async function invokeToolEffect(
   await memoryBoundary(() => turn.observe(ordinal, "completed", { items: [item] }), signal);
   signal?.throwIfAborted();
   return message;
+}
+
+/**
+ * Observe a settled group's started tool calls in call order, each as `settleToolEffect` does.
+ *
+ * The stop a turn throws after publishing doesn't end the observations, nor does a failed call's
+ * own error; a result that can't be represented is observed `completed` without items.
+ *
+ * @param calls Each started call's identity, its request's ordinal and its outcome, in call order.
+ * @param signal The node's stop signal.
+ * @returns The first representation error in call order, or `null` without one.
+ * @throws The stop, when it is pending at the first observation that fails; otherwise that
+ *   observation's `CapabilityFault`: a failed call's error wrapped, the fault noted on it, or the
+ *   fault itself. Later calls stay `pending`.
+ */
+export async function observeToolGroup(
+  turn: ConversationTurn,
+  calls: readonly (ToolCallIdentity & { readonly ordinal: number; readonly outcome: ToolOutcome })[],
+  signal: AbortSignal | undefined,
+): Promise<{ readonly error: unknown } | null> {
+  let unrepresented: { error: unknown } | null = null;
+  for (const { ordinal, outcome, ...call } of calls) {
+    try {
+      await settleToolEffect(turn, ordinal, outcome, { ...call, signal });
+    } catch (error) {
+      // Each is thrown once the observation is stored.
+      if (isStop(error, signal) || ("error" in outcome && error === outcome.error)) continue;
+      if (error instanceof CapabilityFault) {
+        signal?.throwIfAborted();
+        throw error;
+      }
+      unrepresented ??= { error };
+    }
+  }
+  return unrepresented;
 }
 
 /** A text message of `role`. */

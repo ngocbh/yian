@@ -26,9 +26,12 @@
  * check, then a valid value; the check runs after the call, so no finished event names an error
  * (Python's second reads `ValidationError`).
  *
- * Later (T6-6), session memory: `test_history_summary_call_is_observed_through_the_wrapper`,
+ * Ported with session memory: `test_history_summary_call_is_observed_through_the_wrapper` (through
+ * `prepareHistory` with live sinks, TS's wrapper: the summary call's `ModelCallFinished` carries its
+ * usage), and through `FlowEngine` with a `SessionMemory` (`runSessionFlow`)
  * `test_history_summary_calls_publish_their_own_observers` and
- * `test_structured_native_turn_reports_usage_and_retains_the_raw_reply`.
+ * `test_structured_native_turn_reports_usage_and_retains_the_raw_reply` (one valid reply of the
+ * native `json_schema` plan, stored as text where Python stores the schema tool call).
  *
  * TS-only: `liveSinks` (`null` without sinks; provider and model only when strings); `usageOf`
  * with every count; `newExchangeId`; a call without sinks still marks its error; a retryable
@@ -61,6 +64,7 @@ import {
   ModelCallFinished,
   ModelCallStarted,
   ReplayDegraded,
+  RunSucceeded,
   type StreamChunk,
   TokenUsage,
   ToolCallFinished,
@@ -80,6 +84,7 @@ import {
   Usage,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
 import {
   callModel,
   type LiveSinks,
@@ -93,6 +98,7 @@ import {
   usageOf,
 } from "../../src/nodes/agent/live.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
+import { decodeMessage, invokeModel, prepareHistory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/base.ts";
 import { NodeSteps, ValueContract } from "../../src/nodes/contracts.ts";
@@ -102,6 +108,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import { drive, rejected } from "./run_state_fixtures.ts";
+import { NEVER, request, runSessionFlow, sessionFlow, view, withHarness, withTurn } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -820,4 +827,71 @@ test("a model's replay-degraded reasons reach the host once per reason per invoc
     new ReplayDegraded({ nodeId: "writer", reason: "other_account" }),
     new ReplayDegraded({ nodeId: "writer", reason: "other_provider" }),
   ]);
+});
+
+// Session memory: a history summary call, and a structured turn, through `FlowEngine` with a
+// `SessionMemory` (`runSessionFlow`).
+
+/** A `SessionMemory` that summarizes any prior turn, holding one turn: `first` answered `first`. */
+async function summarizingMemory(): Promise<SessionMemory> {
+  const memory = new SessionMemory({ historyBudgetChars: 1, recentTurns: 0 });
+  const models = { env: () => undefined, createModel: () => model(reply("first")) };
+  await runSessionFlow(sessionFlow(), memory, { runId: "first", inputs: { question: "first" }, models });
+  return memory;
+}
+
+const tokenUsage = (input: number, output: number) =>
+  new TokenUsage({ inputTokens: input, outputTokens: output, totalTokens: input + output });
+
+test("a history summary call is observed through the live wrapper", async () => {
+  const memory = new SessionMemory({ historyBudgetChars: 1, recentTurns: 0 });
+  const question = new Message({ role: "user", parts: [new TextPart("question-0")] });
+  const chat = model(reply("summary text", new Usage({ inputTokens: 3, outputTokens: 1, totalTokens: 4 })));
+  const { live, events } = sinks();
+  const messages = await withHarness(async ({ session }) => {
+    await withTurn(session, request("0"), (turn) =>
+      invokeModel(turn, async () => reply("reply-0"), { newMessages: [question], signal: NEVER }),
+    );
+    return withTurn(session, request("current"), (turn) => prepareHistory(turn, chat, { signal: NEVER, live }));
+  }, memory);
+  const finished = events.filter((event) => event instanceof ModelCallFinished);
+  expect(finished.map((event) => [event.purpose, event.usage?.totalTokens])).toEqual([["history_summary", 4]]);
+  expect(messages.map((message) => message.text()).join("\n")).toContain("summary text");
+});
+
+test("history summary calls publish their own observers", async () => {
+  const memory = await summarizingMemory();
+  const usage = new Usage({ inputTokens: 8, outputTokens: 2, totalTokens: 10 });
+  const chat = model(reply("old facts", usage), reply("second"));
+  const events: unknown[] = [];
+  const result = await runSessionFlow(sessionFlow(), memory, {
+    runId: "second",
+    inputs: { question: "q2" },
+    models: { env: () => undefined, createModel: () => chat },
+    onEvent: (event) => void events.push(event),
+  });
+  expect(result).toEqual(new RunSucceeded({ output: "second" }));
+  const finished = events.filter((event) => event instanceof ModelCallFinished);
+  expect(finished.map((event) => [event.purpose, event.usage])).toEqual([
+    ["history_summary", tokenUsage(8, 2)],
+    ["chat", null],
+  ]);
+});
+
+test("a structured native turn reports usage and retains the raw reply", async () => {
+  const memory = new SessionMemory();
+  const chat = model(reply('{"value": 4}', new Usage({ inputTokens: 7, outputTokens: 2, totalTokens: 9 })));
+  const events: unknown[] = [];
+  const result = await runSessionFlow(sessionFlow({ llmConfig: CONFIG, output: INT }), memory, {
+    inputs: { question: "q" },
+    models: { env: () => undefined, createModel: () => chat },
+    onEvent: (event) => void events.push(event),
+  });
+  expect(result).toEqual(new RunSucceeded({ output: 4n }));
+  const finished = events.filter((event) => event instanceof ModelCallFinished);
+  expect(finished.map((event) => [event.purpose, event.usage])).toEqual([["structured_native", tokenUsage(7, 2)]]);
+  const stored = view(memory);
+  expect(stored.effects.map((effect) => [effect.kind, effect.status])).toEqual([["model", "completed"]]);
+  const replies = stored.items.map(decodeMessage).filter((message) => message.role === "assistant");
+  expect(replies.map((message) => message.text())).toEqual(['{"value": 4}']);
 });

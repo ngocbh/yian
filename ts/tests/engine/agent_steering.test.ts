@@ -12,15 +12,15 @@
  * `test_steers_are_sent_as_user_messages_at_the_top_of_each_iteration`,
  * `test_inbox_failure_escapes_as_a_host_fault` (a sync throw and a rejected promise),
  * `test_interrupt_before_the_first_model_call_returns_empty_text`,
- * `test_interrupt_before_a_tool_call_skips_only_the_remaining_calls` (without the memory half),
+ * `test_interrupt_before_a_tool_call_skips_only_the_remaining_calls`,
  * `test_skipped_tool_calls_reach_the_host_as_interrupted_tool_events`,
  * `test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply`,
  * `test_interrupted_node_succeeds_and_the_flow_continues`,
  * `test_interrupt_for_a_finished_node_is_ignored`,
- * `test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream` (without the memory half),
+ * `test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream`,
  * `test_interrupted_stream_reports_the_usage_received_so_far`,
- * `test_interrupt_on_the_last_chunk_keeps_the_complete_reply` (the event half: one usage, the call
- * skipped with brackets) and `test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply`
+ * `test_interrupt_on_the_last_chunk_keeps_the_complete_reply` (one usage, the call skipped with
+ * brackets) and `test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply`
  * (a `Response` reply, the interrupt set on `ModelCallStarted`: its text is the attempt's first
  * event, so there is no later text to cut). A reply's events are listed where Python's chat
  * streams chunks; the interrupt is checked before each non-empty text delta after an attempt's
@@ -32,9 +32,9 @@
  *
  * Changed: `test_run_context_receives_steering_only_when_steerable` can't replace `runAgent` (an
  * ESM export), so the inbox records its calls: a steerable agent's reach it, a non-steerable
- * agent's don't. `test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls`: the event half
- * (the interrupt set once the reply finished; both calls skipped with brackets); the transcript
- * half Later (T6-6). `test_python_built_steerable_agent_with_structured_output_fails_before_the_model`:
+ * agent's don't. `test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls`: the interrupt
+ * is set once the reply finished, and both calls are also skipped with brackets.
+ * `test_python_built_steerable_agent_with_structured_output_fails_before_the_model`:
  * the output contract is built directly where Python reads it from a loaded flow; the evaluator
  * half goes through `drive`.
  * `test_interrupt_mid_stream_in_a_pooled_run_keeps_partial_text` runs with `numWorkers: 2`; the
@@ -43,8 +43,16 @@
  * the model and its provider passed in (`models`, `llmConfig`) where Python patches
  * `model_from_config`; the fold is inline code, as the fixtures have no `reply_fold`.
  *
- * Later: `test_steers_are_recorded_with_the_next_model_request` and every `memory=True` half
- * (T6-6, session memory); `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
+ * Ported with session memory, `chat` owning AGENT memory `session` over a `SessionMemory`
+ * (`runSessionFlow`): `test_steers_are_recorded_with_the_next_model_request` and the `memory=True`
+ * rows above (`test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls`,
+ * `test_interrupt_before_a_tool_call_skips_only_the_remaining_calls`,
+ * `test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream`,
+ * `test_interrupt_on_the_last_chunk_keeps_the_complete_reply` and
+ * `test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply`); a stored call's result
+ * pairing reads `isError` where Python reads the status.
+ *
+ * Later: `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
  * `test_resume_reuses_a_finished_steered_node_without_calling_the_inbox` and
  * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer` (T4-8, the run boundary and resume).
  *
@@ -93,16 +101,18 @@ import {
   ToolCallDelta,
   UsageReport,
 } from "../../src/llm/events.ts";
-import { Message, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
+import { Message, Request, Response, TextPart, ToolCallPart, ToolResultPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
+import { decodeMessage } from "../../src/nodes/agent/memory.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
+import { MemoryContext, MemoryScope } from "../../src/memory/contracts.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { Scheduler } from "../../src/platform.ts";
@@ -110,6 +120,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, rejected, serving } from "./run_state_fixtures.ts";
+import { runSessionFlow, view } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -176,10 +187,16 @@ function lookupTool(body: (topic: string) => string): FunctionTool {
   });
 }
 
-/** One `chat` agent granted `tools`, output `${chat.output}`; with `after`, a summarizing agent reads it. */
-function chatFlow(options: { steerable?: boolean; tools?: readonly string[]; after?: boolean } = {}): CompiledFlow {
-  const { steerable = true, tools = [], after = false } = options;
+/**
+ * One `chat` agent granted `tools`, output `${chat.output}`; with `memory`, it owns AGENT memory
+ * `session`; with `after`, a summarizing agent reads it.
+ */
+function chatFlow(
+  options: { steerable?: boolean; tools?: readonly string[]; memory?: boolean; after?: boolean } = {},
+): CompiledFlow {
+  const { steerable = true, tools = [], memory = false, after = false } = options;
   const chat = new AgentNode("chat", { prompt: "Help the user.", llmConfig: CONFIG, steerable, tools: [...tools] });
+  if (memory) chat.memoryScope = new MemoryScope(["chat"], { memories: ["session"] });
   if (!after) return graph([chat], [[START_ID, "chat"]], { outputs: [new FlowOutput("output", "${chat.output}")] });
   const next = new AgentNode("after", { prompt: "summarize: ${draft}", llmConfig: CONFIG });
   next.params = [new Parameter("draft")];
@@ -193,7 +210,10 @@ function chatFlow(options: { steerable?: boolean; tools?: readonly string[]; aft
   );
 }
 
-/** Run `flow` with `model` and `options`; return the run's output, failing unless it succeeded. */
+/**
+ * Run `flow` with `model` and `options`, `memory` backing `chat`'s AGENT memory `session` when
+ * given; return the run's output, failing unless it succeeded.
+ */
 async function run(
   flow: CompiledFlow,
   model: ChatModel,
@@ -204,12 +224,29 @@ async function run(
     onStream?: (chunk: StreamChunk) => void;
     numWorkers?: number;
     scheduler?: Scheduler;
+    memory?: SessionMemory;
+    runId?: string;
   } = {},
 ): Promise<unknown> {
-  const events = await engine(flow, { models: serving(model), ...options }).run();
-  const last = events.at(-1);
+  const { memory, ...rest } = options;
+  const engineOptions = { models: serving(model), ...rest };
+  const last = memory
+    ? await runSessionFlow(flow, memory, { nodeId: "chat", ...engineOptions })
+    : (await engine(flow, engineOptions).run()).at(-1);
   expect(last).toBeInstanceOf(RunSucceeded);
   return (last as RunSucceeded).output;
+}
+
+/** The kind and status of each effect `memory` holds. */
+function effectsOf(memory: SessionMemory): [string, string][] {
+  return view(memory).effects.map((effect) => [effect.kind, effect.status]);
+}
+
+/** The stored assistant messages of `memory`. */
+function storedReplies(memory: SessionMemory): Message[] {
+  return view(memory)
+    .items.map(decodeMessage)
+    .filter((message) => message.role === "assistant");
 }
 
 /** A direct loop context: agent `chat` prompted "go" with no tools, calling `model`; `extra` overrides. */
@@ -321,6 +358,33 @@ test("steers are sent as user messages at the top of each iteration", async () =
     ["drain", "chat"],
     ["drain", "chat"],
   ]);
+});
+
+test("steers are recorded with the next model request", async () => {
+  const steering = new Inbox();
+  const lookup = lookupTool(() => {
+    steering.queued.set("chat", ["use dataset B"]);
+    return "found";
+  });
+  const model = new ScriptedModel(
+    [reply("", ["lookup", { topic: "a" }, "call-1"]), reply("done"), reply("again")],
+    CONFIG,
+  );
+  const memory = new SessionMemory();
+  const flow = chatFlow({ tools: ["lookup"], memory: true });
+  const options = { steering, tools: new ToolSet({ lookup }), memory };
+  expect(await run(flow, model, options)).toBe("done");
+  const stored = view(memory);
+  const requests = stored.effects
+    .filter((effect) => effect.kind === "model")
+    .map((effect) => effect.request["exchange_id"]);
+  const users = stored.items
+    .filter((item) => decodeMessage(item).role === "user")
+    .map((item) => [item.payload["exchange_id"], decodeMessage(item).text()]);
+  expect(users.at(-1)).toEqual([requests[1], "use dataset B"]);
+  // The next run's history carries the steer as an ordinary user message.
+  expect(await run(flow, model, { ...options, runId: "second" })).toBe("again");
+  expect(shown(model.requests.at(-1)!.messages)).toContainEqual(["user", "use dataset B"]);
 });
 
 test("a steer an async drain promises is awaited before the model call", async () => {
@@ -439,7 +503,7 @@ test("an interrupt before the first model call returns empty text", async () => 
   expect(steering.queued).toEqual(new Map([["chat", ["never read"]]]));
 });
 
-test("an interrupt after a reply keeps it and skips its calls (event half)", async () => {
+test("an interrupt after a reply keeps it and records skipped calls", async () => {
   const steering = new Inbox();
   const ran: string[] = [];
   const events: unknown[] = [];
@@ -452,7 +516,9 @@ test("an interrupt after a reply keeps it and skips its calls (event half)", asy
     return "found";
   });
   const model = new ScriptedModel([twoCalls(), reply("next run")], CONFIG);
-  const output = await run(chatFlow({ tools: ["lookup"] }), model, { steering, tools: new ToolSet({ lookup }), onEvent });
+  const memory = new SessionMemory();
+  const flow = chatFlow({ tools: ["lookup"], memory: true });
+  const output = await run(flow, model, { steering, tools: new ToolSet({ lookup }), onEvent, memory });
   expect(output).toBe("Checking both.");
   expect(ran).toEqual([]);
   expect(model.requests).toHaveLength(1);
@@ -462,7 +528,30 @@ test("an interrupt after a reply keeps it and skips its calls (event half)", asy
     ["started", 1, "call-2"],
     ["finished", 1, "call-2", "interrupted"],
   ]);
+  expect(effectsOf(memory)).toEqual([
+    ["model", "completed"],
+    ["tool", "interrupted"],
+    ["tool", "interrupted"],
+  ]);
+  expect(view(memory).closedInvocations.at(-1)!.status).toBe("interrupted");
+  // Every recorded call is paired with an error result, so the history stays valid.
+  await run(flow, model, { steering: new Inbox(), tools: new ToolSet({ lookup }), memory, runId: "second" });
+  expect(historyPairs(model.requests.at(-1)!.messages)).toEqual([
+    ["call-1", true],
+    ["call-2", true],
+  ]);
 });
+
+/** `[toolCallId, whether its result is an error]` for each call in `messages`, `null` without a result. */
+function historyPairs(messages: readonly Message[]): [string, boolean | null][] {
+  const parts = messages.flatMap((message) => message.parts);
+  const results = new Map(parts.filter((part) => part instanceof ToolResultPart).map((part) => [part.callId, part]));
+  return messages.flatMap((message) =>
+    message.parts
+      .filter((part) => part instanceof ToolCallPart)
+      .map((part): [string, boolean | null] => [part.id, results.get(part.id)?.isError ?? null]),
+  );
+}
 
 test("an interrupt before a tool call skips only the remaining calls", async () => {
   const steering = new Inbox();
@@ -473,11 +562,17 @@ test("an interrupt before a tool call skips only the remaining calls", async () 
     return "found";
   });
   const model = new ScriptedModel([twoCalls()], CONFIG);
-  expect(await run(chatFlow({ tools: ["lookup"] }), model, { steering, tools: new ToolSet({ lookup }) })).toBe(
-    "Checking both.",
-  );
+  const memory = new SessionMemory();
+  const flow = chatFlow({ tools: ["lookup"], memory: true });
+  expect(await run(flow, model, { steering, tools: new ToolSet({ lookup }), memory })).toBe("Checking both.");
   expect(ran).toEqual(["a"]);
   expect(model.requests).toHaveLength(1);
+  expect(effectsOf(memory)).toEqual([
+    ["model", "completed"],
+    ["tool", "completed"],
+    ["tool", "interrupted"],
+  ]);
+  expect(view(memory).closedInvocations.at(-1)!.status).toBe("interrupted");
 });
 
 test("skipped tool calls reach the host as interrupted tool events", async () => {
@@ -717,11 +812,13 @@ test("an interrupt mid-stream keeps the partial text and ends the stream", async
     ran.push(topic);
     return "found";
   });
-  const output = await run(chatFlow({ tools: ["lookup"] }), model, {
+  const memory = new SessionMemory();
+  const output = await run(chatFlow({ tools: ["lookup"], memory: true }), model, {
     steering,
     tools: new ToolSet({ lookup }),
     onStream,
     onEvent: (event) => void events.push(event),
+    memory,
   });
   expect(output).toBe("hello big");
   expect(ran).toEqual([]);
@@ -736,6 +833,11 @@ test("an interrupt mid-stream keeps the partial text and ends the stream", async
   expect(toolEvents(events)).toEqual([]);
   // The cut closes the provider stream.
   expect(model.closed).toBe(1);
+  expect(effectsOf(memory)).toEqual([["model", "interrupted"]]);
+  expect(view(memory).closedInvocations.at(-1)!.status).toBe("interrupted");
+  const replies = storedReplies(memory);
+  const kept = replies.map((message) => [message.text(), message.parts.some((part) => part instanceof ToolCallPart)]);
+  expect(kept).toEqual([["hello big", false]]);
 });
 
 test("an interrupted stream reports the usage received so far", async () => {
@@ -801,11 +903,13 @@ test("an interrupt on the last chunk keeps the complete reply", async () => {
     ran.push(topic);
     return "found";
   });
-  const output = await run(chatFlow({ tools: ["lookup"] }), model, {
+  const memory = new SessionMemory();
+  const output = await run(chatFlow({ tools: ["lookup"], memory: true }), model, {
     steering,
     tools: new ToolSet({ lookup }),
     onStream,
     onEvent: (event) => void events.push(event),
+    memory,
   });
   expect(output).toBe("ok go");
   expect(ran).toEqual([]);
@@ -816,6 +920,15 @@ test("an interrupt on the last chunk keeps the complete reply", async () => {
     ["started", 0, "call-1"],
     ["finished", 0, "call-1", "interrupted"],
   ]);
+  // The stream ran out, so the reply is whole and its call is recorded as skipped.
+  expect(effectsOf(memory)).toEqual([
+    ["model", "completed"],
+    ["tool", "interrupted"],
+  ]);
+  const calls = storedReplies(memory).map(
+    (message) => message.parts.filter((part) => part instanceof ToolCallPart).length,
+  );
+  expect(calls).toEqual([1]);
 });
 
 test("an interrupt during a single-chunk reply keeps the complete reply", async () => {
@@ -831,11 +944,13 @@ test("an interrupt during a single-chunk reply keeps the complete reply", async 
     return "found";
   });
   const model = new ScriptedModel([twoCalls()], CONFIG);
-  const output = await run(chatFlow({ tools: ["lookup"] }), model, {
+  const memory = new SessionMemory();
+  const output = await run(chatFlow({ tools: ["lookup"], memory: true }), model, {
     steering,
     tools: new ToolSet({ lookup }),
     onEvent,
     onStream: () => {},
+    memory,
   });
   expect(output).toBe("Checking both.");
   expect(ran).toEqual([]);
@@ -845,6 +960,11 @@ test("an interrupt during a single-chunk reply keeps the complete reply", async 
     ["finished", 0, "call-1", "interrupted"],
     ["started", 1, "call-2"],
     ["finished", 1, "call-2", "interrupted"],
+  ]);
+  expect(effectsOf(memory)).toEqual([
+    ["model", "completed"],
+    ["tool", "interrupted"],
+    ["tool", "interrupted"],
   ]);
 });
 

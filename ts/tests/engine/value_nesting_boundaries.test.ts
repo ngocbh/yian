@@ -39,10 +39,15 @@
  *
  * TS-only: an over-deep call on a final reply (text and no parsed call) fails it too.
  *
- * Later (T6-6), session memory: the session rows of the agent tests above,
- * `test_a_native_session_value_at_the_limit_is_stored` and
- * `test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects`; the learning half
- * of `test_tool_arguments_at_the_limit_run_and_are_learned_from`.
+ * Ported through `FlowEngine` with a `SessionMemory` (`runSessionFlow`): the session rows of the
+ * agent tests above, `test_a_native_session_value_at_the_limit_is_stored` and
+ * `test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects`. Changed: TS's
+ * native plan answers in text and checks the value after storing the reply, so a too-deep or
+ * schema-missing native reply is stored `completed`, as a prompted one is (Python: `failed`, not
+ * stored); the exhausted schema miss fails `agent.output_invalid`, as without memory.
+ *
+ * Later (T6-6 PR 3): the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`
+ * (it runs a flow and learns from its feedback).
  *
  * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
  * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
@@ -57,10 +62,11 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { ModelCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { ModelCallFinished, RunFailed, RunSucceeded, ToolCallStarted } from "../../src/events.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
@@ -72,6 +78,7 @@ import { Type, type Value, ValueKind, VariablePool } from "../../src/typesys/ind
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadErrorAsync } from "../compose/declarations.ts";
 import { drive } from "./run_state_fixtures.ts";
+import { runSessionFlow, sessionFlow, view } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -375,4 +382,135 @@ output: \${c.output}
 
   expect(error.diagnostic.message).toBe(`input 'x' default at ${DEEP_PATH}: ${TOO_DEEP}`);
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "x: !object"));
+});
+
+// ---------- the session rows: through `FlowEngine` with a `SessionMemory` ----------
+
+/**
+ * Run `sessionFlow`'s AGENT `agent` over `model` with output `output`, `retries`, and `tools`
+ * granted; return the run's terminal event and each stored effect's kind and status.
+ */
+async function sessionRun(model: ScriptedModel, options: { output?: Type; retries?: number; tools?: ToolSet } = {}) {
+  const { output, retries = 0, tools } = options;
+  const memory = new SessionMemory();
+  const llmConfig = { provider: model.provider, model: model.model };
+  const flow = sessionFlow({ llmConfig, retries, output, tools: tools ? ["lookup"] : [] });
+  const models = { env: () => undefined, createModel: () => model };
+  const result = await runSessionFlow(flow, memory, { inputs: { question: "q" }, models, tools });
+  return { result, effects: view(memory).effects.map((effect) => [effect.kind, effect.status]) };
+}
+
+/** The failure of the run's terminal event; fails the test when the run didn't fail. */
+function runFailure(result: unknown) {
+  expect(result).toBeInstanceOf(RunFailed);
+  return (result as RunFailed).failure;
+}
+
+test.each(ROWS)("a session structured value over the limit self-corrects (%s, %d)", async (_, config, levels) => {
+  const model = texts(config, `{"value": ${deepText(levels)}}`, '{"value": {"k": 1}}');
+
+  const { result, effects } = await sessionRun(model, { output: FREEFORM, retries: 1 });
+
+  expect(result).toEqual(new RunSucceeded({ output: { k: 1n } }));
+  expectReplyTooDeep(correction(model), "structured output");
+  // A reply is text on both strategies, so memory keeps it.
+  expect(effects).toEqual([
+    ["model", "completed"],
+    ["model", "completed"],
+  ]);
+});
+
+test("a native session value at the limit is stored", async () => {
+  const model = texts(NATIVE, `{"value": ${deepText(100)}}`);
+
+  const { result, effects } = await sessionRun(model, { output: FREEFORM });
+
+  expect(result).toEqual(new RunSucceeded({ output: nestRecord(100) }));
+  expect(effects).toEqual([["model", "completed"]]);
+});
+
+test.each([101, 120, 1500])("a native session value over the limit self-corrects (%d levels)", async (levels) => {
+  const model = texts(NATIVE, `{"value": ${deepText(levels)}}`, '{"value": {"k": 1}}');
+
+  const { result, effects } = await sessionRun(model, { output: FREEFORM, retries: 1 });
+
+  expect(result).toEqual(new RunSucceeded({ output: { k: 1n } }));
+  expect(effects).toEqual([
+    ["model", "completed"],
+    ["model", "completed"],
+  ]);
+  expectReplyTooDeep(correction(model), "structured output");
+  expect(correction(model)).not.toContain("provider error (");
+});
+
+test.each([125, 1500])("a deep native session reply that misses the schema retries (%d levels)", async (levels) => {
+  const model = texts(NATIVE, `{"t": ${deepText(levels)}, "n": "notint"}`, '{"t": {}, "n": 1}');
+
+  const { result, effects } = await sessionRun(model, { output: T_AND_N, retries: 1 });
+
+  expect(result).toEqual(new RunSucceeded({ output: { t: {}, n: 1n } }));
+  expect(effects).toEqual([
+    ["model", "completed"],
+    ["model", "completed"],
+  ]);
+});
+
+test.each([125, 1500])("an exhausted deep native session schema miss fails the node (%d levels)", async (levels) => {
+  const model = texts(NATIVE, `{"t": ${deepText(levels)}, "n": "notint"}`);
+
+  const { result } = await sessionRun(model, { output: T_AND_N });
+
+  const failure = runFailure(result);
+  expect([failure.code, failure.nodeId]).toEqual(["agent.output_invalid", "agent"]);
+});
+
+test.each(ROWS)("a session structured value over the limit fails without retries (%s, %d)", async (_, config, levels) => {
+  const model = texts(config, `{"value": ${deepText(levels)}}`);
+
+  const failure = runFailure((await sessionRun(model, { output: FREEFORM })).result);
+
+  expect([failure.code, failure.nodeId]).toEqual(["agent.output_invalid", "agent"]);
+  expectReplyTooDeep(failure.message, "structured output");
+});
+
+/** A tool set holding `lookup`, which records its arguments in `calls`. */
+function lookupTools(calls: unknown[]): ToolSet {
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "Look one thing up.",
+    parametersJsonSchema: { type: "object", properties: { x: {}, q: {} } },
+    execute: (args) => {
+      calls.push(args);
+      return "ok";
+    },
+  });
+  return new ToolSet({ lookup });
+}
+
+test.each([101, 1500])("session tool arguments over the limit fail before any call (%d levels)", async (levels) => {
+  const model = new ScriptedModel([partsReply(deepCall(levels))], NATIVE);
+  const calls: unknown[] = [];
+
+  const { result, effects } = await sessionRun(model, { tools: lookupTools(calls) });
+
+  const failure = runFailure(result);
+  expect([failure.code, failure.nodeId]).toEqual(["node.execute", "agent"]);
+  expectReplyTooDeep(failure.message, "tool call 'lookup' arguments");
+  expect(calls).toEqual([]);
+  expect(model.requests).toHaveLength(1);
+  expect(effects).toEqual([["model", "failed"]]);
+});
+
+test("session tool arguments over the limit in a later call stop every call", async () => {
+  const first = new ToolCallPart({ id: "c1", name: "lookup", arguments: { x: 1.5 } });
+  const calls: unknown[] = [];
+
+  const { result } = await sessionRun(new ScriptedModel([partsReply(first, deepCall(101))], NATIVE), {
+    tools: lookupTools(calls),
+  });
+
+  const failure = runFailure(result);
+  expect(failure.code).toBe("node.execute");
+  expect(failure.message).toContain("deeper than 100 levels");
+  expect(calls).toEqual([]);
 });

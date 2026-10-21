@@ -5,7 +5,10 @@
  * Ported, at the adapter level: the `request` and `observe` stages of
  * `test_tool_memory_fault_cannot_repeat_external_action`,
  * `test_tool_error_identity_survives_failed_observation` (2 rows), and
- * `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history`.
+ * `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history`. Through
+ * `FlowEngine` with a `SessionMemory` (`runSessionFlow`), three runs with distinct run ids:
+ * `test_two_runs_restore_tool_exchanges_without_executing_old_calls`, which also checks that the
+ * evaluator closed both turns `completed`.
  *
  * Changed: a host stop is the aborted signal, its reason what the tool throws, rather than a
  * `_HostStop`; an observation failure's note is on the error's own `notes` array. The restored
@@ -32,11 +35,23 @@
  * and observed `failed` (its `interrupted` branch under a stop is `invokeToolEffect`'s, covered by
  * the rows above); an ungranted call records nothing.
  *
+ * TS-only, a reply's concurrency-safe calls run as one group through `runAgent`: each is requested
+ * before it starts (both pending while they run), and results are stored in call order whatever
+ * the finish order; a failing group's finished sibling stays `completed` with its result and the
+ * failing call is `failed`; with a stop pending at settle, a returned call stays `completed` and a
+ * failed or reported one is `interrupted`, the stop thrown; a request failing mid-group starts no
+ * later call, awaits and observes the started one, and throws its `CapabilityFault`; a sibling
+ * failing while a call's request is stored keeps that call from starting, its effect `pending`; a
+ * result
+ * `toolText` refuses in a failing group is `completed` without items and the failure wins; an
+ * observation fault mid-group leaves it and every later call `pending` and throws a
+ * `CapabilityFault` of the fault, or of a failed call's error with the fault noted on it, winning
+ * over a later call's failure; a pending stop wins over the fault.
+ *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6): `test_two_runs_restore_tool_exchanges_without_executing_old_calls` (the loop
- * wiring), and the rows that need `run_flow`:
+ * Later (T6-6 PR 3), the rows that need `run_flow`:
  * `test_recalled_transcript_and_current_notes_share_one_context`,
  * `test_changed_grants_keep_history_but_reject_new_ungranted_call`,
  * `test_missing_tool_result_is_repaired_only_in_context_with_truthful_status`,
@@ -48,9 +63,17 @@
 
 import { expect, spyOn, test } from "bun:test";
 
-import { ModelCallFinished } from "../../src/events.ts";
+import { ModelCallFinished, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
+import {
+  Message,
+  type Part,
+  ReasoningPart,
+  Response,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+} from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ConversationTurn, ConversationView, JsonObject } from "../../src/memory/contracts.ts";
 import { SessionMemory, type Turn } from "../../src/memory/session.ts";
@@ -79,7 +102,10 @@ import {
   NEVER,
   rejected,
   request,
+  runSessionFlow,
+  sessionFlow,
   snapshot,
+  view,
   withHarness,
   withTurn,
 } from "./session_fakes.ts";
@@ -563,4 +589,383 @@ test("an ungranted call records nothing", async () => {
   const { error, view } = await inTurn((turn) => runAgent(context(model, turn)));
   expect(error).toBeInstanceOf(AgentLoopError);
   expect(effects(view)).toEqual([["model", "completed", { purpose: "chat" }]]);
+});
+
+/** A model access serving `model`. */
+const serve = (model: ChatModel) => ({ env: () => undefined, createModel: () => model });
+
+/** Python's `_call`: a reply with kept reasoning calling `lookup` on `value`, reusing one provider id. */
+function callWithReasoning(value: number): Response {
+  const parts = [
+    new ReasoningPart("keep reasoning"),
+    new ToolCallPart({ id: "reused-provider-id", name: "lookup", arguments: { value } }),
+  ];
+  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
+}
+
+/** A reply holding only `text`. */
+const textOnly = (text: string): Response => replyOf(new TextPart(text));
+
+test("two runs restore tool exchanges without executing old calls", async () => {
+  const memory = new SessionMemory();
+  const calls: unknown[] = [];
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "Look a value up.",
+    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
+    execute: (args) => {
+      // The call is requested, after the reply that made it, before it runs.
+      const current = view(memory);
+      expect([current.effects.at(-1)!.kind, current.effects.at(-1)!.status]).toEqual(["tool", "pending"]);
+      expect(decodeMessage(current.items.at(-1)!).parts.some((part) => part instanceof ToolCallPart)).toBe(true);
+      calls.push(args);
+      return `result:${args.value}`;
+    },
+  });
+  const tools = new ToolSet({ lookup });
+  const flow = sessionFlow({ tools: ["lookup"] });
+  const model = new ScriptedModel([callWithReasoning(1), textOnly("one"), callWithReasoning(2), textOnly("two")]);
+  const run = (runId: string, question: string, chat: ChatModel = model) =>
+    runSessionFlow(flow, memory, { runId, inputs: { question }, tools, models: serve(chat) });
+  expect(await run("first-run", "first")).toEqual(new RunSucceeded({ output: "one" }));
+  expect(calls).toEqual([{ value: 1 }]);
+  expect(await run("second-run", "second")).toEqual(new RunSucceeded({ output: "two" }));
+  expect(calls).toEqual([{ value: 1 }, { value: 2 }]);
+  const history = model.requests[2]!.messages;
+  expect(history[2]!.toJSON()).toEqual(callWithReasoning(1).message.toJSON());
+  expect(history[3]!.parts).toEqual([
+    new ToolResultPart({ callId: "reused-provider-id", name: "lookup", content: "result:1" }),
+  ]);
+  const stored = view(memory);
+  expect(stored.effects.map((effect) => effect.kind)).toEqual(["model", "tool", "model", "model", "tool", "model"]);
+  // No repeated provider-input history or duplicated tool results.
+  expect(stored.items).toHaveLength(10);
+  const requests = stored.effects.filter((effect) => effect.kind === "tool").map((effect) => effect.request);
+  expect(requests[0]!["model_exchange_id"]).not.toBe(requests[1]!["model_exchange_id"]);
+  expect(stored.effects.every((effect) => effect.status === "completed")).toBe(true);
+  // The evaluator closed both turns normally.
+  expect(stored.closedInvocations.map((closed) => closed.status)).toEqual(["completed", "completed"]);
+  const third = new ScriptedModel([textOnly("third")]);
+  await run("third-run", "third", third);
+  const restored = third.requests[0]!.messages.filter((message) => message.role === "tool").map(resultText);
+  expect(restored).toEqual(["result:1", "result:2"]);
+  expect(calls).toEqual([{ value: 1 }, { value: 2 }]);
+});
+
+// A reply's concurrency-safe calls run as one group: each is requested right before it starts, and
+// every started call is observed in call order once the group settles.
+
+/** Let every pending promise job run: one macrotask turn. */
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** One concurrency-safe tool whose call waits until the test settles it, whatever its signal does. */
+interface Held {
+  readonly tool: FunctionTool;
+  /** Resolves once the call began. */
+  readonly entered: Promise<void>;
+  /** Whether the call began. */
+  started: boolean;
+  resolve(value: unknown): void;
+  reject(error: unknown): void;
+}
+
+/** A held tool `name`. */
+function held(name: string): Held {
+  const gate = Promise.withResolvers<unknown>();
+  const entered = Promise.withResolvers<void>();
+  const state: Held = {
+    tool: new FunctionTool({
+      name,
+      description: `Tool ${name}.`,
+      parametersJsonSchema: { type: "object", properties: {} },
+      isConcurrencySafe: () => true,
+      execute: () => {
+        state.started = true;
+        entered.resolve();
+        return gate.promise;
+      },
+    }),
+    entered: entered.promise,
+    started: false,
+    resolve: gate.resolve,
+    reject: gate.reject,
+  };
+  return state;
+}
+
+/** A reply calling each of `names` with no arguments, ids `c0`, `c1`, ... */
+function groupReply(...names: string[]): Response {
+  const parts = names.map((name, index) => new ToolCallPart({ id: `c${index}`, name, arguments: {} }));
+  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
+}
+
+/**
+ * Start `runAgent` in a turn of a fresh session over a model answering `replies`, granted the held
+ * tools; `signal` is both the turn's and the node's. `arrange` sees the turn before the run starts.
+ */
+function groupRun(
+  tools: Readonly<Record<string, Held>>,
+  replies: Response[],
+  options: { signal?: AbortSignal; arrange?: (turn: Turn) => void } = {},
+) {
+  const model = new ScriptedModel(replies);
+  const toolset = new ToolSet(Object.fromEntries(Object.entries(tools).map(([name, { tool }]) => [name, tool])));
+  let settled = false;
+  let current: Turn | null = null;
+  const running = inTurn((turn) => {
+    current = turn;
+    options.arrange?.(turn);
+    const ctx = agentContext(model, turn, { tools: Object.keys(tools), toolset, signal: options.signal });
+    return runAgent(ctx).finally(() => (settled = true));
+  }, options.signal);
+  return { running, model, isSettled: () => settled, turn: () => current! };
+}
+
+/** The tool effects of `view` as `[tool_call_id, status]`, in request order. */
+function toolStatuses(view: ConversationView): [unknown, string][] {
+  return view.effects
+    .filter((effect) => effect.kind === "tool")
+    .map((effect) => [effect.request["tool_call_id"], effect.status]);
+}
+
+/** The stored tool results of `view`, in storing order, as `[callId, content, isError]`. */
+function storedResults(view: ConversationView): [string, string, boolean][] {
+  return view.items
+    .map(decodeMessage)
+    .filter((message) => message.role === "tool")
+    .map((message) => {
+      const part = message.parts[0] as ToolResultPart;
+      return [part.callId, part.content, part.isError];
+    });
+}
+
+/**
+ * Make `turn`'s observation of call `toolCallId` throw `fault` without publishing; other
+ * observations publish as usual.
+ */
+function faultObservation(turn: Turn, toolCallId: string, fault: unknown): void {
+  const observe = turn.observe.bind(turn);
+  spyOn(turn, "observe").mockImplementation((ordinal, status, options) => {
+    const effect = turn.view.effects.find((candidate) => candidate.effectOrdinal === ordinal);
+    if (effect?.request["tool_call_id"] === toolCallId) throw fault;
+    return observe(ordinal, status, options);
+  });
+}
+
+test("a group's results are committed in call order whatever the finish order", async () => {
+  const a = held("a");
+  const b = held("b");
+  const run = groupRun({ a, b }, [groupReply("a", "b"), textOnly("done")]);
+  await Promise.all([a.entered, b.entered]);
+  // Both calls were requested before either finished.
+  expect(toolStatuses(run.turn().view)).toEqual([
+    ["c0", "pending"],
+    ["c1", "pending"],
+  ]);
+  b.resolve("b result");
+  await flush();
+  a.resolve("a result");
+  const { result, view } = await run.running;
+  expect(result!.value).toBe("done");
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "completed"],
+    ["c1", "completed"],
+  ]);
+  expect(storedResults(view)).toEqual([
+    ["c0", "a result", false],
+    ["c1", "b result", false],
+  ]);
+  const sent = run.model.requests[1]!.messages.filter((message) => message.role === "tool").map(resultText);
+  expect(sent).toEqual(["a result", "b result"]);
+});
+
+test("a failing group's finished sibling stays completed with its result, and the failing call failed", async () => {
+  const a = held("a");
+  const b = held("b");
+  const failure = new RangeError("b failed");
+  const run = groupRun({ a, b }, [groupReply("a", "b")]);
+  await Promise.all([a.entered, b.entered]);
+  a.resolve("a result");
+  await flush();
+  b.reject(failure);
+  const { error, view } = await run.running;
+  expect(error).toBe(failure);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "completed"],
+    ["c1", "failed"],
+  ]);
+  expect(view.effects.at(-1)!.failure!.message).toBe("Tool invocation failed (RangeError).");
+  expect(storedResults(view)).toEqual([["c0", "a result", false]]);
+  expect(run.model.requests).toHaveLength(1);
+});
+
+test("a stop pending at settle: returned calls completed, failed and reported ones interrupted", async () => {
+  const a = held("a");
+  const b = held("b");
+  const c = held("c");
+  const controller = new AbortController();
+  const stop = new RangeError("stopped");
+  const run = groupRun({ a, b, c }, [groupReply("a", "b", "c")], { signal: controller.signal });
+  await Promise.all([a.entered, b.entered, c.entered]);
+  a.resolve("a result");
+  b.reject(new Error("b failed"));
+  await flush();
+  controller.abort(stop);
+  c.reject(new ReportedToolError("c reported"));
+  const { error, view } = await run.running;
+  expect(error).toBe(stop);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "completed"],
+    ["c1", "interrupted"],
+    ["c2", "interrupted"],
+  ]);
+  const failures = view.effects.slice(-2).map((effect) => effect.failure!.message);
+  expect(failures).toEqual(["Tool invocation interrupted (RangeError).", "Tool invocation interrupted (RangeError)."]);
+  expect(storedResults(view)).toEqual([["c0", "a result", false]]);
+});
+
+test("a request failing mid-group starts no later call; the started one is awaited and observed", async () => {
+  const a = held("a");
+  const b = held("b");
+  const c = held("c");
+  const fault = new Error("memory refused");
+  const run = groupRun({ a, b, c }, [groupReply("a", "b", "c")], {
+    arrange: (turn) => {
+      const requestOf = turn.request.bind(turn);
+      spyOn(turn, "request").mockImplementation((kind, payload, options) => {
+        if (payload["tool_call_id"] === "c1") throw fault;
+        return requestOf(kind, payload, options);
+      });
+    },
+  });
+  await a.entered;
+  await flush();
+  expect(run.isSettled()).toBe(false);
+  a.resolve("a result");
+  const { error, view } = await run.running;
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBe(fault);
+  expect([b.started, c.started]).toEqual([false, false]);
+  expect(toolStatuses(view)).toEqual([["c0", "completed"]]);
+  expect(storedResults(view)).toEqual([["c0", "a result", false]]);
+});
+
+test("a sibling failing while a call's request is stored keeps that call from starting", async () => {
+  const [a, b] = [held("a"), held("b")];
+  const failure = new RangeError("a failed");
+  const run = groupRun({ a, b }, [groupReply("a", "b")], {
+    arrange: (turn) => {
+      const requestOf = turn.request.bind(turn);
+      // A host turn may store a request asynchronously; this one takes a macrotask for `c1`.
+      spyOn(turn, "request").mockImplementation(((kind, payload, options) => {
+        if (payload["tool_call_id"] !== "c1") return requestOf(kind, payload, options);
+        return flush().then(() => requestOf(kind, payload, options));
+      }) as Turn["request"]);
+    },
+  });
+  await a.entered;
+  a.reject(failure);
+  const { error, view } = await run.running;
+  expect(error).toBe(failure);
+  expect(b.started).toBe(false);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "failed"],
+    ["c1", "pending"],
+  ]);
+});
+
+test("a result toolText refuses in a failing group is observed completed without items; the failure wins", async () => {
+  const a = held("a");
+  const b = held("b");
+  const failure = new RangeError("b failed");
+  const run = groupRun({ a, b }, [groupReply("a", "b")]);
+  await Promise.all([a.entered, b.entered]);
+  a.resolve(() => "not a value");
+  await flush();
+  b.reject(failure);
+  const { error, view } = await run.running;
+  expect(error).toBe(failure);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "completed"],
+    ["c1", "failed"],
+  ]);
+  expect(storedResults(view)).toEqual([]);
+});
+
+test("an observation fault mid-group stops observing: later calls stay pending, and a CapabilityFault", async () => {
+  const [a, b, c] = [held("a"), held("b"), held("c")];
+  const fault = new Error("cannot save");
+  const run = groupRun({ a, b, c }, [groupReply("a", "b", "c")], {
+    arrange: (turn) => faultObservation(turn, "c1", fault),
+  });
+  await Promise.all([a.entered, b.entered, c.entered]);
+  for (const [tool, value] of [[a, "a result"], [b, "b result"], [c, "c result"]] as const) tool.resolve(value);
+  const { error, view } = await run.running;
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBe(fault);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "completed"],
+    ["c1", "pending"],
+    ["c2", "pending"],
+  ]);
+});
+
+test("an observation fault on a failed call is noted on its error, which is thrown wrapped", async () => {
+  const [a, b] = [held("a"), held("b")];
+  const fault = new Error("cannot save");
+  const failure = new RangeError("a failed");
+  const run = groupRun({ a, b }, [groupReply("a", "b")], { arrange: (turn) => faultObservation(turn, "c0", fault) });
+  await Promise.all([a.entered, b.entered]);
+  b.resolve("b result");
+  await flush();
+  a.reject(failure);
+  const { error, view } = await run.running;
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBe(failure);
+  expect((failure as RangeError & { notes?: string[] }).notes).toEqual([
+    "Conversation observation failed: Error: cannot save",
+  ]);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "pending"],
+    ["c1", "pending"],
+  ]);
+});
+
+test("an observation fault wins over a later call's failure", async () => {
+  const [a, b] = [held("a"), held("b")];
+  const fault = new Error("cannot save");
+  const failure = new RangeError("b failed");
+  const run = groupRun({ a, b }, [groupReply("a", "b")], { arrange: (turn) => faultObservation(turn, "c0", fault) });
+  await Promise.all([a.entered, b.entered]);
+  a.resolve("a result");
+  await flush();
+  b.reject(failure);
+  const { error, view } = await run.running;
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBe(fault);
+  expect(failure as RangeError & { notes?: string[] }).not.toHaveProperty("notes");
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "pending"],
+    ["c1", "pending"],
+  ]);
+});
+
+test("a pending stop wins over an observation fault", async () => {
+  const [a, b] = [held("a"), held("b")];
+  const controller = new AbortController();
+  const stop = new RangeError("stopped");
+  const run = groupRun({ a, b }, [groupReply("a", "b")], {
+    signal: controller.signal,
+    arrange: (turn) => faultObservation(turn, "c0", new Error("cannot save")),
+  });
+  await Promise.all([a.entered, b.entered]);
+  a.resolve("a result");
+  controller.abort(stop);
+  b.resolve("b result");
+  const { error, view } = await run.running;
+  expect(error).toBe(stop);
+  expect(toolStatuses(view)).toEqual([
+    ["c0", "pending"],
+    ["c1", "pending"],
+  ]);
 });

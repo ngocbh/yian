@@ -44,7 +44,7 @@
  * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6): every other test of the file, which runs a flow with `run_flow` or resumes one.
+ * Later (T6-6 PR 3): every other test of the file, which runs a flow with `run_flow` or resumes one.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -52,7 +52,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { Env } from "../../src/defaults.ts";
 import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel, EventStream } from "../../src/llm/events.ts";
@@ -75,13 +74,9 @@ import {
   ConversationItem,
   type ConversationTurn,
   type ConversationView,
-  DeclSite,
   MemoryContext,
-  MemoryScope,
   MemorySection,
-  MemorySpec,
 } from "../../src/memory/contracts.ts";
-import { conversationViewFromJson } from "../../src/memory/conversation.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import {
@@ -94,11 +89,20 @@ import {
 } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps } from "../../src/nodes/base.ts";
-import { Parameter } from "../../src/nodes/contracts.ts";
-import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
-import { engine, graph } from "./run_state_fixtures.ts";
-import { fakeTurn, NEVER, rejected, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
+import {
+  fakeTurn,
+  NEVER,
+  rejected,
+  request,
+  runSessionFlow,
+  SESSION_CONFIG,
+  sessionFlow,
+  snapshot,
+  view,
+  withHarness,
+  withTurn,
+} from "./session_fakes.ts";
 
 // Each test's environment: conftest's base (a private store in a fresh directory, the default
 // model) with the default provider this test sets.
@@ -525,7 +529,7 @@ for (const pending of [false, true]) {
   });
 }
 
-const CONFIG = { provider: "openai", model: "test-model" };
+const CONFIG = SESSION_CONFIG;
 
 /** A `ScriptedModel` that calls `probe` with the call's index before answering it. */
 class ProbedModel extends ScriptedModel {
@@ -540,11 +544,6 @@ class ProbedModel extends ScriptedModel {
     this.probe(this.requests.length);
     return super.stream(request, options);
   }
-}
-
-/** The conversation `memory` holds, read through a fresh run (Python's `_view`). */
-function view(memory: SessionMemory): ConversationView {
-  return conversationViewFromJson(snapshot(memory)["conversation"] as JsonObject);
 }
 
 /** The texts of the messages of `model`'s last request after its system prompt. */
@@ -593,45 +592,10 @@ test("admission follows render and recall, and only the current recall is reused
   expect(lastTexts(model)).toEqual(["question 0", "one", "question 1"]);
 });
 
-/** Python's `_FLOW`: one AGENT `agent` owning AGENT memory `session`, prompted with the question. */
-function sessionFlow(): CompiledFlow {
-  const node = new AgentNode("agent", { prompt: "${question}", llmConfig: CONFIG });
-  node.params = [new Parameter("question")];
-  node.memoryScope = new MemoryScope(["agent"], { memories: ["session"] });
-  return graph([node], [[START_ID, "agent"]], {
-    wiring: { agent: { question: "${input.question}" } },
-    outputs: [new FlowOutput("result", "${agent.output}")],
-  });
-}
-
-/**
- * Run `sessionFlow` through the engine as run `runId` with `question`, `memory` backing `session`
- * and `model` serving the agent; return the run's terminal event.
- */
-async function runSession(
-  memory: SessionMemory,
-  model: ChatModel,
-  runId: string,
-  question: string,
-): Promise<RunSucceeded | RunFailed> {
-  const spec = new MemorySpec("session", "session", {}, [new DeclSite([], ["root"], "agent")], true);
-  const runtime = await MemoryRuntime.open({
-    memories: [spec],
-    origins: new Map([["session", null]]),
-    memory: new Map([["session", memory]]),
-  });
-  try {
-    const built = engine(sessionFlow(), {
-      runId,
-      inputs: { question },
-      models: { env: () => undefined, createModel: () => model },
-      memoryContextOpener: (scope, opened, options) => runtime.openContext(scope, opened, options),
-    });
-    await built.run();
-    return built.state.result as RunSucceeded | RunFailed;
-  } finally {
-    await runtime.close();
-  }
+/** Run `sessionFlow` as run `runId` with `question`, `memory` backing `session` and `model` serving it. */
+function runSession(memory: SessionMemory, model: ChatModel, runId: string, question: string) {
+  const models = { env: () => undefined, createModel: () => model };
+  return runSessionFlow(sessionFlow(), memory, { runId, inputs: { question }, models });
 }
 
 test("the request is stored before the provider, and a failed effect remains truthful", async () => {

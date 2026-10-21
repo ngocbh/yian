@@ -15,9 +15,10 @@
  * interrupt between effects or before a later chunk of a streamed reply, returning its latest
  * reply's text (a cut reply's text so far); an interrupt never aborts a running tool call.
  *
- * Here so far: prior context comes from the memory transcript, which records each model call's new
- * input and reply, each call a host interrupt skipped, and a granted call whose argument check
- * failed; a call that runs is not recorded yet.
+ * Here: prior context comes from the memory transcript, which records each model call's new input
+ * and reply, each tool call that runs (requested right before it starts, observed in call order
+ * once its group settles), each call a host interrupt skipped, and a granted call whose argument
+ * check failed.
  *
  * Knows about:   diagnostics, events, llm, memory contracts, nodes/base, skills, tools, typesys,
  *                peer AGENT modules.
@@ -69,10 +70,13 @@ import {
   interruptTurn,
   invokeModel,
   invokeToolEffect,
+  observeToolGroup,
   prepareHistory,
   recordSkippedTool,
   reportedText,
+  requestTool,
   systemPromptWithMemory,
+  type ToolOutcome,
   toolText,
 } from "./memory.ts";
 import { generateStructured, typeToSchema, userMessage } from "./structured.ts";
@@ -91,8 +95,11 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * the next call number) and goes between the system prompt and the prompt. Each model call stores
  * only its new input (the system prompt and the prompt first, then each iteration's steers) and its
  * reply; a final structured call after tools reads the current turn back from the transcript. Each
- * call a host interrupt skips is recorded with `SKIPPED_TOOL_RESULT`, a granted call whose argument
- * check failed is recorded failed, and an interrupt asks the turn to close `interrupted`.
+ * tool call is requested right before it starts and observed once its group settles, in call order:
+ * a result or reported error `completed` (a reported error `interrupted` under a stop), a failed
+ * call `failed` (`interrupted` under a stop). Each call a host interrupt skips is recorded with
+ * `SKIPPED_TOOL_RESULT`, a granted call whose argument check failed is recorded failed, and an
+ * interrupt asks the turn to close `interrupted`.
  *
  * @returns The checked structured value, or the final reply's visible text; after a host
  *   interrupt, the latest reply's visible text (`""` before any).
@@ -305,7 +312,7 @@ type CallCheck =
  *
  * @returns Whether a host interrupt skipped the remaining calls.
  * @throws A stop's reason, the first failing call's error, a result `toolText` refuses, the
- *   ungranted `AgentLoopError`, or a failed argument check.
+ *   ungranted `AgentLoopError`, a failed argument check, or the transcript's `CapabilityFault`.
  */
 async function runToolCalls(turn: ToolTurn): Promise<boolean> {
   let group: PlannedCall[] = [];
@@ -438,11 +445,18 @@ async function failCall(
  * first failure is thrown with nothing of the group committed. A stop, then a host interrupt, is
  * checked before the group starts; the interrupt skips from the group's first call.
  *
+ * With a memory transcript, each call is requested right before it starts, and a request that
+ * fails is the group's failure in time. Once the group settles, every started call is observed in
+ * call order (`observeToolGroup`), so a finished sibling of a failing call stays `completed` with
+ * its result. An observation fault wins over the first failure, though not over a pending stop; a
+ * result `toolText` refuses is thrown only when no call failed.
+ *
  * @returns Whether a host interrupt skipped the group and every later call.
  */
 async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<boolean> {
   if (group.length === 0) return false;
   const { ctx, live } = turn;
+  const transcript = ctx.memoryContext.transcript;
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, group[0]!.index);
   const signal = nodeSignal(turn);
@@ -452,46 +466,72 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
   signal?.addEventListener("abort", relay, { once: true });
   // Set in a callback, so declared wide: a `null` initializer would narrow it for good.
   let failure = null as { error: unknown } | null;
+  const fail = (error: unknown) => {
+    // Only the first failure in time is kept and aborts; aborting again changes nothing.
+    failure ??= { error };
+    controller.abort(error);
+  };
   try {
     for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
-    const outcomes: Promise<{ value: unknown; reported: boolean } | null>[] = [];
+    const started: (ReturnType<typeof effectOf> & { ordinal: number })[] = [];
+    const outcomes: Promise<ToolOutcome>[] = [];
     for (const planned of group) {
       if (controller.signal.aborted) break;
       const { call, index } = planned;
-      let started = false;
+      const effect = effectOf(turn, call, index);
+      let ordinal = 0;
+      if (transcript) {
+        try {
+          ordinal = await requestTool(transcript, { ...effect, signal });
+        } catch (error) {
+          fail(error);
+          break;
+        }
+        // A sibling that failed while the request was stored keeps this call from starting; its
+        // effect stays `pending`, which the node's failed turn allows.
+        if (controller.signal.aborted) break;
+      }
+      let begun = false;
       const running = observeToolCall(
         live,
         () => {
-          started = true;
+          begun = true;
           return planned.invoke(controller.signal);
         },
         identityOf(turn, call, index),
         { signal, text: (value) => toolText(call.name, value) },
       );
+      started.push({ ...effect, ordinal });
       outcomes.push(
         running.then(
           (value) => ({ value, reported: false }),
           (error) => {
             if (isReportedToolError(error)) return { value: error, reported: true };
-            // Only the first failure in time is kept and aborts; aborting again changes nothing.
-            failure ??= { error };
-            controller.abort(error);
-            return null;
+            fail(error);
+            return { error };
           },
         ),
       );
       // `observeToolCall` calls `invoke` synchronously unless publishing the started event threw;
       // its rejection is seen only later, so the next call must not start in the meantime.
-      if (!started) break;
+      if (!begun) break;
     }
     const settled = await Promise.all(outcomes);
+    const unrepresented = transcript
+      ? await observeToolGroup(
+          transcript,
+          started.map((effect, position) => ({ ...effect, outcome: settled[position]! })),
+          signal,
+        )
+      : null;
     // A stop pending when the calls settle wins over the first failure and over their results.
     checkNodeStopped(turn);
     if (failure !== null) throw failure.error;
+    if (unrepresented !== null) throw unrepresented.error;
     for (const [position, outcome] of settled.entries()) {
       const { call } = group[position]!;
-      // A `null` outcome is a failure, and a failure was thrown above.
-      const { value, reported } = outcome!;
+      // No outcome is an error: a failure was thrown above.
+      const { value, reported } = outcome as Extract<ToolOutcome, { value: unknown }>;
       const content = reported ? reportedText(call.name, value) : toolText(call.name, value);
       recordToolResult(ctx.evaluationTrace, call.name, content);
       const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError: reported });

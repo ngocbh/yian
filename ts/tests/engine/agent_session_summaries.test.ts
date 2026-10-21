@@ -13,8 +13,9 @@
  * `test_valid_text_blocks_are_kept_intact_without_hard_truncation`, and through `runAgent`:
  * `test_stop_after_summary_preserves_actual_cache_without_answer`,
  * `test_summary_uses_unbound_model_and_current_instructions_and_grants`,
- * `test_summary_failure_never_enters_answer_structured_retry` (native and prompt) and
- * `test_structured_correction_attempts_are_one_whole_recent_turn` (native and prompt).
+ * `test_summary_failure_never_enters_answer_structured_retry` (native and prompt),
+ * `test_structured_correction_attempts_are_one_whole_recent_turn` (native and prompt) and
+ * `test_tool_then_structured_uses_summary_once_and_safe_current_projection` (native and prompt).
  *
  * Changed: the invalid replies are what a `yian.message.v1` reply can hold: empty and blank text,
  * reasoning only, a parsed and an unparsed tool call, and a media part; Python's opaque-payload,
@@ -25,7 +26,11 @@
  * request the current grant; `yian.message.v1` has no developer role, so only the old system
  * message is checked. `test_summary_failure_never_enters_answer_structured_retry` fails with an
  * `Error`: TS has no `FutureCancelledError`, asyncio cancellation or `KeyboardInterrupt`; "no
- * structured binding" reads as no second request.
+ * structured binding" reads as no second request. In
+ * `test_tool_then_structured_uses_summary_once_and_safe_current_projection` the malformed final reply
+ * holds an unparsed tool call (Python: a hidden `function_call`), both strategies' structured
+ * attempts are model replies of the same script (TS's native plan answers in text), and the
+ * tool's effect is checked `completed`.
  *
  * TS-only: the summary request is the prompt with the budget and the projection as a user message,
  * published with purpose `history_summary` and its own retry settings; the summary goes first as a
@@ -34,9 +39,6 @@
  * Not ported: the `"not a message"` row of
  * `test_invalid_summary_reply_is_an_ordinary_invocation_failure`: a `Response` is always an
  * assistant message.
- *
- * Later (T6-6 PR 1, a run tool call's transcript):
- * `test_tool_then_structured_uses_summary_once_and_safe_current_projection`.
  *
  * Later (T6-6 PR 3): `test_refused_summary_call_fails_provider_auth`.
  */
@@ -512,5 +514,55 @@ for (const [label, config] of STRATEGIES) {
         expect(messages.some((message) => message.parts.some((part) => part instanceof ToolCallPart))).toBe(false);
       });
     }, memory);
+  });
+}
+
+for (const [label, config] of STRATEGIES) {
+  test(`a tool then structured answer uses the summary once and a safe current projection: ${label}`, async () => {
+    const memory = summarizing();
+    await seed(memory);
+    const calls: Record<string, unknown>[] = [];
+    const toolset = new ToolSet({ lookup: valueTool("lookup", calls) });
+    // The final chat reply holds an unparsed tool call, so it must become inert text when the
+    // structured pass reads it.
+    const malformed = assistant(
+      new TextPart("ready"),
+      new ToolCallPart({ id: "stale", name: "stale", arguments: null, rawArguments: "{" }),
+    );
+    const replies = [reply("old summary"), callReply(), malformed, reply('{"value":"bad"}'), reply('{"value":9}')];
+    const model = new ScriptedModel(replies, config);
+    const result = await withHarness(
+      ({ session }) =>
+        withTurn(session, request("current"), (turn) =>
+          runAgent(
+            agentContext(model, turn, { tools: ["lookup"], toolset, outputType: INT, retries: 1, llmConfig: config }),
+          ),
+        ),
+      memory,
+    );
+    expect(result.value).toBe(9n);
+    expect(calls).toEqual([{ value: 1 }]);
+    for (const { messages } of model.requests.slice(-2)) {
+      const texts = messages.map((message) => message.text());
+      expect(texts.filter((text) => text.includes("Historical conversation summary"))).toHaveLength(1);
+      expect(texts).not.toContain("question-0");
+      expect(texts).not.toContain("reply-0");
+      expect(texts).toContain("current question");
+      const results = messages.flatMap((message) => message.parts.filter((part) => part instanceof ToolResultPart));
+      expect(results.map((part) => part.content)).toContain("result:1");
+      expect(messages.some((message) => message.role === "user" && message.text().includes("unpairable"))).toBe(true);
+      const unparsed = messages.flatMap((message) =>
+        message.parts.filter((part) => part instanceof ToolCallPart && part.arguments === null),
+      );
+      expect(unparsed).toEqual([]);
+      expect(dump(messages)).not.toContain("completion unknown");
+    }
+    const raw = conversation(memory);
+    expect(logJson(raw)).not.toContain("old summary");
+    expect(raw.effects.filter((effect: Mutable) => effect.kind === "model")).toHaveLength(5);
+    const tools = raw.effects.filter((effect: Mutable) => effect.kind === "tool");
+    expect(tools.map((effect: Mutable) => effect.status)).toEqual(["completed"]);
+    const asked = raw.items.filter((item: Mutable) => logJson(item.payload.message).includes('"current question"'));
+    expect(asked).toHaveLength(1);
   });
 }

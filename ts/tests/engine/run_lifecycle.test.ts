@@ -54,6 +54,14 @@
  * TOOL cut between its `failed` and `started` steps resumes with the next attempt; a resume with
  * an aborted signal rejects with its reason before the lock is taken.
  *
+ * TS-only, the SIGKILL platform sweep (design 4.2): three serial CODE-only flows (one with a CASE
+ * route) run in a child process of the runtime running the test, a script written to a temp dir;
+ * the child is killed with SIGKILL once the log holds k+1 lines, for each k that is a slow node's
+ * `node_started` (the child's CODE bodies wait 1 s, so the kill lands while that node runs). The
+ * records-only `inspectRun` then reads `interrupted` with the killed node in flight, counted once,
+ * and `resumeFlow` in the test process gives an uncut run's output and node outcomes
+ * (`node_succeeded`, `node_routed`, `node_failed`, by node and value).
+ *
  * Covered by a case: `test_terminal_resume_is_read_only_silent_and_unlocks[failed]` and
  * `test_terminal_resume_preserves_compose_failure_and_diagnosis`
  * (`resume/run_lifecycle__a_finished_failed_run_resumes_read_only_with_its_failure`),
@@ -62,11 +70,12 @@
  * `[pooled-override]` (`resume/run_lifecycle__a_resume_num_workers_overrides_the_recorded_one`).
  */
 
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
@@ -96,6 +105,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import {
+  inspectRun,
   type ResumeFlowOptions,
   type RunFlowOptions,
   type RunResult,
@@ -1017,4 +1027,235 @@ test("a resume with an aborted signal rejects before the lock is taken", async (
     held.close();
   }
   expect(readFileSync(path)).toEqual(before);
+});
+
+// ---- The SIGKILL platform sweep ----
+
+/** The `ts/` directory: children run from it, so Bun never looks for packages to install. */
+const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+// Each CODE body waits for `globalThis.yianSweepDelayMs`, which only the child sets: a killed
+// child's node is still running at the kill, and the test process's runs don't wait.
+const SLOW = "await new Promise((resolve) => setTimeout(resolve, globalThis.yianSweepDelayMs ?? 0));";
+
+const SWEEP_FLOWS: Record<string, { text: string; inputs: Record<string, unknown>; slow: string[] }> = {
+  linear: {
+    text: `
+id: sweep-linear
+name: sweep_linear
+input:
+  n: !int
+nodes:
+  a:
+    kind: code
+    input:
+      n: \${input.n}
+    code: |
+      ${SLOW}
+      return inputs.n + 1
+    output: int
+  b:
+    kind: code
+    input:
+      n: \${a.output}
+    code: |
+      ${SLOW}
+      return inputs.n * 2
+    output: int
+  c:
+    kind: code
+    input:
+      n: \${b.output}
+    code: |
+      ${SLOW}
+      return "n=" + inputs.n
+    output: str
+output: \${c.output}
+`,
+    inputs: { n: 4 },
+    slow: ["a", "b", "c"],
+  },
+  case: {
+    text: `
+id: sweep-case
+name: sweep_case
+input:
+  seed: !float
+nodes:
+  score:
+    kind: code
+    input:
+      seed: \${input.seed}
+    code: |
+      ${SLOW}
+      return inputs.seed * 2
+    output: float
+  gate:
+    kind: case
+    cases:
+      - when: "score.output >= 1.0"
+        then: positive
+    else: cautious
+  positive:
+    kind: code
+    input:
+      score: \${score.output}
+    code: |
+      ${SLOW}
+      return "positive " + inputs.score
+    output: str
+  cautious:
+    kind: code
+    input:
+      score: \${score.output}
+    code: |
+      ${SLOW}
+      return "cautious " + inputs.score
+    output: str
+output: \${positive.output | cautious.output}
+`,
+    inputs: { seed: 0.75 },
+    slow: ["score", "positive"],
+  },
+  join: {
+    text: `
+id: sweep-join
+name: sweep_join
+input:
+  topic: !str
+nodes:
+  left:
+    kind: code
+    input:
+      topic: \${input.topic}
+    code: |
+      ${SLOW}
+      return "left " + inputs.topic
+    output: str
+  right:
+    kind: code
+    input:
+      topic: \${input.topic}
+    code: |
+      ${SLOW}
+      return "right " + inputs.topic
+    output: str
+  both:
+    kind: code
+    input:
+      l: \${left.output}
+      r: \${right.output}
+    code: |
+      ${SLOW}
+      return inputs.l + " & " + inputs.r
+    output: str
+output: \${both.output}
+`,
+    inputs: { topic: "reefs" },
+    slow: ["left", "right", "both"],
+  },
+};
+
+/** The node outcomes of the log at `path`: kind, node and value (or route handle), in order. */
+function nodeOutcomes(path: string): unknown[] {
+  const kinds = new Set(["node_succeeded", "node_routed", "node_failed"]);
+  return readRunLog(path)
+    .filter((envelope) => kinds.has(envelope.kind))
+    .map(({ kind, payload }) => [kind, payload["node_id"], payload["value"] ?? payload["handle"] ?? payload["failure"]]);
+}
+
+/** The number of complete lines in the file at `path`. */
+function lineCount(path: string): number {
+  return readFileSync(path, "utf8").split("\n").length - 1;
+}
+
+/**
+ * Run `text` serially in a child process of this runtime, logging to `log`, and SIGKILL it once
+ * the log holds `k + 1` lines; resolve when it has exited. The child is killed in any case.
+ */
+async function killedRunAfter(
+  text: string,
+  inputs: Record<string, unknown>,
+  log: string,
+  k: number,
+): Promise<void> {
+  const script = join(dir, `child-${k}.mjs`);
+  writeFileSync(
+    script,
+    `globalThis.yianSweepDelayMs = 1000;
+const { loadFlow } = await import(${JSON.stringify(pathToFileURL(join(TS_ROOT, "src/compose/loader.ts")).href)});
+const { runFlow } = await import(${JSON.stringify(pathToFileURL(join(TS_ROOT, "src/run.ts")).href)});
+const auth = ${JSON.stringify(join(dir, "auth.json"))};
+const flow = await loadFlow(${JSON.stringify(text)}, { sourceLabel: "flow.yaml" });
+await runFlow(flow, ${JSON.stringify(inputs)}, {
+  log: ${JSON.stringify(log)},
+  numWorkers: 0,
+  env: (name) => (name === "YIAN_AUTH_FILE" ? auth : undefined),
+});
+console.log("finished");
+`,
+  );
+  const child: ChildProcess = spawn(process.execPath, [script], { cwd: TS_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+  child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+  const closed = new Promise((resolve) => child.on("close", resolve));
+  try {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      if (child.exitCode !== null) throw new Error(`the child exited before record ${k}:\n${output}`);
+      let lines = 0;
+      try {
+        lines = lineCount(log);
+      } catch {
+        // The child hasn't created the log yet.
+      }
+      if (lines > k) break;
+      if (Date.now() > deadline) throw new Error(`the log never held ${k + 1} lines:\n${output}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    child.kill("SIGKILL");
+    await closed;
+    expect(child.signalCode).toBe("SIGKILL");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await closed;
+    }
+  }
+}
+
+describe("the SIGKILL platform sweep", () => {
+  for (const [name, { text, inputs, slow }] of Object.entries(SWEEP_FLOWS)) {
+    test(
+      `a ${name} run killed while each slow node runs resumes to the uncut run's outcomes`,
+      async () => {
+        const flow = await load(text);
+        const uncutLog = join(dir, "uncut.jsonl");
+        const uncut = await run(flow, inputs, { log: uncutLog, numWorkers: 0 });
+        expect(uncut.status).toBe("succeeded");
+        const uncutRecords = readRunLog(uncutLog);
+
+        for (const nodeId of slow) {
+          const k = uncutRecords.findIndex((envelope) => envelope.kind === "node_started" && envelope.payload["node_id"] === nodeId);
+          const log = join(dir, `killed-${nodeId}.jsonl`);
+          await killedRunAfter(text, inputs, log, k);
+
+          // The kill landed while the node ran: its start is the last record.
+          expect(lineCount(log)).toBe(k + 1);
+          expect(inspectRun(log)).toEqual({
+            status: "interrupted",
+            inFlight: [nodeId],
+            interruptedAttempts: new Map([[nodeId, 1]]),
+          });
+          const resumed = await resume(flow, { log });
+          expect(resumed.status).toBe("succeeded");
+          expect(resumed.output).toEqual(uncut.output);
+          expect(resumed.interruptedAttempts).toEqual(new Map([[nodeId, 1]]));
+          expect(nodeOutcomes(log)).toEqual(nodeOutcomes(uncutLog));
+        }
+      },
+      20_000,
+    );
+  }
 });

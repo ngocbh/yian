@@ -16,14 +16,14 @@
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
 // `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
 // `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`); the entry's
-// `run --json` child and its forwarded stop (`abortOnSignal`). `status` is covered up to the run
-// inspection, which isn't ported yet; from tests/cli/test_run_log_options.py, the run-log checks
-// running before the flow is read.
+// `run --json` child and its forwarded stop (`abortOnSignal`); `status`, TS-only, on logs these
+// runs write. From tests/cli/test_run_log_options.py, the run-log checks running before the flow
+// is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -51,7 +51,7 @@ import {
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
@@ -1217,6 +1217,77 @@ describe("check", () => {
 });
 
 describe("status", () => {
+  /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */
+  async function finishedLog(name = "finished.jsonl"): Promise<string> {
+    const log = join(tmp, name);
+    const { code } = await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds", "--log", log]);
+    expect(code).toBe(0);
+    return log;
+  }
+
+  /** The finished log cut after the `echo` node's start: a run whose process ended mid-run. */
+  async function interruptedLog(): Promise<string> {
+    const log = await finishedLog("interrupted.jsonl");
+    const lines = readFileSync(log, "utf8").split("\n");
+    const started = lines.findIndex(
+      (line) => line.includes('"kind":"node_started"') && line.includes('"node_id":"echo"'),
+    );
+    expect(started).toBeGreaterThan(0);
+    writeFileSync(log, `${lines.slice(0, started + 1).join("\n")}\n`);
+    return log;
+  }
+
+  test("--json: a finished run's document", async () => {
+    const log = await finishedLog();
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["status", log, "--json"], io)).toBe(0);
+    expect(stdout()).toBe(
+      '{"format":"yian.cli.v1","in_flight":[],"interrupted_attempts":{},"status":"succeeded"}\n',
+    );
+    expect(stderr()).toBe("");
+  });
+
+  test("--json: an interrupted run's nodes in flight and interrupted attempts", async () => {
+    const log = await interruptedLog();
+    const before = readFileSync(log, "utf8");
+    const { io, stdout } = testIo();
+    expect(await main(["status", log, "--json"], io)).toBe(0);
+    expect(stdout()).toBe(
+      '{"format":"yian.cli.v1","in_flight":["echo"],"interrupted_attempts":{"echo":1},"status":"interrupted"}\n',
+    );
+    // It never appends.
+    expect(readFileSync(log, "utf8")).toBe(before);
+  });
+
+  test("text: the status, then the nodes in flight and interrupted attempts when any", async () => {
+    const finished = testIo();
+    expect(await main(["status", await finishedLog()], finished.io)).toBe(0);
+    expect(finished.stdout()).toBe("status: succeeded\n");
+    expect(finished.stderr()).toBe("");
+    const interrupted = testIo();
+    expect(await main(["status", await interruptedLog()], interrupted.io)).toBe(0);
+    expect(interrupted.stdout()).toBe(
+      "status: interrupted\nin flight: echo\ninterrupted attempts: echo=1\n",
+    );
+  });
+
+  test("a log a writer holds is running", async () => {
+    const path = join(tmp, "held.jsonl");
+    const log = JsonlRunLog.create(path, "run-1");
+    try {
+      const { io, stdout } = testIo();
+      expect(await main(["status", path, "--json"], io)).toBe(0);
+      expect(JSON.parse(stdout())).toEqual({
+        format: "yian.cli.v1",
+        status: "running",
+        in_flight: [],
+        interrupted_attempts: {},
+      });
+    } finally {
+      log.close();
+    }
+  });
+
   test("a missing log exits 2", async () => {
     const log = join(tmp, "missing.jsonl");
     const { io, stdout, stderr } = testIo();
@@ -1225,12 +1296,21 @@ describe("status", () => {
     expect(stderr()).toEndWith(`Error: Invalid value for 'LOG': File '${log}' does not exist.\n`);
   });
 
-  test("an existing log reaches the run inspection", async () => {
-    const log = file("run.jsonl", "");
-    const { io, stdout, stderr } = testIo();
-    expect(await main(["status", log], io)).toBe(1);
-    expect(stdout()).toBe("");
-    expect(stderr()).toContain("inspectRun is not ported to TypeScript yet");
+  test("a damaged or empty log is run.setup: its message on stderr, exit 1", async () => {
+    const damaged = file("damaged.jsonl", "not a run log\n");
+    const json = testIo();
+    expect(await main(["status", damaged, "--json"], json.io)).toBe(1);
+    const message = json.stderr().trimEnd();
+    expect(message).toStartWith(`run log ${damaged} line 1 (seq 0): `);
+    expect(JSON.parse(json.stdout())).toEqual({
+      format: "yian.cli.v1",
+      error: { code: "run.setup", message },
+    });
+    const empty = file("empty.jsonl", "");
+    const text = testIo();
+    expect(await main(["status", empty], text.io)).toBe(1);
+    expect(text.stdout()).toBe("");
+    expect(text.stderr()).toBe(`cannot inspect an empty run log: ${empty}\n`);
   });
 });
 

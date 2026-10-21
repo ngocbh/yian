@@ -7,7 +7,7 @@
  *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
  *   `--resume` log, checking its recorded keys, and prints its output or its failure;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
- *   document; `status` inspects a run log.
+ *   document; `status` reports where the run in a run log stands, as text or a `--json` document.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
  *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
@@ -63,8 +63,10 @@ import type { Parameter } from "../nodes/contracts.ts";
 import { FileLockError } from "../platform.ts";
 import {
   hostInputs,
+  inspectRun,
   type LlmConfigsCheck,
   resumeFlow,
+  type RunInspection,
   type RunResult,
   runFlow,
   runStartLlm,
@@ -92,11 +94,6 @@ import {
 
 // In `utils.ts`, so the entry's `run --json` child builds one without loading this module.
 export { HostStop };
-
-// The TS run inspection isn't ported yet; it throws until its module lands.
-async function inspectRun(log: string): Promise<never> {
-  throw new Error("inspectRun is not ported to TypeScript yet");
-}
 
 const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
 
@@ -1572,9 +1569,46 @@ export async function check(
   return results.every((result) => result.ok) ? 0 : 1;
 }
 
-/** Report the run recorded in the run log `log`; returns the exit code. */
-export async function status(log: string): Promise<number> {
-  return inspectRun(log);
+/**
+ * Report where the run recorded in the run log `log` stands (`inspectRun`), without appending to
+ * it or taking its lock; returns the exit code.
+ *
+ * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `interrupted attempts:
+ * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
+ * start order) and `interrupted_attempts`. A log that isn't a readable run log (empty, damaged,
+ * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
+ */
+export async function status(log: string, { json }: { json: boolean }, io: CliIo): Promise<number> {
+  let inspection: RunInspection;
+  try {
+    inspection = inspectRun(log, { env: io.env });
+  } catch (error) {
+    let message: string;
+    if (error instanceof RangeError) message = error.message;
+    else if (isSystemError(error)) message = `can't read ${log}: ${osReason(error)}`;
+    else throw error;
+    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+    if (json) {
+      const diagnostic = new Diagnostic({ code: "run.setup", message });
+      await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
+    }
+    return 1;
+  }
+  const { status: runStatus, inFlight, interruptedAttempts } = inspection;
+  if (json) {
+    // `bigint` counts, so the document writes them as ints.
+    const counts = Object.fromEntries([...interruptedAttempts].map(([node, n]) => [node, BigInt(n)]));
+    await printJson({ status: runStatus, in_flight: inFlight, interrupted_attempts: counts }, io.stdout);
+    return 0;
+  }
+  let text = `status: ${runStatus}\n`;
+  if (inFlight.length > 0) text += `in flight: ${inFlight.join(", ")}\n`;
+  if (interruptedAttempts.size > 0) {
+    const counts = [...interruptedAttempts].map(([node, n]) => `${node}=${n}`);
+    text += `interrupted attempts: ${counts.join(", ")}\n`;
+  }
+  await io.stdout.write(text);
+  return 0;
 }
 
 /** One `yian skills check` result: the skill's name and description, or why it failed to load. */

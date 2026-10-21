@@ -1,0 +1,11 @@
+# A file that isn't a run log is a run.setup error.
+kind: cli
+python_skip: "yian status is TS-only"
+files: {run.jsonl: "not a run log\n"}
+args: [status, run.jsonl, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    error:
+      code: run.setup

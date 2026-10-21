@@ -1,0 +1,22 @@
+# A finished run: succeeded, nothing in flight, no interrupted attempts.
+kind: cli
+python_skip: "yian status is TS-only"
+files:
+  run.jsonl: |
+    {"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow_fingerprint":"fa51bad8a38bedb69c3b2a72adfe8207098933ee92ea65f8aa4e46bc7576b746","initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},"system":{"now":{"kind":"datetime","value":"2026-10-21T17:52:48.430000+00:00"},"run_id":{"kind":"str","value":"dec0b325312242018a72385ba6c51119"},"today":{"kind":"date","value":"2026-10-21"}}},"learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"start_wiring_override":{}},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":0}
+    {"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":1}
+    {"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":2}
+    {"kind":"node_started","payload":{"node_id":"a"},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":3}
+    {"kind":"node_started","payload":{"node_id":"b"},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":4}
+    {"kind":"node_succeeded","payload":{"commit_target":"a","evidence":null,"forward_capture":null,"node_id":"a","value":{"kind":"int","value":1}},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":5}
+    {"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":6}
+    {"kind":"node_succeeded","payload":{"commit_target":"b","evidence":null,"forward_capture":null,"node_id":"b","value":{"kind":"int","value":2}},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":7}
+    {"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,"forward_capture":null,"node_id":"__end__","value":{"kind":"int","value":1}},"run_id":"dec0b325312242018a72385ba6c51119","schema":10,"seq":8}
+args: [status, run.jsonl, --json]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    in_flight: []
+    interrupted_attempts: {}

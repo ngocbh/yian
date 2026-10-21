@@ -1792,6 +1792,25 @@ describe("schema.ts", () => {
     ]);
   });
 
+  test("validates the keys properties doesn't list against a schema additionalProperties", () => {
+    const schema = {
+      properties: { a: { type: "string" } },
+      additionalProperties: { type: "integer", minimum: 0 },
+    };
+    expect(validate(ROOT, schema, { a: "x", b: 1n, c: 0 })).toEqual([]);
+    expect(validate(ROOT, schema, { b: -1, c: "y" })).toEqual([
+      "$.b: -1 is below 0",
+      "$.c: string is not integer",
+    ]);
+    expect(validate(ROOT, schema, { b: "y" }, { closed: true })).toEqual(["$.b: string is not integer"]);
+    expect(lintSchema(ROOT, { additionalProperties: { x: 1 } })).toEqual([
+      "$.additionalProperties.x: unknown keyword",
+    ]);
+    expect(lintSchema(ROOT, { additionalProperties: true })).toEqual([
+      "$.additionalProperties: not a schema object",
+    ]);
+  });
+
   test("lintSchema of cli.schema.json is clean", () => {
     const schema = loadSchema("cli.schema.json");
     expect(lintSchema(schema, schema)).toEqual([]);

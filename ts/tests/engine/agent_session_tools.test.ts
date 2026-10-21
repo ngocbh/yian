@@ -3,11 +3,13 @@
  * `tests/engine/test_agent_session_tools.py`.
  *
  * Ported, at the adapter level: the `request` and `observe` stages of
- * `test_tool_memory_fault_cannot_repeat_external_action`, and
- * `test_tool_error_identity_survives_failed_observation` (2 rows).
+ * `test_tool_memory_fault_cannot_repeat_external_action`,
+ * `test_tool_error_identity_survives_failed_observation` (2 rows), and
+ * `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history`.
  *
  * Changed: a host stop is the aborted signal, its reason what the tool throws, rather than a
- * `_HostStop`; an observation failure's note is on the error's own `notes` array.
+ * `_HostStop`; an observation failure's note is on the error's own `notes` array. The restored
+ * test checks the exact status text.
  *
  * TS-only: a result is a `completed` tool message under the snake_case request payload; a reported
  * error is a `completed` error result; a stop pending at a reported error records `interrupted`
@@ -18,15 +20,19 @@
  * spied `fromHost` throws it), which gets no observation note; a `CapabilityFault` with a stop
  * pending is recorded `failed` and thrown, without the stop check; a skip under an already aborted
  * signal throws the stop, not a `CapabilityFault`, and records nothing, since a session turn
- * checks the stop before publishing a request.
+ * checks the stop before publishing a request. The history projection: a call without its result
+ * gets a context-only error result with each of the three repair texts (effect `completed`,
+ * `failed`, or another status such as `interrupted` or none recorded), a non-`completed` effect is
+ * listed in the status message; an unpaired tool result and a tool message with another part
+ * are inert `unpaired tool result` text; a reply with an unparsed call, an empty name or id, or
+ * repeated ids, and a native structured reply, are inert `structured or unpairable model reply`
+ * text; a stored system message is dropped.
  *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6):
- * `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history` (the
- * history projection), `test_two_runs_restore_tool_exchanges_without_executing_old_calls`
- * (the loop wiring), and the rows that need `run_flow`:
+ * Later (T6-6): `test_two_runs_restore_tool_exchanges_without_executing_old_calls` (the loop
+ * wiring), and the rows that need `run_flow`:
  * `test_recalled_transcript_and_current_notes_share_one_context`,
  * `test_changed_grants_keep_history_but_reject_new_ungranted_call`,
  * `test_missing_tool_result_is_repaired_only_in_context_with_truthful_status`,
@@ -38,20 +44,33 @@
 
 import { expect, spyOn, test } from "bun:test";
 
-import { Message, ToolResultPart } from "../../src/llm/messages.ts";
-import type { ConversationTurn, ConversationView } from "../../src/memory/contracts.ts";
-import type { Turn } from "../../src/memory/session.ts";
+import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
+import type { ConversationTurn, ConversationView, JsonObject } from "../../src/memory/contracts.ts";
+import { SessionMemory, type Turn } from "../../src/memory/session.ts";
 import {
   decodeMessage,
+  encodeMessage,
+  historyMessages,
   interruptTurn,
+  invokeModel,
   invokeToolEffect,
   recordSkippedTool,
   SKIPPED_TOOL_RESULT,
 } from "../../src/nodes/agent/memory.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { ReportedToolError } from "../../src/tools/errors.ts";
+import { logJson } from "../../src/typesys/json.ts";
 import * as values from "../../src/typesys/values.ts";
-import { fakeTurn, NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
+import {
+  fakeTurn,
+  type Mutable,
+  NEVER,
+  rejected,
+  request,
+  snapshot,
+  withHarness,
+  withTurn,
+} from "./session_fakes.ts";
 
 const call = { name: "lookup", arguments: { value: 1 }, modelExchangeId: "model", callIndex: 0, toolCallId: "provider" };
 
@@ -271,4 +290,178 @@ test("a skip under an already aborted signal throws the stop and records nothing
   }, controller.signal);
   expect(error).toBe(stop);
   expect(view.effects).toHaveLength(0);
+});
+
+test("a restored unclosed invocation reports unknown completion without changing history", async () => {
+  const memory = new SessionMemory();
+  const actions: string[] = [];
+  let saved: JsonObject | null = null;
+  await withHarness(async ({ session }) => {
+    await withTurn(session, request("older"), async (turn) => {
+      await invokeModel(turn, async () => callReply, {
+        newMessages: [user("first")],
+        exchangeId: "older-model",
+        signal: NEVER,
+      });
+      const toolCall = { ...call, modelExchangeId: "older-model", toolCallId: "reused-provider-id", signal: NEVER };
+      await invokeToolEffect(turn, async () => (actions.push("executed"), "actual result"), toolCall);
+      saved = snapshot(memory);
+    });
+  }, memory);
+  expect((saved!["conversation"] as Mutable)["closed_invocations"]).toEqual([]);
+  const restored = new SessionMemory();
+  const session = restored.openRun({ snapshot: saved });
+  try {
+    await withTurn(session, request("current"), async (turn) => {
+      const before = turn.view;
+      const context = await historyMessages(turn);
+      expect(turn.view).toBe(before);
+      expect(context.some((message) => message.role === "tool" && resultText(message) === "actual result")).toBe(true);
+      const statuses = context
+        .filter((message) => message.role === "user" && message.text().startsWith("Session history status"))
+        .map((message) => message.text());
+      expect(statuses).toEqual([
+        'Session history status (context only): [{"invocation":"still open; completion unknown"}]',
+      ]);
+    });
+  } finally {
+    session.close();
+  }
+  expect(actions).toEqual(["executed"]);
+  expect((snapshot(restored)["conversation"] as Mutable)["items"]).toHaveLength(3);
+});
+
+const user = (text: string): Message => new Message({ role: "user", parts: [new TextPart(text)] });
+const replyOf = (...parts: Part[]): Response => new Response({ message: new Message({ role: "assistant", parts }) });
+const lookupCall = new ToolCallPart({ id: "provider", name: "lookup", arguments: { value: 1 } });
+const callReply = replyOf(new ToolCallPart({ id: "reused-provider-id", name: "lookup", arguments: { value: 1 } }));
+const resultText = (message: Message): string => (message.parts[0] as ToolResultPart).content;
+const question = user("question");
+const toolPayloadOf = {
+  name: "lookup",
+  arguments: { value: 1 },
+  model_exchange_id: "model",
+  call_index: 0,
+  tool_call_id: "provider",
+};
+
+/** One model call under exchange `model` answering `question` with `reply`. */
+function modelCall(turn: Turn, reply: Response, options: { purpose?: string; newMessages?: Message[] } = {}) {
+  return invokeModel(turn, async () => reply, {
+    newMessages: options.newMessages ?? [question],
+    exchangeId: "model",
+    purpose: options.purpose,
+    signal: NEVER,
+  });
+}
+
+/** The JSON of the history projected in a fresh turn after `fn` ran in it; `fn`'s error is ignored. */
+function projected(fn: (turn: Turn) => Promise<unknown>): Promise<unknown[]> {
+  return withHarness(({ session }) =>
+    withTurn(session, request(), async (turn) => {
+      await fn(turn).catch(() => {});
+      return (await historyMessages(turn)).map((message) => message.toJSON());
+    }),
+  );
+}
+
+const repair = (content: string) => toolMessage(content, true).toJSON();
+const status = (statuses: unknown) => user(`Session history status (context only): ${logJson(statuses)}`).toJSON();
+const inert = (reason: string, message: Message) =>
+  user(`Prior ${reason} (context only, not an executable request): ${logJson(message.toJSON())}`).toJSON();
+
+test("a call without a result is repaired by its tool effect's status", async () => {
+  const asked = [question.toJSON(), replyOf(lookupCall).message.toJSON()];
+  const completed = await projected(async (turn) => {
+    await modelCall(turn, replyOf(lookupCall));
+    await invokeToolEffect(turn, async () => () => "not a value", call);
+  });
+  expect(completed).toEqual([...asked, repair("Tool execution completed; represented result unavailable.")]);
+  const failed = await projected(async (turn) => {
+    await modelCall(turn, replyOf(lookupCall));
+    await invokeToolEffect(turn, async () => Promise.reject(new Error("tool failed")), call);
+  });
+  expect(failed).toEqual([
+    ...asked,
+    repair("Tool invocation failed; result unavailable."),
+    status([{ effect: "tool", status: "failed" }]),
+  ]);
+  const unrecorded = await projected((turn) => modelCall(turn, replyOf(lookupCall)));
+  expect(unrecorded).toEqual([
+    ...asked,
+    repair("Tool result unavailable; execution outcome unknown (status: unrecorded)."),
+  ]);
+  const interrupted = await projected(async (turn) => {
+    await modelCall(turn, replyOf(lookupCall));
+    const controller = new AbortController();
+    const stop = new Error("stopped");
+    const invoke = async () => {
+      controller.abort(stop);
+      throw stop;
+    };
+    await invokeToolEffect(turn, invoke, { ...call, signal: controller.signal });
+  });
+  expect(interrupted).toEqual([
+    ...asked,
+    repair("Tool result unavailable; execution outcome unknown (status: interrupted)."),
+    status([{ effect: "tool", status: "interrupted" }]),
+  ]);
+});
+
+test("an unpaired tool result is inert context, and so is a tool message with other parts", async () => {
+  const unpaired = await projected(async (turn) => {
+    await modelCall(turn, replyOf(new TextPart("no call")));
+    await invokeToolEffect(turn, async () => "actual", call);
+  });
+  expect(unpaired).toEqual([
+    question.toJSON(),
+    replyOf(new TextPart("no call")).message.toJSON(),
+    inert("unpaired tool result", toolMessage("actual")),
+  ]);
+  const mixed = new Message({
+    role: "tool",
+    parts: [new ToolResultPart({ callId: "provider", name: "lookup", content: "actual" }), new TextPart("extra")],
+  });
+  const extra = await projected(async (turn) => {
+    await modelCall(turn, replyOf(lookupCall));
+    const ordinal = turn.request("tool", toolPayloadOf);
+    turn.observe(ordinal, "completed", { items: [encodeMessage(mixed, "model")] });
+  });
+  expect(extra).toEqual([
+    question.toJSON(),
+    replyOf(lookupCall).message.toJSON(),
+    repair("Tool execution completed; represented result unavailable."),
+    inert("unpaired tool result", mixed),
+  ]);
+});
+
+const unpairable: [string, Part[]][] = [
+  ["an unparsed call", [new ToolCallPart({ id: "provider", name: "lookup", arguments: null, rawArguments: "{" })]],
+  ["an empty name", [new ToolCallPart({ id: "provider", name: "", arguments: {} })]],
+  ["an empty id", [new ToolCallPart({ id: "", name: "lookup", arguments: {} })]],
+  ["repeated ids", [lookupCall, new ToolCallPart({ id: "provider", name: "other", arguments: {} })]],
+];
+
+for (const [label, parts] of unpairable) {
+  test(`a reply with ${label} is inert context`, async () => {
+    const reply = replyOf(...parts);
+    expect(await projected((turn) => modelCall(turn, reply))).toEqual([
+      question.toJSON(),
+      inert("structured or unpairable model reply", reply.message),
+    ]);
+  });
+}
+
+test("a native structured reply is inert context, and a stored system message is dropped", async () => {
+  const reply = replyOf(lookupCall);
+  expect(await projected((turn) => modelCall(turn, reply, { purpose: "structured_native" }))).toEqual([
+    question.toJSON(),
+    inert("structured or unpairable model reply", reply.message),
+  ]);
+  const system = new Message({ role: "system", parts: [new TextPart("OLD SYSTEM")] });
+  const answer = replyOf(new TextPart("answer"));
+  expect(await projected((turn) => modelCall(turn, answer, { newMessages: [system, question] }))).toEqual([
+    question.toJSON(),
+    answer.message.toJSON(),
+  ]);
 });

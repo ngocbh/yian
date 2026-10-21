@@ -5,8 +5,9 @@
  * `test_message_codec_round_trip_preserves_exact_provider_fields` (4 rows),
  * `test_message_codec_rejects_non_json_provider_payloads` (4 rows),
  * `test_message_codec_rejects_unknown_or_corrupt_stored_format` (5 rows),
- * `test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes`, the `request` and
- * `observe` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`, and
+ * `test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes`, the `request`,
+ * `observe`, `history` and `view` stages of
+ * `test_adapter_memory_faults_are_distinct_from_provider_failures`, and
  * `test_failed_observation_does_not_replace_provider_or_host_error` (2 rows).
  *
  * Changed: the expected `message_format` is TS's own `yian.message.v1`, not Python's
@@ -18,6 +19,8 @@
  * refuses, and a part `toJSON` writes back changed (a spied `Message.prototype.toJSON`, as Python
  * patches `message_to_dict`). A host stop is the aborted signal, its reason what the call throws,
  * rather than a `_HostStop`; an observation failure's note is on the error's own `notes` array.
+ * The `history` stage's hand-made view has empty ledgers, so its unknown-format item is the fault
+ * (a `RangeError`), not a missing field.
  *
  * TS-only: a record's `api_key` is not kept when the provider resolves from the defaults, a
  * passed `snapshot` is used, and no provider anywhere throws `RangeError`; each `decodeMessage`
@@ -35,10 +38,8 @@
  * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6): the `history` and `view` stages of
- * `test_adapter_memory_faults_are_distinct_from_provider_failures`, which need the history
- * projection, and every other test of the file, which needs the rest of the adapter, session
- * memory and `run_flow`.
+ * Later (T6-6): every other test of the file, which needs the rest of the adapter, session memory
+ * and `run_flow`.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -60,12 +61,13 @@ import {
 } from "../../src/llm/messages.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
-import { ConversationItem, type ConversationView } from "../../src/memory/contracts.ts";
+import { ConversationItem, type ConversationTurn, type ConversationView } from "../../src/memory/contracts.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import {
   compatibility,
   decodeMessage,
   encodeMessage,
+  historyMessages,
   invokeModel,
   memoryBoundary,
 } from "../../src/nodes/agent/memory.ts";
@@ -336,6 +338,25 @@ for (const stage of ["request", "observe"] as const) {
     expect(calls).toHaveLength(stage === "observe" ? 1 : 0);
   });
 }
+
+test("adapter memory faults are distinct from provider failures: history", async () => {
+  const view = { items: [new ConversationItem("old", "unknown", {})], effects: [], applied: [], closedInvocations: [] };
+  const error = await rejected(historyMessages({ view } as unknown as ConversationTurn));
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBeInstanceOf(RangeError);
+});
+
+test("adapter memory faults are distinct from provider failures: view", async () => {
+  const expected = new RangeError("memory refused write");
+  const broken = {
+    get view(): never {
+      throw expected;
+    },
+  };
+  const error = await rejected(historyMessages(broken as unknown as ConversationTurn));
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBe(expected);
+});
 
 for (const hostStop of [false, true]) {
   test(`failed observation does not replace provider or host error: host stop ${hostStop}`, async () => {

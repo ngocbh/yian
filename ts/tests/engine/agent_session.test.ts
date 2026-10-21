@@ -368,7 +368,7 @@ for (const hostStop of [false, true]) {
   });
 }
 
-test("a model call is requested with its new input and observed with its reply", async () => {
+test("a model call is requested with its new input and observed with its reply; chat by default", async () => {
   await withHarness(async ({ session }) => {
     await withTurn(session, request(), async (turn) => {
       const response = reply("answer");
@@ -376,15 +376,20 @@ test("a model call is requested with its new input and observed with its reply",
         newMessages: [newInput],
         signal: NEVER,
         exchangeId: "exchange",
-        purpose: "chat",
+        purpose: "structured_native",
       });
       expect(returned).toBe(response);
       const [effect] = turn.view.effects;
       expect(effect!.kind).toBe("model");
-      expect(effect!.request).toEqual({ exchange_id: "exchange", purpose: "chat" });
+      expect(effect!.request).toEqual({ exchange_id: "exchange", purpose: "structured_native" });
       expect(effect!.status).toBe("completed");
       expect(turn.view.items.map(decodeMessage)).toEqual([newInput, response.message]);
       expect(turn.view.items.map((stored) => stored.payload["exchange_id"])).toEqual(["exchange", "exchange"]);
+      // By default the purpose is `chat` and the exchange id fresh.
+      await invokeModel(turn, async () => response, { newMessages: [], signal: NEVER });
+      const defaults = turn.view.effects[1]!.request;
+      expect(defaults["purpose"]).toBe("chat");
+      expect(defaults["exchange_id"]).toMatch(/^[0-9a-f]{32}$/);
     });
   });
 });

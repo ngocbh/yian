@@ -115,7 +115,7 @@ export function newExchangeId(): string {
 }
 
 /** The name an error is reported by: its `name` for an `Error`, else its `typeof`. */
-function errorName(error: unknown): string {
+export function errorName(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 

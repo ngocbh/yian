@@ -41,7 +41,7 @@ import { fromHost, writeAsText } from "../../typesys/values.ts";
 import { CapabilityFault } from "../base.ts";
 import { isExactly } from "../contracts.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
-import { newExchangeId } from "./live.ts";
+import { errorName, newExchangeId } from "./live.ts";
 
 /** The version of the history projection a backend summarizes. */
 export const HISTORY_PROJECTION = "yian.api-history.v2";
@@ -108,9 +108,14 @@ export async function memoryBoundary<T>(fn: () => T | Promise<T>, signal?: Abort
   try {
     return await fn();
   } catch (error) {
-    if (error instanceof CapabilityFault || (signal?.aborted && error === signal.reason)) throw error;
+    if (error instanceof CapabilityFault || isStop(error, signal)) throw error;
     throw new CapabilityFault(error);
   }
+}
+
+/** Whether `error` is the stop: the reason of the aborted `signal`. */
+function isStop(error: unknown, signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true && error === signal.reason;
 }
 
 /**
@@ -190,12 +195,7 @@ export function toolText(name: string, result: unknown): string {
  */
 export function reportedText(name: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return toolText(name, message) || (error instanceof Error ? error.name : typeof error);
-}
-
-/** An `Error`'s `name`, else the value's `typeof`. */
-function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
+  return toolText(name, message) || errorName(error);
 }
 
 // Local copy of memory/session.ts's addNote: nodes/agent must not import runtime, and session.ts
@@ -213,11 +213,6 @@ function addNote(error: unknown, text: () => string): void {
     if (!Object.hasOwn(target, "notes")) target.notes = [];
     if (Array.isArray(target.notes)) target.notes.push(note);
   } catch {}
-}
-
-/** Whether `error` is the stop: the reason of the aborted `signal`. */
-function isStop(error: unknown, signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true && error === signal.reason;
 }
 
 /**
@@ -305,11 +300,11 @@ export async function invokeModel(
 /**
  * Observe `status`, keeping `primary`'s identity when the observation fails.
  *
- * A failed observation is noted on the original error. An ordinary `primary` is then wrapped in
- * `CapabilityFault`, unless the observation threw the stop: a session turn throws a pending stop
- * only after publishing, so the observation did not fail, and the stop is thrown. A
- * `CapabilityFault` or stop `primary` is left for the caller to rethrow, except that a stop the
- * observation throws is thrown.
+ * A failed observation is noted on the original error. A `CapabilityFault` `primary` is then left
+ * for the caller to rethrow, even when the observation threw the stop: a host fault outranks the
+ * stop. Otherwise a stop the observation throws is thrown: a session turn throws a pending stop
+ * only after publishing, so the observation did not fail. Failing that, an ordinary `primary` is
+ * wrapped in `CapabilityFault`, and a stop `primary` is left for the caller to rethrow.
  */
 async function observePreservingError(
   turn: ConversationTurn,
@@ -483,7 +478,8 @@ export async function invokeToolEffect(
   }
   const ordinal = await memoryBoundary(() => turn.request("tool", toolPayload(options)), signal);
   let result: unknown;
-  let reported = false;
+  // A reported tool error is an object, so `null` means the tool returned.
+  let reported: unknown = null;
   try {
     result = await invoke();
   } catch (error) {
@@ -496,17 +492,16 @@ export async function invokeToolEffect(
       await recordFailure(turn, ordinal, "tool", signal.reason, true, signal);
       throw signal.reason;
     }
-    result = error;
-    reported = true;
+    reported = error;
   }
-  let message!: Message;
+  let message: Message;
   let item: ConversationItem;
   try {
-    const text = reported ? reportedText(name, result) : toolText(name, result);
-    item = await memoryBoundary(() => {
-      message = toolMessage(options, text, reported);
-      return encodeMessage(message, options.modelExchangeId);
-    }, signal);
+    const text = reported === null ? toolText(name, result) : reportedText(name, reported);
+    ({ message, item } = await memoryBoundary(() => {
+      const message = toolMessage(options, text, reported !== null);
+      return { message, item: encodeMessage(message, options.modelExchangeId) };
+    }, signal));
   } catch (primary) {
     await observePreservingError(turn, ordinal, "completed", primary, signal);
     throw primary;

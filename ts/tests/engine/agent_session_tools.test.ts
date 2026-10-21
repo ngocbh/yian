@@ -14,17 +14,18 @@
  * and throws the stop; a skipped call is requested and observed `interrupted` with
  * `SKIPPED_TOOL_RESULT`; a representation error leaves the effect `completed` without items and
  * propagates; `interruptTurn` calls a turn's optional `interrupt`, and a failing one is a
- * `CapabilityFault`; a stop the turn throws after publishing wins over a representation error
- * (a spied `fromHost` throws it), which gets no observation note; a `CapabilityFault` with a stop pending is recorded `failed` and
- * thrown, without the stop check; a skip under an already aborted signal throws the stop, not a
- * `CapabilityFault`, and records nothing, since a session turn checks the stop before publishing a
- * request.
+ * `CapabilityFault`; a stop the turn throws after publishing wins over a representation error (a
+ * spied `fromHost` throws it), which gets no observation note; a `CapabilityFault` with a stop
+ * pending is recorded `failed` and thrown, without the stop check; a skip under an already aborted
+ * signal throws the stop, not a `CapabilityFault`, and records nothing, since a session turn
+ * checks the stop before publishing a request.
  *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6): `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history`
- * (the history projection), `test_two_runs_restore_tool_exchanges_without_executing_old_calls`
+ * Later (T6-6):
+ * `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history` (the
+ * history projection), `test_two_runs_restore_tool_exchanges_without_executing_old_calls`
  * (the loop wiring), and the rows that need `run_flow`:
  * `test_recalled_transcript_and_current_notes_share_one_context`,
  * `test_changed_grants_keep_history_but_reject_new_ungranted_call`,
@@ -136,7 +137,9 @@ for (const hostStop of [false, true]) {
       expect((caught as CapabilityFault).original).toBe(primary);
     }
     expect(seen).toEqual([hostStop ? "interrupted" : "failed"]);
-    expect((primary as Error & { notes?: string[] }).notes![0]).toContain("cannot save failure");
+    expect((primary as Error & { notes?: string[] }).notes).toEqual([
+      "Conversation observation failed: Error: cannot save failure",
+    ]);
   });
 }
 

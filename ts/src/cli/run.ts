@@ -72,7 +72,7 @@ import {
   staticNodes,
 } from "../run.ts";
 import { McpConnectError, type McpServer } from "../tools/mcp.ts";
-import { registeredTools } from "../tools/registry.ts";
+import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
@@ -687,7 +687,9 @@ function isSetupError(error: unknown): error is Error {
     error instanceof AuthError ||
     error instanceof MemoryOperationError ||
     error instanceof McpConnectError ||
-    // A locked log, Python's `BlockingIOError`, is a plain `Error` over the lock's.
+    // A lock file that is unsafe, not private or changed; a locked log (Python's
+    // `BlockingIOError`) is a plain `Error` over the lock's.
+    error instanceof FileLockError ||
     (error instanceof Error && error.cause instanceof FileLockError) ||
     // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
     (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
@@ -957,15 +959,16 @@ async function resumeEnvKey(
 
 /**
  * Return the error refusing a resume whose `provider` key came from a host's
- * `llmConfig.api_key`, pointing to `resumeFlow`; `headerNames` are the recorded names of headers
- * sent with the key, if any.
+ * `llm_config.api_key`, pointing to `resume_flow` (messages keep Python's names); `headerNames`
+ * are the recorded names of headers sent with the key, if any.
  */
 function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError {
   // Header values the host sent with its key are not recorded either.
-  const given = Array.isArray(headerNames) && headerNames.length > 0 ? "apiKey, headers" : "apiKey";
+  const withHeaders = Array.isArray(headerNames) && headerNames.length > 0;
+  const given = withHeaders ? "api_key=..., headers=..." : "api_key=...";
   return new ResumeKeyError(
-    `this run's ${provider} API key came from a host's llmConfig.api_key, which the CLI cannot ` +
-      `supply; resume it from TypeScript with resumeFlow(flow, {${given}})`,
+    `this run's ${provider} API key came from a host's llm_config.api_key, which the CLI cannot ` +
+      `supply; resume it with resume_flow(${given})`,
   );
 }
 
@@ -1176,9 +1179,9 @@ async function startRun(
   const writeStack = async (error: Error) => {
     if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
   };
+  const action = options.resume === undefined ? "run" : "resume";
   // An McpConnectError's notes (the ids no started server supplies, the other servers that
   // failed) follow its message; other notes, such as a cleanup failure, stay out of it.
-  const action = options.resume === undefined ? "run" : "resume";
   const setupFailed = async (error: Error) => {
     const notes = error instanceof McpConnectError ? ((error as { notes?: string[] }).notes ?? []) : [];
     const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
@@ -1268,38 +1271,47 @@ async function startRun(
       const onEvent = reporter === null ? null : (event: RunEvent) => reporter.handle(event);
       const memory = registry.size > 0 ? registry : null;
       const selection = { signal: controller.signal, warn };
+      /** Print `log`, then start the run with `start`, given the run's tools and MCP servers. */
+      type Start = (tools: Record<string, ToolEntry>) => Promise<RunResult>;
+      const startLogged = async (log: string, start: Start) => {
+        // Not after the log path is printed: a stopped run creates no log.
+        controller.signal.throwIfAborted();
+        await reportRunLog(log, io.stderr, io.env);
+        host.started.value = true;
+        return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
+          await writeWarnings();
+          try {
+            return await start({ ...registeredTools(), ...selected, ask_user: terminal.askUser });
+          } finally {
+            // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+            reporter?.stop();
+          }
+        });
+      };
       // Recovery takes no inputs, `--provider`/`--model` or key preflight: the log holds the run's
       // configuration, and its recorded keys are checked once it is replayed.
       if (options.resume !== undefined) {
         const log = options.resume;
-        controller.signal.throwIfAborted();
-        await reportRunLog(log, io.stderr, io.env);
-        host.started.value = true;
-        const keys = {
+        const keyContext = {
           env: commandEnv,
           terminal: io.stdin.isTTY === true ? terminal : null,
           signal: controller.signal,
         };
         const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
-          checkResumeCredentials(effective, callTimeHost, keys);
-        return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
-          await writeWarnings();
-          try {
-            return await resumeFlow(flow, {
-              log,
-              numWorkers: options.numWorkers ?? null,
-              onEvent,
-              memory,
-              tools: { ...registeredTools(), ...selected, ask_user: terminal.askUser },
-              skills,
-              env: commandEnv.read,
-              signal: controller.signal,
-              checkLlmConfigs,
-            });
-          } finally {
-            reporter?.stop();
-          }
-        });
+          checkResumeCredentials(effective, callTimeHost, keyContext);
+        return startLogged(log, (tools) =>
+          resumeFlow(flow, {
+            log,
+            numWorkers: options.numWorkers ?? null,
+            onEvent,
+            memory,
+            tools,
+            skills,
+            env: commandEnv.read,
+            signal: controller.signal,
+            checkLlmConfigs,
+          }),
+        );
       }
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
@@ -1337,32 +1349,22 @@ async function startRun(
         return fail(new Diagnostic({ code: "run.setup", message: error.message }));
       }
 
-      // Not after the log path is printed: a stopped run creates no log.
-      controller.signal.throwIfAborted();
       const runId = defaultRunId();
       const log = options.log ?? defaultRunLogPath(runId, io.env);
-      await reportRunLog(log, io.stderr, io.env);
-      host.started.value = true;
-      return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
-        await writeWarnings();
-        try {
-          return await runFlow(flow, supplied, {
-            log,
-            runId,
-            llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-            numWorkers: options.numWorkers ?? 8,
-            onEvent,
-            memory,
-            tools: { ...registeredTools(), ...selected, ask_user: terminal.askUser },
-            skills,
-            env: commandEnv.read,
-            signal: controller.signal,
-          });
-        } finally {
-          // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
-          reporter?.stop();
-        }
-      });
+      return startLogged(log, (tools) =>
+        runFlow(flow, supplied, {
+          log,
+          runId,
+          llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+          numWorkers: options.numWorkers ?? 8,
+          onEvent,
+          memory,
+          tools,
+          skills,
+          env: commandEnv.read,
+          signal: controller.signal,
+        }),
+      );
     });
   } catch (error) {
     if (error instanceof HostStop) {

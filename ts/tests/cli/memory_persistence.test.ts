@@ -206,11 +206,14 @@ test("test_cli_resume_after_process_death_reuses_saved_history_and_repeats_reque
   const memory = new SessionMemory({ storage });
   try {
     const opened = memory.openRun();
-    type Effect = { status: string; invocation: unknown };
-    const { effects } = opened.snapshot["conversation"] as { effects: Effect[] };
-    expect(effects.map((effect) => effect.status)).toEqual(["pending", "completed"]);
-    expect(effects[0]!.invocation).not.toEqual(effects[1]!.invocation);
-    opened.close();
+    try {
+      type Effect = { status: string; invocation: unknown };
+      const { effects } = opened.snapshot["conversation"] as { effects: Effect[] };
+      expect(effects.map((effect) => effect.status)).toEqual(["pending", "completed"]);
+      expect(effects[0]!.invocation).not.toEqual(effects[1]!.invocation);
+    } finally {
+      opened.close();
+    }
   } finally {
     memory.close();
   }

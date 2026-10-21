@@ -25,7 +25,7 @@ import { createServer } from "node:http";
 import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { constants, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
@@ -37,10 +37,11 @@ import {
   resolveIsinstanceType,
 } from "../src/compose/helpers/isinstance_types.ts";
 import { flowFingerprint } from "../src/compile/manifest.ts";
+import { END_ID } from "../src/compile/model.ts";
 import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
-import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
+import { ENTRIES, forget, nonDefaults, read, reload, withEnv } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
 import {
   compareCodeUnits,
@@ -50,7 +51,7 @@ import {
   OriginRef,
   reprText,
 } from "../src/diagnostics.ts";
-import type { RunEvent, StreamChunk } from "../src/events.ts";
+import { type RunEvent, RunSucceeded, type StreamChunk } from "../src/events.ts";
 import type { Steering } from "../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
 import {
@@ -86,7 +87,18 @@ import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
 import { buildMemories, type MemoryRegistry } from "../src/memory_host.ts";
 import { virtualScheduler } from "../src/platform.ts";
-import { type RunFlowOptions, type RunResult, runFlow } from "../src/run.ts";
+import {
+  inspectRun,
+  replayRunLog,
+  type ResumeFlowOptions,
+  resumeFlow,
+  type RunInspection,
+  type RunFlowOptions,
+  type RunResult,
+  runFlow,
+} from "../src/run.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog } from "../src/runtime/log.ts";
+import { addInterruptedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -187,9 +199,9 @@ const RUN_KEYS: ReadonlySet<string> = new Set([
 ]);
 const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
 // Host keys the format reserves and this runner doesn't support yet.
-const RESERVED_HOST_KEYS: readonly string[] = ["stop", "skills"];
+const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "memory", "steering", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "memory", "steering", "stop", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -535,17 +547,7 @@ function checkSteering(steering: Value | undefined): void {
       if (Object.hasOwn(action, "interrupt") && action["interrupt"] !== true) {
         throw new Error(`\`${where}.interrupt\` must be \`true\``);
       }
-      if (!Object.hasOwn(action, "after")) return;
-      const after = mapping(`${where}.after`, action["after"]);
-      const names = Object.keys(after).sort().join(",");
-      if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
-        throw new Error(
-          `\`${where}.after\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``,
-        );
-      }
-      if (Object.values(after).some((count) => typeof count !== "bigint" || count < 1n)) {
-        throw new Error(`\`${where}.after\` counts must be ints from 1`);
-      }
+      if (Object.hasOwn(action, "after")) checkPoint(`${where}.after`, action["after"]);
     });
   }
 }
@@ -595,6 +597,30 @@ function checkMemory(value: Value | undefined): void {
       }
     }
   });
+}
+
+/**
+ * Throw unless `value`, at `where`, is a point: `{model_call: n, chunk: k}`, `{model_call: n}` or
+ * `{tool_call: i}`, counted from 1.
+ */
+function checkPoint(where: string, value: Value | undefined): void {
+  const point = mapping(where, value);
+  const names = Object.keys(point).sort().join(",");
+  if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
+    throw new Error(`\`${where}\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``);
+  }
+  if (Object.values(point).some((count) => typeof count !== "bigint" || count < 1n)) {
+    throw new Error(`\`${where}\` counts must be ints from 1`);
+  }
+}
+
+/** Throw unless `stop` is `host.stop`: node ids to `{after: <point>}`. */
+function checkStop(stop: Value | undefined): void {
+  for (const [node, item] of Object.entries(mapping("host.stop", stop))) {
+    const where = `host.stop.${node}`;
+    const action = keys(where, item, new Set(["after"]), { required: ["after"] });
+    checkPoint(`${where}.after`, action["after"]);
+  }
 }
 
 /**
@@ -671,6 +697,7 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   checkModels(get(host, "models", {}));
   if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkSteering(get(host, "steering", {}));
+  checkStop(get(host, "stop", {}));
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
@@ -844,12 +871,19 @@ export function checkCase(case_: Case): Case {
   // Both were checked as mappings above when present.
   const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
-    const cut = get(get(case_, "host", {}) as Case, "crash_after_record");
-    if (cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
-      throw new Error("a `resume` case needs `host.crash_after_record`, a record number or `end`");
+    const host = get(case_, "host", {}) as Case;
+    const stops = Object.hasOwn(host, "stop");
+    if (stops && Object.hasOwn(host, "crash_after_record")) {
+      throw new Error("a `resume` case takes one of `host.crash_after_record` and `host.stop`");
+    }
+    const cut = get(host, "crash_after_record");
+    if (!stops && cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
+      throw new Error(
+        "a `resume` case needs `host.crash_after_record`, a record number or `end`, or `host.stop`",
+      );
     }
     if (!isZero(get(run, "num_workers"))) {
-      throw new Error("`host.crash_after_record` needs `run.num_workers: 0`");
+      throw new Error(`\`host.${stops ? "stop" : "crash_after_record"}\` needs \`run.num_workers: 0\``);
     }
   }
   if (kind === "backward" && get(run, "learnable") !== true) {
@@ -1093,6 +1127,12 @@ export async function results(
 export interface CaseContext {
   dir: string;
   env: Record<string, string>;
+  /** Whether `--crash-sweep` asks an eligible `run` case for its crash sweep too. */
+  crashSweep?: boolean;
+  /** The path of the case's golden log, `<group>/<name>.log.jsonl` beside it. */
+  golden?: string;
+  /** Whether `--write-logs` asks a `run` or `resume` case to write its golden log. */
+  writeLogs?: boolean;
 }
 
 /** Return the `Env` that reads the case's environment; a name that is not an own key is unset. */
@@ -1111,7 +1151,7 @@ export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
   load: runLoad,
   run: runRun,
-  // resume: not run yet
+  resume: runRun,
   // backward: not run yet
   expr: runExpr,
   value: runValue,
@@ -1185,6 +1225,7 @@ async function runCase(
   case_: Case,
   kinds: Partial<Record<Kind, KindRunner>>,
   fixturesDir: string,
+  options: Pick<CaseContext, "crashSweep" | "golden" | "writeLogs"> = {},
 ): Promise<string | undefined> {
   for (const [section, key] of RESERVED) {
     if (Object.hasOwn(get(case_, section, {}) as Case, key)) {
@@ -1196,7 +1237,7 @@ async function runCase(
   if (run === undefined) return `the TS runner doesn't run \`${kind}\` cases yet`;
   let ctx: CaseContext | undefined;
   try {
-    ctx = setUp(case_, fixturesDir);
+    ctx = { ...setUp(case_, fixturesDir), ...options };
     await run(case_, ctx);
     return undefined;
   } catch (error) {
@@ -1208,7 +1249,7 @@ async function runCase(
 
 const USAGE =
   "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-  "[--diagnostic-code CODE]";
+  "[--diagnostic-code CODE] [--crash-sweep] [--write-logs]";
 
 /** What `main` reads cases from, runs them with and writes lines to. */
 export interface MainOptions {
@@ -1225,6 +1266,8 @@ export interface MainOptions {
  * Run the cases the flags in `argv` select; report one `FAIL` line per failing case and a
  * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
+ * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`,
+ * which needs `--case`, writes each selected `run` and `resume` case's golden log (`goldenLog`).
  */
 export async function main(
   argv: readonly string[],
@@ -1240,16 +1283,27 @@ export async function main(
   }: MainOptions = {},
 ): Promise<number> {
   const option = { type: "string", multiple: true } as const;
-  let flags: Partial<Record<"group" | "kind" | "case" | "rules" | "diagnostic-code", string[]>>;
+  let flags: Partial<Record<"group" | "kind" | "case" | "rules" | "diagnostic-code", string[]>> & {
+    "crash-sweep"?: boolean;
+    "write-logs"?: boolean;
+  };
   try {
     flags = parseArgs({
       args: [...argv],
       strict: true,
       options: {
         group: option, kind: option, case: option, rules: option, "diagnostic-code": option,
+        "crash-sweep": { type: "boolean" },
+        "write-logs": { type: "boolean" },
       },
     }).values;
   } catch {
+    writeError(USAGE);
+    return 2;
+  }
+  // Pinning a golden log is a choice per case, never a whole suite's.
+  if (flags["write-logs"] === true && flags.case === undefined) {
+    writeError("--write-logs needs --case: name each case whose golden log to write");
     writeError(USAGE);
     return 2;
   }
@@ -1301,7 +1355,11 @@ export async function main(
     if ("unreadable" in entry) {
       failure = entry.unreadable;
     } else {
-      failure = await runCase(entry.case_, kinds, fixturesDir);
+      failure = await runCase(entry.case_, kinds, fixturesDir, {
+        crashSweep: flags["crash-sweep"] === true,
+        golden: join(casesDir, `${entry.id}.log.jsonl`),
+        writeLogs: flags["write-logs"] === true,
+      });
       if (Object.hasOwn(entry.case_, "pending")) {
         if (failure !== undefined) {
           pending += 1;
@@ -1383,14 +1441,25 @@ const RUN_OPTIONS: Readonly<Record<string, keyof RunFlowOptions>> = {
   context: "context",
 };
 
-/** Return the `run` arguments as `runFlow` options: an int as a JS number, `context` an object. */
-function runOptions(run: Case): RunFlowOptions {
+/** The `resumeFlow` option each `resume` key sets. */
+const RESUME_OPTIONS: Readonly<Record<string, keyof ResumeFlowOptions>> = {
+  num_workers: "numWorkers",
+  api_key: "apiKey",
+  headers: "headers",
+  context: "context",
+};
+
+/**
+ * Return the `run` or `resume` arguments `args` as the options `names` gives each key: an int as a
+ * JS number, `context` an object.
+ */
+function runOptions<T>(args: Case, names: Readonly<Record<string, keyof T>>): T {
   return Object.fromEntries(
-    Object.entries(run).map(([key, value]) => [
-      RUN_OPTIONS[key],
+    Object.entries(args).map(([key, value]) => [
+      names[key],
       key === "context" ? {} : typeof value === "bigint" ? Number(value) : value,
     ]),
-  );
+  ) as T;
 }
 
 /** An error class a script's `raise` can name. */
@@ -1512,13 +1581,23 @@ function v1Request(request: Request): Case {
 /** A point of the run a `host.steering` action waits for: its `after`. */
 type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint };
 
+/** The error the runner stops a run with at its `host.stop` point. */
+class ConformanceStop extends Error {
+  override name = "ConformanceStop";
+
+  constructor() {
+    super("conformance stop");
+  }
+}
+
 /**
- * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id.
+ * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id, and the
+ * `host.stop` points.
  *
  * An action without `after` is queued at once, the others when the run reaches their point.
  * Steers are drained once; an interrupt aborts the node's interrupt signal, which stays aborted.
- * Calls are counted, and points reached, only once `armed`, so that runs before the main one
- * neither count nor steer.
+ * Reaching a stop calls `onStop`. Calls are counted, and points reached, only once `armed`, so
+ * that runs before the main one neither count nor steer.
  */
 class Inbox implements Steering {
   armed = false;
@@ -1526,8 +1605,13 @@ class Inbox implements Steering {
   readonly #interrupts = new Map<string, AbortController>();
   readonly #counts = new Map<string, number>();
   readonly #pending: { label: string; node: string; action: Case }[] = [];
+  readonly #onStop: () => void;
 
-  constructor(steering: Case) {
+  constructor(steering: Case, stop: Case = {}, onStop: () => void = () => {}) {
+    this.#onStop = onStop;
+    for (const [node, action] of Object.entries(stop)) {
+      this.#pending.push({ label: `host.stop.${node}`, node, action: { ...(action as Case), stop: true } });
+    }
     for (const [node, actions] of Object.entries(steering)) {
       (actions as Case[]).forEach((action, index) => {
         if (Object.hasOwn(action, "after")) {
@@ -1539,8 +1623,12 @@ class Inbox implements Steering {
     }
   }
 
-  /** Queue `action`'s steers for `node`, or abort its interrupt signal. */
+  /** Queue `action`'s steers for `node`, abort its interrupt signal, or stop the run. */
   #act(node: string, action: Case): void {
+    if (action["stop"] === true) {
+      this.#onStop();
+      return;
+    }
     const steers = this.#steers.get(node) ?? [];
     this.#steers.set(node, [...steers, ...(get(action, "steer", []) as string[])]);
     if (action["interrupt"] === true) this.#controller(node).abort();
@@ -1698,12 +1786,16 @@ interface Host {
   random: (() => number) | null;
   /** Builds every model the run calls; no call reaches a provider. */
   models: ModelAccess;
-  /** The `host.steering` inbox. */
+  /** The `host.steering` inbox, which also reaches the `host.stop` points. */
   inbox: Inbox;
+  /** With `host.stop`, the run's signal and the error it is aborted with at the point. */
+  stop: { signal: AbortSignal; error: ConformanceStop } | null;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
   calls: Map<string, Case[]>;
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
   taken: { label: string; entry: Value; sequence: number }[];
+  /** Put each entry taken while the log's `nextSequence` was above `last` back at its script's front. */
+  putBack: (last: number) => void;
   /**
    * Throw a `CaseFailure` when a script ran out or was missing or a model call's request differed
    * from its entry's; return a message per script with entries left and per `host.steering`
@@ -1725,7 +1817,12 @@ function host(case_: Case, log: string, env: Env): Host {
   const calls = new Map<string, Case[]>();
   const problems: string[] = [];
   const taken: Host["taken"] = [];
-  const inbox = new Inbox(get(spec, "steering", {}) as Case);
+  const stopper = new AbortController();
+  const stopError = new ConformanceStop();
+  const stop = Object.hasOwn(spec, "stop") ? { signal: stopper.signal, error: stopError } : null;
+  const inbox = new Inbox(get(spec, "steering", {}) as Case, get(spec, "stop", {}) as Case, () =>
+    stopper.abort(stopError),
+  );
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
       `host.human.${node}`,
@@ -1822,7 +1919,13 @@ function host(case_: Case, log: string, env: Env): Host {
       })
       .concat(inbox.left());
   };
-  return { tools: Object.fromEntries(tools), random, models, inbox, calls, taken, check };
+  const putBack = (last: number): void => {
+    // Taken in `nextSequence` order, so the entries to put back are a tail.
+    const first = taken.findIndex(({ sequence }) => sequence > last);
+    if (first === -1) return;
+    for (const item of taken.splice(first).reverse()) scripts.get(item.label)!.unshift(item.entry);
+  };
+  return { tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, check };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -2131,6 +2234,101 @@ function placeholders(results: Record<string, unknown>, runId: string | null): R
   return Object.fromEntries(Object.entries(results).map(([name, value]) => [name, replace(value)]));
 }
 
+/** The refused append that cuts a `resume` case's first run. */
+class Cut extends Error {
+  override name = "Cut";
+}
+
+/** What `settle` returns for a run that resolved. */
+const ENDED = Symbol("ended");
+
+/** Return what `start` rejects with, or `ENDED` when it resolves. */
+async function settle(start: () => Promise<unknown>): Promise<unknown> {
+  try {
+    await start();
+    return ENDED;
+  } catch (error) {
+    return error;
+  }
+}
+
+/**
+ * Run `start` with every append refused once the log holds record `last`; throw a `CaseFailure`
+ * (`at` saying where) unless it rejects with that refusal.
+ */
+async function cutAt(last: number, start: () => Promise<unknown>, at = ""): Promise<void> {
+  const append = JsonlRunLog.prototype.append;
+  const refused = new Cut("the conformance runner refused this append");
+  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record) {
+    if (this.nextSequence > last) throw refused;
+    return append.call(this, record);
+  };
+  let outcome: unknown;
+  try {
+    outcome = await settle(start);
+  } finally {
+    JsonlRunLog.prototype.append = append;
+  }
+  if (outcome === ENDED) throw new CaseFailure(`the run ended before record ${last + 1}${at}`);
+  if (outcome !== refused) {
+    throw new CaseFailure(`the run raised before record ${last + 1}${at}\n${failureText(outcome)}`);
+  }
+}
+
+/**
+ * Run a `resume` case's first run with `start`: cut after record `host.crash_after_record`, run to
+ * its end for `end`, or stopped at its `host.stop` point. Throw a `CaseFailure` unless it ended as
+ * the case says.
+ */
+async function cutFirstRun(
+  spec: Case,
+  start: () => Promise<unknown>,
+  stop: { error: ConformanceStop } | null,
+): Promise<void> {
+  const last = get(spec, "crash_after_record");
+  if (typeof last === "bigint") {
+    await cutAt(Number(last), start);
+    return;
+  }
+  const outcome = await settle(start);
+  if (stop !== null && outcome === ENDED) throw new CaseFailure("the run ended before its `host.stop` point");
+  if (outcome !== (stop === null ? ENDED : stop.error)) {
+    const before = stop === null ? "its end" : "its stop";
+    throw new CaseFailure(`the run raised before ${before}\n${failureText(outcome)}`);
+  }
+}
+
+/**
+ * Return the options every run of a case gets: its log, environment and host (`steering` only
+ * with `host.steering`, as Python passes it), on a virtual clock that starts at `start`, with
+ * `events` and `chunks` collecting what it publishes.
+ */
+function runHooks(
+  case_: Case,
+  log: string,
+  env: Env,
+  { tools, random, models, inbox }: Host,
+  start: number,
+  events: RunEvent[] = [],
+  chunks: StreamChunk[] = [],
+) {
+  return {
+    log,
+    env,
+    tools,
+    random,
+    models,
+    ...(Object.hasOwn(get(case_, "host", {}) as Case, "steering") ? { steering: inbox } : {}),
+    scheduler: virtualScheduler(start),
+    onEvent: (event: RunEvent) => {
+      events.push(event);
+    },
+    onStream: (chunk: StreamChunk) => {
+      chunks.push(chunk);
+    },
+  };
+}
+
 /**
  * Return the whole recall text of memory `key` in `memory`, after the main run. Fails the case for
  * a key the flow doesn't declare, and for a session key, whose whole recall is empty by contract
@@ -2189,7 +2387,8 @@ async function beforeRuns(
       const registry = await memories();
       try {
         const inputs = get(entry, "inputs", {}) as Case;
-        await runFlow(flow, inputs, { ...options, ...runOptions(run), log, memory: registry });
+        const args = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
+        await runFlow(flow, inputs, { ...options, ...args, log, memory: registry });
       } finally {
         await registry?.close();
       }
@@ -2207,21 +2406,29 @@ async function beforeRuns(
 
 /**
  * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
- * the case directory, its waits on a virtual clock that starts at the real current time. Return
- * its results: `output`, or the host error as `raises` and `error` (never compared), `memory`
- * when `expect.memory` lists keys, and `left`, a message per script with entries left.
+ * the case directory, its waits on a virtual clock that starts at the real current time; with
+ * `host.stop`, the run is stopped at its point. A `resume` case's first run is cut after record
+ * `host.crash_after_record` (or, for `end`, runs to its end; with `host.stop`, is stopped) and
+ * resumed with the `resume` arguments. Return the results: `trace`, `events`, `stream` (the
+ * resume's), `tool_calls` (every run's), `output` or the host error as `raises` and `error` (never
+ * compared), `memory` when `expect.memory` lists keys, and `left`, a message per script with
+ * entries left.
  *
- * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run gets the flow's
- * memories built afresh under `<case dir>/memory`, closed after the run; `expect.memory` is read
- * from memories built after the main run. Learner events are kept apart, never compared.
+ * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run (each `before` run,
+ * the main run, and for a `resume` case the cut run and the resume) gets the flow's memories built
+ * afresh under `<case dir>/memory`, closed after the run; a failure building the cut run's is the
+ * case's `raises`, and nothing resumes. `expect.memory` is read from memories built after the main
+ * run. Learner events are kept apart, never compared.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
   const env = caseEnv(ctx);
-  const { tools, random, models, inbox, calls, check } = host(case_, log, env);
-  const run = get(case_, "run", {}) as Case;
   const spec = get(case_, "host", {}) as Case;
+  const scripted = host(case_, log, env);
+  const { tools, models, inbox, stop, calls, check } = scripted;
+  const run = get(case_, "run", {}) as Case;
+  const resume = get(case_, "resume", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
   // The learners' events (TS-only, from `buildMemories`' `onEvent`) are never read: collected here
@@ -2236,39 +2443,53 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
           onEvent: (event) => apart.push(event),
         })
       : null;
-  // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
-  const shared: RunFlowOptions = {
-    env,
-    tools,
-    random,
-    models,
-    scheduler: virtualScheduler(Date.now()),
-  };
+  // One clock for every run of the case. `env` scopes the case's YIAN_* values to each run, so
+  // nothing is installed around it.
+  const hooks = runHooks(case_, log, env, scripted, Date.now(), events, chunks);
+  // The `before` runs share the clock, but not the log, the steering or the observers.
+  const { random, scheduler } = hooks;
+  const shared: RunFlowOptions = { env, tools, random, models, scheduler };
   const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
-  const options: RunFlowOptions = {
-    ...shared,
-    ...runOptions(run),
-    log,
-    // Only with `host.steering`, as Python passes it.
-    ...(Object.hasOwn(spec, "steering") ? { steering: inbox } : {}),
-    onEvent: (event) => {
-      events.push(event);
-    },
-    onStream: (chunk) => {
-      chunks.push(chunk);
-    },
-  };
+  const inputs = get(case_, "inputs", {}) as Case;
+  const signal = stop === null ? {} : { signal: stop.signal };
+  const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
+  let start = (memory: MemoryRegistry | null) =>
+    runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory });
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
-  let memory: MemoryRegistry | null = null;
   inbox.armed = true;
-  try {
-    memory = await memories();
-    result = await runFlow(flow, get(case_, "inputs", {}) as Case, { ...options, memory });
-  } catch (error) {
-    caught = { raises: raised(error), error };
+  if (case_["kind"] === "resume") {
+    let cutMemory: MemoryRegistry | null = null;
+    try {
+      cutMemory = await memories();
+    } catch (error) {
+      // The cut run's memories failing to build is the case's `raises`; nothing resumes.
+      caught = { raises: raised(error), error };
+    }
+    if (!Object.hasOwn(caught, "raises")) {
+      // A close error escapes as the case's own error, as Python's `with` lets it.
+      try {
+        await cutFirstRun(spec, () => start(cutMemory), stop);
+      } finally {
+        await cutMemory?.close();
+      }
+      events.length = 0;
+      chunks.length = 0;
+      const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
+      start = (memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory });
+    }
   }
-  await memory?.close();
+  if (!Object.hasOwn(caught, "raises")) {
+    let memory: MemoryRegistry | null = null;
+    try {
+      memory = await memories();
+      result = await start(memory);
+    } catch (error) {
+      caught = { raises: raised(error), error };
+    }
+    // Outside the `try`, so a close error never replaces the run's `raises`.
+    await memory?.close();
+  }
   const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
   let recalled: Record<string, string> | undefined;
   if (listed !== undefined) {
@@ -2282,6 +2503,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   }
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
+  if (existsSync(log)) await checkInvariants(flow, log, { env, tools, models }, result ?? null);
+  goldenLog(log, ctx);
   const text = existsSync(log) ? readFileSync(log, "utf8") : "";
   const lines = text.split("\n").filter((line) => line !== "");
   // In placeholder order: ids are numbered walking the results in this order. The `before`
@@ -2301,7 +2524,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     ...logs,
     "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
   });
-  if (!isZero(get(run, "num_workers", 8n))) actual = pooled(actual);
+  // A `resume` case's results are grouped by the resumed run's `num_workers`.
+  if (!isZero(get({ ...run, ...resume }, "num_workers", 8n))) actual = pooled(actual);
   const runId =
     Object.hasOwn(run, "run_id") || lines.length === 0
       ? null
@@ -2339,12 +2563,254 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
   if (left.length > 0) throw new CaseFailure(left.join("\n"));
 }
 
-/** Run a `run` case: run the flow and compare its results with `expect`. */
+/**
+ * Return the run log text `text` as a golden log holds it: each line with every `traceback` value
+ * and the seeded clock values (`initial_pool.system`'s `now` and `today`) replaced by `<masked>`,
+ * written again with the log's own encoder.
+ */
+function masked(text: string): string {
+  const lines = text.split("\n").filter((line) => line !== "");
+  const mask = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(mask);
+    if (!isMapping(value)) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "traceback" && typeof item === "string") value[key] = "<masked>";
+      else mask(item);
+    }
+  };
+  return lines
+    .map((line, seq) => {
+      const record = parseJson(line, "codec") as Case;
+      // Masking re-encodes the line, so it must encode back to itself first.
+      if (logJson(record) !== line) {
+        throw new CaseFailure(`run log record ${seq} doesn't encode back to its line`);
+      }
+      mask(record);
+      if (record["kind"] === "run_started") {
+        const system = ((record["payload"] as Case)["initial_pool"] as Case)["system"] as Case;
+        for (const name of ["now", "today"]) (system[name] as Case)["value"] = "<masked>";
+      }
+      return `${logJson(record)}\n`;
+    })
+    .join("");
+}
+
+/**
+ * Compare the run log at `log`, masked, with the case's golden log when it has one, byte for
+ * byte; with `--write-logs`, write it instead.
+ */
+function goldenLog(log: string, ctx: CaseContext): void {
+  const golden = ctx.golden;
+  if (golden === undefined || !(ctx.writeLogs === true || existsSync(golden))) return;
+  if (!existsSync(log)) {
+    if (ctx.writeLogs === true) return;
+    throw new CaseFailure(`the run wrote no log, but ${basename(golden)} pins one`);
+  }
+  const text = masked(readFileSync(log, "utf8"));
+  if (ctx.writeLogs === true) {
+    writeFileSync(golden, text);
+    return;
+  }
+  const expected = readFileSync(golden, "utf8").split("\n");
+  const actual = text.split("\n");
+  const seq = actual.findIndex((line, index) => line !== expected[index]);
+  if (seq === -1 && actual.length === expected.length) return;
+  const at = seq === -1 ? actual.length : seq;
+  const lines = `--- actual\n${actual[at] ?? ""}\n--- golden\n${expected[at] ?? ""}`;
+  throw new CaseFailure(`the run log differs from ${basename(golden)} at record ${at}\n${lines}`);
+}
+
+/**
+ * Throw a `CaseFailure` naming the first invariant the run log at `log` breaks (`at` says where in
+ * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
+ * 0); after the run's terminal outcome only backward and memory records follow; after a
+ * `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a replay's
+ * status, in-flight nodes and interrupted counts, and without it the same except in its one blind
+ * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
+ * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
+ * output and appends nothing.
+ */
+async function checkInvariants(
+  flow: ComposedFlow,
+  log: string,
+  options: { env: Env; tools: Record<string, ToolEntry>; models: ModelAccess },
+  result: RunResult | null,
+  at = "",
+): Promise<void> {
+  const fail = (problem: string): never => {
+    throw new CaseFailure(`invariant${at}: ${problem}`);
+  };
+  const envelopes = readRunLog(log);
+  if (envelopes.length === 0) return;
+  const inFlight = new Set<string>();
+  let workers = 1;
+  let stopped = false;
+  let lastRun = -1;
+  envelopes.forEach(({ kind, payload }, seq) => {
+    if (stopped && kind !== "node_step" && kind !== "run_resumed") {
+      fail(`record ${seq} (${kind}) follows a run_stopped`);
+    }
+    if (kind === "run_started" || kind === "run_resumed") {
+      workers = Math.max(1, Number(payload["num_workers"]));
+      inFlight.clear();
+      stopped = false;
+    }
+    if (kind === "run_stopped") stopped = true;
+    if (kind === "node_started") inFlight.add(payload["node_id"] as string);
+    if (kind === "node_succeeded" || kind === "node_routed") inFlight.delete(payload["node_id"] as string);
+    if (kind === "node_expanded") inFlight.delete(payload["spawner_id"] as string);
+    if (kind === "node_failed") inFlight.delete((payload["failure"] as Readonly<Case>)["node_id"] as string);
+    if (inFlight.size > workers) {
+      fail(`${inFlight.size} nodes are in flight after record ${seq}, over ${workers}`);
+    }
+    if (!kind.startsWith("backward_") && !kind.startsWith("memory_")) lastRun = seq;
+  });
+  const replay = (count: number) =>
+    withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes.slice(0, count))));
+  // A terminal result is never undone, so checking the prefix before the last run record covers
+  // every record after it.
+  if (lastRun > 0 && replay(lastRun).result !== null) fail(`record ${lastRun} follows the terminal outcome`);
+  // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
+  // agrees with a replay, not a second statement of its rules.
+  const state = replay(envelopes.length);
+  const terminal = state.result;
+  const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
+  const counts = new Map(state.interruptedAttempts);
+  if (finished === null) addInterruptedAttempts(counts, state.acceptedStarts, state.lastStopSequence);
+  const expected = {
+    status: finished ?? (state.lastStopSequence === null ? "interrupted" : "stopped"),
+    inFlight: finished === null ? [...state.acceptedStarts.keys()] : [],
+    interruptedAttempts: Object.fromEntries(counts),
+  };
+  const form = (inspection: RunInspection) => ({
+    ...inspection,
+    inFlight: [...inspection.inFlight],
+    interruptedAttempts: Object.fromEntries(inspection.interruptedAttempts),
+  });
+  compare(`inspectRun with the flow${at}`, form(inspectRun(log, { flow, env: options.env })), expected);
+  const blind = form(inspectRun(log));
+  const endSucceeded = envelopes.some(
+    ({ kind, payload }) => kind === "node_succeeded" && payload["node_id"] === END_ID,
+  );
+  const corner =
+    finished === null &&
+    state.acceptedStarts.size === 0 &&
+    state.ready.length > 0 &&
+    (endSucceeded || state.terminalUnreachableFailure !== null);
+  const allowed = corner ? { ...blind, status: expected.status } : blind;
+  compare(`inspectRun without the flow${at}`, allowed, expected);
+  if (finished === null) return;
+  if (result !== null) {
+    const counted = Object.fromEntries(result.interruptedAttempts);
+    compare(`interrupted counts${at}`, counted, expected.interruptedAttempts);
+  }
+  const before = readFileSync(log);
+  const reopened = await resumeFlow(flow, { log, ...options });
+  if (!readFileSync(log).equals(before)) fail("resuming the finished log changed it");
+  if (reopened.status !== finished) {
+    fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
+  }
+  if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
+}
+
+/** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */
+const OUTCOMES: ReadonlySet<string> = new Set([
+  "node_succeeded", "node_routed", "node_expanded", "node_failed",
+]);
+
+/**
+ * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
+ * `pending`, with no `host.models`, `host.steering`, `host.memory` or `host.stop`.
+ */
+function sweepable(case_: Case): boolean {
+  const spec = get(case_, "host", {}) as Case;
+  return (
+    case_["kind"] === "run" &&
+    isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
+    Object.hasOwn(case_["expect"] as Case, "output") &&
+    !Object.hasOwn(case_, "pending") &&
+    !["models", "steering", "memory", "stop"].some((key) => Object.hasOwn(spec, key))
+  );
+}
+
+/**
+ * Run a `run` case's crash sweep. An uncut run writes N records; then, for each k in 0..N-2, a run
+ * on a fresh host is cut after record k, the script entries it took after the cut are put back,
+ * the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
+ * the run is resumed. The resume must end with a result whose invariants hold. With no
+ * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
+ * also holds: the same output, and the same node outcome entries in the trace, in order.
+ */
+export async function crashSweep(
+  case_: Case,
+  ctx: CaseContext,
+  { beforeResume = (_log: string) => {} } = {},
+): Promise<void> {
+  const flow = await loadText(case_["flow"] as string, ctx);
+  const env = caseEnv(ctx);
+  const spec = get(case_, "host", {}) as Case;
+  const tools = Object.values(get(spec, "tools", {}) as Case) as Case[];
+  const entries = tools.flatMap(({ results }) =>
+    (isMapping(results) ? Object.values(results) : [results]).flat(),
+  );
+  const strong =
+    !Object.hasOwn(spec, "human") &&
+    !Object.hasOwn(spec, "jitter") &&
+    entries.every((entry) => Object.hasOwn(entry as Case, "return"));
+  // Every run seeds the same clock, so `system.now` agrees.
+  const start = Date.now();
+  const inputs = get(case_, "inputs", {}) as Case;
+  const args = runOptions<RunFlowOptions>(get(case_, "run", {}) as Case, RUN_OPTIONS);
+  const uncutLog = join(ctx.dir, "sweep.jsonl");
+  const uncutHooks = runHooks(case_, uncutLog, env, host(case_, uncutLog, env), start);
+  const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
+  const outcomes = (log: string) => {
+    const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
+    return trace(lines, flow).filter(([kind]) => OUTCOMES.has(kind as string));
+  };
+  const expected = outcomes(uncutLog);
+  const count = readRunLog(uncutLog).length;
+  for (let k = 0; k <= count - 2; k += 1) {
+    const at = ` (crash sweep, cut after record ${k})`;
+    const log = join(ctx.dir, `sweep-${k}.jsonl`);
+    const scripted = host(case_, log, env);
+    const hooks = runHooks(case_, log, env, scripted, start);
+    // The uncut run's id, so the runs agree on it when the case gives none.
+    const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
+    await cutAt(k, cut, at);
+    scripted.putBack(k);
+    const reopen = { env, tools: scripted.tools, models: scripted.models };
+    await checkInvariants(flow, log, reopen, null, at);
+    beforeResume(log);
+    let resumed: RunResult;
+    try {
+      // The cut run's `context`, which the log doesn't hold, as a `resume` case passes it again.
+      const context = args.context === undefined ? {} : { context: args.context };
+      resumed = await resumeFlow(flow, { ...hooks, ...context });
+    } catch (error) {
+      throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
+    }
+    if (strong) {
+      compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });
+      compare(`node outcomes${at}`, outcomes(log), expected);
+    }
+    await checkInvariants(flow, log, reopen, resumed, at);
+  }
+}
+
+/**
+ * Run a `run` or `resume` case (whose first run `actualRun` cuts or stops and resumes): run the
+ * flow and compare its results with `expect`; with `--crash-sweep`, an eligible case's crash sweep
+ * (`crashSweep`) runs after.
+ */
 async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
   checkResults(case_["expect"] as Case, await actualRun(case_, ctx));
+  if (ctx.crashSweep === true && sweepable(case_)) await crashSweep(case_, ctx);
 }
 
 // ---- resume ----
+
+// `resume` cases run through `runRun`: `actualRun` cuts or stops their first run and resumes it.
 
 // ---- backward ----
 

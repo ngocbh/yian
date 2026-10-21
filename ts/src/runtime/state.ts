@@ -1797,14 +1797,8 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       state.nodeStarts.set(delta.nodeId, (state.nodeStarts.get(delta.nodeId) ?? 0) + 1);
       break;
     case "resumed":
-      // A stop names every in-flight node, and an attempt stays in flight until its outcome or the
-      // next resume, so an attempt retried here was covered exactly when it started before the
-      // segment's last stop.
-      for (const nodeId of delta.retryNodeIds) {
-        if (state.lastStopSequence === null || state.acceptedStarts.get(nodeId)! >= state.lastStopSequence) {
-          state.interruptedAttempts.set(nodeId, (state.interruptedAttempts.get(nodeId) ?? 0) + 1);
-        }
-      }
+      // The retries are exactly the in-flight nodes, which `acceptedStarts` holds in start order.
+      addInterruptedAttempts(state.interruptedAttempts, state.acceptedStarts, state.lastStopSequence);
       state.lastStopSequence = null;
       // Steps and start counts outlive the segment: a retried node reads them back. One `unshift`
       // per id, last first, puts the retries ahead in order without spreading a wide list.
@@ -2116,6 +2110,26 @@ function requireAuthorityCoordinates(
     }
   } else if (state.runId !== null) {
     throw new RangeError("RunStarted requires state.run_id to be null");
+  }
+}
+
+/**
+ * @internal Add one to `counts` for each in-flight attempt no stop covers: the count a resume
+ * records for the nodes it retries, and what a run log reader adds for a run that a resume would
+ * pick up. A stop names every in-flight node, and an attempt stays in flight until its outcome or
+ * the next resume, so an attempt is covered exactly when it started before the segment's last stop.
+ *
+ * @param counts The interrupted counts by node id, updated in place.
+ * @param starts The accepted start sequence of each in-flight node.
+ * @param lastStop The sequence of the segment's last `RunStopped`, or `null`.
+ */
+export function addInterruptedAttempts(
+  counts: Map<string, number>,
+  starts: ReadonlyMap<string, number>,
+  lastStop: number | null,
+): void {
+  for (const [nodeId, start] of starts) {
+    if (lastStop === null || start >= lastStop) counts.set(nodeId, (counts.get(nodeId) ?? 0) + 1);
   }
 }
 

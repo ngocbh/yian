@@ -1,0 +1,75 @@
+# From tests/engine/test_run_api_key.py::test_resume_without_the_key_fails_instead_of_reading_the_environment[llm_config0-VLLM_API_KEY].
+# A resume without the host key fails the agent at its model call with `provider.auth` instead of reading the
+# environment's key; no model is called on resume.
+# env: VLLM_API_KEY is set, as in the test, to show the resume doesn't fall back to it.
+# Record 3 is agent's node_started: its first model call runs, its result is refused.
+# events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the
+# trace still pins the resume.
+kind: resume
+flow: |
+  id: keyed
+  name: keyed
+  nodes:
+    agent: {kind: agent, prompt: hi}
+  output: ${agent.output}
+env:
+  VLLM_API_KEY: <key:2>
+run:
+  run_id: r1
+  num_workers: 0
+  llm_config:
+    provider: vllm
+    model: served-model
+    api_key: <key:1>
+host:
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+  crash_after_record: 3
+expect:
+  output:
+    status: failed
+    failure:
+      code: provider.auth
+      message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass api_key to resume_flow or RunResult.backward
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 8]
+      node: agent
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          _host_key: true
+          model: served-model
+          provider: vllm
+      learnable: false
+      num_workers: 0
+      inputs: {}
+  - [node_started, __start__]
+  - - node_succeeded
+    - __start__
+    - value: {}
+  - [node_started, agent]
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [agent]
+  - [node_started, agent]
+  - - node_failed
+    - agent
+    - failure:
+        code: provider.auth
+        message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass api_key to resume_flow or RunResult.backward
+        frames:
+        - label: flow.yaml
+          range: [4, 3, 4, 8]
+        node: agent
+resume: {}

@@ -1,0 +1,37 @@
+# TS-only (decision 20): a host stop after fetch's first tool call rejects the run with the stop, and
+# the log ends with run_stopped naming fetch, still in flight.
+kind: run
+python_skip: TS-only (decision 20)
+flow: |
+  id: fetch-once
+  name: fetch_once
+  nodes:
+    fetch:
+      kind: tool
+      tool_id: lookup
+  output: ${fetch.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {}}
+      results:
+      - return: F1
+  stop:
+    fetch: {after: {tool_call: 1}}
+expect:
+  raises: {class: ConformanceStop, message: conformance stop}
+  trace:
+  - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+  - [node_started, __start__]
+  - [node_succeeded, __start__, {value: {}}]
+  - [node_started, fetch]
+  - [run_stopped, null, {node_ids: [fetch], reason: signal}]
+  events:
+  - [RunStarted]
+  - [NodeStarted, {node_id: __start__}]
+  - [NodeSucceeded, {node_id: __start__, output: {}}]
+  - [NodeStarted, {node_id: fetch}]
+  tool_calls:
+    lookup:
+    - {args: {}, call_id: r1/fetch, attempt: 1, node: fetch}

@@ -16,8 +16,9 @@ import {
   memoryStacks as layoutStacks,
   resolveMemoryLayout,
 } from "../../src/compile/memory_layout.ts";
-import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { flowFingerprint } from "../../src/compile/manifest.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { ChildResolver } from "../../src/compose/loader.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
@@ -35,7 +36,7 @@ import {
 } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { comparePaths, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Binding, comparePaths, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
   type LearnContext,
@@ -57,6 +58,7 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   decodePool,
   encodePool,
+  JsonlRunLog,
   MemoryRunLog,
   type RecordEnvelope,
   type RunLog,
@@ -78,6 +80,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 
@@ -1257,4 +1260,122 @@ export class ReturningLog implements RunLog {
   close(): void {}
 
   [Symbol.dispose](): void {}
+}
+
+// ---- Run-boundary helpers: errors, crashes, recorded prefixes ----
+
+/** The error `promise` rejects with; fails the test when it resolves. */
+export async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the promise to reject");
+}
+
+/** The error `fn` throws; fails the test when it returns. */
+export function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
+
+/** The process-loss marker a frozen log throws. */
+export class Crash extends Error {
+  override name = "Crash";
+}
+
+/**
+ * Run `fn` with every durable log refusing appends once it holds `k` records, as a crash after
+ * record `k - 1` would; `fn` must reject with that `Crash`. `JsonlRunLog.prototype.append` is
+ * patched while `fn` runs and restored after.
+ */
+export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise<void> {
+  const append = JsonlRunLog.prototype.append;
+  const crash = new Crash(`crash after record ${k - 1}`);
+  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
+    if (this.nextSequence >= k) throw crash;
+    return append.call(this, record);
+  };
+  try {
+    expect(await rejection(fn())).toBe(crash);
+  } finally {
+    JsonlRunLog.prototype.append = append;
+  }
+}
+
+/**
+ * Commit a canonical RunStarted of `loaded` to the empty `log`, under its run id, for a private
+ * graph: START primed with `inputs` and wired to them, the system clock seeded at
+ * 2026-08-14T12:00:00Z.
+ *
+ * @param options.privateFlow The graph to run, a copy of `loaded.compiled` by default.
+ * @returns The state after the record.
+ */
+export function startedRun(
+  loaded: ComposedFlow,
+  log: RunLog,
+  options: {
+    inputs?: Record<string, unknown>;
+    numWorkers?: number;
+    effective?: Record<string, Record<string, unknown>>;
+    privateFlow?: CompiledFlow;
+  } = {},
+): RunState {
+  const { inputs = {}, numWorkers = 0, effective = {} } = options;
+  const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
+  const pool = new VariablePool(privateFlow.startId);
+  pool.set(privateFlow.startId, structuredClone(inputs));
+  seedSystemClock(pool, Date.UTC(2026, 7, 14, 12));
+  pool.addSystem("run_id", log.runId);
+  const state = new RunState(privateFlow);
+  commitPrepared(
+    log,
+    state,
+    prepareRunStarted(state, {
+      runId: log.runId,
+      flowFingerprint: flowFingerprint(loaded.compiled),
+      initialPool: pool,
+      startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
+      effectiveLlmByStaticPath: effective,
+      numWorkers,
+    }),
+  );
+  return state;
+}
+
+/**
+ * Return `loaded` as loaded before a flow output reading only skippable nodes was made nullable:
+ * END's wiring and outputs drop `:-null`, and its edges are required, so a route that skips the
+ * only producer of END's output proves END unreachable.
+ */
+export function requiredEndFlow(loaded: ComposedFlow): ComposedFlow {
+  const compiled = loaded.compiled;
+  const required = (binding: Binding) =>
+    new Binding(String(binding.source).replaceAll(":-null}", "}"), { origin: binding.origin });
+  compiled.wiring.set(
+    END_ID,
+    new Map([...compiled.wiring.get(END_ID)!].map(([key, binding]) => [key, required(binding)])),
+  );
+  compiled.outputs = compiled.outputs.map((output) => new FlowOutput(output.name, required(output.binding)));
+  compiled.edges = compiled.edges.map((edge) =>
+    edge.to === END_ID
+      ? new Edge(edge.id, edge.from, edge.to, {
+          sourceHandle: edge.sourceHandle,
+          inputGroup: edge.inputGroup,
+          ordering: edge.ordering,
+        })
+      : edge,
+  );
+  // The copy rebuilds the edge index from the new edges.
+  return new ComposedFlow(copyGraph(compiled), {
+    version: loaded.version,
+    name: loaded.name,
+    description: loaded.description,
+    originResolver: loaded.originResolver,
+  });
 }

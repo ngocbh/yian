@@ -26,6 +26,7 @@ import {
   CaseFailure,
   checkCase,
   compare,
+  crashSweep,
   decode,
   expectRaises,
   KINDS as RUNNERS,
@@ -497,6 +498,22 @@ describe("checkCase", () => {
       "`host.crash_after_record` needs `run.num_workers: 0`",
     ],
     [
+      `${BARE_RESUME}run: {num_workers: 1}\nhost: {stop: {a: {after: {tool_call: 1}}}}`,
+      "`host.stop` needs `run.num_workers: 0`",
+    ],
+    [
+      `${BARE_RESUME}run: {num_workers: 0}\nhost: {stop: {a: {after: {tool_call: 1}}}, crash_after_record: 1}`,
+      "a `resume` case takes one of `host.crash_after_record` and `host.stop`",
+    ],
+    [`${RUN}host: {stop: []}`, "`host.stop` must be a mapping"],
+    [`${RUN}host: {stop: {a: {}}}`, "`host.stop.a.after` is required"],
+    [`${RUN}host: {stop: {a: {after: {tool_call: 1}, steer: [x]}}}`, "unknown key `host.stop.a.steer`"],
+    [
+      `${RUN}host: {stop: {a: {after: {chunk: 1}}}}`,
+      "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
+    ],
+    [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, "`host.stop.a.after` counts must be ints from 1"],
+    [
       `${BARE_BACKWARD}backward: [{feedback: f}]`,
       "a `backward` case needs `run.learnable: true`",
     ],
@@ -556,6 +573,8 @@ describe("checkCase", () => {
     `${BARE_RESUME}run: {num_workers: 0.0}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: false}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: end}`,
+    `${BARE_RESUME}run: {num_workers: 0}\nhost: {stop: {a: {after: {model_call: 1, chunk: 2}}}}`,
+    `${RUN}host: {stop: {a: {after: {tool_call: 1}}}}`,
     BACKWARD,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,
@@ -1123,7 +1142,7 @@ describe("main", () => {
 
   test("fails a case using a reserved key before setting it up", async () => {
     const files = {
-      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, stop: {}}\nexpect: {output: {}}\n",
+      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, skills: {}}\nexpect: {output: {}}\n",
       "r/skills.yaml": "kind: run\nflow: x\nhost: {skills: {}}\nexpect: {output: {}}\n",
       "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
     };
@@ -1134,7 +1153,7 @@ describe("main", () => {
     expect(await run([], files, {}, { run: passing })).toEqual({
       code: 1,
       out: [
-        "FAIL r/host: `host.stop` is not supported by the TS runner yet",
+        "FAIL r/host: `host.skills` is not supported by the TS runner yet",
         "FAIL r/skills: `host.skills` is not supported by the TS runner yet",
         "3 cases: 1 passed, 2 failed, 0 pending",
       ],
@@ -1359,8 +1378,111 @@ describe("main", () => {
     expect(out).toEqual([]);
     expect(err).toEqual([
       "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-        "[--diagnostic-code CODE]",
+        "[--diagnostic-code CODE] [--crash-sweep] [--write-logs]",
     ]);
+  });
+
+  test("writes a golden log with --write-logs, then compares it byte for byte", async () => {
+    const kinds = { run: RUNNERS.run! };
+    const written = await run(["--write-logs", "--case", "a/two"], { "a/two.yaml": TWO_NODES }, {}, kinds);
+    expect(written.code).toBe(0);
+    const golden = readFileSync(join(roots.at(-1)!, "cases", "a", "two.log.jsonl"), "utf8");
+    const lines = golden.trimEnd().split("\n");
+    expect(lines).toHaveLength(9);
+    expect(lines[0]).toContain('"now":{"kind":"datetime","value":"<masked>"}');
+    expect(lines[0]).toContain('"today":{"kind":"date","value":"<masked>"}');
+    const pinned = { "a/two.yaml": TWO_NODES, "a/two.log.jsonl": golden };
+    expect(await run([], pinned, {}, kinds)).toEqual({
+      code: 0,
+      out: ["1 case: 1 passed, 0 failed, 0 pending"],
+      err: [],
+    });
+    const changed = { ...pinned, "a/two.log.jsonl": golden.replace('"seq":8', '"seq":9') };
+    const { code, out } = await run([], changed, {}, kinds);
+    expect(code).toBe(1);
+    expect(out[0]).toBe("FAIL a/two: the run log differs from two.log.jsonl at record 8");
+  });
+
+  test("refuses --write-logs without --case", async () => {
+    const { code, out, err } = await run(["--write-logs"], { "a/two.yaml": TWO_NODES });
+    expect(code).toBe(2);
+    expect(out).toEqual([]);
+    expect(err[0]).toBe("--write-logs needs --case: name each case whose golden log to write");
+  });
+
+  test("sweeps an eligible run case with --crash-sweep", async () => {
+    const files = { "a/two.yaml": TWO_NODES };
+    // The sweep's logs, counted before `main` removes the case directory.
+    const cuts: string[][] = [];
+    const counting: KindRunner = async (case_, ctx) => {
+      await RUNNERS.run!(case_, ctx);
+      cuts.push(readdirSync(ctx.dir).filter((name) => /^sweep-[0-9]+\.jsonl$/.test(name)));
+    };
+    const { code, out } = await run(["--crash-sweep"], files, {}, { run: counting });
+    expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
+    expect(code).toBe(0);
+    expect(cuts.map((names) => names.length)).toEqual([8]);
+    expect((await run([], files, {}, { run: counting })).code).toBe(0);
+    expect(cuts.map((names) => names.length)).toEqual([8, 0]);
+  });
+});
+
+// A serial run of two CODE nodes: nine records, so a crash sweep resumes eight cuts.
+const TWO_NODES = `kind: run
+flow: |
+  id: two
+  name: two
+  nodes:
+    a: {kind: code, code: return "x", output: str}
+    b: {kind: code, code: return inputs.v + "y", input: {v: "\${a.output}"}, output: str}
+  output: \${b.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: xy}
+`;
+
+describe("crashSweep", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Return the prepared `TWO_NODES` case and its set-up directory. */
+  function twoNodes(): [Case, CaseContext] {
+    const case_ = prepare(checkCase(readCase(TWO_NODES)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    return [case_, ctx];
+  }
+
+  test("resumes every cut and passes", async () => {
+    const [case_, ctx] = twoNodes();
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    expect(cuts).toHaveLength(8);
+  });
+
+  test("fails a resume that drops a record", async () => {
+    const [case_, ctx] = twoNodes();
+    const dropSecond = (log: string) => {
+      const lines = readFileSync(log, "utf8").split("\n");
+      if (lines.length > 3) writeFileSync(log, [lines[0], ...lines.slice(2)].join("\n"));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: dropSecond });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 2)");
+  });
+
+  test("fails the strong oracle when a recorded value changes before the resume", async () => {
+    const [case_, ctx] = twoNodes();
+    const rewrite = (log: string) => {
+      const text = readFileSync(log, "utf8");
+      const recorded = '"value":{"kind":"str","value":"x"}';
+      writeFileSync(log, text.replace(recorded, recorded.replace('"x"', '"z"')));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("output (crash sweep, cut after record 4) differs");
   });
 });
 

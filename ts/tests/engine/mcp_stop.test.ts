@@ -2,8 +2,8 @@
  * Stopping a run ends its waiting MCP calls and leaves nothing running: a port of
  * `tests/engine/test_mcp_stop.py`, over the fake server in `tests/fixtures/mcp/`.
  *
- * Ported, each for 0 and 8 workers: `test_a_stop_ends_a_run_owned_server_call_and_the_log_resumes`
- * (the stop half), `test_ctrl_c_in_the_host_ends_a_run_owned_server_call`,
+ * Ported, each for 0 and 8 workers: `test_a_stop_ends_a_run_owned_server_call_and_the_log_resumes`,
+ * `test_ctrl_c_in_the_host_ends_a_run_owned_server_call`,
  * `test_a_stop_cancels_only_its_own_run_on_a_shared_host_server` and
  * `test_a_stop_ends_an_agent_tool_call`.
  *
@@ -15,9 +15,7 @@
  * A call in flight is read from the server's private connection (Python: `server._calls`).
  * Concurrent runs are concurrent promises (Python: threads). An AGENT's model is a
  * `ScriptedModel` from `models`, and every run sees only the test's credential store in its
- * environment.
- *
- * Later (resumeFlow): the resume half of `test_a_stop_ends_a_run_owned_server_call_and_the_log_resumes`.
+ * environment. The resume's `slow` is a `FunctionTool` in the `fake` group.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -29,8 +27,9 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
+import { type RunFlowOptions, type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { readRunLog } from "../../src/runtime/log.ts";
+import { tool } from "../../src/tools/function_tools.ts";
 import { type McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
 
@@ -143,6 +142,16 @@ for (const numWorkers of [0, 8]) {
         "run_stopped",
       ]);
       await expectClosed(server, file);
+
+      const slow = tool({
+        name: "slow",
+        description: "Answer at once.",
+        parameters: { type: "object", properties: { seconds: { type: "number" } }, required: ["seconds"] },
+        execute: () => "done",
+      });
+      const resumed = await resumeFlow(await loadFlow(SLOW_FLOW), { log, env: hostEnv(dir), tools: { fake: [slow] } });
+      expect(resumed.failure).toBeNull();
+      expect(resumed.status).toBe("succeeded");
     },
     SLOW,
   );

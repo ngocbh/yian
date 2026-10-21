@@ -48,6 +48,16 @@
  * and of `test_llm_config_values_call_time.py`. Changed: TS keeps Infinity, so the provider block
  * refuses it ("Input should be a finite number", a `contract.input` failure when the agent runs)
  * where Python refuses `non-finite number inf`.
+ *
+ * TS-only, `inspectRun` (each row without the flow, and with it where the two agree): a succeeded
+ * and a failed run; a crash mid-node counts the in-flight node once (a crash is a log that refuses
+ * appends past a record); a `RunStopped` covers its in-flight nodes; resumed then crashed again
+ * counts 2, and the count stays after the node finishes; a locked log (a `JsonlRunLog` held open)
+ * is `running` with the recorded counts only; END succeeded with another node ready but unstarted
+ * reads `succeeded` without the flow and `interrupted` with it; a finished pooled failure has
+ * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
+ * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
+ * checks the recorded `YIAN_*` values against the given `env` (the records alone don't).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -56,22 +66,33 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { current, DefaultsError, type Env } from "../../src/defaults.ts";
+import { current, DefaultsError, DefaultsMismatchError, type Env } from "../../src/defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
-import { RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
+import {
+  inspectRun,
+  type ResumeFlowOptions,
+  RunResult,
+  type RunInspection,
+  resumeFlow,
+  runFlow,
+  type RunFlowOptions,
+} from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, type RunStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
+import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
-import { textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { crashAfter, rejection, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -80,15 +101,9 @@ function load(text: string): Promise<ComposedFlow> {
   return loadFlow(text, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
 }
 
-/** An environment with only `vars` set, and the credential store in the test's directory. */
-function hostEnv(vars: Record<string, string> = {}): Env {
-  const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
-  return (name) => all.get(name);
-}
-
-/** `runFlow` in `hostEnv()` unless `options` sets `env`, so no host variable or login decides a row. */
+/** `runFlow` in `hostEnv(dir)` unless `options` sets `env`, so no host variable or login decides a row. */
 function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
-  return runFlow(flow, inputs, { env: hostEnv(), ...options });
+  return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
 const PLAN_FLOW = `
@@ -512,7 +527,7 @@ test("a too-deep input is refused", async () => {
 
 test("the run's env sets the YIAN_* values it reads and records", async () => {
   const path = join(dir, "run.jsonl");
-  const env = hostEnv({ YIAN_MAX_VALUE_NESTING: "3" });
+  const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "3" });
   const flow = await load(echoFlow("Any"));
   const result = await run(flow, { x: [[1]] }, { log: path, env });
   expect(result.status).toBe("succeeded");
@@ -524,7 +539,7 @@ test("the run's env sets the YIAN_* values it reads and records", async () => {
 
 test("a bad YIAN_* value in the run's env rejects before the log exists", async () => {
   const path = join(dir, "run.jsonl");
-  const env = hostEnv({ YIAN_MAX_VALUE_NESTING: "deep" });
+  const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "deep" });
   const flow = await load(PLAN_FLOW);
   const error = await run(flow, { topic: "ACME" }, { log: path, env }).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(DefaultsError);
@@ -829,7 +844,7 @@ const SENTINEL = "sk-sentinel-5b2e8d41";
  * A model access over `env` that records each config it builds from in `built` and answers each
  * call with `ok`.
  */
-function scripted(built: Record<string, unknown>[], env: Env = hostEnv()): ModelAccess {
+function scripted(built: Record<string, unknown>[], env: Env = hostEnv(dir)): ModelAccess {
   return {
     env,
     createModel: (config) => {
@@ -962,4 +977,254 @@ test("a non-finite call-time value names the block field", async () => {
   expect(result.failure!.code).toBe("contract.input");
   expect(result.failure!.message).toBe("node 'chat' llm_config.openai.temperature: Input should be a finite number");
   expect(built).toEqual([]);
+});
+
+// ---- inspectRun ----
+
+const WORK_FLOW = `
+id: inspect-work
+name: inspect_work
+nodes:
+  work:
+    kind: code
+    code: return "done"
+    output: str
+output: \${work.output}
+`;
+
+const STOP_FLOW = `
+id: inspect-stop
+name: inspect_stop
+nodes:
+  work:
+    kind: tool
+    tool_id: work
+output: \${work.output}
+`;
+
+const POOLED_FAILURE_FLOW = `
+id: inspect-pooled-failure
+name: inspect_pooled_failure
+nodes:
+  fail:
+    kind: code
+    code: ./compose_codefns.ts:boom
+    output: str
+  waiter:
+    kind: wait
+    until: "2099-01-01T00:00:00+00:00"
+output:
+  fail: \${fail.output}
+  waiter: \${waiter.output}
+`;
+
+const END_FIRST_FLOW = `
+id: inspect-end-first
+name: inspect_end_first
+input:
+  x: !str
+nodes:
+  side:
+    kind: code
+    code: return "side"
+    output: str
+output: \${input.x}
+`;
+
+/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
+function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
+  return resumeFlow(flow, { env: hostEnv(dir), ...options });
+}
+
+/** `inspectRun` of `path` without and with `flow` (read in `hostEnv(dir)`), which must agree. */
+function inspectBoth(path: string, flow: ComposedFlow): RunInspection {
+  const without = inspectRun(path);
+  expect(inspectRun(path, { flow, env: hostEnv(dir) })).toEqual(without);
+  return without;
+}
+
+/** A log of `WORK_FLOW` whose process ended while `work` ran: records 0-3 are kept. */
+async function crashedWork(path: string): Promise<ComposedFlow> {
+  const flow = await load(WORK_FLOW);
+  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0 }));
+  return flow;
+}
+
+test("inspectRun reads a succeeded and a failed run, with and without the flow", async () => {
+  const succeeded = join(dir, "succeeded.jsonl");
+  const plan = await load(PLAN_FLOW);
+  await run(plan, { topic: "ACME" }, { log: succeeded });
+  expect(inspectBoth(succeeded, plan)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+
+  const failed = join(dir, "failed.jsonl");
+  const boom = await load(
+    "id: f\nname: f\nnodes:\n  fail: {kind: code, code: ./compose_codefns.ts:boom, output: str}\n" +
+      "output: ${fail.output}\n",
+  );
+  await run(boom, {}, { log: failed });
+  expect(inspectBoth(failed, boom)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+});
+
+test("inspectRun counts the node in flight at a crash once", async () => {
+  const path = join(dir, "crash.jsonl");
+  const flow = await crashedWork(path);
+  const before = readFileSync(path);
+
+  expect(inspectBoth(path, flow)).toEqual({
+    status: "interrupted",
+    inFlight: ["work"],
+    interruptedAttempts: new Map([["work", 1]]),
+  });
+  expect(readFileSync(path)).toEqual(before);
+});
+
+test("inspectRun: a RunStopped covers its in-flight nodes", async () => {
+  const path = join(dir, "stopped.jsonl");
+  const flow = await load(STOP_FLOW);
+  const host = new AbortController();
+  const stop = new Error("host stop");
+  let stopping = true;
+  const work = tool({
+    name: "work",
+    description: "Stop the run the first time.",
+    parameters: { type: "object", properties: {} },
+    execute: (_args, ctx) => {
+      if (!stopping) return "done";
+      stopping = false;
+      host.abort(stop);
+      throw ctx.signal.reason;
+    },
+  });
+  expect(await rejection(run(flow, {}, { log: path, numWorkers: 0, signal: host.signal, tools: { work } }))).toBe(stop);
+
+  expect(inspectBoth(path, flow)).toEqual({ status: "stopped", inFlight: ["work"], interruptedAttempts: new Map() });
+  const resumed = await resume(flow, { log: path, tools: { work } });
+  expect(resumed.status).toBe("succeeded");
+  expect(inspectBoth(path, flow)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+});
+
+test("inspectRun: resumed then crashed again counts 2, and the count stays after the node finishes", async () => {
+  const path = join(dir, "twice.jsonl");
+  const flow = await crashedWork(path);
+  // RunResumed and work's second NodeStarted are kept; its outcome is refused again.
+  await crashAfter(6, () => resume(flow, { log: path }));
+
+  expect(inspectBoth(path, flow)).toEqual({
+    status: "interrupted",
+    inFlight: ["work"],
+    interruptedAttempts: new Map([["work", 2]]),
+  });
+  const resumed = await resume(flow, { log: path });
+  expect(resumed.interruptedAttempts).toEqual(new Map([["work", 2]]));
+  expect(inspectBoth(path, flow)).toEqual({
+    status: "succeeded",
+    inFlight: [],
+    interruptedAttempts: new Map([["work", 2]]),
+  });
+});
+
+test("inspectRun: a locked log is running, with the recorded counts only", async () => {
+  const path = join(dir, "locked.jsonl");
+  const flow = await crashedWork(path);
+  const held = JsonlRunLog.resume(path);
+  try {
+    expect(inspectBoth(path, flow)).toEqual({ status: "running", inFlight: ["work"], interruptedAttempts: new Map() });
+  } finally {
+    held.close();
+  }
+  expect(inspectRun(path).status).toBe("interrupted");
+});
+
+test("inspectRun: END succeeded with another node ready but unstarted is succeeded without the flow only", async () => {
+  const path = join(dir, "end-first.jsonl");
+  const flow = await load(END_FIRST_FLOW);
+  const log = JsonlRunLog.create(path, "end-first");
+  try {
+    const state = startedRun(flow, log, { inputs: { x: "Ada" } });
+    commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+    commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, { x: "Ada" }));
+    expect(state.ready).toEqual([END_ID, "side"]);
+    commitPrepared(log, state, prepareNodeStarted(state, END_ID));
+    commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, "Ada"));
+    expect(state.result).toBeNull();
+  } finally {
+    log.close();
+  }
+
+  expect(inspectRun(path)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectRun(path, { flow, env: hostEnv(dir) })).toEqual({
+    status: "interrupted",
+    inFlight: [],
+    interruptedAttempts: new Map(),
+  });
+  const resumed = await resume(flow, { log: path });
+  expect(resumed.output).toBe("Ada");
+  expect(resumed.events.some((event) => event instanceof NodeSucceeded && event.nodeId === "side")).toBe(true);
+});
+
+test("inspectRun: a finished pooled failure has nothing in flight and adds nothing", async () => {
+  const path = join(dir, "pooled-failure.jsonl");
+  const flow = await load(POOLED_FAILURE_FLOW);
+  const result = await run(flow, {}, { log: path, numWorkers: 2 });
+  expect(result.status).toBe("failed");
+  // The abandoned sibling started and never settled.
+  expect(readRunLog(path).some((envelope) => envelope.payload["node_id"] === "waiter")).toBe(true);
+  expect(readRunLog(path).at(-1)!.kind).toBe("node_failed");
+
+  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+});
+
+test("inspectRun refuses a missing log and an empty log no writer holds", async () => {
+  const missing = thrownBy(() => inspectRun(join(dir, "missing.jsonl")));
+  expect((missing as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+  const empty = join(dir, "empty.jsonl");
+  writeFileSync(empty, "");
+  expect(() => inspectRun(empty)).toThrow(new RangeError(`cannot inspect an empty run log: ${empty}`));
+});
+
+const UNREACHABLE_FLOW = `
+id: inspect-unreachable
+name: inspect_unreachable
+input:
+  score: !float
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 1.0"
+        then: selected
+  selected:
+    kind: code
+    code: return "selected"
+    output: str
+output: \${selected.output}
+`;
+
+test("inspectRun reads a route that proved END unreachable as failed, with and without the flow", async () => {
+  const path = join(dir, "unreachable.jsonl");
+  const flow = requiredEndFlow(await load(UNREACHABLE_FLOW));
+  const result = await run(flow, { score: 0.0 }, { log: path });
+  expect(result.failure?.code).toBe("graph.terminal_unreachable");
+  const last = readRunLog(path).at(-1)!;
+  expect(last.kind).toBe("node_routed");
+  expect(last.payload["terminal_failure"]).not.toBeNull();
+
+  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+});
+
+test("inspectRun replays with the run's env", async () => {
+  const path = join(dir, "env.jsonl");
+  const flow = await load(WORK_FLOW);
+  const env = hostEnv(dir, { YIAN_MAX_TOTAL_NODES: "5000" });
+  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0, env }));
+
+  expect(inspectRun(path, { flow, env })).toEqual({
+    status: "interrupted",
+    inFlight: ["work"],
+    interruptedAttempts: new Map([["work", 1]]),
+  });
+  expect(thrownBy(() => inspectRun(path, { flow, env: hostEnv(dir) }))).toBeInstanceOf(DefaultsMismatchError);
+  // Reading without the flow doesn't check the recorded values.
+  expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("interrupted");
 });

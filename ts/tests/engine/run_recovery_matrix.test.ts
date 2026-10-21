@@ -1,0 +1,790 @@
+/**
+ * Recovery equivalence across nested growth and unfinished live effects: a port of
+ * `tests/engine/test_run_recovery_matrix.py`.
+ *
+ * The live state is captured after every committed record, each prefix is replayed through
+ * `run.ts`'s `replayRunLog`, and the complete reducer state and topology are compared. The effect
+ * rows stop the run right after the effect's durable `NodeStarted`, so no model, human interaction
+ * or wait runs. CODE references resolve from the conformance fixtures.
+ *
+ * Ported: `test_every_nested_growth_prefix_replays_to_the_live_state` (4 rows),
+ * `test_every_loop_body_spawner_prefix_replays_to_the_live_state` (3 rows),
+ * `test_every_partial_loop_prefix_replays_to_the_live_state` (2 rows) and
+ * `test_resume_prepends_ordered_effect_retries_before_existing_ready_work`.
+ *
+ * Changed:
+ * - The live snapshot after each commit is taken by the log, before the next append and once at
+ *   the end (the engine changes the state only in its commits), where Python patches the engine's
+ *   `commit_prepared`.
+ * - `test_effect_start_prefix_replays_without_running_effect_work` (`human_input`, `wait`) and
+ *   `test_namespaced_human_input_start_replays_without_host_interaction[call]`: an async engine
+ *   can't be paused between a start and its evaluation, so the host callback throws at the
+ *   effect's `NodeStarted` while the log refuses further appends: the engine's `RunStopped` is
+ *   refused, nothing evaluates (the `ask_user` handler, the scheduler's sleep and the model fail
+ *   the test if called), and the log ends with the start, as Python's closed generator leaves it.
+ * - `test_recovered_wait_recomputes_from_the_authored_absolute_deadline`: the remaining duration is
+ *   the sleep `evalNode` asks the scheduler for, whose clock reads 12:00:04 then 12:00:07 and
+ *   moves past each sleep, which returns at once.
+ * - `test_recorded_nested_growth_resumes_with_exact_memory_and_trace`: the prefix is the first 25
+ *   lines of a live learnable TS run (schema 10 is the only TS schema) whose memory keys are served
+ *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
+ *
+ * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
+ * (`resume/run_recovery_matrix__an_agent_started_before_the_crash_runs_again`) and
+ * `test_namespaced_human_input_start_replays_without_host_interaction[map]`
+ * (`resume/run_recovery_matrix__a_human_input_in_a_map_retries_under_its_namespaced_id`). Also
+ * covered by a case, besides their rows here: `[serial-named]`
+ * (`resume/run_recovery_matrix__a_cut_after_nested_growth_resumes_the_grown_nodes`, which covers
+ * `test_recorded_nested_growth_resumes_with_exact_memory_and_trace` without its memory) and the
+ * ordered-retries row (`resume/run_lifecycle__a_resume_retries_in_flight_work_ahead_of_ready_work`,
+ * one retry).
+ */
+
+import { expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { buildGrow } from "../../src/compile/expand.ts";
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
+import { copyGraph, START_ID } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { NodeStarted, type RunEvent, RunSucceeded } from "../../src/events.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { NodeKind, Output } from "../../src/nodes/base.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
+import { Binding } from "../../src/nodes/contracts.ts";
+import type { Scheduler } from "../../src/platform.ts";
+import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { FlowEngine } from "../../src/runtime/engine.ts";
+import { evalNode } from "../../src/runtime/eval_node.ts";
+import {
+  decodeRecord,
+  JsonlRunLog,
+  MemoryRunLog,
+  NodeExpandedRecord,
+  NodeStartedRecord,
+  type RecordEnvelope,
+  type RunRecord,
+  RunResumedRecord,
+  type RunStartedRecord,
+} from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  prepareRunResumed,
+  type RunState,
+} from "../../src/runtime/state.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
+
+import { hostEnv } from "./mcp_helpers.ts";
+import { FakeMemory } from "./memory_fakes.ts";
+import { reducerSnapshot, startedRun } from "./run_state_fixtures.ts";
+
+const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+const RUN_ID = "recovery-matrix";
+const SYSTEM_TODAY = "2026-08-14";
+const SYSTEM_NOW = "2026-08-14T12:00:00+00:00";
+const WAIT_DEADLINE = "2026-08-14T12:00:10+00:00";
+
+const NESTED_GROWTH = `
+id: recovery-matrix-growth
+name: recovery_matrix_growth
+defs:
+  echo_one:
+    input:
+      value: !int
+    nodes:
+      echo:
+        kind: code
+        input:
+          x: \${input.value}
+        output: int
+        code: ./compose_codefns.ts:echo_x
+    output: \${echo.output}
+  bump_once:
+    input:
+      n: !int
+      exited: !bool
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+        code: ./compose_codefns.ts:loop_bump
+    output: \${bump.output}
+  composite:
+    nodes:
+      mapped:
+        kind: map
+        call: echo_one
+        over: \${[1, 2]}
+        input:
+          value: \${item}
+      repeated:
+        kind: loop
+        call: bump_once
+        input:
+          n: 0
+          exited: false
+        times: 2
+    output:
+      mapped: \${mapped.output}
+      repeated: \${repeated.output}
+nodes:
+  outer:
+    kind: call
+    call: composite
+output: \${outer.output}
+`;
+
+const NESTED_INLINE_GROWTH = `
+id: recovery-matrix-inline-growth
+name: recovery_matrix_inline_growth
+nodes:
+  outer:
+    kind: call
+    input:
+      items: [1, 2]
+    nodes:
+      mapped:
+        kind: map
+        over: \${input.items}
+        input:
+          value: \${item}
+        nodes:
+          echo:
+            kind: code
+            input:
+              x: \${input.value}
+            output: int
+            code: ./compose_codefns.ts:echo_x
+        output: \${echo.output}
+      repeated:
+        kind: loop
+        input:
+          n: 0
+          exited: false
+        times: 2
+        nodes:
+          bump:
+            kind: code
+            input:
+              n: \${input.n}
+              exited: \${input.exited}
+            output:
+              n: int
+              exited: bool
+            code: ./compose_codefns.ts:loop_bump
+        output: \${bump.output}
+    output:
+      mapped: \${mapped.output}
+      repeated: \${repeated.output}
+output: \${outer.output}
+`;
+
+const NESTED_HUMAN_CALL = `
+id: recovery-nested-human-call
+name: recovery_nested_human_call
+defs:
+  gate:
+    input:
+      token: !str
+    nodes:
+      ask:
+        kind: human_input
+        prompt: nested call input
+        output: str
+    output: \${ask.output}
+nodes:
+  invoke:
+    kind: call
+    call: gate
+    input:
+      token: ready
+output: \${invoke.output}
+`;
+
+const LOOP_BODY_SPAWNERS = `
+id: recovery-loop-body-spawners
+name: recovery_loop_body_spawners
+defs:
+  echo_one:
+    input:
+      value: !int
+    nodes:
+      echo:
+        kind: code
+        input:
+          x: \${input.value}
+        output: int
+        code: ./compose_codefns.ts:echo_x
+    output: \${echo.output}
+  turn:
+    input:
+      n: !int
+      exited: !bool
+    nodes:
+      nested_call:
+        kind: call
+        call: echo_one
+        input:
+          value: \${input.n}
+      nested_map:
+        kind: map
+        call: echo_one
+        over: \${[1, 2]}
+        input:
+          value: \${item}
+      bump:
+        kind: code
+        depends_on: [nested_call, nested_map]
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+        code: ./compose_codefns.ts:loop_bump
+    output: \${bump.output}
+nodes:
+  repeated:
+    kind: loop
+    call: turn
+    input:
+      n: 0
+      exited: false
+    times: 3
+output: \${repeated.output}
+`;
+
+const LOOP_BODY_NESTED_LOOP_AND_CASE = `
+id: recovery-loop-body-nested-loop-case
+name: recovery_loop_body_nested_loop_case
+defs:
+  echo_one:
+    input:
+      value: !int
+    nodes:
+      echo:
+        kind: code
+        input:
+          x: \${input.value}
+        output: int
+        code: ./compose_codefns.ts:echo_x
+    output: \${echo.output}
+  inc:
+    input:
+      n: !int
+    nodes:
+      c:
+        kind: call
+        call: echo_one
+        input:
+          value: \${input.n}
+    output:
+      n: \${c.output}
+  turn:
+    input:
+      n: !int
+      exited: !bool
+    nodes:
+      inner:
+        kind: loop
+        call: inc
+        input:
+          n: \${input.n}
+        times: 2
+      pick:
+        kind: case
+        cases:
+          - when: "input.n % 2 == 0"
+            then: call(echo_one, value=\${input.n})
+        else: call(echo_one, value=\${input.n})
+      bump:
+        kind: code
+        depends_on: [inner]
+        input:
+          n: \${pick.output}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+        code: ./compose_codefns.ts:loop_bump
+    output: \${bump.output}
+nodes:
+  repeated:
+    kind: loop
+    call: turn
+    input:
+      n: 0
+      exited: false
+    times: 3
+output: \${repeated.output}
+`;
+
+// The body returns only `{n}`; the omitted `tag` merges in at every LOOP respawn.
+const PARTIAL_LOOP = `
+id: recovery-partial-loop
+name: recovery_partial_loop
+defs:
+  bump:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        code: |
+          return {"n": inputs["n"] + 1}
+        input:
+          n: \${input.n}
+        output:
+          n: int
+    output: \${step.output}
+nodes:
+  repeated:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      tag: kept
+    times: 3
+output: \${repeated.output}
+`;
+
+const EFFECT_FLOWS: Record<string, string> = {
+  human_input: `
+id: recovery-human
+name: recovery_human
+nodes:
+  effect:
+    kind: human_input
+    prompt: this host interaction must never be invoked
+    output: str
+output: \${effect.output}
+`,
+  wait: `
+id: recovery-wait
+name: recovery_wait
+nodes:
+  effect:
+    kind: wait
+    until: '${WAIT_DEADLINE}'
+output: \${effect.output}
+`,
+};
+
+const ORDERED_EFFECTS = `
+id: recovery-ordered-effects
+name: recovery_ordered_effects
+nodes:
+  release:
+    kind: code
+    input: {x: ready}
+    output: str
+    code: ./compose_codefns.ts:echo_x
+  wait:
+    kind: wait
+    depends_on: [release]
+    until: '${WAIT_DEADLINE}'
+  agent:
+    kind: agent
+    depends_on: [release]
+    prompt: never invoked
+    llm_config: {provider: openai, model: offline-test}
+  human:
+    kind: human_input
+    depends_on: [release]
+    prompt: never invoked
+    output: str
+  later:
+    kind: code
+    depends_on: [release]
+    input: {x: still-ready}
+    output: str
+    code: ./compose_codefns.ts:echo_x
+output:
+  agent: \${agent.output}
+  human: \${human.output}
+  wait: \${wait.output}
+  later: \${later.output}
+`;
+
+/** Load inline Compose YAML whose CODE references resolve from the conformance fixtures. */
+function load(text: string): Promise<ComposedFlow> {
+  return loadFlow(text, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
+}
+
+/** Every topology and reducer coordinate of `state` as detached values. */
+function matrixSnapshot(state: RunState): Record<string, unknown> {
+  const flow = state.flow;
+  const ids = [...flow.nodes.keys()];
+  return {
+    ...reducerSnapshot(state),
+    topology: flowManifest(flow),
+    originContext: [...flow.nodes].map(([nodeId, node]) => [nodeId, node.originContext]),
+    nodeOrder: ids,
+    edges: flow.edges.map((edge) => [
+      edge.id,
+      edge.from,
+      edge.to,
+      edge.sourceHandle,
+      edge.inputGroup,
+      edge.optional,
+      edge.ordering,
+    ]),
+    wiring: [...flow.wiring].map(([nodeId, wiring]) => [nodeId, [...wiring]]),
+    incoming: ids.map((nodeId) => [nodeId, flow.incoming(nodeId).map((edge) => edge.id)]),
+    outgoing: ids.map((nodeId) => [nodeId, flow.outgoing(nodeId).map((edge) => edge.id)]),
+    initialStaticIds: [...state.initialStaticIds],
+  };
+}
+
+/**
+ * A memory log that snapshots `state`, once set, before each append (the state after the
+ * previous commit), and that refuses every append once `frozen`.
+ */
+class CapturingLog extends MemoryRunLog {
+  state: RunState | null = null;
+  readonly snapshots: Record<string, unknown>[] = [];
+  frozen = false;
+
+  override append(record: RunRecord): RecordEnvelope {
+    if (this.frozen) throw new Error("the run was paused");
+    if (this.state !== null) this.snapshots.push(matrixSnapshot(this.state));
+    return super.append(record);
+  }
+}
+
+/** Create one private explicitly configured run of `loaded` through its first record. */
+function newStartedRun(loaded: ComposedFlow, numWorkers: number): { state: RunState; log: CapturingLog } {
+  const privateFlow = copyGraph(loaded.compiled);
+  const effective = resolveLlmCascade(privateFlow, {}, { defaults: { provider: "openai", model: "offline-test" } });
+  const log = new CapturingLog(RUN_ID);
+  return { state: startedRun(loaded, log, { numWorkers, effective, privateFlow }), log };
+}
+
+/** Run `loaded` live to its end; return the state, its log and the snapshot after each record. */
+async function liveRun(
+  loaded: ComposedFlow,
+  numWorkers: number,
+): Promise<{ state: RunState; log: CapturingLog; observers: readonly RunEvent[] }> {
+  const { state, log } = newStartedRun(loaded, numWorkers);
+  log.state = state;
+  const observers = await new FlowEngine(state, log, { growBuilder: buildGrow, numWorkers }).run();
+  log.snapshots.push(matrixSnapshot(state));
+  return { state, log, observers };
+}
+
+/** Expect every prefix of `log` to replay to the live snapshot after it. */
+function expectEveryPrefixReplays(loaded: ComposedFlow, log: CapturingLog): void {
+  const envelopes = log.records();
+  expect(log.snapshots).toHaveLength(envelopes.length);
+  log.snapshots.forEach((expected, index) => {
+    const recovered = replayRunLog(loaded, MemoryRunLog.fromRecords(envelopes.slice(0, index + 1)));
+    expect(matrixSnapshot(recovered), `prefix ${index + 1}/${envelopes.length}`).toEqual(expected);
+  });
+}
+
+/** A tool set, model access and scheduler that fail the test if an effect runs. */
+const NO_EFFECTS = {
+  tools: new ToolSet({
+    ask_user: () => {
+      throw new Error("effect work ran after only its durable NodeStarted");
+    },
+  }),
+  models: {
+    env: () => undefined,
+    createModel: () => {
+      throw new Error("effect work ran after only its durable NodeStarted");
+    },
+  } satisfies ModelAccess,
+  scheduler: {
+    now: () => Date.parse(SYSTEM_NOW),
+    sleep: () => {
+      throw new Error("effect work ran after only its durable NodeStarted");
+    },
+  } satisfies Scheduler,
+};
+
+/**
+ * Run `loaded` serially until the first durable `NodeStarted` that `isTarget` accepts, then
+ * stop with nothing more recorded; return the live state and its log.
+ */
+async function pauseAfterStarted(
+  loaded: ComposedFlow,
+  isTarget: (state: RunState, nodeId: string) => boolean,
+): Promise<{ state: RunState; log: CapturingLog; target: string }> {
+  const { state, log } = newStartedRun(loaded, 0);
+  const pause = new Error("paused after the durable start");
+  let target: string | null = null;
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof NodeStarted && isTarget(state, event.nodeId)) {
+      target = event.nodeId;
+      log.frozen = true;
+      throw pause;
+    }
+  };
+  let caught: unknown;
+  try {
+    await new FlowEngine(state, log, { growBuilder: buildGrow, numWorkers: 0, onEvent, ...NO_EFFECTS }).run();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(pause);
+  expect(target).not.toBeNull();
+  expect(log.records().at(-1)!.record).toEqual(new NodeStartedRecord(target!));
+  return { state, log, target: target! };
+}
+
+for (const [sourceId, source] of [
+  ["named", NESTED_GROWTH],
+  ["inline", NESTED_INLINE_GROWTH],
+] as const) {
+  for (const [workersId, numWorkers] of [
+    ["serial", 0],
+    ["pooled", 2],
+  ] as const) {
+    test(`test_every_nested_growth_prefix_replays_to_the_live_state[${workersId}-${sourceId}]`, async () => {
+      const loaded = await load(source);
+      const { state, log, observers } = await liveRun(loaded, numWorkers);
+
+      expect(state.result).toBeInstanceOf(RunSucceeded);
+      expect((state.result as RunSucceeded).output).toEqual({ mapped: [1n, 2n], repeated: { n: 2n, exited: false } });
+      expect(observers.at(-1)).toEqual(state.result!);
+      expectEveryPrefixReplays(loaded, log);
+    });
+  }
+}
+
+const CALL_MAP = [LOOP_BODY_SPAWNERS, { n: 3n, exited: true }, ["/nested_call", "/nested_map"]] as const;
+const LOOP_CASE = [LOOP_BODY_NESTED_LOOP_AND_CASE, { n: 3n, exited: true }, ["/inner", "/c", "/__call_0"]] as const;
+
+// Every prefix replays from scratch, so the long loop-case log runs serially only; the call-map
+// case covers pooled replay.
+for (const [id, [source, expectedOutput, spawnerSuffixes], numWorkers] of [
+  ["call-map-serial", CALL_MAP, 0],
+  ["call-map-pooled", CALL_MAP, 2],
+  ["loop-case-serial", LOOP_CASE, 0],
+] as const) {
+  test(`test_every_loop_body_spawner_prefix_replays_to_the_live_state[${id}]`, async () => {
+    const loaded = await load(source);
+    const { state, log, observers } = await liveRun(loaded, numWorkers);
+
+    expect(observers.at(-1)).toBeInstanceOf(RunSucceeded);
+    expect((observers.at(-1) as RunSucceeded).output).toEqual(expectedOutput);
+    const expandedIds = log
+      .records()
+      .map((envelope) => envelope.record)
+      .filter((record) => record instanceof NodeExpandedRecord)
+      .map((record) => (record as NodeExpandedRecord).spawnerId);
+    for (const suffix of spawnerSuffixes) expect(expandedIds.some((nodeId) => nodeId.endsWith(suffix))).toBe(true);
+    expectEveryPrefixReplays(loaded, log);
+    // Only the last turn's body stays live at the end of the run.
+    const ids = [...state.flow.nodes.keys()];
+    expect(ids.filter((nodeId) => nodeId.startsWith("repeated#0/") || nodeId.startsWith("repeated#1/"))).toEqual([]);
+    expect(ids.some((nodeId) => nodeId.startsWith("repeated#2/"))).toBe(true);
+  });
+}
+
+for (const [id, numWorkers] of [
+  ["serial", 0],
+  ["pooled", 2],
+] as const) {
+  test(`test_every_partial_loop_prefix_replays_to_the_live_state[${id}]`, async () => {
+    const loaded = await load(PARTIAL_LOOP);
+    const { log, observers } = await liveRun(loaded, numWorkers);
+
+    expect(observers.at(-1)).toBeInstanceOf(RunSucceeded);
+    expect((observers.at(-1) as RunSucceeded).output).toEqual({ n: 3n, tag: "kept" });
+    expectEveryPrefixReplays(loaded, log);
+  });
+}
+
+for (const [id, source] of Object.entries(EFFECT_FLOWS)) {
+  test(`test_effect_start_prefix_replays_without_running_effect_work[${id}]`, async () => {
+    const loaded = await load(source);
+    const { state: live, log } = await pauseAfterStarted(loaded, (_state, nodeId) => nodeId === "effect");
+
+    const recovered = replayRunLog(loaded, log);
+
+    expect(matrixSnapshot(recovered)).toEqual(matrixSnapshot(live));
+    expect([...recovered.inFlight]).toEqual(["effect"]);
+    expect(recovered.ready).toEqual([]);
+    const prepared = prepareRunResumed(recovered, { numWorkers: 0 });
+    expect(prepared.record).toEqual(new RunResumedRecord(["effect"], 0));
+    log.frozen = false;
+    commitPrepared(log, recovered, prepared);
+    expect([...recovered.inFlight]).toEqual([]);
+    expect(recovered.ready).toEqual(["effect"]);
+  });
+}
+
+test("test_namespaced_human_input_start_replays_without_host_interaction[call]", async () => {
+  const loaded = await load(NESTED_HUMAN_CALL);
+  const { state, log, target } = await pauseAfterStarted(
+    loaded,
+    (live, nodeId) => live.flow.nodes.get(nodeId)!.kind === NodeKind.HUMAN_INPUT,
+  );
+
+  expect(target).toContain("/ask");
+  expect([...state.inFlight]).toEqual([target]);
+
+  const recovered = replayRunLog(loaded, log);
+  expect(matrixSnapshot(recovered)).toEqual(matrixSnapshot(state));
+  expect([...recovered.inFlight]).toEqual([target]);
+  expect(prepareRunResumed(recovered, { numWorkers: 0 }).record).toEqual(new RunResumedRecord([target], 0));
+});
+
+test("test_recovered_wait_recomputes_from_the_authored_absolute_deadline", async () => {
+  const loaded = await load(EFFECT_FLOWS["wait"]!);
+  const { log } = await pauseAfterStarted(loaded, (_state, nodeId) => nodeId === "effect");
+  const recovered = replayRunLog(loaded, log);
+  const authored = loaded.compiled.wiring.get("effect")!.get("until") as Binding;
+  const replayed = recovered.flow.wiring.get("effect")!.get("until") as Binding;
+  expect(replayed).toEqual(authored);
+  expect(replayed.source).toBe(WAIT_DEADLINE);
+  expect(replayed.origin).not.toBeNull();
+
+  log.frozen = false;
+  commitPrepared(log, recovered, prepareRunResumed(recovered, { numWorkers: 0 }));
+  const node = recovered.flow.nodes.get("effect")!;
+
+  const observed: number[][] = [];
+  for (const second of [4, 7]) {
+    const sleeps: number[] = [];
+    let now = Date.UTC(2026, 7, 14, 12, 0, second);
+    // A sleep returns at once with the clock moved past it.
+    const scheduler: Scheduler = {
+      now: () => now,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+    };
+    const { outcome } = await evalNode(node, recovered.flow, recovered.pool, { scheduler });
+    expect(outcome).toEqual(new Output(null));
+    observed.push(sleeps);
+  }
+
+  expect(observed).toEqual([[6000], [3000]]);
+});
+
+test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-recovery-matrix-"));
+  const env = hostEnv(dir);
+  try {
+    const source = NESTED_GROWTH.replace(
+      "name: recovery_matrix_growth\n",
+      "name: recovery_matrix_growth\nlong_term_memory: episodic\n",
+    ).replace("  composite:\n    nodes:", "  composite:\n    long_term_memory: reflective\n    nodes:");
+    const flow = await load(source);
+    const path = join(dir, "historical-growth.jsonl");
+    const memory = () => new Map([["episodic", new FakeMemory()], ["reflective", new FakeMemory()]]);
+    const fresh = await runFlow(flow, {}, {
+      log: path,
+      runId: "historical-growth",
+      learnable: true,
+      numWorkers: 0,
+      memory: memory(),
+      env,
+    });
+    expect(fresh.status).toBe("succeeded");
+    // Records 0-24: through outer/mapped#1/echo's NodeSucceeded, as Python's recorded prefix.
+    const length = 25;
+    const lines = readFileSync(path, "utf8").split("\n").slice(0, length);
+    expect(decodeRecord(lines.at(-1)!).payload["node_id"]).toBe("outer/mapped#1/echo");
+    const prefix = `${lines.join("\n")}\n`;
+    writeFileSync(path, prefix);
+    const initial = decodeRecord(lines[0]!).record as RunStartedRecord;
+    const snapshots = new Map(initial.memorySnapshots!.map((item) => [item.memory, item.snapshot]));
+    expect([...snapshots.keys()].sort()).toEqual(["episodic", "reflective"]);
+    const backends = memory();
+    const calls: string[] = [];
+    const original = CodeNode.prototype.forward;
+    const forward = spyOn(CodeNode.prototype, "forward").mockImplementation(function (this: CodeNode, inputs) {
+      calls.push(this.id);
+      expect(this.id).toBe("outer/repeated#1/bump");
+      return original.call(this, inputs);
+    });
+    try {
+      const result = await resumeFlow(flow, { log: path, memory: backends, env });
+      expect(result.status).toBe("succeeded");
+      expect(result.output).toEqual({ mapped: [1n, 2n], repeated: { n: 2n, exited: false } });
+      expect(calls).toEqual(["outer/repeated#1/bump"]);
+      for (const [key, backend] of backends) expect(backend.openSnapshots).toEqual([snapshots.get(key)!]);
+      expect(readFileSync(path, "utf8").startsWith(prefix)).toBe(true);
+
+      const log = JsonlRunLog.resume(path);
+      let replayed: RunState;
+      try {
+        replayed = replayRunLog(flow, log);
+      } finally {
+        log.close();
+      }
+      expect(replayed.flowFingerprint).toBe(initial.flowFingerprint);
+      expect(initial.flowFingerprint).toBe(flowFingerprint(flow.compiled));
+      expect(replayed.effectiveLlmByStaticPath).toEqual(initial.effectiveLlmByStaticPath as never);
+      expect(replayed.learnable).toBe(true);
+      const historical = replayed.trace!.occurrences.filter((item) => item.outcomeSeq < length);
+      expect(
+        new Set(historical.filter((item) => item.record instanceof NodeExpandedRecord).map((item) => item.nodeId)),
+      ).toEqual(new Set(["outer", "outer/mapped", "outer/repeated"]));
+      for (const occurrence of historical) expect(occurrence.recordJson).toBe(lines[occurrence.outcomeSeq]!);
+
+      const complete = readFileSync(path, "utf8");
+      const inspected = await resumeFlow(flow, {
+        log: path,
+        memory: new Map([["episodic", {}], ["reflective", {}]]) as never,
+        env,
+      });
+      expect(inspected.output).toEqual(result.output);
+      expect(inspected.events).toEqual([]);
+      expect(readFileSync(path, "utf8")).toBe(complete);
+      expect(calls).toEqual(["outer/repeated#1/bump"]);
+    } finally {
+      forward.mockRestore();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("test_resume_prepends_ordered_effect_retries_before_existing_ready_work", async () => {
+  const loaded = await load(ORDERED_EFFECTS);
+  const { state, log } = newStartedRun(loaded, 2);
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareNodeStarted(state, "release"));
+  commitPrepared(log, state, prepareNodeSucceeded(state, "release", "ready"));
+  expect(state.ready).toEqual(["wait", "agent", "human", "later"]);
+
+  const retryOrder = ["wait", "agent", "human"];
+  expect(retryOrder).not.toEqual([...retryOrder].sort());
+  for (const nodeId of retryOrder) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+  const startedOrder = log
+    .records()
+    .flatMap((envelope) => (envelope.record instanceof NodeStartedRecord ? [envelope.record.nodeId] : []));
+  expect(startedOrder).toEqual([START_ID, "release", ...retryOrder]);
+  expect([...state.inFlight]).toEqual(retryOrder);
+  expect(state.ready).toEqual(["later"]);
+
+  const recovered = replayRunLog(loaded, log);
+  expect([...recovered.inFlight]).toEqual(retryOrder);
+  expect(recovered.ready).toEqual(["later"]);
+
+  const prepared = prepareRunResumed(recovered, { numWorkers: 2 });
+  expect(prepared.record).toEqual(new RunResumedRecord(retryOrder, 2));
+  commitPrepared(log, recovered, prepared);
+  expect(log.records().at(-1)!.record).toEqual(prepared.record);
+  expect([...recovered.inFlight]).toEqual([]);
+  expect(recovered.ready).toEqual([...retryOrder, "later"]);
+});

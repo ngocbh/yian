@@ -12,7 +12,7 @@ Each runner turns a case into calls on its own implementation and compares the r
 conformance/
   README.md                       # this file: the case format and the runner contract
   cases/<group>/<name>.yaml       # one case per file; its id is <group>/<name>
-  cases/<group>/<name>.log.jsonl  # optional pinned TS run log (TS-only)
+  cases/<group>/<name>.log.jsonl  # optional golden TS run log (TS-only; see Running the suite)
   fixtures/                       # files cases share: CODE helpers, golden profiles, stub data
   schema/                         # JSON Schemas of the documents yian gives hosts
 ```
@@ -110,7 +110,7 @@ it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of
 |---|---|---|
 | `load` | `flow` (required), `files`, `env` | `expect.load` |
 | `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `memory` when present |
-| `resume` | as `run`, plus `host.crash_after_record` and `resume` | as `run`, for the resumed run |
+| `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run |
 | `backward` | as `run`, plus `backward` | as `run`, plus `expect.backward` |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
@@ -147,12 +147,14 @@ every other result is the main run's.
 
 ### `resume`
 
-For serial runs (`num_workers: 0`). `host.crash_after_record` (required) is a record number or
-`end`. A number `k` cuts the first run after record `k` (0-based, so records `0`..`k` are kept): every later
-append is refused without writing, the run is abandoned, and the runner checks that the cut
-happened. The Python runner's cut still runs the run's own cleanup (closing the log; later, memory
-and MCP close calls), which a real crash would not. `end` lets the first run run to its end (a first
-run that raises fails the case), so the resume is a finished run's, read-only. Then the flow is
+For serial runs (`num_workers: 0`). A `resume` case gives one of `host.crash_after_record`, a
+record number or `end`, and `host.stop` (below). A number `k` cuts the first run after record `k`
+(0-based, so records `0`..`k` are kept): every later append is refused without writing, the run
+is abandoned, and the runner checks that the cut happened. Each runner's cut still runs the run's
+own cleanup (closing the log, and memory and MCP close calls; in TS, `runFlow`'s), which a real
+crash would not. `end` lets the first run run to its end (a first run that raises fails the case),
+so the resume is a finished run's, read-only. With `host.stop`, the first run must reject with the
+stop, and the resume continues the stopped run. Then the flow is
 resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
 `api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
 run: its output, the trace of the whole log, the events and stream of the resume call, and
@@ -426,6 +428,12 @@ A case can't hold code, so its host is declared under `host`.
   the chunks shown and ends the stream with a final `""` chunk, and on the last chunk it keeps the
   whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT authored
   `steerable: true` (with `str` output) reads the inbox.
+- **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run (TS only; the Python runner
+  doesn't support it yet). The points and their counting are `steering`'s, and `after` is
+  required. When the run reaches the point, the runner aborts the run's `signal` with a
+  `ConformanceStop` error, so the run rejects with it: a `run` case expects `raises: {class:
+  ConformanceStop, message: conformance stop}`, and its trace ends with `run_stopped`. A stop
+  whose point is never reached fails the case after the comparisons, like a leftover entry.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
@@ -444,8 +452,6 @@ contract: a session is checked through a later run's `request`.
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
 
-- **`stop`**: a stop at a point: before model call `n` of a node, after chunk `k` of model call
-  `n`, or before tool call `i`.
 - **`skills`**: skill directories, given as `files`.
 
 Not in the format yet (each comes as an addition when a case needs it): file values in
@@ -681,4 +687,20 @@ cd ts && bun run build && node dist/tests/conformance.js           # every case,
 The TS runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>/<name>`,
 `--rules` and `--diagnostic-code`. It prints one `FAIL` line per failing case and a summary,
 counts a failing `pending` case as expected, fails a case whose kind it doesn't run yet, and exits
-1 when any case fails.
+1 when any case fails. On every `run` and `resume` case with a log it also checks the log's invariants
+(in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
+outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only). `--crash-sweep`
+also cuts each serial `run` case that expects `output`, isn't `pending`, and has no `host.models`,
+`host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it, and
+checks the invariants, plus the output and node outcomes when the case has no `host.human` or
+`host.jitter` and its tool scripts only return.
+
+A `run` or `resume` case may have a **golden log**, `<name>.log.jsonl` beside it: the TS run log
+the case writes (for a `resume` case, the whole log after the resume), pinned byte for byte. Before
+the comparison, every `traceback` value and the seeded clock values (`initial_pool.system`'s
+`now` and `today`) are replaced by `"<masked>"`, and each line is written again with the log's own
+encoder, which gives back the line as written. Bun and Node write the same bytes. A golden log goes
+with a serial case that sets `run.run_id`, makes no random ids (no AGENT or memory), and holds no
+file paths; the error texts in it are a stub's or the runner's own (the stop's `conformance stop`).
+`--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`
+and `resume` case instead of comparing it. The Python runner ignores golden logs.

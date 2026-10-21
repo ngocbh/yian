@@ -1,0 +1,10 @@
+{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow_fingerprint":"84b06c9d3403ef8adec5bb9536acccffb10c75f1fd3ab3c859257fca5cd48fbf","initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},"system":{"now":{"kind":"datetime","value":"<masked>"},"run_id":{"kind":"str","value":"r1"},"today":{"kind":"date","value":"<masked>"}}},"learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},"run_id":"r1","schema":10,"seq":0}
+{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"r1","schema":10,"seq":1}
+{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"r1","schema":10,"seq":2}
+{"kind":"node_started","payload":{"node_id":"fetch"},"run_id":"r1","schema":10,"seq":3}
+{"kind":"run_stopped","payload":{"message":"conformance stop","node_ids":["fetch"],"reason":"signal"},"run_id":"r1","schema":10,"seq":4}
+{"kind":"run_resumed","payload":{"num_workers":0,"retry_node_ids":["fetch"]},"run_id":"r1","schema":10,"seq":5}
+{"kind":"node_started","payload":{"node_id":"fetch"},"run_id":"r1","schema":10,"seq":6}
+{"kind":"node_succeeded","payload":{"commit_target":"fetch","evidence":null,"forward_capture":null,"node_id":"fetch","value":{"kind":"str","value":"F1"}},"run_id":"r1","schema":10,"seq":7}
+{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"r1","schema":10,"seq":8}
+{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,"forward_capture":null,"node_id":"__end__","value":{"kind":"str","value":"F1"}},"run_id":"r1","schema":10,"seq":9}

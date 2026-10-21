@@ -7,7 +7,7 @@
  *
  * - `compose`: `load_flow` -> `loadFlow` (`compose/loader`), `LoadError` (`compose/helpers/errors`),
  *   `ComposedFlow` (`compose/build/pipeline`);
- * - `run`: `run_flow` -> `runFlow` (`run`);
+ * - `run`: `run_flow` -> `runFlow`, `resume_flow` -> `resumeFlow` (`run`);
  * - `memory_host`: `build_memories` -> `buildMemories`, `MemoryRegistry` (`memory_host`);
  * - `diagnostics`: `Failure` (`diagnostics`);
  * - `compile.model`: `CompiledFlow` (`compile/model`);
@@ -48,7 +48,7 @@ export {
 export { checkStoragePath, SQLiteStorage } from "./memory/storage/sqlite.ts";
 export { buildMemories, MemoryRegistry } from "./memory_host.ts";
 export { ToolAttemptsFailed } from "./nodes/tool/node.ts";
-export { runFlow } from "./run.ts";
+export { resumeFlow, runFlow } from "./run.ts";
 export { ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";
 export { FunctionTool, tool } from "./tools/function_tools.ts";

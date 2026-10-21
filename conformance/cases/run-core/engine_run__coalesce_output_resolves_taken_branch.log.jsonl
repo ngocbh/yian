@@ -1,0 +1,11 @@
+{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow_fingerprint":"7eb0ad51506c7560058b06cdb02fc262f9b3aa29b5cf1d870d0deb4c10f9e780","initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{"seed":0.2,"topic":"BETA"}}},"system":{"now":{"kind":"datetime","value":"<masked>"},"run_id":{"kind":"str","value":"r1"},"today":{"kind":"date","value":"<masked>"}}},"learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{"seed":"${input.seed}","topic":"${input.topic}"}},"run_id":"r1","schema":10,"seq":0}
+{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"r1","schema":10,"seq":1}
+{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{"seed":0.2,"topic":"BETA"}}},"run_id":"r1","schema":10,"seq":2}
+{"kind":"node_started","payload":{"node_id":"score"},"run_id":"r1","schema":10,"seq":3}
+{"kind":"node_succeeded","payload":{"commit_target":"score","evidence":null,"forward_capture":null,"node_id":"score","value":{"kind":"float","value":0.2}},"run_id":"r1","schema":10,"seq":4}
+{"kind":"node_started","payload":{"node_id":"gate"},"run_id":"r1","schema":10,"seq":5}
+{"kind":"node_routed","payload":{"evidence":null,"forward_capture":null,"handle":"#else","node_id":"gate","terminal_failure":null},"run_id":"r1","schema":10,"seq":6}
+{"kind":"node_started","payload":{"node_id":"cautious"},"run_id":"r1","schema":10,"seq":7}
+{"kind":"node_succeeded","payload":{"commit_target":"cautious","evidence":null,"forward_capture":null,"node_id":"cautious","value":{"kind":"str","value":"cautious note for BETA"}},"run_id":"r1","schema":10,"seq":8}
+{"kind":"node_started","payload":{"node_id":"__end__"},"run_id":"r1","schema":10,"seq":9}
+{"kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,"forward_capture":null,"node_id":"__end__","value":{"kind":"str","value":"cautious note for BETA"}},"run_id":"r1","schema":10,"seq":10}

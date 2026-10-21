@@ -457,14 +457,26 @@ def _check_steering(steering: object) -> None:
                 raise ValueError(f"`{where}.steer` must be a non-empty list of text")
             if "interrupt" in action and action["interrupt"] is not True:
                 raise ValueError(f"`{where}.interrupt` must be `true`")
-            if "after" not in action:
-                continue
-            after = _mapping(f"{where}.after", action["after"])
-            if set(after) not in ({"model_call", "chunk"}, {"model_call"}, {"tool_call"}):
-                raise ValueError(f"`{where}.after` is `{{model_call, chunk}}`, `{{model_call}}` "
-                                 "or `{tool_call}`")
-            if any(type(count) is not int or count < 1 for count in after.values()):
-                raise ValueError(f"`{where}.after` counts must be ints from 1")
+            if "after" in action:
+                _check_point(f"{where}.after", action["after"])
+
+
+def _check_point(where: str, value: object) -> None:
+    """Raise unless `value`, at `where`, is a point: `{model_call: n, chunk: k}`,
+    `{model_call: n}` or `{tool_call: i}`, counted from 1."""
+    point = _mapping(where, value)
+    if set(point) not in ({"model_call", "chunk"}, {"model_call"}, {"tool_call"}):
+        raise ValueError(f"`{where}` is `{{model_call, chunk}}`, `{{model_call}}` or `{{tool_call}}`")
+    if any(type(count) is not int or count < 1 for count in point.values()):
+        raise ValueError(f"`{where}` counts must be ints from 1")
+
+
+def _check_stop(stop: object) -> None:
+    """Raise unless `stop` is `host.stop`: node ids to `{after: <point>}`."""
+    for node, action in _mapping("host.stop", stop).items():
+        where = f"host.stop.{node}"
+        _keys(where, action, {"after"}, required=("after",))
+        _check_point(f"{where}.after", action["after"])
 
 
 def _check_host(host: object, kind: str) -> None:
@@ -505,6 +517,7 @@ def _check_host(host: object, kind: str) -> None:
     if "memory" in host:
         _check_memory(host["memory"])
     _check_steering(host.get("steering", {}))
+    _check_stop(host.get("stop", {}))
     human = _mapping("host.human", host.get("human", {}))
     if any(not isinstance(answers, list) for answers in human.values()):
         raise ValueError("`host.human` maps node ids to lists of answers")
@@ -622,13 +635,17 @@ def _check(case: dict, candidate: bool = False) -> dict:
             raise ValueError(f"`{key}.memory` values must be text")
     run = case.get("run", {})
     if kind == "resume":
-        cut = case.get("host", {}).get("crash_after_record")
-        if cut != "end" and (type(cut) is not int or cut < 0):
-            raise ValueError(
-                "a `resume` case needs `host.crash_after_record`, a record number or `end`"
-            )
+        host = case.get("host", {})
+        stops = "stop" in host
+        if stops and "crash_after_record" in host:
+            raise ValueError("a `resume` case takes one of `host.crash_after_record` and `host.stop`")
+        cut = host.get("crash_after_record")
+        if not stops and cut != "end" and (type(cut) is not int or cut < 0):
+            raise ValueError("a `resume` case needs `host.crash_after_record`, a record number or "
+                             "`end`, or `host.stop`")
         if run.get("num_workers") != 0:
-            raise ValueError("`host.crash_after_record` needs `run.num_workers: 0`")
+            raise ValueError(f"`host.{'stop' if stops else 'crash_after_record'}` needs "
+                             "`run.num_workers: 0`")
     if kind == "backward" and run.get("learnable") is not True:
         raise ValueError("a `backward` case needs `run.learnable: true`")
     if kind == "expr":
@@ -4350,6 +4367,32 @@ def test_resume_after_the_end(tmp_path: Path) -> None:
     case = {**_end_case({}), "host": {"crash_after_record": "later"}}
     with pytest.raises(ValueError, match=re.escape("a record number or `end`")):
         _check(case, candidate=True)
+
+
+def test_stop_checks(tmp_path: Path) -> None:
+    """`host.stop` is checked, a `resume` case may give it instead of `crash_after_record`, and the
+    Python runner refuses it at run time."""
+    stop = {"c": {"after": {"tool_call": 1}}}
+    case = {**_end_case({}), "host": {"stop": stop}}
+    _check(case, candidate=True)
+    problems = [
+        ("`host.stop` must be a mapping", []),
+        ("`host.stop.c.after` is required", {"c": {}}),
+        ("unknown key `host.stop.c.steer`", {"c": {"after": {"tool_call": 1}, "steer": ["x"]}}),
+        ("`host.stop.c.after` is `{model_call, chunk}`", {"c": {"after": {"chunk": 1}}}),
+        ("`host.stop.c.after` counts must be ints from 1", {"c": {"after": {"model_call": 0}}}),
+    ]
+    for message, value in problems:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            _check({**case, "host": {"stop": value}}, candidate=True)
+    both = {**case, "host": {"stop": stop, "crash_after_record": 1}}
+    with pytest.raises(ValueError, match=re.escape("takes one of `host.crash_after_record` and")):
+        _check(both, candidate=True)
+    pooled = {**case, "run": {"num_workers": 2}}
+    with pytest.raises(ValueError, match=re.escape("`host.stop` needs `run.num_workers: 0`")):
+        _check(pooled, candidate=True)
+    with pytest.raises(pytest.fail.Exception, match=re.escape("`host.stop` is not supported")):
+        results(case, tmp_path, candidate=True)
 
 
 def test_resume_end_first_run_raises(tmp_path: Path) -> None:

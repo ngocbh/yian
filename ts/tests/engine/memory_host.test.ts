@@ -67,9 +67,11 @@
  *
  * Ported: `test_package_exports_the_host_builder`, on `index.ts`.
  *
- * Later (T4-8): `test_resume_checks_registry_types_too`,
- * `test_resume_accepts_one_callee_called_from_two_nodes` (every case) and
- * `test_backward_checks_registry_types_too`.
+ * Ported, through `runFlow` and `resumeFlow` in that environment, the first run stopped by a
+ * throwing `onEvent` at `RunStarted`: `test_resume_checks_registry_types_too` and
+ * `test_resume_accepts_one_callee_called_from_two_nodes` (every case).
+ *
+ * Later (T4-8, `RunResult.backward`): `test_backward_checks_registry_types_too`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -111,7 +113,8 @@ import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { runFlow, type RunFlowOptions } from "../../src/run.ts";
+import { RunStarted } from "../../src/events.ts";
+import { resumeFlow, runFlow, type RunFlowOptions } from "../../src/run.ts";
 
 import { FakeMemory, type FakeSession } from "./memory_fakes.ts";
 
@@ -991,4 +994,74 @@ test("registry for this flow runs", async () => {
   const flow = await runnableFlow("{notes: episodic}");
   await using registry = await buildMemories(flow);
   expect((await run(flow, registry)).status).toBe("succeeded");
+});
+
+/** A host callback that stops a run once its `RunStarted` is published. */
+function stopAfterStart(event: unknown): void {
+  if (event instanceof RunStarted) throw new Error("host stop");
+}
+
+/** `resumeFlow` in an environment holding only the test's credential store. */
+function resume(flow: ComposedFlow, log: string, memory: unknown) {
+  const env = new Map([["YIAN_AUTH_FILE", path.join(tmp, "auth.json")]]);
+  return resumeFlow(flow, { log, memory: memory as Map<string, Memory>, env: (name) => env.get(name) });
+}
+
+test("resume checks registry types too", async () => {
+  const flow = await runnableFlow("{notes: episodic}");
+  const log = path.join(tmp, "run.jsonl");
+  const root = path.join(tmp, "mem");
+  {
+    await using registry = await buildMemories(flow, { root });
+    const stopped = await caught(() => run(flow, registry, { log, onEvent: stopAfterStart }));
+    expect((stopped as Error).message).toBe("host stop");
+  }
+  {
+    await using other = await buildMemories(await runnableFlow("{notes: reflective}"));
+    await setupError(() => resume(flow, log, other), /'notes'.*'episodic'.*'reflective'/);
+  }
+  await using registry = await buildMemories(flow, { root });
+  expect((await resume(flow, log, registry)).status).toBe("succeeded");
+});
+
+const TWO_CALLS = `id: two-calls
+name: two_calls
+long_term_memory: {notes: episodic}
+defs:
+  child:
+    nodes:
+      work: {kind: code, code: return 1, output: int}
+    output: \${work.output}
+nodes:
+  one: {kind: call, call: child}
+  two: {kind: call, call: child}
+output: \${one.output + two.output}
+`;
+
+const TWO_USES_CALLS = `id: two-uses-calls
+name: two_uses_calls
+nodes:
+  one: {kind: call, call: lib}
+  two: {kind: call, call: lib}
+output: \${one.output + two.output}
+uses:
+  lib: lib
+`;
+
+test.each(["def", "uses"])("resume accepts one callee called from two nodes: %s", async (source) => {
+  fs.writeFileSync(
+    path.join(tmp, "lib.yaml"),
+    "id: lib\nname: lib\nlong_term_memory: {notes: episodic}\nnodes:\n" +
+      "  work: {kind: code, code: return 1, output: int}\noutput: ${work.output}\n",
+  );
+  const text = source === "def" ? TWO_CALLS : TWO_USES_CALLS;
+  const load = () => loadFlow(text, { searchPaths: [tmp] });
+  const log = path.join(tmp, "run.jsonl");
+
+  await using registry = await buildMemories(await load());
+  const stopped = await caught(async () => run(await load(), registry, { log, onEvent: stopAfterStart }));
+  expect((stopped as Error).message).toBe("host stop");
+  const resumed = await resume(await load(), log, registry);
+  expect(resumed.status).toBe("succeeded");
+  expect(resumed.output).toBe(2n);
 });

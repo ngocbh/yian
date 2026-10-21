@@ -48,6 +48,8 @@
  * holds the partial reply's JSON; the second call of a tool loop records call `2n`; a key echoed in
  * the error is scrubbed; without steps nothing is recorded and the call still retries; a
  * `steps.record` fault ends the call as a host fault, unretried, with no finished event after it.
+ * `ReplayDegraded`: the reasons a built model signals over a two-turn tool loop reach the event
+ * sink once per reason.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -57,15 +59,25 @@ import type { FailureCode } from "../../src/diagnostics.ts";
 import {
   ModelCallFinished,
   ModelCallStarted,
+  ReplayDegraded,
   type StreamChunk,
   TokenUsage,
   ToolCallFinished,
   ToolCallStarted,
 } from "../../src/events.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { Finish, TextDelta, UsageReport } from "../../src/llm/events.ts";
-import { Message, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
+import {
+  Message,
+  type ReplayDegradedReason,
+  Request,
+  Response,
+  TextPart,
+  ToolCallPart,
+  Usage,
+} from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import {
   callModel,
@@ -81,7 +93,7 @@ import {
 } from "../../src/nodes/agent/live.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { CapabilityFault, type Output } from "../../src/nodes/base.ts";
+import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/base.ts";
 import { NodeSteps, ValueContract } from "../../src/nodes/contracts.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
@@ -414,7 +426,7 @@ const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
 const INT = Type.scalar(ValueKind.INTEGER);
 
 /** The events an AGENT's event sink receives. */
-type LiveEvent = ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished;
+type LiveEvent = Parameters<NonNullable<NodeCaps["emitEvent"]>>[0];
 
 /**
  * Evaluate an AGENT `writer` over `chat` with the sinks asked for (both by default), granted
@@ -769,4 +781,31 @@ test("a steps.record fault ends the call as a host fault, unretried, with no fin
   expect(await rejected(withSteps(chat, { record, log }))).toBe(broken);
   expect(chat.requests).toHaveLength(1);
   expect(shape(log)).toEqual([["ModelCallStarted", null]]);
+});
+
+// ---------- replay degraded ----------
+
+test("a model's replay-degraded reasons reach the host once per reason per invocation", async () => {
+  const chat = model(callReply("", [["acme", "call-1"]]), reply("acme is fine"));
+  // Each request signals what its adapter would for the turns it replays.
+  const reasons: ReplayDegradedReason[][] = [["other_account"], ["other_account", "other_provider"]];
+  const models: ModelAccess = {
+    env: () => undefined,
+    createModel: (_config, { onReplayDegraded }) => ({
+      provider: chat.provider,
+      model: chat.model,
+      stream(request, options) {
+        for (const reason of reasons.shift() ?? []) onReplayDegraded?.(reason);
+        return chat.stream(request, options);
+      },
+    }),
+  };
+  const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG, tools: ["lookup"] });
+  const observed: unknown[] = [];
+  const outcome = await drive(node, { models, tools: lookupTools(), emitEvent: (event) => void observed.push(event) });
+  expect((outcome as Output).value).toBe("acme is fine");
+  expect(observed.filter((event) => event instanceof ReplayDegraded)).toEqual([
+    new ReplayDegraded({ nodeId: "writer", reason: "other_account" }),
+    new ReplayDegraded({ nodeId: "writer", reason: "other_provider" }),
+  ]);
 });

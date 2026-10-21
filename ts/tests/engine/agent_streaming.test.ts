@@ -230,7 +230,8 @@ async function evaluate(model: ScriptedModel, options: { events?: boolean; tools
     models: { env: () => undefined, createModel: () => model },
     tools,
     emitStream: (item) => void chunks.push(item),
-    emitEvent: options.events === false ? null : (event) => void observed.push(event),
+    // A scripted model never reports degraded replay state, so only these four arrive.
+    emitEvent: options.events === false ? null : (event) => void observed.push(event as (typeof observed)[number]),
   });
   return { outcome, chunks, observed };
 }

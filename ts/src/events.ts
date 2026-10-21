@@ -5,7 +5,7 @@
  * has been applied: `NodeStarted` followed by `NodeSucceeded`, `NodeRouted`,
  * `NodeExpanded`, or `NodeFailed`. `StreamChunk` is intentionally transient,
  * as are the in-loop AGENT observers (`ModelCallStarted`/`ModelCallFinished` with
- * `TokenUsage`, `ToolCallStarted`/`ToolCallFinished`): they reach `onEvent`
+ * `TokenUsage`, `ToolCallStarted`/`ToolCallFinished`, `ReplayDegraded`): they reach `onEvent`
  * between a node's start and outcome but are never yielded, recorded, or replayed,
  * and `NodeSkipped` is derived from a route's durable skip closure. A node only
  * describes its result; the reducer owns graph state and variable-pool writes.
@@ -454,6 +454,27 @@ export class ToolCallFinished {
 }
 
 /**
+ * An AGENT's model left out replay state it couldn't send back for `reason`
+ * (`other_account`, `other_provider`, ...), published once per reason per invocation.
+ * The replayed turns' text and tool calls were still sent.
+ */
+export class ReplayDegraded {
+  readonly type = "ReplayDegraded" as const;
+  readonly nodeId: string;
+  readonly reason: string;
+
+  constructor(options: { nodeId: string; reason: string }) {
+    this.nodeId = options.nodeId;
+    this.reason = options.reason;
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { node_id: this.nodeId, reason: this.reason };
+  }
+}
+
+/**
  * The in-loop AGENT event classes, so hosts sharing one `onEvent` callback can
  * separate them from post-durable observers.
  */
@@ -462,6 +483,7 @@ export const IN_LOOP_EVENTS = [
   ModelCallFinished,
   ToolCallStarted,
   ToolCallFinished,
+  ReplayDegraded,
 ] as const;
 
 // --------------------------------------------------------------------------- //
@@ -533,6 +555,7 @@ export type RunEvent =
   | ModelCallFinished
   | ToolCallStarted
   | ToolCallFinished
+  | ReplayDegraded
   | RunStarted
   | RunResumed
   | RunSucceeded

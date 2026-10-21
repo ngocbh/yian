@@ -2,7 +2,8 @@
  * Contracts for the transient observer events, a port of
  * `tests/engine/test_in_loop_event_types.py` and `tests/engine/test_run_resumed_event.py`,
  * plus each event's `type` discriminant, its snake_case JSON data form, and
- * `conformance/schema/events.schema.json`, which describes that form.
+ * `conformance/schema/events.schema.json`, which describes that form. TS-only: `ReplayDegraded`,
+ * an in-loop observer.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -23,6 +24,7 @@ import {
   NodeSkipped,
   NodeStarted,
   NodeSucceeded,
+  ReplayDegraded,
   RunFailed,
   type RunEvent,
   RunResumed,
@@ -271,6 +273,10 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
       error: null,
     },
   },
+  {
+    event: new ReplayDegraded({ nodeId: "n", reason: "other_account" }),
+    data: { node_id: "n", reason: "other_account" },
+  },
   { event: new RunStarted(), data: {} },
   { event: new RunResumed(), data: {} },
   { event: new RunSucceeded({ output: { greeting: "hi" } }), data: { output: { greeting: "hi" } } },
@@ -364,12 +370,13 @@ describe("in-loop observers", () => {
     }
   });
 
-  test("IN_LOOP_EVENTS names exactly the four observers", () => {
+  test("IN_LOOP_EVENTS names exactly the five observers", () => {
     expect(IN_LOOP_EVENTS).toEqual([
       ModelCallStarted,
       ModelCallFinished,
       ToolCallStarted,
       ToolCallFinished,
+      ReplayDegraded,
     ]);
   });
 });
@@ -399,7 +406,7 @@ describe("type discriminant", () => {
   test("the samples cover every event class", () => {
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
     expect(sampled).toEqual(EVENT_CLASS_NAMES);
-    expect(EVENT_CLASS_NAMES).toHaveLength(16);
+    expect(EVENT_CLASS_NAMES).toHaveLength(17);
   });
 
   test("TokenUsage is not an event and has no type", () => {

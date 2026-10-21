@@ -114,9 +114,9 @@ is read before the flow assembles. `baseDir` is the directory a CODE node's
 `./file.ts:fn` reference resolves against (default: the first search path, else the
 current directory); a file read through the search path resolves against its own
 directory, so a `childResolver` that loads a child file passes the child's own directory
-as its `baseDir`. `env` is the environment this load reads the `YIAN_*` values from, as
-`runFlow` takes it, so a host passes one environment to both. The default is the process
-environment, or the calling load's when a `childResolver` calls `loadFlow` without `env`.
+as its `baseDir`. `env` is the environment this load reads the `YIAN_*` values from. The
+default is the process environment, or the calling load's when a `childResolver` calls
+`loadFlow` without `env`.
 A bad `YIAN_*` value in `env` rejects with `DefaultsError`, not `LoadError`.
 
 ## `run_flow`
@@ -2553,9 +2553,9 @@ current().max_total_nodes  # 10000 unless YIAN_MAX_TOTAL_NODES sets it
   `RunResult.backward`'s replay when the run's recorded values differ from this
   process's; see [Durable recovery](#durable-recovery-with-resume_flow).
 
-Changed (TS yian): a call that takes an `env` option, such as `loadFlow`, reads the
-`YIAN_*` values from it, and `current()` returns them for the work of that call, so
-concurrent calls with different environments each keep their own. `withEnv(env, fn)` (from
+Changed (TS yian): `loadFlow`'s `env` option sets the `YIAN_*` values for that load:
+`current()` returns the values read from it for all of the load's work, so concurrent loads
+with different environments each keep their own. `withEnv(env, fn)` (from
 `ts/src/defaults.ts`) does the same for any code; `withEnv(processEnv, fn)` keeps the values
 already in effect. Elsewhere `current()` returns the process values, read once.
 

@@ -6,7 +6,7 @@
  * so no `MAX_INT_DIGITS` entry), `test_memory_json_nesting_follows_value_nesting` (TS has no
  * memory JSON nesting bound), and `test_set_defaults_fixture` and
  * `test_every_test_starts_from_builtin_values` (pytest fixtures; TS tests reset with `forget` or
- * `install(BUILTIN)` instead).
+ * `install(BUILTIN)` instead). TS-only: the per-call values `withEnv` scopes.
  */
 
 import { readFileSync } from "node:fs";

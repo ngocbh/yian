@@ -508,9 +508,10 @@ describe("loadFlow's env", () => {
     await loadConformanceFlow(ROOT, { env: recorder, childResolver: () => child });
     expect(asked).toEqual(ENTRIES.map((entry) => entry.variable));
 
+    // A bad process value makes any read of the process environment throw.
     const saved = process.env["YIAN_MAX_VALUE_NESTING"];
     try {
-      process.env["YIAN_MAX_VALUE_NESTING"] = "3";
+      process.env["YIAN_MAX_VALUE_NESTING"] = "abc";
       forget();
       await loadConformanceFlow(ROOT, { env: recorder, childResolver: () => child });
     } finally {

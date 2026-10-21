@@ -565,12 +565,13 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
   };
 }
 
-/** The options `loadFlow` takes besides `env`. */
+/** The options `loadFlow` takes. */
 interface LoadOptions {
   childResolver?: ChildResolver | null;
   searchPaths?: readonly string[] | null;
   sourceLabel?: string;
   baseDir?: string | null;
+  env?: Env;
 }
 
 /**
@@ -592,9 +593,9 @@ interface LoadOptions {
  * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference resolves against
  *   (default: the first search path, else the current directory). A file read through the search
  *   path resolves its own references against its own directory.
- * @param options.env The environment this load reads the `YIAN_*` values from, as `runFlow` takes
- *   it; default `processEnv`, which keeps the values in effect, so a `childResolver` that calls
- *   `loadFlow` without `env` loads under the caller's.
+ * @param options.env The environment this load reads the `YIAN_*` values from; default
+ *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
+ *   without `env` loads under the caller's.
  * @returns The compiled, validated flow.
  * @throws LoadError (as a rejection) for any malformed or inconsistent flow, located at the
  *   offending line when source provenance is available: among them a memory layout that breaks a
@@ -602,7 +603,7 @@ interface LoadOptions {
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  * @throws TypeError when `sourceLabel` isn't text.
  */
-export async function loadFlow(text: string, options: LoadOptions & { env?: Env } = {}): Promise<ComposedFlow> {
+export async function loadFlow(text: string, options: LoadOptions = {}): Promise<ComposedFlow> {
   const { env = processEnv, ...rest } = options;
   // `withEnv` reads `env` first, so a bad YIAN_<NAME> value fails before any parsing.
   return withEnv(env, () => loadText(text, rest));

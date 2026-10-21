@@ -720,9 +720,9 @@ a host tool may return `Infinity`, which is a float value. A `tool()` validator'
 and the checks on a declared result (see [Tool context](#tool-context)), a throw from the
 output validator included, raise `ToolCheckError`, which is never retried; the result
 checks run inside the call, not after the node returns. `ToolAttemptsFailed` is an
-`Error` named `ToolAttemptsFailed` whose `cause` is the last attempt's error. A thrown
-non-`Error` value is recorded by its type name and text, and propagates as thrown
-(unwrapped), or becomes `ToolAttemptsFailed`'s `cause`.
+`Error` named `ToolAttemptsFailed` whose `cause` is the last attempt's error. A tool
+that throws a non-`Error` value fails with an `Error` whose message is the value's text
+and whose `cause` is the value; it is retried like any other failure.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.

@@ -56,9 +56,10 @@
  * `validate`'s `TypeCheckError` rejects `node.run` before any call. A `ToolCheckError` from
  * the tool is not retried, also when branded transient too (check wins). A tool throwing a
  * `CapabilityFault` is called once and records nothing (Python's `_CapabilityFault` shares the
- * host stop's `except`). A thrown non-`Error` records its `jsTypeName` and text, and propagates,
- * or becomes the `cause`, unwrapped. A result is taken in as a yian value (`5` is `5n`), and one
- * that isn't (a `Date`) rejects with `HostOutputError` after one call.
+ * host stop's `except`). A thrown non-`Error` reaches the node wrapped in an `Error` (by
+ * `ToolSet.invoke`), so it is retried as transient and recorded with the type `Error`. A result
+ * is taken in as a yian value (`5` is `5n`), and one that isn't (a `Date`) rejects with
+ * `HostOutputError` after one call.
  *
  * Not ported: `test_the_real_sleep_raises_at_once_on_a_set_event`,
  * `test_the_real_sleep_waits_without_an_event`, `test_a_wait_longer_than_timeout_max_waits_in_chunks`
@@ -600,19 +601,25 @@ test("odd error text is recorded safely", async () => {
   }
 });
 
-test("a thrown non-Error is recorded by its type and text, and propagates unwrapped", async () => {
-  const once = await runDirect(new FlakyTool(["boom"]).tool);
-  expect(once.recorded[0]!.error).toEqual({ type: "string", message: "boom" });
+test("a thrown non-Error is wrapped in an Error, retried as transient and recorded as an Error", async () => {
+  const object = { code: 7 };
+  for (const [value, message] of [["boom", "boom"], [object, "[object Object]"], [undefined, "undefined"]] as const) {
+    const once = await runDirect(new FlakyTool([value]).tool, { retries: 1 });
+    expect(once.result).toEqual(new Output("ok"));
+    expect(once.recorded[0]!.error).toEqual({ type: "Error", message });
+  }
 
   const alone = await runDirect(new FlakyTool(["boom"]).tool, { retries: 0 });
-  expect(alone.error).toBe("boom");
+  expect((alone.error as Error).constructor).toBe(Error);
+  expect((alone.error as Error).message).toBe("boom");
+  expect((alone.error as Error).cause).toBe("boom");
 
   const twice = await runDirect(new FlakyTool(["a", "b"]).tool, { retries: 1 });
   expect(twice.error).toBeInstanceOf(ToolAttemptsFailed);
   expect((twice.error as Error).message).toBe(
-    "tool 'flaky' failed after 2 attempts: attempt 1: string: a; attempt 2: string: b",
+    "tool 'flaky' failed after 2 attempts: attempt 1: Error: a; attempt 2: Error: b",
   );
-  expect((twice.error as Error).cause).toBe("b");
+  expect(((twice.error as Error).cause as Error).cause).toBe("b");
 });
 
 test("a tool's result is taken in as a yian value", async () => {

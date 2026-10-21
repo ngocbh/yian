@@ -8,7 +8,7 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * Knows about:   compile, compose, defaults, diagnostics, events, llm_clients, memory contracts,
+ * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                nodes, platform, runtime, skills, tools, typesys.
  * Never imports: the CLI.
  */
@@ -18,36 +18,45 @@ import { types } from "node:util";
 
 import { buildGrow } from "./compile/expand.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
-import { copyGraph } from "./compile/model.ts";
+import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
+import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
+import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { current, type Defaults, type Env, nonDefaults, processEnv } from "./defaults.ts";
-import { type Failure, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, type Failure, getCloseMatches, reprText } from "./diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
+import { ExpressionError } from "./expr/expressions.ts";
+import { checkTemplateCalls } from "./expr/template.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import type { LearningResult, Memory } from "./memory/contracts.ts";
-import type { Steering } from "./nodes/base.ts";
+import type { Node, Steering } from "./nodes/base.ts";
 import { checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
-import type { Parameter } from "./nodes/contracts.ts";
+import { type HostToolCall, isExactly, iterSourceStrings, type Parameter } from "./nodes/contracts.ts";
 import { realScheduler, type Scheduler } from "./platform.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine } from "./runtime/engine.ts";
 import { addNote, requireSteering } from "./runtime/eval_node.ts";
 import { JsonlRunLog, MemoryRunLog, type RunLog } from "./runtime/log.ts";
 import { commitPrepared, prepareRunStarted, RunState } from "./runtime/state.ts";
-import type { Skill } from "./skills/catalog.ts";
+import { Skill } from "./skills/catalog.ts";
 import { isMcpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
+import { toolTypes } from "./tools/types.ts";
 import { VariablePool } from "./typesys/pool.ts";
 import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
 import {
+  canonicalTypeLabel,
   fromHost,
   jsTypeName,
   rejectDeepNesting,
   setField,
+  type Type,
   TypeCheckError,
   type Value,
+  ValueKind,
   type ValueRecord,
+  writeAsText,
 } from "./typesys/values.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */
@@ -187,12 +196,16 @@ export interface RunFlowOptions {
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `learnable` isn't a boolean, `signal`
  *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), a `tools` entry is
- *   malformed, or `steering` lacks its methods.
+ *   malformed, `skills` isn't a `Map` of `Skill`s each keyed by its name, or `steering` lacks its
+ *   methods.
+ * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
  *   can't be read.
- * @throws RangeError when an input key names no declared input, or the identity, worker count or
- *   prepared start state breaks its contract.
+ * @throws RangeError when an input key names no declared input; an AGENT grants a tool, group or
+ *   skill this run lacks; a TOOL node names a tool this run lacks, or its inputs or output can't
+ *   fit that tool's types; or the identity, worker count or prepared start state breaks its
+ *   contract.
  * @throws DefaultsError when a `YIAN_<NAME>` variable holds a value its entry doesn't accept.
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
@@ -214,9 +227,13 @@ export async function runFlow(
   if (tools !== null && Object.values(tools).some((entry) => isMcpServer(entry) && !entry.isOpen)) {
     throw new Error("run-owned MCP servers are not ported yet");
   }
+  // The tool entries' errors, and the checks that need no tools, come before any server starts.
   new ToolSet(tools, { context });
+  checkConditions(flow.compiled);
+  checkTemplates(flow.compiled);
+  const skills = checkSkills(flow.compiled, options.skills ?? null);
   requireSteering(steering);
-  return startRun(flow, inputs, options, runDefaults);
+  return startRun(flow, inputs, { ...options, skills }, runDefaults);
 }
 
 /**
@@ -241,7 +258,7 @@ function hostInputs(params: readonly Parameter[], inputs: unknown): Record<strin
   return taken;
 }
 
-/** Record and drive a fresh run whose checks have passed. */
+/** Check the tools, then record and drive a fresh run. */
 async function startRun(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
@@ -254,6 +271,8 @@ async function startRun(
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(options.env ?? processEnv);
   const runTools = new ToolSet(tools, { context });
+  checkToolGrants(flow.compiled, runTools);
+  checkToolTypes(flow.compiled, runTools);
 
   // Identity belongs to the authored program, before cascade resolution or any per-run copy can
   // change object topology.
@@ -337,6 +356,303 @@ function publishBoundaryObservers(observers: readonly RunEvent[], events: RunEve
     onEvent?.(observer);
     events.push(observer);
   }
+}
+
+/**
+ * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
+ *
+ * An AGENT grant may name a tool group; a TOOL node must name one tool. Every static node is
+ * checked, including nodes that may never run, so an unresolvable id rejects the run before any
+ * record is written instead of failing its node when the node starts.
+ *
+ * @throws RangeError when an AGENT grants a tool or group this run lacks, or `ask_user` with no
+ *   handler; or a TOOL node names a tool this run lacks, a tool group, or `ask_user` with no
+ *   handler.
+ */
+function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
+  for (const [nodeId, node] of staticNodes(flow)) {
+    for (const toolId of tools.expand(node.grantedTools())) {
+      try {
+        tools.resolve([toolId]);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        const reason =
+          toolId === "ask_user"
+            ? `'ask_user': ${error.message}`
+            : `unknown tool or group ${reprText(toolId)}; tool groups in this run: ${writeAsText([...tools.groups])}`;
+        throw new RangeError(`AGENT node ${reprText(nodeId)} grants ${reason}`);
+      }
+    }
+    const call = node.hostToolCall();
+    if (call === null) continue;
+    try {
+      tools.resolve([call.toolId]);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      let reason: string;
+      if (call.toolId === "ask_user" || tools.groups.includes(call.toolId)) {
+        reason = `${reprText(call.toolId)}: ${error.message}`;
+      } else {
+        const known = tools.toolIds;
+        reason =
+          `tool ${reprText(call.toolId)}, which isn't in this run's tools; ` +
+          `known tools: ${writeAsText([...known])}`;
+        const [close] = getCloseMatches(call.toolId, known, 1, CLOSE_MATCH_CUTOFF);
+        if (close !== undefined) reason += `; did you mean ${reprText(close)}?`;
+      }
+      throw new RangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
+    }
+  }
+}
+
+/**
+ * Reject a condition that doesn't parse on any static node, before any record is written.
+ *
+ * A condition is an assertion, a CASE `when`, or a LOOP predicate. A YAML flow can't hold one that
+ * doesn't parse (Compose rejects it at load); this catches conditions set in code.
+ *
+ * @throws ExpressionError when a condition doesn't parse; the message names the node's path.
+ */
+function checkConditions(flow: CompiledFlow): void {
+  for (const [nodePath, node] of staticNodes(flow)) node.validateConditions({ path: nodePath });
+}
+
+/**
+ * Reject a binding or prompt span that can't run, before any record is written.
+ *
+ * Checks every static flow level: each template string of a wiring source (END's is the flow's
+ * output) must parse, pass each builtin arguments it takes, and name only constructors in the
+ * type table the binder evaluates it with (the reading node's; none for a reserved key such as
+ * WAIT `until` or MAP `over`); each node checks its prompts. A YAML flow can't hold such a span
+ * (Compose rejects it at load); this catches values set in code.
+ *
+ * @param flow A compiled flow or a static child flow.
+ * @param path The static path of the node that owns `flow`; empty for the top level.
+ * @throws ExpressionError when a span can't run; the message names the node and binding, the flow
+ *   output, or the prompt field.
+ */
+function checkTemplates(flow: Flow, path: readonly string[] = []): void {
+  const owner = path.length > 0 ? `node ${reprText(path.join("/"))} ` : "";
+  for (const [nodeId, node] of flow.nodes) {
+    const nodePath = [...path, nodeId].join("/");
+    const reserved = node.reservedWiringKeys();
+    for (const [key, binding] of flow.wiring.get(nodeId) ?? []) {
+      let subject: string;
+      if (nodeId === flow.endId) {
+        subject = `${owner}${node.bindingLabels.get(key) ?? `flow output ${reprText(key)}`}`;
+      } else if (node.bindingLabels.has(key) && !node.wiringLabels.has(key)) {
+        // A desugared param (an inline call's argument, a value entry's input) reads as its
+        // authored site; a CASE param keeps its wiring site name.
+        subject = `${owner}${node.bindingLabels.get(key)}`;
+      } else if (reserved.has(key)) {
+        subject = `node ${reprText(nodePath)} ${node.reservedKeyLabel(key)}`;
+      } else if (node.bindsPerItem) {
+        subject = `node ${reprText(nodePath)} map input ${reprText(key)}`;
+      } else {
+        subject = `node ${reprText(nodePath)} ${node.wiringRefLabel(key).replace(/:+$/, "")}`;
+      }
+      // The binder resolves a reserved key with no type table.
+      checkTemplateSource(binding, subject, reserved.has(key) ? new Map() : node.types);
+    }
+    node.validatePrompts({ path: nodePath });
+    for (const child of node.originChildren()) checkTemplates(child as Flow, [...path, nodeId]);
+  }
+}
+
+/**
+ * Check each template string of one wiring source, prefixing an error with `subject`.
+ *
+ * @throws ExpressionError when a string's span can't run.
+ */
+function checkTemplateSource(binding: unknown, subject: string, types: ReadonlyMap<string, Type>): void {
+  for (const [, text] of iterSourceStrings(binding)) {
+    try {
+      checkTemplateCalls(text, types);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      throw new ExpressionError(`${subject}: ${error.message}`, { cause: error });
+    }
+  }
+}
+
+/**
+ * Prove every static TOOL node's inputs and output agree with its tool's types. Every static node
+ * is checked, including nodes that may never run, before any record is written.
+ *
+ * @throws RangeError when a TOOL node passes an input its tool doesn't take, omits one the tool
+ *   requires, binds an input whose type can never fit the tool's, or declares an output the tool
+ *   can never return.
+ */
+function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
+  for (const [nodeId, node] of staticNodes(flow)) {
+    const call = node.hostToolCall();
+    if (call === null) continue;
+    const declared = toolTypes(tools.resolve([call.toolId])[0]!);
+    if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required);
+    if (declared.output !== null) checkToolOutput(nodeId, call, declared.output);
+  }
+}
+
+/**
+ * Prove one TOOL node's inputs match the names and types its tool declares.
+ *
+ * @param nodeId The node's path, for the message.
+ * @param call The node's tool call.
+ * @param inputs The tool's declared input types by name; `null` leaves an input unchecked.
+ * @param required The names of the inputs the tool requires.
+ * @throws RangeError when an input isn't one the tool takes, a required input is missing (all
+ *   missing inputs are named at once), or an input's binding type is disjoint from the tool's.
+ */
+function checkToolInputs(
+  nodeId: string,
+  call: HostToolCall,
+  inputs: ReadonlyMap<string, Type | null>,
+  required: ReadonlySet<string>,
+): void {
+  for (const name of call.inputs) {
+    if (!inputs.has(name)) {
+      const taken = [...inputs.keys()].sort(compareCodeUnits);
+      throw new RangeError(
+        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(call.toolId)} takes no such input; ` +
+          `it takes ${writeAsText(taken)}`,
+      );
+    }
+  }
+  const missing = [...required].filter((name) => !call.inputs.includes(name)).sort(compareCodeUnits);
+  if (missing.length > 0) {
+    const named = missing.length === 1 ? `input ${reprText(missing[0]!)}` : `inputs ${writeAsText(missing)}`;
+    throw new RangeError(
+      `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${reprText(call.toolId)} requires`,
+    );
+  }
+  for (const [name, inferred] of call.inputTypes) {
+    const expected = inputs.get(name) ?? null;
+    // Disjoint is yian's non-coercing relation, so a binding a tool's validator would coerce (a
+    // string of digits into an int) is rejected too.
+    if (expected !== null && typeRelation(inferred, expected) === "disjoint") {
+      throw new RangeError(
+        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(call.toolId)} takes ` +
+          `${canonicalTypeLabel(expected)}, but the binding is ${bindingLabel(inferred)}`,
+      );
+    }
+  }
+}
+
+/**
+ * Prove one TOOL node's declared output can hold a value its tool returns; a call with no output
+ * type isn't checked.
+ *
+ * @throws RangeError when the tool's return type is disjoint from the node's output type.
+ */
+function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Type): void {
+  if (call.outputType === null) return;
+  if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
+    throw new RangeError(
+      `TOOL node ${reprText(nodeId)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
+        `but tool ${reprText(call.toolId)} returns ${canonicalTypeLabel(declaredOutput)}`,
+    );
+  }
+}
+
+/** The most characters of a one-value string `bindingLabel` shows, `...` included. */
+const LITERAL_LABEL_WIDTH = 40;
+
+/** Return a binding type's label, showing a one-value string or int by its value. */
+function bindingLabel(typ: Type): string {
+  const [low, high] = typ.bounds ?? [null, null];
+  if (typ.kind === ValueKind.INTEGER && low !== null && low === high && !typ.nullable) return `${low} (int)`;
+  if (typ.kind === ValueKind.STRING && typ.tags?.size === 1 && typ.variants === undefined && !typ.nullable) {
+    // Code points, so a cut never splits a surrogate pair.
+    let chars = [...[...typ.tags][0]!];
+    if (chars.length > LITERAL_LABEL_WIDTH) chars = [...chars.slice(0, LITERAL_LABEL_WIDTH - 3), "..."];
+    return `"${chars.join("")}" (str)`;
+  }
+  return canonicalTypeLabel(typ);
+}
+
+/**
+ * Map each runtime node id to its encoded static path, read from its execution scope.
+ *
+ * @param nodes The run's live nodes, keyed by node id.
+ * @param nodeIds The runtime ids to map.
+ * @returns The `/`-joined static path of each id whose node has an execution scope.
+ */
+function staticPathKeys(nodes: ReadonlyMap<string, Node>, nodeIds: Iterable<string>): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const nodeId of nodeIds) {
+    const scope = nodes.get(nodeId)!.executionScope;
+    if (scope !== null) keys.set(nodeId, scope.staticPath.join("/"));
+  }
+  return keys;
+}
+
+/**
+ * Copy the host's skills and prove every AGENT grant can be served.
+ *
+ * Walks top-level and static child-flow agents before any record is written. A flow that grants
+ * skills needs a `skills` map (an empty one grants none), so a run never silently drops them. A
+ * listed skill must be in the map.
+ *
+ * @returns A copy of `skills`, or `null` when the host passed none.
+ * @throws TypeError when `skills` isn't a `Map` of `Skill`s each keyed by its name.
+ * @throws RangeError when a flow grants skills and no map was passed, or a listed skill is missing.
+ */
+function checkSkills(flow: CompiledFlow, skills: ReadonlyMap<string, Skill> | null): Map<string, Skill> | null {
+  let copied: Map<string, Skill> | null = null;
+  if (skills !== null) {
+    if (!(skills instanceof Map)) throw new TypeError("skills must be a Map of name to Skill, or null");
+    for (const [name, skill] of skills as ReadonlyMap<unknown, unknown>) {
+      if (!isExactly(skill, Skill) || skill.name !== name) {
+        const shown = reprText(String(name));
+        throw new TypeError(`skills[${shown}] must be a Skill named ${shown}`);
+      }
+    }
+    copied = new Map(skills);
+  }
+  for (const [nodeId, grants] of skillGrants(flow)) {
+    if (copied === null) {
+      throw new RangeError(
+        `AGENT node ${reprText(nodeId)} grants skills, but no skills= mapping was passed; ` +
+          "pass the run's skills (or an empty Map for none)",
+      );
+    }
+    const missing = grants === "all" ? [] : grants.filter((name) => !copied.has(name));
+    if (missing.length > 0) {
+      throw new RangeError(
+        `AGENT node ${reprText(nodeId)} grants skills not supplied to this run: ${writeAsText(missing)}`,
+      );
+    }
+  }
+  return copied;
+}
+
+/**
+ * @internal Return each static node's non-empty skill grant, keyed by its node path.
+ */
+export function skillGrants(flow: Flow): [string, readonly string[] | "all"][] {
+  const found: [string, readonly string[] | "all"][] = [];
+  for (const [nodeId, node] of staticNodes(flow)) {
+    // Read kind-blind: only a node that declares `needsSkills` carries a grant.
+    const grants = (node as { skills?: readonly string[] | "all" }).skills;
+    if (node.needsSkills && grants !== undefined && grants.length > 0) found.push([nodeId, grants]);
+  }
+  return found;
+}
+
+/**
+ * @internal Return every static node of `flow` and its child flows, keyed by node path.
+ *
+ * Kind-blind: child flows come from `Node.originChildren()`, so the run boundary imports no node
+ * class.
+ */
+export function staticNodes(flow: Flow, path: readonly string[] = []): [string, Node][] {
+  const found: [string, Node][] = [];
+  for (const [nodeId, node] of flow.nodes) {
+    const nodePath = [...path, nodeId];
+    found.push([nodePath.join("/"), node]);
+    for (const child of node.originChildren()) found.push(...staticNodes(child as Flow, nodePath));
+  }
+  return found;
 }
 
 /**

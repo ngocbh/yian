@@ -4,24 +4,33 @@
  *
  * Ported: `test_unparseable_case_when_raises_its_parse_error_from_setup`,
  * `test_unparseable_loop_predicate_raises_before_the_first_body`,
- * `test_times_loop_has_no_predicate_to_check` and `test_validate_conditions_names_the_given_path`.
+ * `test_times_loop_has_no_predicate_to_check`, `test_validate_conditions_names_the_given_path` and
+ * `test_python_set_loop_predicate_fails_before_the_run_starts`.
  *
  * Ported (adapted): `test_case_when_evaluation_error_still_fails_in_forward` (the rejection's stack
  * names `forward`, where Python reads the traceback's frames).
  *
+ * Ported (adapted): `test_python_set_case_when_fails_before_the_run_starts` (a `Case` is frozen,
+ * so the test replaces the first one where Python sets its `when`).
+ *
  * Changed: `run` is async, so the setup error is a rejection. The LOOP's child is a stub object.
  *
  * TS-only: LOOP's `validateConditions` names the given path.
- *
- * Later (T4-8): `test_python_set_case_when_fails_before_the_run_starts` and
- * `test_python_set_loop_predicate_fails_before_the_run_starts`.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { runFlow } from "../../src/run.ts";
+
+const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
 /** Return the error `promise` rejects with; fail when it resolves. */
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
@@ -111,3 +120,110 @@ test("loop validate conditions names the given path", () => {
   expect(() => node.validateConditions({ path: "outer/loop" })).toThrow(/^node 'outer\/loop' `while:`/);
 });
 
+
+// ---- conditions set in code fail before the run starts ----
+
+const GATED = `
+id: gated
+name: gated
+input:
+  v: !int
+nodes:
+  a:
+    kind: code
+    code: ./compose_codefns.ts:double
+    input:
+      n: \${input.v}
+    output: int
+  gate:
+    kind: case
+    cases:
+      - when: "a.output > 0"
+        then: pos
+    else: neg
+  pos:
+    kind: code
+    code: ./compose_codefns.ts:double
+    input:
+      n: \${a.output}
+    output: int
+  neg:
+    kind: code
+    code: ./compose_codefns.ts:double
+    input:
+      n: \${a.output}
+    output: int
+output: \${pos.output}
+`;
+
+const COUNTER = `
+id: counter
+name: counter
+defs:
+  bump:
+    input:
+      n: !int
+      exited: !bool
+    nodes:
+      step:
+        kind: code
+        code: ./compose_codefns.ts:loop_bump
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: \${step.output}
+nodes:
+  loop:
+    kind: loop
+    call: bump
+    input:
+      n: 0
+      exited: false
+    while: not exited
+    max: 10
+output: \${loop.output}
+`;
+
+let dir: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "yian-conditions-"));
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("python set case when fails before the run starts", async () => {
+  // A downstream CASE's bad `when` rejects before any node runs or any record is written.
+  const flow = await loadFlow(GATED, { baseDir: FIXTURES });
+  const gate = flow.compiled.nodes.get("gate") as CaseNode;
+  const [first, ...rest] = gate.cases;
+  gate.cases = [new Case(first!.handle, { when: "${__r0} > 0", origin: first!.origin }), ...rest];
+  const path = join(dir, "run.jsonl");
+
+  const error = await rejection(runFlow(flow, { v: 1 }, { log: path }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  const message = (error as Error).message;
+  expect(message).toStartWith("node 'gate' case 'pos' `when:` '${__r0} > 0' is not a valid boolean expression: ");
+  expect(message).toContain("write `__r0 > 0`");
+  expect(existsSync(path)).toBe(false);
+});
+
+test("python set loop predicate fails before the run starts", async () => {
+  const flow = await loadFlow(COUNTER, { baseDir: FIXTURES });
+  (flow.compiled.nodes.get("loop") as LoopNode).predicate = "not ${exited}";
+  const path = join(dir, "run.jsonl");
+
+  const error = await rejection(runFlow(flow, {}, { log: path }));
+
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toStartWith(
+    "node 'loop' `while:` 'not ${exited}' is not a valid boolean expression: ",
+  );
+  expect(existsSync(path)).toBe(false);
+});

@@ -22,6 +22,13 @@
  * `Infinity` kept for a `float`, a too-deep value refused); the `memory` and run-owned MCP server
  * stubs.
  *
+ * TS-only, one row for each run-start check's message (Python pins them in
+ * `test_typed_tool_node.py`, `test_run_tools_flow.py`, `test_run_skills.py` and
+ * `test_span_calls.py`): an unknown tool id with a close match, an unknown tool group, `ask_user`
+ * without a handler, an input the tool doesn't take, a missing required input, a disjoint input
+ * type (a literal shown by its value, a long one cut), a disjoint output, skills without a map, a
+ * missing skill, a skill keyed by another name, and a bad template span named by its subject.
+ *
  * Later (T4-10): `test_bool_text_is_not_converted_for_a_child_input` (a CALL).
  */
 
@@ -35,9 +42,12 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { current } from "../../src/defaults.ts";
 import { NodeSucceeded } from "../../src/events.ts";
+import { ExpressionError } from "../../src/expr/index.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { RunResult, runFlow } from "../../src/run.ts";
+import { Skill } from "../../src/skills/catalog.ts";
+import { tool } from "../../src/tools/function_tools.ts";
 import { mcpServer } from "../../src/tools/mcp.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
@@ -425,4 +435,259 @@ test("a run-owned MCP server is not ported yet", async () => {
   await expect(runFlow(flow, { topic: "ACME" }, { tools: { mcp: server } })).rejects.toThrow(
     "run-owned MCP servers are not ported yet",
   );
+});
+
+// ---- TS-only: the run-start checks ----
+
+/** A flow whose one TOOL node `place` calls `toolId` with `inputBlock`'s inputs. */
+function toolFlow(inputBlock: string, toolId = "place_order"): string {
+  return `
+id: placing
+name: placing
+nodes:
+  place:
+    kind: tool
+    tool_id: ${toolId}
+    input:
+${inputBlock}
+output: \${place.output}
+`;
+}
+
+/** A `place_order` tool taking an int `qty` and a str `sym`, both required. */
+const placeOrder = tool({
+  name: "place_order",
+  description: "Place one order.",
+  parameters: {
+    type: "object",
+    properties: { qty: { type: "integer" }, sym: { type: "string" } },
+    required: ["qty", "sym"],
+  },
+  execute: () => "placed",
+});
+
+/** Return the error `runFlow` rejects with, after checking that it left no log behind. */
+async function runStartError(flow: ComposedFlow, options: Parameters<typeof runFlow>[2] = {}, inputs = {}) {
+  const path = join(dir, "run.jsonl");
+  const error = await runFlow(flow, inputs, { ...options, log: path }).catch((caught: unknown) => caught);
+  expect(existsSync(path)).toBe(false);
+  return error as Error;
+}
+
+test("an unknown tool id with a close match fails at run start", async () => {
+  const flow = await load(toolFlow("      qty: 5\n      sym: X", "place_ordr"));
+  const error = await runStartError(flow, { tools: { place_order: placeOrder } });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(
+    "TOOL node 'place' names tool 'place_ordr', which isn't in this run's tools; " +
+      `known tools: ["place_order"]; did you mean 'place_order'?`,
+  );
+});
+
+test("an AGENT granting an unknown tool group fails at run start", async () => {
+  const flow = await load(`
+id: groups
+name: groups
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [toolbox, workspace, company]
+output: \${agent.output}
+`);
+  const error = await runStartError(flow, { tools: { toolbox: [], workspace: [] } });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(
+    `AGENT node 'agent' grants unknown tool or group 'company'; tool groups in this run: ["toolbox","workspace"]`,
+  );
+});
+
+test("a TOOL node naming ask_user without a handler fails at run start", async () => {
+  const flow = await load(`
+id: asking
+name: asking
+nodes:
+  ask:
+    kind: tool
+    tool_id: ask_user
+    input:
+      question: Proceed?
+      options: "yes, no"
+output: \${ask.output}
+`);
+  const error = await runStartError(flow, { tools: {} });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toStartWith("TOOL node 'ask' names 'ask_user': no ask_user handler for this run");
+});
+
+test("an input the tool does not take fails at run start", async () => {
+  const flow = await load(toolFlow("      qtty: 5\n      sym: X"));
+  const error = await runStartError(flow, { tools: { place_order: placeOrder } });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(
+    `TOOL node 'place' input 'qtty': tool 'place_order' takes no such input; it takes ["qty","sym"]`,
+  );
+});
+
+test("a missing required input fails at run start", async () => {
+  const one = await runStartError(await load(toolFlow("      sym: X")), { tools: { place_order: placeOrder } });
+  expect(one).toBeInstanceOf(RangeError);
+  expect(one.message).toBe("TOOL node 'place' is missing input 'qty' that tool 'place_order' requires");
+  const both = await runStartError(await load(toolFlow("      note: x")), {
+    tools: {
+      place_order: tool({ ...placeOrderOptions(), parameters: placeOrderParameters(["qty", "sym", "note"]) }),
+    },
+  });
+  expect(both.message).toBe(`TOOL node 'place' is missing inputs ["qty","sym"] that tool 'place_order' requires`);
+});
+
+/** The options `placeOrder` was built from, without `parameters`. */
+function placeOrderOptions() {
+  return { name: "place_order", description: "Place one order.", execute: () => "placed" };
+}
+
+/** A `place_order` schema with str `note`, int `qty` and str `sym`, requiring `required`. */
+function placeOrderParameters(required: string[]) {
+  return {
+    type: "object",
+    properties: { note: { type: "string" }, qty: { type: "integer" }, sym: { type: "string" } },
+    required,
+  };
+}
+
+test("a disjoint input type fails at run start", async () => {
+  const typed = await load(`
+id: placing
+name: placing
+input:
+  s: !str
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: \${input.s}
+      sym: X
+output: \${place.output}
+`);
+  const error = await runStartError(typed, { tools: { place_order: placeOrder } }, { s: "10" });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is str");
+
+  const literal = await runStartError(await load(toolFlow('      qty: "10"\n      sym: X')), {
+    tools: { place_order: placeOrder },
+  });
+  expect(literal.message).toBe(
+    `TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is "10" (str)`,
+  );
+  const long = await runStartError(await load(toolFlow(`      qty: "${"x".repeat(60)}"\n      sym: X`)), {
+    tools: { place_order: placeOrder },
+  });
+  expect(long.message).toEndWith(`but the binding is "${"x".repeat(37)}..." (str)`);
+});
+
+test("a return type disjoint from the declared output fails at run start", async () => {
+  const flow = await load(`
+id: count
+name: count
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: 5
+    output: int
+output: \${place.output}
+`);
+  const placeText = tool({
+    name: "place_order",
+    description: "Place one order.",
+    parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
+    output: { type: "string" },
+    execute: () => "placed",
+  });
+  const error = await runStartError(flow, { tools: { place_order: placeText } });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe("TOOL node 'place' output: declared int, but tool 'place_order' returns str");
+});
+
+const SKILLS_FLOW = `
+id: review
+name: review
+llm_config: {provider: openai, model: test-model}
+nodes:
+  review:
+    kind: agent
+    prompt: go
+    skills: [code-review, release-notes]
+output: \${review.output}
+`;
+
+/** A skill named `name`. */
+function skill(name: string): Skill {
+  return new Skill({ name, description: "d", instructions: "" });
+}
+
+test("a flow granting skills needs a skills map", async () => {
+  const error = await runStartError(await load(SKILLS_FLOW));
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(
+    "AGENT node 'review' grants skills, but no skills= mapping was passed; pass the run's skills " +
+      "(or an empty Map for none)",
+  );
+});
+
+test("a granted skill missing from the map fails at run start", async () => {
+  const skills = new Map([["code-review", skill("code-review")]]);
+  const error = await runStartError(await load(SKILLS_FLOW), { skills });
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(`AGENT node 'review' grants skills not supplied to this run: ["release-notes"]`);
+});
+
+test("the skills map must be keyed by skill name", async () => {
+  const flow = await load(SKILLS_FLOW);
+  await expect(runFlow(flow, {}, { skills: new Map([["alias", skill("code-review")]]) })).rejects.toThrow(
+    new TypeError("skills['alias'] must be a Skill named 'alias'"),
+  );
+});
+
+const SPAN_FLOW = `
+id: f
+name: f
+input: {v: !str }
+nodes:
+  x: {kind: code, code: "return inputs['n']", input: {n: '\${input.v}'}, output: str}
+output: \${x.output}
+`;
+
+const UPPER = "expression function 'upper' takes (s): too many positional arguments";
+
+/** Replace `nodeId`'s binding of `key` in `flow`'s top-level wiring with `source`. */
+function rewire(flow: ComposedFlow, nodeId: string, key: string, source: string): void {
+  const wiring = flow.compiled.wiring;
+  wiring.set(nodeId, new Map([...wiring.get(nodeId)!, [key, new Binding(source)]]));
+}
+
+test("a bad template span set in code fails at run start, named by its subject", async () => {
+  const input = await load(SPAN_FLOW);
+  rewire(input, "x", "n", "${upper(input.v, 1)}");
+  const error = await runStartError(input, {}, { v: "a" });
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect(error.message).toBe(`node 'x' input 'n': ${UPPER}`);
+
+  const output = await load(SPAN_FLOW);
+  rewire(output, "__end__", "result", "${upper(x.output, 1)}");
+  expect((await runStartError(output, {}, { v: "a" })).message).toBe(`flow output: ${UPPER}`);
+
+  const waiting = await load(`
+id: f
+name: f
+input: {d: !str }
+nodes:
+  w: {kind: wait, until: '\${input.d}'}
+output: ok
+`);
+  rewire(waiting, "w", "until", "${upper(input.d, 1)}");
+  expect((await runStartError(waiting, {}, { d: "2026-01-01" })).message).toBe(`node 'w' wait until: ${UPPER}`);
 });

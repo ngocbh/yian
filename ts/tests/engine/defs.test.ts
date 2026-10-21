@@ -18,20 +18,30 @@
  * defs (an uncalled def, a def calling a bad def, written order), whose messages and frames match
  * Python's, which checks CODE while building each def.
  *
- * Later (T4-8): the rows that run the loaded flow:
+ * Ported through `runFlow` (CODE references TS's, inline bodies JavaScript):
  * `test_defs_callable_runs_end_to_end_without_external_resolver`,
- * `test_defs_callable_as_mapped_call`, `test_def_calls_another_def`,
- * `test_defs_shadow_external_of_same_name`, `test_single_node_def_runs`,
- * `test_def_asserts_are_enforced_at_the_child_seam`,
+ * `test_defs_shadow_external_of_same_name` (the external served by `childResolver`),
+ * `test_single_node_def_runs`, `test_def_asserts_are_enforced_at_the_child_seam`,
  * `test_tag_subset_or_literal_binding_fills_literal_child_input`,
- * `test_typed_binding_from_str_checks_the_tag_at_run_time`,
  * `test_isinstance_guard_lets_str_fill_literal_child_input`,
- * `test_nullable_source_with_literal_escape_ok`, `test_parent_null_shadows_child_default`,
- * `test_def_yaml_merge_uses_local_nodes_override`, and the run half of
- * `test_omitted_child_input_applies_explicit_null_default`.
+ * `test_nullable_source_with_literal_escape_ok` and `test_def_yaml_merge_uses_local_nodes_override`.
+ *
+ * Covered by the harvested run cases (the same flows, inputs and results):
+ * `run-map-call/engine_defs__def_as_a_mapped_call` (`test_defs_callable_as_mapped_call`),
+ * `run-map-call/engine_defs__def_calls_another_def` (`test_def_calls_another_def`),
+ * `run-map-call/engine_defs__typed_call_argument_checks_a_literal_tag`
+ * (`test_typed_binding_from_str_checks_the_tag_at_run_time`: `binding.type` at `go`),
+ * `run-map-call/engine_defs__parent_null_shadows_child_default`
+ * (`test_parent_null_shadows_child_default`) and
+ * `run-map-call/engine_defs__omitted_child_input_takes_its_null_default` (the run half of
+ * `test_omitted_child_input_applies_explicit_null_default`).
  */
 
-import { expect, mock, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
@@ -42,9 +52,12 @@ import { SourceRange } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { CodeNode } from "../../src/nodes/code/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 
 import { loadConformanceFlow, loadError, loadErrorAsync } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { childResolver } from "./run_state_fixtures.ts";
 
 /** The baked child of `flow`'s CALL node `nodeId`. */
 const childOf = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as CallNode).child as CompiledFlow;
@@ -751,4 +764,236 @@ test("defs' CODE bodies are checked in written order, each def's nodes in order"
   const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message.startsWith("defs entry 'b2': node 'own': ")).toBe(true);
   expectDefFrames(error, text, ["b2"], ["b2", "own"]);
+});
+
+// ---------- runs ----------
+
+const dir = mkdtempSync(join(tmpdir(), "yian-defs-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Load `text` with the conformance fixtures (and `options`), run it on `inputs`, and return its output. */
+async function runOutput(
+  text: string,
+  inputs: Record<string, unknown>,
+  options: Parameters<typeof loadConformanceFlow>[1] = {},
+): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text, options), inputs, { env: hostEnv(dir) });
+  expect(result.failure).toBeNull();
+  return result.output;
+}
+
+test("a defs callable runs end to end without an external resolver", async () => {
+  // research_pair: make_report -> {report: "report for ACME", ...} -> echo the report.
+  expect(await runOutput(DEFS_PARENT, { topic: "ACME" })).toBe("report for ACME");
+});
+
+test("defs shadow an external flow of the same name", async () => {
+  const parent = `
+id: shadow-parent
+name: shadow_parent
+input:
+  topic: !str
+defs:
+  shared:
+    input:
+      topic: !str
+    nodes:
+      x:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:make_report
+        input:
+          topic: \${input.topic}
+        output:
+          report: str
+          n: int
+    output: \${x.output.report}
+nodes:
+  call_shared:
+    kind: call
+    call: shared
+    input:
+      topic: \${input.topic}
+output: \${call_shared.output}
+`;
+  const external = `
+id: shared
+name: shared
+input:
+  topic: !str
+nodes:
+  x:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+output: \${x.output}
+`;
+  // The in-file def (make_report) wins, not the external echo ("ACME").
+  expect(await runOutput(parent, { topic: "ACME" }, { childResolver: childResolver({ shared: external }) })).toBe(
+    "report for ACME",
+  );
+});
+
+test("a single-node def runs", async () => {
+  expect(await runOutput(SINGLE_NODE_DEF, { t: "ACME" })).toBe("ACME");
+});
+
+test("def asserts are enforced at the child seam", async () => {
+  const text = `
+id: da
+name: da
+input:
+  topic: !str
+defs:
+  d:
+    input:
+      topic: !str
+    nodes:
+      x:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: \${input.topic}
+        output: str
+    output: \${x.output}
+    asserts:
+      - x.output != ""
+nodes:
+  go:
+    kind: call
+    call: d
+    input:
+      topic: \${input.topic}
+output: \${go.output}
+`;
+  expect(await runOutput(text, { topic: "ACME" })).toBe("ACME");
+});
+
+/** Python's `_STR_TO_LITERAL_CHILD`, with the input type `source` and the call binding `binding`. */
+const strToLiteralChild = (source: string, binding: string) => `
+id: str-to-literal
+name: str_to_literal
+typedefs:
+  Mode: Literal(a, b)
+input:
+  s: ${source}
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["mode"]
+    input:
+      mode: !Mode
+    output: str
+nodes:
+  go:
+    kind: call
+    call: child
+    input:
+      mode: ${binding}
+output: \${go.output}
+`;
+
+test.each([
+  ["!Literal(a)", "${input.s}"],
+  ["!Mode", "${input.s}"],
+  ["!str", "a"],
+  ["!str", "!Mode ${input.s}"],
+])("a tag subset or literal binding fills a literal child input: %s %s", async (source, binding) => {
+  expect(await runOutput(strToLiteralChild(source, binding), { s: "a" })).toBe("a");
+});
+
+test.each([
+  ["a", "a"],
+  ["c", "other"],
+])("an isinstance guard lets a str fill a literal child input: %s", async (s, expected) => {
+  const text = `
+id: str-to-literal-guarded
+name: str_to_literal_guarded
+typedefs:
+  Mode: Literal(a, b)
+input:
+  s: !str
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["mode"]
+    input:
+      mode: !Mode
+    output: str
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: isinstance(input.s, Mode)
+        then: go
+    else: other
+  go:
+    kind: call
+    call: child
+    input:
+      mode: \${input.s}
+  other:
+    kind: code
+    code: return "other"
+output: \${go.output | other.output}
+`;
+  expect(await runOutput(text, { s })).toBe(expected);
+});
+
+test("a nullable source with a literal escape is ok", async () => {
+  // `:-safe` guarantees a non-null value (it fires on null, a present null included).
+  const text = `
+id: nok
+name: nok
+input:
+  x: !Optional(str)
+defs:
+  child:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: !str
+    output: str
+nodes:
+  go:
+    kind: call
+    call: child
+    input:
+      topic: \${input.x:-"safe"}
+output: \${go.output}
+`;
+  expect(await runOutput(text, { x: null })).toBe("safe");
+});
+
+test("a def YAML merge uses the local nodes override", async () => {
+  const text = `id: merged-def
+name: merged_def
+x-def-base: &def_base
+  nodes:
+    old:
+      kind: code
+      code: |
+        return "old"
+      output: str
+  output: \${old.output}
+defs:
+  target:
+    <<: *def_base
+    nodes:
+      new:
+        kind: code
+        code: |
+          return "new"
+        output: str
+    output: \${new.output}
+nodes:
+  invoke:
+    kind: call
+    call: target
+output: \${invoke.output}
+`;
+  expect(await runOutput(text, {})).toBe("new");
 });

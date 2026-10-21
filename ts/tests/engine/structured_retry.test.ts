@@ -40,9 +40,18 @@
  * error, so there is no error list to choose from; `test_tool_parser_returns_none_for_a_reply_without_a_tool_call`:
  * a LangChain parser.
  *
- * Later (T4-8), they run a flow: `test_an_agent_retries_a_reply_without_the_tool_call`,
- * `test_an_agent_fails_naming_the_tool_once_retries_are_spent` and
- * `test_a_generic_agent_fails_naming_the_tool_when_the_reply_has_no_result`.
+ * Ported through `runFlow` (`runWith`, with and without the AGENT memory `session`), the flow rows of
+ * `test_agent_missing_tool_call.py`: `test_an_agent_retries_a_reply_without_the_tool_call` and
+ * `test_an_agent_fails_naming_the_tool_once_retries_are_spent`. Changed: the model is the
+ * `ToolRoute` stub on OpenAI Chat (Python: an Anthropic client over a fake server), so the flow's
+ * config names `gpt-5.5`; the corrected request holds the system message, the question and the
+ * correction, with no assistant reply (Anthropic's body sends the system apart and merges the two
+ * user messages); the failure is `agent.output_invalid` with
+ * cause type `OutputInvalidError` (Python: `node.execute`, `MissingToolCallError`).
+ *
+ * Not ported: `test_a_generic_agent_fails_naming_the_tool_when_the_reply_has_no_result`, whose
+ * subject is a LangChain `with_structured_output` binding that returns no parsed value; TS has no
+ * such binding, and a reply without the tool call is the tool strategy's, which the rows above run.
  *
  * TS-only: a corrected request holds the earlier messages and the correction, not the invalid
  * reply; a stop during the call of an invalid last reply wins over the `OutputInvalidError`, and
@@ -55,7 +64,11 @@
  * structured call, so a transport retry of a later call reports that call.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ModelCallFinished } from "../../src/events.ts";
@@ -86,6 +99,10 @@ import {
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { PLAIN_FLOW, runWith } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -393,5 +410,53 @@ describe("TS-only", () => {
     const prompted = scripted([text("x"), text('{"value": 4}')], PROMPTED);
     await generateStructured(prompted, [], INT, { retries: 1, evaluationTrace: trace });
     expect(recorded).toEqual([new ModelTextInteraction("x"), new ModelTextInteraction('{"value": 4}')]);
+  });
+});
+
+// ---------- an AGENT whose reply skips the schema's tool, through the runner ----------
+
+describe("an agent reply without the schema's tool call", () => {
+  const missing = "the reply did not call the ScalarWrapper tool; call it with the answer";
+  const dir = mkdtempSync(join(tmpdir(), "yian-structured-retry-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  /** Run `PLAIN_FLOW` as an int AGENT with `retries`, with or without its `session` memory, over `model`. */
+  async function runAgent(model: ToolRoute, retries: number, session: boolean) {
+    let text = PLAIN_FLOW.replace("{provider: openai, model: test-model}", "{provider: openai, model: gpt-5.5}").replace(
+      "    output: str",
+      `    retries: ${retries}\n    output: int`,
+    );
+    if (!session) text = text.replace("    long_term_memory: session\n", "");
+    const memory = session ? new SessionMemory() : null;
+    return runWith(await loadFlow(text), { question: "q" }, memory, model, { env: hostEnv(dir) });
+  }
+
+  test.each([true, false])("an agent retries a reply without the tool call (session %p)", async (session) => {
+    const call = new ToolCallPart({ id: "c1", name: "ScalarWrapper", arguments: { value: 7n } });
+    const model = new ToolRoute([text("7"), reply(call)]);
+    const result = await runAgent(model, 2, session);
+    expect(result.failure).toBeNull();
+    expect(result.output).toBe(7n);
+    const requests = model.script.requests;
+    expect(requests).toHaveLength(2);
+    const messages = requests[1]!.messages;
+    expect(messages.map((message) => message.role)).toEqual(["system", "user", "user"]);
+    const correction = messages.at(-1)!.text();
+    expect(correction).toContain(missing);
+    expect(correction).not.toContain("provider error (");
+  });
+
+  describe.each([true, false])("session %p", (session) => {
+    test.each([0, 2])("an agent fails naming the tool once retries are spent (retries %p)", async (retries) => {
+      const model = new ToolRoute(Array.from({ length: retries + 1 }, () => text("7")));
+      const result = await runAgent(model, retries, session);
+      expect(result.status).toBe("failed");
+      const failure = result.failure!;
+      expect([failure.code, failure.nodeId]).toEqual(["agent.output_invalid", "agent"]);
+      expect(failure.message).toContain(missing);
+      expect(failure.trace.length).toBeGreaterThan(0);
+      expect(failure.causeType).toBe("OutputInvalidError");
+      expect(model.script.requests).toHaveLength(retries + 1);
+    });
   });
 });

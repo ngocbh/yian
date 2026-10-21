@@ -675,8 +675,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `loadFlow`, `runFlow` (fresh), `resumeFlow` (`--resume`, with the recorded-key checks),
   `loadSkillDir` and `inspectRun`; the diagnostic boxes, the banner, progress on stderr and
   `stopOnSignals` (SIGINT, SIGTERM and SIGHUP stop a run; exit 130).
-- A stop aborts the run's controller with a `HostStop` naming the signal; Ctrl-C at a prompt is a
-  `HostStop("SIGINT")`.
+- A stop aborts the run's controller with a `HostStop` (`utils.ts`) naming the signal; Ctrl-C at
+  a prompt is a `HostStop("SIGINT")`.
 - A required provider key that is missing and that no prompt supplied throws `MissingKeyError`
   (`utils.ts`); `run` reports it as `run.setup` before the log exists.
 - `run --json` runs in a child of the same runtime whose fd 1 is the parent's stderr and whose

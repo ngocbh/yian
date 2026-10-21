@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
-import { HostStop } from "../../src/cli/run.ts";
+import { HostStop } from "../../src/cli/utils.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";

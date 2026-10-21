@@ -32,7 +32,6 @@ import { fileURLToPath } from "node:url";
 import {
   diagnosticJson,
   flowBanner,
-  HostStop,
   jsonValue,
   mergeInputs,
   parseKv,
@@ -44,6 +43,7 @@ import { main } from "../../src/cli/index.ts";
 import {
   abortOnSignal,
   type CliIo,
+  HostStop,
   printJson,
   UsageError,
   type Writer,

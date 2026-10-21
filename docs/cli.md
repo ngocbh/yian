@@ -969,8 +969,12 @@ problem, and `yian config check` exits `2` when stdin is not a JSON object. With
 `--json`, a failed check exits `1` with its document on stdout, as does every other
 reported problem; see [Machine-readable output](#machine-readable-output).
 
-Changed (TS yian): SIGTERM and SIGHUP stop a run as Ctrl-C does (exit `130`), from the
-command's start; a second signal while the run stops kills the process (design 6.8).
+Changed (TS yian): SIGINT, SIGTERM and SIGHUP stop a run as Ctrl-C does (exit `130`) from
+the command's start, including while the flow loads and at the prompts before the run, where
+Python prints `Aborted!` and exits `1`. Once the first signal has been taken, a second one
+kills the process. A synchronous body (a CODE body or a tool) that blocks the event loop
+holds every signal until it returns, so a stop during the last node's body can be lost and
+the run reported as succeeded; under `--json`, a second signal kills the run even then.
 
 `yian auth` exits `1` when it fails or is cancelled, and `2` for a usage error, such as
 `--json` on a form that doesn't take it. Under `--json`, Ctrl-C makes it exit `130`, as

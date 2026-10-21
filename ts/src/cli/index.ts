@@ -14,7 +14,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream, realpathSync } from "node:fs";
+import { createWriteStream, realpathSync, writeSync } from "node:fs";
 import { constants } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -461,13 +461,13 @@ function isRunJson(args: readonly string[]): boolean {
  * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2, a signal no terminal sends, so a
  * group Ctrl-C (which the child gets too) and the forwarded stop are one stop; the second kills
  * the child and exits 130. A child that died by SIGUSR2, before its listener was on, exits 130.
- * When stdout fails other than by a closed pipe, it prints the error and exits 1 once the child
- * has ended.
+ * When the child can't start, or stdout fails other than by a closed pipe (once the child has
+ * ended), it prints the error and exits 1.
  */
 async function runJsonParent(args: readonly string[]): Promise<never> {
-  const command = [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
-  const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe"] });
+  const io = processIo();
   let stops = 0;
+  // Listeners run from the event loop, after the synchronous `spawn` below has set `child`.
   const onStop = () => {
     stops += 1;
     if (stops === 1) {
@@ -479,11 +479,22 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
     process.exit(130);
   };
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  // On before the spawn, so a stop during it isn't the default action; it reaches the child after.
   for (const name of signals) process.on(name, onStop);
+  // A `bun build --compile` binary has a `$bunfs` argv[1] and an empty execArgv: a release build
+  // must build this command line itself.
+  const command = [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
+  const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe"] });
+  child.on("error", (error) => {
+    // Once started, only a failed `kill` errors, and the run goes on.
+    if (child.pid !== undefined) return;
+    // Synchronous, so it exits before the `close` that can follow a failed start.
+    writeSync(2, `Error: cannot start the run: ${error.message}\n`);
+    process.exit(1);
+  });
   const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
     child.on("close", (code, signal) => resolve([code, signal]));
   });
-  const io = processIo();
   // Ending the relay early destroys the pipe, so the child's later writes end quietly too.
   const relayed = relay(child.stdio[3] as NodeJS.ReadableStream, io.stdout).then(
     () => undefined,

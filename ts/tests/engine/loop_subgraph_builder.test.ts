@@ -247,9 +247,9 @@ test("continue appends body iteration but driver keeps outer occurrence", () => 
     outer,
     new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["outer_map", "lp"], 2),
   ];
-  for (const [nodeId, node] of fragment.nodes) {
-    if (nodeId !== d.id) expect(node.memoryScope!.occurrencePath).toEqual(expectedBody);
-  }
+  const body = [...fragment.nodes].filter(([nodeId]) => nodeId !== d.id);
+  expect(body.length).toBeGreaterThan(0);
+  for (const [, node] of body) expect(node.memoryScope!.occurrencePath).toEqual(expectedBody);
   expect(fragment.nodes.get(d.id)!.memoryScope!.occurrencePath).toEqual([outer]);
 });
 

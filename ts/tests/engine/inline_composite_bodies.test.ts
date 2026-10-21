@@ -95,11 +95,11 @@
  * `load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts`.
  *
  * Ported through `loadFlow` (the fixture CODE references resolve against the conformance dir):
+ * `test_eager_def_inline_child_bad_output_preserves_absolute_range`,
+ * `test_inline_call_resolver_failure_uses_friendly_child_label`, and the load halves of
  * `test_inline_multinode_body_matches_named_def_signature_and_runtime`,
  * `test_eager_def_inline_call_uses_origin_and_shared_scope`,
  * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`,
- * `test_eager_def_inline_child_bad_output_preserves_absolute_range`,
- * `test_inline_call_resolver_failure_uses_friendly_child_label`, and the load halves of
  * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` and
  * `test_nested_inline_composites_register_four_lexical_children_once`, the rows counting
  * registrations and resolutions with spies on `CallableScope.prototype`'s `registerPrivate` and
@@ -1010,38 +1010,31 @@ async function recordPrivateScope<T>(load: () => Promise<T>) {
   }
 }
 
-/** Load `text` and run it on `inputs` with `numWorkers`; expect it to succeed; return its output. */
-async function runOutput(text: string, inputs: Record<string, unknown> = {}, numWorkers?: number): Promise<unknown> {
-  const result = await runFlow(await loadConformanceFlow(text), inputs, numWorkers === undefined ? {} : { numWorkers });
+/** Load `text` and run it on `inputs`; expect it to succeed; return its output. */
+async function runOutput(text: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text), inputs);
   expect(result.status, result.failure?.message).toBe("succeeded");
   return result.output;
 }
 
 /**
- * Load `text` and run it on `inputs` with `numWorkers`, spying on `CallableScope.prototype`'s
- * `registerPrivate` and `resolve`; expect the run to register and resolve no private flow beyond
- * what the load did, and to succeed; return its output.
+ * Load `text` and run it on `inputs` with `numWorkers` (`recordPrivateScope` around the run);
+ * expect the run to register and resolve no private flow beyond the load's, and to succeed; return
+ * its output.
  */
 async function runOutputRegisteringNoMore(
   text: string,
   inputs: Record<string, unknown> = {},
   numWorkers?: number,
 ): Promise<unknown> {
-  const register = spyOn(CallableScope.prototype, "registerPrivate");
-  const resolve = spyOn(CallableScope.prototype, "resolve");
-  const privateResolutions = () =>
-    resolve.mock.calls.filter(([flowId]) => flowId.startsWith(INLINE_FLOW_PREFIX)).length;
-  try {
-    const loaded = await loadConformanceFlow(text);
-    const atLoad = [register.mock.calls.length, privateResolutions()];
-    const result = await runFlow(loaded, inputs, numWorkers === undefined ? {} : { numWorkers });
-    expect([register.mock.calls.length, privateResolutions()]).toEqual(atLoad);
-    expect(result.status, result.failure?.message).toBe("succeeded");
-    return result.output;
-  } finally {
-    register.mockRestore();
-    resolve.mockRestore();
-  }
+  const loaded = await loadConformanceFlow(text);
+  const { result, registrations, resolutions } = await recordPrivateScope(() =>
+    runFlow(loaded, inputs, numWorkers === undefined ? {} : { numWorkers }),
+  );
+  expect(registrations).toEqual([]);
+  expect(resolutions).toEqual([]);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
 }
 
 const ZERO_INPUT = `id: inline-call-zero-input
@@ -1669,14 +1662,18 @@ output: \${invoke.output}
 `;
 
 test("an eager def's inline call takes its origin and shares the file scope", async () => {
-  const source = EAGER_DEF_INLINE_CALL;
-  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() => loadConformanceFlow(source));
+  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(EAGER_DEF_INLINE_CALL),
+  );
 
   const owner = ["def", "outer", "node", "wrapper", "inline"];
   const flowId = inlineFlowId(owner);
   const wrapper = (driver<CallNode>(loaded, "invoke").child as CompiledFlow).nodes.get("wrapper") as CallNode;
-  const keyRange = SourceDocument.parse(source).root.child("defs").child("outer").child("nodes").child("wrapper")
-    .keyRange!;
+  const keyRange = SourceDocument.parse(EAGER_DEF_INLINE_CALL)
+    .root.child("defs")
+    .child("outer")
+    .child("nodes")
+    .child("wrapper").keyRange!;
   expect(wrapper.flowId).toBe(flowId);
   expect(wrapper.childInputs).toEqual([]);
   expect(wrapper.origin).not.toBeNull();

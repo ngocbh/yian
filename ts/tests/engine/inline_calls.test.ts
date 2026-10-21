@@ -6,9 +6,10 @@
  * halves assemble the flow (`assembleText`), each `defs:` callee built by hand (`handChild`) with
  * the signature the row reads; the direct row drives `desugarInlineCalls`.
  *
- * Changed: Python loads and runs each flow; these rows check the load: the synth node, its edges,
- * and the argument binding a run would read. `test_inline_call_seed_21_loads` is the harvested
- * `load-map-call/seed_21_inline_call`, pinned at the end. `test_inline_call_e06_type_mismatch_is_loud`
+ * Changed: Python loads and runs each flow; the load rows check the load (the synth node, its
+ * edges, and the argument binding a run would read), and the runs are listed below.
+ * `test_inline_call_seed_21_loads` is the harvested `load-map-call/seed_21_inline_call`, pinned at
+ * the end. `test_inline_call_e06_type_mismatch_is_loud`
  * pins the whole message, where Python matches fragments; its harvested case
  * `load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected` is
  * pinned at the end too.

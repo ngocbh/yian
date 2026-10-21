@@ -59,7 +59,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
-import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, ToolIterationLimitError } from "./context.ts";
+import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
 import { modelFailureCode } from "./live.ts";
 import {
   type CallTimeLLM,
@@ -117,8 +117,11 @@ export class AgentNode extends Node {
   override readonly needsLiveEvents: boolean = true;
   override readonly needsSkills: boolean = true;
   override readonly needsModels: boolean = true;
-  /** Receive node steps only when this agent's config resolves when it runs; follows `callTime`. */
-  override needsSteps: boolean = false;
+  /**
+   * Every agent records a `model_attempt` step before each model retry; a call-time agent also
+   * records and reads back its `effective_llm_config`.
+   */
+  override readonly needsSteps: boolean = true;
   /** The prompt template. */
   prompt: string;
   /** The system prompt template replacing the default one; `null` keeps the default. */
@@ -158,8 +161,12 @@ export class AgentNode extends Node {
    * not proven), which decides whether it always overrides a lower layer's field.
    */
   llmValueTypes: readonly (readonly [ValuePath, Type | null])[];
-  /** The field behind `callTime`, an own field so a shallow node copy carries it. */
-  private callTimeValue: CallTimeLLM | null = null;
+  /**
+   * Set per run on the run's private flow, never on the authored one: what run start fixed when
+   * this agent's config resolves only when it runs; `null` when run start resolved it into
+   * `llmConfig`.
+   */
+  callTime: CallTimeLLM | null;
   /**
    * Set per run on the run's private flow, only for an agent given `callTime`: the host key and
    * header values.
@@ -326,21 +333,6 @@ export class AgentNode extends Node {
    */
   llmNullable(): Nullable {
     return typesNullable(this.ownLlmConfig, this.llmValueTypes);
-  }
-
-  /**
-   * Set per run on the run's private flow, never on the authored one: what run start fixed when
-   * this agent's config resolves only when it runs; `null` when run start resolved it into
-   * `llmConfig`. Setting it also sets `needsSteps`. It is an accessor because the base declares
-   * `needsSteps` as a field, which a getter can't override, so the setter keeps that field in step.
-   */
-  get callTime(): CallTimeLLM | null {
-    return this.callTimeValue;
-  }
-
-  set callTime(value: CallTimeLLM | null) {
-    this.callTimeValue = value;
-    this.needsSteps = value !== null;
   }
 
   /**
@@ -564,6 +556,9 @@ export class AgentNode extends Node {
       steering: caps.steering,
       models: options.models,
       sent: () => [],
+      steps: caps.steps,
+      scheduler: caps.scheduler,
+      random: caps.random,
     };
   }
 
@@ -614,15 +609,16 @@ export class AgentNode extends Node {
    * header values joined when it is marked for the host key; any other agent uses its run's
    * `llmConfig`. Before anything renders, a call-time agent checks the bound config against the
    * one an earlier start recorded in its steps, then records it as a step,
-   * `{effective_llm_config: <config>}`, which holds no key or header value.
+   * `{effective_llm_config: <config>}`, which holds no key or header value. Each model retry is
+   * first recorded as a `model_attempt` step; a later start restarts the agent and ignores them.
    *
    * The model is built through `caps.models`, else `defaultModelAccess()`. Every error from the
    * loop has the credentials the call sent scrubbed before it leaves.
    *
    * @param inputs Delivered inputs, kept separate from local variables.
-   * @param caps The node's signal, checked before recall and the model call, and the capabilities
-   *   its traits ask for: evidence, memory context, render capture, tools, live sinks, skills,
-   *   steering, model access, and for a call-time agent its steps.
+   * @param caps The node's signal, checked before recall and the model call, its scheduler and
+   *   random draw for model-retry waits, and the capabilities its traits ask for: evidence, memory
+   *   context, render capture, tools, live sinks, skills, steering, model access and steps.
    * @returns The model's answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
@@ -687,14 +683,8 @@ export class AgentNode extends Node {
     try {
       return await runAgent(ctx);
     } catch (error) {
-      let sent: readonly string[] = [];
-      try {
-        sent = ctx.sent();
-      } catch {
-        // A failing read must not replace the error being scrubbed.
-      }
       // Providers may echo any credential the call sent; the failure record must not carry it.
-      throw scrubCallCredentials(error, config, { env, sent });
+      throw scrubCallCredentials(error, config, { env, sent: sentCredentials(ctx) });
     }
   }
 

@@ -17,11 +17,12 @@
  *
  * Here: memory transcripts are not ported yet.
  *
- * Knows about:   diagnostics, llm, nodes/base, skills, tools, typesys, peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, nodes/base, skills, tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { reprText } from "../../diagnostics.ts";
+import { ReplayDegraded } from "../../events.ts";
 import { type ChatModel, parseArguments } from "../../llm/events.ts";
 import { RouteModel } from "../../llm/executor.ts";
 import {
@@ -45,6 +46,7 @@ import {
   checkStopped,
   drainSteers,
   interruptSignal,
+  retrySettings,
   ToolIterationLimitError,
 } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
@@ -66,7 +68,10 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * Run one AGENT invocation.
  *
  * Makes one model call without tools or skills, otherwise runs the tool loop until the model
- * answers. Sets `ctx.sent` to the built model's route credentials once the model is built.
+ * answers. Sets `ctx.sent` to the built model's route credentials once the model is built. Each
+ * reason the model gives for leaving out replay state reaches `ctx.emitEvent` once, as
+ * `ReplayDegraded`. Model calls are numbered from 1 in call order; with `ctx.steps`, each retry
+ * of call `n` first records a `model_attempt` step for it (`retrySettings`).
  *
  * @returns The checked structured value, or the final reply's visible text; after a host
  *   interrupt, the latest reply's visible text (`""` before any).
@@ -88,11 +93,19 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   const messages = [new Message({ role: "system", parts: [new TextPart(systemPrompt)] }), userMessage(ctx.prompt)];
   const live = liveSinks(ctx);
   checkStopped(ctx);
+  // Each turn's request replays every earlier one, so a reason would otherwise repeat per turn.
+  const degraded = new Set<string>();
+  const onReplayDegraded = (reason: string) => {
+    if (degraded.has(reason)) return;
+    degraded.add(reason);
+    ctx.emitEvent?.(new ReplayDegraded({ nodeId: ctx.nodeId, reason }));
+  };
   let model: ChatModel;
   try {
     model = await ctx.models.createModel(ctx.llmConfig ?? {}, {
       nodeId: ctx.nodeId,
       signal: ctx.signal ?? new AbortController().signal,
+      onReplayDegraded,
     });
   } catch (error) {
     // Building the model resolves its credentials, which can fail as refused ones.
@@ -103,11 +116,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   checkStopped(ctx);
   ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.prompt, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
+  // Every model call of this start, chat or structured, takes the next call number.
+  let modelCalls = 0;
+  const nextCall = () => retrySettings(ctx, ++modelCalls);
   const structuredOptions = {
     retries: ctx.retries,
     live,
     signal: ctx.signal,
     evaluationTrace: ctx.evaluationTrace,
+    retry: nextCall,
   };
   const toolset = ctx.toolset ?? new ToolSet();
   // A granted id may name a host-filled group; grants are checked by tool name.
@@ -144,6 +161,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
         exchangeId,
         signal: ctx.signal,
         interrupt,
+        retry: nextCall(),
       });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.

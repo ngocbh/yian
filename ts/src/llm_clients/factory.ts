@@ -636,21 +636,22 @@ export interface ModelAccess {
   readonly env: Env;
   /**
    * Build the chat model `config` (a record of host values) selects for node `nodeId`; `signal`
-   * aborts any credential read the build makes.
+   * aborts any credential read the build makes, and the model calls `onReplayDegraded` with the
+   * reason each time it leaves out replay state it can't send back.
    */
   createModel(
     config: Readonly<Record<string, unknown>>,
-    options: { nodeId: string; signal: AbortSignal },
+    options: { nodeId: string; signal: AbortSignal; onReplayDegraded?: (reason: ReplayDegradedReason) => void },
   ): ChatModel | Promise<ChatModel>;
 }
 
 /**
  * Return the model access that builds through `chatModelFromConfig` with `env` (default
- * `processEnv`).
+ * `processEnv`), passing on `signal` and `onReplayDegraded`.
  */
 export function defaultModelAccess(env: Env = processEnv): ModelAccess {
   return {
     env,
-    createModel: (config, { signal }) => chatModelFromConfig(config, { env, signal }),
+    createModel: (config, { signal, onReplayDegraded }) => chatModelFromConfig(config, { env, signal, onReplayDegraded }),
   };
 }

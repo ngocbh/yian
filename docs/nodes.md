@@ -178,7 +178,7 @@ branching on kind.
 | `needs_stop_event` | agent, wait, tool | receive the run-owned cooperative stop event (TS yian: `caps.signal`, every node) |
 | `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools, tool groups, and `ask_user` handler) |
 | `granted_tools()` | base; agent overrides | tool and group ids the run boundary checks against the run's tools before the run starts |
-| `needs_steps` | tool | receive `caps["steps"]`, a `NodeSteps`: the node's start count, the steps its earlier starts recorded, and `record(step)`, which appends a step to the run log and returns once it is applied (TS yian: once the run stops, `record` throws and appends nothing, except `record(step, { settled: true })` for an effect that settled before the stop, while the run has no terminal result) |
+| `needs_steps` | tool (TS yian: also every agent, which records a `model_attempt` step before each model retry) | receive `caps["steps"]`, a `NodeSteps`: the node's start count, the steps its earlier starts recorded, and `record(step)`, which appends a step to the run log and returns once it is applied (TS yian: once the run stops, `record` throws and appends nothing, except `record(step, { settled: true })` for an effect that settled before the stop, while the run has no terminal result) |
 | `needs_live_events` | agent | receive transient `emit_stream`/`emit_event` sinks for the host callbacks that exist |
 | `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
 

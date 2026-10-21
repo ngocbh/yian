@@ -59,7 +59,9 @@
  * interrupt cuts nothing; a stop that lands after a reply was cut, before the loop sees the cut,
  * wins over its text; at the `callModel` level, an interrupt during a model-retry wait, or already
  * set when it begins, ends the wait at once with an empty `ReplyInterrupted` and no second
- * attempt, leaving no sleep pending, and a stop during the wait still rejects with the stop.
+ * attempt, leaving no sleep pending, and a stop during the wait still rejects with the stop;
+ * through the engine, an interrupt during a later model call's retry wait (on the run's scheduler)
+ * ends the loop with `""` and no retry attempt, leaving no sleep pending.
  * Interrupts around concurrent tool groups are in `agent_tool_groups.test.ts`.
  */
 
@@ -197,6 +199,7 @@ async function run(
     onEvent?: (event: unknown) => void;
     onStream?: (chunk: StreamChunk) => void;
     numWorkers?: number;
+    scheduler?: Scheduler;
   } = {},
 ): Promise<unknown> {
   const events = await engine(flow, { models: serving(model), ...options }).run();
@@ -895,7 +898,7 @@ test("an interrupt during a model-retry wait ends the wait at once with an empty
   const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);
   const scheduler = waitingScheduler();
   const interrupt = new AbortController();
-  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, scheduler } as const;
+  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, retry: { scheduler } } as const;
   const call = callModel(live, model, REQUEST, options);
   await scheduler.slept;
   interrupt.abort(new Error("interrupted"));
@@ -924,7 +927,7 @@ test("an interrupt already set when a model-retry wait begins ends it with an em
   const live = liveSinks({ nodeId: "chat", llmConfig: CONFIG, emitEvent });
   const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);
   const scheduler = waitingScheduler();
-  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, scheduler } as const;
+  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, retry: { scheduler } } as const;
   const cut = await rejected(callModel(live, model, REQUEST, options));
   expect(cut).toBeInstanceOf(ReplyInterrupted);
   expect((cut as ReplyInterrupted).reply.parts).toEqual([]);
@@ -949,12 +952,37 @@ test("a stop during a model-retry wait still rejects with the stop", async () =>
     exchangeId: "x1",
     signal: stop.signal,
     interrupt: interrupt.signal,
-    scheduler,
+    retry: { scheduler },
   });
   await scheduler.slept;
   stop.abort(reason);
   interrupt.abort(new Error("interrupted"));
   expect(await rejected(call)).toBe(reason);
   expect(model.requests).toHaveLength(1);
+  expect(scheduler.pending).toBe(0);
+});
+
+test("an interrupt during a later model call's retry wait ends the loop with an empty reply", async () => {
+  install({ ...BUILTIN, modelRetries: 1 });
+  const events: unknown[] = [];
+  const model = new ScriptedModel(
+    [
+      reply("Checking.", ["lookup", { topic: "a" }, "call-1"]),
+      new ProviderError("server", "boom", { retryAfter: 60 }),
+      reply("never"),
+    ],
+    CONFIG,
+  );
+  const steering = new Inbox();
+  const scheduler = waitingScheduler();
+  const tools = new ToolSet({ lookup: lookupTool((topic) => `found ${topic}`) });
+  const onEvent = (event: unknown) => void events.push(event);
+  const output = run(chatFlow({ tools: ["lookup"] }), model, { steering, tools, scheduler, onEvent });
+  await scheduler.slept;
+  steering.interrupt("chat");
+  expect(await output).toBe("");
+  // The retry the wait was for never starts.
+  expect(events.filter((event) => event instanceof ModelCallStarted)).toHaveLength(2);
+  expect(model.requests).toHaveLength(2);
   expect(scheduler.pending).toBe(0);
 });

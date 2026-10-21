@@ -1,0 +1,59 @@
+# TS-only: Python records no step for a model retry.
+# The AGENT's first model call fails with a 503 reply before any output; with one model retry
+# (YIAN_MODEL_RETRIES=1) and a draw of 0, the node records a model_attempt step for call 1's
+# failed attempt 1, waits the first backoff (0.5 s), and the second attempt answers.
+kind: run
+python_skip: model_attempt steps are TS-only
+flow: |
+  id: agent-model-retries
+  name: agent_model_retries
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '1'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: InternalServerError, status: 503, message: The server is temporarily unavailable}
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: A line.}]
+  jitter: [0.0]
+expect:
+  output: {status: succeeded, output: A line.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {}
+        learnable: false
+        num_workers: 0
+        defaults: {MODEL_RETRIES: 1}
+        effective_llm_by_static_path:
+          write:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {}}]
+    - [node_started, write]
+    - - node_step
+      - write
+      - step:
+          model_attempt:
+            call: 1
+            attempt: 1
+            status: failed
+            error: {kind: server, message: The server is temporarily unavailable}
+            partial: null
+            retry_in: 0.5
+    - [node_succeeded, write, {value: A line.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: A line.}]

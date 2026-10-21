@@ -277,9 +277,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   layouts, LOOP `respawn`); their `forward` throws "not ported yet".
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
-  runs an AGENT with its tools and skills (below), and `backward` is not ported yet. `callTime` is
-  an accessor over an own field, so setting it also sets `needsSteps`, and a shallow copy carries
-  both.
+  runs an AGENT with its tools and skills (below), and `backward` is not ported yet. Every AGENT has
+  `needsSteps`: it records a `model_attempt` step before each model retry, and a call-time agent
+  (`callTime` set) also records its `effective_llm_config`.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`,
   `evaluationTrace`, `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent
@@ -293,6 +293,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `agent.output_invalid`. With tools or skills it runs the tool loop: consecutive calls whose tool
   is concurrency-safe (`isConcurrencySafe`, and `load_skill`) run together as a group, and an
   unsafe call runs alone. A memory transcript still throws "not ported yet".
+- Before each wait between model-call attempts, an AGENT with `caps.steps` records a
+  `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
+  from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
+  is. Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
+  (before, the real clock and `Math.random`). Nothing reads these steps yet, so a resumed AGENT
+  restarts. Each reason the built model gives
+  for leaving out replay state (`onReplayDegraded`, passed to `ModelAccess.createModel`) reaches
+  `emitEvent` once per invocation, as the in-loop `ReplayDegraded`.
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing.

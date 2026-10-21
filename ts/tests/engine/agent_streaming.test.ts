@@ -58,7 +58,7 @@ import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { CapabilityFault, type Output } from "../../src/nodes/base.ts";
+import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/base.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
@@ -224,7 +224,7 @@ test("an interrupted call ends its stream with the final chunk", async () => {
 async function evaluate(model: ScriptedModel, options: { events?: boolean; tools?: ToolSet } = {}) {
   const { tools } = options;
   const chunks: StreamChunk[] = [];
-  const observed: (ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished)[] = [];
+  const observed: Parameters<NonNullable<NodeCaps["emitEvent"]>>[0][] = [];
   const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG, tools: tools ? ["lookup"] : undefined });
   const outcome = await drive(node, {
     models: { env: () => undefined, createModel: () => model },
@@ -240,7 +240,7 @@ test("a plain agent streams text chunks then one final chunk", async () => {
   const replyEvents = [...streamed("hello", " big", " world").slice(0, -1), new UsageReport(usage), FINISH];
   const { outcome, chunks, observed } = await evaluate(model(replyEvents));
   expect((outcome as Output).value).toBe("hello big world");
-  const exchangeId = observed[0]!.exchangeId;
+  const exchangeId = (observed[0] as ModelCallStarted).exchangeId;
   const at = (text: string, final = false) =>
     new StreamChunk({ nodeId: "writer", key: "text", chunk: text, final, exchangeId, attempt: 1 });
   expect(chunks).toEqual([at("hello"), at(" big"), at(" world"), at("", true)]);
@@ -279,7 +279,7 @@ test("a mid-stream failure sends no final chunk and fails the node", async () =>
   const cut = [new TextDelta(0, "partial"), new TextDelta(0, " answer"), new ProviderError("connection", "reset by sk-hidden")];
   const { outcome, chunks, observed } = await evaluate(model(cut));
   expect(outcome).toBeInstanceOf(EvaluationFailure);
-  const exchangeId = observed[0]!.exchangeId;
+  const exchangeId = (observed[0] as ModelCallStarted).exchangeId;
   expect(chunks.map((item) => [item.exchangeId, item.chunk, item.final])).toEqual([
     [exchangeId, "partial", false],
     [exchangeId, " answer", false],
@@ -348,7 +348,7 @@ test("a tool-calling agent streams each exchange between its observers", async (
   const { outcome, chunks, observed } = await evaluate(chat, { tools: lookupTools() });
 
   expect((outcome as Output).value).toBe("acme is fine");
-  const [first, second] = [observed[0]!.exchangeId, observed[4]!.exchangeId];
+  const [first, second] = [(observed[0] as ModelCallStarted).exchangeId, (observed[4] as ModelCallStarted).exchangeId];
   const call = { nodeId: "writer", exchangeId: first, callIndex: 0, toolCallId: "call-1", name: "lookup" };
   expect(observed[2]).toEqual(new ToolCallStarted({ ...call, arguments: { topic: "acme" } }));
   expect(chunks.map((item) => [item.exchangeId, item.chunk, item.final])).toEqual([

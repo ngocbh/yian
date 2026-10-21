@@ -24,6 +24,7 @@ import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.t
 import type {
   ModelCallFinished,
   ModelCallStarted,
+  ReplayDegraded,
   StreamChunk,
   ToolCallFinished,
   ToolCallStarted,
@@ -787,8 +788,10 @@ export interface NodeCaps {
   readonly skills?: ReadonlyMap<string, Skill>;
   /** The transient stream-chunk sink; supplied to a node that declares `needsLiveEvents`. */
   readonly emitStream?: (chunk: StreamChunk) => void;
-  /** The transient model and tool call observer sink; supplied with `needsLiveEvents`. */
-  readonly emitEvent?: (event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished) => void;
+  /** The transient in-loop observer sink (`IN_LOOP_EVENTS`); supplied with `needsLiveEvents`. */
+  readonly emitEvent?: (
+    event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
+  ) => void;
   /**
    * The invocation's write-only evidence sink; supplied to a node that declares
    * `needsEvaluationTrace` while evidence capture is on.

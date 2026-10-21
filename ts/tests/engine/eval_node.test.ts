@@ -67,7 +67,8 @@
  * `scheduler` and `random` to every node it evaluates and its constructor refuses malformed ones;
  * the run's `models` reaching a node declaring `needsModels` (through `evalNode` and `FlowEngine`)
  * and never a node without the trait, and no `caps.models` when the run has none;
- * `defaultModelAccess` keeping the given `env` and building through `chatModelFromConfig`; a node
+ * `defaultModelAccess` keeping the given `env` and building through `chatModelFromConfig`, with
+ * the `onReplayDegraded` it is given; a node
  * that records steps and whose reserved key fails to bind after an earlier start recorded
  * steps rejects with a `RangeError`, while a node that doesn't read its steps gets the ordinary
  * binding failure.
@@ -83,6 +84,7 @@ import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
+import { Message, replayRecord, Request, TextPart } from "../../src/llm/messages.ts";
 import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ConversationInvocation } from "../../src/memory/contracts.ts";
 import {
@@ -681,6 +683,21 @@ describe("the models capability", () => {
     const model = await access.createModel({ provider: "openai", model: "gpt-5.5" }, { nodeId: "n", signal });
     expect(model).toBeInstanceOf(RouteModel);
     expect(await (model as RouteModel).route.auth.headers()).toEqual({ Authorization: "Bearer sk-test" });
+  });
+
+  test("defaultModelAccess passes onReplayDegraded to chatModelFromConfig", async () => {
+    const env = (name: string): string | undefined => (name === "OPENAI_API_KEY" ? "sk-test" : undefined);
+    const reasons: string[] = [];
+    const onReplayDegraded = (reason: string) => void reasons.push(reason);
+    const signal = new AbortController().signal;
+    const config = { provider: "openai", model: "gpt-5.5" };
+    const model = await defaultModelAccess(env).createModel(config, { nodeId: "n", signal, onReplayDegraded });
+    // Text another provider's reply recorded degrades when this model replays it.
+    const key = { protocol: (model as RouteModel).protocol.name, provider: "azure", model: "gpt-5.5" };
+    const text = new TextPart("Hello.", replayRecord(key, { id: "msg_1" }));
+    const messages = [new Message({ role: "user", parts: [new TextPart("hi")] }), new Message({ role: "assistant", parts: [text] })];
+    (model as RouteModel).protocol.buildBody(new Request({ messages }));
+    expect(reasons).toEqual(["other_provider"]);
   });
 });
 

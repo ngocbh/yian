@@ -143,14 +143,14 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   [NodeKind.END]: [],
   // `llmConfig` is always run-resolved; `ownLlmConfig` is the authored identity source.
   // `llmConfigLabel` is render-only. `wiresLlmConfig` and `llmValueTypes` are derived from the
-  // layers; the reserved wiring they decide is manifested with the wiring. `callTimeValue` (behind
-  // the `callTime` accessor) and `hostCredentials` are run-resolved like `llmConfig`.
+  // layers; the reserved wiring they decide is manifested with the wiring. `callTime` and
+  // `hostCredentials` are run-resolved like `llmConfig`.
   [NodeKind.AGENT]: [
     "llmConfig",
     "llmConfigLabel",
     "wiresLlmConfig",
     "llmValueTypes",
-    "callTimeValue",
+    "callTime",
     "hostCredentials",
   ],
   // `mode` is derived from `code`; CODE origins are diagnostic metadata resolved only by the

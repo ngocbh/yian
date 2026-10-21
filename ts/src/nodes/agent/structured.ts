@@ -66,6 +66,7 @@ import {
   ValueKind,
 } from "../../typesys/values.ts";
 import type { ValuePath } from "../contracts.ts";
+import type { RetrySettings } from "./context.ts";
 import { callModel, type LiveSinks, newExchangeId } from "./live.ts";
 import { recordModelText, recordModelValue } from "./text.ts";
 
@@ -437,7 +438,8 @@ export function userMessage(text: string): Message {
  * @param messages The conversation so far; not changed.
  * @param typ The declared output type; `typeToSchema` must give it a schema.
  * @param options `retries` defaults to `YIAN_AGENT_RETRIES`; `live` gets the call events;
- *   `signal` stops the run before each call and wins over the reply of a call it stopped during.
+ *   `signal` stops the run before each call and wins over the reply of a call it stopped during;
+ *   `retry` gives each call its retry settings, called once per call.
  * @returns The checked value, unwrapped.
  * @throws OutputInvalidError once `retries + 1` replies were invalid.
  * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged.
@@ -451,9 +453,10 @@ export async function generateStructured(
     live?: LiveSinks | null;
     signal?: AbortSignal;
     evaluationTrace?: EvaluationTrace | null;
+    retry?: () => RetrySettings;
   } = {},
 ): Promise<Value> {
-  const { live = null, signal, evaluationTrace } = options;
+  const { live = null, signal, evaluationTrace, retry } = options;
   const retries = options.retries ?? current().agentRetries;
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
@@ -462,7 +465,12 @@ export async function generateStructured(
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     const request = plan.apply(new Request({ messages: conversation }));
-    const response = await callModel(live, model, request, { purpose, exchangeId: newExchangeId(), signal });
+    const response = await callModel(live, model, request, {
+      purpose,
+      exchangeId: newExchangeId(),
+      signal,
+      retry: retry?.(),
+    });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
     if (prompted) recordModelText(evaluationTrace, response.message.text());

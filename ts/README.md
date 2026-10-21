@@ -716,5 +716,6 @@ development; it needs `--case`) writes each selected `run` or `resume` case's go
 `<name>.log.jsonl` beside the case, which later runs compare byte for byte.
 
 The runner runs every kind but `backward`. A `run` or `resume` case's `host` may hold `tools`,
-`human`, `jitter`, `models`, `steering` and `stop`; a case using `host.memory`, `host.skills` or
-`expect.memory` fails before it is set up.
+`human`, `jitter`, `models`, `memory`, `steering` and `stop`, and its `expect` may hold `memory`
+(a `host.memory.before` entry with `backward` fails until `RunResult.backward` is ported); a case
+using `host.skills` fails before it is set up.

@@ -1378,8 +1378,28 @@ describe("main", () => {
     expect(out).toEqual([]);
     expect(err).toEqual([
       "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-        "[--diagnostic-code CODE] [--crash-sweep]",
+        "[--diagnostic-code CODE] [--crash-sweep] [--write-logs]",
     ]);
+  });
+
+  test("writes a golden log with --write-logs, then compares it byte for byte", async () => {
+    const kinds = { run: RUNNERS.run! };
+    expect((await run(["--write-logs"], { "a/two.yaml": TWO_NODES }, {}, kinds)).code).toBe(0);
+    const golden = readFileSync(join(roots.at(-1)!, "cases", "a", "two.log.jsonl"), "utf8");
+    const lines = golden.trimEnd().split("\n");
+    expect(lines).toHaveLength(9);
+    expect(lines[0]).toContain('"now":{"kind":"datetime","value":"<masked>"}');
+    expect(lines[0]).toContain('"today":{"kind":"date","value":"<masked>"}');
+    const pinned = { "a/two.yaml": TWO_NODES, "a/two.log.jsonl": golden };
+    expect(await run([], pinned, {}, kinds)).toEqual({
+      code: 0,
+      out: ["1 case: 1 passed, 0 failed, 0 pending"],
+      err: [],
+    });
+    const changed = { ...pinned, "a/two.log.jsonl": golden.replace('"seq":8', '"seq":9') };
+    const { code, out } = await run([], changed, {}, kinds);
+    expect(code).toBe(1);
+    expect(out[0]).toBe("FAIL a/two: the run log differs from two.log.jsonl at record 8");
   });
 
   test("sweeps an eligible run case with --crash-sweep", async () => {

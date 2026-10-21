@@ -710,8 +710,11 @@ Flags, each repeatable (values of one flag are alternatives; different flags all
 `--group G`, `--kind K`, `--case <group>/<name>`, `--rules R` (cases whose `rules` hold R),
 `--diagnostic-code C` (`load` cases expecting a diagnostic with code C). `--kind`, `--rules` and
 `--diagnostic-code` never hide a case file that can't be read; `--group` and `--case`, read from
-its path, still select or skip it.
+its path, still select or skip it. `--crash-sweep` also gives each eligible `run` case a crash
+sweep: the run is cut after each record but the last, resumed, and checked. `--write-logs` (for
+development) writes each selected `run` or `resume` case's golden log, `<name>.log.jsonl` beside
+the case, which later runs compare byte for byte; select the cases to pin with `--case`.
 
-The runner runs every kind but `resume` and `backward`. A `run` case's `host` may hold `tools`,
-`human`, `jitter`, `models` and `steering`; a case using `host.stop`, `host.memory`,
-`host.skills` or `expect.memory` fails before it is set up.
+The runner runs every kind but `backward`. A `run` or `resume` case's `host` may hold `tools`,
+`human`, `jitter`, `models`, `steering` and `stop`; a case using `host.memory`, `host.skills` or
+`expect.memory` fails before it is set up.

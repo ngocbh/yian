@@ -2411,6 +2411,36 @@ to the key's provider, before its model call; it is a host error, not a failure 
 with the key. `context` re-supplies the host's app
 object; the log does not hold it (see [Tool context](#tool-context)).
 
+Changed (TS yian): `resumeFlow(flow, { log, numWorkers, onEvent, onStream, memory, tools, skills,
+steering, apiKey, headers, context, signal, env })` returns a Promise of the `RunResult`, and the
+errors are its rejections. `memory` and `skills` are `Map`s and `tools` a plain record, as for
+`runFlow`. `signal` is the host's stop: aborting it stops the resumed segment, which rejects with
+the signal's reason and records a `RunStoppedRecord`, and an already-aborted signal rejects before
+the log is locked. `env` is the environment the resume reads connections, credentials and its
+`YIAN_*` values from; the run's recorded values must match it. `scheduler`, `random` and `models`
+are for tests, as for `runFlow`. Header names that aren't the recorded ones, a negative
+`numWorkers` and an invalid log prefix raise `RangeError`, not `ValueError`. A resume without the
+key fails each agent the log marks for it with `provider.auth` when the agent runs, a node failure
+whose message says to pass `api_key` again.
+
+### Reading a run log with `inspectRun`
+
+Changed (TS yian): `inspectRun(log, { flow, env })` reads where the run in a log stands without
+changing the file or taking its lock, and returns `{ status, inFlight, interruptedAttempts }`.
+`status` is `running` while a writer holds the log's lock, `succeeded` or `failed` once the run
+finished, `stopped` when the host stopped its last segment (a `RunStoppedRecord`), and otherwise
+`interrupted`, the process having ended without a stop; a run that is neither running nor finished
+can be resumed. `inFlight` lists the nodes started and not settled, in start order (`[]` for a
+finished run), and `interruptedAttempts` the attempts a resume counted as interrupted, plus, for a
+run that is neither running nor finished, one for each node in flight that no stop covers: what
+`resumeFlow` would count. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
+is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, the status is read
+from the records, which don't hold the ready nodes: a run whose process ended after the top-level
+END succeeded (or after a route proved END unreachable) but before a node already ready started
+reads as finished, though `resumeFlow` would still run that node. Pass the flow when you have it.
+An empty log with no writer raises `RangeError`, and a missing one the `fs` error with `code`
+`ENOENT`.
+
 Recovery locks the existing file before reading it and validates the complete
 record prefix; a file whose complete lines are not a valid run log is rejected and
 left unchanged. Only then does it durably truncate any bytes after its final
@@ -2555,12 +2585,22 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
     external effect exactly-once.
 
 Changed (TS yian): right after `RunResumed`, a resume publishes one `NodeAttemptResumed(node_id,
-interrupted)` event per node it runs again, in retry order (the TS `resumeFlow` isn't ported
-yet). `interrupted` counts that node's interrupted attempts, including the one this resume
-retries: starts with no outcome before a resume, unless a `RunStoppedRecord` covered them. A
-host stop or a failing host callback records that stop before the run winds down, so only a
-crash (or a host fault that isn't a callback) counts. yian sets no limit; a host that resumes on
-its own decides how many interruptions to tolerate.
+interrupted)` event per node it runs again, in retry order. `interrupted` counts that node's
+interrupted attempts, including the one this resume retries: starts with no outcome before a
+resume, unless a `RunStoppedRecord` covered them. A host stop or a failing host callback records
+that stop before the run winds down, so only a crash (or a host fault that isn't a callback)
+counts. Nodes running beside a crashing node are counted too: the crash interrupts every start in
+flight, not only the one that was running when the process died. A stopped run resumes with
+`interrupted` 0 for the nodes the stop covered. yian sets no limit; a host that resumes on its own
+decides how many interruptions to tolerate. `RunResult.interruptedAttempts` and `inspectRun` hold
+the same counts.
+
+Changed (TS yian): the log also holds `RunStoppedRecord` (see [Authoritative run
+logs](#authoritative-run-logs)): when the host's signal aborts a run or a resume, or a host
+callback throws or rejects, the engine lets the nodes in flight wind down and appends one record
+naming them, with `reason` `signal` or `callback`. It isn't terminal: the stopped nodes are still
+in flight, a resume retries them after its `RunResumed`, and they aren't counted as interrupted.
+Between the stop and that resume only those nodes' steps are appended.
 
 ## Defaults and limits
 

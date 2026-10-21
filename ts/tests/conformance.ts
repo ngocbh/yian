@@ -25,7 +25,7 @@ import { createServer } from "node:http";
 import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { constants, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
@@ -1129,6 +1129,10 @@ export interface CaseContext {
   env: Record<string, string>;
   /** Whether `--crash-sweep` asks an eligible `run` case for its crash sweep too. */
   crashSweep?: boolean;
+  /** The path of the case's golden log, `<group>/<name>.log.jsonl` beside it. */
+  golden?: string;
+  /** Whether `--write-logs` asks a `run` or `resume` case to write its golden log. */
+  writeLogs?: boolean;
 }
 
 /** Return the `Env` that reads the case's environment; a name that is not an own key is unset. */
@@ -1221,7 +1225,7 @@ async function runCase(
   case_: Case,
   kinds: Partial<Record<Kind, KindRunner>>,
   fixturesDir: string,
-  crashSweep = false,
+  options: Pick<CaseContext, "crashSweep" | "golden" | "writeLogs"> = {},
 ): Promise<string | undefined> {
   for (const [section, key] of RESERVED) {
     if (Object.hasOwn(get(case_, section, {}) as Case, key)) {
@@ -1233,7 +1237,7 @@ async function runCase(
   if (run === undefined) return `the TS runner doesn't run \`${kind}\` cases yet`;
   let ctx: CaseContext | undefined;
   try {
-    ctx = { ...setUp(case_, fixturesDir), crashSweep };
+    ctx = { ...setUp(case_, fixturesDir), ...options };
     await run(case_, ctx);
     return undefined;
   } catch (error) {
@@ -1245,7 +1249,7 @@ async function runCase(
 
 const USAGE =
   "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-  "[--diagnostic-code CODE] [--crash-sweep]";
+  "[--diagnostic-code CODE] [--crash-sweep] [--write-logs]";
 
 /** What `main` reads cases from, runs them with and writes lines to. */
 export interface MainOptions {
@@ -1262,7 +1266,8 @@ export interface MainOptions {
  * Run the cases the flags in `argv` select; report one `FAIL` line per failing case and a
  * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
- * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`).
+ * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`
+ * writes each `run` and `resume` case's golden log (`goldenLog`).
  */
 export async function main(
   argv: readonly string[],
@@ -1280,6 +1285,7 @@ export async function main(
   const option = { type: "string", multiple: true } as const;
   let flags: Partial<Record<"group" | "kind" | "case" | "rules" | "diagnostic-code", string[]>> & {
     "crash-sweep"?: boolean;
+    "write-logs"?: boolean;
   };
   try {
     flags = parseArgs({
@@ -1288,6 +1294,7 @@ export async function main(
       options: {
         group: option, kind: option, case: option, rules: option, "diagnostic-code": option,
         "crash-sweep": { type: "boolean" },
+        "write-logs": { type: "boolean" },
       },
     }).values;
   } catch {
@@ -1342,7 +1349,11 @@ export async function main(
     if ("unreadable" in entry) {
       failure = entry.unreadable;
     } else {
-      failure = await runCase(entry.case_, kinds, fixturesDir, flags["crash-sweep"] === true);
+      failure = await runCase(entry.case_, kinds, fixturesDir, {
+        crashSweep: flags["crash-sweep"] === true,
+        golden: join(casesDir, `${entry.id}.log.jsonl`),
+        writeLogs: flags["write-logs"] === true,
+      });
       if (Object.hasOwn(entry.case_, "pending")) {
         if (failure !== undefined) {
           pending += 1;
@@ -2454,6 +2465,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
   if (existsSync(log)) await checkInvariants(flow, log, { env, tools, models }, result ?? null);
+  goldenLog(log, ctx);
   const text = existsSync(log) ? readFileSync(log, "utf8") : "";
   const lines = text.split("\n").filter((line) => line !== "");
   // In placeholder order: ids are numbered walking the results in this order. The `before`
@@ -2510,6 +2522,63 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
   // Last: a leftover entry usually follows from a divergence the comparisons show.
   const left = actual["left"] as string[];
   if (left.length > 0) throw new CaseFailure(left.join("\n"));
+}
+
+/**
+ * Return the run log text `text` as a golden log holds it: each line with every `traceback` value
+ * and the seeded clock values (`initial_pool.system`'s `now` and `today`) replaced by `<masked>`,
+ * written again with the log's own encoder.
+ */
+function masked(text: string): string {
+  const lines = text.split("\n").filter((line) => line !== "");
+  const mask = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(mask);
+    if (!isMapping(value)) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "traceback" && typeof item === "string") value[key] = "<masked>";
+      else mask(item);
+    }
+  };
+  return lines
+    .map((line, seq) => {
+      const record = parseJson(line, "codec") as Case;
+      // Masking re-encodes the line, so it must encode back to itself first.
+      if (logJson(record) !== line) {
+        throw new CaseFailure(`run log record ${seq} doesn't encode back to its line`);
+      }
+      mask(record);
+      if (record["kind"] === "run_started") {
+        const system = ((record["payload"] as Case)["initial_pool"] as Case)["system"] as Case;
+        for (const name of ["now", "today"]) (system[name] as Case)["value"] = "<masked>";
+      }
+      return `${logJson(record)}\n`;
+    })
+    .join("");
+}
+
+/**
+ * Compare the run log at `log`, masked, with the case's golden log when it has one, byte for
+ * byte; with `--write-logs`, write it instead.
+ */
+function goldenLog(log: string, ctx: CaseContext): void {
+  const golden = ctx.golden;
+  if (golden === undefined || !(ctx.writeLogs === true || existsSync(golden))) return;
+  if (!existsSync(log)) {
+    if (ctx.writeLogs === true) return;
+    throw new CaseFailure(`the run wrote no log, but ${basename(golden)} pins one`);
+  }
+  const text = masked(readFileSync(log, "utf8"));
+  if (ctx.writeLogs === true) {
+    writeFileSync(golden, text);
+    return;
+  }
+  const expected = readFileSync(golden, "utf8").split("\n");
+  const actual = text.split("\n");
+  const seq = actual.findIndex((line, index) => line !== expected[index]);
+  if (seq === -1 && actual.length === expected.length) return;
+  const at = seq === -1 ? actual.length : seq;
+  const lines = `--- actual\n${actual[at] ?? ""}\n--- golden\n${expected[at] ?? ""}`;
+  throw new CaseFailure(`the run log differs from ${basename(golden)} at record ${at}\n${lines}`);
 }
 
 /** Return the records of the log file at `path`, read with the codec. */

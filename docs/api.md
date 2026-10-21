@@ -433,6 +433,21 @@ run before appending any record.
   `ctx.context` (see [Tool context](#tool-context)). It is never recorded and is
   not part of the flow fingerprint, so pass it again to `resume_flow`.
 
+Changed (TS yian): `runFlow(flow, inputs, { log, runId, numWorkers, onEvent, onStream,
+llmConfig, memory, learnable, tools, skills, steering, context, signal, env })` returns a Promise
+of the `RunResult`; a failed flow resolves too, and the errors above are its rejections. `memory`
+and `skills` are `Map`s and `tools` a plain record. `signal` is the host's stop: aborting it stops
+the run, which rejects with the signal's reason, and an already-aborted signal rejects before
+anything is created. `env` (default `processEnv`) is the environment the run reads connections,
+credentials and its `YIAN_*` values from (see [Defaults and limits](#defaults-and-limits)). Three
+options are for tests: `scheduler` (the clock the system clock is seeded from and node waits run
+on), `random` (the draw in [0, 1) for backoff jitter) and `models` (the model builder AGENT nodes
+use). `inputs` and `llmConfig` are taken through host intake (see [Types → host
+intake](typing.md#two-constructors-infer-vs-check)): a whole `number` within ±(2^53−1) arrives as
+an int (`{n: 3}` holds `3n`) and any other number as a float, so `Infinity` is accepted where a
+float is; NaN, an accessor property, a Proxy and a non-yian object (a `Date`, a `Map`) are refused
+with `TypeCheckError` before the log is created.
+
 ### Tool context
 
 A host tool is a synchronous function or bound method. Its type hints give the
@@ -2554,9 +2569,9 @@ current().max_total_nodes  # 10000 unless YIAN_MAX_TOTAL_NODES sets it
   `RunResult.backward`'s replay when the run's recorded values differ from this
   process's; see [Durable recovery](#durable-recovery-with-resume_flow).
 
-Changed (TS yian): `loadFlow`'s `env` option sets the `YIAN_*` values for that load:
-`current()` returns the values read from it for all of the load's work, so concurrent loads
-with different environments each keep their own. `withEnv(env, fn)` (from
+Changed (TS yian): the `env` option of `loadFlow` and `runFlow` sets the `YIAN_*` values for
+that load or run: `current()` returns the values read from it for all of its work, so concurrent
+loads and runs with different environments each keep their own. `withEnv(env, fn)` (from
 `ts/src/defaults.ts`) does the same for any code; `withEnv(processEnv, fn)` keeps the values
 already in effect. Elsewhere `current()` returns the process values, read once.
 
@@ -2693,6 +2708,11 @@ The terminal outcome of a fresh or recovered run exposes these public fields:
 | `events` | post-durable observer events published during this call only; in-loop AGENT observers are excluded |
 | `learning` | learning projection of the last observed backward outcome; `None` before an attempt is observed or when the run had no memory |
 | `backward_outcome` | last observed accepted `BackwardOutcome`, or `None` before an attempt is observed |
+
+Changed (TS yian): the fields are camelCase (`runId`, `backwardOutcome`), and `log` is the path
+as given to `runFlow`, a string, not resolved. `interruptedAttempts` maps each node id to the
+number of its attempts a resume retried with no recorded stop (as `NodeAttemptResumed` counts
+them); it is empty for a run never resumed.
 
 Call `backward(feedback=None)` explicitly on a retained result. It changes only
 the observed backward/learning fields; forward status, values, failure, and events

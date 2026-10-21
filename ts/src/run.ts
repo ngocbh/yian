@@ -76,6 +76,7 @@ import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
 import {
   canonicalTypeLabel,
   fromHost,
+  isRecord,
   jsTypeName,
   rejectDeepNesting,
   setField,
@@ -228,9 +229,9 @@ export interface RunFlowOptions {
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `learnable` isn't a boolean, `signal`
- *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), a `tools` entry is
- *   malformed, `skills` isn't a `Map` of `Skill`s each keyed by its name, or `steering` lacks its
- *   methods.
+ *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), `llmConfig` isn't a record,
+ *   a `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its name, or
+ *   `steering` lacks its methods.
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
@@ -505,7 +506,8 @@ async function startRun(
   // The key stays out of the cascade so RunStarted never records it. Its base_url and connection
   // settings stay out too, so no authored layer can pair the key with another. Host intake makes
   // the copy they are taken from, with an integral number as an int.
-  const runLlmConfig = fromHost(options.llmConfig ?? {}, "llm_config") as Record<string, unknown>;
+  const runLlmConfig = fromHost(options.llmConfig ?? {}, "llm_config");
+  if (!isRecord(runLlmConfig)) throw new TypeError("llmConfig must be a record or null");
   const host = popHostCredentials(runLlmConfig);
   let apiKey = host.apiKey;
   let headers = host.headers;
@@ -533,7 +535,10 @@ async function startRun(
   applyEffectiveLlmMap(privateFlow, effectiveLlm, callTimeLlm);
   // A key that neither marks an agent nor is in the call-time agents' selection has nothing to
   // authenticate, so the run keeps neither it nor its headers.
-  if (apiKey !== null && !usesHostKey(effectiveLlm, callTimeLlm)) apiKey = headers = null;
+  if (apiKey !== null && !usesHostKey(effectiveLlm, callTimeLlm)) {
+    apiKey = null;
+    headers = null;
+  }
   if (apiKey !== null) bindHostCredentials(privateFlow, apiKey, headers);
   checkEffectiveLlm(effectiveLlm, apiKey, headers, staticAgentLabels(privateFlow), valueConfigSubjects(privateFlow));
 
@@ -568,15 +573,9 @@ async function startRun(
     // Preparation precedes durable-file creation, so invalid initialization cannot leave an empty
     // path behind.
     authority = log === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(resolve(log), canonicalRunId);
-    const events: RunEvent[] = [];
-    // A callback's rejection is delivered only after this synchronous stretch, so the engine
-    // exists by then.
-    let engine: FlowEngine | null = null;
-    publishBoundaryObservers(commitPrepared(authority, state, preparedStart), events, onEvent, (error) =>
-      engine?.stopForCallback(error),
-    );
-
-    engine = new FlowEngine(state, authority, {
+    const observers = commitPrepared(authority, state, preparedStart);
+    // Built before publishing so a callback's rejected promise can stop it.
+    const engine = new FlowEngine(state, authority, {
       growBuilder: buildGrow,
       numWorkers,
       onEvent,
@@ -589,6 +588,8 @@ async function startRun(
       scheduler,
       random,
     });
+    const events: RunEvent[] = [];
+    publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));
     events.push(...(await engine.run()));
     return resultFromState(state, log, events);
   } catch (error) {
@@ -596,24 +597,6 @@ async function startRun(
     throw error;
   } finally {
     closeRunResources(authority, primary);
-  }
-}
-
-/**
- * Publish an already-applied segment lead before retaining it in the result. Nothing is in flight
- * yet, so a throwing callback rejects the run with no stop record; a promise the callback returns
- * that rejects goes to `stop`, which stops the run with its error.
- */
-function publishBoundaryObservers(
-  observers: readonly RunEvent[],
-  events: RunEvent[],
-  onEvent: EventHook | null,
-  stop: (error: unknown) => void,
-): void {
-  for (const observer of observers) {
-    const returned = onEvent?.(observer);
-    if (returned instanceof Promise) returned.then(undefined, stop);
-    events.push(observer);
   }
 }
 
@@ -949,6 +932,24 @@ export function staticNodes(flow: Flow, path: readonly string[] = []): [string, 
     for (const child of node.originChildren()) found.push(...staticNodes(child as Flow, nodePath));
   }
   return found;
+}
+
+/**
+ * Publish an already-applied segment lead before retaining it in the result. Nothing is in flight
+ * yet, so a throwing callback rejects the run with no stop record; a promise the callback returns
+ * that rejects goes to `stop`, which stops the run with its error.
+ */
+function publishBoundaryObservers(
+  observers: readonly RunEvent[],
+  events: RunEvent[],
+  onEvent: EventHook | null,
+  stop: (error: unknown) => void,
+): void {
+  for (const observer of observers) {
+    const returned = onEvent?.(observer);
+    if (returned instanceof Promise) returned.then(undefined, stop);
+    events.push(observer);
+  }
 }
 
 /**

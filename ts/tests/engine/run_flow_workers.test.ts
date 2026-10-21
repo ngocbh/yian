@@ -18,8 +18,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { runFlow } from "../../src/run.ts";
+import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { JsonlRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
@@ -64,10 +65,16 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** `runFlow` with only the test's credential store in its environment, so no host variable or login decides a row. */
+function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
+  const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
+  return runFlow(flow, inputs, { env: (name) => env.get(name), ...options });
+}
+
 test("run flow serial and pooled same output", async () => {
   const loaded = await loadFlow(FANOUT, { baseDir: FIXTURES });
-  const serial = await runFlow(loaded, { topic: "X" }, { numWorkers: 0 });
-  const pooled = await runFlow(loaded, { topic: "X" }, { numWorkers: 4 });
+  const serial = await run(loaded, { topic: "X" }, { numWorkers: 0 });
+  const pooled = await run(loaded, { topic: "X" }, { numWorkers: 4 });
   expect(serial.status).toBe("succeeded");
   expect(pooled.status).toBe("succeeded");
   expect(serial.output).toBe(pooled.output);
@@ -78,7 +85,7 @@ for (const withSignal of [false, true]) {
     const loaded = await loadFlow(FANOUT, { baseDir: FIXTURES });
     const path = join(dir, "run.jsonl");
     const signal = withSignal ? new AbortController().signal : null;
-    const result = await runFlow(loaded, { topic: "X" }, { log: path, signal });
+    const result = await run(loaded, { topic: "X" }, { log: path, signal });
     expect(result.status).toBe("succeeded");
     using log = JsonlRunLog.resume(path);
     const first = log.records()[0]!.record;

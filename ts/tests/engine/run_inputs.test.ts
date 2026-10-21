@@ -16,8 +16,9 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { runFlow } from "../../src/run.ts";
+import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 
 const FLOW = `
 id: hello
@@ -45,10 +46,16 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** `runFlow` with only the test's credential store in its environment, so no host variable or login decides a row. */
+function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
+  const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
+  return runFlow(flow, inputs, { env: (name) => env.get(name), ...options });
+}
+
 test("undeclared input is rejected before the log", async () => {
   const flow = await loadFlow(FLOW);
   const path = join(dir, "run.jsonl");
-  await expect(runFlow(flow, { topik: "Ada" }, { log: path })).rejects.toThrow(
+  await expect(run(flow, { topik: "Ada" }, { log: path })).rejects.toThrow(
     new RangeError(`unknown input "topik"; declared inputs: topic`),
   );
   expect(existsSync(path)).toBe(false);
@@ -56,7 +63,7 @@ test("undeclared input is rejected before the log", async () => {
 
 test("flow without inputs names none declared", async () => {
   const flow = await loadFlow(FLOW.replace('input:\n  topic: !str "world"\n', "").replace("${input.topic}", "x"));
-  await expect(runFlow(flow, { b: 1, a: 2 })).rejects.toThrow(
+  await expect(run(flow, { b: 1, a: 2 })).rejects.toThrow(
     new RangeError(`unknown inputs "a", "b"; declared inputs: (none)`),
   );
 });
@@ -64,7 +71,7 @@ test("flow without inputs names none declared", async () => {
 for (const bad of [null, [["topic", "x"]], "topic"]) {
   test(`non mapping inputs raise type error (${JSON.stringify(bad)})`, async () => {
     const flow = await loadFlow(FLOW);
-    const error = await runFlow(flow, bad as never).catch((caught: unknown) => caught);
+    const error = await run(flow, bad as never).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(TypeError);
     expect((error as Error).message).toStartWith("inputs must be a mapping");
   });
@@ -72,7 +79,7 @@ for (const bad of [null, [["topic", "x"]], "topic"]) {
 
 test("declared inputs in any mapping run", async () => {
   const flow = await loadFlow(FLOW);
-  expect((await runFlow(flow, Object.freeze({ topic: "Ada" }))).output).toBe("hello Ada");
-  expect((await runFlow(flow, Object.assign(Object.create(null), { topic: "Ada" }))).output).toBe("hello Ada");
-  expect((await runFlow(flow, {})).output).toBe("hello world");
+  expect((await run(flow, Object.freeze({ topic: "Ada" }))).output).toBe("hello Ada");
+  expect((await run(flow, Object.assign(Object.create(null), { topic: "Ada" }))).output).toBe("hello Ada");
+  expect((await run(flow, {})).output).toBe("hello world");
 });

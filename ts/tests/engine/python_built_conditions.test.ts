@@ -24,11 +24,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
-import { runFlow } from "../../src/run.ts";
+import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -120,7 +121,6 @@ test("loop validate conditions names the given path", () => {
   expect(() => node.validateConditions({ path: "outer/loop" })).toThrow(/^node 'outer\/loop' `while:`/);
 });
 
-
 // ---- conditions set in code fail before the run starts ----
 
 const GATED = `
@@ -197,6 +197,12 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** `runFlow` with only the test's credential store in its environment, so no host variable or login decides a row. */
+function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
+  const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
+  return runFlow(flow, inputs, { env: (name) => env.get(name), ...options });
+}
+
 test("python set case when fails before the run starts", async () => {
   // A downstream CASE's bad `when` rejects before any node runs or any record is written.
   const flow = await loadFlow(GATED, { baseDir: FIXTURES });
@@ -205,7 +211,7 @@ test("python set case when fails before the run starts", async () => {
   gate.cases = [new Case(first!.handle, { when: "${__r0} > 0", origin: first!.origin }), ...rest];
   const path = join(dir, "run.jsonl");
 
-  const error = await rejection(runFlow(flow, { v: 1 }, { log: path }));
+  const error = await rejection(run(flow, { v: 1 }, { log: path }));
 
   expect(error).toBeInstanceOf(ExpressionError);
   const message = (error as Error).message;
@@ -219,7 +225,7 @@ test("python set loop predicate fails before the run starts", async () => {
   (flow.compiled.nodes.get("loop") as LoopNode).predicate = "not ${exited}";
   const path = join(dir, "run.jsonl");
 
-  const error = await rejection(runFlow(flow, {}, { log: path }));
+  const error = await rejection(run(flow, {}, { log: path }));
 
   expect(error).toBeInstanceOf(ExpressionError);
   expect((error as Error).message).toStartWith(

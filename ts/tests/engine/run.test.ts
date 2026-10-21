@@ -2,8 +2,9 @@
  * End-to-end fresh runs through `runFlow`: a port of `tests/engine/test_run.py`.
  *
  * The flows use CODE, through `./compose_codefns.ts:<fn>` references (resolved from the
- * conformance fixtures as `baseDir`) or inline TS bodies; an AGENT's model is a `ScriptedModel`. A flow failure,
- * a false assert included, comes back as a `RunResult` whose `status` is `"failed"`.
+ * conformance fixtures as `baseDir`) or inline TS bodies; an AGENT's model is a `ScriptedModel`.
+ * A flow failure, a false assert included, comes back as a `RunResult` whose `status` is
+ * `"failed"`. Every run sees only the test's credential store in its environment.
  *
  * Ported: `test_code_flow_runs_to_declared_output`, `test_leaf_binds_from_flow_wiring`,
  * `test_coalesce_output_resolves_taken_branch_positive`, `test_case_gate_binds_from_flow_wiring`,
@@ -28,17 +29,22 @@
  * without a handler, an input the tool doesn't take, a missing required input, a disjoint input
  * type (a literal shown by its value, a long one cut), a disjoint output, skills without a map, a
  * missing skill, a skill keyed by another name, and a bad template span named by its subject; a
- * boundary callback whose promise rejects stops the run.
+ * boundary callback whose promise rejects stops the run, and one that throws rejects the run with
+ * no stop record; an `llmConfig` that isn't a record is refused.
  *
- * The run-start LLM chain, where an AGENT's model is a `ScriptedModel` from `models` and the
- * environment is an `env` accessor: `test_no_model_anywhere_fails_before_any_node`
- * (`test_no_builtin_defaults.py`) and `test_key_without_a_provider_is_rejected`
- * (`test_run_api_key.py`); of `test_a_key_that_marks_no_agent_does_not_block_replay`, the fresh
- * run (no agent gets the key and the log holds no marker); `test_a_non_finite_value_names_the_block_field`
- * of `test_llm_config_values_run_start.py` and of `test_llm_config_values_call_time.py`, changed:
- * TS keeps Infinity, so the provider block refuses it ("Input should be a finite number", a
- * `contract.input` failure when the agent runs) where Python refuses `non-finite number inf`.
- * TS-only: an integral number in a host `llm_config` is recorded as an int.
+ * The run-start LLM chain, where an AGENT's model is a `ScriptedModel` from `models`. TS rows
+ * this file owns, not ports of their Python files: an AGENT with no provider fails before the log
+ * exists (the same checks as `test_no_model_anywhere_fails_before_any_node`, so
+ * `no_builtin_defaults.test.ts` points here); `llm_config.api_key` without `provider` is refused
+ * without echoing the key (the check of `test_run_api_key.py`'s
+ * `test_key_without_a_provider_is_rejected`, which stays with that file's mirror); of
+ * `test_a_key_that_marks_no_agent_does_not_block_replay`, the fresh run (no agent gets the key and
+ * the log holds no marker); an integral number in a host `llm_config` is recorded as an int.
+ *
+ * Ported: `test_a_non_finite_value_names_the_block_field` of `test_llm_config_values_run_start.py`
+ * and of `test_llm_config_values_call_time.py`. Changed: TS keeps Infinity, so the provider block
+ * refuses it ("Input should be a finite number", a `contract.input` failure when the agent runs)
+ * where Python refuses `non-finite number inf`.
  *
  * Later (T4-10): `test_bool_text_is_not_converted_for_a_child_input` (a CALL).
  */
@@ -58,7 +64,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
-import { RunResult, runFlow } from "../../src/run.ts";
+import { RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, type RunStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
@@ -72,6 +78,17 @@ const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.m
 /** Load inline Compose YAML whose CODE references resolve from the conformance fixtures. */
 function load(text: string): Promise<ComposedFlow> {
   return loadFlow(text, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
+}
+
+/** An environment with only `vars` set, and the credential store in the test's directory. */
+function hostEnv(vars: Record<string, string> = {}): Env {
+  const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
+  return (name) => all.get(name);
+}
+
+/** `runFlow` in `hostEnv()` unless `options` sets `env`, so no host variable or login decides a row. */
+function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) {
+  return runFlow(flow, inputs, { env: hostEnv(), ...options });
 }
 
 const PLAN_FLOW = `
@@ -219,7 +236,7 @@ afterEach(() => {
 // ---- a CODE-only flow runs end-to-end ----
 
 test("code flow runs to declared output", async () => {
-  const result = await runFlow(await load(PLAN_FLOW), { topic: "ACME" });
+  const result = await run(await load(PLAN_FLOW), { topic: "ACME" });
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ rating: "plan for ACME", score: 0.9 });
 });
@@ -235,7 +252,7 @@ test("leaf binds from flow wiring", async () => {
   expect(wiring.get("topic")!.origin).not.toBeNull();
   expect(parameters.map((parameter) => parameter.name)).toEqual(["topic"]);
   expect(parameters[0]!.origin).not.toBeNull();
-  const result = await runFlow(loaded, { topic: "ACME" });
+  const result = await run(loaded, { topic: "ACME" });
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ rating: "plan for ACME", score: 0.9 });
 });
@@ -243,7 +260,7 @@ test("leaf binds from flow wiring", async () => {
 // ---- a coalesce output resolves the taken branch ----
 
 test("coalesce output resolves taken branch positive", async () => {
-  const result = await runFlow(await load(CASE_FLOW), { topic: "BETA", seed: 0.7 });
+  const result = await run(await load(CASE_FLOW), { topic: "BETA", seed: 0.7 });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("pro case for BETA");
 });
@@ -257,19 +274,19 @@ test("case gate binds from flow wiring", async () => {
   expect(binding.source).toBe("${score.output}");
   expect(binding.origin).toBe(gate.cases[0]!.origin);
   expect(gate.params!.map((parameter) => parameter.name)).toEqual(["__r0"]);
-  const result = await runFlow(loaded, { topic: "BETA", seed: 0.7 });
+  const result = await run(loaded, { topic: "BETA", seed: 0.7 });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("pro case for BETA");
 });
 
 test("coalesce output resolves taken branch cautious", async () => {
-  const result = await runFlow(await load(CASE_FLOW), { topic: "BETA", seed: 0.2 });
+  const result = await run(await load(CASE_FLOW), { topic: "BETA", seed: 0.2 });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("cautious note for BETA");
 });
 
 test("coalesce skips untaken branch", async () => {
-  const result = await runFlow(await load(CASE_FLOW), { topic: "BETA", seed: 0.7 });
+  const result = await run(await load(CASE_FLOW), { topic: "BETA", seed: 0.7 });
   const succeeded = new Set(result.events.flatMap((event) => (event instanceof NodeSucceeded ? [event.nodeId] : [])));
   expect(succeeded.has("positive")).toBe(true);
   expect(succeeded.has("cautious")).toBe(false);
@@ -278,7 +295,7 @@ test("coalesce skips untaken branch", async () => {
 // ---- input types are enforced at the flow boundary ----
 
 test("input type mismatch fails at boundary", async () => {
-  const result = await runFlow(await load(CASE_FLOW), { topic: "BETA", seed: "high" });
+  const result = await run(await load(CASE_FLOW), { topic: "BETA", seed: "high" });
   expect(result.status).toBe("failed");
   const message = result.failure!.message;
   expect(message).toContain("input 'seed'");
@@ -288,7 +305,7 @@ test("input type mismatch fails at boundary", async () => {
 });
 
 test("coercible string input passes boundary", async () => {
-  const result = await runFlow(await load(CASE_FLOW), { topic: "BETA", seed: "0.7" });
+  const result = await run(await load(CASE_FLOW), { topic: "BETA", seed: "0.7" });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("pro case for BETA");
 });
@@ -298,7 +315,7 @@ for (const [raw, expected] of [
   ["no", false],
 ] as const) {
   test(`bool spelling ${raw} coerces at boundary`, async () => {
-    const result = await runFlow(await load(BOOL_FLOW), { flag: raw });
+    const result = await run(await load(BOOL_FLOW), { flag: raw });
     expect(result.status).toBe("succeeded");
     expect(result.output).toBe(expected);
   });
@@ -306,7 +323,7 @@ for (const [raw, expected] of [
 
 test("unrecognized bool spelling fails at boundary", async () => {
   // A typo such as "ture" must not silently become false.
-  const result = await runFlow(await load(BOOL_FLOW), { flag: "ture" });
+  const result = await run(await load(BOOL_FLOW), { flag: "ture" });
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("contract.input");
   expect(result.failure!.message).toContain("input 'flag'");
@@ -317,7 +334,7 @@ test("unrecognized bool spelling fails at boundary", async () => {
 // ---- asserts ----
 
 test("boundary assert false fails before any node runs", async () => {
-  const result = await runFlow(await load(ASSERT_FLOW), { topic: "ACME", seed: -1.0 });
+  const result = await run(await load(ASSERT_FLOW), { topic: "ACME", seed: -1.0 });
   expect(result.status).toBe("failed");
   expect(result.failure!.message).toContain("assert failed");
   expect(hasNodeOutput(result)).toBe(false);
@@ -325,7 +342,7 @@ test("boundary assert false fails before any node runs", async () => {
 
 test("post terminal assert false flips succeeded to failed", async () => {
   const flow = await load(ASSERT_FLOW.replace("plan.output.score >= 0.5", "plan.output.score >= 2.0"));
-  const result = await runFlow(flow, { topic: "ACME", seed: 1.0 });
+  const result = await run(flow, { topic: "ACME", seed: 1.0 });
   expect(result.status).toBe("failed");
   expect(result.failure!.message).toContain("assert failed");
   // The run reached the node: the assert fired after it, not at the boundary.
@@ -333,7 +350,7 @@ test("post terminal assert false flips succeeded to failed", async () => {
 });
 
 test("all asserts true succeeds", async () => {
-  const result = await runFlow(await load(ASSERT_FLOW), { topic: "ACME", seed: 1.0 });
+  const result = await run(await load(ASSERT_FLOW), { topic: "ACME", seed: 1.0 });
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ rating: "plan for ACME", score: 0.9 });
 });
@@ -341,14 +358,14 @@ test("all asserts true succeeds", async () => {
 // ---- system.run_id ----
 
 test("run id host override resolves", async () => {
-  const result = await runFlow(await load(RUN_ID_FLOW), { topic: "ACME" }, { runId: "rid-123" });
+  const result = await run(await load(RUN_ID_FLOW), { topic: "ACME" }, { runId: "rid-123" });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("rid-123");
   expect(result.runId).toBe("rid-123");
 });
 
 test("run id minted when omitted", async () => {
-  const result = await runFlow(await load(RUN_ID_FLOW), { topic: "ACME" });
+  const result = await run(await load(RUN_ID_FLOW), { topic: "ACME" });
   expect(result.status).toBe("succeeded");
   expect(typeof result.output).toBe("string");
   expect(result.output).not.toBe("");
@@ -363,7 +380,7 @@ test("an aborted signal rejects with its reason before the log exists", async ()
   controller.abort(reason);
   const path = join(dir, "run.jsonl");
   const flow = await load(PLAN_FLOW);
-  await expect(runFlow(flow, { topic: "ACME" }, { log: path, signal: controller.signal })).rejects.toBe(reason);
+  await expect(run(flow, { topic: "ACME" }, { log: path, signal: controller.signal })).rejects.toBe(reason);
   expect(existsSync(path)).toBe(false);
 });
 
@@ -371,21 +388,21 @@ test("an existing log path is refused and left unchanged", async () => {
   const path = join(dir, "run.jsonl");
   writeFileSync(path, "keep\n");
   const flow = await load(PLAN_FLOW);
-  await expect(runFlow(flow, { topic: "ACME" }, { log: path })).rejects.toMatchObject({ code: "EEXIST" });
+  await expect(run(flow, { topic: "ACME" }, { log: path })).rejects.toMatchObject({ code: "EEXIST" });
   expect(readFileSync(path, "utf8")).toBe("keep\n");
 });
 
 test("result.log is the path as given", async () => {
   const given = relative(process.cwd(), join(dir, "run.jsonl"));
   const flow = await load(PLAN_FLOW);
-  const result = await runFlow(flow, { topic: "ACME" }, { log: given });
+  const result = await run(flow, { topic: "ACME" }, { log: given });
   expect(result.log).toBe(given);
   expect(existsSync(join(dir, "run.jsonl"))).toBe(true);
-  expect((await runFlow(flow, { topic: "ACME" })).log).toBeNull();
+  expect((await run(flow, { topic: "ACME" })).log).toBeNull();
 });
 
 test("interruptedAttempts is an empty map for a fresh run", async () => {
-  const result = await runFlow(await load(PLAN_FLOW), { topic: "ACME" });
+  const result = await run(await load(PLAN_FLOW), { topic: "ACME" });
   expect(result.interruptedAttempts).toBeInstanceOf(Map);
   expect(result.interruptedAttempts.size).toBe(0);
   expect(result.learning).toBeNull();
@@ -395,7 +412,7 @@ test("interruptedAttempts is an empty map for a fresh run", async () => {
 // ---- TS-only: host intake of inputs ----
 
 test("an integral number for an int input is the int 3n", async () => {
-  const result = await runFlow(await load(echoFlow("int")), { x: 3 });
+  const result = await run(await load(echoFlow("int")), { x: 3 });
   expect(result.status).toBe("succeeded");
   expect(result.input).toEqual({ x: 3n });
   expect(result.output).toBe(3n);
@@ -404,7 +421,7 @@ test("an integral number for an int input is the int 3n", async () => {
 test("NaN is refused where it sits", async () => {
   const path = join(dir, "run.jsonl");
   const flow = await load(echoFlow("Any"));
-  const error = await runFlow(flow, { x: { a: [NaN] } }, { log: path }).catch((caught: unknown) => caught);
+  const error = await run(flow, { x: { a: [NaN] } }, { log: path }).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toBe("input 'x' at a[0]: NaN is not a yian value");
   expect(existsSync(path)).toBe(false);
@@ -414,16 +431,16 @@ test("an accessor input or a Proxy inputs record is refused", async () => {
   const flow = await load(echoFlow("str"));
   const inputs = {};
   Object.defineProperty(inputs, "x", { get: () => "hidden", enumerable: true });
-  const error = await runFlow(flow, inputs).catch((caught: unknown) => caught);
+  const error = await run(flow, inputs).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toBe("input 'x': accessor property is not a yian value");
-  await expect(runFlow(flow, new Proxy({ x: "a" }, {}))).rejects.toThrow(
+  await expect(run(flow, new Proxy({ x: "a" }, {}))).rejects.toThrow(
     new TypeError("inputs must be a mapping of input names to values, got Proxy"),
   );
 });
 
 test("Infinity is kept for a float input", async () => {
-  const result = await runFlow(await load(echoFlow("float")), { x: Infinity });
+  const result = await run(await load(echoFlow("float")), { x: Infinity });
   expect(result.status).toBe("succeeded");
   expect(result.input).toEqual({ x: Infinity });
   expect(result.output).toBe(Infinity);
@@ -432,7 +449,7 @@ test("Infinity is kept for a float input", async () => {
 test("a too-deep input is refused", async () => {
   let value: unknown = [];
   for (let level = 1; level <= current().maxValueNesting; level += 1) value = [value];
-  const error = await runFlow(await load(echoFlow("Any")), { x: value }).catch((caught: unknown) => caught);
+  const error = await run(await load(echoFlow("Any")), { x: value }).catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toStartWith("input 'x' at ");
   expect((error as Error).message).toContain(`value nests deeper than ${current().maxValueNesting} levels`);
@@ -442,13 +459,13 @@ test("a too-deep input is refused", async () => {
 
 test("a memory option is not ported yet", async () => {
   const flow = await load(PLAN_FLOW);
-  await expect(runFlow(flow, { topic: "ACME" }, { memory: new Map() })).rejects.toThrow("memory is not ported yet");
+  await expect(run(flow, { topic: "ACME" }, { memory: new Map() })).rejects.toThrow("memory is not ported yet");
 });
 
 test("a run-owned MCP server is not ported yet", async () => {
   const flow = await load(PLAN_FLOW);
   const server = mcpServer({ command: "never-started" });
-  await expect(runFlow(flow, { topic: "ACME" }, { tools: { mcp: server } })).rejects.toThrow(
+  await expect(run(flow, { topic: "ACME" }, { tools: { mcp: server } })).rejects.toThrow(
     "run-owned MCP servers are not ported yet",
   );
 });
@@ -483,9 +500,9 @@ const placeOrder = tool({
 });
 
 /** Return the error `runFlow` rejects with, after checking that it left no log behind. */
-async function runStartError(flow: ComposedFlow, options: Parameters<typeof runFlow>[2] = {}, inputs = {}) {
+async function runStartError(flow: ComposedFlow, options: RunFlowOptions = {}, inputs = {}) {
   const path = join(dir, "run.jsonl");
-  const error = await runFlow(flow, inputs, { ...options, log: path }).catch((caught: unknown) => caught);
+  const error = await run(flow, inputs, { ...options, log: path }).catch((caught: unknown) => caught);
   expect(existsSync(path)).toBe(false);
   return error as Error;
 }
@@ -663,7 +680,7 @@ test("a granted skill missing from the map fails at run start", async () => {
 
 test("the skills map must be keyed by skill name", async () => {
   const flow = await load(SKILLS_FLOW);
-  await expect(runFlow(flow, {}, { skills: new Map([["alias", skill("code-review")]]) })).rejects.toThrow(
+  await expect(run(flow, {}, { skills: new Map([["alias", skill("code-review")]]) })).rejects.toThrow(
     new TypeError("skills['alias'] must be a Skill named 'alias'"),
   );
 });
@@ -720,7 +737,7 @@ test("a boundary callback whose promise rejects stops the run", async () => {
     const onEvent = (event: RunEvent): Promise<void> | undefined =>
       event instanceof RunStarted ? Promise.reject(failure) : undefined;
     const flow = await load(PLAN_FLOW);
-    await expect(runFlow(flow, { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
+    await expect(run(flow, { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
     using log = JsonlRunLog.resume(path);
     const stopped = log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
     expect(stopped.map((record) => [record.reason, record.message])).toEqual([["callback", "host listener failed"]]);
@@ -731,15 +748,20 @@ test("a boundary callback whose promise rejects stops the run", async () => {
   }
 });
 
+test("a boundary callback that throws rejects the run with no stop record", async () => {
+  const failure = new Error("host listener failed");
+  const path = join(dir, "run.jsonl");
+  const onEvent = (event: RunEvent): void => {
+    if (event instanceof RunStarted) throw failure;
+  };
+  await expect(run(await load(PLAN_FLOW), { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
+  using log = JsonlRunLog.resume(path);
+  expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started"]);
+});
+
 // ---- The run-start LLM chain ----
 
 const SENTINEL = "sk-sentinel-5b2e8d41";
-
-/** An environment with only `vars` set, and the credential store in the test's directory. */
-function hostEnv(vars: Record<string, string> = {}): Env {
-  const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
-  return (name) => all.get(name);
-}
 
 /**
  * A model access over `env` that records each config it builds from in `built` and answers each
@@ -750,7 +772,8 @@ function scripted(built: Record<string, unknown>[], env: Env = hostEnv()): Model
     env,
     createModel: (config) => {
       built.push({ ...config });
-      return new ScriptedModel([textReply("ok")], { provider: config["provider"] as string, model: config["model"] as string });
+      const identity = { provider: config["provider"] as string, model: config["model"] as string };
+      return new ScriptedModel([textReply("ok")], identity);
     },
   };
 }
@@ -765,7 +788,7 @@ const forbidden: ModelAccess = {
 
 test("an AGENT with no provider fails before the log exists", async () => {
   const flow = await load("id: f\nname: f\nnodes:\n  write: {kind: agent, prompt: hi}\noutput: ${write.output}\n");
-  const error = await runStartError(flow, { env: hostEnv(), models: forbidden });
+  const error = await runStartError(flow, { models: forbidden });
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toContain("Agent 'write'");
   for (const fix of ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"]) {
@@ -776,15 +799,19 @@ test("an AGENT with no provider fails before the log exists", async () => {
 const KEYED_FLOW = "id: keyed\nname: keyed\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: ${agent.output}\n";
 
 test("llm_config.api_key without provider is refused without echoing the key", async () => {
-  const error = await runStartError(await load(KEYED_FLOW), {
-    env: hostEnv(),
-    models: forbidden,
-    llmConfig: { api_key: SENTINEL },
-  });
+  const error = await runStartError(await load(KEYED_FLOW), { models: forbidden, llmConfig: { api_key: SENTINEL } });
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toContain("provider");
   expect(error.message).not.toContain(SENTINEL);
 });
+
+for (const llmConfig of ["x", 5, [1]]) {
+  test(`an llmConfig that isn't a record is refused (${JSON.stringify(llmConfig)})`, async () => {
+    const error = await runStartError(await load(PLAN_FLOW), { llmConfig: llmConfig as never }, { topic: "ACME" });
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toBe("llmConfig must be a record or null");
+  });
+}
 
 test("a key that marks no agent is dropped", async () => {
   const other = await load(
@@ -793,15 +820,15 @@ test("a key that marks no agent is dropped", async () => {
   );
   const plain = await load(echoFlow("str"));
   const llmConfig = { provider: "vllm", model: "served-model", api_key: SENTINEL };
-  for (const [flow, inputs] of [
-    [other, {}],
-    [plain, { x: "ok" }],
+  for (const [name, flow, inputs, keys] of [
+    ["other", other, {}, [undefined]],
+    ["plain", plain, { x: "ok" }, []],
   ] as const) {
     const built: Record<string, unknown>[] = [];
-    const path = join(dir, `${flow.compiled.nodes.has("agent") ? "other" : "plain"}.jsonl`);
-    const result = await runFlow(flow, inputs, { log: path, env: hostEnv(), models: scripted(built), llmConfig });
+    const path = join(dir, `${name}.jsonl`);
+    const result = await run(flow, inputs, { log: path, models: scripted(built), llmConfig });
     expect(result.status).toBe("succeeded");
-    expect(built.map((config) => config["api_key"])).toEqual(flow === other ? [undefined] : []);
+    expect(built.map((config) => config["api_key"])).toEqual([...keys]);
     const text = readFileSync(path, "utf8");
     expect(text).not.toContain("_host_key");
     expect(text).not.toContain(SENTINEL);
@@ -812,10 +839,11 @@ test("an integral number in a host llm_config is recorded as an int", async () =
   const path = join(dir, "run.jsonl");
   const built: Record<string, unknown>[] = [];
   const llmConfig = { provider: "anthropic", model: "m", anthropic: { max_tokens: 1000 } };
-  const result = await runFlow(await load(KEYED_FLOW), {}, { log: path, env: hostEnv(), models: scripted(built), llmConfig });
+  const result = await run(await load(KEYED_FLOW), {}, { log: path, models: scripted(built), llmConfig });
   expect(result.status).toBe("succeeded");
   const started = readRunLog(path)[0]!.record as RunStartedRecord;
-  expect((started.effectiveLlmByStaticPath["agent"] as Record<string, unknown>)["anthropic"]).toEqual({ max_tokens: 1000n });
+  const recorded = started.effectiveLlmByStaticPath["agent"] as Record<string, unknown>;
+  expect(recorded["anthropic"]).toEqual({ max_tokens: 1000n });
   expect(built[0]!["anthropic"]).toEqual({ max_tokens: 1000n });
 });
 
@@ -844,7 +872,7 @@ test("a non-finite value names the block field", async () => {
   const events: RunEvent[] = [];
   const error = await runStartError(
     await load(TAGGED),
-    { env: hostEnv(), models: scripted(built), onEvent: (event) => events.push(event) },
+    { models: scripted(built), onEvent: (event) => events.push(event) },
     { d: {}, t: 1e308 },
   );
   expect(error).toBeInstanceOf(RangeError);
@@ -867,7 +895,7 @@ output: \${chat.output}
 
 test("a non-finite call-time value names the block field", async () => {
   const built: Record<string, unknown>[] = [];
-  const result = await runFlow(await load(PICKING), {}, { env: hostEnv(), models: scripted(built) });
+  const result = await run(await load(PICKING), {}, { models: scripted(built) });
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("contract.input");
   expect(result.failure!.message).toBe("node 'chat' llm_config.openai.temperature: Input should be a finite number");

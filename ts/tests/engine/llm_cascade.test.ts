@@ -392,13 +392,12 @@ test("the effective map resolves environment defaults once", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-cascade-"));
   try {
     // The run reads YIAN_DEFAULT_MODEL once, from its one snapshot; any later read sees a new value.
-    const modelReads: string[] = [];
+    let modelReads = 0;
     const env: Env = (name) => {
       if (name === "YIAN_AUTH_FILE") return join(dir, "auth.json");
       if (name === "YIAN_DEFAULT_PROVIDER") return "ANTHROPIC";
       if (name !== "YIAN_DEFAULT_MODEL") return undefined;
-      modelReads.push(name);
-      return modelReads.length === 1 ? "environment-model" : "later-model";
+      return ++modelReads === 1 ? "environment-model" : "later-model";
     };
     const seen: Record<string, unknown>[] = [];
     const models: ModelAccess = {
@@ -413,7 +412,7 @@ test("the effective map resolves environment defaults once", async () => {
     );
     const result = await runFlow(loaded, {}, { env, models });
     expect(result.status).toBe("succeeded");
-    expect(modelReads).toHaveLength(1);
+    expect(modelReads).toBe(1);
     expect(seen).toEqual([{ provider: "anthropic", model: "environment-model" }]);
   } finally {
     rmSync(dir, { recursive: true, force: true });

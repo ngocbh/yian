@@ -407,6 +407,11 @@ export async function printJson(document: Readonly<Record<string, unknown>>, out
   await out.write(`{${fields.join(",")}}\n`);
 }
 
+/** A provider key that is required but not set, and that no prompt supplied. */
+export class MissingKeyError extends Error {
+  override name = "MissingKeyError";
+}
+
 /** The key and endpoint helpers' arguments: the command's environment and terminal, if any. */
 export interface PromptContext {
   env: CommandEnv;
@@ -423,7 +428,7 @@ export interface PromptContext {
  * @returns The key, or `null` for a saved subscription or a provider that needs no key.
  * @throws {AuthError} If the saved login can't be read.
  * @throws {RangeError} If the saved logins or the default-provider environment are invalid.
- * @throws {Error} As `ensureEnvKey` does, when there is no saved login.
+ * @throws {MissingKeyError} As `ensureEnvKey` does, when there is no saved login.
  */
 export async function ensureApiKey(provider: string, context: PromptContext): Promise<string | null> {
   const name = provider.toLowerCase();
@@ -447,8 +452,8 @@ export async function ensureApiKey(provider: string, context: PromptContext): Pr
  *
  * @param provider The LLM provider name (such as `"anthropic"`), matched case-insensitively.
  * @returns The key, or `null` when the provider needs none.
- * @throws {Error} If the provider needs a key, none is set, and there is no terminal, the user
- *   cancels the prompt, or every attempt was empty.
+ * @throws {MissingKeyError} If the provider needs a key, none is set, and there is no terminal,
+ *   the user cancels the prompt, or every attempt was empty.
  */
 export async function ensureEnvKey(provider: string, { env, terminal }: PromptContext): Promise<string | null> {
   const envVar = getApiKeyEnv(provider);
@@ -457,7 +462,7 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
   if (existing) return existing;
   if (OPTIONAL_API_KEY_PROVIDERS.has(provider.toLowerCase())) return null;
   if (terminal === null) {
-    throw new Error(
+    throw new MissingKeyError(
       `provider ${reprText(provider)} needs an API key but $${envVar} is not set ` +
         `(set it in the environment, or run interactively to be prompted). ` +
         `Or run 'yian auth ${provider.toLowerCase()}' to save a login`,
@@ -468,14 +473,14 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
   const tries = current().maxKeyPrompts;
   for (let attempt = 0; attempt < tries; attempt++) {
     const answer = await terminal.askText(`Enter ${envVar} for provider ${reprText(provider)}:`, { secret: true });
-    if (answer === null) throw new Error(`no API key provided for ${reprText(provider)} ($${envVar})`);
+    if (answer === null) throw new MissingKeyError(`no API key provided for ${reprText(provider)} ($${envVar})`);
     const key = answer.trim();
     if (key) {
       env.set(envVar, key);
       return key;
     }
   }
-  throw new Error(`no API key provided for ${reprText(provider)} ($${envVar}) after ${tries} attempts`);
+  throw new MissingKeyError(`no API key provided for ${reprText(provider)} ($${envVar}) after ${tries} attempts`);
 }
 
 /**

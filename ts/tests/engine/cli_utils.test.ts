@@ -1,7 +1,8 @@
 // Ported from tests/engine/test_cli_utils.py: the key and endpoint helpers, with a fake terminal
 // standing in for questionary and a TTY; plus the argument parser, the usage text and `printJson`.
-// The `_agent_connections` / `_ensure_provider_keys` rows load the hello-agent seed's text inline,
-// and set the default provider and model the Python suite's conftest sets where they rely on it.
+// The `_agent_connections` / `_ensure_provider_keys` rows load the hello-agent seed from its
+// harvested case, `load-core/seed_00_hello_agent`, and set the default provider and model the
+// Python suite's conftest sets where they rely on it.
 // Added: `ensureProviderKeys` resolves a saved login without a prompt.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -20,6 +21,7 @@ import {
   flush,
   helpText,
   JSON_FORMAT,
+  MissingKeyError,
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
@@ -29,10 +31,11 @@ import {
   usageError,
   type Writer,
 } from "../../src/cli/utils.ts";
-import type { Env } from "../../src/defaults.ts";
+import { type Env, forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
+import { caseText } from "../compose/declarations.ts";
 
 // Each test's environment: a private home and auth store, so no real login is read.
 let home: string;
@@ -278,22 +281,12 @@ describe("confirmOllamaEndpoint", () => {
 });
 
 describe("agentConnections / ensureProviderKeys pre-flight", () => {
-  // The hello-agent seed: one agent, `note`, that sets no provider or model.
-  const HELLO_AGENT = `id: hello-agent
-name: hello_agent
-input:
-  topic: !str
-nodes:
-  note:
-    kind: agent
-    input:
-      topic: \${input.topic}
-    output: str
-    prompt: Write a single neutral paragraph on \${topic}.
-output: \${note.output}
-`;
+  // `caseText` applies the case's env to the process's defaults.
+  afterEach(() => forget());
 
-  const helloAgent = () => loadFlow(HELLO_AGENT, { env: base });
+  // The hello-agent seed: one agent, `note`, that sets no provider or model.
+  const helloAgent = () =>
+    loadFlow(caseText("load-core/seed_00_hello_agent").text, { env: base });
 
   /** Each distinct agent connection as `[provider, source]`. */
   async function connectionSources(cliCfg: Record<string, string>): Promise<[string, unknown][]> {
@@ -334,21 +327,22 @@ output: \${note.output}
   test("ensureProviderKeys passes when the key is present", async () => {
     conftestDefaults();
     vars.set("OPENAI_API_KEY", "sk-present");
-    await ensureProviderKeys(await helloAgent(), {}, { env: new CommandEnv(base), terminal: null });
+    await ensureProviderKeys(await helloAgent(), {}, {}, { env: new CommandEnv(base), terminal: null });
   });
 
   test("ensureProviderKeys throws when the key is missing", async () => {
     conftestDefaults();
     const flow = await helloAgent();
     const context = { env: new CommandEnv(base), terminal: null };
-    const error = await rejection(ensureProviderKeys(flow, {}, context));
+    const error = await rejection(ensureProviderKeys(flow, {}, {}, context));
+    expect(error).toBeInstanceOf(MissingKeyError);
     expect(error.message).toContain("OPENAI_API_KEY");
   });
 
   test("a saved login is resolved without a key prompt", async () => {
     await new AuthStore(null, { env: base }).save("anthropic", new ApiKeyCredentials("saved-k"), "m");
     const terminal = fakeTerminal("typed");
-    await ensureProviderKeys(await helloAgent(), {}, { env: new CommandEnv(base), terminal });
+    await ensureProviderKeys(await helloAgent(), {}, {}, { env: new CommandEnv(base), terminal });
     expect(terminal.prompts).toEqual([]);
   });
 });

@@ -61,6 +61,7 @@ import {
   type CliIo,
   CommandEnv,
   ensureEnvKey,
+  MissingKeyError,
   osReason,
   printJson,
   type PromptContext,
@@ -751,14 +752,19 @@ export function agentConnections(
  * A prompted key is `set` in `context.env`.
  *
  * @param cliCfg The `--provider`/`--model` layer, possibly empty.
+ * @param supplied The run's supplied inputs, which `llm_config` values may read to select a
+ *   provider.
+ * @throws {MissingKeyError} As `ensureEnvKey` does, for a required key that is missing.
  * @throws {AuthError} If a saved login can't be resolved.
- * @throws {Error} As `ensureEnvKey` does, for a required key that is missing.
- * @throws {RangeError} As `agentConnections` does.
+ * @throws {RangeError} As `agentConnections` and `connectionCredentials` do.
+ * @throws {TypeError} As `agentConnections` does, for inputs that can't be coerced.
+ * @throws {Error} A system error when a saved login can't be read.
  */
 export async function ensureProviderKeys(
   flow: ComposedFlow,
   cliCfg: Readonly<Record<string, string>>,
-  { supplied = {}, ...context }: PromptContext & { supplied?: Readonly<Record<string, unknown>> },
+  supplied: Readonly<Record<string, unknown>>,
+  context: PromptContext,
 ): Promise<void> {
   const env = context.env.read;
   for (const [provider, connection] of agentConnections(flow, cliCfg, { inputs: supplied, env })) {
@@ -768,12 +774,6 @@ export async function ensureProviderKeys(
       await ensureEnvKey(provider, context);
     }
   }
-}
-
-/** Whether `error` is what the key helpers throw for a key that can't be had: a plain `Error`. */
-function isKeyError(error: unknown): error is Error {
-  if (error instanceof AuthError) return true;
-  return error instanceof Error && Object.getPrototypeOf(error) === Error.prototype;
 }
 
 /**
@@ -964,9 +964,9 @@ async function startRun(
       if (options.model) cliCfg["model"] = options.model;
       // Any required key is asked for before the run creates its log.
       try {
-        await ensureProviderKeys(flow, cliCfg, { supplied, env: commandEnv, terminal: prompter });
+        await ensureProviderKeys(flow, cliCfg, supplied, { env: commandEnv, terminal: prompter });
       } catch (error) {
-        if (!isKeyError(error)) throw error;
+        if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
         await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
         return fail(new Diagnostic({ code: "run.setup", message: error.message }));
       }

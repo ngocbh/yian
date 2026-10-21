@@ -252,6 +252,10 @@ describe("checkCase", () => {
       TOOL("[{raise: {class: A, message: m, retry_after: 1}}]"),
       "`host.tools.t.results[0].raise.retry_after` is for TransientToolError",
     ],
+    ...["null", "'1'", "-1", "-0.5", "{$float: inf}"].map((seconds) => [
+      TOOL(`[{raise: {class: TransientToolError, message: m, retry_after: ${seconds}}}]`),
+      "`host.tools.t.results[0].raise.retry_after` must be a finite non-negative number",
+    ]),
     [`${RUN}host: {human: 1}`, "`host.human` must be a mapping"],
     [`${RUN}host: {human: {n: a}}`, "`host.human` maps node ids to lists of answers"],
     [
@@ -325,6 +329,7 @@ describe("checkCase", () => {
     `${LOAD}rules: [text]\npython_expect: {load: ok}`,
     `${RUN}host: {jitter: [0, 0.5], human: {n: [a]}}`,
     TOOL("{n: [{return: 1}, {raise: {class: TransientToolError, message: m, retry_after: 1}}]}"),
+    TOOL("[{raise: {class: TransientToolError, message: m, retry_after: 0.5}}]"),
     RESUME,
     `${BARE_RESUME}run: {num_workers: 0.0}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: false}\nhost: {crash_after_record: 1}`,

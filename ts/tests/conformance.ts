@@ -222,6 +222,11 @@ function truthy(value: Value | undefined): boolean {
   return Boolean(value);
 }
 
+/** Return whether `value` is 0 in Python's `== 0` sense, under which 0.0 and false equal 0 too. */
+function isZero(value: Value | undefined): boolean {
+  return value === 0n || value === 0 || value === false;
+}
+
 /**
  * Return the case file `text` as YAML 1.2 core, untagged, with only text keys, each once.
  */
@@ -341,8 +346,16 @@ function checkHost(value: Value | undefined, kind: Kind): void {
           const error = keys(`${at}.raise`, step["raise"], raiseKeys, {
             required: ["class", "message"],
           });
-          if (Object.hasOwn(error, "retry_after") && error["class"] !== "TransientToolError") {
-            throw new Error(`\`${at}.raise.retry_after\` is for TransientToolError`);
+          if (Object.hasOwn(error, "retry_after")) {
+            if (error["class"] !== "TransientToolError") {
+              throw new Error(`\`${at}.raise.retry_after\` is for TransientToolError`);
+            }
+            const seconds = error["retry_after"];
+            const number = typeof seconds === "bigint" || typeof seconds === "number";
+            // Finite, as `TransientToolError` requires.
+            if (!number || !(seconds >= 0 && seconds < Infinity)) {
+              throw new Error(`\`${at}.raise.retry_after\` must be a finite non-negative number`);
+            }
           }
         }
       });
@@ -528,9 +541,7 @@ export function checkCase(case_: Case): Case {
     if (cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
       throw new Error("a `resume` case needs `host.crash_after_record`, a record number or `end`");
     }
-    // Python's `!= 0`, under which 0.0 and false equal 0 too.
-    const workers = get(run, "num_workers");
-    if (workers !== 0n && workers !== 0 && workers !== false) {
+    if (!isZero(get(run, "num_workers"))) {
       throw new Error("`host.crash_after_record` needs `run.num_workers: 0`");
     }
   }
@@ -1084,16 +1095,17 @@ const TOOL_ERRORS: ReadonlyMap<string, ErrorClass> = new Map<string, ErrorClass>
 ]);
 
 /**
- * Return a script's error `{class, message, retry_after}`: an error of the class `classes` names,
- * else a plain `Error` named `class` (`TimeoutError` and `ConnectionError` among them).
+ * Return the error a script's `raise` mapping `{class, message, retry_after}` names: an error of
+ * the class `classes` names, else a plain `Error` named `class` (`TimeoutError` and
+ * `ConnectionError` among them).
  */
 function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): Error {
   const name = error["class"] as string;
   const message = error["message"] as string;
   const Class = classes.get(name);
   if (Class === undefined) return Object.assign(new Error(message), { name });
-  const retryAfter = Object.hasOwn(error, "retry_after") ? Number(error["retry_after"]) : undefined;
-  return new Class(message, retryAfter === undefined ? {} : { retryAfter });
+  const options = Object.hasOwn(error, "retry_after") ? { retryAfter: Number(error["retry_after"]) } : {};
+  return new Class(message, options);
 }
 
 /** Return `name`, a camelCase field name, in snake_case. */
@@ -1177,7 +1189,9 @@ function host(case_: Case, log: string): Host {
 
   const call = (name: string, label: string, ctx: ToolContext, args: Case): Value => {
     const record = { args, call_id: ctx.callId, attempt: BigInt(ctx.attempt), node: ctx.node };
-    calls.set(name, [...(calls.get(name) ?? []), record]);
+    let list = calls.get(name);
+    if (list === undefined) calls.set(name, (list = []));
+    list.push(record);
     return take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
   };
 
@@ -1257,15 +1271,214 @@ function eventForm(event: RunEvent, flow: ComposedFlow): Value[] {
   return Object.keys(data).length > 0 ? [event.type, data] : [event.type];
 }
 
+// The README's trace table: record kind -> [the payload field naming the node, the payload fields
+// kept].
+type TraceRow = readonly [string | null, readonly string[]];
+const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
+  [
+    "run_started",
+    [
+      null,
+      ["inputs", "learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm"],
+    ],
+  ],
+  ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
+  ["run_stopped", [null, ["reason", "node_ids"]]],
+  ["node_started", ["node_id", []]],
+  ["node_step", ["node_id", ["step"]]],
+  ["node_succeeded", ["node_id", ["value", "commit_target", "forward_capture"]]],
+  ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
+  ["node_expanded", ["spawner_id", ["seed", "prune_ids", "forward_capture"]]],
+  ["node_failed", ["failure", ["failure", "forward_capture"]]],
+  ...["memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"].map(
+    (kind): [string, TraceRow] => [
+      kind,
+      [null, ["memory", "commit_id", "attempt_id", "mutations", "failure"]],
+    ],
+  ),
+  ["backward_started", [null, ["attempt_id", "feedback"]]],
+  ["backward_ready", [null, ["attempt_id", "root_result", "attributed_results", "proposals"]]],
+  ["backward_finished", [null, ["attempt_id", "outcome", "attributed_results"]]],
+]);
+const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
+  "defaults", "effective_llm_by_static_path", "call_time_llm",
+]);
+const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
+  "evaluated_keys", "items", "node_data", "input_names", "variable_names",
+]);
+const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
+  ["node_failed", "failure"],
+  ["node_routed", "terminal_failure"],
+]);
+
+/** Return a connection record with only its `method`, `source` and `endpoint`. */
+function cut(connection: Case): Case {
+  const names = ["method", "source", "endpoint"].filter((name) => Object.hasOwn(connection, name));
+  return Object.fromEntries(names.map((name) => [name, connection[name]!]));
+}
+
+/**
+ * Return an agent's LLM config projected to the trace: its `llm_config` fields (keys not
+ * starting with `_`), `_header_names` and `_host_key` stay, and its `_connection` is cut; any
+ * other `_` key is dropped.
+ */
+function llm(config: Case): Case {
+  const kept = Object.fromEntries(
+    Object.entries(config).filter(
+      ([key]) => !key.startsWith("_") || key === "_header_names" || key === "_host_key",
+    ),
+  );
+  const connection = get(config, "_connection") ?? null;
+  if (connection !== null) kept["_connection"] = cut(connection as Case);
+  return kept;
+}
+
+/** Return whether a route field holds its empty value, as Python's `in (None, [], 0, "")` reads. */
+function emptyRouteValue(value: Value): boolean {
+  // Python's `0` also equals `0.0` and `False`.
+  return (
+    value === null || value === "" || value === 0 || value === 0n || value === false ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+/** Return a `forward_capture` projected to the trace, changing it in place. */
+function capture(captured: Case): Case {
+  const route = (node: Case): Case => {
+    // `expression` and `result_type` are text each implementation spells its own way.
+    const lean: Case = Object.fromEntries(
+      Object.entries(node).filter(
+        ([key, value]) =>
+          key !== "expression" && key !== "result_type" && (key === "kind" || !emptyRouteValue(value)),
+      ),
+    );
+    if (Object.hasOwn(lean, "value_json")) {
+      lean["value_json"] = parseJson(lean["value_json"] as string, "codec") as Value;
+    }
+    if (Object.hasOwn(lean, "children")) lean["children"] = (lean["children"] as Case[]).map(route);
+    if (Object.hasOwn(lean, "snapshot")) lean["snapshot"] = route(lean["snapshot"] as Case);
+    return lean;
+  };
+  const data = get(captured, "node_data") ?? null;
+  if (isMapping(data) && (get(data, "effective_llm_config") ?? null) !== null) {
+    data["effective_llm_config"] = llm(data["effective_llm_config"] as Case);
+  }
+  captured["route"] = route(captured["route"] as Case);
+  for (const item of captured["items"] as Case[]) item["capture"] = capture(item["capture"] as Case);
+  return Object.fromEntries(
+    Object.entries(captured).filter(
+      ([key, value]) => truthy(value) || !CAPTURE_LEFT_OUT_WHEN_EMPTY.has(key),
+    ),
+  );
+}
+
+/** Return the run log's `lines` projected to the README's trace. */
+function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
+  const failure = (payload: Case): Case => {
+    const origins = (payload["trace"] as Case[]).map(
+      (origin) => new OriginRef(origin["key"] as string),
+    );
+    return failureForm(
+      new Failure({
+        code: payload["code"] as FailureCode,
+        message: payload["message"] as string,
+        nodeId: payload["node_id"] as string | null,
+        trace: origins,
+      }),
+      flow,
+    );
+  };
+  return lines.map((line) => {
+    // Read with the codec, so ints stay ints and floats floats. Each record is parsed afresh, so
+    // its payload is projected in place.
+    const record = parseJson(line, "codec") as Case;
+    const kind = record["kind"] as string;
+    const payload = record["payload"] as Case;
+    const row = TRACE.get(kind);
+    if (row === undefined) {
+      throw new CaseFailure(`the run log holds a \`${kind}\` record the trace has no row for`);
+    }
+    const [nodeField, kept] = row;
+    let node = nodeField === null ? null : (payload[nodeField] ?? null);
+    if (kind === "node_failed") node = (node as Case)["node_id"] ?? null;
+    if (kind === "run_started") {
+      const pool = payload["initial_pool"] as Case;
+      payload["inputs"] = ((pool["store"] as Case)[pool["start_id"] as string] as Case)["value"]!;
+      const effective = payload["effective_llm_by_static_path"] as Case;
+      payload["effective_llm_by_static_path"] = Object.fromEntries(
+        Object.entries(effective).map(([path, config]) => [path, llm(config as Case)]),
+      );
+      const callTime = get(payload, "call_time_llm") ?? null;
+      if (callTime !== null) {
+        // `selection` is internal; its effect is each agent's `effective_llm_config` step.
+        const agents = (callTime as Case)["agents"] as Case;
+        payload["call_time_llm"] = {
+          agents: Object.fromEntries(
+            Object.entries(agents).map(([path, config]) => [path, llm(config as Case)]),
+          ),
+        };
+      }
+    }
+    if (kind === "node_succeeded") {
+      payload["value"] = (payload["value"] as Case)["value"]!;
+      if (payload["commit_target"] === node) delete payload["commit_target"];
+    }
+    const key = FAILURE_FIELDS.get(kind);
+    if (key !== undefined && (payload[key] ?? null) !== null) {
+      payload[key] = failure(payload[key] as Case);
+    }
+    if ((get(payload, "forward_capture") ?? null) !== null) {
+      payload["forward_capture"] = capture(payload["forward_capture"] as Case);
+    }
+    if (kind === "node_step") {
+      const step = payload["step"] as Case;
+      if (Object.hasOwn(step, "retry_in")) step["retry_in"] = Number(step["retry_in"]);
+      if ((get(step, "effective_llm_config") ?? null) !== null) {
+        step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
+      }
+      // A failed step's error type goes through the error-class table.
+      const error = get(step, "error");
+      if (step["event"] === "failed" && isMapping(error) && typeof error["type"] === "string") {
+        error["type"] = ERROR_CLASSES.get(error["type"]) ?? error["type"];
+      }
+    }
+    if (kind === "backward_finished") {
+      const backward = get(payload["outcome"] as Case, "failure") ?? null;
+      if (backward !== null) {
+        const failed = backward as Case;
+        delete failed["cause_type"];
+        delete failed["traceback"];
+        // A backward failure's `cause` is a node failure when it has a `trace`.
+        const cause = failed["cause"];
+        if (isMapping(cause) && Object.hasOwn(cause, "trace")) failed["cause"] = failure(cause);
+      }
+    }
+    const projected = Object.fromEntries(
+      Object.entries(payload).filter(
+        ([name, value]) =>
+          kept.includes(name) && value !== null && !(LEFT_OUT_WHEN_EMPTY.has(name) && !truthy(value)),
+      ),
+    );
+    return Object.keys(projected).length > 0 ? [kind, node, projected] : [kind, node];
+  });
+}
+
+/** Return `result` in the form of `expect.output`. */
+function output(result: RunResult, flow: ComposedFlow): Case {
+  if (result.status === "succeeded") {
+    return { status: "succeeded", output: dataForm(result.output as YianValue) };
+  }
+  return { status: result.status, failure: failureForm(result.failure!, flow) };
+}
+
 /**
  * Return `entries` with run-level ones (node `null`) first, then each node's, nodes sorted; each
  * group keeps its order.
  */
 function grouped<T>(entries: readonly T[], nodeOf: (entry: T) => string | null): T[] {
-  const key = (entry: T): string | null => nodeOf(entry);
   // `sort` is stable, so each group keeps its order.
   return [...entries].sort((a, b) => {
-    const [first, second] = [key(a), key(b)];
+    const [first, second] = [nodeOf(a), nodeOf(b)];
     if (first === null || second === null) return (first === null ? 0 : 1) - (second === null ? 0 : 1);
     return compareCodeUnits(first, second);
   });
@@ -1338,208 +1551,6 @@ function placeholders(results: Record<string, unknown>, runId: string | null): R
   return Object.fromEntries(Object.entries(results).map(([name, value]) => [name, replace(value)]));
 }
 
-// The README's trace table: record kind -> [the payload field naming the node, the payload fields
-// kept].
-type TraceRow = readonly [string | null, readonly string[]];
-const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
-  [
-    "run_started",
-    [
-      null,
-      ["inputs", "learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm"],
-    ],
-  ],
-  ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
-  ["run_stopped", [null, ["reason", "node_ids"]]],
-  ["node_started", ["node_id", []]],
-  ["node_step", ["node_id", ["step"]]],
-  ["node_succeeded", ["node_id", ["value", "commit_target", "forward_capture"]]],
-  ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
-  ["node_expanded", ["spawner_id", ["seed", "prune_ids", "forward_capture"]]],
-  ["node_failed", ["failure", ["failure", "forward_capture"]]],
-  ...["memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"].map(
-    (kind): [string, TraceRow] => [
-      kind,
-      [null, ["memory", "commit_id", "attempt_id", "mutations", "failure"]],
-    ],
-  ),
-  ["backward_started", [null, ["attempt_id", "feedback"]]],
-  ["backward_ready", [null, ["attempt_id", "root_result", "attributed_results", "proposals"]]],
-  ["backward_finished", [null, ["attempt_id", "outcome", "attributed_results"]]],
-]);
-const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "defaults", "effective_llm_by_static_path", "call_time_llm",
-]);
-const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "evaluated_keys", "items", "node_data", "input_names", "variable_names",
-]);
-const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
-  ["node_failed", "failure"],
-  ["node_routed", "terminal_failure"],
-]);
-
-/** Return a connection record with only its `method`, `source` and `endpoint`. */
-function cut(connection: Case): Case {
-  const names = ["method", "source", "endpoint"].filter((name) => Object.hasOwn(connection, name));
-  return Object.fromEntries(names.map((name) => [name, connection[name]!]));
-}
-
-/**
- * Return an agent's LLM config projected to the trace: its `llm_config` fields (keys not
- * starting with `_`), `_header_names` and `_host_key` stay, and its `_connection` is cut; any
- * other `_` key is dropped.
- */
-function llm(config: Case): Case {
-  const kept = Object.fromEntries(
-    Object.entries(config).filter(
-      ([key]) => !key.startsWith("_") || key === "_header_names" || key === "_host_key",
-    ),
-  );
-  const connection = get(config, "_connection") ?? null;
-  if (connection !== null) kept["_connection"] = cut(connection as Case);
-  return kept;
-}
-
-/** Return whether a route field holds its empty value, as Python's `in (None, [], 0, "")` reads. */
-function emptyRouteValue(value: Value): boolean {
-  // Python's `0` also equals `0.0` and `False`.
-  return (
-    value === null || value === "" || value === 0 || value === 0n || value === false ||
-    (Array.isArray(value) && value.length === 0)
-  );
-}
-
-/** Return a `forward_capture` projected to the trace. */
-function capture(captured: Case): Case {
-  const route = (node: Case): Case => {
-    // `expression` and `result_type` are text each implementation spells its own way.
-    const lean: Case = Object.fromEntries(
-      Object.entries(node).filter(
-        ([key, value]) =>
-          key !== "expression" && key !== "result_type" && (key === "kind" || !emptyRouteValue(value)),
-      ),
-    );
-    if (Object.hasOwn(lean, "value_json")) {
-      lean["value_json"] = parseJson(lean["value_json"] as string, "codec") as Value;
-    }
-    if (Object.hasOwn(lean, "children")) lean["children"] = (lean["children"] as Case[]).map(route);
-    if (Object.hasOwn(lean, "snapshot")) lean["snapshot"] = route(lean["snapshot"] as Case);
-    return lean;
-  };
-  const projected: Case = { ...captured };
-  const data = get(captured, "node_data") ?? null;
-  if (isMapping(data) && (get(data, "effective_llm_config") ?? null) !== null) {
-    projected["node_data"] = { ...data, effective_llm_config: llm(data["effective_llm_config"] as Case) };
-  }
-  projected["route"] = route(captured["route"] as Case);
-  projected["items"] = (captured["items"] as Case[]).map((item) => ({
-    ...item,
-    capture: capture(item["capture"] as Case),
-  }));
-  return Object.fromEntries(
-    Object.entries(projected).filter(
-      ([key, value]) => truthy(value) || !CAPTURE_LEFT_OUT_WHEN_EMPTY.has(key),
-    ),
-  );
-}
-
-/** Return the run log's `lines` projected to the README's trace. */
-function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
-  const failure = (payload: Case): Case => {
-    const origins = (payload["trace"] as Case[]).map(
-      (origin) => new OriginRef(origin["key"] as string),
-    );
-    const fields = {
-      code: payload["code"] as FailureCode,
-      message: payload["message"] as string,
-      nodeId: payload["node_id"] as string | null,
-      trace: origins,
-    };
-    return failureForm(new Failure(fields), flow);
-  };
-  return lines.map((line) => {
-    // Read with the codec, so ints stay ints and floats floats; each record is projected afresh.
-    const record = parseJson(line, "codec") as Case;
-    const kind = record["kind"] as string;
-    const payload = { ...(record["payload"] as Case) };
-    const row = TRACE.get(kind);
-    if (row === undefined) {
-      throw new CaseFailure(`the run log holds a \`${kind}\` record the trace has no row for`);
-    }
-    const [nodeField, kept] = row;
-    let node = nodeField === null ? null : (payload[nodeField] ?? null);
-    if (kind === "node_failed") node = (node as Case)["node_id"] ?? null;
-    if (kind === "run_started") {
-      const pool = payload["initial_pool"] as Case;
-      payload["inputs"] = ((pool["store"] as Case)[pool["start_id"] as string] as Case)["value"]!;
-      const effective = payload["effective_llm_by_static_path"] as Case;
-      payload["effective_llm_by_static_path"] = Object.fromEntries(
-        Object.entries(effective).map(([path, config]) => [path, llm(config as Case)]),
-      );
-      const callTime = get(payload, "call_time_llm") ?? null;
-      if (callTime !== null) {
-        // `selection` is internal; its effect is each agent's `effective_llm_config` step.
-        const agents = (callTime as Case)["agents"] as Case;
-        payload["call_time_llm"] = {
-          agents: Object.fromEntries(
-            Object.entries(agents).map(([path, config]) => [path, llm(config as Case)]),
-          ),
-        };
-      }
-    }
-    if (kind === "node_succeeded") {
-      payload["value"] = (payload["value"] as Case)["value"]!;
-      if (payload["commit_target"] === node) delete payload["commit_target"];
-    }
-    const key = FAILURE_FIELDS.get(kind);
-    if (key !== undefined && (payload[key] ?? null) !== null) {
-      payload[key] = failure(payload[key] as Case);
-    }
-    if ((get(payload, "forward_capture") ?? null) !== null) {
-      payload["forward_capture"] = capture(payload["forward_capture"] as Case);
-    }
-    if (kind === "node_step") {
-      const step = { ...(payload["step"] as Case) };
-      if (Object.hasOwn(step, "retry_in")) step["retry_in"] = Number(step["retry_in"]);
-      if ((get(step, "effective_llm_config") ?? null) !== null) {
-        step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
-      }
-      // A failed step's error type goes through the error-class table.
-      const error = get(step, "error");
-      if (step["event"] === "failed" && isMapping(error) && typeof error["type"] === "string") {
-        step["error"] = { ...error, type: ERROR_CLASSES.get(error["type"]) ?? error["type"] };
-      }
-      payload["step"] = step;
-    }
-    if (kind === "backward_finished") {
-      const outcome = payload["outcome"] as Case;
-      const backward = get(outcome, "failure") ?? null;
-      if (backward !== null) {
-        const { cause_type: _type, traceback: _traceback, ...rest } = backward as Case;
-        // A backward failure's `cause` is a node failure when it has a `trace`.
-        const cause = rest["cause"];
-        if (isMapping(cause) && Object.hasOwn(cause, "trace")) rest["cause"] = failure(cause);
-        payload["outcome"] = { ...outcome, failure: rest };
-      }
-    }
-    const projected = Object.fromEntries(
-      Object.entries(payload).filter(
-        ([name, value]) =>
-          kept.includes(name) && value !== null && !(LEFT_OUT_WHEN_EMPTY.has(name) && !truthy(value)),
-      ),
-    );
-    return Object.keys(projected).length > 0 ? [kind, node, projected] : [kind, node];
-  });
-}
-
-/** Return `result` in the form of `expect.output`. */
-function output(result: RunResult, flow: ComposedFlow): Case {
-  if (result.status === "succeeded") {
-    return { status: "succeeded", output: dataForm(result.output as YianValue) };
-  }
-  return { status: result.status, failure: failureForm(result.failure!, flow) };
-}
-
 /**
  * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
  * the case directory, its waits on a virtual clock that starts at the real current time. Return
@@ -1587,17 +1598,16 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
   };
-  const error = caught["error"];
   checkSecrets(case_, {
     ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
     "the run log": text,
-    "the raised error": error === undefined ? "" : error instanceof Error ? error.message : String(error),
+    "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
   });
-  // Python's `!= 0`, under which 0.0 and false equal 0 too.
-  const workers = get(run, "num_workers", 8n);
-  if (workers !== 0n && workers !== 0 && workers !== false) actual = pooled(actual);
-  const given = Object.hasOwn(run, "run_id") || lines.length === 0;
-  const runId = given ? null : ((JSON.parse(lines[0]!) as Case)["run_id"] as string);
+  if (!isZero(get(run, "num_workers", 8n))) actual = pooled(actual);
+  const runId =
+    Object.hasOwn(run, "run_id") || lines.length === 0
+      ? null
+      : ((parseJson(lines[0]!, "codec") as Case)["run_id"] as string);
   // A raised error is compared as is, without placeholders.
   actual = placeholders(actual, runId);
   return { ...actual, ...caught, left };

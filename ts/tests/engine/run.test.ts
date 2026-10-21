@@ -20,8 +20,9 @@
  * log path is refused (`EEXIST`) and left unchanged; `result.log` is the path as given (`null`
  * without one); `interruptedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
  * `int` is `3n`, NaN refused where it sits, an accessor or a Proxy inputs record refused,
- * `Infinity` kept for a `float`, a too-deep value refused); the `memory` and run-owned MCP server
- * stubs.
+ * `Infinity` kept for a `float`, a too-deep value refused); the run's `env` scopes the `YIAN_*`
+ * values it reads and records, and a bad one rejects before the log exists; the `memory` and
+ * run-owned MCP server stubs.
  *
  * TS-only, one row for each run-start check's message (Python pins them in
  * `test_typed_tool_node.py`, `test_run_tools_flow.py`, `test_run_skills.py` and
@@ -57,7 +58,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { current, type Env } from "../../src/defaults.ts";
+import { current, DefaultsError, type Env } from "../../src/defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -453,6 +454,28 @@ test("a too-deep input is refused", async () => {
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toStartWith("input 'x' at ");
   expect((error as Error).message).toContain(`value nests deeper than ${current().maxValueNesting} levels`);
+});
+
+test("the run's env sets the YIAN_* values it reads and records", async () => {
+  const path = join(dir, "run.jsonl");
+  const env = hostEnv({ YIAN_MAX_VALUE_NESTING: "3" });
+  const flow = await load(echoFlow("Any"));
+  const result = await run(flow, { x: [[1]] }, { log: path, env });
+  expect(result.status).toBe("succeeded");
+  expect((readRunLog(path)[0]!.record as RunStartedRecord).defaults).toEqual({ MAX_VALUE_NESTING: 3n });
+  const error = await run(flow, { x: [[[[1]]]] }, { env }).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(TypeCheckError);
+  expect((error as Error).message).toContain("value nests deeper than 3 levels");
+});
+
+test("a bad YIAN_* value in the run's env rejects before the log exists", async () => {
+  const path = join(dir, "run.jsonl");
+  const env = hostEnv({ YIAN_MAX_VALUE_NESTING: "deep" });
+  const flow = await load(PLAN_FLOW);
+  const error = await run(flow, { topic: "ACME" }, { log: path, env }).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(DefaultsError);
+  expect((error as Error).message).toStartWith('YIAN_MAX_VALUE_NESTING="deep" is not an integer');
+  expect(existsSync(path)).toBe(false);
 });
 
 // ---- TS-only: not ported yet ----

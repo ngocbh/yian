@@ -35,7 +35,7 @@ import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
-import { current, type Defaults, type Env, nonDefaults, processEnv } from "./defaults.ts";
+import { current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, reprText } from "./diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
@@ -205,7 +205,10 @@ export interface RunFlowOptions {
    * signal rejects before anything is created.
    */
   signal?: AbortSignal | null;
-  /** The environment for connection selection, credentials and model building (default `process.env`). */
+  /**
+   * The environment for connection selection, credentials, model building and the run's `YIAN_*`
+   * values (default `process.env`).
+   */
   env?: Env | null;
   /** For tests: the clock the system clock is seeded from and node waits run on (default `realScheduler`). */
   scheduler?: Scheduler | null;
@@ -242,7 +245,7 @@ export interface RunFlowOptions {
  *   has no provider or model, or `llmConfig.api_key` has no `provider`; or the identity, worker
  *   count or prepared start state breaks its contract. A message never echoes the key.
  * @throws AuthError when the credential store can't be read.
- * @throws DefaultsError when a `YIAN_<NAME>` variable holds a value its entry doesn't accept.
+ * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
  *   can't be created, locked, written, synced or closed.
@@ -252,24 +255,29 @@ export async function runFlow(
   inputs: Readonly<Record<string, unknown>>,
   options: RunFlowOptions = {},
 ): Promise<RunResult> {
-  // A bad YIAN_<NAME> value fails here, before any work.
-  const runDefaults = current();
-  const { learnable = false, tools = null, steering = null, context, signal = null } = options;
-  if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
-  if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
-  if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
-  signal?.throwIfAborted();
-  // A server the run opens and closes itself.
-  if (tools !== null && Object.values(tools).some((entry) => isMcpServer(entry) && !entry.isOpen)) {
-    throw new Error("run-owned MCP servers are not ported yet");
-  }
-  // The tool entries' errors, and the checks that need no tools, come before any server starts.
-  new ToolSet(tools, { context });
-  checkConditions(flow.compiled);
-  checkTemplates(flow.compiled);
-  const skills = checkSkills(flow.compiled, options.skills ?? null);
-  requireSteering(steering);
-  return startRun(flow, inputs, { ...options, skills }, runDefaults);
+  // The scope makes everything the run reads, the engine's work included, see the run's values;
+  // a bad YIAN_<NAME> value fails here, before any work.
+  return withEnv(options.env ?? processEnv, () => {
+    const runDefaults = current();
+    const { learnable = false, tools = null, steering = null, context, signal = null } = options;
+    if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
+    if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
+    if (signal !== null && !(signal instanceof AbortSignal)) {
+      throw new TypeError("signal must be an AbortSignal or null");
+    }
+    signal?.throwIfAborted();
+    // A server the run opens and closes itself.
+    if (tools !== null && Object.values(tools).some((entry) => isMcpServer(entry) && !entry.isOpen)) {
+      throw new Error("run-owned MCP servers are not ported yet");
+    }
+    // The tool entries' errors, and the checks that need no tools, come before any server starts.
+    new ToolSet(tools, { context });
+    checkConditions(flow.compiled);
+    checkTemplates(flow.compiled);
+    const skills = checkSkills(flow.compiled, options.skills ?? null);
+    requireSteering(steering);
+    return startRun(flow, inputs, { ...options, skills }, runDefaults);
+  });
 }
 
 /**

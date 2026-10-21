@@ -54,6 +54,7 @@ import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEn
 import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
+import type { FeedbackValue } from "./expr/lineage.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
 import { LLMConfig, popHostCredentials } from "./llm_clients/config.ts";
 import {
@@ -94,6 +95,7 @@ import {
   sameOptional,
 } from "./nodes/contracts.ts";
 import { realScheduler, type Scheduler } from "./platform.ts";
+import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine, resumedAttemptEvents } from "./runtime/engine.ts";
 import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
@@ -214,6 +216,207 @@ export class RunResult {
   /** The last observed accepted backward disposition, initially `null`. */
   get backwardOutcome(): BackwardOutcome | null {
     return this.#backwardOutcome;
+  }
+
+  /**
+   * Run one new explicit backward attempt over the retained accepted execution.
+   *
+   * Each call appends a new attempt, whatever earlier attempts did; an unfinished earlier attempt
+   * (from a killed process, say) is first recorded as interrupted. The forward fields never change.
+   *
+   * @param feedback Ordinary text or structured feedback on the flow's output, taken through host
+   *   intake (`{n: 3}` holds the int `3n`).
+   * @param options.apiKey The provider key of a run started with `llmConfig.api_key`, for the same
+   *   agents as in `runFlow`, never recorded; `null` (the default) uses the key this result was
+   *   created with, if any. A run that marked no agent ignores it.
+   * @param options.headers The header values sent with that key; their names must be the recorded
+   *   ones, compared without case. `null` uses the headers this result was created with, if any.
+   * @returns The accepted attempt's outcome, separate from the forward status, output, failure and
+   *   events; `learning` is its projection.
+   * @throws TypeError when the feedback has an invalid message carrier.
+   * @throws TypeCheckError when the feedback isn't a yian value or nests deeper than
+   *   `YIAN_MAX_VALUE_NESTING` levels.
+   * @throws RangeError when the run wasn't retained (`learnable: true`), the feedback doesn't match
+   *   the output's shape, or `headers` has a name or value that can't be sent or names other than
+   *   the recorded ones (the message never echoes a value).
+   * @throws MemorySetupError when the run's memories can't restore their recorded snapshots.
+   * @throws Error when another backward call on this result is in progress, or an earlier call
+   *   couldn't retain its accepted prefix; host and log faults also reject, keeping the accepted
+   *   prefix.
+   */
+  async backward(
+    feedback: unknown = null,
+    options: { apiKey?: string | null; headers?: Readonly<Record<string, string>> | null } = {},
+  ): Promise<BackwardOutcome> {
+    const handle = BACKWARD_HANDLES.get(this);
+    if (handle === undefined) throw new RangeError("backward requires a run retained with learnable: true");
+    // Taken and bounded before anything walks the feedback recursively.
+    const taken = fromHost(feedback, "feedback");
+    rejectDeepNesting(taken, "feedback");
+    if (handle.busy) throw new Error("a backward call on this result is already in progress");
+    const { apiKey = null, headers = null } = options;
+    handle.busy = true;
+    try {
+      return await handle.backward(taken as FeedbackValue, {
+        apiKey: apiKey === null ? null : secretKey(apiKey),
+        headers: headers === null ? null : secretHeaders(headers),
+      });
+    } finally {
+      this.#backwardOutcome = handle.outcome;
+      handle.busy = false;
+    }
+  }
+}
+
+/** The retained authority behind each learnable `RunResult`, found by its result. */
+const BACKWARD_HANDLES = new WeakMap<RunResult, BackwardHandle>();
+
+/**
+ * The private original program and closed append authority a learnable result keeps for later
+ * feedback: the log's path, or a process-local log's records.
+ */
+class BackwardHandle {
+  readonly program: CompiledFlow;
+  readonly runId: string;
+  /** The absolute log path captured at the run, or `null` for a process-local log. */
+  readonly path: string | null;
+  /** A process-local log's records; empty for a durable log. */
+  records: readonly RecordEnvelope[];
+  readonly memory: ReadonlyMap<string, Memory> | null;
+  /** The last accepted backward outcome this handle observed. */
+  outcome: BackwardOutcome | null;
+  // Held in memory for this result's own backward calls; never recorded.
+  readonly apiKey: string | null;
+  readonly headers: Readonly<Record<string, string>> | null;
+  /** The run's environment: the replay checks the recorded `YIAN_*` values against it. */
+  readonly env: Env;
+  readonly models: ModelAccess;
+  /** Whether a backward call on the result is running. */
+  busy = false;
+  #unusable = false;
+
+  constructor(fields: {
+    program: CompiledFlow;
+    runId: string;
+    path: string | null;
+    records: readonly RecordEnvelope[];
+    memory: ReadonlyMap<string, Memory> | null;
+    outcome: BackwardOutcome | null;
+    apiKey: string | null;
+    headers: Readonly<Record<string, string>> | null;
+    env: Env;
+    models: ModelAccess;
+  }) {
+    this.program = fields.program;
+    this.runId = fields.runId;
+    this.path = fields.path;
+    this.records = fields.records;
+    this.memory = fields.memory;
+    this.outcome = fields.outcome;
+    this.apiKey = fields.apiKey;
+    this.headers = fields.headers;
+    this.env = fields.env;
+    this.models = fields.models;
+  }
+
+  /**
+   * Reopen and replay the log, then drive one whole backward attempt over it.
+   *
+   * @throws Error when an earlier call couldn't retain its accepted prefix, and what the replay or
+   *   `driveBackward` throws.
+   */
+  backward(
+    feedback: FeedbackValue,
+    options: { apiKey: string | null; headers: Readonly<Record<string, string>> | null },
+  ): Promise<BackwardOutcome> {
+    if (this.#unusable) {
+      throw new Error("backward handle is unavailable after an accepted-prefix refresh failure");
+    }
+    // The call comes after the run's scope ended, so the replay's `checkRecorded` needs its own.
+    return withEnv(this.env, async () => {
+      const authority = this.path === null ? MemoryRunLog.fromRecords(this.records) : JsonlRunLog.resume(this.path);
+      let state: RunState | null = null;
+      let replaySequence: number | null = null;
+      let primary: { error: unknown } | null = null;
+      try {
+        state = replayCompiledRunLog(this.program, authority, {
+          apiKey: options.apiKey ?? this.apiKey,
+          headers: options.headers ?? this.headers,
+        });
+        if (state.runId !== this.runId) throw new RangeError("backward log identity differs from the retained run");
+        const callTime = state.callTimeLlm as CallTimeLlm | null;
+        if (options.headers !== null && usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
+          // Before the attempt is appended; kept headers were checked when kept.
+          checkHostHeaderNames(state.effectiveLlmByStaticPath, options.headers, callTime);
+        }
+        replaySequence = state.nextSequence;
+        const replayed = state;
+        const openMemory = (): Promise<MemoryRuntime> => {
+          if (this.memory === null) throw new MemorySetupError("backward requires this run's enabled memory mapping");
+          const memories = replayed.memories!;
+          checkRegistryTypes(this.memory, memories);
+          const program = copyGraph(this.program);
+          applyEffectiveLlmMap(program, legacyConnectionMap(replayed.effectiveLlmByStaticPath), replayed.callTimeLlm);
+          const layout = resolveRuntimeMemoryLayout(program);
+          checkRecordedMemoryTable(memories, replayed.memoryStacks, layout.memories, layout.stacks, "retained program");
+          return MemoryRuntime.open({
+            memories,
+            origins: layout.origins,
+            memory: this.memory,
+            snapshots: replayed.memorySnapshots,
+          });
+        };
+        return await driveBackward(state, authority, feedback, { openMemory, models: this.models });
+      } catch (error) {
+        primary = { error };
+        throw error;
+      } finally {
+        try {
+          if (replaySequence !== null) {
+            try {
+              this.#refresh(authority, state!, replaySequence);
+            } catch (refreshError) {
+              this.#unusable = true;
+              if (primary === null) {
+                primary = { error: refreshError };
+                // With no error in flight, the refresh error is the call's error.
+                throw refreshError;
+              }
+              noteCleanupError(primary.error, "backward prefix refresh", refreshError);
+            }
+          }
+        } finally {
+          closeOwnedLog(authority, primary);
+        }
+      }
+    });
+  }
+
+  /**
+   * Retain the accepted facts, replaying an append that outpaced the local reduction.
+   *
+   * @throws RangeError when the log's sequence went back or the log changed while it was read, or
+   *   the log holds another run.
+   */
+  #refresh(authority: RunLog, state: RunState, replaySequence: number): void {
+    const sequence = authority.nextSequence;
+    if (!Number.isSafeInteger(sequence) || sequence < state.nextSequence) {
+      throw new RangeError("backward log sequence regressed during the call");
+    }
+    // Merely reading another handle's work must keep this result's observation when its own call
+    // accepted no new record.
+    if (sequence === replaySequence) return;
+    if (state.nextSequence > replaySequence) this.outcome = state.backwardState.outcome;
+    const records = authority.records();
+    if (authority.nextSequence !== sequence || records.length !== sequence) {
+      throw new RangeError("backward log changed during prefix refresh");
+    }
+    if (this.path === null) this.records = records;
+    if (sequence > state.nextSequence) {
+      const accepted = replayCompiledRunLog(this.program, authority);
+      if (accepted.runId !== this.runId) throw new RangeError("backward log identity differs from the retained run");
+      this.outcome = accepted.backwardState.outcome;
+    }
   }
 }
 
@@ -687,7 +890,9 @@ async function startRun(
 
     // Preparation precedes durable-file creation, so invalid initialization cannot leave an empty
     // path behind.
-    authority = log === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(resolve(log), canonicalRunId);
+    // The absolute path is taken once, so a later directory change can't move the log.
+    const locator = log === null ? null : resolve(log);
+    authority = locator === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(locator, canonicalRunId);
     const observers = commitPrepared(authority, state, preparedStart);
     const runtime = memoryRuntime;
     // Built before publishing so a callback's rejected promise can stop it.
@@ -710,7 +915,14 @@ async function startRun(
     const events: RunEvent[] = [];
     publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));
     events.push(...(await engine.run()));
-    return resultFromState(state, log, events);
+    const handle = retainedHandle(retainedProgram, state, authority, memory, {
+      locator,
+      apiKey,
+      headers,
+      env,
+      models,
+    });
+    return resultFromState(state, log, events, handle);
   } catch (error) {
     primary = { error };
     throw error;
@@ -851,7 +1063,9 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
     let headers = rawHeaders === null ? null : secretHeaders(rawHeaders);
     requireSteering(steering);
     checkTestOptions(options);
-    const authority = JsonlRunLog.resume(resolve(log));
+    // The absolute path is taken once, so a later directory change can't move the log.
+    const locator = resolve(log);
+    const authority = JsonlRunLog.resume(locator);
     let memoryRuntime: MemoryRuntime | null = null;
     let runServers: McpServer[] = [];
     let primary: { error: unknown } | null = null;
@@ -865,7 +1079,17 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
         // Checked before the terminal return too, since a later backward call sends them.
         checkHostHeaderNames(state.effectiveLlmByStaticPath, headers, callTime);
       }
-      if (state.result !== null) return resultFromState(state, log, []);
+      const models = options.models ?? defaultModelAccess(env);
+      const retainedProgram = state.learnable ? copyGraph(flow.compiled) : null;
+      const handle = (): BackwardHandle | null =>
+        retainedHandle(retainedProgram, state, authority, options.memory ?? null, {
+          locator,
+          apiKey,
+          headers,
+          env,
+          models,
+        });
+      if (state.result !== null) return resultFromState(state, log, [], handle());
       // The checks that need no tools come before any server starts.
       checkConditions(flow.compiled);
       checkTemplates(flow.compiled);
@@ -920,7 +1144,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
         tools: runTools,
         skills,
         steering,
-        models: options.models ?? defaultModelAccess(env),
+        models,
         signal,
         scheduler: options.scheduler ?? realScheduler,
         random: options.random ?? null,
@@ -929,7 +1153,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
       publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
       events.push(...(await engine.run()));
-      return resultFromState(state, log, events);
+      return resultFromState(state, log, events, handle());
     } catch (error) {
       primary = { error };
       throw error;
@@ -1653,7 +1877,12 @@ function publishBoundaryObservers(
  *
  * @throws Error when the state has no terminal result.
  */
-function resultFromState(state: RunState, path: string | null, events: readonly RunEvent[]): RunResult {
+function resultFromState(
+  state: RunState,
+  path: string | null,
+  events: readonly RunEvent[],
+  handle: BackwardHandle | null = null,
+): RunResult {
   const terminal = state.result;
   const common = {
     input: copyValue(state.input) as Record<string, unknown>,
@@ -1661,13 +1890,56 @@ function resultFromState(state: RunState, path: string | null, events: readonly 
     log: path,
     events,
     interruptedAttempts: new Map(state.interruptedAttempts),
-    backwardOutcome: state.backwardState.outcome,
+    backwardOutcome: handle === null ? state.backwardState.outcome : handle.outcome,
   };
+  let result: RunResult;
   if (terminal instanceof RunSucceeded) {
-    return new RunResult({ ...common, status: "succeeded", output: copyValue(terminal.output as Value) });
+    result = new RunResult({ ...common, status: "succeeded", output: copyValue(terminal.output as Value) });
+  } else if (terminal instanceof RunFailed) {
+    result = new RunResult({ ...common, status: "failed", failure: terminal.failure });
+  } else {
+    throw new Error("engine returned without deriving a terminal run result");
   }
-  if (terminal instanceof RunFailed) return new RunResult({ ...common, status: "failed", failure: terminal.failure });
-  throw new Error("engine returned without deriving a terminal run result");
+  if (handle !== null) BACKWARD_HANDLES.set(result, handle);
+  return result;
+}
+
+/**
+ * Detach the authority a later `RunResult.backward` needs, keeping no open session or log: the
+ * log's path (or a process-local log's records), the retained program and memory, the host key
+ * and headers, the run's environment and model access. A plain `Map` of memories is copied, so a
+ * later change to it doesn't reach the handle; a `MemoryRegistry` is kept as is.
+ *
+ * @param program The retained original program, or `null` for a run that isn't learnable.
+ * @param locator The log's absolute path, or `null` for a process-local log.
+ * @returns The handle, or `null` when `program` is `null`.
+ */
+function retainedHandle(
+  program: CompiledFlow | null,
+  state: RunState,
+  log: RunLog,
+  memory: ReadonlyMap<string, Memory> | null,
+  options: {
+    locator: string | null;
+    apiKey: string | null;
+    headers: Readonly<Record<string, string>> | null;
+    env: Env;
+    models: ModelAccess;
+  },
+): BackwardHandle | null {
+  if (program === null) return null;
+  return new BackwardHandle({
+    program,
+    runId: requiredStateRunId(state),
+    path: options.locator,
+    records: log.path === null ? log.records() : [],
+    memory: memory !== null && Object.getPrototypeOf(memory) === Map.prototype ? new Map(memory) : memory,
+    outcome: state.backwardState.outcome,
+    apiKey: options.apiKey,
+    headers: options.headers,
+    env: options.env,
+    models: options.models,
+  });
 }
 
 /**

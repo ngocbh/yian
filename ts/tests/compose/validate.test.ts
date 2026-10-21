@@ -31,7 +31,7 @@
  * (`./fixtures/compose_codefns.ts:pick_pro`).
  *
  * Also ported here: `test_a_case_output_over_a_1000_link_alias_chain_is_rejected_as_a_case_output`
- * from `tests/compose/test_record_type_nesting.py`, which has no TS mirror yet. Changed: it raises
+ * from `tests/compose/test_record_type_nesting.py` (whose other rows are in `record_type_nesting.test.ts`). Changed: it raises
  * `maxYamlNodes` (the anchors hit the YAML node limit first at the default), as
  * `written_value_nesting.test.ts` does; its message is pinned (a stack overflow would give another
  * error, so there is no cause-chain check).

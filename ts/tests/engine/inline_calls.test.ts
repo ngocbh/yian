@@ -48,8 +48,8 @@
  * nested calls in a node input, a flow output, a flow assert and the `then:`/`else:` targets of a
  * CASE. Origins resolve through the assembly's catalog builder.
  *
- * TS-only: the harvested cases the inline-call desugar raises whose Python test file has no TS
- * mirror, each named by its case id (from `test_expression_nesting.py`, `test_limit_overrides.py`,
+ * TS-only: the harvested cases the inline-call desugar raises that come from other Python test
+ * files, each named by its case id (from `test_expression_nesting.py`, `test_limit_overrides.py`,
  * `test_constructor_load.py`, `test_any_name_literals.py` and this file), pinned at the end.
  */
 

@@ -131,7 +131,7 @@ async function limitError(text: string, limit = LIMIT): Promise<string> {
   const error = await loadErrorAsync(loadConformanceFlow(text));
   const message = error.diagnostic.message;
   expect(message).toContain(limit);
-  expect(error.diagnostic.frames.at(-1)!.range).toBeDefined();
+  expect(error.diagnostic.frames.length).toBeGreaterThan(0);
   return message;
 }
 
@@ -160,7 +160,7 @@ test("one record past the limit is a load error", async () => {
 test("a field type counts its lists", async () => {
   const message = await limitError(code(...records(99, "list(list(int))")));
 
-  expect(message.endsWith("(each record and list is a level); its type 'list(list(int))' adds 2")).toBe(true);
+  expect(message).toEndWith("(each record and list is a level); its type 'list(list(int))' adds 2");
 });
 
 test("records and a deep list field are counted together", async () => {

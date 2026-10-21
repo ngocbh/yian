@@ -93,6 +93,8 @@ const human = (n: number) =>
   "output: ${ask.output}\n";
 
 const SEED_05 = "load-map-call/seed_05_call_map";
+// Python resolves seed 05's `uses:` child on the seeds directory; here it comes from the case.
+const researchOne = caseText(SEED_05, { file: "03-research-one.yaml" }).text;
 
 /** A seed's flow text, read from its harvested case. */
 const seed = (id: string) => caseText(id).text;
@@ -135,8 +137,6 @@ test.each(Object.keys(SITES).flatMap((site) => [101, CHAIN].map((depth) => [site
   "a too deep expression is a located load error (%s, %d)",
   async (site, depth) => {
     const [text, needle] = SITES[site]!(depth);
-    // Python resolves seed 05's `uses:` child on the seeds directory; here it comes from the case.
-    const researchOne = caseText(SEED_05, { file: "03-research-one.yaml" }).text;
     const error = await loadErrorAsync(
       loadConformanceFlow(text, { childResolver: () => loadConformanceFlow(researchOne) }),
     );

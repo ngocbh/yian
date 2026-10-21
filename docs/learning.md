@@ -274,6 +274,13 @@ Changed (TS yian): the learner's material is the text form (`1.0` is `1`, bare `
 key order), lengths (`max_chars`, `input_budget_chars`) count code points, and blank and
 unchanged checks use JS `trim()` where Python uses `strip()`. Feedback values dedupe by their
 JSON text, so the int `2`, the float `2.0` and `true` stay distinct (Python's `==` merges them).
+
+Changed (TS yian): reflective and profile learners, and AGENT backward, retry a failed model call
+like any other model call (`YIAN_MODEL_RETRIES`); before each wait they publish a transient
+`ModelCallRetried` event (`consumer` `"memory:<key>"` under the node id `__memory__`, or
+`"backward"` under the AGENT's id). Learners publish to the `onEvent` given to `buildMemories`, which
+also takes the `models` they build through; AGENT backward publishes to the backward driver's
+`onEvent`.
 Feedback holding `±Infinity` fails `profile.invalid_context` when a proposed mutation would carry
 it.
 

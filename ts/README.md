@@ -275,7 +275,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   CALL's, MAP's, LOOP's, CODE's, TOOL's, HUMAN_INPUT's and WAIT's bodies run.
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
-  runs an AGENT with its tools and skills (below), and `backward` is not ported yet. Every AGENT has
+  runs an AGENT with its tools and skills (below), and `backward` (`backward.ts`, Python's
+  `nodes/agent/backward.py`) makes one tool-free call of the recorded model through the
+  `BackwardOptions` `models` the backward driver passes (consumer `"backward"`). Every AGENT has
   `needsSteps`: it records a `model_attempt` step before each model retry, and a call-time agent
   (`callTime` set) also records its `effective_llm_config`.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
@@ -569,6 +571,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   routing input feedback, and returns the root projection with every occurrence's attributed result
   (unreached ones uninvoked); a handler's throw is a `backward.execute` `BackwardComputeError` and a
   refused result `backward.result`, while trace faults escape unattributed.
+  `computeBackward` and `driveBackward` take `models` and `onEvent` too and pass them to each
+  handler as its `BackwardOptions`.
   `driveBackward(state, log, feedback, { openMemory })` runs one new explicit attempt when a host
   calls it: it prepares its first record (an interrupted `BackwardFinished` for an unfinished
   earlier attempt, else `BackwardStarted`) as a gate, opens the memory runtime (only when memories

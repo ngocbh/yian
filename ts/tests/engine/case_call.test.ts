@@ -10,8 +10,8 @@
  * flow call inside its `${...}` is a LoadError that says to call the flow as the branch
  * (`then: call(take, ...)`).
  *
- * Changed: the flows assemble with `assembleText`, each `defs:` callee built by hand (`handChild`)
- * with the signature the row reads, where Python loads them.
+ * Changed: the load rows assemble their flows with `assembleText`, each `defs:` callee built by hand
+ * (`handChild`) with the signature the row reads, where Python loads them.
  * `test_private_callee_in_case_target_is_rejected_at_branch_before_resolution` pins the whole
  * message; the scope's resolver throws a plain `Error` for any callee, so a private callee that
  * reached resolution would fail the row without a monkeypatch.

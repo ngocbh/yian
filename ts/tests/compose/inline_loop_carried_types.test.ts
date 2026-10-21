@@ -232,7 +232,7 @@ test("a typed seed with an optional body field loads", () => {
   assembleText(noteLoop('!str "start"', "Optional(str)", 'inputs["note"] + "!"'));
 });
 
-test("typed seed with an optional body field loads (runs)", async () => {
+test("typed seed with an optional body field runs", async () => {
   // Python's test_typed_seed_with_an_optional_body_field_loads also runs the flow.
   const result = await run(noteLoop('!str "start"', "Optional(str)", 'inputs["note"] + "!"'));
 

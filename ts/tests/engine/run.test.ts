@@ -12,6 +12,9 @@
  * `test_input_type_mismatch_fails_at_boundary`, `test_coercible_string_input_passes_boundary`,
  * `test_bool_spelling_coerces_at_boundary` (both spellings),
  * `test_unrecognized_bool_spelling_fails_at_boundary`,
+ * `test_bool_text_is_not_converted_for_a_child_input` (a CALL, both answers; the `yes` run is also
+ * the harvested `run-core/engine_run__bool_text_is_not_converted_for_a_child_input`; Changed: the
+ * message quotes the text JSON style, `"yes"`, where Python shows `'yes'` (decision 7)),
  * `test_boundary_assert_false_fails_before_any_node_runs`,
  * `test_post_terminal_assert_false_flips_succeeded_to_failed`, `test_all_asserts_true_succeeds`,
  * `test_run_id_host_override_resolves` and `test_run_id_minted_when_omitted`.
@@ -45,10 +48,6 @@
  * and of `test_llm_config_values_call_time.py`. Changed: TS keeps Infinity, so the provider block
  * refuses it ("Input should be a finite number", a `contract.input` failure when the agent runs)
  * where Python refuses `non-finite number inf`.
- *
- * Ported: `test_bool_text_is_not_converted_for_a_child_input` (both answers; the `yes` run is also
- * the harvested `run-core/engine_run__bool_text_is_not_converted_for_a_child_input`). Changed: the
- * message quotes the text JSON style, `"yes"`, where Python shows `'yes'` (decision 7).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

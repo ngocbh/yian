@@ -290,10 +290,16 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   model errors fail with their `provider.*` code, spent `retries:` corrections with
   `agent.output_invalid`. With tools or skills it runs the tool loop: consecutive calls whose tool
   is concurrency-safe (`isConcurrencySafe`, and `load_skill`) run together as a group, and an
-  unsafe call runs alone. A memory transcript still throws "not ported yet".
+  unsafe call runs alone. With a memory transcript (`src/nodes/agent/memory.ts`, Python's
+  `nodes/agent/memory.py`) it prepares prior context first (`prepareHistory`, summaries through
+  the AGENT's model with purpose `history_summary`), then records each model call's new input and
+  reply (`invokeModel`) and each tool call (`requestTool` before it starts; a group's started calls
+  observed in call order once the group settles), skipped calls and interrupts. Stored messages
+  are `yian.message.v1` items `{exchange_id, message}`; memory faults surface as
+  `CapabilityFault`.
 - Before each wait between model-call attempts, an AGENT with `caps.steps` records a
   `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
-  from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
+  from 1 per node start, chat, structured and history summaries alike, and the error is scrubbed as the node's failure
   is. Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
   (before, the real clock and `Math.random`). Nothing reads these steps yet, so a resumed AGENT
   restarts. Each reason the built model gives

@@ -2062,7 +2062,8 @@ uses current instructions (the node's rendered `system_prompt:` or the framework
 instruction), recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
-Changed (TS yian): the message format is `yian.message.v1`; TS yian never reads Python memory
+Changed (TS yian): the message format is `yian.message.v1`, and each stored item's payload is
+`{exchange_id, message}` with `message` in that format; TS yian never reads Python memory
 stores. `await source.openTurn(request, { signal })` waits for the lease and resolves to the
 admitted turn; an aborted `signal` is the cooperative stop, and a waiter learns of a poisoned
 store at its next wake-up. `request`, `observe` and `view` are synchronous. `turn.close(error?)`
@@ -2488,7 +2489,7 @@ Changed (TS yian): before each wait between an AGENT's model-call attempts (a
 transport retry under `YIAN_MODEL_RETRIES`), the node records a `NodeStepRecord`
 step `{"model_attempt": {"call": n, "attempt": k, "status": "failed", "error":
 {"kind": ..., "message": ...}, "partial": ..., "retry_in": s}}`. `call` numbers the
-node's model calls, chat and structured alike, from 1 in each node start; `attempt`
+node's model calls, chat, structured and history summaries alike, from 1 in each node start; `attempt`
 is the attempt that failed; `error` holds the provider error's kind (`server`,
 `rate_limit`, `timeout`, ...) and its message, scrubbed of the credentials the call
 may have sent, as the node's failure is; `partial` is the `yian.message.v1`

@@ -110,7 +110,7 @@ it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of
 |---|---|---|
 | `load` | `flow` (required), `files`, `env` | `expect.load` |
 | `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `memory` when present |
-| `resume` | as `run`, plus `host.crash_after_record` and `resume` | as `run`, for the resumed run |
+| `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run |
 | `backward` | as `run`, plus `backward` | as `run`, plus `expect.backward` |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
@@ -147,12 +147,14 @@ every other result is the main run's.
 
 ### `resume`
 
-For serial runs (`num_workers: 0`). `host.crash_after_record` (required) is a record number or
-`end`. A number `k` cuts the first run after record `k` (0-based, so records `0`..`k` are kept): every later
-append is refused without writing, the run is abandoned, and the runner checks that the cut
-happened. The Python runner's cut still runs the run's own cleanup (closing the log; later, memory
-and MCP close calls), which a real crash would not. `end` lets the first run run to its end (a first
-run that raises fails the case), so the resume is a finished run's, read-only. Then the flow is
+For serial runs (`num_workers: 0`). A `resume` case gives one of `host.crash_after_record`, a
+record number or `end`, and `host.stop` (below). A number `k` cuts the first run after record `k`
+(0-based, so records `0`..`k` are kept): every later append is refused without writing, the run
+is abandoned, and the runner checks that the cut happened. Each runner's cut still runs the run's
+own cleanup (closing the log, and memory and MCP close calls; in TS, `runFlow`'s), which a real
+crash would not. `end` lets the first run run to its end (a first run that raises fails the case),
+so the resume is a finished run's, read-only. With `host.stop`, the first run must reject with the
+stop, and the resume continues the stopped run. Then the flow is
 resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
 `api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
 run: its output, the trace of the whole log, the events and stream of the resume call, and
@@ -426,6 +428,12 @@ A case can't hold code, so its host is declared under `host`.
   the chunks shown and ends the stream with a final `""` chunk, and on the last chunk it keeps the
   whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT authored
   `steerable: true` (with `str` output) reads the inbox.
+- **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run (TS only; the Python runner
+  doesn't support it yet). The points and their counting are `steering`'s, and `after` is
+  required. When the run reaches the point, the runner aborts the run's `signal` with a
+  `ConformanceStop` error, so the run rejects with it: a `run` case expects `raises: {class:
+  ConformanceStop, message: conformance stop}`, and its trace ends with `run_stopped`. A stop
+  whose point is never reached fails the case after the comparisons, like a leftover entry.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
@@ -444,8 +452,6 @@ contract: a session is checked through a later run's `request`.
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
 
-- **`stop`**: a stop at a point: before model call `n` of a node, after chunk `k` of model call
-  `n`, or before tool call `i`.
 - **`skills`**: skill directories, given as `files`.
 
 Not in the format yet (each comes as an addition when a case needs it): file values in

@@ -497,6 +497,22 @@ describe("checkCase", () => {
       "`host.crash_after_record` needs `run.num_workers: 0`",
     ],
     [
+      `${BARE_RESUME}run: {num_workers: 1}\nhost: {stop: {a: {after: {tool_call: 1}}}}`,
+      "`host.stop` needs `run.num_workers: 0`",
+    ],
+    [
+      `${BARE_RESUME}run: {num_workers: 0}\nhost: {stop: {a: {after: {tool_call: 1}}}, crash_after_record: 1}`,
+      "a `resume` case takes one of `host.crash_after_record` and `host.stop`",
+    ],
+    [`${RUN}host: {stop: []}`, "`host.stop` must be a mapping"],
+    [`${RUN}host: {stop: {a: {}}}`, "`host.stop.a.after` is required"],
+    [`${RUN}host: {stop: {a: {after: {tool_call: 1}, steer: [x]}}}`, "unknown key `host.stop.a.steer`"],
+    [
+      `${RUN}host: {stop: {a: {after: {chunk: 1}}}}`,
+      "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
+    ],
+    [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, "`host.stop.a.after` counts must be ints from 1"],
+    [
       `${BARE_BACKWARD}backward: [{feedback: f}]`,
       "a `backward` case needs `run.learnable: true`",
     ],
@@ -556,6 +572,8 @@ describe("checkCase", () => {
     `${BARE_RESUME}run: {num_workers: 0.0}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: false}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: end}`,
+    `${BARE_RESUME}run: {num_workers: 0}\nhost: {stop: {a: {after: {model_call: 1, chunk: 2}}}}`,
+    `${RUN}host: {stop: {a: {after: {tool_call: 1}}}}`,
     BACKWARD,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,
@@ -1123,7 +1141,7 @@ describe("main", () => {
 
   test("fails a case using a reserved key before setting it up", async () => {
     const files = {
-      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, stop: {}}\nexpect: {output: {}}\n",
+      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, skills: {}}\nexpect: {output: {}}\n",
       "r/skills.yaml": "kind: run\nflow: x\nhost: {skills: {}}\nexpect: {output: {}}\n",
       "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
     };
@@ -1134,7 +1152,7 @@ describe("main", () => {
     expect(await run([], files, {}, { run: passing })).toEqual({
       code: 1,
       out: [
-        "FAIL r/host: `host.stop` is not supported by the TS runner yet",
+        "FAIL r/host: `host.skills` is not supported by the TS runner yet",
         "FAIL r/skills: `host.skills` is not supported by the TS runner yet",
         "3 cases: 1 passed, 2 failed, 0 pending",
       ],

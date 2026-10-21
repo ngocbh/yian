@@ -86,7 +86,14 @@ import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
 import { buildMemories, type MemoryRegistry } from "../src/memory_host.ts";
 import { virtualScheduler } from "../src/platform.ts";
-import { type RunFlowOptions, type RunResult, runFlow } from "../src/run.ts";
+import {
+  type ResumeFlowOptions,
+  resumeFlow,
+  type RunFlowOptions,
+  type RunResult,
+  runFlow,
+} from "../src/run.ts";
+import { JsonlRunLog } from "../src/runtime/log.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -187,9 +194,9 @@ const RUN_KEYS: ReadonlySet<string> = new Set([
 ]);
 const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
 // Host keys the format reserves and this runner doesn't support yet.
-const RESERVED_HOST_KEYS: readonly string[] = ["stop", "skills"];
+const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "memory", "steering", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "memory", "steering", "stop", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -535,17 +542,7 @@ function checkSteering(steering: Value | undefined): void {
       if (Object.hasOwn(action, "interrupt") && action["interrupt"] !== true) {
         throw new Error(`\`${where}.interrupt\` must be \`true\``);
       }
-      if (!Object.hasOwn(action, "after")) return;
-      const after = mapping(`${where}.after`, action["after"]);
-      const names = Object.keys(after).sort().join(",");
-      if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
-        throw new Error(
-          `\`${where}.after\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``,
-        );
-      }
-      if (Object.values(after).some((count) => typeof count !== "bigint" || count < 1n)) {
-        throw new Error(`\`${where}.after\` counts must be ints from 1`);
-      }
+      if (Object.hasOwn(action, "after")) checkPoint(`${where}.after`, action["after"]);
     });
   }
 }
@@ -595,6 +592,30 @@ function checkMemory(value: Value | undefined): void {
       }
     }
   });
+}
+
+/**
+ * Throw unless `value`, at `where`, is a point: `{model_call: n, chunk: k}`, `{model_call: n}` or
+ * `{tool_call: i}`, counted from 1.
+ */
+function checkPoint(where: string, value: Value | undefined): void {
+  const point = mapping(where, value);
+  const names = Object.keys(point).sort().join(",");
+  if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
+    throw new Error(`\`${where}\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``);
+  }
+  if (Object.values(point).some((count) => typeof count !== "bigint" || count < 1n)) {
+    throw new Error(`\`${where}\` counts must be ints from 1`);
+  }
+}
+
+/** Throw unless `stop` is `host.stop`: node ids to `{after: <point>}`. */
+function checkStop(stop: Value | undefined): void {
+  for (const [node, item] of Object.entries(mapping("host.stop", stop))) {
+    const where = `host.stop.${node}`;
+    const action = keys(where, item, new Set(["after"]), { required: ["after"] });
+    checkPoint(`${where}.after`, action["after"]);
+  }
 }
 
 /**
@@ -671,6 +692,7 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   checkModels(get(host, "models", {}));
   if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkSteering(get(host, "steering", {}));
+  checkStop(get(host, "stop", {}));
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
@@ -844,12 +866,19 @@ export function checkCase(case_: Case): Case {
   // Both were checked as mappings above when present.
   const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
-    const cut = get(get(case_, "host", {}) as Case, "crash_after_record");
-    if (cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
-      throw new Error("a `resume` case needs `host.crash_after_record`, a record number or `end`");
+    const host = get(case_, "host", {}) as Case;
+    const stops = Object.hasOwn(host, "stop");
+    if (stops && Object.hasOwn(host, "crash_after_record")) {
+      throw new Error("a `resume` case takes one of `host.crash_after_record` and `host.stop`");
+    }
+    const cut = get(host, "crash_after_record");
+    if (!stops && cut !== "end" && (typeof cut !== "bigint" || cut < 0n)) {
+      throw new Error(
+        "a `resume` case needs `host.crash_after_record`, a record number or `end`, or `host.stop`",
+      );
     }
     if (!isZero(get(run, "num_workers"))) {
-      throw new Error("`host.crash_after_record` needs `run.num_workers: 0`");
+      throw new Error(`\`host.${stops ? "stop" : "crash_after_record"}\` needs \`run.num_workers: 0\``);
     }
   }
   if (kind === "backward" && get(run, "learnable") !== true) {
@@ -1111,7 +1140,7 @@ export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
   load: runLoad,
   run: runRun,
-  // resume: not run yet
+  resume: runResume,
   // backward: not run yet
   expr: runExpr,
   value: runValue,
@@ -1383,14 +1412,25 @@ const RUN_OPTIONS: Readonly<Record<string, keyof RunFlowOptions>> = {
   context: "context",
 };
 
-/** Return the `run` arguments as `runFlow` options: an int as a JS number, `context` an object. */
-function runOptions(run: Case): RunFlowOptions {
+/** The `resumeFlow` option each `resume` key sets. */
+const RESUME_OPTIONS: Readonly<Record<string, keyof ResumeFlowOptions>> = {
+  num_workers: "numWorkers",
+  api_key: "apiKey",
+  headers: "headers",
+  context: "context",
+};
+
+/**
+ * Return the `run` or `resume` arguments `args` as the options `names` gives each key: an int as a
+ * JS number, `context` an object.
+ */
+function runOptions<T>(args: Case, names: Readonly<Record<string, keyof T>>): T {
   return Object.fromEntries(
-    Object.entries(run).map(([key, value]) => [
-      RUN_OPTIONS[key],
+    Object.entries(args).map(([key, value]) => [
+      names[key],
       key === "context" ? {} : typeof value === "bigint" ? Number(value) : value,
     ]),
-  );
+  ) as T;
 }
 
 /** An error class a script's `raise` can name. */
@@ -1512,13 +1552,23 @@ function v1Request(request: Request): Case {
 /** A point of the run a `host.steering` action waits for: its `after`. */
 type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint };
 
+/** The error the runner stops a run with at its `host.stop` point. */
+class ConformanceStop extends Error {
+  override name = "ConformanceStop";
+
+  constructor() {
+    super("conformance stop");
+  }
+}
+
 /**
- * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id.
+ * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id, and the
+ * `host.stop` points.
  *
  * An action without `after` is queued at once, the others when the run reaches their point.
  * Steers are drained once; an interrupt aborts the node's interrupt signal, which stays aborted.
- * Calls are counted, and points reached, only once `armed`, so that runs before the main one
- * neither count nor steer.
+ * Reaching a stop calls `onStop`. Calls are counted, and points reached, only once `armed`, so
+ * that runs before the main one neither count nor steer.
  */
 class Inbox implements Steering {
   armed = false;
@@ -1526,8 +1576,13 @@ class Inbox implements Steering {
   readonly #interrupts = new Map<string, AbortController>();
   readonly #counts = new Map<string, number>();
   readonly #pending: { label: string; node: string; action: Case }[] = [];
+  readonly #onStop: () => void;
 
-  constructor(steering: Case) {
+  constructor(steering: Case, stop: Case = {}, onStop: () => void = () => {}) {
+    this.#onStop = onStop;
+    for (const [node, action] of Object.entries(stop)) {
+      this.#pending.push({ label: `host.stop.${node}`, node, action: { ...(action as Case), stop: true } });
+    }
     for (const [node, actions] of Object.entries(steering)) {
       (actions as Case[]).forEach((action, index) => {
         if (Object.hasOwn(action, "after")) {
@@ -1539,8 +1594,12 @@ class Inbox implements Steering {
     }
   }
 
-  /** Queue `action`'s steers for `node`, or abort its interrupt signal. */
+  /** Queue `action`'s steers for `node`, abort its interrupt signal, or stop the run. */
   #act(node: string, action: Case): void {
+    if (action["stop"] === true) {
+      this.#onStop();
+      return;
+    }
     const steers = this.#steers.get(node) ?? [];
     this.#steers.set(node, [...steers, ...(get(action, "steer", []) as string[])]);
     if (action["interrupt"] === true) this.#controller(node).abort();
@@ -1698,8 +1757,10 @@ interface Host {
   random: (() => number) | null;
   /** Builds every model the run calls; no call reaches a provider. */
   models: ModelAccess;
-  /** The `host.steering` inbox. */
+  /** The `host.steering` inbox, which also reaches the `host.stop` points. */
   inbox: Inbox;
+  /** With `host.stop`, the run's signal and the error it is aborted with at the point. */
+  stop: { signal: AbortSignal; error: ConformanceStop } | null;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
   calls: Map<string, Case[]>;
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
@@ -1725,7 +1786,12 @@ function host(case_: Case, log: string, env: Env): Host {
   const calls = new Map<string, Case[]>();
   const problems: string[] = [];
   const taken: Host["taken"] = [];
-  const inbox = new Inbox(get(spec, "steering", {}) as Case);
+  const stopper = new AbortController();
+  const stopError = new ConformanceStop();
+  const stop = Object.hasOwn(spec, "stop") ? { signal: stopper.signal, error: stopError } : null;
+  const inbox = new Inbox(get(spec, "steering", {}) as Case, get(spec, "stop", {}) as Case, () =>
+    stopper.abort(stopError),
+  );
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
       `host.human.${node}`,
@@ -1822,7 +1888,7 @@ function host(case_: Case, log: string, env: Env): Host {
       })
       .concat(inbox.left());
   };
-  return { tools: Object.fromEntries(tools), random, models, inbox, calls, taken, check };
+  return { tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, check };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -2131,6 +2197,11 @@ function placeholders(results: Record<string, unknown>, runId: string | null): R
   return Object.fromEntries(Object.entries(results).map(([name, value]) => [name, replace(value)]));
 }
 
+/** The refused append that cuts a `resume` case's first run. */
+class Cut extends Error {
+  override name = "Cut";
+}
+
 /**
  * Return the whole recall text of memory `key` in `memory`, after the main run. Fails the case for
  * a key the flow doesn't declare, and for a session key, whose whole recall is empty by contract
@@ -2189,7 +2260,8 @@ async function beforeRuns(
       const registry = await memories();
       try {
         const inputs = get(entry, "inputs", {}) as Case;
-        await runFlow(flow, inputs, { ...options, ...runOptions(run), log, memory: registry });
+        const args = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
+        await runFlow(flow, inputs, { ...options, ...args, log, memory: registry });
       } finally {
         await registry?.close();
       }
@@ -2207,21 +2279,27 @@ async function beforeRuns(
 
 /**
  * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
- * the case directory, its waits on a virtual clock that starts at the real current time. Return
- * its results: `output`, or the host error as `raises` and `error` (never compared), `memory`
- * when `expect.memory` lists keys, and `left`, a message per script with entries left.
+ * the case directory, its waits on a virtual clock that starts at the real current time; with
+ * `host.stop`, the run is stopped at its point. A `resume` case's first run is cut after record
+ * `host.crash_after_record` (or, for `end`, runs to its end; with `host.stop`, is stopped) and
+ * resumed with the `resume` arguments. Return the results: `trace`, `events`, `stream` (the
+ * resume's), `tool_calls` (every run's), `output` or the host error as `raises` and `error` (never
+ * compared), `memory` when `expect.memory` lists keys, and `left`, a message per script with
+ * entries left.
  *
- * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run gets the flow's
- * memories built afresh under `<case dir>/memory`, closed after the run; `expect.memory` is read
- * from memories built after the main run. Learner events are kept apart, never compared.
+ * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run (each `before` run,
+ * the main run, and for a `resume` case the cut run and the resume) gets the flow's memories built
+ * afresh under `<case dir>/memory`, closed after the run; `expect.memory` is read from memories
+ * built after the main run. Learner events are kept apart, never compared.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
   const env = caseEnv(ctx);
-  const { tools, random, models, inbox, calls, check } = host(case_, log, env);
-  const run = get(case_, "run", {}) as Case;
   const spec = get(case_, "host", {}) as Case;
+  const { tools, random, models, inbox, stop, calls, check } = host(case_, log, env);
+  const run = get(case_, "run", {}) as Case;
+  const resume = get(case_, "resume", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
   // The learners' events (TS-only, from `buildMemories`' `onEvent`) are never read: collected here
@@ -2236,7 +2314,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
           onEvent: (event) => apart.push(event),
         })
       : null;
-  // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
+  // `env` scopes the case's YIAN_* values to each run, so nothing is installed around it. One
+  // clock for every run of the case.
   const shared: RunFlowOptions = {
     env,
     tools,
@@ -2245,30 +2324,76 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     scheduler: virtualScheduler(Date.now()),
   };
   const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
-  const options: RunFlowOptions = {
+  const hooks = {
     ...shared,
-    ...runOptions(run),
     log,
     // Only with `host.steering`, as Python passes it.
     ...(Object.hasOwn(spec, "steering") ? { steering: inbox } : {}),
-    onEvent: (event) => {
+    onEvent: (event: RunEvent) => {
       events.push(event);
     },
-    onStream: (chunk) => {
+    onStream: (chunk: StreamChunk) => {
       chunks.push(chunk);
     },
   };
+  /** Run `go` with the memories built afresh, closed after it. */
+  const withMemories = async (go: (memory: MemoryRegistry | null) => Promise<RunResult>) => {
+    const memory = await memories();
+    try {
+      return await go(memory);
+    } finally {
+      await memory?.close();
+    }
+  };
+  const inputs = get(case_, "inputs", {}) as Case;
+  const signal = stop === null ? {} : { signal: stop.signal };
+  const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
+  let start = () =>
+    withMemories((memory) => runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory }));
+  inbox.armed = true;
+  if (case_["kind"] === "resume") {
+    const last = get(spec, "crash_after_record");
+    // What the first run rejects with, or `ended` when it resolves.
+    const ended = Symbol("ended");
+    let outcome: unknown = ended;
+    const append = JsonlRunLog.prototype.append;
+    const refused = new Cut("the conformance runner refused this append");
+    if (typeof last === "bigint") {
+      JsonlRunLog.prototype.append = function (this: JsonlRunLog, record) {
+        if (this.nextSequence > Number(last)) throw refused;
+        return append.call(this, record);
+      };
+    }
+    try {
+      await start();
+    } catch (error) {
+      outcome = error;
+    } finally {
+      JsonlRunLog.prototype.append = append;
+    }
+    const raisedText = () => failureText(outcome);
+    if (stop !== null) {
+      if (outcome === ended) throw new CaseFailure("the run ended before its `host.stop` point");
+      if (outcome !== stop.error) throw new CaseFailure(`the run raised before its stop\n${raisedText()}`);
+    } else if (last === "end") {
+      if (outcome !== ended) throw new CaseFailure(`the run raised before its end\n${raisedText()}`);
+    } else {
+      const next = `record ${(last as bigint) + 1n}`;
+      if (outcome === ended) throw new CaseFailure(`the run ended before ${next}`);
+      if (outcome !== refused) throw new CaseFailure(`the run raised before ${next}\n${raisedText()}`);
+    }
+    events.length = 0;
+    chunks.length = 0;
+    const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
+    start = () => withMemories((memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory }));
+  }
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
-  let memory: MemoryRegistry | null = null;
-  inbox.armed = true;
   try {
-    memory = await memories();
-    result = await runFlow(flow, get(case_, "inputs", {}) as Case, { ...options, memory });
+    result = await start();
   } catch (error) {
     caught = { raises: raised(error), error };
   }
-  await memory?.close();
   const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
   let recalled: Record<string, string> | undefined;
   if (listed !== undefined) {
@@ -2301,7 +2426,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     ...logs,
     "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
   });
-  if (!isZero(get(run, "num_workers", 8n))) actual = pooled(actual);
+  // A `resume` case's results are grouped by the resumed run's `num_workers`.
+  if (!isZero(get({ ...run, ...resume }, "num_workers", 8n))) actual = pooled(actual);
   const runId =
     Object.hasOwn(run, "run_id") || lines.length === 0
       ? null
@@ -2345,6 +2471,11 @@ async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
 }
 
 // ---- resume ----
+
+/** Run a `resume` case: its first run is cut or stopped and resumed (`actualRun`), as `runRun` does. */
+async function runResume(case_: Case, ctx: CaseContext): Promise<void> {
+  await runRun(case_, ctx);
+}
 
 // ---- backward ----
 

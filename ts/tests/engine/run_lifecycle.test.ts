@@ -51,7 +51,8 @@
  *
  * TS-only: a resume after a crash publishes `RunResumed` then one `NodeAttemptResumed` per retried
  * node with its interrupted count (2 after a second crash), and the result holds the counts; a
- * resume with an aborted signal rejects with its reason before the lock is taken.
+ * TOOL cut between its `failed` and `started` steps resumes with the next attempt; a resume with
+ * an aborted signal rejects with its reason before the lock is taken.
  *
  * Covered by a case: `test_terminal_resume_is_read_only_silent_and_unlocks[failed]` and
  * `test_terminal_resume_preserves_compose_failure_and_diagnosis`
@@ -93,7 +94,7 @@ import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import type { Scheduler } from "../../src/platform.ts";
+import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import {
   type ResumeFlowOptions,
   type RunFlowOptions,
@@ -107,6 +108,7 @@ import {
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
+  NodeStepRecord,
   NodeSucceededRecord,
   readRunLog,
   type RecordEnvelope,
@@ -116,6 +118,7 @@ import {
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
+import { TransientToolError } from "../../src/tools/errors.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
@@ -959,6 +962,44 @@ test("a resume after a crash publishes RunResumed and NodeAttemptResumed with th
     new NodeStarted({ nodeId: "work" }),
   ]);
   expect(result.interruptedAttempts).toEqual(new Map([["work", 2]]));
+});
+
+test("a TOOL cut between its failed and started steps resumes with the next attempt", async () => {
+  const path = join(dir, "retry.jsonl");
+  const flow = await load(`
+id: lifecycle-retry
+name: lifecycle_retry
+nodes:
+  call:
+    kind: tool
+    tool_id: flaky
+    retries: 1
+output: \${call.output}
+`);
+  const attempts: number[] = [];
+  const flaky = tool({
+    name: "flaky",
+    description: "flaky",
+    parameters: { type: "object", properties: {} },
+    execute: (_args, ctx) => {
+      attempts.push(ctx.attempt);
+      if (attempts.length === 1) throw new TransientToolError("busy");
+      return "ok";
+    },
+  });
+  const options = { tools: { flaky }, scheduler: virtualScheduler(0), random: () => 1 };
+  // Records 0-4 are RunStarted, START's two, call's NodeStarted and its `failed` step: the
+  // `started` step of attempt 2 is refused.
+  await crashAfter(5, () => run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 0, ...options }));
+  expect(attempts).toEqual([1]);
+
+  const result = await resume(flow, { log: path, ...options });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("ok");
+  expect(attempts).toEqual([1, 2]);
+  const steps = durableRecords(path).filter((record) => record instanceof NodeStepRecord);
+  expect(steps.map((record) => [record.step["event"], record.step["attempt"]])).toEqual([["failed", 1n]]);
 });
 
 test("a resume with an aborted signal rejects before the lock is taken", async () => {

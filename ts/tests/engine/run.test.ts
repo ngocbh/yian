@@ -21,8 +21,7 @@
  * unchanged; `result.log` is the path as given (`null` without one); `interruptedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
  * `int` is `3n`, NaN refused where it sits, an accessor or a Proxy inputs record refused,
  * `Infinity` kept for a `float`, a too-deep value refused); the run's `env` scopes the `YIAN_*`
- * values it reads and records, and a bad one rejects before the log exists; the `memory` and
- * run-owned MCP server stubs.
+ * values it reads and records, and a bad one rejects before the log exists.
  *
  * TS-only, one row for each run-start check's message (Python pins them in
  * `test_typed_tool_node.py`, `test_run_tools_flow.py`, `test_run_skills.py` and
@@ -69,7 +68,6 @@ import { RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, type RunStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
-import { mcpServer } from "../../src/tools/mcp.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { textReply } from "./run_state_fixtures.ts";
@@ -488,21 +486,6 @@ test("a bad YIAN_* value in the run's env rejects before the log exists", async 
   expect(error).toBeInstanceOf(DefaultsError);
   expect((error as Error).message).toStartWith('YIAN_MAX_VALUE_NESTING="deep" is not an integer');
   expect(existsSync(path)).toBe(false);
-});
-
-// ---- TS-only: not ported yet ----
-
-test("a memory option is not ported yet", async () => {
-  const flow = await load(PLAN_FLOW);
-  await expect(run(flow, { topic: "ACME" }, { memory: new Map() })).rejects.toThrow("memory is not ported yet");
-});
-
-test("a run-owned MCP server is not ported yet", async () => {
-  const flow = await load(PLAN_FLOW);
-  const server = mcpServer({ command: "never-started" });
-  await expect(run(flow, { topic: "ACME" }, { tools: { mcp: server } })).rejects.toThrow(
-    "run-owned MCP servers are not ported yet",
-  );
 });
 
 // ---- TS-only: the run-start checks ----

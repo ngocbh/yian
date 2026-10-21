@@ -12,8 +12,8 @@
  * here, and the HTTP rows run in both the `auto` and `legacy` modes, with an integer past 2^53
  * read as a `number` over HTTP (the SDK parses with `JSON.parse`) and refused in the arguments,
  * where a safe `bigint` is sent as a `number`.
- * `test_a_tool_node_calls_a_host_opened_server` is run-level and lands with the runs that open
- * servers.
+ * `test_a_tool_node_calls_a_host_opened_server` runs the flow through `runFlow`, in an
+ * environment holding only the test's credential store.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -22,6 +22,8 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
+import { type RunResult, runFlow } from "../../src/run.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isPermanentToolError, isReportedToolError, ToolCheckError } from "../../src/tools/errors.ts";
 import { isMcpError, type McpServer, mcpServer, McpToolError, resultValue } from "../../src/tools/mcp.ts";
@@ -346,4 +348,34 @@ describe("resultValue", () => {
     expect(sizeOf(b64(1280))).toBe("[image m, 1.2 KB]");
     expect(sizeOf(b64(1331))).toBe("[image m, 1.3 KB]");
   });
+});
+
+describe("runs", () => {
+  test(
+    "test_a_tool_node_calls_a_host_opened_server",
+    async () => {
+      const flow = await loadFlow(`
+id: mcp_echo
+name: mcp_echo
+nodes:
+  say:
+    kind: tool
+    tool_id: echo
+    input:
+      text: hi
+output: \${say.output}
+`);
+      const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
+      let result: RunResult;
+      {
+        await using server = await openFake(["--only", "echo"]);
+        result = await runFlow(flow, {}, { tools: { fake: [...server.tools] }, env: (name) => env.get(name) });
+        expect(server.isOpen).toBe(true);
+      }
+      expect(result.failure).toBeNull();
+      expect(result.status).toBe("succeeded");
+      expect(result.output).toBe("hi");
+    },
+    SLOW,
+  );
 });

@@ -24,9 +24,11 @@
  * Elsewhere: `test_structured_content_failing_the_output_schema_is_a_tool_error` is in
  * `mcp_calls.test.ts`. Not ported: `test_a_raw_timeout_is_a_transport_error` (a failed request is
  * recognized by the error `safeFetch` rejects with, which the stopped-server row covers). The TOOL and AGENT rows
- * (`test_tool_node_retries_follow_the_error_class`,
- * `test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds`) are run-level and land
- * with the runs that open servers. Not ported: `test_a_request_error_survives_a_pickle_round_trip`
+ * (`test_tool_node_retries_follow_the_error_class`, both cases, and
+ * `test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds`) run the flow through
+ * `runFlow` in an environment holding only the test's credential store (the retry delay as
+ * `YIAN_TOOL_RETRY_DELAY_SECONDS`); the AGENT's model is a `ScriptedModel` from `models`, and it
+ * reads the error as a `ToolResultPart`. Not ported: `test_a_request_error_survives_a_pickle_round_trip`
  * (Python-only); `test_a_call_that_never_resolves_times_out_on_its_own_deadline` (no grace
  * deadline: the SDK's own timer bounds a call); `test_a_closed_stream_after_a_transport_failure_is_a_transport_error`
  * (no ping probe: the v2 client reports a closed connection as its own error, distinct from a
@@ -41,7 +43,11 @@ import { join } from "node:path";
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 
-import { BUILTIN, install } from "../../src/defaults.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { BUILTIN, type Env, install } from "../../src/defaults.ts";
+import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { runFlow } from "../../src/run.ts";
 import { isPermanentToolError, isReportedToolError, isTransientToolError } from "../../src/tools/errors.ts";
 import {
   McpCallCancelled,
@@ -522,4 +528,85 @@ describe("errors over HTTP", () => {
     await server.close();
     expect(http.recordedMethods).toContain("DELETE");
   }, SLOW);
+});
+
+describe("runs", () => {
+  /** An environment holding `vars` and the credential store in the test's directory. */
+  function hostEnv(vars: Record<string, string> = {}): Env {
+    const all = new Map(Object.entries({ YIAN_AUTH_FILE: join(dir, "auth.json"), ...vars }));
+    return (name) => all.get(name);
+  }
+
+  const RETRY_FLOW = `
+id: retry
+name: retry
+nodes:
+  call:
+    kind: tool
+    tool_id: TOOL
+    retries: 2
+    input: INPUT
+output: \${call.output}
+`;
+
+  for (const [tool, args, attempts] of [
+    ["fail", "{message: nope}", 3],
+    ["bad_request", "{}", 1],
+  ] as const) {
+    test(
+      `test_tool_node_retries_follow_the_error_class (${tool})`,
+      async () => {
+        const server = await fake().open();
+        const calls = async () => ((await tools(server).invoke("calls", {})) as { result: number }).result;
+        const before = await calls();
+        const flow = await loadFlow(RETRY_FLOW.replace("TOOL", tool).replace("INPUT", args));
+        const result = await runFlow(flow, {}, {
+          tools: { fake: [...server.tools] },
+          env: hostEnv({ YIAN_TOOL_RETRY_DELAY_SECONDS: "0" }),
+        });
+        expect(result.status).toBe("failed");
+        expect((await calls()) - before).toBe(attempts);
+      },
+      SLOW,
+    );
+  }
+
+  test(
+    "test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds",
+    async () => {
+      const call = new ToolCallPart({ id: "c0", name: "fail", arguments: { message: "no luck" } });
+      const model = new ScriptedModel([
+        new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" }),
+        new Response({
+          message: new Message({ role: "assistant", parts: [new TextPart("gave up")] }),
+          finishReason: "stop",
+        }),
+      ]);
+      const flow = await loadFlow(`
+id: mcp_agent
+name: mcp_agent
+llm_config: {provider: openai, model: test-model}
+nodes:
+  worker:
+    kind: agent
+    prompt: go
+    tools: [fake]
+output: \${worker.output}
+`);
+      const server = await fake().open();
+      const result = await runFlow(flow, {}, {
+        tools: { fake: [...server.tools] },
+        env: hostEnv(),
+        models: { env: hostEnv(), createModel: () => model },
+      });
+      expect(result.failure).toBeNull();
+      expect(result.output).toBe("gave up");
+      const [message] = model.requests[1]!.messages.flatMap((each) =>
+        each.role === "tool" ? each.parts.filter((part) => part instanceof ToolResultPart) : [],
+      );
+      expect(message!.isError).toBe(true);
+      expect(message!.content).toContain("no luck");
+    },
+    SLOW,
+  );
 });

@@ -51,10 +51,15 @@
  * async factory rejecting `TypeError` is "rejected its config"; a wrapped failure keeps its cause;
  * `env` reaches reflective and profile memory and defaults to `processEnv`.
  *
- * Later (T4-8): `test_package_exports_the_host_builder`, `test_run_flow_accepts_any_mapping`,
- * `test_registry_built_for_another_flow_is_rejected`, `test_registry_for_this_flow_runs`,
- * `test_resume_checks_registry_types_too`, `test_resume_accepts_one_callee_called_from_two_nodes`
- * (every case) and `test_backward_checks_registry_types_too`.
+ * Ported, through `runFlow` in an environment holding only the test's credential store:
+ * `test_registry_built_for_another_flow_is_rejected` and `test_registry_for_this_flow_runs`, whose
+ * flows are loaded from YAML.
+ * Changed: `test_run_flow_accepts_any_mapping` becomes "a plain object is refused; a Map runs":
+ * `memory` must be a `Map`, as `skills` must.
+ *
+ * Later (T4-8): `test_package_exports_the_host_builder`, `test_resume_checks_registry_types_too`,
+ * `test_resume_accepts_one_callee_called_from_two_nodes` (every case) and
+ * `test_backward_checks_registry_types_too`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -64,6 +69,7 @@ import path from "node:path";
 
 import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import {
@@ -84,6 +90,9 @@ import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { runFlow } from "../../src/run.ts";
+
+import { FakeMemory } from "./memory_fakes.ts";
 
 let tmp: string;
 
@@ -757,3 +766,42 @@ test.each([["episodic"], ["reflective"], ["profile"]] as const)(
     expect(entries(tmp)).toEqual([]);
   },
 );
+
+/**
+ * A loaded flow declaring `memory` around one CODE node (Python's `_flow`, loaded as Python loads
+ * it, so the run has edges to follow).
+ */
+function runnableFlow(memory: string): Promise<ComposedFlow> {
+  return loadFlow(
+    `id: host-flow\nname: host\nlong_term_memory: ${memory}\nnodes:\n` +
+      "  echo: {kind: code, code: return 1, output: int}\noutput: ${echo.output}\n",
+  );
+}
+
+/** `runFlow` with no inputs, in an environment holding only the test's credential store. */
+function run(flow: ComposedFlow, memory: unknown) {
+  const env = new Map([["YIAN_AUTH_FILE", path.join(tmp, "auth.json")]]);
+  return runFlow(flow, {}, { memory: memory as Map<string, Memory>, env: (name) => env.get(name) });
+}
+
+test("a plain object is refused; a Map runs", async () => {
+  const flow = await runnableFlow("{notes: episodic}");
+  const refused = await caught(() => run(flow, { notes: new FakeMemory() }));
+  expect(refused).toBeInstanceOf(TypeError);
+  expect((refused as Error).message).toBe("memory must be a Map of memory keys to backends");
+  const memory = new FakeMemory();
+  expect((await run(flow, new Map([["notes", memory]]))).status).toBe("succeeded");
+  expect(memory.sessions.map((session) => session.closed)).toEqual([true]);
+});
+
+test("registry built for another flow is rejected", async () => {
+  await using other = await buildMemories(await runnableFlow("{notes: reflective}"));
+  const flow = await runnableFlow("{notes: episodic}");
+  await setupError(() => run(flow, other), /'notes'.*'episodic'.*'reflective'/);
+});
+
+test("registry for this flow runs", async () => {
+  const flow = await runnableFlow("{notes: episodic}");
+  await using registry = await buildMemories(flow);
+  expect((await run(flow, registry)).status).toBe("succeeded");
+});

@@ -74,7 +74,7 @@ import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
 import { FileRef, Type, ValueKind } from "../../src/typesys/values.ts";
-import { engine, graph } from "./run_state_fixtures.ts";
+import { engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -387,14 +387,14 @@ function chatLoop(): LoopNode {
   return node;
 }
 
-/** Return what `promise` rejects with. */
-async function rejection(promise: Promise<unknown>): Promise<unknown> {
+/** Return what `fn` throws, or fail when it returns. */
+function thrown(fn: () => unknown): unknown {
   try {
-    await promise;
+    fn();
   } catch (error) {
     return error;
   }
-  throw new Error("expected a rejection");
+  throw new Error("expected a throw");
 }
 
 test("run grows iteration zero with next driver when continue", async () => {
@@ -481,7 +481,7 @@ test("runaway guard raises loop max exceeded", async () => {
   expect(await origin.run({ x: 1n })).toBeInstanceOf(Grow);
   // driver@1 would grow the second body: over budget.
   const driver = origin.respawn(1);
-  const error = await rejection(driver.run({ x: 1n }));
+  const error = await rejected(driver.run({ x: 1n }));
   expect(error).toBeInstanceOf(LoopMaxExceeded);
   expect((error as Error).message).toBe("loop 'lp' exceeded max (1)");
   expect(driver.exceptionCode(error)).toBe("loop.max_exceeded");
@@ -551,14 +551,9 @@ test("buildGrow partial loop matches live and replay digest", async () => {
 
 test("a while: that throws while evaluating is rethrown unchanged as condition.evaluate", async () => {
   const node = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "while", predicate: "n / 0 > 0" });
-  let direct: unknown;
-  try {
-    evaluateWhenRecord("n / 0 > 0", { n: 1n });
-  } catch (error) {
-    direct = error;
-  }
+  const direct = thrown(() => evaluateWhenRecord("n / 0 > 0", { n: 1n }));
 
-  const error = await rejection(node.run({ n: 1n }));
+  const error = await rejected(node.run({ n: 1n }));
 
   expect(error).toBeInstanceOf(ExpressionError);
   expect((error as Error).message).toBe((direct as Error).message);
@@ -569,15 +564,10 @@ test("a while: that throws while evaluating is rethrown unchanged as condition.e
 
 test("an until: that throws at k >= 1 is rethrown unchanged as condition.evaluate", async () => {
   const origin = new LoopNode("lp", { flowId: "f", child: {}, predicateKind: "until", predicate: "x > 0" });
-  let direct: unknown;
-  try {
-    evaluateWhenRecord("x > 0", { x: { a: 1n } });
-  } catch (error) {
-    direct = error;
-  }
+  const direct = thrown(() => evaluateWhenRecord("x > 0", { x: { a: 1n } }));
   const driver = origin.respawn(1);
 
-  const error = await rejection(driver.run({ x: { a: 1n } }));
+  const error = await rejected(driver.run({ x: { a: 1n } }));
 
   expect(error).toBeInstanceOf(ExpressionError);
   expect((error as Error).message).toBe((direct as Error).message);

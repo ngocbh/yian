@@ -67,8 +67,9 @@ export class LoopMaxExceeded extends Error {
 }
 
 /**
- * Each error a `while:`/`until:` predicate threw while evaluating, so the error itself stays
- * unchanged. Python classifies it `node.execute`; JS has no traceback to tell it apart later.
+ * Each error a `while:`/`until:` predicate threw while evaluating. TS classifies such a failure
+ * as `condition.evaluate` (Python: `node.execute`); marking the error rather than wrapping it
+ * leaves it unchanged for `exceptionCode` to classify.
  */
 const failedPredicates = new WeakSet<object>();
 

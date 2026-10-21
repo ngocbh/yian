@@ -20,8 +20,8 @@
  * `test_python_built_unparseable_spawner_post_assert_fails_before_the_run`. Integers are bigints
  * (decision 4a); the CODE reference is the TS fixture's (`./fixtures/compose_codefns.ts:double`).
  *
- * Later (T4-8): `test_spawner_post_assert_fires_after_log_recovery` (a host stop and
- * `resume_flow`).
+ * Later (T4-8): `test_spawner_post_assert_fires_after_log_recovery`: needs `resumeFlow` (a host
+ * stop, then a resume).
  */
 
 import { expect, test } from "bun:test";

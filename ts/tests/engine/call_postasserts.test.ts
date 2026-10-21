@@ -14,7 +14,7 @@
  * (`./fixtures/compose_codefns.ts:make_report`).
  *
  * Later (T4-8): `test_call_post_assert_survives_recovery_true` and
- * `test_call_post_assert_survives_recovery_false` (a host stop and `resume_flow`).
+ * `test_call_post_assert_survives_recovery_false`: needs `resumeFlow` (a host stop, then a resume).
  */
 
 import { expect, test } from "bun:test";

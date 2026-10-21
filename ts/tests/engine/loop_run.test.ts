@@ -1087,8 +1087,7 @@ test("loop growth record keeps only the requested prune ids", async () => {
   const eng = await finishNested("call", 3);
   const pruned = [...eng.log]
     .map(({ record }) => record)
-    .filter((record) => record.constructor === NodeExpandedRecord)
-    .map((record) => record as NodeExpandedRecord)
+    .filter((record): record is NodeExpandedRecord => record.constructor === NodeExpandedRecord)
     .filter((record) => record.spawnerId === "loop~2")
     .map((record) => record.pruneIds);
   expect(pruned).toEqual([["loop#1/__end__", "loop#1/__start__", "loop#1/c", "loop~2"]]);

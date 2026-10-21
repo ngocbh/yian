@@ -6,7 +6,7 @@
  * `test_bind_params_rejects_a_filled_default_over_the_limit`.
  *
  * Ported at node level, through `evalNode` (`drive`) with a `ScriptedModel` from `models` where
- * Python runs a loaded flow (the run is T4-8): the non-session rows of
+ * Python runs a loaded flow: the non-session rows of
  * `test_a_structured_agent_over_the_limit_self_corrects_under_retries`,
  * `test_a_deep_native_reply_that_misses_the_schema_retries_on_the_schema_error`,
  * `test_an_exhausted_deep_native_schema_miss_is_located_at_the_field` and

@@ -16,9 +16,9 @@
  * `test_post_terminal_assert_false_flips_succeeded_to_failed`, `test_all_asserts_true_succeeds`,
  * `test_run_id_host_override_resolves` and `test_run_id_minted_when_omitted`.
  *
- * TS-only: an already-aborted signal rejects with its reason before the log exists; an existing
- * log path is refused (`EEXIST`) and left unchanged; `result.log` is the path as given (`null`
- * without one); `interruptedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
+ * TS-only: an already-aborted signal rejects with its reason before the log exists, as does a bad
+ * `scheduler`, `random` or `models`; an existing log path is refused (`EEXIST`) and left
+ * unchanged; `result.log` is the path as given (`null` without one); `interruptedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
  * `int` is `3n`, NaN refused where it sits, an accessor or a Proxy inputs record refused,
  * `Infinity` kept for a `float`, a too-deep value refused); the run's `env` scopes the `YIAN_*`
  * values it reads and records, and a bad one rejects before the log exists; the `memory` and
@@ -382,6 +382,18 @@ test("an aborted signal rejects with its reason before the log exists", async ()
   const path = join(dir, "run.jsonl");
   const flow = await load(PLAN_FLOW);
   await expect(run(flow, { topic: "ACME" }, { log: path, signal: controller.signal })).rejects.toBe(reason);
+  expect(existsSync(path)).toBe(false);
+});
+
+test.each([
+  [{ scheduler: { now: () => 0 } }, "scheduler must be a Scheduler or null"],
+  [{ random: 0.5 }, "random must be a function or null"],
+  [{ models: { env: () => undefined } }, "models must provide env(name) and createModel(config, options), or be null"],
+])("a bad test option is refused before the log exists (%#)", async (option, message) => {
+  const path = join(dir, "run.jsonl");
+  const flow = await load(PLAN_FLOW);
+  const options = { log: path, ...option } as unknown as RunFlowOptions;
+  await expect(run(flow, { topic: "ACME" }, options)).rejects.toThrow(new TypeError(message));
   expect(existsSync(path)).toBe(false);
 });
 

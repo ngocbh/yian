@@ -64,7 +64,7 @@ import { type HostToolCall, isExactly, iterSourceStrings, type Parameter } from 
 import { realScheduler, type Scheduler } from "./platform.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine } from "./runtime/engine.ts";
-import { addNote, requireSteering } from "./runtime/eval_node.ts";
+import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
 import { JsonlRunLog, MemoryRunLog, type RunLog } from "./runtime/log.ts";
 import { commitPrepared, prepareRunStarted, RunState } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
@@ -207,7 +207,8 @@ export interface RunFlowOptions {
   signal?: AbortSignal | null;
   /**
    * The environment for connection selection, credentials, model building and the run's `YIAN_*`
-   * values (default `process.env`).
+   * values. Without one, those read `process.env`, and the `YIAN_*` values are the ones already in
+   * effect: an enclosing `withEnv` scope's, else this process's.
    */
   env?: Env | null;
   /** For tests: the clock the system clock is seeded from and node waits run on (default `realScheduler`). */
@@ -232,13 +233,15 @@ export interface RunFlowOptions {
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `learnable` isn't a boolean, `signal`
- *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), `llmConfig` isn't a record,
- *   a `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its name, or
- *   `steering` lacks its methods.
+ *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), `llmConfig` is a primitive
+ *   or an array, a `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its
+ *   name, `steering` lacks its methods, `scheduler` lacks `now` or `sleep`, `random` isn't a
+ *   function, or `models` lacks `env` or `createModel`.
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
- *   can't be read.
+ *   can't be read; or when `llmConfig` is or holds a non-yian value (a `Map`, a class instance, a
+ *   Proxy).
  * @throws RangeError when an input key names no declared input; an AGENT grants a tool, group or
  *   skill this run lacks; a TOOL node names a tool this run lacks, or its inputs or output can't
  *   fit that tool's types; `llmConfig` or an agent's resolved model config is invalid, an agent
@@ -276,8 +279,27 @@ export async function runFlow(
     checkTemplates(flow.compiled);
     const skills = checkSkills(flow.compiled, options.skills ?? null);
     requireSteering(steering);
+    checkTestOptions(options);
     return startRun(flow, inputs, { ...options, skills }, runDefaults);
   });
+}
+
+/**
+ * Check the options for tests before anything is created, as the engine checks them.
+ *
+ * @throws TypeError when `scheduler` lacks `now` or `sleep`, `random` isn't a function, or
+ *   `models` lacks `env` or `createModel`.
+ */
+function checkTestOptions(options: RunFlowOptions): void {
+  const { scheduler = null, random = null, models = null } = options;
+  if (
+    scheduler !== null &&
+    (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
+  ) {
+    throw new TypeError("scheduler must be a Scheduler or null");
+  }
+  if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
+  requireModels(models);
 }
 
 /**

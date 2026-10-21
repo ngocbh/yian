@@ -483,8 +483,8 @@ export class ReplayDegraded {
  * A model call outside a forward node failed with a retryable error and is sent again
  * after `retryIn` seconds; published before the wait. TS-only: Python yian publishes nothing.
  *
- * `consumer` is `"backward"` (AGENT backward, under the AGENT's node id) or
- * `"memory:<key>"` (a memory's learner, under the node id `"__memory__"`). `attempt` is the
+ * `consumer` names what the model was built for, as `ModelAccess.createModel`'s `consumer`
+ * option does (`llm_clients/factory.ts`). `attempt` is the
  * failed attempt, from 1; `error` is the provider error's kind and message, scrubbed of
  * credentials. Transient and published outside a node, so it is not in `IN_LOOP_EVENTS`.
  */
@@ -524,7 +524,8 @@ export class ModelCallRetried {
 
 /**
  * The in-loop AGENT event classes, so hosts sharing one `onEvent` callback can
- * separate them from post-durable observers.
+ * separate them from post-durable observers. `ModelCallRetried` is transient too, but it is
+ * published outside a node, so it isn't listed here.
  */
 export const IN_LOOP_EVENTS = [
   ModelCallStarted,

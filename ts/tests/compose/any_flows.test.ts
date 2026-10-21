@@ -36,8 +36,10 @@
  * `test_a_map_over_a_mixed_literal_list_into_a_child_any_input_runs`,
  * `test_a_typed_loop_seed_accepts_an_optional_any_body_field`, the `x` row of
  * `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value`,
- * `test_a_child_any_output_into_a_parent_any_consumer_runs` and the int row of
- * `test_an_int_when_on_an_any_value_loads_and_matches`.
+ * `test_a_child_any_output_into_a_parent_any_consumer_runs`, the int row of
+ * `test_an_int_when_on_an_any_value_loads_and_matches`, `test_a_typed_any_literal_loads_and_runs`
+ * (4) and the `list(Optional(Any))` row of
+ * `test_a_list_of_any_into_an_untagged_inline_body_parameter_runs`.
  *
  * Covered by `run-core` cases: `test_a_list_of_any_output_returns_mixed_items`
  * (`compose_any_flows__a_list_of_any_output_returns_mixed_items`), the int row of
@@ -57,18 +59,18 @@
  * of `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value`
  * (`compose_any_flows__a_reader_tagging_a_case_result_any_gets_the_taken_branch`), the text row
  * of `test_an_int_when_on_an_any_value_loads_and_matches`
- * (`compose_any_flows__an_int_when_does_not_match_text`) and
+ * (`compose_any_flows__an_int_when_does_not_match_text`),
  * `test_a_text_when_on_an_any_value_loads_and_matches`
- * (`compose_any_flows__a_text_when_on_an_any_value_matches`).
+ * (`compose_any_flows__a_text_when_on_an_any_value_matches`) and the `list(Any)` row of
+ * `test_a_list_of_any_into_an_untagged_inline_body_parameter_runs`
+ * (`compose_any_flows__a_list_of_any_into_an_inline_body_parameter_runs`).
  *
  * Changed: rows asserting fragments pin the whole message. CODE bodies are TS: the child returns
  * `JSON.stringify` of its input where Python returns its `repr` (`"hi"` for `'hi'`, `null` for
  * `None`), and an int reaches a CODE body as a number. A flow's int output is a `bigint`.
  *
- * Not ported (not T3-19 rows): `test_a_typed_any_literal_loads_and_runs` (4) and
- * `test_a_null_any_literal_is_a_load_error`, decided by the tags reader (the null row's case is
- * pinned in `tags.test.ts`); `test_a_list_of_any_into_an_untagged_inline_body_parameter_runs` (2),
- * decided by T3-17's inline inputs; their run halves are T4's.
+ * Not ported: `test_a_null_any_literal_is_a_load_error`, decided by the tags reader (its case is
+ * pinned in `tags.test.ts`).
  * Python-only (dates and non-text keys): `test_an_object_output_rejects_a_date_member`,
  * `test_an_object_output_rejects_a_non_text_key_at_the_output`,
  * `test_an_object_flow_input_rejects_a_non_text_key_naming_the_input`,
@@ -155,6 +157,24 @@ test("a field read on an Any output loads in a case condition", async () => {
   expect(await ok(flow("Any", rest, { code: '{"a": 1}', out: "${hit.output | miss.output}" }))).toBe("hit");
 });
 
+// ---------- typed slot literals ----------
+
+/** A flow whose CODE node `n` takes `x: <binding>` and returns it. */
+const literal = (binding: string) =>
+  `id: p\nname: p\nnodes:\n  n:\n    kind: code\n    input:\n      x: ${binding}\n` +
+  "    code: return inputs['x']\noutput: ${n.output}\n";
+
+test.each<[string, unknown]>([
+  ["!Any 3", 3n],
+  ['!Any [1, "two"]', [1n, "two"]],
+  ["!Any {a: 1}", { a: 1n }],
+  ["!Optional(Any) null", null],
+])("a typed Any literal loads and runs: %s", async (binding, value) => {
+  expect(await ok(literal(binding), {})).toEqual(value);
+});
+
+// ---------- value entries ----------
+
 /** A flow with value entry `entry` and a CODE node reading `read`. */
 const entryFlow = (entry: string, read: string) =>
   `id: p\nname: p\nnodes:\n  ${entry}\n  use:\n    kind: code\n    input:\n      v: ${read}\n` +
@@ -170,6 +190,17 @@ test("a field read on an object value entry is still checked", () => {
   expect(error.message).toContain("reads unknown field 'zz'");
 });
 
+// ---------- inline bodies ----------
+
+test("a list of optional Any into an untagged inline body parameter runs", async () => {
+  const rest =
+    "  c:\n    kind: call\n    input:\n      xs: ${mk.output}\n    nodes:\n" +
+    "      inner:\n        kind: code\n        input:\n          xs: ${input.xs}\n" +
+    "        code: return inputs['xs']\n    output: ${inner.output}\n";
+
+  expect(await ok(flow("list(Optional(Any))", rest, { code: "[1, null]", out: "${c.output}" }))).toEqual([1n, null]);
+});
+
 // ---------- CALL wiring ----------
 
 /** A flow binding `mk`'s `Any` output, returning `code`, into `child`'s str input as `!str`. */
@@ -177,7 +208,7 @@ const taggedAny = (code: string) =>
   flow("Any", call("!str ${mk.output}"), { code, out: "${c.output}", head: `defs:\n${childDef("child", "str")}` });
 
 test("a tagged Any binding into a child str input fails at runtime for an int (loads)", () => {
-  assembleText(taggedAny("3n"));
+  assembleText(taggedAny("3"));
 });
 
 test("a tagged Any binding into a child str input runs for text", async () => {

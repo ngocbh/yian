@@ -56,10 +56,10 @@
  * `::test_loop_node_assert_tag_checks_narrow_its_local` (with its two load errors),
  * `::test_partial_record_local_root_reads` (with its load error),
  * `::test_flow_assert_known_input_field_loads_and_runs`, the `sell` and `buy-positive` rows of
- * `::test_guarded_node_assert_runs`, the `buy-zero` row of `::test_guarded_flow_assert_runs`
- * and the `every-member-ruled-out` row of `::test_flow_assert_on_a_skippable_producer_reads_null`.
- * Their other rows are covered by `run-core/compose_field_read_sites__guarded_node_assert_fails`,
- * `__guarded_flow_assert_short_circuits` and `__flow_assert_on_a_skipped_producer_reads_null`.
+ * `::test_guarded_node_assert_runs`, `::test_guarded_flow_assert_runs` (2) and the
+ * `every-member-ruled-out` row of `::test_flow_assert_on_a_skippable_producer_reads_null`. Their
+ * other rows are covered by `run-core/compose_field_read_sites__guarded_node_assert_fails` and
+ * `__flow_assert_on_a_skipped_producer_reads_null`.
  *
  * Ported, the builtin-result rows: `::test_binding_reads_a_field_on_a_builtin_result`,
  * `::test_flow_output_reads_a_field_on_a_builtin_result`, `::test_prompt_reads_a_field_on_a_builtin_result`,
@@ -880,12 +880,16 @@ test("a flow assert read before its check is rejected", () => {
   );
 });
 
-test("a guarded flow assert runs: buy-zero", async () => {
-  const inputs = { s: "x", r: { a: "x" }, o: { action: "buy", qty: 0 }, ab: { x: 1 } };
+test.each<[string, Record<string, unknown>, "succeeded" | "failed"]>([
+  ["sell", { action: "sell" }, "succeeded"],
+  ["buy-zero", { action: "buy", qty: 0 }, "failed"],
+])("a guarded flow assert runs: %s", async (_id, order, status) => {
+  const inputs = { s: "x", r: { a: "x" }, o: order, ab: { x: 1 } };
 
   const result = await run(flowAssert("not isinstance(input.o, Buy) or input.o.qty > 0"), inputs);
 
-  expect(result.status).toBe("failed");
+  expect(result.status, result.failure?.message).toBe(status);
+  if (status === "failed") expect(result.failure?.code).toBe("assertion.failed");
 });
 
 test("an impossible flow assert check is located at the assert", () => {
@@ -995,7 +999,9 @@ test("a flow assert known input field loads and runs", async () => {
   const text = flow("", "${step.output}", { tail: asserts("input.r.a == 'x'") });
 
   expect((await run(text)).status).toBe("succeeded");
-  expect((await run(text, { s: "x", r: { a: "y" } })).status).toBe("failed");
+  const failed = await run(text, { s: "x", r: { a: "y" } });
+  expect(failed.status).toBe("failed");
+  expect(failed.failure?.code).toBe("assertion.failed");
 });
 
 test.each([

@@ -233,8 +233,11 @@ asserts:
   expectTypes(loaded.compiled.nodes.get("c"), { Buy: BUY });
 
   expect((await runFlow(loaded, { order: A_BUY })).status).toBe("succeeded");
-  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.95 } })).status).toBe("failed");
-  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.05 } })).status).toBe("failed");
+  for (const conviction of [0.95, 0.05]) {
+    const failed = await runFlow(loaded, { order: { action: "buy", conviction } });
+    expect(failed.status).toBe("failed");
+    expect(failed.failure?.code).toBe("assertion.failed");
+  }
 });
 
 test("a constructor in a flow output", async () => {

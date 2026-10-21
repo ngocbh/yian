@@ -17,9 +17,10 @@
  * `output:`, tagged or not, is a load error at the `output:` that says to tag the result where it
  * is read.
  *
- * Ported: every row but one covered by a case. A row that applies the suggested rewrite and runs it (Python's `_taken`)
- * loads the rewritten flow with `loadFlow`, runs it with `runFlow` and checks the taken branch's
- * value: `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
+ * Ported: every row except the `__value_0` row named below, which a case covers. A row that
+ * applies the suggested rewrite and runs it (Python's `_taken`) loads the rewritten flow with
+ * `loadFlow`, runs it with `runFlow` and checks the taken branch's value:
+ * `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_an_else_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_a_suggested_entry_id_skips_ids_already_taken`,
  * `test_the_old_typed_text_is_tagged_with_its_type`, `test_a_lone_reference_is_tagged_with_its_type`,

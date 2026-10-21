@@ -74,6 +74,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { prepareExpanded } from "../../src/runtime/state.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { fragment, initializedSpawner, thrownBy } from "../engine/run_state_fixtures.ts";
 import {
   assembled,
   assembledWith,
@@ -85,7 +86,6 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
-import { fragment, initializedSpawner, thrownBy } from "../engine/run_state_fixtures.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },

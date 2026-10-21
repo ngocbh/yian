@@ -25,8 +25,10 @@
  * `test_a_failing_flow_input_assert_fails_at_start`, `test_a_run_that_used_isinstance_replays` and
  * `test_a_uses_child_resolves_names_against_its_own_typedefs`. The sell rows of the first two are
  * covered by `run-core/compose_isinstance_load__isinstance_in_a_node_input` and
- * `run-core/compose_isinstance_load__isinstance_in_a_searched_case_first_true_wins`. The loop
- * body's CODE is TS's; a flow's int output is a `bigint`.
+ * `run-core/compose_isinstance_load__isinstance_in_a_searched_case_first_true_wins`.
+ *
+ * Changed: CODE runs TypeScript, so the loop body's CODE is TS's; and int is `bigint`, so a
+ * flow's int output is a `bigint`.
  *
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
@@ -56,8 +58,8 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
 import {

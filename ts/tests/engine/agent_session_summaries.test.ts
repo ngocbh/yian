@@ -13,15 +13,17 @@
  * `test_valid_text_blocks_are_kept_intact_without_hard_truncation`.
  *
  * Changed: the invalid replies are what a `yian.message.v1` reply can hold: empty and blank text,
- * reasoning only, a parsed and an unparsed tool call, a media part, and a non-assistant reply (a
- * spied `callModel`, since a `Response` is always an assistant message); Python's opaque-payload,
+ * reasoning only, a parsed and an unparsed tool call, and a media part; Python's opaque-payload,
  * `function_call` and LangChain block rows have no TS form. A `ValueError` is a `RangeError`, each
- * with Python's text. A non-assistant reply's `TypeError` reads "summary reply must be an assistant
- * message" for Python's "summary reply must be an AIMessage".
+ * with Python's text.
  *
  * TS-only: the summary request is the prompt with the budget and the projection as a user message,
  * published with purpose `history_summary` and its own retry settings; the summary goes first as a
  * user message; a refusal part is not text; a tool result in the reply is a tool call.
+ *
+ * Not ported: the `"not a message"` row of
+ * `test_invalid_summary_reply_is_an_ordinary_invocation_failure`: a `Response` is always an
+ * assistant message.
  *
  * Later (T6-6 PR 1, the loop wiring): `test_stop_after_summary_preserves_actual_cache_without_answer`,
  * `test_tool_then_structured_uses_summary_once_and_safe_current_projection`,
@@ -32,7 +34,7 @@
  * Later (T6-6 PR 3): `test_refused_summary_call_fails_provider_auth`.
  */
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 import { ModelCallStarted } from "../../src/events.ts";
 import {
@@ -49,7 +51,6 @@ import {
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ConversationTurn } from "../../src/memory/contracts.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
-import * as live from "../../src/nodes/agent/live.ts";
 import {
   currentHistoryMessages,
   encodeMessage,
@@ -175,23 +176,6 @@ for (const [label, make, type, message] of invalidReplies) {
   });
 }
 
-test("an invalid summary reply is an ordinary invocation failure: a non-assistant reply", async () => {
-  const memory = summarizing();
-  await seed(memory);
-  const spy = spyOn(live, "callModel").mockResolvedValue({ message: user("summary") } as unknown as Response);
-  try {
-    await withHarness(async ({ session }) => {
-      await withTurn(session, request("current"), async (turn) => {
-        const error = await rejected(prepareHistory(turn, new ScriptedModel([]), { signal: NEVER }));
-        expect(error).toBeInstanceOf(TypeError);
-        expect((error as Error).message).toBe("summary reply must be an assistant message");
-      });
-    }, memory);
-  } finally {
-    spy.mockRestore();
-  }
-});
-
 test("a summary provider exception keeps its identity outside the capability boundary", async () => {
   const memory = summarizing();
   await seed(memory);
@@ -247,7 +231,7 @@ test("projection uses whole model exchanges and inert repairs", async () => {
       expect(sent).toContain("outcome unknown");
       expect(sent).toContain("failed");
       const results = messages.filter((message) => message.role === "tool");
-      expect(results.map((message) => (message.parts[0] as { content: string }).content)).toEqual([
+      expect(results.map((message) => (message.parts[0] as ToolResultPart).content)).toEqual([
         "recent actual tool result",
       ]);
       expect(messages.some((message) => message.role === "user" && message.text().includes("structured"))).toBe(true);

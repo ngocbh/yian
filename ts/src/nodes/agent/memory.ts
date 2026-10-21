@@ -35,7 +35,7 @@ import {
   MessageFormatError,
   ReasoningPart,
   Request,
-  Response,
+  type Response,
   TextPart,
   ToolCallPart,
   ToolResultPart,
@@ -600,29 +600,29 @@ function projectHistory(
   }
   const consumed = new Set<string>();
   const messages: Message[] = [];
-  decoded.forEach(({ itemId, exchange, message }, index) => {
-    if (consumed.has(itemId) || message.role === "system") return;
+  for (const [index, { itemId, exchange, message }] of decoded.entries()) {
+    if (consumed.has(itemId) || message.role === "system") continue;
     if (message.role === "tool") {
       messages.push(inertMessage(message, "unpaired tool result"));
-      return;
+      continue;
     }
     if (message.role !== "assistant") {
       messages.push(message);
-      return;
+      continue;
     }
     if (purposes.get(exchange) === "structured_native" || !pairableCalls(message)) {
       messages.push(inertMessage(message, "structured or unpairable model reply"));
-      return;
+      continue;
     }
     messages.push(message);
-    message.toolCalls().forEach((call, callIndex) => {
+    for (const [callIndex, call] of message.toolCalls().entries()) {
       const matches = decoded
         .slice(index + 1)
         .filter((other) => other.exchange === exchange && resultCallId(other.message) === call.id);
       if (matches.length === 1) {
         consumed.add(matches[0]!.itemId);
         messages.push(matches[0]!.message);
-        return;
+        continue;
       }
       const status = toolEffects.get(logJson([exchange, callIndex]));
       const note =
@@ -637,8 +637,8 @@ function projectHistory(
           parts: [new ToolResultPart({ callId: call.id, name: call.name, content: note, isError: true })],
         }),
       );
-    });
-  });
+    }
+  }
   const statuses: JsonObject[] = [];
   const closed = new Set<string>();
   for (const entry of view.closedInvocations) {
@@ -708,9 +708,8 @@ export function currentHistoryMessages(
  * @param options.signal The node's stop signal.
  * @param options.live The sinks the summary call publishes to.
  * @param options.retry Called once per summary call for its retry settings.
- * @throws The summary call's error or reply-validation error with its own identity: TypeError for a
- *   reply that isn't an assistant message, RangeError for tool calls or tool results, parts other
- *   than text and reasoning, or blank text.
+ * @throws The summary call's error or reply-validation error with its own identity: RangeError for
+ *   tool calls or tool results, parts other than text and reasoning, or blank text.
  * @throws CapabilityFault when reading or projecting history fails, or the backend's summary or
  *   projection is invalid.
  * @throws The stop (`signal.reason`).
@@ -724,7 +723,7 @@ export async function prepareHistory(
   if (!turn) return [];
   if (!(await memoryBoundary(() => typeof turn.prepareHistory === "function"))) return historyMessages(turn);
   // The summary call's own error must escape the boundary unwrapped.
-  let callbackFailure: { error: unknown } | null = null;
+  let callbackFailure = null as { error: unknown } | null;
   const project = (view: ConversationView, selected: readonly ConversationInvocation[]): string =>
     logJson(projectHistory(view, selected).map((message) => message.toJSON()));
   const summarize = async (text: string, budget: number): Promise<string> => {
@@ -779,8 +778,9 @@ export async function prepareHistory(
       return context;
     }, signal);
   } catch (fault) {
-    const failure = callbackFailure as { error: unknown } | null;
-    if (fault instanceof CapabilityFault && failure !== null && fault.original === failure.error) throw failure.error;
+    if (fault instanceof CapabilityFault && callbackFailure !== null && fault.original === callbackFailure.error) {
+      throw callbackFailure.error;
+    }
     throw fault;
   }
   signal?.throwIfAborted();
@@ -790,14 +790,10 @@ export async function prepareHistory(
 /**
  * The summary text of `reply`: its text parts joined with `""`, reasoning dropped.
  *
- * @throws TypeError when `reply` isn't a `Response` of an assistant message.
  * @throws RangeError for tool calls or tool results, parts other than text and reasoning, or
  *   blank text.
  */
 function summaryText(reply: Response): string {
-  if (!(reply instanceof Response) || reply.message.role !== "assistant") {
-    throw new TypeError("summary reply must be an assistant message");
-  }
   const parts = reply.message.parts;
   if (parts.some((part) => part instanceof ToolCallPart) || !pairableCalls(reply.message)) {
     throw new RangeError("summary reply must not contain tool calls");

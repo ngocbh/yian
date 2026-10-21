@@ -292,6 +292,45 @@ test("a skip under an already aborted signal throws the stop and records nothing
   expect(view.effects).toHaveLength(0);
 });
 
+const user = (text: string): Message => new Message({ role: "user", parts: [new TextPart(text)] });
+const replyOf = (...parts: Part[]): Response => new Response({ message: new Message({ role: "assistant", parts }) });
+const lookupCall = new ToolCallPart({ id: "provider", name: "lookup", arguments: { value: 1 } });
+const callReply = replyOf(new ToolCallPart({ id: "reused-provider-id", name: "lookup", arguments: { value: 1 } }));
+const resultText = (message: Message): string => (message.parts[0] as ToolResultPart).content;
+const question = user("question");
+const toolPayloadOf = {
+  name: "lookup",
+  arguments: { value: 1 },
+  model_exchange_id: "model",
+  call_index: 0,
+  tool_call_id: "provider",
+};
+
+/** One model call under exchange `model` answering `question` with `reply`. */
+function modelCall(turn: Turn, reply: Response, options: { purpose?: string; newMessages?: Message[] } = {}) {
+  return invokeModel(turn, async () => reply, {
+    newMessages: options.newMessages ?? [question],
+    exchangeId: "model",
+    purpose: options.purpose,
+    signal: NEVER,
+  });
+}
+
+/** The JSON of the history projected in a fresh turn after `fn` ran in it. */
+function projected(fn: (turn: Turn) => Promise<unknown>): Promise<unknown[]> {
+  return withHarness(({ session }) =>
+    withTurn(session, request(), async (turn) => {
+      await fn(turn);
+      return (await historyMessages(turn)).map((message) => message.toJSON());
+    }),
+  );
+}
+
+const repair = (content: string) => toolMessage(content, true).toJSON();
+const status = (statuses: unknown) => user(`Session history status (context only): ${logJson(statuses)}`).toJSON();
+const inert = (reason: string, message: Message) =>
+  user(`Prior ${reason} (context only, not an executable request): ${logJson(message.toJSON())}`).toJSON();
+
 test("a restored unclosed invocation reports unknown completion without changing history", async () => {
   const memory = new SessionMemory();
   const actions: string[] = [];
@@ -331,55 +370,18 @@ test("a restored unclosed invocation reports unknown completion without changing
   expect((snapshot(restored)["conversation"] as Mutable)["items"]).toHaveLength(3);
 });
 
-const user = (text: string): Message => new Message({ role: "user", parts: [new TextPart(text)] });
-const replyOf = (...parts: Part[]): Response => new Response({ message: new Message({ role: "assistant", parts }) });
-const lookupCall = new ToolCallPart({ id: "provider", name: "lookup", arguments: { value: 1 } });
-const callReply = replyOf(new ToolCallPart({ id: "reused-provider-id", name: "lookup", arguments: { value: 1 } }));
-const resultText = (message: Message): string => (message.parts[0] as ToolResultPart).content;
-const question = user("question");
-const toolPayloadOf = {
-  name: "lookup",
-  arguments: { value: 1 },
-  model_exchange_id: "model",
-  call_index: 0,
-  tool_call_id: "provider",
-};
-
-/** One model call under exchange `model` answering `question` with `reply`. */
-function modelCall(turn: Turn, reply: Response, options: { purpose?: string; newMessages?: Message[] } = {}) {
-  return invokeModel(turn, async () => reply, {
-    newMessages: options.newMessages ?? [question],
-    exchangeId: "model",
-    purpose: options.purpose,
-    signal: NEVER,
-  });
-}
-
-/** The JSON of the history projected in a fresh turn after `fn` ran in it; `fn`'s error is ignored. */
-function projected(fn: (turn: Turn) => Promise<unknown>): Promise<unknown[]> {
-  return withHarness(({ session }) =>
-    withTurn(session, request(), async (turn) => {
-      await fn(turn).catch(() => {});
-      return (await historyMessages(turn)).map((message) => message.toJSON());
-    }),
-  );
-}
-
-const repair = (content: string) => toolMessage(content, true).toJSON();
-const status = (statuses: unknown) => user(`Session history status (context only): ${logJson(statuses)}`).toJSON();
-const inert = (reason: string, message: Message) =>
-  user(`Prior ${reason} (context only, not an executable request): ${logJson(message.toJSON())}`).toJSON();
-
 test("a call without a result is repaired by its tool effect's status", async () => {
   const asked = [question.toJSON(), replyOf(lookupCall).message.toJSON()];
   const completed = await projected(async (turn) => {
     await modelCall(turn, replyOf(lookupCall));
-    await invokeToolEffect(turn, async () => () => "not a value", call);
+    const error = await rejected(invokeToolEffect(turn, async () => () => "not a value", call));
+    expect(error).toBeInstanceOf(values.TypeCheckError);
   });
   expect(completed).toEqual([...asked, repair("Tool execution completed; represented result unavailable.")]);
   const failed = await projected(async (turn) => {
     await modelCall(turn, replyOf(lookupCall));
-    await invokeToolEffect(turn, async () => Promise.reject(new Error("tool failed")), call);
+    const error = await rejected(invokeToolEffect(turn, async () => Promise.reject(new Error("tool failed")), call));
+    expect((error as Error).message).toBe("tool failed");
   });
   expect(failed).toEqual([
     ...asked,
@@ -399,7 +401,7 @@ test("a call without a result is repaired by its tool effect's status", async ()
       controller.abort(stop);
       throw stop;
     };
-    await invokeToolEffect(turn, invoke, { ...call, signal: controller.signal });
+    expect(await rejected(invokeToolEffect(turn, invoke, { ...call, signal: controller.signal }))).toBe(stop);
   });
   expect(interrupted).toEqual([
     ...asked,

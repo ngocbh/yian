@@ -17,11 +17,11 @@ import { expect, test } from "bun:test";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
+import type { Request, Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { JsonObject } from "../../src/memory/contracts.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
-import { runWith, snapshot } from "./session_fakes.ts";
+import { recording, reply, runWith, snapshot } from "./session_fakes.ts";
 
 const FLOW = `id: summarized-session
 name: summarized_session
@@ -39,10 +39,6 @@ output: \${answer.output}
 `;
 const SUMMARY = "Retained summary of the earliest conversation. ".repeat(3);
 const QUESTIONS = [0, 1, 2, 3, 4].map((index) => `prior question ${index}: ${"x".repeat(30)}`);
-
-/** A reply holding only `text`. */
-const reply = (text: string): Response =>
-  new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
 
 /** The five prior answers. */
 const replies = (): Response[] => [0, 1, 2, 3, 4].map((index) => reply(`prior answer ${index}`));
@@ -121,21 +117,14 @@ test("a new summary uses the current model without a second model factory", asyn
   const memory = new SessionMemory({ historyBudgetChars: 1 });
   const old = new ScriptedModel(replies());
   const current = new ScriptedModel([reply(SUMMARY), reply("new answer")]);
-  const configs: Readonly<Record<string, unknown>>[] = [];
-  const models = {
-    env: () => undefined,
-    createModel: (config: Readonly<Record<string, unknown>>) => {
-      configs.push(config);
-      return config["model"] === "new-model" ? current : old;
-    },
-  };
+  const models = recording((config) => (config["model"] === "new-model" ? current : old));
   await seed(flow, memory, old, { models });
   const changed = await loadFlow(FLOW.replace("old-model", "new-model"));
   const result = await runWith(changed, { question: "new question" }, memory, current, { models });
 
   expect(result.output).toBe("new answer");
-  expect(configs).toHaveLength(6);
-  expect(configs.at(-1)!["model"]).toBe("new-model");
+  expect(models.configs).toHaveLength(6);
+  expect(models.configs.at(-1)!["model"]).toBe("new-model");
   expect([old.requests.length, current.requests.length]).toEqual([5, 2]);
   expect(texts(current.requests[0]!).join("\n")).toContain(QUESTIONS[0]!);
 });

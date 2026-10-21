@@ -10,8 +10,8 @@
  * `test_more_recent_turns_on_reopen_restores_raw_context`.
  *
  * Changed: Python's `with <backend>:` is `withBackend`, which closes the backend in `finally`.
- * `test_process_local_backends_never_open_sqlite`: spies on `SQLiteStorage.prototype.load` and
- * `save` that throw stand in for Python forbidding `sqlite3.connect`.
+ * `test_process_local_backends_never_open_sqlite`: spies on `SQLiteStorage.prototype.ensureOpen`,
+ * `load` and `save` that throw stand in for Python forbidding `sqlite3.connect`.
  * `test_snapshot_identity_survives_a_real_process_restart`: the child is a `bun -e` script
  * importing the backend's module that prints the snapshot as `logJson`.
  *
@@ -37,7 +37,7 @@ import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { reply, runWith, sentTexts } from "./session_fakes.ts";
+import { reply, runWith, sentTexts, snapshot } from "./session_fakes.ts";
 
 const MODEL_CONFIG = { provider: "openai", model: "storage-test-model" };
 const AGENT_FLOW = `id: durable-session
@@ -85,16 +85,6 @@ async function withBackend<M extends Backend, T>(memory: M, fn: (memory: M) => T
   }
 }
 
-/** The current snapshot of `memory`, read through a fresh run. */
-function snapshotOf(memory: Backend): JsonObject {
-  const opened = memory.openRun();
-  try {
-    return opened.snapshot;
-  } finally {
-    opened.close();
-  }
-}
-
 /** The texts of every message of `model`'s request `index` (the last by default), system prompt included. */
 function context(model: ScriptedModel, index = -1): string[] {
   return model.requests.at(index)!.messages.map((message) => message.text());
@@ -102,13 +92,13 @@ function context(model: ScriptedModel, index = -1): string[] {
 
 for (const policy of POLICIES) {
   test(`process local backends never open sqlite: ${policy}`, async () => {
-    const spies = (["load", "save"] as const).map((name) =>
+    const spies = (["ensureOpen", "load", "save"] as const).map((name) =>
       spyOn(SQLiteStorage.prototype, name).mockImplementation(() => {
         throw new Error("process-local memory opened SQLite");
       }),
     );
     try {
-      await withBackend(backend(policy, null), snapshotOf);
+      await withBackend(backend(policy, null), snapshot);
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     } finally {
       for (const spy of spies) spy.mockRestore();
@@ -136,7 +126,7 @@ memory.close();
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     const recorded = parseJson(result.stdout, "plain");
-    await withBackend(backend(policy, file), (reopened) => expect(snapshotOf(reopened)).toEqual(recorded as JsonObject));
+    await withBackend(backend(policy, file), (reopened) => expect(snapshot(reopened)).toEqual(recorded as JsonObject));
     expect(logJson(recorded)).not.toContain(file);
   });
 
@@ -147,7 +137,7 @@ memory.close();
       const recorded = opened.snapshot;
       memory.close();
       expect(() => opened.snapshot).toThrow(MemoryOperationError);
-      await withBackend(backend(policy, file), (reopened) => expect(snapshotOf(reopened)).toEqual(recorded));
+      await withBackend(backend(policy, file), (reopened) => expect(snapshot(reopened)).toEqual(recorded));
       opened.close();
     });
   });
@@ -161,15 +151,15 @@ test("api session history is used after reopening storage", async () => {
     const first = await runWith(flow, { question: "first" }, memory, model);
     expect(first.output).toBe("reply 1");
     expect(first.learning).toBeNull();
-    return snapshotOf(memory);
+    return snapshot(memory);
   });
   await withBackend(new SessionMemory({ storage: file }), async (reopened) => {
-    expect(snapshotOf(reopened)).toEqual(recorded);
+    expect(snapshot(reopened)).toEqual(recorded);
     const second = await runWith(flow, { question: "second" }, reopened, model);
     expect(second.output).toBe("reply 2");
     expect(second.learning).toBeNull();
     expect(sentTexts(model, 1)).toEqual(["first", "reply 1", "second"]);
-    expect((snapshotOf(reopened)["conversation"] as JsonObject)["items"]).toHaveLength(6);
+    expect((snapshot(reopened)["conversation"] as JsonObject)["items"]).toHaveLength(6);
   });
 });
 
@@ -192,7 +182,7 @@ test("api summary cache survives reopen under current budget", async () => {
       expect(result.output).toBe(`answer ${index}`);
     }
     expect(model.requests).toHaveLength(7);
-    const items = (snapshotOf(memory)["conversation"] as JsonObject)["items"] as JsonObject[];
+    const items = (snapshot(memory)["conversation"] as JsonObject)["items"] as JsonObject[];
     expect(logJson(items)).not.toContain(summary);
     return items;
   });
@@ -204,7 +194,7 @@ test("api summary cache survives reopen under current budget", async () => {
     expect(texts.some((text) => text.includes(summary))).toBe(true);
     expect(texts).not.toContain("question 0");
     for (let index = 1; index <= 6; index++) expect(texts).toContain(`question ${index}`);
-    const items = (snapshotOf(reopened)["conversation"] as JsonObject)["items"] as JsonObject[];
+    const items = (snapshot(reopened)["conversation"] as JsonObject)["items"] as JsonObject[];
     expect(items.slice(0, raw.length)).toEqual(raw);
   });
 });

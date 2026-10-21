@@ -120,6 +120,7 @@ import {
   fakeTurn,
   type Mutable,
   NEVER,
+  NO_ENV,
   PLAIN_FLOW,
   rejected,
   request,
@@ -537,14 +538,9 @@ function context(model: ChatModel, transcript: ConversationTurn, overrides: Part
 
 /** A `lookup` tool taking an integer `value`; it must not run. */
 function lookupTool(): FunctionTool {
-  return new FunctionTool({
-    name: "lookup",
-    description: "Look a value up.",
-    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
-    execute: () => {
-      throw new Error("the tool ran");
-    },
-  });
+  return recordedTool(() => {
+    throw new Error("the tool ran");
+  }).tool;
 }
 
 /** A reply with `text` and one tool call per `[name, arguments, id]`. */
@@ -627,19 +623,12 @@ const textOnly = (text: string): Response => replyOf(new TextPart(text));
 
 test("two runs restore tool exchanges without executing old calls", async () => {
   const memory = new SessionMemory();
-  const calls: unknown[] = [];
-  const lookup = new FunctionTool({
-    name: "lookup",
-    description: "Look a value up.",
-    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
-    execute: (args) => {
-      // The call is requested, after the reply that made it, before it runs.
-      const current = view(memory);
-      expect([current.effects.at(-1)!.kind, current.effects.at(-1)!.status]).toEqual(["tool", "pending"]);
-      expect(decodeMessage(current.items.at(-1)!).parts.some((part) => part instanceof ToolCallPart)).toBe(true);
-      calls.push(args);
-      return `result:${args.value}`;
-    },
+  const { tool: lookup, calls } = recordedTool((args) => {
+    // The call is requested, after the reply that made it, before it runs.
+    const current = view(memory);
+    expect([current.effects.at(-1)!.kind, current.effects.at(-1)!.status]).toEqual(["tool", "pending"]);
+    expect(decodeMessage(current.items.at(-1)!).parts.some((part) => part instanceof ToolCallPart)).toBe(true);
+    return `result:${args["value"]}`;
   });
   const tools = new ToolSet({ lookup });
   const flow = sessionFlow({ tools: ["lookup"] });
@@ -1221,7 +1210,7 @@ for (const stage of ["before_model", "after_model", "after_tool"] as const) {
     });
     // The stop before the model lands as the AGENT builds it, after its turn is admitted.
     const models: ModelAccess = {
-      env: () => undefined,
+      env: NO_ENV,
       createModel: () => {
         if (stage === "before_model") controller.abort(stop);
         return chat;
@@ -1265,7 +1254,7 @@ for (const stage of ["before_model", "after_model", "after_tool"] as const) {
 test("session tool calls keep public argument validation", async () => {
   const { tool, calls } = recordedTool();
   const memory = new SessionMemory();
-  const bad = new ToolCallPart({ id: "call", name: "lookup", arguments: { value: 1n, private: "no" } });
+  const bad = new ToolCallPart({ id: "call", name: "lookup", arguments: { value: 1, private: "no" } });
   const chat = new ScriptedModel([replyOf(bad)]);
   const result = await runWith(await loadFlow(TOOL_FLOW), { question: "first" }, memory, chat, {
     tools: { lookup: tool },

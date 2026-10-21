@@ -10,6 +10,7 @@ import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import {
   ConversationInvocation,
@@ -82,7 +83,7 @@ export function item(itemId: string, text: string, role = "assistant"): Conversa
 }
 
 /** The current snapshot of `memory`, read through a fresh run. */
-export function snapshot(memory: SessionMemory): JsonObject {
+export function snapshot(memory: { openRun(): { readonly snapshot: JsonObject; close(): void } }): JsonObject {
   const opened = memory.openRun();
   try {
     return opened.snapshot;
@@ -343,4 +344,19 @@ export function sentTexts(model: { requests: readonly { messages: readonly Messa
 /** A text-only assistant reply. */
 export function reply(text: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
+}
+
+/** Model access over `NO_ENV` that records each config it builds from and serves `pick(config)`. */
+export function recording(
+  pick: (config: Readonly<Record<string, unknown>>) => ChatModel,
+): ModelAccess & { configs: Readonly<Record<string, unknown>>[] } {
+  const configs: Readonly<Record<string, unknown>>[] = [];
+  return {
+    configs,
+    env: NO_ENV,
+    createModel: (config) => {
+      configs.push(config);
+      return pick(config);
+    },
+  };
 }

@@ -82,6 +82,7 @@ import {
   NEVER,
   PLAIN_FLOW,
   rejected,
+  reply,
   request,
   runWith,
   snapshot,
@@ -91,7 +92,6 @@ import {
 
 const user = (text: string): Message => new Message({ role: "user", parts: [new TextPart(text)] });
 const assistant = (...parts: Part[]): Response => new Response({ message: new Message({ role: "assistant", parts }) });
-const reply = (text: string): Response => assistant(new TextPart(text));
 const callReply = (name = "lookup"): Response =>
   assistant(new ToolCallPart({ id: "reused-provider-id", name, arguments: { value: 1 } }));
 /** The whole text of the messages, for substring checks. */

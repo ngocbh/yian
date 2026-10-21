@@ -78,7 +78,6 @@ import {
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
-import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   ConversationItem,
   type ConversationTurn,
@@ -108,8 +107,11 @@ import { serving } from "./run_state_fixtures.ts";
 import {
   fakeTurn,
   NEVER,
+  NO_ENV,
   PLAIN_FLOW,
+  recording,
   rejected,
+  reply,
   request,
   runSessionFlow,
   runWith,
@@ -358,8 +360,6 @@ test("the memory boundary passes a fault and the stop through and wraps anything
   expect((early as CapabilityFault).original).toBe(stop);
 });
 
-const reply = (text: string): Response =>
-  new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
 const newInput = new Message({ role: "user", parts: [new TextPart("new")] });
 
 for (const stage of ["request", "observe"] as const) {
@@ -573,7 +573,7 @@ test("admission follows render and recall, and only the current recall is reused
   const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
   const events: string[] = [];
   const models = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: () => {
       events.push("model");
       return model;
@@ -686,22 +686,10 @@ for (const [policy, backend] of noSession) {
   });
 }
 
-/** Model access serving `model` that records each config it builds from. */
-function recording(model: ChatModel): ModelAccess & { configs: Readonly<Record<string, unknown>>[] } {
-  const configs: Readonly<Record<string, unknown>>[] = [];
-  return {
-    configs,
-    env: () => undefined,
-    createModel: (config) => {
-      configs.push(config);
-      return model;
-    },
-  };
-}
 
 test("compatible model and prompt changes retain history with the current system", async () => {
   const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
-  const models = recording(model);
+  const models = recording(() => model);
   const memory = new SessionMemory();
   const system = (text: string) => `    kind: agent\n    system_prompt: ${text}\n`;
   const original = PLAIN_FLOW.replace("    kind: agent\n", system("old system instructions"));
@@ -724,7 +712,7 @@ test("compatible model and prompt changes retain history with the current system
 
 test("a provider change requires a reset, then starts fresh", async () => {
   const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
-  const models = recording(model);
+  const models = recording(() => model);
   const memory = new SessionMemory();
   await runWith(await loadFlow(PLAIN_FLOW), { question: "first" }, memory, model, { models });
   const changed = await loadFlow(PLAIN_FLOW.replace("provider: openai", "provider: anthropic"));

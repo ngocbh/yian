@@ -27,7 +27,7 @@ import { expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
-import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
+import type { Message, Request, Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import {
   type ConversationView,
@@ -40,8 +40,7 @@ import { conversationViewFromJson } from "../../src/memory/conversation.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { decodeMessage } from "../../src/nodes/agent/memory.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { rejected } from "./run_state_fixtures.ts";
-import { caught, runWith, snapshot } from "./session_fakes.ts";
+import { caught, NO_ENV, rejected, reply, runWith, snapshot } from "./session_fakes.ts";
 
 const FLOW = `id: execution-session
 name: execution_session
@@ -57,10 +56,6 @@ nodes:
     output: str
 output: \${answer.output}
 `;
-
-/** A reply holding only `text`. */
-const answer = (text: string): Response =>
-  new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
 
 /**
  * Python's `_Model`: a chat model answering each request with `invoke(messages)`, which may wait.
@@ -123,7 +118,7 @@ test("the same authored agent queues real runs in admission order", async () => 
         entered.resolve();
         await release.promise;
       }
-      return answer(`reply:${question}`);
+      return reply(`reply:${question}`);
     } finally {
       active -= 1;
     }
@@ -160,15 +155,14 @@ test("the same authored agent queues real runs in admission order", async () => 
   expect(views(memory)).toEqual([]);
 });
 
-/** A two-party barrier: each `wait` resolves once both parties arrived, or rejects after 5 s. */
+/** A two-party barrier: each `wait` resolves once both parties arrived. */
 function barrier(): { wait(): Promise<void> } {
   const both = Promise.withResolvers<void>();
   let arrived = 0;
   return {
     wait: () => {
       if (++arrived === 2) both.resolve();
-      const timeout = new Promise<void>((_, reject) => setTimeout(() => reject(new Error("barrier broken")), 5000));
-      return Promise.race([both.promise, timeout]);
+      return both.promise;
     },
   };
 }
@@ -187,7 +181,7 @@ output: \${[left.output, right.output]}
 `);
   const model = new InvokeModel(async (messages) => {
     await meeting.wait();
-    return answer(lastText(messages));
+    return reply(lastText(messages));
   });
   const memory = new Map<string, Memory>([
     ["left_chat", left],
@@ -214,7 +208,7 @@ test("a cancelled waiter exits, but the active run keeps its lease until its rep
       entered.resolve();
       await release.promise;
     }
-    return answer(`reply:${question}`);
+    return reply(`reply:${question}`);
   });
   const controlled = (question: string, stop: AbortController) =>
     runWith(flow, { question }, memory, model, { signal: stop.signal, numWorkers: 2 });
@@ -233,7 +227,9 @@ test("a cancelled waiter exits, but the active run keeps its lease until its rep
     next = runWith(flow, { question: "next" }, memory, model);
     await waitQueue(memory, 1);
     expect(calls).toEqual(["owner"]);
-    expect(() => memory.reset()).toThrow(/active or queued/);
+    const error = caught(() => memory.reset());
+    expect(error).toBeInstanceOf(MemoryOperationError);
+    expect((error as MemoryOperationError).message).toContain("active or queued");
   } finally {
     release.resolve();
   }
@@ -267,7 +263,7 @@ for (const [outerSession, localSession] of [
     const calls: Message[][] = [];
     const model = new InvokeModel((messages) => {
       calls.push([...messages]);
-      return answer("answer");
+      return reply("answer");
     });
     const memory = new Map<string, Memory>([
       ["outer", outer],
@@ -291,12 +287,12 @@ for (const [outerSession, localSession] of [
   });
 }
 
-/** A model answering each request with `reply(callIndex, messages)`, recording each request's messages. */
-function recordingModel(reply: (count: number, messages: readonly Message[]) => string) {
+/** A model answering each request with `text(callIndex, messages)`, recording each request's messages. */
+function recordingModel(text: (count: number, messages: readonly Message[]) => string) {
   const calls: Message[][] = [];
   const model = new InvokeModel((messages) => {
     calls.push([...messages]);
-    return answer(reply(calls.length, messages));
+    return reply(text(calls.length, messages));
   });
   return { model, calls };
 }
@@ -441,10 +437,13 @@ output: \${[a.output, b.output]}
 
 test("one session under two providers fails at run setup", async () => {
   const flow = await loadFlow(PROVIDER_SPLIT.replace("PROVIDER", "anthropic"));
-  const model = new InvokeModel(() => {
-    throw new Error("model called before the setup check");
-  });
-  const error = await rejected(runWith(flow, {}, new SessionMemory(), model));
+  const models = {
+    env: NO_ENV,
+    createModel: (): never => {
+      throw new Error("model built before the setup check");
+    },
+  };
+  const error = await rejected(runWith(flow, {}, new SessionMemory(), new InvokeModel(() => reply("unused")), { models }));
   expect(error).toBeInstanceOf(MemorySetupError);
   const message = (error as Error).message;
   expect(message).toContain("session memory 'session' resolves provider");
@@ -455,7 +454,7 @@ test("one session under two providers fails at run setup", async () => {
 
 test("one session under two models of one provider runs", async () => {
   const flow = await loadFlow(PROVIDER_SPLIT.replace("PROVIDER", "openai"));
-  const result = await runWith(flow, {}, new SessionMemory(), new InvokeModel(() => answer("ok")));
+  const result = await runWith(flow, {}, new SessionMemory(), new InvokeModel(() => reply("ok")));
   expect(result.failure).toBeNull();
   expect(result.output).toEqual(["ok", "ok"]);
 });

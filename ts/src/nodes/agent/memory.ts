@@ -2,16 +2,20 @@
  * How an AGENT uses memory: model input from recalled notes and transcripts, and model and tool
  * effects recorded back into the memory turn.
  *
- * Here so far: framing recalled notes into the system prompt; the compatibility descriptor: the
- * provider and message format a stored transcript was written with (changing either requires an
- * explicit memory reset; model, prompt and tool-grant changes keep history); and the text the
- * model reads for a tool result, a reported tool error or a skipped call; the message codec, which
- * stores a `Message` as a `ConversationItem` and reads it back strictly; and the memory boundary,
- * which keeps codec and backend faults apart from errors a model retry may handle; and recording
- * model calls and tool effects in the turn: each request stored before the call, then its reply,
- * result or sanitized failure, a pending stop recorded `interrupted`, a failed observation never
- * hiding the call's own error, and a tool group's settled calls observed in call order; and
- * projecting stored history for the model: whole model exchanges with context-only repairs for
+ * The whole of Python's `nodes/agent/memory.py`: framing recalled notes into the system prompt;
+ * the compatibility descriptor, the provider and message format a stored transcript was written
+ * with (changing either requires an explicit memory reset; model, prompt and tool-grant changes
+ * keep history); the text the model reads for a tool result, a reported tool error or a skipped
+ * call; the message codec, which stores a `Message` as a `ConversationItem` and reads it back
+ * strictly; the memory boundary, which keeps codec and backend faults apart from errors a model
+ * retry may handle.
+ *
+ * Recording: each model call's request is stored before the call, then its reply or sanitized
+ * failure; each tool call's request before it starts, then its result or failure (a tool group's
+ * settled calls in call order); a pending stop is recorded `interrupted`, and a failed observation
+ * never hides the call's own error.
+ *
+ * History: whole model exchanges are projected for the model, with context-only repairs for
  * missing tool results, inert text for unpairable calls and a status line for unfinished work,
  * optionally condensed by a summary the current model writes when the turn supports
  * `prepareHistory`.
@@ -396,7 +400,7 @@ async function recordFailure(
 }
 
 /** The identity of one tool call the model requested. */
-export interface ToolCallIdentity {
+export interface ToolEffectIdentity {
   /** The granted tool name. */
   name: string;
   /** The requested arguments. */
@@ -410,7 +414,7 @@ export interface ToolCallIdentity {
 }
 
 /** The request payload a run or skipped tool effect stores. */
-function toolPayload(call: ToolCallIdentity): JsonObject {
+function toolPayload(call: ToolEffectIdentity): JsonObject {
   return {
     name: call.name,
     arguments: call.arguments,
@@ -421,7 +425,7 @@ function toolPayload(call: ToolCallIdentity): JsonObject {
 }
 
 /** A tool message answering `call` with `content`. */
-function toolMessage(call: ToolCallIdentity, content: string, isError: boolean): Message {
+function toolMessage(call: ToolEffectIdentity, content: string, isError: boolean): Message {
   return new Message({
     role: "tool",
     parts: [new ToolResultPart({ callId: call.toolCallId, name: call.name, content, isError })],
@@ -438,7 +442,7 @@ function toolMessage(call: ToolCallIdentity, content: string, isError: boolean):
  */
 export async function recordSkippedTool(
   turn: ConversationTurn | null | undefined,
-  options: ToolCallIdentity & { signal?: AbortSignal },
+  options: ToolEffectIdentity & { signal?: AbortSignal },
 ): Promise<Message> {
   const message = toolMessage(options, SKIPPED_TOOL_RESULT, true);
   if (!turn) return message;
@@ -466,7 +470,7 @@ export async function interruptTurn(turn: ConversationTurn | null | undefined): 
 export type ToolOutcome = { readonly value: unknown; readonly reported: boolean } | { readonly error: unknown };
 
 /** One started call of a tool group: its identity, its request's ordinal, and how it ended. */
-export interface StartedTool extends ToolCallIdentity {
+export interface StartedTool extends ToolEffectIdentity {
   readonly ordinal: number;
   readonly outcome: ToolOutcome;
 }
@@ -491,7 +495,7 @@ export interface StartedTool extends ToolCallIdentity {
 export async function invokeToolEffect(
   turn: ConversationTurn | null | undefined,
   invoke: () => Promise<unknown>,
-  options: ToolCallIdentity & { signal?: AbortSignal },
+  options: ToolEffectIdentity & { signal?: AbortSignal },
 ): Promise<Message> {
   const { name, signal } = options;
   if (!turn) {
@@ -525,7 +529,7 @@ export async function invokeToolEffect(
  */
 export function requestTool(
   turn: ConversationTurn,
-  options: ToolCallIdentity & { signal?: AbortSignal },
+  options: ToolEffectIdentity & { signal?: AbortSignal },
 ): Promise<number> {
   return memoryBoundary(() => turn.request("tool", toolPayload(options)), options.signal);
 }
@@ -546,7 +550,7 @@ async function settleToolEffect(
   turn: ConversationTurn,
   ordinal: number,
   outcome: ToolOutcome,
-  options: ToolCallIdentity & { signal?: AbortSignal },
+  options: ToolEffectIdentity & { signal?: AbortSignal },
 ): Promise<Message> {
   const { name, signal } = options;
   if ("error" in outcome) {
@@ -759,12 +763,12 @@ function projectHistory(
  *
  * @throws CapabilityFault when reading or projecting the history fails.
  */
-export function historyMessages(turn: ConversationTurn): Promise<Message[]> {
+export function historyMessages(turn: ConversationTurn, options: { signal?: AbortSignal } = {}): Promise<Message[]> {
   return memoryBoundary(() => {
     const view = turn.view;
     const selected = admissions(view);
     return projectHistory(view, selected, { active: selected.at(-1) ?? null });
-  });
+  }, options.signal);
 }
 
 /**
@@ -774,7 +778,7 @@ export function historyMessages(turn: ConversationTurn): Promise<Message[]> {
  */
 export function currentHistoryMessages(
   turn: ConversationTurn | null | undefined,
-  options: { fallback?: Message[] } = {},
+  options: { fallback?: Message[]; signal?: AbortSignal } = {},
 ): Promise<Message[]> {
   if (!turn) return Promise.resolve(options.fallback ?? []);
   return memoryBoundary(() => {
@@ -782,7 +786,7 @@ export function currentHistoryMessages(
     const current = admissions(view).at(-1);
     if (current === undefined) throw new RangeError("the turn has no admitted invocation");
     return projectHistory(view, [current], { active: current });
-  });
+  }, options.signal);
 }
 
 /**
@@ -811,7 +815,9 @@ export async function prepareHistory(
 ): Promise<Message[]> {
   const { signal, live = null, retry } = options;
   if (!turn) return [];
-  if (!(await memoryBoundary(() => typeof turn.prepareHistory === "function"))) return historyMessages(turn);
+  if (!(await memoryBoundary(() => typeof turn.prepareHistory === "function", signal))) {
+    return historyMessages(turn, { signal });
+  }
   // The summary call's own error must escape the boundary unwrapped.
   let callbackFailure = null as { error: unknown } | null;
   const project = (view: ConversationView, selected: readonly ConversationInvocation[]): string =>

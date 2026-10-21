@@ -77,6 +77,7 @@ import {
   requestTool,
   type StartedTool,
   systemPromptWithMemory,
+  type ToolEffectIdentity,
   type ToolOutcome,
   toolText,
 } from "./memory.ts";
@@ -238,7 +239,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       if (schema !== null) {
         // With a transcript, the turn so far is read back, so an unpairable reply becomes inert
         // text.
-        const current = await currentHistoryMessages(transcript, { fallback: messages.slice(1) });
+        const current = await currentHistoryMessages(transcript, { fallback: messages.slice(1), signal: ctx.signal });
         const conversation = [system, ...prior, ...current];
         const options = { ...structuredOptions, newMessages: [] };
         return new Output(await generateStructured(model, conversation, ctx.outputType!, options));
@@ -351,8 +352,11 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
 async function skipFrom(turn: ToolTurn, start: number): Promise<true> {
   for (const [index, call] of turn.calls.entries()) {
     if (index < start) continue;
-    const effect = { ...effectOf(turn, call, index), signal: nodeSignal(turn) };
-    await recordSkippedTool(turn.ctx.memoryContext.transcript, effect);
+    const transcript = turn.ctx.memoryContext.transcript;
+    // Without a transcript nothing is awaited, so a reply's skipped events stay together.
+    if (transcript !== null) {
+      await recordSkippedTool(transcript, { ...effectOf(turn, call, index), signal: nodeSignal(turn) });
+    }
     observeSkippedToolCall(turn.live, identityOf(turn, call, index));
   }
   return true;
@@ -551,7 +555,7 @@ function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCall
 }
 
 /** One call's identity on its transcript record: its bracket identity, the exchange id renamed. */
-function effectOf(turn: ToolTurn, call: ToolCallPart, index: number) {
+function effectOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolEffectIdentity {
   const { exchangeId, ...identity } = identityOf(turn, call, index);
   return { ...identity, modelExchangeId: exchangeId };
 }

@@ -13,8 +13,8 @@
  * asserts the structured purpose and the value for an `ollama` `ScriptedModel`.
  *
  * TS-only: `systemPromptWithMemory` with no sections returns the base unchanged, and with
- * sections appends Python's text and canonical JSON; a memory transcript is refused before the
- * model is built; a steering inbox's steers join the loop's request after the prompt; a granted
+ * sections appends Python's text and canonical JSON; a memory transcript stores the structured
+ * call's system prompt, prompt and reply; a steering inbox's steers join the loop's request after the prompt; a granted
  * tool runs in the loop; a grant without a tool set reads the registry (`new ToolSet()`), so an
  * unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted skill
  * binds `load_skill`; a reply with a parsed tool call and no grant fails at a cap of 1 with
@@ -36,7 +36,6 @@ import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import {
-  type ConversationTurn,
   type EvaluationTrace,
   MemoryContext,
   MemorySection,
@@ -51,13 +50,14 @@ import {
   ToolIterationLimitError,
 } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
+import { decodeMessage, systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { loadSkillTool } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { request, withHarness, withTurn } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -183,13 +183,20 @@ test("the memory sections follow the system prompt in the request", async () => 
   expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
 });
 
-test("a memory transcript is refused before the model is built", async () => {
-  const transcript = new MemoryContext({ transcript: {} as ConversationTurn });
-  const ctx = context(new ScriptedModel([]), { memoryContext: transcript });
-  const error = await rejection(runAgent(ctx));
-  expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toBe("AGENT memory transcripts are not ported yet (T6-6)");
-  expect(ctx.built).toBe(0);
+test("a memory transcript stores the structured call's system prompt, prompt and reply", async () => {
+  const answer = textReply('{"name": "Ada", "score": 9}');
+  const model = new ScriptedModel([answer], NATIVE);
+  const stored = await withHarness(({ session }) =>
+    withTurn(session, request(), async (turn) => {
+      const ctx = context(model, { outputType: RECORD, memoryContext: new MemoryContext({ transcript: turn }) });
+      expect((await runAgent(ctx)).value).toEqual({ name: "Ada", score: 9n });
+      return turn.view;
+    }),
+  );
+  expect(stored.effects.map((effect) => [effect.status, effect.request["purpose"]])).toEqual([
+    ["completed", "structured_native"],
+  ]);
+  expect(stored.items.map(decodeMessage)).toEqual([...model.requests[0]!.messages, answer.message]);
 });
 
 test("a steering inbox's steers join the loop's request after the prompt", async () => {

@@ -7,8 +7,12 @@
  * `test_message_codec_rejects_unknown_or_corrupt_stored_format` (5 rows),
  * `test_message_codec_rejects_nested_data_loss_and_opaque_payload_changes`, the `request`,
  * `observe`, `history` and `view` stages of
- * `test_adapter_memory_faults_are_distinct_from_provider_failures`, and
- * `test_failed_observation_does_not_replace_provider_or_host_error` (2 rows).
+ * `test_adapter_memory_faults_are_distinct_from_provider_failures`,
+ * `test_failed_observation_does_not_replace_provider_or_host_error` (2 rows),
+ * `test_admission_follows_render_and_recall_and_only_current_recall_is_reused` (through
+ * `AgentNode.forward` with an async `openMemoryContext`, the model's build counted as `model`) and
+ * `test_request_is_stored_before_provider_and_failed_effect_remains_truthful` (two `FlowEngine`
+ * runs with distinct run ids over a `MemoryRuntime` backed by one `SessionMemory`).
  *
  * Changed: the expected `message_format` is TS's own `yian.message.v1`, not Python's
  * `yian.langchain-message.v1`, and the codec rows use `yian.message.v1` messages. A stored payload
@@ -20,7 +24,9 @@
  * patches `message_to_dict`). A host stop is the aborted signal, its reason what the call throws,
  * rather than a `_HostStop`; an observation failure's note is on the error's own `notes` array.
  * The `history` stage's hand-made view has empty ledgers, so its unknown-format item is the fault
- * (a `RangeError`), not a missing field.
+ * (a `RangeError`), not a missing field. The refused provider call throws an `Error`, so its
+ * sanitized failure names `Error`; the engine row also checks the evaluator's close: the turn closes
+ * `failed` with the node's error, and a clean close adds no cleanup note to it.
  *
  * TS-only: a record's `api_key` is not kept when the provider resolves from the defaults, a
  * passed `snapshot` is used, and no provider anywhere throws `RangeError`; each `decodeMessage`
@@ -38,8 +44,7 @@
  * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6): every other test of the file, which needs the rest of the adapter, session memory
- * and `run_flow`.
+ * Later (T6-6): every other test of the file, which runs a flow with `run_flow` or resumes one.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -47,21 +52,37 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { Env } from "../../src/defaults.ts";
+import { RunFailed, RunSucceeded } from "../../src/events.ts";
+import type { ChatModel, EventStream } from "../../src/llm/events.ts";
 import {
   MediaPart,
   Message,
   MESSAGE_FORMAT,
   MessageFormatError,
   ReasoningPart,
+  type Request,
   Response,
   TextPart,
   ToolCallPart,
   ToolResultPart,
 } from "../../src/llm/messages.ts";
+import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
-import { ConversationItem, type ConversationTurn, type ConversationView } from "../../src/memory/contracts.ts";
+import {
+  ConversationItem,
+  type ConversationTurn,
+  type ConversationView,
+  DeclSite,
+  MemoryContext,
+  MemoryScope,
+  MemorySection,
+  MemorySpec,
+} from "../../src/memory/contracts.ts";
+import { conversationViewFromJson } from "../../src/memory/conversation.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import {
   compatibility,
@@ -71,9 +92,13 @@ import {
   invokeModel,
   memoryBoundary,
 } from "../../src/nodes/agent/memory.ts";
-import { CapabilityFault } from "../../src/nodes/base.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
-import { fakeTurn, NEVER, rejected, request, withHarness, withTurn } from "./session_fakes.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { CapabilityFault, type NodeCaps } from "../../src/nodes/base.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
+import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { engine, graph } from "./run_state_fixtures.ts";
+import { fakeTurn, NEVER, rejected, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
 
 // Each test's environment: conftest's base (a private store in a fresh directory, the default
 // model) with the default provider this test sets.
@@ -499,3 +524,142 @@ for (const pending of [false, true]) {
     });
   });
 }
+
+const CONFIG = { provider: "openai", model: "test-model" };
+
+/** A `ScriptedModel` that calls `probe` with the call's index before answering it. */
+class ProbedModel extends ScriptedModel {
+  readonly probe: (index: number) => void;
+
+  constructor(replies: ScriptedReply[], probe: (index: number) => void) {
+    super(replies, CONFIG);
+    this.probe = probe;
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    this.probe(this.requests.length);
+    return super.stream(request, options);
+  }
+}
+
+/** The conversation `memory` holds, read through a fresh run (Python's `_view`). */
+function view(memory: SessionMemory): ConversationView {
+  return conversationViewFromJson(snapshot(memory)["conversation"] as JsonObject);
+}
+
+/** The texts of the messages of `model`'s last request after its system prompt. */
+function lastTexts(model: ScriptedModel): string[] {
+  return model.requests.at(-1)!.messages.slice(1).map((message) => message.text());
+}
+
+test("admission follows render and recall, and only the current recall is reused", async () => {
+  const memory = new SessionMemory();
+  const model = new ScriptedModel([reply("one"), reply("two")], CONFIG);
+  const events: string[] = [];
+  const models = {
+    env: () => undefined,
+    createModel: () => {
+      events.push("model");
+      return model;
+    },
+  };
+  const node = new AgentNode("agent", { prompt: "question ${value}", llmConfig: CONFIG });
+  for (const [index, note] of ["old recall", "current recall"].entries()) {
+    await withHarness(async ({ session }) => {
+      let turn: ConversationTurn | null = null;
+      const openMemoryContext: NodeCaps["openMemoryContext"] = async (_system, prompt, compatibility) => {
+        expect(prompt).toBe(`question ${index}`);
+        events.push("recall");
+        const sections = [new MemorySection("session", note)];
+        events.push("admit");
+        turn = await session.openTurn(request(String(index), 1, ["root", "agent"], compatibility), { signal: NEVER });
+        return new MemoryContext({ sections, transcript: turn });
+      };
+      try {
+        await node.forward({ value: BigInt(index) }, {
+          openMemoryContext,
+          captureRender: () => void events.push("render"),
+          models,
+        });
+      } finally {
+        (turn as ConversationTurn | null)?.close();
+      }
+    }, memory);
+  }
+  expect(events).toEqual(["render", "recall", "admit", "model", "render", "recall", "admit", "model"]);
+  const last = model.requests.at(-1)!.messages;
+  expect(last[0]!.text()).toContain("current recall");
+  expect(last.every((message) => !message.text().includes("old recall"))).toBe(true);
+  expect(lastTexts(model)).toEqual(["question 0", "one", "question 1"]);
+});
+
+/** Python's `_FLOW`: one AGENT `agent` owning AGENT memory `session`, prompted with the question. */
+function sessionFlow(): CompiledFlow {
+  const node = new AgentNode("agent", { prompt: "${question}", llmConfig: CONFIG });
+  node.params = [new Parameter("question")];
+  node.memoryScope = new MemoryScope(["agent"], { memories: ["session"] });
+  return graph([node], [[START_ID, "agent"]], {
+    wiring: { agent: { question: "${input.question}" } },
+    outputs: [new FlowOutput("result", "${agent.output}")],
+  });
+}
+
+/**
+ * Run `sessionFlow` through the engine as run `runId` with `question`, `memory` backing `session`
+ * and `model` serving the agent; return the run's terminal event.
+ */
+async function runSession(
+  memory: SessionMemory,
+  model: ChatModel,
+  runId: string,
+  question: string,
+): Promise<RunSucceeded | RunFailed> {
+  const spec = new MemorySpec("session", "session", {}, [new DeclSite([], ["root"], "agent")], true);
+  const runtime = await MemoryRuntime.open({
+    memories: [spec],
+    origins: new Map([["session", null]]),
+    memory: new Map([["session", memory]]),
+  });
+  try {
+    const built = engine(sessionFlow(), {
+      runId,
+      inputs: { question },
+      models: { env: () => undefined, createModel: () => model },
+      memoryContextOpener: (scope, opened, options) => runtime.openContext(scope, opened, options),
+    });
+    await built.run();
+    return built.state.result as RunSucceeded | RunFailed;
+  } finally {
+    await runtime.close();
+  }
+}
+
+test("the request is stored before the provider, and a failed effect remains truthful", async () => {
+  const error = new Error("provider refused; secret-marker");
+  const memory = new SessionMemory();
+  const model = new ProbedModel([error, reply("later")], (index) => {
+    if (index !== 0) return;
+    const stored = view(memory);
+    expect(stored.effects.map((effect) => effect.status)).toEqual(["pending"]);
+    expect(stored.items).toHaveLength(2);
+  });
+  const failed = await runSession(memory, model, "first-run", "first");
+  expect(failed).toBeInstanceOf(RunFailed);
+  const failure = (failed as RunFailed).failure;
+  expect(failure.code).toBe("node.execute");
+  // The evaluator closed the turn with the node's error, and the clean close left no note.
+  expect(failure.traceback).not.toContain("cleanup");
+  expect((error as Error & { notes?: string[] }).notes).toBeUndefined();
+  const stored = view(memory);
+  expect(stored.effects[0]!.status).toBe("failed");
+  expect(stored.closedInvocations.at(-1)!.status).toBe("failed");
+  expect(stored.effects[0]!.failure!.message).toBe("Model invocation failed (Error).");
+  expect(logJson(snapshot(memory))).not.toContain("secret-marker");
+  const later = await runSession(memory, model, "second-run", "second");
+  expect(later).toEqual(new RunSucceeded({ output: "later" }));
+  expect(lastTexts(model)).toEqual([
+    "first",
+    'Session history status (context only): [{"invocation":"failed"},{"effect":"model","status":"failed"}]',
+    "second",
+  ]);
+});

@@ -9,13 +9,23 @@
  * `test_empty_crash_status_selected_and_active_current_not_unknown`,
  * `test_exchange_attribution_faults_do_not_call_summary_model` (2 rows),
  * `test_old_turn_without_summary_capability_preserves_full_context`,
- * `test_backend_projection_faults_remain_capability_faults` (4 rows) and
- * `test_valid_text_blocks_are_kept_intact_without_hard_truncation`.
+ * `test_backend_projection_faults_remain_capability_faults` (4 rows),
+ * `test_valid_text_blocks_are_kept_intact_without_hard_truncation`, and through `runAgent`:
+ * `test_stop_after_summary_preserves_actual_cache_without_answer`,
+ * `test_summary_uses_unbound_model_and_current_instructions_and_grants`,
+ * `test_summary_failure_never_enters_answer_structured_retry` (native and prompt) and
+ * `test_structured_correction_attempts_are_one_whole_recent_turn` (native and prompt).
  *
  * Changed: the invalid replies are what a `yian.message.v1` reply can hold: empty and blank text,
  * reasoning only, a parsed and an unparsed tool call, and a media part; Python's opaque-payload,
  * `function_call` and LangChain block rows have no TS form. A `ValueError` is a `RangeError`, each
- * with Python's text.
+ * with Python's text. A stop is the aborted signal, its reason what the run throws; the stop after
+ * the summary lands at the summary call's `ModelCallFinished`. TS has no tool binding, so "the
+ * summary uses the unbound model" reads as the summary request carrying no tools and the chat
+ * request the current grant; `yian.message.v1` has no developer role, so only the old system
+ * message is checked. `test_summary_failure_never_enters_answer_structured_retry` fails with an
+ * `Error`: TS has no `FutureCancelledError`, asyncio cancellation or `KeyboardInterrupt`; "no
+ * structured binding" reads as no second request.
  *
  * TS-only: the summary request is the prompt with the budget and the projection as a user message,
  * published with purpose `history_summary` and its own retry settings; the summary goes first as a
@@ -25,18 +35,16 @@
  * `test_invalid_summary_reply_is_an_ordinary_invocation_failure`: a `Response` is always an
  * assistant message.
  *
- * Later (T6-6 PR 1, the loop wiring): `test_stop_after_summary_preserves_actual_cache_without_answer`,
- * `test_tool_then_structured_uses_summary_once_and_safe_current_projection`,
- * `test_summary_uses_unbound_model_and_current_instructions_and_grants`,
- * `test_summary_failure_never_enters_answer_structured_retry` and
- * `test_structured_correction_attempts_are_one_whole_recent_turn`.
+ * Later (T6-6 PR 1, a run tool call's transcript):
+ * `test_tool_then_structured_uses_summary_once_and_safe_current_projection`.
  *
  * Later (T6-6 PR 3): `test_refused_summary_call_fails_provider_auth`.
  */
 
 import { expect, test } from "bun:test";
 
-import { ModelCallStarted } from "../../src/events.ts";
+import { ModelCallFinished, ModelCallStarted } from "../../src/events.ts";
+import type { ChatModel } from "../../src/llm/events.ts";
 import {
   MediaPart,
   Message,
@@ -49,7 +57,7 @@ import {
   ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import type { ConversationTurn } from "../../src/memory/contracts.ts";
+import { type ConversationTurn, MemoryContext, MemorySection } from "../../src/memory/contracts.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import {
   currentHistoryMessages,
@@ -59,9 +67,14 @@ import {
   invokeToolEffect,
   prepareHistory,
 } from "../../src/nodes/agent/memory.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
+import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
-import { logJson } from "../../src/typesys/json.ts";
-import { NEVER, rejected, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
+import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { type Mutable, NEVER, rejected, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
 
 const user = (text: string): Message => new Message({ role: "user", parts: [new TextPart(text)] });
 const assistant = (...parts: Part[]): Response => new Response({ message: new Message({ role: "assistant", parts }) });
@@ -346,3 +359,172 @@ test("valid text blocks are kept intact without hard truncation", async () => {
     });
   }, memory);
 });
+
+const NATIVE = { provider: "openai", model: "gpt-5.5" };
+const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const STRATEGIES = [
+  ["native", NATIVE],
+  ["prompt", PROMPTED],
+] as const;
+const INT = Type.scalar(ValueKind.INTEGER);
+
+/** A hand-built `runAgent` context over `model` and `transcript`, with `overrides`. */
+function context(
+  model: ChatModel,
+  transcript: ConversationTurn,
+  overrides: Partial<AgentRunContext> = {},
+): AgentRunContext {
+  return {
+    nodeId: "agent",
+    prompt: "current question",
+    tools: [],
+    llmConfig: null,
+    outputType: null,
+    retries: 0,
+    maxToolIterations: -1,
+    memoryContext: new MemoryContext({ transcript }),
+    toolset: null,
+    baseSystemPrompt: DEFAULT_SYSTEM,
+    skills: [],
+    models: { env: () => undefined, createModel: () => model },
+    sent: () => [],
+    ...overrides,
+  };
+}
+
+/** Python's `_Tool`: a tool `name` taking an integer `value`, answering `result:<value>`. */
+function valueTool(name: string, calls: Record<string, unknown>[]): FunctionTool {
+  return new FunctionTool({
+    name,
+    description: "Look a value up.",
+    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
+    execute: (args) => {
+      calls.push(args);
+      return `result:${args.value}`;
+    },
+  });
+}
+
+/** The conversation `memory` holds, as its snapshot's JSON. */
+const conversation = (memory: SessionMemory): Mutable => snapshot(memory)["conversation"];
+
+test("a stop after the summary keeps the actual cache without an answer", async () => {
+  const memory = new SessionMemory({ historyBudgetChars: 1, recentTurns: 1 });
+  await seed(memory, 2);
+  const model = new ScriptedModel([reply("actual summary before stop")]);
+  const stop = new AbortController();
+  const primary = new Error("stopped");
+  // Stopped once the summary reply arrived, as Python's model sets the stop before returning it.
+  const emitEvent = (event: unknown) => {
+    if (event instanceof ModelCallFinished) stop.abort(primary);
+  };
+  const before = conversation(memory);
+  const error = await rejected(
+    withHarness(
+      ({ session }) =>
+        withTurn(
+          session,
+          request("current"),
+          (turn) => runAgent(context(model, turn, { prompt: "current", signal: stop.signal, emitEvent })),
+          stop.signal,
+        ),
+      memory,
+    ),
+  );
+  expect(error).toBe(primary);
+  expect(model.requests).toHaveLength(1);
+  const after = conversation(memory);
+  expect(after.items).toEqual(before.items);
+  expect(after.effects).toEqual(before.effects);
+  expect(after.closed_invocations.at(-1).status).toBe("interrupted");
+  expect([...memory["summaries"].values()][0]!.text).toBe("actual summary before stop");
+});
+
+test("the summary uses the unbound model and the current instructions and grants", async () => {
+  const memory = summarizing();
+  await withHarness(async ({ session }) => {
+    await withTurn(session, request("old"), (turn) =>
+      invokeModel(turn, async () => reply("old reply"), {
+        newMessages: [new Message({ role: "system", parts: [new TextPart("OLD SYSTEM")] }), user("old question")],
+        signal: NEVER,
+      }),
+    );
+  }, memory);
+  const model = new ScriptedModel([reply("facts"), callReply("current"), reply("answer")]);
+  const calls: Record<string, unknown>[] = [];
+  const toolset = new ToolSet({ current: valueTool("current", calls) });
+  const sections = [new MemorySection("session", "CURRENT NOTE")];
+  const result = await withHarness(
+    ({ session }) =>
+      withTurn(session, request("current"), (turn) =>
+        runAgent(
+          context(model, turn, {
+            prompt: "new question",
+            tools: ["current"],
+            toolset,
+            memoryContext: new MemoryContext({ sections, transcript: turn }),
+          }),
+        ),
+      ),
+    memory,
+  );
+  expect(result.value).toBe("answer");
+  const [summary, chat] = model.requests;
+  // The summary call binds no tools; the chat call binds the current grant.
+  expect(summary!.tools).toEqual([]);
+  expect(chat!.tools.map((tool) => tool.name)).toEqual(["current"]);
+  expect(dump(model.requests.flatMap((sent) => sent.messages))).not.toContain("OLD SYSTEM");
+  expect(chat!.messages[0]!.text()).toContain("CURRENT NOTE");
+  expect(calls).toEqual([{ value: 1 }]);
+});
+
+for (const [label, config] of STRATEGIES) {
+  test(`a summary failure never enters the answer's structured retry: ${label}`, async () => {
+    const memory = summarizing();
+    await seed(memory);
+    const error = new Error("summary error");
+    const model = new ScriptedModel([error], config);
+    const before = conversation(memory);
+    const caught = await rejected(
+      withHarness(
+        ({ session }) =>
+          withTurn(session, request("current"), (turn) =>
+            runAgent(context(model, turn, { outputType: INT, retries: 7, llmConfig: config })),
+          ),
+        memory,
+      ),
+    );
+    expect(caught).toBe(error);
+    expect(model.requests).toHaveLength(1);
+    const after = conversation(memory);
+    expect(after.items).toEqual(before.items);
+    expect(after.effects).toEqual(before.effects);
+    expect(after.closed_invocations.at(-1).status).not.toBe("completed");
+  });
+
+  test(`structured correction attempts are one whole recent turn: ${label}`, async () => {
+    const memory = new SessionMemory({ historyBudgetChars: 1, recentTurns: 1 });
+    await seed(memory);
+    const model = new ScriptedModel([reply('{"value":"bad"}'), reply('{"value":7}')], config);
+    await withHarness(async ({ session }) => {
+      const value = await withTurn(session, request("structured"), (turn) =>
+        runAgent(
+          context(model, turn, { prompt: "structured question", outputType: INT, retries: 1, llmConfig: config }),
+        ),
+      );
+      expect(value.value).toBe(7n);
+      await withTurn(session, request("current"), async (turn) => {
+        const summaryModel = new ScriptedModel([reply("old facts")]);
+        const messages = await prepareHistory(turn, summaryModel, { signal: NEVER });
+        const sent = dump(summaryModel.requests[0]!.messages);
+        expect(sent).toContain("question-0");
+        expect(sent).not.toContain("structured question");
+        expect(messages.map((message) => message.text())).toContain("structured question");
+        expect(dump(messages)).toContain("previous output was invalid");
+        expect(dump(messages)).toContain("bad");
+        expect(dump(messages)).toContain("7");
+        expect(messages.some((message) => message.parts.some((part) => part instanceof ToolCallPart))).toBe(false);
+      });
+    }, memory);
+  });
+}

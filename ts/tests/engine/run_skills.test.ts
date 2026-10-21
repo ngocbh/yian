@@ -11,9 +11,9 @@
  * - The early checks throw a `RangeError` where Python raises `ValueError`; a skills mapping is a
  *   `Map`, a hand-made skill a `new Skill({...})`; a list of names in a message is written in the
  *   text form (`["release-notes"]`, Python `['release-notes']`).
- * - A crash is a frozen log: `CrashAt` freezes every durable log as it serves request N, and the
- *   log's next append throws a `Crash` the run rejects with (Python: the model raises
- *   `_SimulatedCrash` for request N).
+ * - A crash is a frozen log: `CrashAt` marks request N, and from then on every durable log's
+ *   append throws a `Crash` the run rejects with (Python: the model raises `_SimulatedCrash` for
+ *   request N). Either way no record of request N's outcome reaches the log.
  *
  * `run.test.ts`'s TS-only skill rows stay: they pin the full messages of the same checks.
  */
@@ -35,17 +35,15 @@ import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Crash, rejection, textReply } from "./run_state_fixtures.ts";
-import { effectsOf, resumeWith, runWith } from "./session_fakes.ts";
+import { effectsOf, resumeWith, runWith, SESSION_CONFIG } from "./session_fakes.ts";
 
-const OPTIONS = { provider: "openai", model: "test-model" };
-
-/** A `ScriptedModel` that freezes the durable logs as it serves request `at` (1-based). */
+/** A `ScriptedModel` that sets `frozen` as it serves request `at` (1-based); `crashes` reads it. */
 class CrashAt extends ScriptedModel {
   readonly at: number;
   frozen = false;
 
   constructor(replies: ScriptedReply[], at: number) {
-    super(replies, OPTIONS);
+    super(replies, SESSION_CONFIG);
     this.at = at;
   }
 
@@ -76,9 +74,9 @@ function loadCall(args: JsonObject, id: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
 }
 
-/** The system text of `model`'s request `index`. */
-function systemText(model: ScriptedModel, index = 0): string {
-  return model.requests[index]!.messages[0]!.text();
+/** The system text of `model`'s first request. */
+function systemText(model: ScriptedModel): string {
+  return model.requests[0]!.messages[0]!.text();
 }
 
 /** The content of the tool result ending `model`'s request `index`. */
@@ -154,7 +152,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 test("runFlow delivers skills to the agent", async () => {
-  const model = new ScriptedModel([textReply("ok")], OPTIONS);
+  const model = new ScriptedModel([textReply("ok")], SESSION_CONFIG);
   const skills = loadSkills([skillRoot]);
   const result = await runWith(await loadFlow(FLOW), { change: "x" }, null, model, { skills });
   expect(result.failure).toBeNull();
@@ -164,7 +162,7 @@ test("runFlow delivers skills to the agent", async () => {
 });
 
 test("load_skill runs through a session conversation", async () => {
-  const model = new ScriptedModel([loadCall({ name: "code-review" }, "a"), textReply("done")], OPTIONS);
+  const model = new ScriptedModel([loadCall({ name: "code-review" }, "a"), textReply("done")], SESSION_CONFIG);
   const memory = new SessionMemory();
   const result = await runWith(await loadFlow(SESSION_FLOW), { change: "x" }, memory, model, {
     skills: loadSkills([skillRoot]),
@@ -180,7 +178,7 @@ test("load_skill runs through a session conversation", async () => {
 });
 
 test("a missing skill is rejected before any record", async () => {
-  const model = new ScriptedModel([], OPTIONS);
+  const model = new ScriptedModel([], SESSION_CONFIG);
   const skills = new Map([["code-review", new Skill({ name: "code-review", description: "d", instructions: "" })]]);
   const error = await rejection(runWith(await loadFlow(FLOW), { change: "x" }, null, model, { log, skills }));
   expect(error).toBeInstanceOf(RangeError);
@@ -198,15 +196,16 @@ test.each([
   ["nested", NESTED],
 ])("a granting flow needs a skills mapping: %s", async (_label, text) => {
   const inputs = text === NESTED ? {} : { change: "x" };
-  const error = await rejection(runWith(await loadFlow(text), inputs, null, new ScriptedModel([], OPTIONS), { log }));
+  const error = await rejection(runWith(await loadFlow(text), inputs, null, new ScriptedModel([], SESSION_CONFIG), { log }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("grants skills, but no skills= mapping was passed");
   expect(existsSync(log)).toBe(false);
 });
 
 test("skills: all with an empty mapping grants none", async () => {
-  const model = new ScriptedModel([textReply("ok")], OPTIONS);
+  const model = new ScriptedModel([textReply("ok")], SESSION_CONFIG);
   const result = await runWith(await loadFlow(ALL_FLOW), { change: "x" }, null, model, { skills: new Map() });
+  expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(systemText(model)).toBe(DEFAULT_SYSTEM);
 });
@@ -218,12 +217,12 @@ test("a resume of a skills: all flow needs the mapping", async () => {
   );
   const before = readFileSync(log);
 
-  const refused = await rejection(resumeWith(await loadFlow(ALL_FLOW), log, null, new ScriptedModel([], OPTIONS)));
+  const refused = await rejection(resumeWith(await loadFlow(ALL_FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
   expect(refused).toBeInstanceOf(RangeError);
-  expect((refused as Error).message).toMatch(/no skills= mapping was passed/);
+  expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);
 
-  const model = new ScriptedModel([textReply("ok")], OPTIONS);
+  const model = new ScriptedModel([textReply("ok")], SESSION_CONFIG);
   const resumed = await resumeWith(await loadFlow(ALL_FLOW), log, null, model, { skills: loadSkills([skillRoot]) });
   expect(resumed.status).toBe("succeeded");
   expect(systemText(model)).toContain("- unused: Not granted.");
@@ -232,7 +231,7 @@ test("a resume of a skills: all flow needs the mapping", async () => {
 test("the skills mapping must be keyed by skill name", async () => {
   const skills = new Map([["alias", new Skill({ name: "code-review", description: "d", instructions: "" })]]);
   const error = await rejection(
-    runWith(await loadFlow(FLOW), { change: "x" }, null, new ScriptedModel([], OPTIONS), { skills }),
+    runWith(await loadFlow(FLOW), { change: "x" }, null, new ScriptedModel([], SESSION_CONFIG), { skills }),
   );
   expect(error).toBeInstanceOf(TypeError);
   expect((error as Error).message).toBe("skills['alias'] must be a Skill named 'alias'");
@@ -259,9 +258,9 @@ test("end to end: listing, load, escape and resume", async () => {
   expect(lastResult(first, 2)).toBe("1. Tests pass.\n");
 
   const before = readFileSync(log);
-  const refused = await rejection(resumeWith(await loadFlow(FLOW), log, null, new ScriptedModel([], OPTIONS)));
+  const refused = await rejection(resumeWith(await loadFlow(FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
   expect(refused).toBeInstanceOf(RangeError);
-  expect((refused as Error).message).toMatch(/no skills= mapping was passed/);
+  expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);
 
   const second = new ScriptedModel(
@@ -270,7 +269,7 @@ test("end to end: listing, load, escape and resume", async () => {
       loadCall({ name: "code-review", path: "references/checklist.md" }, "b"),
       textReply("looks good"),
     ],
-    OPTIONS,
+    SESSION_CONFIG,
   );
   const resumed = await resumeWith(await loadFlow(FLOW), log, null, second, { skills: loadSkills([skillRoot]) });
 
@@ -284,7 +283,7 @@ test("end to end: listing, load, escape and resume", async () => {
   expect(review(NodeStartedRecord)).toBe(2);
   expect(review(NodeSucceededRecord)).toBe(1);
 
-  const escape = new ScriptedModel([loadCall({ name: "code-review", path: "../../secret.txt" }, "c")], OPTIONS);
+  const escape = new ScriptedModel([loadCall({ name: "code-review", path: "../../secret.txt" }, "c")], SESSION_CONFIG);
   const failed = await runWith(await loadFlow(FLOW), { change: "diff-2" }, null, escape, { skills });
   expect(failed.status).toBe("failed");
   expect(failed.failure!.message).toContain("relative path inside the skill directory");

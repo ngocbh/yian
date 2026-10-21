@@ -41,7 +41,7 @@ import { readRunLog } from "../../src/runtime/log.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { serving } from "./run_state_fixtures.ts";
+import { barrier, serving } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-live-events-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -203,14 +203,8 @@ test("a run without callbacks is unchanged", async () => {
 });
 
 test("parallel agents keep their own events in pooled runs", async () => {
-  let arrived = 0;
-  let release!: () => void;
-  const both = new Promise<void>((resolve) => (release = resolve));
   // Both AGENTs are inside a tool call at once.
-  registerLookup(() => {
-    if (++arrived === 2) release();
-    return both;
-  });
+  registerLookup(barrier(2));
   const model = new ScriptedModel(
     [
       reply("", [["lookup", { topic: "acme" }, "call-1"]]),

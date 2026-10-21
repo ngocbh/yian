@@ -32,9 +32,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { NodeStarted } from "../../src/events.ts";
 import { type RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
+import { startedIds } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-complex-values-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -54,9 +54,6 @@ function expectBindingFails(result: RunResult, nodeId: string, message: string):
   expect(result.failure!.nodeId).toBe(nodeId);
   expect(result.failure!.message).toBe(message);
 }
-
-const startedIds = (result: RunResult) =>
-  result.events.filter((event) => event instanceof NodeStarted).map((event) => (event as NodeStarted).nodeId);
 
 test("a binding that evaluates to no real number fails its node (learnable)", async () => {
   const result = await run(

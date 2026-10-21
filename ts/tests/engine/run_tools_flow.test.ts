@@ -51,7 +51,7 @@ import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, textReply } from "./run_state_fixtures.ts";
+import { barrier, rejection, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-tools-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -153,17 +153,6 @@ const fixed = (name: string, value: () => unknown) =>
 
 /** Echo the rendered question back as the answer. */
 const answerWithQuestion = (request: AskUserRequest) => `answer to ${request.question}`;
-
-/** A barrier for `parties` calls: each awaits the returned promise until all have arrived. */
-function barrier(parties: number): () => Promise<void> {
-  let arrived = 0;
-  let release!: () => void;
-  const all = new Promise<void>((resolve) => (release = resolve));
-  return () => {
-    if (++arrived === parties) release();
-    return all;
-  };
-}
 
 test("runFlow uses per-run tools and ask_user handler", async () => {
   const result = await run(GREETING_FLOW, {}, {

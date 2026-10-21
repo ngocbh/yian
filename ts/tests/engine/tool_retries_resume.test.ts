@@ -77,7 +77,7 @@ import { TransientToolError } from "../../src/tools/errors.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { Crash, crashAfter, rejection, startedRun } from "./run_state_fixtures.ts";
+import { barrier, Crash, crashAfter, rejection, startedRun } from "./run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets: the
 // engine rows and the replays read the process's values.
@@ -436,17 +436,6 @@ nodes:
       n: \${item}
 output: \${each.output}
 `;
-
-/** A barrier for `parties` calls: each awaits the returned promise until all have arrived. */
-function barrier(parties: number): () => Promise<void> {
-  let arrived = 0;
-  let release!: () => void;
-  const all = new Promise<void>((resolve) => (release = resolve));
-  return () => {
-    if (++arrived === parties) release();
-    return all;
-  };
-}
 
 test("two tools retrying at once in a pooled map resume with their own steps", async () => {
   const path = freshLog();

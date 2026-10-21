@@ -52,10 +52,11 @@ import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
-import { type RunEvent, StreamChunk } from "../../src/events.ts";
+import { NodeStarted, type RunEvent, StreamChunk } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import type { RunResult } from "../../src/run.ts";
 import {
   decodePool,
   encodePool,
@@ -80,6 +81,7 @@ import {
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -441,6 +443,12 @@ export async function drive(
 /** Return an assistant reply holding only `text`, finished with `stop`. */
 export function textReply(text: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
+}
+
+/** One assistant reply calling `calls` (`[name, args, id]`), finished with `tool_calls`. */
+export function callReply(...calls: [string, JsonObject, string][]): Response {
+  const parts = calls.map(([name, args, id]) => new ToolCallPart({ id, name, arguments: args }));
+  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
 }
 
 /** Return a model access over an empty environment that serves `model`; `built` counts the builds. */
@@ -1275,6 +1283,21 @@ export class ReturningLog implements RunLog {
 }
 
 // ---- Run-boundary helpers: errors, crashes, recorded prefixes ----
+
+/** The ids of the nodes whose `NodeStarted` the run's events hold, in order. */
+export const startedIds = (result: RunResult) =>
+  result.events.filter((event) => event instanceof NodeStarted).map((event) => (event as NodeStarted).nodeId);
+
+/** A barrier for `parties` calls: each awaits the returned promise until all have arrived. */
+export function barrier(parties: number): () => Promise<void> {
+  let arrived = 0;
+  let release!: () => void;
+  const all = new Promise<void>((resolve) => (release = resolve));
+  return () => {
+    if (++arrived === parties) release();
+    return all;
+  };
+}
 
 /** The error `promise` rejects with; fails the test when it resolves. */
 export async function rejection(promise: Promise<unknown>): Promise<unknown> {

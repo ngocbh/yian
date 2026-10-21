@@ -53,7 +53,6 @@ import { join } from "node:path";
 
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { NodeStarted } from "../../src/events.ts";
 import { type TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { applyDefaults, BindingError } from "../../src/nodes/binding.ts";
@@ -62,7 +61,7 @@ import { type RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, serving, textReply } from "./run_state_fixtures.ts";
+import { rejection, serving, startedIds, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nonfinite-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -109,9 +108,6 @@ function expectSucceeds(result: RunResult, output: unknown): void {
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toEqual(output);
 }
-
-const startedIds = (result: RunResult) =>
-  result.events.filter((event) => event instanceof NodeStarted).map((event) => (event as NodeStarted).nodeId);
 
 /** A flow whose `n` CODE node declares `output` and returns `value`. */
 const codeFlow = (output: string, value: string) => `

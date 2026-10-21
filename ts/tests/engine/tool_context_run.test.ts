@@ -32,7 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
+import type { Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
@@ -40,9 +40,8 @@ import { resumeFlow, runFlow } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserRequest, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-tool-context-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -118,12 +117,6 @@ const probe = (seen: ToolContext[], name = "probe") =>
       return `seen ${args.text}`;
     },
   });
-
-/** One reply calling `calls` (`[name, args, id]`). */
-function callReply(...calls: [string, JsonObject, string][]): Response {
-  const parts = calls.map(([name, args, id]) => new ToolCallPart({ id, name, arguments: args }));
-  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
-}
 
 /** Two calls in one reply, one more in a second reply, then a final answer. */
 const twoCallsThenAnswer = (name: string) => [

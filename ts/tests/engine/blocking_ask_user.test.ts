@@ -35,7 +35,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
-import { Message, type Request, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
+import { type Message, type Request, type Response, TextPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
@@ -43,21 +43,14 @@ import { Assertion, ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserHandler, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
 afterEach(forget);
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };
-
-/** One model reply calling `calls` (`[name, args, id]`). */
-function callReply(...calls: [string, JsonObject, string][]): Response {
-  const parts = calls.map(([name, args, id]) => new ToolCallPart({ id, name, arguments: args }));
-  return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
-}
 
 /** A scripted model answering `replies` under `CONFIG`. */
 const scripted = (replies: Response[]) => new ScriptedModel(replies, CONFIG);

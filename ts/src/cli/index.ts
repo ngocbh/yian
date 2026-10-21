@@ -7,15 +7,22 @@
  *
  * Before a command parses its arguments, `main` checks the `YIAN_<NAME>` defaults in the command's
  * environment, as Python's root callback does.
+ *
+ * Run as the entry script, `yian run ... --json` runs in a child of this runtime whose fd 1 goes to
+ * stderr and whose `stdout` writer is fd 3, so stdout holds only the document even when a CODE body
+ * or a tool writes to fd 1 (Python points fd 1 at stderr with `os.dup2`, which Node and Bun lack).
  */
 
-import { realpathSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createWriteStream, realpathSync } from "node:fs";
+import { constants } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { DefaultsError, read } from "../defaults.ts";
 import {
   type CliIo,
   type CommandSpec,
+  abortOnSignal,
   flush,
   helpText,
   type OptionSpec,
@@ -23,6 +30,8 @@ import {
   parseCommand,
   printJson,
   processIo,
+  relay,
+  streamWriter,
   UsageError,
   usageError,
 } from "./utils.ts";
@@ -431,10 +440,81 @@ function isEntry(): boolean {
   }
 }
 
-if (isEntry()) {
+/**
+ * The internal first argument the entry re-runs itself with for `run --json`: the child it marks
+ * writes the document on fd 3. Users never pass it, and `main` never sees it.
+ */
+const JSON_CHILD = "--yian-json-child";
+
+/** Whether `args` is a `run` command with `--json` before any `--`. */
+function isRunJson(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  return args[0] === "run" && args.slice(0, end === -1 ? undefined : end).includes("--json");
+}
+
+/**
+ * Run `args` in a child of this runtime marked `JSON_CHILD`, copy its fd 1 to stderr and its fd 3
+ * to stdout, and exit as it did.
+ *
+ * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2, a signal no terminal sends, so a
+ * group Ctrl-C (which the child gets too) and the forwarded stop are one stop; the second kills
+ * the child and exits 130. A child that died by SIGUSR2, before its listener was on, exits 130.
+ */
+async function runJsonParent(args: readonly string[]): Promise<never> {
+  const command = [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
+  const child = spawn(process.execPath, command, { stdio: ["inherit", "pipe", "inherit", "pipe"] });
+  let stops = 0;
+  const onStop = () => {
+    stops += 1;
+    if (stops === 1) {
+      child.kill("SIGUSR2");
+      return;
+    }
+    // A run whose synchronous body blocks its loop never takes the forwarded stop.
+    child.kill("SIGKILL");
+    process.exit(130);
+  };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const name of signals) process.on(name, onStop);
+  const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+    child.on("close", (code, signal) => resolve([code, signal]));
+  });
   const io = processIo();
-  const code = await main(process.argv.slice(2), io);
+  const [[code, signal]] = await Promise.all([
+    closed,
+    relay(child.stdio[3] as NodeJS.ReadableStream, io.stdout),
+    relay(child.stdio[1]!, io.stderr),
+  ]);
+  if (code !== null) process.exit(code);
+  if (signal === "SIGUSR2") process.exit(130);
+  for (const name of signals) process.off(name, onStop);
+  process.kill(process.pid, signal!);
+  // Reached only when the signal doesn't end this process.
+  process.exit(128 + constants.signals[signal!]);
+}
+
+/**
+ * Run `args` as the `run --json` child: `main` with `stdout` writing to fd 3, and `CliIo.stop`
+ * aborted with a `HostStop("SIGINT")` by the SIGUSR2 the parent forwards. Return the exit code.
+ */
+async function runJsonChild(args: readonly string[]): Promise<number> {
+  // On before anything loads; `run.ts` loads on the signal, as `main` would load it anyway.
+  const hostStop = async () => new (await import("./run.ts")).HostStop("SIGINT");
+  const stop = abortOnSignal("SIGUSR2", hostStop);
+  const stdout = streamWriter(createWriteStream("", { fd: 3 }));
+  const io: CliIo = { ...processIo(), stdout, stop };
+  const code = await main(args, io);
   await flush(io);
-  // The explicit exit ends a run whose CODE body left a timer, as Python's process exit does.
+  return code;
+}
+
+if (isEntry()) {
+  const args = process.argv.slice(2);
+  // The explicit exits end a run whose CODE body left a timer, as Python's process exit does.
+  if (args[0] === JSON_CHILD) process.exit(await runJsonChild(args.slice(1)));
+  if (isRunJson(args)) await runJsonParent(args);
+  const io = processIo();
+  const code = await main(args, io);
+  await flush(io);
   process.exit(code);
 }

@@ -15,13 +15,14 @@
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
 // `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
-// `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`). `status` is
-// covered up to the run inspection, which isn't ported yet; from tests/cli/test_run_log_options.py,
-// the run-log checks running before the flow is read.
+// `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`); the entry's
+// `run --json` child and its forwarded stop (`abortOnSignal`). `status` is covered up to the run
+// inspection, which isn't ported yet; from tests/cli/test_run_log_options.py, the run-log checks
+// running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,7 +41,13 @@ import {
   stopOnSignals,
 } from "../../src/cli/run.ts";
 import { main } from "../../src/cli/index.ts";
-import { type CliIo, printJson, UsageError, type Writer } from "../../src/cli/utils.ts";
+import {
+  abortOnSignal,
+  type CliIo,
+  printJson,
+  UsageError,
+  type Writer,
+} from "../../src/cli/utils.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
@@ -258,6 +265,31 @@ describe("stopOnSignals", () => {
     target.emit("SIGTERM");
     expect(controller.signal.reason).toBe(first);
     expect(listeners(target)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("abortOnSignal", () => {
+  test("a forwarded stop then a SIGINT: one stop; only the signal removes listeners", async () => {
+    const target = new EventEmitter();
+    const stop = abortOnSignal("SIGUSR2", async () => new HostStop("SIGINT"), target);
+    // As `run` links `io.stop` to its controller beside the signal listeners.
+    const controller = new AbortController();
+    stopOnSignals(controller, target);
+    stop.addEventListener("abort", () => controller.abort(stop.reason), { once: true });
+    const names = ["SIGINT", "SIGTERM", "SIGHUP", "SIGUSR2"];
+    const counts = () => names.map((name) => target.listenerCount(name));
+    target.emit("SIGUSR2");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const first = controller.signal.reason;
+    expect(first).toBeInstanceOf(HostStop);
+    expect(first.signal).toBe("SIGINT");
+    expect(counts()).toEqual([1, 1, 1, 1]);
+    target.emit("SIGINT");
+    target.emit("SIGUSR2");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controller.signal.reason).toBe(first);
+    expect(stop.reason).toBe(first);
+    expect(counts()).toEqual([0, 0, 0, 1]);
   });
 });
 
@@ -1225,3 +1257,45 @@ test("the entry writes a large --json document whole to piped stdout", () => {
   const document = JSON.parse(ran.stdout);
   expect(document.skills.map((s: { path: string }) => s.path)).toEqual(dirs);
 }, 30_000);
+
+/** Spawn the entry with `args` in `tmp`, collecting its streams. */
+function spawnEntry(args: string[]) {
+  const runtime = process.versions.bun !== undefined ? ["--no-install", "--no-env-file"] : [];
+  const command = [...runtime, CLI_ENTRY, ...args];
+  const child = spawn(process.execPath, command, { cwd: tmp, env: { HOME: tmp } });
+  const streams = { out: "", err: "" };
+  child.stdout.setEncoding("utf8").on("data", (text: string) => (streams.out += text));
+  child.stderr.setEncoding("utf8").on("data", (text: string) => (streams.err += text));
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.on("close", (code, signal) => resolve({ code, signal }));
+  });
+  return { child, streams, closed };
+}
+
+describe("the entry's run --json", () => {
+  test("stdout holds only the large document; the flow's stdout writes go to stderr", async () => {
+    const code = "|\n      console.log('noise');\n      return 'x'.repeat(300000);";
+    const flow = file("flow.yaml", topicFlow(code));
+    const log = join(tmp, "run.jsonl");
+    const args = ["run", flow, "-q", "--json", "--log", log, "--input", "topic=t"];
+    const { streams, closed } = spawnEntry(args);
+    expect(await closed).toEqual({ code: 0, signal: null });
+    const output = { topic: "x".repeat(300000) };
+    expect(JSON.parse(streams.out)).toEqual({ format: "yian.cli.v1", status: "succeeded", output });
+    expect(streams.err).toContain("noise\n");
+  }, 30_000);
+
+  test("a second SIGINT kills a run stuck in a sync body: exit 130, no document", async () => {
+    const code = "|\n      console.log('ready');\n      while (true) {}";
+    const flow = file("flow.yaml", topicFlow(code));
+    const log = join(tmp, "run.jsonl");
+    const args = ["run", flow, "-q", "--json", "--log", log, "--input", "topic=t"];
+    const { child, streams, closed } = spawnEntry(args);
+    while (!streams.err.includes("ready")) await new Promise((resolve) => setTimeout(resolve, 20));
+    child.kill("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    child.kill("SIGINT");
+    expect(await closed).toEqual({ code: 130, signal: null });
+    expect(streams.out).toBe("");
+  }, 30_000);
+});

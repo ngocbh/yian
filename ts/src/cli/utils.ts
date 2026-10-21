@@ -6,6 +6,8 @@
  *   `parseArgs`, then converts int and float options and checks paths with Click's messages;
  *   `helpText` and `usageError` give the text a command prints for `--help` and for a `UsageError`.
  * - `printJson` writes the one `yian.cli.v1` document a `--json` command prints.
+ * - `relay` and `abortOnSignal` serve the entry's `run --json` child: copying its streams, and
+ *   turning the stop its parent forwards into `CliIo.stop`.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
  *   prompt instead of a failure on the first API call. `ensureApiKey` resolves a provider's saved
@@ -119,6 +121,29 @@ export function processIo(): CliIo {
  */
 export async function flush(io: CliIo): Promise<void> {
   await Promise.allSettled([lastWrites.get(io.stdout), lastWrites.get(io.stderr)]);
+}
+
+/** Write what `from` gives to `to`, resolving once `from` has ended and `to` took the last. */
+export async function relay(from: NodeJS.ReadableStream, to: Writer): Promise<void> {
+  from.setEncoding("utf8");
+  for await (const text of from) await to.write(text as string);
+}
+
+/**
+ * Return a signal aborted, with the reason `reason` resolves to, on the first `name` signal
+ * `target` emits.
+ *
+ * The listener is on from the call, so a signal while the process is still starting isn't lost,
+ * and it stays on: a later `name` signal does nothing instead of getting the default action.
+ */
+export function abortOnSignal(
+  name: NodeJS.Signals,
+  reason: () => Promise<unknown>,
+  target: Pick<NodeJS.EventEmitter, "on"> = process,
+): AbortSignal {
+  const controller = new AbortController();
+  target.on(name, () => void reason().then((why) => controller.abort(why)));
+  return controller.signal;
 }
 
 /** A command's view of the environment: the values it `set`, over the base environment. */

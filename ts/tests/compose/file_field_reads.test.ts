@@ -11,7 +11,7 @@
  * `test_another_field_of_an_optional_file_is_a_load_error`, `test_a_field_of_a_file_uri_is_a_load_error`,
  * `test_another_field_of_a_file_flow_input_is_a_load_error`,
  * `test_another_field_of_a_carried_file_in_a_loop_predicate_is_a_load_error`,
- * `test_a_carried_file_uri_in_a_loop_predicate_loads` (the load, not the run),
+ * `test_a_carried_file_uri_in_a_loop_predicate_loads` (run with `loadFlow` and `runFlow`),
  * `test_another_field_of_a_file_item_in_a_named_map_is_a_load_error`,
  * `test_another_field_of_a_record_item_file_in_a_named_map_is_a_load_error`,
  * `test_another_field_of_a_file_every_union_member_has_is_a_load_error`,
@@ -26,32 +26,46 @@
  * `test_a_case_on_the_uri_of_a_file_with_an_int_when_is_a_load_error`, pinning the whole message
  * where Python matches a fragment.
  *
- * Changed: the `child` and `child_int` defs are hand-built children (`handChild`) with the defs'
- * signatures and output contracts. The CODE bodies stay Python's text: the flows only load.
+ * Ported through `loadFlow` and `runFlow`, the defs read from the flow text:
+ * `test_a_node_assert_reads_the_uri_of_its_file_output`,
+ * `test_the_uri_of_a_file_item_in_a_named_map_feeds_a_str_input`,
+ * `test_the_uri_of_a_file_every_union_member_has_loads_and_reads`, the run half of
+ * `test_the_uri_of_a_file_after_a_constructor_is_typed_str`,
+ * `test_an_inline_map_body_reads_the_fields_of_a_file_item`,
+ * `test_an_inline_call_body_input_from_a_file_uri_is_typed_str`,
+ * `test_the_uri_of_a_file_into_a_str_child_input_runs` and
+ * `test_the_fields_of_a_file_load_and_read_at_run`. Ported through `prepareExpanded`, where Python
+ * calls the private growth wiring check:
+ * `test_a_growth_fragment_reading_another_field_of_a_file_is_rejected`, a fragment whose end reads
+ * its start's `{f: file}` output.
+ *
+ * Covered by `run-core/compose_file_field_reads__an_inline_call_body_reads_a_file_uri`:
+ * `test_an_inline_call_body_reads_the_uri_of_a_file_input`.
+ *
+ * Changed: the `child` and `child_int` defs of the load-only rows are hand-built children
+ * (`handChild`) with the defs' signatures and output contracts. The CODE bodies are TS: a body
+ * builds a file with the `FileRef` it imports from `src/typesys/values.ts`, where Python's body
+ * calls `__import__`.
  *
  * Pinned at the end, the harvested `load-core/compose_file_field_reads__*` cases the reference
  * validator and the typed-binding check decide, the `child` def built by hand (`assembledWith`).
- *
- * Later (T4-8 follow-up): the flow runs (`test_a_node_assert_reads_the_uri_of_its_file_output`,
- * `test_the_uri_of_a_file_item_in_a_named_map_feeds_a_str_input`,
- * `test_the_uri_of_a_file_every_union_member_has_loads_and_reads`,
- * the run half of `test_the_uri_of_a_file_after_a_constructor_is_typed_str`,
- * `test_an_inline_call_body_reads_the_uri_of_a_file_input`,
- * `test_an_inline_map_body_reads_the_fields_of_a_file_item`,
- * `test_an_inline_call_body_input_from_a_file_uri_is_typed_str`,
- * `test_the_uri_of_a_file_into_a_str_child_input_runs`, `test_the_fields_of_a_file_load_and_read_at_run`),
- * with the case `run-core/compose_file_field_reads__an_inline_call_body_reads_a_file_uri`, and
- * `test_a_growth_fragment_reading_another_field_of_a_file_is_rejected` (runtime growth).
  */
 
 import { expect, test } from "bun:test";
 
+import { Edge, GrowthRejected } from "../../src/compile/model.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { inferExprType } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { isExactly, ValueContract } from "../../src/nodes/contracts.ts";
+import { Grow } from "../../src/nodes/base.ts";
+import { Binding, isExactly, ValueContract } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { runFlow } from "../../src/run.ts";
+import { prepareExpanded } from "../../src/runtime/state.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { fileFieldType, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { fragment, initializedSpawner, thrownBy } from "../engine/run_state_fixtures.ts";
 import {
   assembled,
   assembledWith,
@@ -107,9 +121,13 @@ test("projectOutputContract types the fields of a file", () => {
 
 // ---------- other names are located load errors at every reader ----------
 
-const F = "__import__('yian.typesys.values', fromlist=['FileRef']).FileRef(uri='f')";
-const NAMED_F =
-  "__import__('yian.typesys.values', fromlist=['FileRef']).FileRef(uri='f', mime='text/plain', name='a.txt')";
+// A CODE body has no `FileRef` in scope, so it imports this module to build one, as Python's
+// body calls `__import__` on `yian.typesys.values`. The extension follows this file's (`.ts` from
+// source, `.js` when built), so the body gets the module instance the run uses.
+const VALUES_EXT = import.meta.url.endsWith(".ts") ? "ts" : "js";
+const VALUES_URL = new URL(`../../src/typesys/values.${VALUES_EXT}`, import.meta.url).href;
+const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
+const NAMED_F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f", mime: "text/plain", name: "a.txt" })`;
 const URII = "reads field 'urii' on a file, which has only uri, mime, and name";
 
 /**
@@ -119,7 +137,23 @@ const URII = "reads field 'urii' on a file, which has only uri, mime, and name";
 const PRODUCER =
   "  a:\n    kind: code\n    output:\n" +
   "      f: file\n      g: Optional(file)\n      r: {opt: Optional(str), s: str}\n      o: object\n      y: Any\n" +
-  `    code: |\n      return {'f': ${NAMED_F}, 'g': None, 'r': {'opt': None, 's': 'x'}, 'o': {'k': 1}, 'y': 1}\n`;
+  `    code: |\n      return {'f': ${NAMED_F}, 'g': null, 'r': {'opt': null, 's': 'x'}, 'o': {'k': 1}, 'y': 1}\n`;
+
+/** The `child` (`s: !str`) and `child_int` (`s: !int`) defs, as text. */
+const CHILD_DEFS = `defs:
+  child:
+    input:
+      s: !str
+    nodes:
+      k: {kind: code, input: {s: "\${input.s}"}, code: "return inputs['s']", output: str}
+    output: \${k.output}
+  child_int:
+    input:
+      s: !int
+    nodes:
+      k: {kind: code, input: {s: "\${input.s}"}, code: "return 1n", output: int}
+    output: \${k.output}
+`;
 
 /** A flow whose nodes are the producer `a`, then `nodes`, after `head` and before `tail`. */
 const flow = (nodes: string, output = "${b.output}", head = "", tail = "") =>
@@ -131,6 +165,13 @@ const reader = (binding: string) =>
 
 /** Load `text` with `children` as its defs. */
 const load = (text: string, children: ChildFlows = {}) => assembleText(text, "flow.yaml", { children });
+
+/** Load `text` with `loadFlow`, run it on `inputs` and return its output, expecting success. */
+async function ok(text: string, inputs: Readonly<Record<string, unknown>> = {}): Promise<unknown> {
+  const result = await runFlow(await loadFlow(text), inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
 
 /** Expect loading `text` (with `children`) to fail with `message`, located at the line holding `marker`. */
 function expectLocated(text: string, message: string, marker: string, children: ChildFlows = {}): void {
@@ -173,17 +214,23 @@ test("another field of a file is a located load error: flow-assert", () => {
 
 test("another field of a top-level file output is a load error", () => {
   const text =
-    `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: return ${F}\n` +
+    `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: |\n      return ${F}\n` +
     reader("${a.output.urii}") +
     "output: ${b.output}\n";
   expectLocated(text, URII, "x: ${a.output.urii}");
 });
 
+/** A flow whose CODE node `a` has `output: file` and a post-assert `check`. */
+const fileOutputAssert = (check: string) =>
+  `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: |\n      return ${F}\n` +
+  `    asserts:\n      - "${check}"\noutput: \${a.output.uri}\n`;
+
+test("a node assert reads the uri of its file output", async () => {
+  expect(await ok(fileOutputAssert("output.uri == 'f'"))).toBe("f");
+});
+
 test("a node assert reading another field of its file output is a load error", () => {
-  const text =
-    `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: return ${F}\n` +
-    "    asserts:\n      - \"output.urii == 'f'\"\noutput: ${a.output.uri}\n";
-  expectLocated(text, URII, "output.urii == 'f'");
+  expectLocated(fileOutputAssert("output.urii == 'f'"), URII, "output.urii == 'f'");
 });
 
 test("another field of an optional file is a load error", () => {
@@ -220,8 +267,8 @@ test("another field of a carried file in a loop predicate is a load error", () =
   );
 });
 
-test("a carried file uri in a loop predicate loads", () => {
-  load(carriedFile("f.uri == 'f'"));
+test("a carried file uri in a loop predicate loads", async () => {
+  expect(await ok(carriedFile("f.uri == 'f'"))).toBe("f");
 });
 
 // ---------- MAP items, unions and constructors ----------
@@ -252,8 +299,18 @@ test("another field of a record item file in a named map is a load error", () =>
   expectLocated(text, URII, "s: ${item.f.urii}", children());
 });
 
+test("the uri of a file item in a named map feeds a str input", async () => {
+  const text = namedMap(CHILD_DEFS, "fs: !list(file)", "${item.uri}");
+
+  expect(await ok(text, { fs: [{ uri: "x", mime: null, name: null }] })).toEqual(["x"]);
+});
+
 const UNION_HEAD = "typedefs:\n  A: {f: file, k: int}\n  B: {f: file, j: str}\n  AB: Union(A, B)\n";
 const UNION_PRODUCER = `  u:\n    kind: code\n    output: AB\n    code: |\n      return {'f': ${F}, 'k': 1}\n`;
+
+test("the uri of a file every union member has loads and reads", async () => {
+  expect(await ok(flow(UNION_PRODUCER + reader("${u.output.f.uri}"), "${b.output}", UNION_HEAD))).toBe("f");
+});
 
 test("another field of a file every union member has is a load error", () => {
   const text = flow(UNION_PRODUCER + reader("${u.output.f.urii}"), "${b.output}", UNION_HEAD);
@@ -267,7 +324,8 @@ test("another field of a file after a constructor is a load error", () => {
   expect(loadError(() => load(text)).message).toContain(URII);
 });
 
-test("the uri of a file after a constructor is typed str (load half)", () => {
+test("the uri of a file after a constructor is typed str", async () => {
+  expect(await ok(flow(reader("${Rec(f=a.output.f).f.uri}"), "${b.output}", REC_HEAD))).toBe("f");
   const text = flow(reader("!int ${Rec(f=a.output.f).f.uri}"), "${b.output}", REC_HEAD);
   expect(loadError(() => load(text)).message).toContain("declared int, but the value is str");
 });
@@ -306,7 +364,19 @@ test("the uri of an optional file is Optional(str)", () => {
   );
 });
 
-// ---------- guards: opaque slots stay unchecked ----------
+// ---------- guards: the three fields load and read; opaque slots stay unchecked ----------
+
+test("the fields of a file load and read at run", async () => {
+  const text = flow(
+    "  b:\n    kind: code\n    input:\n" +
+      "      u: ${a.output.f.uri}\n      m: ${a.output.f.mime}\n" +
+      "      k: ${a.output.f.name}\n      g: ${a.output.g.uri}\n" +
+      '      t: "u=${a.output.f.uri}"\n' +
+      "    code: return [inputs['u'], inputs['m'], inputs['k'], inputs['g'], inputs['t']]\n",
+  );
+
+  expect(await ok(text)).toEqual(["f", "text/plain", "a.txt", null, "u=f"]);
+});
 
 test.each([["a.output.o.zzz"], ["a.output.y.zzz"], ["a.output.o.f.urii"]])(
   "reads on object and Any stay unchecked: %s",
@@ -338,6 +408,13 @@ function inlineMap(over: string, binding: string): string {
   );
 }
 
+const FORM = { uri: "f", mime: "text/plain", name: null };
+
+test("an inline map body reads the fields of a file item", async () => {
+  expect(await ok(inlineMap("list(Item)", "${item.f.mime}"), { xs: [{ f: FORM }] })).toEqual(["text/plain"]);
+  expect(await ok(inlineMap("list(file)", "${item.uri}"), { xs: [FORM] })).toEqual(["f"]);
+});
+
 test.each([
   ["call-input", inlineCall("${input.f.urii}"), "${input.f.urii}"],
   ["map-record-item", inlineMap("list(Item)", "${item.f.urii}"), "${item.f.urii}"],
@@ -355,22 +432,18 @@ test.each([
   );
 });
 
-// ---------- a file field into a child input ----------
+test("an inline call body input from a file uri is typed str", async () => {
+  const text = flow(
+    "  b:\n    kind: call\n    input:\n      s: ${a.output.f.uri}\n    nodes:\n" +
+      '      k:\n        kind: code\n        input: {s: "${input.s}"}\n' +
+      "        code: \"return inputs['s']\"\n        output: str\n" +
+      "    output: ${k.output}\n",
+  );
 
-const CHILD_DEFS = `defs:
-  child:
-    input:
-      s: !str
-    nodes:
-      k: {kind: code, input: {s: "\${input.s}"}, code: "return inputs['s']", output: str}
-    output: \${k.output}
-  child_int:
-    input:
-      s: !int
-    nodes:
-      k: {kind: code, input: {s: "\${input.s}"}, code: "return 1n", output: int}
-    output: \${k.output}
-`;
+  expect(await ok(text)).toBe("f");
+});
+
+// ---------- a file field into a child input ----------
 
 test.each([
   ["child", "a.output.f.mime", "child expects 'str', source is 'Optional(str)'"],
@@ -388,6 +461,12 @@ test.each([
   expect(error.message).toBe(`call node 'b': binding 's' — ${message}`);
 });
 
+test("the uri of a file into a str child input runs", async () => {
+  const text = flow("  b:\n    kind: call\n    call: child\n    input:\n      s: ${a.output.f.uri}\n", "${b.output}", CHILD_DEFS);
+
+  expect(await ok(text)).toBe("f");
+});
+
 test("a case on the uri of a file with an int when is a load error", () => {
   const text = flow(
     caseGate("    on: ${a.output.f.uri}\n    cases:\n      - when: 1\n        then: b"),
@@ -396,6 +475,31 @@ test("a case on the uri of a file with an int when is a load error", () => {
   expect(loadError(() => load(text)).message).toBe(
     "case node 'gate': `when: 1` is an int but `on: ${a.output.f.uri}` is `str`; quote it: `when: \"1\"`",
   );
+});
+
+test("a growth fragment reading another field of a file is rejected", () => {
+  /** Grow `spawn` into a fragment whose end reads `field` of its start's `{f: file}` output. */
+  const record = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["f", Type.scalar(ValueKind.FILE)]]),
+    required: new Set(["f"]),
+  });
+  const grow = (field: string) => {
+    const { state } = initializedSpawner();
+    const built = fragment("spawn");
+    built.nodes.get(built.startId)!.outputContract = new ValueContract(record);
+    const end = EndNode.value(built.endId, { outputName: "value" });
+    end.commitAs = "spawn";
+    built.nodes.set(built.endId, end);
+    built.wiring.set(built.endId, new Map([["value", new Binding(`\${${built.startId}.output.f.${field}}`)]]));
+    built.edges[0] = new Edge(built.edges[0]!.id, built.startId, built.endId, { inputGroup: "value" });
+    return prepareExpanded(state, "spawn", new Grow({}), () => built);
+  };
+
+  grow("uri");
+  const error = thrownBy(() => grow("urii"));
+  expect(error).toBeInstanceOf(GrowthRejected);
+  expect((error as GrowthRejected).original.message).toContain(URII);
 });
 
 test.each<CaseRow>([

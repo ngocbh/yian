@@ -6,8 +6,8 @@
  *   `parseArgs`, then converts int and float options and checks paths with Click's messages;
  *   `helpText` and `usageError` give the text a command prints for `--help` and for a `UsageError`.
  * - `printJson` writes the one `yian.cli.v1` document a `--json` command prints.
- * - `relay` and `abortOnSignal` serve the entry's `run --json` child: copying its streams, and
- *   turning the stop its parent forwards into `CliIo.stop`.
+ * - `relay` copies the `run --json` child's document to the entry's stdout; `abortOnSignal` turns
+ *   the stop the entry forwards to the child into its `CliIo.stop`, aborted with a `HostStop`.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
  *   prompt instead of a failure on the first API call. `ensureApiKey` resolves a provider's saved
@@ -130,19 +130,33 @@ export async function relay(from: NodeJS.ReadableStream, to: Writer): Promise<vo
 }
 
 /**
- * Return a signal aborted, with the reason `reason` resolves to, on the first `name` signal
- * `target` emits.
+ * The reason a run's controller is aborted with when the host stops it: a signal, or Ctrl-C at a
+ * prompt (`SIGINT`).
+ */
+export class HostStop extends Error {
+  override name = "HostStop";
+  /** The signal that stopped the run. */
+  readonly signal: NodeJS.Signals;
+
+  constructor(signal: NodeJS.Signals) {
+    super(`stopped by ${signal}`);
+    this.signal = signal;
+  }
+}
+
+/**
+ * Return a signal aborted with `reason` on the first `name` signal `target` emits.
  *
  * The listener is on from the call, so a signal while the process is still starting isn't lost,
  * and it stays on: a later `name` signal does nothing instead of getting the default action.
  */
 export function abortOnSignal(
   name: NodeJS.Signals,
-  reason: () => Promise<unknown>,
+  reason: unknown,
   target: Pick<NodeJS.EventEmitter, "on"> = process,
 ): AbortSignal {
   const controller = new AbortController();
-  target.on(name, () => void reason().then((why) => controller.abort(why)));
+  target.on(name, () => controller.abort(reason));
   return controller.signal;
 }
 

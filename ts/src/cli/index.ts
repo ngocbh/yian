@@ -25,6 +25,7 @@ import {
   abortOnSignal,
   flush,
   helpText,
+  HostStop,
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
@@ -453,16 +454,18 @@ function isRunJson(args: readonly string[]): boolean {
 }
 
 /**
- * Run `args` in a child of this runtime marked `JSON_CHILD`, copy its fd 1 to stderr and its fd 3
- * to stdout, and exit as it did.
+ * Run `args` in a child of this runtime marked `JSON_CHILD`, whose fd 1 is this process's fd 2 (as
+ * Python's `os.dup2(2, 1)`), copy its fd 3 to stdout, and exit as it did.
  *
  * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2, a signal no terminal sends, so a
  * group Ctrl-C (which the child gets too) and the forwarded stop are one stop; the second kills
  * the child and exits 130. A child that died by SIGUSR2, before its listener was on, exits 130.
+ * When stdout fails other than by a closed pipe, it prints the error and exits 1 once the child
+ * has ended.
  */
 async function runJsonParent(args: readonly string[]): Promise<never> {
   const command = [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
-  const child = spawn(process.execPath, command, { stdio: ["inherit", "pipe", "inherit", "pipe"] });
+  const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe"] });
   let stops = 0;
   const onStop = () => {
     stops += 1;
@@ -480,11 +483,18 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
     child.on("close", (code, signal) => resolve([code, signal]));
   });
   const io = processIo();
-  const [[code, signal]] = await Promise.all([
-    closed,
-    relay(child.stdio[3] as NodeJS.ReadableStream, io.stdout),
-    relay(child.stdio[1]!, io.stderr),
-  ]);
+  // Ending the relay early destroys the pipe, so the child's later writes end quietly too.
+  const relayed = relay(child.stdio[3] as NodeJS.ReadableStream, io.stdout).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  const [[code, signal], failed] = await Promise.all([closed, relayed]);
+  if (failed !== undefined) {
+    const reason = failed instanceof Error ? failed.message : String(failed);
+    await io.stderr.write(`Error: cannot write to stdout: ${reason}\n`);
+    await flush(io);
+    process.exit(1);
+  }
   if (code !== null) process.exit(code);
   if (signal === "SIGUSR2") process.exit(130);
   for (const name of signals) process.off(name, onStop);
@@ -498,9 +508,8 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
  * aborted with a `HostStop("SIGINT")` by the SIGUSR2 the parent forwards. Return the exit code.
  */
 async function runJsonChild(args: readonly string[]): Promise<number> {
-  // On before anything loads; `run.ts` loads on the signal, as `main` would load it anyway.
-  const hostStop = async () => new (await import("./run.ts")).HostStop("SIGINT");
-  const stop = abortOnSignal("SIGUSR2", hostStop);
+  // First, so a stop during start-up is kept until `run` links it.
+  const stop = abortOnSignal("SIGUSR2", new HostStop("SIGINT"));
   const stdout = streamWriter(createWriteStream("", { fd: 3 }));
   const io: CliIo = { ...processIo(), stdout, stop };
   const code = await main(args, io);

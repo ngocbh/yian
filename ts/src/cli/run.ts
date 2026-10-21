@@ -61,6 +61,7 @@ import {
   type CliIo,
   CommandEnv,
   ensureEnvKey,
+  HostStop,
   MissingKeyError,
   osReason,
   printJson,
@@ -68,6 +69,9 @@ import {
   UsageError,
   type Writer,
 } from "./utils.ts";
+
+// In `utils.ts`, so the entry's `run --json` child builds one without loading this module.
+export { HostStop };
 
 // The TS run inspection isn't ported yet; it throws until its module lands.
 async function inspectRun(log: string): Promise<never> {
@@ -576,21 +580,6 @@ export function defaultRunLogPath(runId: string, env: Env): string {
 /** Write the run's log path to `out`, even when progress is quiet. */
 export async function reportRunLog(path: string, out: Writer, env: Env): Promise<void> {
   await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
-}
-
-/**
- * The reason a run's controller is aborted with when the host stops it: a signal, or Ctrl-C at a
- * prompt (`SIGINT`).
- */
-export class HostStop extends Error {
-  override name = "HostStop";
-  /** The signal that stopped the run. */
-  readonly signal: NodeJS.Signals;
-
-  constructor(signal: NodeJS.Signals) {
-    super(`stopped by ${signal}`);
-    this.signal = signal;
-  }
 }
 
 const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;

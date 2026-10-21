@@ -3,24 +3,27 @@
  * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
- * Ported, loaded with `loadFlow`: the load halves of
+ * Ported, loaded with `loadFlow` and run with `runFlow`:
  * `test_map_over_literal_list_without_spans_still_loads`,
- * `test_nested_references_in_a_map_child_run_after_growth` and
- * `test_nested_references_in_a_loop_body_run_after_growth`.
- *
- * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
- * Later (T4-8): the run halves of `test_map_over_literal_list_without_spans_still_loads`,
- * `test_nested_references_in_a_map_child_run_after_growth` and
- * `test_nested_references_in_a_loop_body_run_after_growth`.
+ * `test_nested_references_in_a_loop_body_run_after_growth` and
+ * `test_nested_case_output_expands_in_inputs_and_outputs` (both rows); the load half of
+ * `test_nested_references_in_a_map_child_run_after_growth`, whose run is covered by
+ * `run-core/compose_nested_template_walkers__nested_references_in_a_map_child`.
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { desugarInlineCalls } from "../../src/compose/desugar/inline_calls.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
 
 /** Return a flow whose CODE node `c` binds `x` as `binding`. */
@@ -242,8 +245,11 @@ test("nested call directive is not lifted", () => {
 
 // ---------- loaded flows ----------
 
-test("map over literal list without spans still loads (load half)", async () => {
-  await loadFlow(`
+const dir = mkdtempSync(join(tmpdir(), "yian-nested-walkers-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test("map over literal list without spans still loads", async () => {
+  const flow = await loadFlow(`
 id: m
 name: m
 defs:
@@ -261,6 +267,8 @@ nodes:
       v: \${item}
 output: \${m.output}
 `);
+
+  expect((await runFlow(flow, {}, { env: hostEnv(dir) })).output).toEqual([1n, 2n]);
 });
 
 test("nested references in a map child run after growth (load half)", async () => {
@@ -297,8 +305,8 @@ output: \${m.output}
 `);
 });
 
-test("nested references in a loop body run after growth (load half)", async () => {
-  await loadFlow(`
+test("nested references in a loop body run after growth", async () => {
+  const flow = await loadFlow(`
 id: nested_loop
 name: nested_loop
 defs:
@@ -334,6 +342,21 @@ nodes:
     max: 10
 output: \${loop.output}
 `);
+
+  const result = await runFlow(flow, {}, { env: hostEnv(dir) });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ n: 3n });
+});
+
+test.each([
+  [true, "yes"],
+  [false, "no"],
+])("nested case output expands in inputs and outputs: go %p", async (go, picked) => {
+  const result = await runFlow(await loadFlow(CASE_FLOW), { go }, { env: hostEnv(dir) });
+
+  expect(result.failure).toBeNull();
+  expect(result.output).toEqual({ c: { picked, note: `took ${picked}` }, direct: [picked] });
 });
 
 // ---------- harvested conformance cases ----------

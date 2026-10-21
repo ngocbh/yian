@@ -25,7 +25,7 @@
  * decides, and the assert checks' `load-core/compose_field_reads__field_on_str_in_a_flow_assert` and
  * `load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field`.
  *
- * Later (T4): `test_optional_record_field_reads_null_when_the_whole_value_is_null` and
+ * Later (T4-8 follow-up): `test_optional_record_field_reads_null_when_the_whole_value_is_null` and
  * `test_case_when_on_a_missing_optional_record_input_is_falsy` (flow runs), with their cases
  * `run-core/compose_field_reads__{optional_record_field_reads_null,
  * case_when_on_a_missing_optional_record_is_falsy}`.

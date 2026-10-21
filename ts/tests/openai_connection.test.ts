@@ -6,8 +6,8 @@
  * is `llm/structured.test.ts`'s); `test_saved_api_key_and_preflight_ignore_incidental_environment`
  * and `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight
  * goes with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
- * `connectionCredentials` twin. The two cascade tests are ported over `resolveLlmCascade`.
- * Later (T4-8): the runs go with `runFlow`.
+ * `connectionCredentials` twin. The two cascade tests are ported over `resolveLlmCascade`. The
+ * three run tests go through `runFlow` with the test's environment.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -37,6 +37,7 @@ import {
 } from "../src/llm_clients/connection.ts";
 import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import type { Send } from "../src/platform.ts";
+import { runFlow } from "../src/run.ts";
 
 // Each test's environment: a private store in a fresh directory and no default provider, model,
 // OpenAI key or endpoint, as Python's `isolated_auth` leaves it.
@@ -385,6 +386,45 @@ test("unsupported default provider environment is named", () => {
   expect(error.message).toMatch(/YIAN_DEFAULT_PROVIDER='claude'.*anthropic/);
 });
 
+const SLOW_THEN_AGENT = `
+id: test
+name: test
+input:
+  topic: !str
+output: \${w.output}
+{extra}nodes:
+  first:
+    kind: code
+    input:
+      topic: \${input.topic}
+    output: str
+    code: |
+      return inputs["topic"]
+  w:
+    kind: agent
+    input:
+      text: \${first.output}
+    output: str
+    prompt: Write about \${text}.
+`;
+
+/** Run `SLOW_THEN_AGENT` with `extra` before its nodes; return the rejection and the events seen. */
+async function rejectedRun(extra: string): Promise<[Error, unknown[]]> {
+  const events: unknown[] = [];
+  const flow = await loadFlow(SLOW_THEN_AGENT.replace("{extra}", extra));
+  const error = await rejected(runFlow(flow, { topic: "x" }, { env, onEvent: (event) => events.push(event) }));
+  return [error, events];
+}
+
+test("run rejects unsupported default provider before any node", async () => {
+  vars.set("YIAN_DEFAULT_PROVIDER", "claude");
+  vars.set("YIAN_DEFAULT_MODEL", "claude-model");
+  const [error, events] = await rejectedRun("");
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toContain("YIAN_DEFAULT_PROVIDER");
+  expect(events).toEqual([]);
+});
+
 describe("check model config checks the openai block against the subscription endpoint", () => {
   test.each([[{ temperature: 0.2 }], [{ max_output_tokens: 100n }]])("%#", async (block) => {
     await subscription();
@@ -413,4 +453,20 @@ test("factory subscription sends the openai block", async () => {
   const model = await build(resolveModelConfig({ openai: { reasoning: { effort: "low" } } }, { env }), send);
   await collect(model.stream(HI));
   expect((requests[0]!.body["reasoning"] as { effort: string }).effort).toBe("low");
+});
+
+test("run rejects a subscription openai block before any node", async () => {
+  await subscription();
+  const [error, events] = await rejectedRun("llm_config:\n  openai:\n    max_output_tokens: 100\n");
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toMatch(/Agent 'w'.*`openai\.max_output_tokens`.*ChatGPT subscription/s);
+  expect(events).toEqual([]);
+});
+
+test("run rejects subscription temperature before any node", async () => {
+  await subscription();
+  const [error, events] = await rejectedRun("llm_config:\n  openai:\n    temperature: 0.2\n");
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toMatch(/Agent 'w'.*`openai\.temperature`.*ChatGPT subscription/s);
+  expect(events).toEqual([]);
 });

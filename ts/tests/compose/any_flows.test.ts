@@ -52,7 +52,7 @@
  * `case_on_typed.test.ts`) and `test_an_unquoted_date_any_literal_gets_the_quote_hint` (TS loads
  * it, as `tags.test.ts` notes).
  *
- * Later (T4):
+ * Later (T4-8 follow-up):
  * `test_a_list_of_any_output_returns_mixed_items`, `test_an_any_output_returns_any_json_value` (4),
  * `test_an_any_output_rejects_null`, `test_an_optional_any_output_returns_null`,
  * `test_an_any_flow_input_rejects_null_naming_the_input`,

@@ -110,3 +110,10 @@ export function record(inputs: Record<string, any>): string {
   RECORDED.push(inputs.tag);
   return inputs.tag;
 }
+
+/** A `{tree}` record whose tree is a chain of `n` nested records (the value nesting tests). */
+export function deep_tree(inputs: Record<string, any>): Record<string, unknown> {
+  let tree: unknown = "leaf";
+  for (let i = 0; i < inputs.n; i++) tree = { a: tree };
+  return { tree };
+}

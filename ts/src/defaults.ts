@@ -63,12 +63,15 @@ function entry<N extends string>(
 }
 
 // The nesting limits keep the deepest accepted input the same on Node and Bun, whose
-// stacks differ: the `yaml` package handles about 500 levels on Node but 5000 on Bun's
-// main thread. Each maximum is re-measured once every recursive walker is ported.
+// stacks differ: under a 1 MiB stack the `yaml` package composes 793 levels on Node and
+// 818 on Bun, 3975 in a Bun Worker. Each limit's measured maximum is the deepest input that
+// loads, runs, replays and resumes with every limit lifted; the AGENT output limit's builds
+// the reply schema and reads a reply, with no run (docs/defaults.md has the method).
 export const ENTRIES = Object.freeze([
   // Language safety limits.
-  // yian's JSON writer and reader are iterative, but walkers still to be ported recurse
-  // per value level, so the limit can only be lowered.
+  // yian's JSON writer and reader are iterative; the other value walkers recurse per
+  // value level, and the limit can only be lowered.
+  // Measured maximum under a 1 MiB stack (Node) / a Bun Worker: 1587 / 10500 (expressions; a plain value goes deeper).
   entry("MAX_VALUE_NESTING", {
     default: 100,
     description: "Deepest nesting a value may have; also bounds expression nesting",
@@ -76,9 +79,10 @@ export const ENTRIES = Object.freeze([
     minimum: 1,
     maximum: 100,
   }),
-  // The type walkers handle at least 500 levels on both runtimes. The limit also bounds
+  // The type walkers handle at least 893 levels on both runtimes. The limit also bounds
   // each typedef's levels, a chain of typedefs naming each other, and a type with its
   // typedef names expanded.
+  // Measured maximum under a 1 MiB stack (Node) / a Bun Worker: 1387 / at least 3200; 893 under a 1 MiB Bun stack.
   entry("MAX_TYPE_NESTING", {
     default: 100,
     description: "Deepest nesting a type may have, counting record levels",
@@ -88,6 +92,8 @@ export const ENTRIES = Object.freeze([
   }),
   // Providers limit the nesting of a structured-output schema, so a deeper `output:` type
   // is of no use; the variable can only lower it.
+  // Measured maximum under a 1 MiB stack (Node) / a Bun Worker: at least 400 / at least 800 (building the schema
+  // and reading a reply, not a run).
   entry("MAX_AGENT_OUTPUT_NESTING", {
     default: 16,
     description: "Deepest nesting an AGENT `output:` type may have (each record and list is a level)",
@@ -97,6 +103,7 @@ export const ENTRIES = Object.freeze([
   }),
   // Twice a value's 100 levels, so a value at that limit fits inside a flow's own
   // structure; well under the `yaml` package's overflow depth on Node.
+  // Measured maximum under a 1 MiB stack (Node) / a Bun Worker: 793 / 3975.
   entry("MAX_YAML_NESTING", {
     default: 200,
     description: "Deepest nesting of a YAML document yian reads",
@@ -113,7 +120,8 @@ export const ENTRIES = Object.freeze([
     minimum: 1,
   }),
   // Loading a body or a `uses:` file recurses through the loader, so the limit holds
-  // both chains; it can only be lowered until the loader is ported and measured.
+  // both chains; it can only be lowered.
+  // Measured maximum under a 1 MiB stack (Node) / a Bun Worker: 268 / at least 400.
   entry("MAX_CALL_NESTING", {
     default: 50,
     description: "Deepest chain of call, map, and loop bodies a flow may nest, and of uses: files it may import",

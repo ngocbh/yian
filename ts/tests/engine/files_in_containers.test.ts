@@ -32,11 +32,7 @@
  * learnable and body output `test_a_partial_loop_compares_an_omitted_file_with_a_returned_one` (4)
  * and `test_a_partial_loop_compares_a_carried_file_the_body_does_not_take` (4).
  *
- * Later (T4-8): needs `resumeFlow`: the `_LOOP_FLOW` row of
- * `test_resuming_a_finished_run_with_files_replays_its_output` and
- * `test_a_log_whose_loop_default_was_digested_as_a_mapping_still_resumes`.
- *
- * Later (T4-8): flow runs: the runs with no CALL, MAP or LOOP,
+ * Ported through `runFlow` (and `resumeFlow`), each run in `hostEnv`: the flow runs
  * `test_a_tagged_union_of_a_file_and_an_object_member_loads`,
  * `test_an_object_binding_delivers_a_nested_file_as_its_mapping`,
  * `test_an_object_output_binding_over_a_record_with_a_file_succeeds`,
@@ -53,14 +49,22 @@
  * `test_the_success_event_holds_the_files_of_a_typed_output` (2),
  * `test_an_untyped_output_holding_files_is_read_as_mappings` (2),
  * `test_a_flow_input_file_reaches_code_as_a_file` (2),
- * `test_backward_context_holds_the_files_of_a_typed_output_as_json`,
  * `test_the_run_result_holds_the_files_of_a_typed_output` (6) and
- * `test_the_run_result_holds_the_files_of_an_untyped_output_as_mappings` (2); and the resume rows
- * `test_resuming_a_run_with_a_typed_list_of_files_succeeds`, the `_READER_FLOW` row of
- * `test_resuming_a_finished_run_with_files_replays_its_output`,
+ * `test_the_run_result_holds_the_files_of_an_untyped_output_as_mappings` (2); on the engine
+ * fixtures' `engine`, `test_backward_context_holds_the_files_of_a_typed_output_as_json`; and the
+ * resume rows `test_resuming_a_run_with_a_typed_list_of_files_succeeds`,
+ * `test_resuming_a_finished_run_with_files_replays_its_output` (both flows),
  * `test_a_reader_after_resume_sees_the_files_of_a_replayed_output` (2),
- * `test_resuming_an_unfinished_run_returns_the_files_of_a_typed_output` (2) and
- * `test_resuming_a_finished_run_returns_the_files_of_a_typed_output` (6).
+ * `test_resuming_an_unfinished_run_returns_the_files_of_a_typed_output` (2),
+ * `test_resuming_a_finished_run_returns_the_files_of_a_typed_output` (6) and
+ * `test_a_log_whose_loop_default_was_digested_as_a_mapping_still_resumes` (`LoopNode`'s private
+ * `carriedValue` replaced on the prototype with `spyOn`, where Python patches `_carried_value`).
+ * Changed: a body reads a plain record's `constructor.name` as `Object` (Python's `dict`), the
+ * float binding's int is 2^60, so the body sees a `bigint` (an int up to 2^53 and a float both
+ * arrive as a `number`; Python reads `type(n).__name__`), and a body writes a missing value as
+ * `String(x)`, `null` (Python's `repr`, `None`); the interruption before
+ * the human answer is the run's `signal`, which the `ask_user` handler aborts (Python: the
+ * handler raises `_HostStop`).
  *
  * Not ported: the hash half of `test_a_source_entry_with_a_record_reading_type_is_hashable`, since
  * a `SourceEntry` has no hash (maps key sources by `sourceKey`); the `field_of` rows on dict
@@ -70,7 +74,13 @@
  * tuples in TS).
  */
 
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+
+import { NodeSucceeded, RunSucceeded } from "../../src/events.ts";
 
 import { evalExpr } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
@@ -78,7 +88,7 @@ import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
-import { runFlow } from "../../src/run.ts";
+import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { SourceEntry, sameSourceEntry } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -97,6 +107,8 @@ import {
   ValueKind,
 } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { engine, rejection } from "./run_state_fixtures.ts";
 
 const REGISTRY = readTypedefs({
   Rec: { f: "file", n: "int" },
@@ -375,9 +387,17 @@ const VALUES_EXT = import.meta.url.endsWith(".ts") ? "ts" : "js";
 const VALUES_URL = new URL(`../../src/typesys/values.${VALUES_EXT}`, import.meta.url).href;
 const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
 
+const dir = mkdtempSync(join(tmpdir(), "yian-files-in-containers-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Load and run `text` on `inputs` in `hostEnv` with `options`. */
+async function runText(text: string, inputs: Record<string, unknown> = {}, options: RunFlowOptions = {}) {
+  return runFlow(await loadConformanceFlow(text), inputs, { env: hostEnv(dir), ...options });
+}
+
 /** Load and run `text` with no inputs, asserting it succeeded; return its output. */
-async function okRun(text: string, options: { learnable?: boolean } = {}): Promise<unknown> {
-  const result = await runFlow(await loadConformanceFlow(text), {}, options);
+async function okRun(text: string, options: RunFlowOptions = {}, inputs: Record<string, unknown> = {}): Promise<unknown> {
+  const result = await runText(text, inputs, options);
   expect(result.status, result.failure?.message).toBe("succeeded");
   return result.output;
 }
@@ -1011,4 +1031,614 @@ test("a source entry with a record reading type differs from one without it", ()
 
   expect(sameSourceEntry(entry, new SourceEntry(null, 0, "null", files))).toBe(true);
   expect(sameSourceEntry(entry, new SourceEntry(null, 0, "null"))).toBe(false);
+});
+
+// --- typed bindings and constructors deliver the slot's file representation --- //
+
+const UNION_FLOW = `\
+id: u
+name: u
+typedefs:
+  XFile:
+    kind: Literal(file)
+    x: file
+  XObject:
+    kind: Literal(object)
+    x: object
+  U: Union(XFile, XObject)
+nodes:
+  a:
+    kind: code
+    output: U
+    code: |
+      return { kind: 'file', x: ${F} }
+output: \${a.output}
+`;
+
+test("a tagged union of a file and an object member loads", async () => {
+  await okRun(UNION_FLOW);
+});
+
+const RECORD_PRODUCER = `\
+  a:
+    kind: code
+    output:
+      f: file
+    code: |
+      return { f: ${F} }
+`;
+
+test("an object binding delivers a nested file as its mapping", async () => {
+  const output = await okRun(
+    "id: p\nname: p\nnodes:\n" +
+      RECORD_PRODUCER +
+      "  b:\n    kind: code\n    input:\n      x: !object ${a.output}\n" +
+      "    code: |\n      return inputs['x']['f'].constructor.name\n" +
+      "output: ${b.output}\n",
+  );
+  expect(output).toBe("Object");
+});
+
+test("an object output binding over a record with a file succeeds", async () => {
+  expect(await okRun("id: p\nname: p\nnodes:\n" + RECORD_PRODUCER + "output: !object ${a.output}\n")).toEqual({
+    f: form(),
+  });
+});
+
+test("a file binding delivers the JSON form as a file", async () => {
+  const output = await okRun(`\
+id: p
+name: p
+nodes:
+  u:
+    kind: code
+    code: |
+      return { uri: 'f', mime: null, name: null }
+  b:
+    kind: code
+    input:
+      f: !file \${u.output}
+    code: |
+      return inputs['f'].constructor.name
+output: \${b.output}
+`);
+  expect(output).toBe("FileRef");
+});
+
+test("a float binding still delivers an int", async () => {
+  const output = await okRun(`\
+id: p
+name: p
+nodes:
+  i:
+    kind: code
+    output: int
+    code: |
+      return 2n ** 60n
+  b:
+    kind: code
+    input:
+      n: !float \${i.output}
+    code: |
+      return typeof inputs['n']
+output: \${b.output}
+`);
+  // A body gets an int past 2^53 as a `bigint`, a float as a `number`.
+  expect(output).toBe("bigint");
+});
+
+test("a constructor in a flow delivers a nested file as its mapping", async () => {
+  const output = await okRun(
+    "id: p\nname: p\ntypedefs:\n  Box:\n    x: object\nnodes:\n" +
+      RECORD_PRODUCER +
+      "  b:\n    kind: code\n    input:\n      t: ${Box(x=a.output)}\n" +
+      "    code: |\n      return inputs['t']['x']['f'].constructor.name\n" +
+      "output: ${b.output}\n",
+  );
+  expect(output).toBe("Object");
+});
+
+// --- dotted reads of a file's uri, mime and name --- //
+
+const NAMED_F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f", mime: "text/plain", name: "a.txt" })`;
+
+const PRODUCERS = `\
+  a:
+    kind: code
+    output: file
+    code: |
+      return ${F}
+  n:
+    kind: code
+    output: file
+    code: |
+      return ${NAMED_F}
+`;
+
+/** A flow whose nodes are the file producers `a` and `n`, then `nodes` (Python's `_file_flow`). */
+const fileFlow = (nodes: string, output = "${b.output}", extra = "") =>
+  `id: p\nname: p\nnodes:\n${PRODUCERS}${nodes}output: ${output}\n${extra}`;
+
+test("a binding reads the fields of a file", async () => {
+  const output = await okRun(
+    fileFlow(
+      "  b:\n    kind: code\n    input:\n" +
+        "      u: ${a.output.uri}\n      m: ${n.output.mime}\n      k: ${n.output.name}\n" +
+        "    code: |\n      return [inputs['u'], inputs['m'], inputs['k']]\n",
+    ),
+  );
+  expect(output).toEqual(["f", "text/plain", "a.txt"]);
+});
+
+test("a template binding reads the uri of a file", async () => {
+  const output = await okRun(
+    fileFlow('  b:\n    kind: code\n    input:\n      u: "u=${a.output.uri}"\n' + "    code: |\n      return inputs['u']\n"),
+  );
+  expect(output).toBe("u=f");
+});
+
+test("a prompt reads the name of a file", async () => {
+  const text = fileFlow(
+    '  b:\n    kind: human_input\n    prompt: "u=${f.uri} k=${f.name}"\n' + "    input:\n      f: ${n.output}\n    output: str\n",
+  );
+  const output = await okRun(text, { tools: { ask_user: (request: { question: string }) => request.question } });
+  expect(output).toBe("u=f k=a.txt");
+});
+
+const CASE_NODES = (cases: string) => `\
+  gate:
+    kind: case
+${cases}
+    else: other
+  b: {kind: code, code: "return 'hit'", output: str}
+  other: {kind: code, code: "return 'else'", output: str}
+`;
+
+test.each([
+  ["on", "    on: ${a.output.uri}\n    cases:\n      - when: f\n        then: b"],
+  ["when", "    cases:\n      - when: \"a.output.uri == 'f'\"\n        then: b"],
+])("a case routes on the uri of a file: %s", async (_id, cases) => {
+  expect(await okRun(fileFlow(CASE_NODES(cases), "${b.output | other.output}"))).toBe("hit");
+});
+
+test("a flow assert reads the uri of a file", async () => {
+  const text = fileFlow(
+    "  b: {kind: code, code: \"return 'ok'\", output: str}\n",
+    undefined,
+    "asserts:\n  - \"a.output.uri == 'f' and n.output.name == 'a.txt'\"\n",
+  );
+  expect(await okRun(text)).toBe("ok");
+});
+
+test("a node pre-assert reads the uri of a file", async () => {
+  const text = fileFlow(
+    "  b:\n    kind: code\n    input:\n      f: ${a.output}\n" +
+      "    code: |\n      return 'ok'\n    output: str\n" +
+      "    asserts:\n      - \"f.uri == 'f'\"\n",
+  );
+  expect(await okRun(text)).toBe("ok");
+});
+
+test("a node post-assert reads the uri of a file in its output", async () => {
+  const text = fileFlow(
+    "  b:\n    kind: code\n    output:\n      f: file\n      n: int\n" +
+      `    code: |\n      return { f: ${F}, n: 1 }\n` +
+      "    asserts:\n      - \"output.f.uri == 'f'\"\n",
+    "${b.output.n}",
+  );
+  expect(await okRun(text)).toBe(1n);
+});
+
+/** Run a node binding `${<path>}` after `producer`; return its status and output. */
+async function missingOutcome(producer: string, path: string): Promise<[string, unknown]> {
+  const result = await runText(
+    `id: p\nname: p\nnodes:\n${producer}` +
+      `  b:\n    kind: code\n    input:\n      x: \${${path}}\n` +
+      "    code: |\n      return String(inputs['x'])\n" +
+      "output: ${b.output}\n",
+  );
+  return [result.status, result.output];
+}
+
+const OBJECT_PRODUCER = `\
+  a:
+    kind: code
+    output: object
+    code: |
+      return { uri: 'f' }
+`;
+
+// With no `output:`, load leaves reads on `a.output` unchecked while the value stays a file.
+const UNTYPED_FILE_PRODUCER = `\
+  a:
+    kind: code
+    code: |
+      return ${F}
+`;
+
+test.each(["other", "__class__"])("another field of a file is missing like a missing key: %s", async (field) => {
+  const expected = await missingOutcome(OBJECT_PRODUCER, `a.output.${field}`);
+  expect(expected).toEqual(["succeeded", "null"]);
+  expect(await missingOutcome(UNTYPED_FILE_PRODUCER, `a.output.${field}`)).toEqual(expected);
+});
+
+test("render_as_json writes a file as its mapping", async () => {
+  const output = await okRun(
+    fileFlow("  b:\n    kind: code\n    input:\n      j: ${render_as_json(a.output)}\n" + "    code: |\n      return inputs['j']\n"),
+  );
+  expect(output).toBe('{\n  "uri": "f",\n  "mime": null,\n  "name": null\n}');
+});
+
+test.each([false, true])("a run reads the fields of a file through its trace: learnable %p", async (learnable) => {
+  // A learnable run resolves bindings through the run trace, not the pool.
+  const output = await okRun(
+    `id: p\nname: p\nnodes:\n${UNTYPED_FILE_PRODUCER}` +
+      "  n:\n    kind: code\n    output: file\n" +
+      `    code: |\n      return ${NAMED_F}\n` +
+      "  b:\n    kind: code\n    input:\n" +
+      "      u: ${a.output.uri}\n      k: ${n.output.name}\n" +
+      "      x: ${a.output.other}\n      c: ${a.output.__class__}\n      t: ${a.output}\n" +
+      "    code: |\n" +
+      "      return [inputs['u'], inputs['k'], inputs['x'], inputs['c'], inputs['t'].constructor.name]\n" +
+      "output: ${b.output}\n",
+    { learnable },
+  );
+  expect(output).toEqual(["f", "a.txt", null, null, "FileRef"]);
+});
+
+// --- readers, events and results hold the files of a typed output --- //
+
+const READER_FLOW = `\
+id: p
+name: p
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}, ${F}]
+  r:
+    kind: code
+    output:
+      f: file
+      n: int
+    code: |
+      return { f: ${F}, n: 1 }
+  b:
+    kind: code
+    input:
+      xs: \${a.output}
+      f: \${r.output.f}
+      u: \${r.output.f.uri}
+    code: |
+      return [inputs['xs'].map((x) => x.constructor.name), inputs['f'].constructor.name, inputs['u']]
+output: \${b.output}
+`;
+
+test.each([false, true])("a reader sees the files of a typed output: learnable %p", async (learnable) => {
+  expect(await okRun(READER_FLOW, { learnable })).toEqual([["FileRef", "FileRef"], "FileRef", "f"]);
+});
+
+test.each([false, true])("the success event holds the files of a typed output: learnable %p", async (learnable) => {
+  const events: unknown[] = [];
+  await okRun(READER_FLOW, { learnable, onEvent: (event) => void events.push(event) });
+
+  const outputs = events
+    .filter((event) => event instanceof NodeSucceeded && event.nodeId === "a")
+    .map((event) => (event as NodeSucceeded).output);
+  expect(outputs).toHaveLength(1);
+  expect(outputs[0]).toEqual([REF, REF]);
+  expect((outputs[0] as unknown[]).every((item) => item instanceof FileRef)).toBe(true);
+});
+
+test.each([false, true])("an untyped output holding files is read as mappings: learnable %p", async (learnable) => {
+  const output = await okRun(
+    `\
+id: p
+name: p
+nodes:
+  a:
+    kind: code
+    code: |
+      return [${F}]
+  b:
+    kind: code
+    input:
+      xs: \${a.output}
+    code: |
+      return inputs['xs'].map((x) => x.constructor.name)
+output: \${b.output}
+`,
+    { learnable },
+  );
+  expect(output).toEqual(["Object"]);
+});
+
+test.each([false, true])("a flow input file reaches code as a file: learnable %p", async (learnable) => {
+  const output = await okRun(
+    `\
+id: p
+name: p
+input:
+  f: !file
+  fs: !list(file)
+nodes:
+  c:
+    kind: code
+    input:
+      f: \${input.f}
+      fs: \${input.fs}
+    code: |
+      return [inputs['f'].constructor.name, inputs['fs'].map((x) => x.constructor.name)]
+output: \${c.output}
+`,
+    { learnable },
+    { f: REF, fs: [REF] },
+  );
+  expect(output).toEqual(["FileRef", ["FileRef"]]);
+});
+
+test("the backward context holds the files of a typed output as JSON", async () => {
+  // Feedback shapes and source lookups stay on the recorded JSON value.
+  const built = engine((await loadConformanceFlow(READER_FLOW)).compiled, { inputs: {}, learnable: true });
+  await built.run();
+  const trace = built.state.trace!;
+  const [occurrence, ...others] = trace.occurrences.filter((item) => item.nodeId === "a");
+  expect(others).toEqual([]);
+
+  expect(trace.backwardContext(occurrence!.source).output).toEqual([form(), form()]);
+  expect(trace.lookupSource(occurrence!.source) as Value).toEqual([form(), form()]);
+  expect(trace.currentWriters.get("a")!.value).toEqual([REF, REF]);
+});
+
+const TWO_FILES = (output: string) => `\
+id: p
+name: p
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}, ${F}]
+  b:
+    kind: code
+    code: |
+      return 1
+output: ${output}
+`;
+
+const RESULT_OUTPUTS: Record<string, readonly [string, (output: unknown) => unknown]> = {
+  whole: ["${a.output}", (output) => output],
+  tagged: ["!list(file) ${a.output}", (output) => output],
+  record: ["\n  a: ${a.output}\n  n: ${b.output}", (output) => (output as Record<string, unknown>).a],
+};
+
+const LEARNABLE_BY_SHAPE = [false, true].flatMap((learnable) =>
+  Object.keys(RESULT_OUTPUTS)
+    .sort()
+    .map((shape) => [learnable, shape] as const),
+);
+
+/** Expect `files` to be the two files `REF`, each a `FileRef`. */
+function expectTwoFiles(files: unknown): void {
+  expect(files).toEqual([REF, REF]);
+  expect((files as unknown[]).every((item) => item instanceof FileRef)).toBe(true);
+}
+
+test.each(LEARNABLE_BY_SHAPE)(
+  "the run result holds the files of a typed output: learnable %p, %s",
+  async (learnable, shape) => {
+    const [output, filesOf] = RESULT_OUTPUTS[shape]!;
+    const events: unknown[] = [];
+    const result = await runText(TWO_FILES(output), {}, { learnable, onEvent: (event) => void events.push(event) });
+
+    expect(result.failure).toBeNull();
+    expectTwoFiles(filesOf(result.output));
+    const succeeded = events.filter((event) => event instanceof RunSucceeded) as RunSucceeded[];
+    expect(succeeded).toHaveLength(1);
+    expect(succeeded[0]!.output).toEqual(result.output);
+    expect((result.events.at(-1) as RunSucceeded).output).toEqual(result.output);
+    expectTwoFiles(filesOf(succeeded[0]!.output));
+  },
+);
+
+test.each([false, true])(
+  "the run result holds the files of an untyped output as mappings: learnable %p",
+  async (learnable) => {
+    const result = await runText(
+      `\
+id: p
+name: p
+nodes:
+  a:
+    kind: code
+    code: |
+      return [${F}]
+output: \${a.output}
+`,
+      {},
+      { learnable },
+    );
+    expect(result.failure).toBeNull();
+    expect(result.output).toEqual([form()]);
+    expect((result.output as unknown[])[0]).not.toBeInstanceOf(FileRef);
+  },
+);
+
+// --- resumed runs --- //
+
+/** Run `text` into the new log `name`, expecting success; return the log path and the result. */
+async function runLogged(name: string, text: string, options: RunFlowOptions = {}) {
+  const path = join(dir, `${name}.jsonl`);
+  const first = await runText(text, {}, { log: path, ...options });
+  expect(first.failure).toBeNull();
+  return { path, first };
+}
+
+/** Resume the log at `path` over `text` in `hostEnv`. */
+async function resumeText(text: string, path: string, options: Omit<Parameters<typeof resumeFlow>[1], "log"> = {}) {
+  return resumeFlow(await loadConformanceFlow(text), { log: path, env: hostEnv(dir), ...options });
+}
+
+test("resuming a run with a typed list of files succeeds", async () => {
+  const text = `\
+id: p
+name: p
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}, ${F}]
+output:
+  a: \${a.output}
+`;
+  const { path } = await runLogged("typed-list", text);
+  const resumed = await resumeText(text, path);
+  expect(resumed.failure).toBeNull();
+});
+
+test.each([
+  ["reader", READER_FLOW],
+  ["loop", LOOP_FLOW],
+])("resuming a finished run with files replays its output: %s", async (name, text) => {
+  const { path, first } = await runLogged(`finished-${name}`, text);
+  const events: unknown[] = [];
+  const resumed = await resumeText(text, path, { onEvent: (event) => void events.push(event) });
+
+  expect(resumed.failure).toBeNull();
+  expect(resumed.output).toEqual(first.output);
+  expect(events.filter((event) => event!.constructor.name.includes("Node"))).toEqual([]);
+});
+
+const GATED_READER_FLOW = `\
+id: p
+name: p
+nodes:
+  a:
+    kind: code
+    output: list(file)
+    code: |
+      return [${F}, ${F}]
+  ask:
+    kind: human_input
+    prompt: "Go?"
+  b:
+    kind: code
+    input:
+      xs: \${a.output}
+      go: \${ask.output}
+    code: |
+      return inputs['xs'].map((x) => x.constructor.name)
+output: \${b.output}
+`;
+
+/** Run `text` into the new log `name`, stopped by the host before the human answer; return the path. */
+async function interruptedRun(name: string, text: string, learnable: boolean): Promise<string> {
+  const path = join(dir, `${name}.jsonl`);
+  const interruption = new Error("stop before the answer");
+  const host = new AbortController();
+  const interrupt = () => {
+    host.abort(interruption);
+    throw interruption;
+  };
+  const caught = await rejection(runText(text, {}, { log: path, learnable, signal: host.signal, tools: { ask_user: interrupt } }));
+  expect(caught).toBe(interruption);
+  return path;
+}
+
+test.each([false, true])("a reader after resume sees the files of a replayed output: learnable %p", async (learnable) => {
+  const path = await interruptedRun(`gated-${learnable}`, GATED_READER_FLOW, learnable);
+  const resumed = await resumeText(GATED_READER_FLOW, path, { tools: { ask_user: () => "y" } });
+
+  expect(resumed.failure).toBeNull();
+  expect(resumed.output).toEqual(["FileRef", "FileRef"]);
+});
+
+test.each([false, true])(
+  "resuming an unfinished run returns the files of a typed output: learnable %p",
+  async (learnable) => {
+    // `a` is replayed from the log; the run then finishes live, so the result reads through the
+    // contract the replayed state carries.
+    const text = GATED_READER_FLOW.replace("output: ${b.output}\n", "output: ${a.output}\n");
+    const path = await interruptedRun(`unfinished-${learnable}`, text, learnable);
+    const events: unknown[] = [];
+    const resumed = await resumeText(text, path, {
+      onEvent: (event) => void events.push(event),
+      tools: { ask_user: () => "y" },
+    });
+
+    expect(resumed.failure).toBeNull();
+    expectTwoFiles(resumed.output);
+    const succeeded = events.filter((event) => event instanceof RunSucceeded) as RunSucceeded[];
+    expect(succeeded).toHaveLength(1);
+    expect(succeeded[0]!.output).toEqual(resumed.output);
+    expectTwoFiles(succeeded[0]!.output);
+  },
+);
+
+test.each(LEARNABLE_BY_SHAPE)(
+  "resuming a finished run returns the files of a typed output: learnable %p, %s",
+  async (learnable, shape) => {
+    const [output, filesOf] = RESULT_OUTPUTS[shape]!;
+    const text = TWO_FILES(output);
+    const { path, first } = await runLogged(`result-${learnable}-${shape}`, text, { learnable });
+
+    const resumed = await resumeText(text, path);
+
+    expect(resumed.output).toEqual(first.output);
+    expect((filesOf(resumed.output) as unknown[]).every((item) => item instanceof FileRef)).toBe(true);
+  },
+);
+
+test("a log whose loop default was digested as a mapping still resumes", async () => {
+  // A partial LOOP's respawned driver once defaulted an omitted file to its mapping.
+  const text = `\
+id: p
+name: p
+defs:
+  body:
+    input:
+      f: !file
+      n: !int
+    nodes:
+      c:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return { n: inputs['n'] + 1 }
+    output: \${c.output}
+nodes:
+  a:
+    kind: code
+    output: file
+    code: |
+      return ${F}
+  l:
+    kind: loop
+    times: 3
+    call: body
+    input:
+      f: \${a.output}
+      n: 0
+output: \${l.output.n}
+`;
+  const carried = spyOn(LoopNode.prototype as never, "carriedValue").mockImplementation(
+    ((_name: string, value: Value) => value) as never,
+  );
+  let logged: Awaited<ReturnType<typeof runLogged>>;
+  try {
+    logged = await runLogged("digested-default", text);
+    expect(carried).toHaveBeenCalled();
+  } finally {
+    carried.mockRestore();
+  }
+
+  const resumed = await resumeText(text, logged.path);
+
+  expect(resumed.failure).toBeNull();
+  expect([resumed.output, logged.first.output]).toEqual([3n, 3n]);
 });

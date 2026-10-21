@@ -13,7 +13,7 @@
  * message holds `depends_on` and `nope` and the last frame has a line, or that the cycle message
  * holds `cycle`. The cycle message writes its node list in the text form (rule `messages`).
  *
- * Later (T4): the run rows (`test_warm_runs_both_dependents_run`,
+ * Later (T4-8 follow-up): the run rows (`test_warm_runs_both_dependents_run`,
  * `test_warm_skipped_depends_on_co_skips_runs_after_survives`,
  * `test_ordering_on_a_case_runs_on_every_branch`,
  * `test_branch_target_ordered_on_its_case_runs_when_taken`,

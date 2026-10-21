@@ -18,36 +18,48 @@
  * fixtures' `graph`, `engine` and `RecordingBackwardNode`:
  * `test_root_feedback_on_a_one_field_record_reaches_its_producer`.
  *
- * Changed: Python's three rows above check only the run output, so the TS load halves check the
- * END's mode and names, or the driver's output type, instead. The empty-record row compares with
- * `sameOutputContract` (Python's dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP,
- * LOOP and non-text-name rows pin the whole message, where Python matches a fragment.
+ * Ported through `runFlow`: the `${c.output.order}` row of
+ * `test_call_over_a_one_field_record_def_returns_the_record`,
+ * `test_nested_value_re_export_of_a_record_def_keeps_the_record`,
+ * `test_case_then_call_over_a_one_field_record_def_returns_the_record`, the run halves of
+ * `test_flow_result_follows_the_output_shape` (all but `absent`),
+ * `test_inline_call_body_with_a_one_field_output_returns_the_record`,
+ * `test_loop_body_with_a_one_field_record_output_runs` and
+ * `test_map_over_a_one_field_record_def_returns_a_list_of_records`, and the `value` row of
+ * `test_a_literal_flow_output_is_returned_as_written`. Integers are bigints.
+ *
+ * Changed: the load halves check the END's mode and names, or the driver's output type, which
+ * Python's rows don't. The empty-record row compares with `sameOutputContract` (Python's
+ * dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP, LOOP and non-text-name rows
+ * pin the whole message, where Python matches a fragment.
  *
  * Pinned at the end (`assembled`): `load-core/engine_flow_output_shape__map_over_a_def_without_output`,
  * `load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record`,
  * `load-core/engine_flow_output_shape__missing_field_of_an_empty_record_child` and
  * `load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output`.
  *
+ * Covered by the harvested run cases (the same flows and outputs):
+ * `run-core/engine_flow_output_shape__call_over_a_one_field_record_def_returns_the_record` (the
+ * `${c.output}` row), `run-core/engine_flow_output_shape__call_over_a_single_node_def_returns_the_bare_value`
+ * (`test_call_over_a_flat_single_node_def_returns_the_bare_value`),
+ * `run-core/engine_flow_output_shape__no_output_gives_null` (the `absent` row of
+ * `test_flow_result_follows_the_output_shape`),
+ * `run-core/engine_flow_output_shape__an_unquoted_yes_flow_output_name_is_text` and
+ * `run-core/engine_flow_output_shape__a_literal_flow_output_is_returned_as_written` (its `field` row).
+ *
  * TS-only: `ChildSignature`'s constructor errors, which no Python test reaches: a non-contract
  * output, a non-array `declaredOutputs`, a malformed pair, an empty or duplicate name, a
  * non-contract declared output; and the form with no declared evidence, which skips the check.
- *
- * Later (T4-8): `test_call_over_a_one_field_record_def_returns_the_record`,
- * `test_call_over_a_flat_single_node_def_returns_the_bare_value`,
- * `test_nested_value_re_export_of_a_record_def_keeps_the_record` and
- * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (they run flows).
- * Later (T4): the run halves of `test_flow_result_follows_the_output_shape`,
- * `test_inline_call_body_with_a_one_field_output_returns_the_record`,
- * `test_loop_body_with_a_one_field_record_output_runs` and
- * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
- * `test_an_unquoted_yes_flow_output_name_is_text` and
- * `test_a_literal_flow_output_is_returned_as_written`.
  *
  * Not ported here: `test_a_non_string_flow_output_name_is_a_load_error_at_its_key` is the source
  * layer's message, which `tests/compose/non_text_keys.test.ts` pins.
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
@@ -56,10 +68,12 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { engine, graph, RecordingBackwardNode } from "./run_state_fixtures.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
@@ -88,6 +102,16 @@ const parent = (defOutput: string, nodes: string, output: string) =>
 const ONE_FIELD_DEF_OUTPUT = "    output:\n      order: ${step.output}\n";
 
 const CALL_CHILD = "  c:\n    kind: call\n    call: child\n";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-flow-output-shape-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Load and run `text` on `inputs`, returning the output (Python's `_run`). */
+async function run(text: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
+  const result = await runFlow(await loadFlow(text), inputs, { env: hostEnv(dir) });
+  expect(result.failure).toBeNull();
+  return result.output;
+}
 
 /** Return the error `run` throws, failing when it returns. */
 function thrown(run: () => unknown): Error {
@@ -235,6 +259,8 @@ test("a map over a one-field record def returns a list of records", async () => 
   const fields = contract.type.element!.fields!;
   expect([...fields.keys()]).toEqual(["order"]);
   expect(typeEquals(fields.get("order")!, STR)).toBe(true);
+  const result = await runFlow(loaded, { items: ["a", "b"] }, { env: hostEnv(dir) });
+  expect(result.output).toEqual([{ order: "filled" }, { order: "filled" }]);
 });
 
 test.each([
@@ -335,8 +361,16 @@ test.each<[string, string, EndNode["mode"], string[]]>([
   expect([end.mode, end.names]).toEqual([mode, names]);
 });
 
-test("an inline call body with a one-field output returns the record", () => {
-  const { flow } = assembleText(`
+test.each<[string, string, unknown]>([
+  ["one-field", "output:\n  order: ${step.output}\n", { order: "filled" }],
+  ["two-fields", "output:\n  order: ${step.output}\n  note: ${step.output}\n", { order: "filled", note: "filled" }],
+  ["value", "output: ${step.output}\n", "filled"],
+  ["empty-record", "output: {}\n", {}],
+])("the flow result follows the output shape: %s", async (_name, section, expected) => {
+  expect(await run(shapeFlow(section))).toEqual(expected);
+});
+
+const INLINE_CALL = `
 id: parent
 name: parent
 nodes:
@@ -345,13 +379,16 @@ nodes:
     nodes:${STEP.replaceAll("\n  ", "\n      ")}    output:
       order: \${step.output}
 output: \${c.output}
-`);
+`;
+
+test("an inline call body with a one-field output returns the record", async () => {
+  const { flow } = assembleText(INLINE_CALL);
 
   expect((flow.compiled.nodes.get("c")!.outputContract as ValueContract).type).toEqual(record({ order: STR }));
+  expect(await run(INLINE_CALL)).toEqual({ order: "filled" });
 });
 
-test("a loop body with a one-field record output loads", () => {
-  const { flow } = assembleText(`
+const LOOP_ONE_FIELD = `
 id: l
 name: l
 nodes:
@@ -367,13 +404,17 @@ nodes:
           n: \${input.count}
         output: int
         code: |
-          return inputs["n"] + 1n
+          return inputs["n"] + 1
     output:
       count: \${bump.output}
 output: \${lp.output}
-`);
+`;
+
+test("a loop body with a one-field record output runs", async () => {
+  const { flow } = assembleText(LOOP_ONE_FIELD);
 
   expect((flow.compiled.nodes.get("lp")!.outputContract as ValueContract).type).toEqual(record({ count: INT }));
+  expect(await run(LOOP_ONE_FIELD)).toEqual({ count: 3n });
 });
 
 // ---------- backward ----------
@@ -422,6 +463,63 @@ test("a non-string output name in a def is a load error", async () => {
     'the key `1` was read by YAML as an integer, but names in a flow must be text. Quote it ("1") or ' +
       "choose another name.",
   );
+});
+
+// ---------- runs ----------
+
+test("a call over a one-field record def returns the record: a field read", async () => {
+  expect(await run(parent(ONE_FIELD_DEF_OUTPUT, CALL_CHILD, "${c.output.order}"))).toBe("filled");
+});
+
+test("a nested value re-export of a record def keeps the record", async () => {
+  const text = `
+id: parent
+name: parent
+defs:
+  b:
+    nodes:
+      step:
+        kind: code
+        output: str
+        code: |
+          return "filled"
+    output:
+      order: \${step.output}
+  a:
+    nodes:
+      inner:
+        kind: call
+        call: b
+    output: \${inner.output}
+nodes:
+  c:
+    kind: call
+    call: a
+output: \${c.output.order}
+`;
+  expect(await run(text)).toBe("filled");
+});
+
+test("a case then call over a one-field record def returns the record", async () => {
+  const nodes = `  fallback:
+    kind: code
+    output:
+      order: str
+    code: |
+      return {"order": "never"}
+  route:
+    kind: case
+    cases:
+      - when: "\${input.go}"
+        then: call(child)
+    else: fallback
+`;
+  const text = "input:\n  go: !bool\n" + parent(ONE_FIELD_DEF_OUTPUT, nodes, "${route.output.order}");
+  expect(await run(text, { go: true })).toBe("filled");
+});
+
+test("a literal flow output is returned as written: value", async () => {
+  expect(await run(shapeFlow("output: 5\n"))).toBe(5n);
 });
 
 // ---------- harvested conformance cases ----------

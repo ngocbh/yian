@@ -16,12 +16,27 @@
  * rejects with the signal's reason; TS errors have no implicit context chain, so the reported
  * error isn't checked on it.
  *
- * Later (T4-8), the TOOL rows through the runner: `test_a_tool_node_fails_on_a_reported_error`,
- * `test_tool_retries_retry_a_reported_error` and
- * `test_tool_retries_stop_on_a_reported_error_that_is_also_permanent`.
+ * Ported through `runFlow`, the TOOL row
+ * `test_tool_retries_stop_on_a_reported_error_that_is_also_permanent`. Changed: the permanent
+ * reported error is a `ReportedToolError` built with `permanent: true` (Python: a subclass of both
+ * error classes), and the zero retry delay is a `YIAN_TOOL_RETRY_DELAY_SECONDS` value in the run's
+ * `env`.
+ *
+ * Covered by conformance cases whose headers name the Python test, the other TOOL rows:
+ * `test_a_tool_node_fails_on_a_reported_error` by
+ * `run-leaves/reported_tool_error__a_tool_node_fails_on_a_reported_error` and
+ * `test_tool_retries_retry_a_reported_error` by
+ * `run-leaves/reported_tool_error__tool_retries_retry_a_reported_error` (both pin the failure and
+ * each tool call).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { RunSucceeded, ToolCallFinished } from "../../src/events.ts";
@@ -35,6 +50,8 @@ import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { ReportedToolError } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { drive, rejected, serving } from "./run_state_fixtures.ts";
 import { effectsOf, runSessionFlow, sessionFlow, view } from "./session_fakes.ts";
 
@@ -195,4 +212,36 @@ test("a session records the reported call completed with its message", async () 
   // A later turn on the same session replays the reported error to the model.
   expect(await run("second", "again")).toEqual(new RunSucceeded({ output: "still missing" }));
   expect(toolResults(model, 2)).toEqual(results);
+});
+
+// ---------- TOOL nodes ----------
+
+const dir = mkdtempSync(join(tmpdir(), "yian-reported-tool-error-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test("tool retries stop on a reported error that is also permanent", async () => {
+  class Gone extends ReportedToolError {
+    override name = "Gone";
+  }
+  const calls: string[] = [];
+  const tool = new FunctionTool({
+    name: "read_file",
+    description: "Read one file.",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } } },
+    execute: (args) => {
+      calls.push((args.path as string | undefined) ?? "a.txt");
+      throw new Gone("gone", { permanent: true });
+    },
+  });
+  const flow = await loadFlow(
+    "id: t\nname: t\nnodes:\n  call:\n    kind: tool\n    tool_id: read_file\n    retries: 2\n" +
+      "output: ${call.output}\n",
+  );
+  const result = await runFlow(flow, {}, {
+    tools: { read_file: tool },
+    env: hostEnv(dir, { YIAN_TOOL_RETRY_DELAY_SECONDS: "0" }),
+  });
+  expect(result.status).toBe("failed");
+  expect([result.failure!.message, result.failure!.causeType]).toEqual(["gone", "Gone"]);
+  expect(calls).toHaveLength(1);
 });

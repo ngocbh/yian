@@ -159,7 +159,7 @@
  * writes an inline CODE body as `{inline: <body>}` (design 6.7) where Python writes the bare text,
  * and the inline bodies are TS (`+ 1n`); with both put back, Python's pins reproduce.
  *
- * Later (T4): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
+ * Later (T4-8 follow-up): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
  *
  * Not ported: `test_flow_fingerprint_distinguishes_yaml_literal_types`,
  * `test_flow_fingerprint_supports_binary_nonfinite_and_non_string_mapping_keys` and

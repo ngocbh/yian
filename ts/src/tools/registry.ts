@@ -33,7 +33,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import { ASK_USER, ToolContext } from "./context.ts";
-import { isToolCheckError, ToolCheckError } from "./errors.ts";
+import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
@@ -611,7 +611,8 @@ export class ToolSet {
    * `invoke(call, options)` runs the tool `validate` looked up, with this set's context, run id
    * and signal; it checks no argument again. `invoke(toolId, inputs, options)` validates the
    * arguments first, as `validate` does, then calls the tool. Errors from the argument checks and
-   * from the tool propagate unchanged.
+   * from the tool propagate unchanged; a tool that throws a non-`Error` rejects with an `Error`
+   * wrapping it.
    *
    * When the tool declares an output (`outputJsonSchema` or `outputValidator`), the result must be
    * a yian value; it is checked against the type the output schema translates to, read open (an
@@ -630,7 +631,8 @@ export class ToolSet {
    * @throws {ToolCheckError} A declared result is not a yian value or doesn't fit the output
    *   schema's type; or the output validator threw (the error is the `cause`), returned no
    *   Standard Schema result, reported issues or gave a value that isn't a yian value.
-   * @throws Whatever the tool throws, unchanged.
+   * @throws Whatever the tool throws: an `Error` unchanged, any other value wrapped in an `Error`
+   *   whose message is its text and whose `cause` is the value.
    */
   invoke(call: CheckedCall, options?: InvokeOptions): Promise<unknown>;
   invoke(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
@@ -771,7 +773,12 @@ export class ToolSet {
       context: this.hostContext,
       signal: options.signal ?? this.boundSignal ?? new AbortController().signal,
     });
-    let result = await tool.execute(args, ctx);
+    let result: unknown;
+    try {
+      result = await tool.execute(args, ctx);
+    } catch (error) {
+      throw asError(error);
+    }
     if (result === undefined) result = null;
     // `??`: a tool built by an older copy of yian has no output fields.
     const schema = tool.outputJsonSchema ?? null;
@@ -833,6 +840,23 @@ function thrownText(error: unknown): string {
   } catch {
     return jsTypeName(error);
   }
+}
+
+/**
+ * Return a value a tool threw as an `Error`: an `Error`, or a value carrying a tool error brand,
+ * as it is; anything else wrapped in an `Error` whose message is its text and whose `cause` is
+ * the value. TS-only: Python can raise only an exception.
+ */
+function asError(error: unknown): unknown {
+  // The brand check keeps a branded error from another realm, which fails `instanceof`, unwrapped
+  // so its kind still steers retries.
+  if (toolErrorKinds(error).length > 0) return error;
+  try {
+    if (error instanceof Error) return error;
+  } catch {
+    // A Proxy whose prototype trap throws isn't an `Error`.
+  }
+  return new Error(thrownText(error), { cause: error });
 }
 
 /**

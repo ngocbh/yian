@@ -78,7 +78,7 @@
  * with `full` (every frame and the notes) for `loop_while_reads_a_field_on_a_builtin_result` and
  * `prompt_inside_a_def_reads_unknown_field`.
  *
- * Later (T4): `test_guarded_node_assert_runs`, `test_guarded_flow_assert_runs`, and the run halves
+ * Later (T4-8 follow-up): `test_guarded_node_assert_runs`, `test_guarded_flow_assert_runs`, and the run halves
  * of the rows above.
  */
 

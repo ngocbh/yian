@@ -25,7 +25,7 @@
  * assert's text holding a lone surrogate is a located load error in the aggregate (Python yian
  * loads it); the TS-only row pins the message.
  *
- * Later (T4): `test_pre_assert_passes_and_runs`, `test_pre_assert_violated_fails_before_body`,
+ * Later (T4-8 follow-up): `test_pre_assert_passes_and_runs`, `test_pre_assert_violated_fails_before_body`,
  * `test_post_assert_violated_fails`, `test_post_assert_on_nonscalar_output_fails_cleanly`,
  * `test_post_assert_record_field_passes`, `test_skipped_branch_target_asserts_do_not_fire`,
  * `test_absent_input_pre_assert_fails_cleanly`, `test_def_internal_node_assert_via_call`,

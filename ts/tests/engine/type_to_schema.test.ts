@@ -36,10 +36,20 @@
  * (`[0, "scores", 0, 1]`). TS-only: an open record drops unknown fields and comes back in declared
  * field order.
  *
- * Later (T4-8), it loads and runs a flow: `test_agent_with_any_output_loads_and_returns_the_value`.
+ * Ported through `runFlow`, the model config as the run's `llmConfig` (the flow names none):
+ * the `"hello"`, `3`, `True` and `[1, "a"]` rows of
+ * `test_agent_with_any_output_loads_and_returns_the_value`; the int comes back as a `bigint`.
+ * Covered by `run-agent/engine_type_to_schema__an_any_output_agent_returns_the_reply_value`, its
+ * harvested `{"a": [1, None]}` row (the same flow and reply value).
  */
 
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, describe, expect, test } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
 
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
@@ -51,6 +61,7 @@ import {
   typeToSchema,
 } from "../../src/nodes/agent/structured.ts";
 import { questionListType } from "../../src/nodes/human_input/questions.ts";
+import { runFlow } from "../../src/run.ts";
 import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
@@ -60,6 +71,8 @@ import {
   TypeCheckError,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { serving } from "./run_state_fixtures.ts";
 
 const NO_TYPEDEFS = readTypedefs({});
 const POINT = readTypedefs({ Point: { x: "int" } });
@@ -1343,5 +1356,37 @@ describe("TS-only", () => {
     expect(() => typeToSchema(record({ f: Type.scalar(ValueKind.FILE) }, ["f"]))).toThrow(
       RangeError,
     );
+  });
+});
+
+// ---------- an AGENT with an `Any` output, through the runner ----------
+
+describe("an agent with an Any output loads and returns the value", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-type-to-schema-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const flow = `
+id: guess
+name: guess
+nodes:
+  a:
+    kind: agent
+    prompt: say anything
+    output: Any
+output: \${a.output}
+`;
+
+  test.each<[string, unknown]>([
+    ['"hello"', "hello"],
+    ["3", 3n],
+    ["true", true],
+    ['[1, "a"]', [1n, "a"]],
+  ])("%s", async (reply, value) => {
+    const result = await runFlow(await loadFlow(flow), {}, {
+      llmConfig: { provider: "openai", model: "gpt-5.5" },
+      models: serving(native(`{"value": ${reply}}`)),
+      env: hostEnv(dir),
+    });
+    expect(result.failure).toBeNull();
+    expect(result.output).toEqual(value);
   });
 });

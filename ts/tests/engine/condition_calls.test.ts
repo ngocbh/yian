@@ -15,7 +15,7 @@
  *
  * Changed: the CODE references and code are TS's (`./fixtures/compose_codefns.ts:double`).
  *
- * Later (T4): `test_python_built_assert_calling_an_unknown_function_fails_before_the_run`,
+ * Later (T4-8 follow-up): `test_python_built_assert_calling_an_unknown_function_fails_before_the_run`,
  * `test_python_built_case_when_with_the_wrong_arguments_fails_before_the_run`, and the run halves
  * of `test_a_condition_calling_a_builtin_correctly_loads_and_runs` and
  * `test_a_typedef_constructor_in_a_condition_loads_and_runs`.

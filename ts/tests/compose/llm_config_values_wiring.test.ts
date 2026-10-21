@@ -30,7 +30,7 @@
  * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
  *
  * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
- * Later (T4): `test_runs_with_different_inputs_record_the_same_fingerprint`.
+ * Later (T4-8 follow-up): `test_runs_with_different_inputs_record_the_same_fingerprint`.
  */
 
 import { expect, test } from "bun:test";

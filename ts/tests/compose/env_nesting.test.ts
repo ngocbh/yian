@@ -22,9 +22,9 @@
  * `test_env_value_follows_the_configured_limit`,
  * `test_flow_env_nesting_is_checked_before_max_tool_iterations`,
  * `test_env_value_holding_itself_is_a_located_load_error`,
- * `test_env_mapping_holding_itself_is_a_located_load_error`, `test_env_scalar_value_loads`, and the
- * load halves of `test_env_value_at_the_limit_loads_and_runs` and
- * `test_env_value_repeating_an_alias_loads_and_runs`. The CODE reference is TS's
+ * `test_env_mapping_holding_itself_is_a_located_load_error`, `test_env_scalar_value_loads`, and
+ * `test_env_value_at_the_limit_loads_and_runs` and
+ * `test_env_value_repeating_an_alias_loads_and_runs`, run with `runFlow`. The CODE reference is TS's
  * (`./fixtures/compose_codefns.ts:echo`). The other rows are ported through `checkEnvValues`.
  *
  * TS-only: `loadFlow`'s `env` sets the limit for one load, its imports included, without
@@ -34,12 +34,13 @@
  *
  * Not ported: the `!!pairs` row of `test_flow_env_cycle_names_the_entry_that_refers_back`
  * (TS refuses `!!pairs`).
- *
- * Later (T4-8): the run halves of `test_env_value_at_the_limit_loads_and_runs` and
- * `test_env_value_repeating_an_alias_loads_and_runs`.
  */
 
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
@@ -47,8 +48,10 @@ import { checkEnvValues, checkWrittenValue } from "../../src/compose/helpers/val
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, DefaultsError, ENTRIES, type Env, forget, install, processEnv } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
+import { runFlow } from "../../src/run.ts";
 import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
 import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 const LIMIT = `value nests deeper than ${MAX_VALUE_NESTING} levels`;
@@ -353,6 +356,15 @@ async function expectLoadCycleError(text: string, start: string, linePrefix: str
 }
 
 describe("loaded sites", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-env-nesting-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  /** Load `text` and run it in an isolated environment, expecting success. */
+  async function expectRuns(text: string): Promise<void> {
+    const result = await runFlow(await loadConformanceFlow(text), {}, { env: hostEnv(dir) });
+    expect(result.status).toBe("succeeded");
+  }
+
   describe.each(SITES)("%s", (_site, flow, where, line) => {
     test.each([
       ["list", listAlias],
@@ -364,8 +376,8 @@ describe("loaded sites", () => {
     test.each([
       ["text", list],
       ["alias", listAlias],
-    ])("an env value at the limit as %s loads", async (_, form) => {
-      await loadConformanceFlow(flow(...form(MAX_VALUE_NESTING)));
+    ])("an env value at the limit as %s loads and runs", async (_, form) => {
+      await expectRuns(flow(...form(MAX_VALUE_NESTING)));
     });
 
     test("an env value holding itself is a located load error", async () => {
@@ -410,8 +422,8 @@ describe("loaded sites", () => {
     await expectLoadCycleError(flow("&e {K: [*e]}"), `${where} at [0].K`, line);
   });
 
-  test("an env value repeating an alias loads", async () => {
-    await loadConformanceFlow("x-anchors: [&s [1, 2]]\n" + loadedFlowEnv("", "[*s, *s]"));
+  test("an env value repeating an alias loads and runs", async () => {
+    await expectRuns("x-anchors: [&s [1, 2]]\n" + loadedFlowEnv("", "[*s, *s]"));
   });
 
   test("an env scalar value loads", async () => {

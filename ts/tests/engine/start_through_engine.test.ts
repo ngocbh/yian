@@ -14,8 +14,15 @@
  * `test_child_boundary_assert_violation_fails_run` and `test_child_boundary_assert_satisfied_succeeds`.
  * Changed: the def body's CODE reference is TS's (`./compose_codefns.ts:double`).
  *
- * Later (T4-8), through `runFlow`: the `run_flow` halves of those four tests, and
- * `test_loadedflow_reusable_across_runs_shared_ir_untouched`.
+ * Ported, through `loadFlow` and `runFlow`: the `run_flow` halves of
+ * `test_typed_int_default_is_used_when_omitted`, `test_boundary_assert_violating_value_fails` and
+ * `test_boundary_assert_satisfying_value_succeeds`, and
+ * `test_loadedflow_reusable_across_runs_shared_ir_untouched` (it compares START's wiring map
+ * before and after each run). The CODE references are TS's (`./compose_codefns.ts:<name>`).
+ *
+ * Covered by `run-core/engine_start_through_engine__boundary_assert_reads_typed_default`, the
+ * harvested `run_flow` half of `test_boundary_assert_reads_typed_default` (the same flow, run with
+ * no inputs, succeeding with 5).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -31,6 +38,7 @@ import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.t
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
 
 const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
@@ -137,9 +145,8 @@ afterEach(() => {
 
 /** Run the child-assert flow on `v` with `numWorkers`, with only the test's credential store in its environment. */
 async function runChildAssert(v: number, numWorkers: number) {
-  const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
   const flow = await loadFlow(CHILD_ASSERT_FLOW, { baseDir: FIXTURES });
-  return runFlow(flow, { v }, { numWorkers, env: (name) => env.get(name) });
+  return runFlow(flow, { v }, { numWorkers, env: hostEnv(dir) });
 }
 
 for (const numWorkers of [0, 4]) {
@@ -155,3 +162,99 @@ for (const numWorkers of [0, 4]) {
     expect(result.output).toBe(10n);
   });
 }
+
+// ---------- through runFlow ----------
+
+const AGE_FLOW = `
+id: age
+name: age
+input:
+  age: !int
+nodes:
+  n:
+    kind: code
+    input:
+      x: \${input.age}
+    output: int
+    code: ./compose_codefns.ts:echo_x
+output: \${n.output}
+asserts:
+  - "input.age >= 18"
+`;
+
+/** Load `source` with the conformance CODE fixtures and run it on `inputs`. */
+async function run(source: string, inputs: Record<string, unknown>) {
+  return runFlow(await loadFlow(source, { baseDir: FIXTURES }), inputs, { env: hostEnv(dir) });
+}
+
+test("boundary assert violating value fails", async () => {
+  const result = await run(AGE_FLOW, { age: 10 });
+  expect(result.status).toBe("failed");
+  expect(result.failure!.message).toContain("assert failed");
+});
+
+test("boundary assert satisfying value succeeds", async () => {
+  const result = await run(AGE_FLOW, { age: 20 });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(20n);
+});
+
+test("typed int default is used when omitted, through runFlow", async () => {
+  const source = `
+id: dflt
+name: dflt
+input:
+  n: !int 5
+nodes:
+  echo:
+    kind: code
+    input:
+      x: \${input.n}
+    output: int
+    code: ./compose_codefns.ts:echo_x
+output: \${echo.output}
+`;
+  const result = await run(source, {});
+  expect([result.status, result.output]).toEqual(["succeeded", 5n]);
+});
+
+test("loaded flow reusable across runs, shared IR untouched", async () => {
+  const loaded = await loadFlow(
+    `
+id: reuse
+name: reuse
+input:
+  topic: !str
+  window: !int 30
+nodes:
+  emit:
+    kind: code
+    input:
+      topic: \${input.topic}
+      window: \${input.window}
+    output:
+      report: str
+      n: int
+    code: ./compose_codefns.ts:make_report
+output:
+  report: \${emit.output.report}
+  n: \${emit.output.n}
+`,
+    { baseDir: FIXTURES },
+  );
+  const fullWiring = new Map(loaded.compiled.wiring.get(START_ID)!);
+  expect([...fullWiring.keys()].sort()).toEqual(["topic", "window"]);
+
+  // Both keys present: the run must not narrow the shared START wiring.
+  const first = await runFlow(loaded, { topic: "A", window: 10 }, { env: hostEnv(dir) });
+  expect(first.status).toBe("succeeded");
+  expect(first.input).toEqual({ topic: "A", window: 10n });
+  expect(loaded.compiled.wiring.get(START_ID)).toEqual(fullWiring);
+
+  // `window` omitted: START fills the default, and the input keeps only the caller's key.
+  const second = await runFlow(loaded, { topic: "B" }, { env: hostEnv(dir) });
+  expect(second.status).toBe("succeeded");
+  expect(second.input).toEqual({ topic: "B" });
+  expect(second.output).toEqual({ report: "report for B", n: 1n });
+  expect(loaded.compiled.wiring.get(START_ID)).toEqual(fullWiring);
+});

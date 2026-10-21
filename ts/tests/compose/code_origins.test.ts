@@ -2,8 +2,11 @@
  * The CODE node's whole-code and exact-line origins: a port of
  * `tests/compose/test_code_origins.py`.
  *
- * Ported: every row but the run below; the CODE bodies keep Python's text, which load doesn't
- * run.
+ * Ported: every row; the CODE bodies keep Python's text where load doesn't run them.
+ * `test_runtime_failure_diagnoses_exact_line_across_composition_paths` runs its root, named-def
+ * and external-alias rows with `runFlow`, over TS bodies (`throw new Error("boom")` on the second
+ * line); its inline-child row is covered by
+ * `run-leaves/compose_code_origins__an_inline_child_code_raise_is_located_at_its_line`.
  *
  * Ported (adapted): `test_code_origin_carriers_reject_invalid_shapes`, its node and descriptor
  * rows `whole-not-origin` and `line-item-not-origin`.
@@ -16,11 +19,13 @@
  *
  * Not ported: the `lines-not-tuple` row of `test_code_origin_carriers_reject_invalid_shapes` (TS
  * line origins are arrays only).
- *
- * Later (T4-8): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { cloneChild } from "../../src/compile/expand.ts";
@@ -34,6 +39,8 @@ import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts"
 import { OriginRef, type OriginResolver, SourceRange } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 const CODE_ORIGIN = new OriginRef("/s:root/s:node/s:worker/s:field/s:code");
 const LINE_ORIGINS = [
@@ -75,6 +82,87 @@ function expectResolvesCodeCursor(node: CodeNode, resolver: OriginResolver, curs
   expect(lineFrames.every((frame) => frame !== null && frame.text === cursor.document!.text)).toBe(true);
   expect(lineFrames.map((frame) => frame!.range)).toEqual([...lineRanges]);
 }
+
+// A CODE body that throws on its second line.
+const FAILING_CODE = `    kind: code
+    output: int
+    code: |-
+      const marker = 1
+      throw new Error("boom")
+      return marker
+`;
+
+const RUNTIME_FAILURE_ROOT = `id: code-origin-failure
+name: code-origin-failure
+nodes:
+  worker:
+${FAILING_CODE}output: \${worker.output}
+`;
+
+const RUNTIME_FAILURE_DEF = `id: code-origin-def-failure
+name: code-origin-def-failure
+defs:
+  child:
+    nodes:
+      worker:
+${FAILING_CODE.replace(/^(?=.)/gm, "    ")}    output: \${worker.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`;
+
+/** A failing root CODE occurrence and its cursor. */
+async function rootRuntimeFailure(): Promise<[ComposedFlow, CodeNode, SourceCursor]> {
+  const loaded = await loadFlow(RUNTIME_FAILURE_ROOT, { sourceLabel: "root.yaml" });
+  const cursor = SourceDocument.parse(RUNTIME_FAILURE_ROOT, "root.yaml").root.child("nodes").child("worker");
+  return [loaded, loaded.compiled.nodes.get("worker") as CodeNode, cursor.child("code")];
+}
+
+/** A failing named-def CODE occurrence and its cursor. */
+async function defRuntimeFailure(): Promise<[ComposedFlow, CodeNode, SourceCursor]> {
+  const loaded = await loadFlow(RUNTIME_FAILURE_DEF, { sourceLabel: "def.yaml" });
+  const root = SourceDocument.parse(RUNTIME_FAILURE_DEF, "def.yaml").root;
+  const cursor = root.child("defs").child("child").child("nodes").child("worker").child("code");
+  return [loaded, childCode(loaded, "invoke", "worker"), cursor];
+}
+
+/** A failing alias-rebased CODE occurrence and its cursor in the child file. */
+async function externalRuntimeFailure(): Promise<[ComposedFlow, CodeNode, SourceCursor]> {
+  const child = await loadFlow(RUNTIME_FAILURE_ROOT, { sourceLabel: "child.yaml" });
+  const parent = `id: code-origin-external-failure
+name: code-origin-external-failure
+uses:
+  child_view: child
+nodes:
+  invoke:
+    kind: call
+    call: child_view
+output: \${invoke.output}
+`;
+  const loaded = await loadFlow(parent, { sourceLabel: "parent.yaml", childResolver: () => child });
+  const cursor = SourceDocument.parse(RUNTIME_FAILURE_ROOT, "child.yaml").root.child("nodes").child("worker");
+  return [loaded, childCode(loaded, "invoke", "worker"), cursor.child("code")];
+}
+
+const dir = mkdtempSync(join(tmpdir(), "yian-code-origins-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test.each([
+  ["root", rootRuntimeFailure],
+  ["named-def", defRuntimeFailure],
+  ["external-alias", externalRuntimeFailure],
+])("runtime failure diagnoses the exact line across composition paths: %s", async (_id, failureCase) => {
+  const [loaded, node, cursor] = await failureCase();
+
+  const result = await runFlow(loaded, {}, { env: hostEnv(dir) });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.trace.at(-1)).toEqual(node.codeLineOrigins[1]!);
+  const lineRanges = cursor.scalarSource!.constructedLineRanges!;
+  expect(loaded.diagnose(result.failure!).frames.at(-1)!.range).toEqual(lineRanges[1]!);
+});
 
 test("literal code carries whole scalar and exact constructed lines", async () => {
   const { node, resolver } = await workerOf(LITERAL_FLOW);

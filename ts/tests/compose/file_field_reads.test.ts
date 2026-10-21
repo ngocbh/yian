@@ -32,7 +32,7 @@
  * Pinned at the end, the harvested `load-core/compose_file_field_reads__*` cases the reference
  * validator and the typed-binding check decide, the `child` def built by hand (`assembledWith`).
  *
- * Later (T4): the flow runs (`test_a_node_assert_reads_the_uri_of_its_file_output`,
+ * Later (T4-8 follow-up): the flow runs (`test_a_node_assert_reads_the_uri_of_its_file_output`,
  * `test_the_uri_of_a_file_item_in_a_named_map_feeds_a_str_input`,
  * `test_the_uri_of_a_file_every_union_member_has_loads_and_reads`,
  * the run half of `test_the_uri_of_a_file_after_a_constructor_is_typed_str`,

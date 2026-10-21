@@ -50,11 +50,31 @@
  * part, as an inline body), so their rows match the `node '...': ` start where Python matches
  * "never closed" and "did you mean"; e31's TS body (no `return`) loads, failing only when it runs
  * (the case `run-leaves/seed_e31_inline_no_return`), so the e31 rows check that it loads.
- * Later (T4-8): `test_runtime_error_gallery`, `test_e23_unknown_tool_fails_at_run_start`,
- * `test_flow_input_type_failure_origin_resolves_to_declaration`,
- * `test_false_boundary_assert_origin_resolves_to_assertion`,
- * `test_duplicate_asserts_caret_at_first_occurrence`, `test_structured_output_origin_is_exact`.
+ *
+ * Ported through `runFlow`, the flow read from conformance case `run-core/seed_e23_unknown_tool`:
+ * `test_e23_unknown_tool_fails_at_run_start` (the case pins the error; the row adds that the log
+ * file is never created). The error is a `RangeError` (Python: `ValueError`).
+ *
+ * Covered by the conformance cases holding the same seed flows, run on the same inputs, each
+ * pinning the failure's message and its frame:
+ * - `test_runtime_error_gallery`, row by row: `run-core/seed_e18_false_boundary_assert`,
+ *   `run-core/seed_e19_false_post_assert`, `run-leaves/seed_e20_code_raises`,
+ *   `run-leaves/seed_e21_code_wrong_type`, `run-core/seed_e22_required_missing`,
+ *   `run-core/seed_e07_required_missing`, `run-core/seed_e08_input_type_mismatch`,
+ *   `run-leaves/seed_e27_inline_code_raises`, `run-leaves/seed_e28_inline_wrong_type` and
+ *   `run-leaves/seed_e29_inline_nonserializable` (TS's message: `... is not a yian value`);
+ * - `test_flow_input_type_failure_origin_resolves_to_declaration` by
+ *   `run-core/seed_e08_input_type_mismatch` (the frame on line 20);
+ * - `test_false_boundary_assert_origin_resolves_to_assertion` by
+ *   `run-core/seed_e18_false_boundary_assert` (line 15);
+ * - `test_duplicate_asserts_caret_at_first_occurrence` by `run-core/seed_e34_dup_assert` (line 12);
+ * - `test_structured_output_origin_is_exact` by `run-leaves/seed_e41_structured_output_no_range`
+ *   (the whole message, which doesn't name `score`, and line 13).
  */
+
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -65,6 +85,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -82,6 +103,8 @@ import {
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { rejection } from "./run_state_fixtures.ts";
 
 afterEach(() => forget());
 
@@ -433,3 +456,19 @@ test("e04: an else satisfies coverage", () => {
   assembleText(E04_WITH_ELSE);
 });
 
+
+test("e23: an unknown tool fails at run start", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-errors-"));
+  try {
+    const path = join(dir, "run.jsonl");
+    const flow = await loadFlow(caseText("run-core/seed_e23_unknown_tool").text);
+    const error = await rejection(runFlow(flow, { topic: "X" }, { log: path, tools: {}, env: hostEnv(dir) }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toBe(
+      "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools; known tools: []",
+    );
+    expect(existsSync(path)).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

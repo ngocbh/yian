@@ -40,12 +40,14 @@
  *
  * Ported through `loadFlow`: `test_external_alias_rebases_case_and_generated_binding_origins`,
  * `test_generated_child_clone_preserves_case_predicate_origins` and
- * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`.
+ * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`; and, run with
+ * `runFlow`, `test_inline_definition_case_failure_keeps_child_predicate_origin`.
  *
- * Later (T4): the run half of
- * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T4-8):
- * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T4):
- * `test_inline_definition_case_failure_keeps_child_predicate_origin`.
+ * Covered by the run cases whose headers name the Python test:
+ * `run-case/compose_kind_case_parse__a_failing_when_in_a_called_child_is_located`
+ * (`test_named_definition_case_failure_keeps_child_predicate_origin`) and
+ * `run-case/compose_kind_case_parse__a_failing_searched_when_is_located_at_its_arm` (the run half
+ * of `test_searched_case_origins_are_positional_and_select_the_failing_entry`).
  *
  * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
  * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
@@ -54,6 +56,10 @@
  * expansion raises, and `load-case/compose_kind_case_parse__a_flow_style_case_names_no_node`,
  * which the case-branch check raises.
  */
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
@@ -73,6 +79,8 @@ import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
@@ -634,6 +642,66 @@ test("formatting moves case ranges without changing keys or fingerprint", async 
   expect(baselineOrigins.map((origin) => baseline.originResolver!.resolve(origin)!.range)).not.toEqual(
     relocatedOrigins.map((origin) => relocated.originResolver!.resolve(origin)!.range),
   );
+});
+
+// ---------- a failing arm in a child, run ----------
+
+/** Python's `_CASE_CHILD_BODY`: a CASE whose second `when:` divides by zero. */
+const CASE_CHILD_BODY = `nodes:
+  zero:
+    kind: code
+    code: "return 0"
+    output: int
+  gate:
+    kind: case
+    cases:
+      - when: "zero.output > 0"
+        then: positive
+      - when: "1 / zero.output > 0"
+        then: broken
+    else: negative
+  positive:
+    kind: code
+    code: 'return "positive"'
+    output: str
+  broken:
+    kind: code
+    code: 'return "broken"'
+    output: str
+  negative:
+    kind: code
+    code: 'return "negative"'
+    output: str
+output: \${positive.output | broken.output | negative.output}
+`;
+
+test("an inline definition's case failure keeps the child predicate origin", async () => {
+  // Inline child assembly and CALL growth keep the exact failing arm.
+  const body = CASE_CHILD_BODY.split("\n")
+    .map((line) => (line === "" ? line : `    ${line}`))
+    .join("\n");
+  const text = "id: inline-case-origin\nname: inline-case-origin\nnodes:\n  invoke:\n    kind: call\n" + body + "output: ${invoke.output}\n";
+  const expected = SourceDocument.parse(text, "inline-case.yaml")
+    .root.child("nodes")
+    .child("invoke")
+    .child("nodes")
+    .child("gate")
+    .child("cases")
+    .child(1)
+    .child("when");
+  const flow = await loadFlow(text, { sourceLabel: "inline-case.yaml" });
+  const child = (flow.compiled.nodes.get("invoke") as CallNode).child as CompiledFlow;
+  const caseNode = child.nodes.get("gate") as CaseNode;
+  const dir = mkdtempSync(join(tmpdir(), "yian-kind-case-parse-"));
+  try {
+    const result = await runFlow(flow, {}, { env: hostEnv(dir) });
+
+    expect(result.failure).not.toBeNull();
+    expect(result.failure!.trace.at(-1)).toEqual(caseNode.cases[1]!.origin!);
+    expect(flow.diagnose(result.failure!).frames.at(-1)!.range).toEqual(expected.range!);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------- harvested conformance cases ----------

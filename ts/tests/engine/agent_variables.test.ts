@@ -37,11 +37,17 @@
  * model stands in for the patched `run_agent`; `AgentNode.backward` throws until it is ported, so a
  * backward call would fail the run, for Python's patched `backward`).
  *
- * Later (T4-8), through the loader and `runFlow` (the flow's `llm_config` cascade is the subject):
- * `test_temperature_variable_renders_independently_of_effective_model_configuration`.
+ * Ported through `loadFlow` and `runFlow`, in `hostEnv`, a `ScriptedModel` given as `models`:
+ * `test_temperature_variable_renders_independently_of_effective_model_configuration` (a `spyOn` of
+ * `AgentNode.prototype`'s private `resolveVariables` reads the scopes, since the run executes a
+ * private copy of the flow).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -54,6 +60,7 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -67,7 +74,8 @@ import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { FileRef, Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
-import { engine, graph, rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { engine, graph, rejected, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -486,4 +494,55 @@ output: \${writer.output}
   expect(built.state.pool.get(START_ID)).toEqual({ topic: "reefs" });
   expect(built.state.pool.get("writer")).toBe(expected);
   expect(built.state.trace).toBeNull();
+});
+
+test("a temperature variable renders independently of the effective model configuration", async () => {
+  const loaded = await loadFlow(`id: variable_temperature
+name: variable_temperature
+input: {topic: !str }
+llm_config: {provider: ollama, model: test, ollama: {options: {temperature: 0.8}}}
+nodes:
+  writer:
+    kind: agent
+    input: {topic: '\${input.topic}'}
+    variables:
+      temperature: !float(0..1) 0.4
+    prompt: '\${topic}: \${temperature}'
+    output: str
+output: \${writer.output}
+`);
+  const dir = mkdtempSync(join(tmpdir(), "yian-agent-variables-"));
+  const model = new ScriptedModel([textReply("answer")]);
+  const configurations: Readonly<Record<string, unknown>>[] = [];
+  const scopes: unknown[][] = [];
+  const target = AgentNode.prototype as unknown as { resolveVariables: (this: AgentNode) => ValueRecord };
+  const resolve = target.resolveVariables;
+  const spy = spyOn(target, "resolveVariables").mockImplementation(function (this: AgentNode) {
+    scopes.push([this.executionScope, this.memoryScope]);
+    return resolve.call(this);
+  });
+  try {
+    const result = await runFlow(loaded, { topic: "reefs" }, {
+      learnable: false,
+      env: hostEnv(dir),
+      models: {
+        env: hostEnv(dir),
+        createModel: (config) => {
+          configurations.push(config);
+          return model;
+        },
+      },
+    });
+
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toBe("answer");
+    expect(result.learning).toBeNull();
+    expect(configurations).toEqual([{ provider: "ollama", model: "test", ollama: { options: { temperature: 0.8 } } }]);
+    expect(model.requests.at(-1)!.messages.at(-1)!.text()).toBe("reefs: 0.4");
+    expect(model.requests.length).toBe(1);
+    expect(scopes).toEqual([[null, null]]);
+  } finally {
+    spy.mockRestore();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

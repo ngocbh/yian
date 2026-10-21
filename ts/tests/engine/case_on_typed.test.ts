@@ -64,7 +64,7 @@
  * Dropped: `test_unquoted_datetime_when_is_a_load_error` (TS YAML reads an unquoted datetime as
  * text, so it matches that text).
  *
- * Later (T4): `test_int_on_matches_int_when`, `test_negative_int_when`,
+ * Later (T4-8 follow-up): `test_int_on_matches_int_when`, `test_negative_int_when`,
  * `test_float_on_matches_numerically`, `test_bool_on_matches_bool_when`,
  * `test_quoted_when_is_text`, `test_no_else_int_on_routes_at_runtime`,
  * `test_bool_never_equals_a_number_on_an_untyped_on`, `test_date_when_is_iso_text`,

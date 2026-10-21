@@ -16,7 +16,9 @@
  * an importer doesn't check a `uses:` child's CODE again, so a host's cached child whose CODE file
  * was removed after its load still imports.
  *
- * Later (T4-8): `test_seed_24_runs_via_search_path`, which runs the loaded flow.
+ * Covered by `run-map-call/seed_24_uses_external`: `test_seed_24_runs_via_search_path`. The case
+ * runs seed 24 with its sibling `lib_verdict.yaml` on the search path and pins the succeeded
+ * output, which carries the given rationale (other input values than Python's row).
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";

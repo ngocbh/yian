@@ -12,7 +12,7 @@
  * Pinned at the end: the harvested `load-map-call/engine_span_calls__*` cases the reference
  * validator decides and `well_called_builtins_in_a_map_load`, which loads.
  *
- * Later (T4): the `test_python_built_*` rows and `test_a_well_called_python_built_binding_still_runs`,
+ * Later (T4-8 follow-up): the `test_python_built_*` rows and `test_a_well_called_python_built_binding_still_runs`,
  * which change a loaded flow's wiring and run it.
  */
 

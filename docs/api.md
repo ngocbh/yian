@@ -720,9 +720,9 @@ a host tool may return `Infinity`, which is a float value. A `tool()` validator'
 and the checks on a declared result (see [Tool context](#tool-context)), a throw from the
 output validator included, raise `ToolCheckError`, which is never retried; the result
 checks run inside the call, not after the node returns. `ToolAttemptsFailed` is an
-`Error` named `ToolAttemptsFailed` whose `cause` is the last attempt's error. A thrown
-non-`Error` value is recorded by its type name and text, and propagates as thrown
-(unwrapped), or becomes `ToolAttemptsFailed`'s `cause`.
+`Error` named `ToolAttemptsFailed` whose `cause` is the last attempt's error. A tool
+that throws a non-`Error` value fails with an `Error` whose message is the value's text
+and whose `cause` is the value; it is retried like any other failure.
 
 A `ReportedToolError` is retried like any other failure, unless it is also a
 `PermanentToolError`.
@@ -2347,6 +2347,16 @@ fsync failed.
 A record the envelope or the codec refuses raises its `RangeError` or `TypeError` before
 anything is written and doesn't poison the log. A damaged record in a log being read
 raises a `RangeError` naming the path, the 1-based line and the seq.
+
+Each record is fsynced before it counts, in Python yian and in TS yian on Node and Bun, so a
+durable run pays one sync per record. Changed (TS yian): on macOS, Node's `fsyncSync` is
+`fcntl(F_FULLFSYNC)`, which also flushes the drive's cache, so a sync costs about 80 times what
+Bun's `fsyncSync` costs (a plain `fsync`, which leaves the data in the drive's cache; Python's
+`os.fsync` is the same plain call, not measured here). On an Apple M4 Pro
+MacBook Pro (Mac16,8, APFS), measured 2026-10, Node pays about 4.2 ms per record: a 10,000-item
+MAP (with `YIAN_MAX_TOTAL_NODES` raised past its default of 10,000) writes 60,011 records and
+spends about 250 s in sync, 254 s in all against 4 s with a memory log, serial or with 8
+workers. Bun pays about 52 µs per record, so the same MAP spends about 3 s in sync.
 
 !!! warning "Run logs may contain sensitive data"
     Canonical records retain caller inputs, node outputs (including human, tool,

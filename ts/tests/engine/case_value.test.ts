@@ -25,7 +25,7 @@
  * TS-only: the harvested `load-case/engine_case_value__case_value_in_a_coalesce_is_rejected` and
  * `load-case/seed_22_case_value`, pinned at the end.
  *
- * Later (T4): the run halves of `test_case_value_returns_taken_branch`,
+ * Later (T4-8 follow-up): the run halves of `test_case_value_returns_taken_branch`,
  * `test_node_consuming_case_value_runs`, `test_case_of_case_value_runs_taken_nested_leaf` and
  * `test_case_value_in_inline_call_arg_runs`.
  */

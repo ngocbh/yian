@@ -20,11 +20,16 @@
  * `test_python_built_unparseable_spawner_post_assert_fails_before_the_run`. Integers are bigints
  * (decision 4a); the CODE reference is the TS fixture's (`./fixtures/compose_codefns.ts:double`).
  *
- * Later (T4-8): `test_spawner_post_assert_fires_after_log_recovery`: needs `resumeFlow` (a host
- * stop, then a resume).
+ * Ported through `runFlow` and `resumeFlow`, in `hostEnv`: `test_spawner_post_assert_fires_after_log_recovery`.
+ * Changed: the interruption before the human answer is the run's `signal`, which the `ask_user`
+ * handler aborts (Python: the handler raises `_HostStop`).
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { callSubgraph } from "../../src/compile/expand.ts";
 import type { Flow } from "../../src/compile/model.ts";
@@ -34,9 +39,13 @@ import { RunFailed } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
-import { runFlow } from "../../src/run.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
-import { childResolver, rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { childResolver, rejected, rejection } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-spawner-post-assert-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 // The prefix `callSubgraph` gives a synthesized assertion parameter (unexported in TS).
 const SYNTH_PREFIX = "__assert_";
@@ -147,6 +156,72 @@ test("declared input post assert violating fails", async () => {
   expect(failed.length).toBeGreaterThan(0);
   expect(failed[0]!.failure.causeType).toBe("NodeAssertFailed");
   expect(res.failure!.nodeId).toBe("callee/__end__");
+});
+
+// --- 3. recovery safety: the lowered spawner post-assert survives log replay --- //
+
+// A child whose live HUMAN_INPUT can be interrupted after its durable start.
+const BLOCKING_CHILD = `
+id: approver
+name: approver
+input:
+  v: !int
+nodes:
+  approve:
+    kind: human_input
+    input:
+      v: \${input.v}
+    prompt: "value \${v}?"
+    output: int
+output: \${approve.output}
+`;
+
+// The call carries a node-level `output < 100` post-assert, which the rebuilt child END checks
+// after recovery retries the unfinished HUMAN_INPUT.
+const BLOCKING_PARENT = `
+id: recovery-parent
+name: recovery_parent
+uses:
+  approver: approver
+input:
+  v: !int
+nodes:
+  gate:
+    kind: call
+    call: approver
+    input:
+      v: \${input.v}
+    asserts:
+      - output < 100
+output: \${gate.output}
+`;
+
+function loadBlocking(): Promise<ComposedFlow> {
+  return loadConformanceFlow(BLOCKING_PARENT, { childResolver: childResolver({ approver: BLOCKING_CHILD }) });
+}
+
+test("spawner post assert fires after log recovery", async () => {
+  // Interrupt the HUMAN_INPUT after its NodeStarted is durable; recovery replays the expansion,
+  // retries the input node and delivers 120, which the rebuilt child END's post-assert rejects.
+  const path = join(dir, "spawner-post-assert.jsonl");
+  const interruption = new Error("interrupt before human answer");
+  const host = new AbortController();
+  const interrupt = () => {
+    host.abort(interruption);
+    throw interruption;
+  };
+  const caught = await rejection(
+    runFlow(await loadBlocking(), { v: 1 }, { log: path, signal: host.signal, tools: { ask_user: interrupt }, env: hostEnv(dir) }),
+  );
+  expect(caught).toBe(interruption);
+
+  const res = await resumeFlow(await loadBlocking(), { log: path, tools: { ask_user: () => 120 }, env: hostEnv(dir) });
+
+  expect(res.status).toBe("failed");
+  const failed = res.events.filter((event) => event instanceof RunFailed);
+  expect(failed.length).toBeGreaterThan(0);
+  expect(failed[0]!.failure.causeType).toBe("NodeAssertFailed");
+  expect(res.failure!.message.toLowerCase()).toContain("post-assert");
 });
 
 // --- collision-free synthesized assertion parameters --- //

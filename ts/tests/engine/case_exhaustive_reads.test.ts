@@ -26,7 +26,7 @@
  * Changed: the flows assemble (`assembleText`), where Python loads them. An uncovered tag list is
  * written in the text form, `["b"]` (Python `['b']`).
  *
- * Later (T4): the run halves of the five rows whose load half is ported.
+ * Later (T4-8 follow-up): the run halves of the five rows whose load half is ported.
  *
  * The harvested cases are pinned at the end.
  */

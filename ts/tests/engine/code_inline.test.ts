@@ -54,8 +54,8 @@
  * `test_dynamic_same_filename_code_falls_back_to_owned_call_site` (Python `compile` and `exec`);
  * `test_reference_failure_does_not_inspect_origin_truthiness` (Python `__bool__`).
  *
- * Later (T4-8): `test_inline_flow_loads_and_runs` and `test_inline_raise_becomes_failed_run`
- * (they need `runFlow`).
+ * Ported through `loadFlow` and `runFlow`, in `hostEnv`: `test_inline_flow_loads_and_runs` and
+ * `test_inline_raise_becomes_failed_run` (the body JavaScript, `toFixed(1)` for Python's `:.1f`).
  */
 
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
@@ -71,8 +71,11 @@ import { HostOutputError, Output } from "../../src/nodes/base.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
 import { TypeStripError } from "../../src/platform.ts";
+import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { loadConformanceFlow } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { drive, engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** Run a CODE node `n` with `code` on the bound `inputs` and return its result's value. */
@@ -632,4 +635,35 @@ test("the load check never calls the body", async () => {
 
 test("the load check passes a built-in", async () => {
   await new CodeNode("v", { code: { builtin: "identity", field: "v" } }).check();
+});
+
+// --- integration through the loader (framing and run) --- //
+
+const INLINE_FLOW = `\
+id: t
+name: t
+input:
+  rating: !float
+nodes:
+  verdict:
+    kind: code
+    input:
+      rating: \${input.rating}
+    output: str
+    code: |
+      return "r=" + inputs['rating'].toFixed(1)
+output: \${verdict.output}
+`;
+
+test("inline flow loads and runs", async () => {
+  const result = await runFlow(await loadConformanceFlow(INLINE_FLOW), { rating: 3.0 }, { env: hostEnv(helpers) });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("r=3.0");
+});
+
+test("inline raise becomes failed run", async () => {
+  const flow = INLINE_FLOW.replace(`return "r=" + inputs['rating'].toFixed(1)`, 'throw new Error("boom")');
+  const result = await runFlow(await loadConformanceFlow(flow), { rating: 3.0 }, { env: hostEnv(helpers) });
+  expect(result.status).not.toBe("succeeded");
+  expect(result.failure!.message).toContain("boom");
 });

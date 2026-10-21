@@ -17,14 +17,15 @@
  *
  * Ported through `loadFlow` and `buildGrow`: `test_renamespacing_keeps_the_binding_contract`
  * (`rensInternal`), `test_flow_origin_traversal_reaches_the_binding_contract`,
- * `test_call_expansion_keeps_a_typed_child_binding` and the load, manifest and expansion half of
- * `test_record_typed_binding_is_never_hashed` (Python's hashability has no TS counterpart, and
- * "a deep copy keeps the fingerprint" is "a second load, typed the same, has the same
- * fingerprint"). The parent's `child` is served by a `childResolver` over the loaded `_CHILD`.
- *
- * Later (T4-8): the run half of `test_record_typed_binding_is_never_hashed` (the binder rejects
- * the int with `binding.type`).
+ * `test_call_expansion_keeps_a_typed_child_binding` and `test_record_typed_binding_is_never_hashed`
+ * (Python's hashability has no TS counterpart, "a deep copy keeps the fingerprint" is "a second
+ * load, typed the same, has the same fingerprint", and its run is a `runFlow` in `hostEnv`). The
+ * parent's `child` is served by a `childResolver` over the loaded `_CHILD`.
  */
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
@@ -40,9 +41,11 @@ import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/no
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 
 /** Return an exact int contract with an optional root origin. */
 function intContract(origin: OriginRef | null = null): ValueContract {
@@ -333,17 +336,17 @@ test("CALL expansion keeps a typed child binding", async () => {
   expect(fragment.wiring.get("invoke/inner")!.get("x")!.contract).toBe(contract);
 });
 
-test("a record typed binding is never hashed: manifest and expansion", async () => {
+test("a record typed binding is never hashed", async () => {
   /** Load the parent and type its CALL's child binding and its own `x` binding with `contract`. */
   async function typedParent(contract: ValueContract) {
     const loaded = await loadParent();
     const call = loaded.compiled.nodes.get("invoke") as CallNode;
     setContract((call.child as CompiledFlow).wiring.get("inner") as Map<string, Binding>, "x", contract);
     setContract(loaded.compiled.wiring.get("invoke") as Map<string, Binding>, "x", contract);
-    return { compiled: loaded.compiled, call };
+    return { loaded, compiled: loaded.compiled, call };
   }
   const contract = recordContract();
-  const { compiled, call } = await typedParent(contract);
+  const { loaded, compiled, call } = await typedParent(contract);
   const again = (await typedParent(recordContract())).compiled;
 
   expect([...again.wiring.get("invoke")!.get("x")!.contract!.type.fields!.keys()]).toEqual(["value"]);
@@ -354,4 +357,15 @@ test("a record typed binding is never hashed: manifest and expansion", async () 
   const fragment = buildGrow(call, { x: 2n });
   expect(fragment.wiring.get("invoke/inner")!.get("x")!.contract).toBe(contract);
   expansionDigest(fragment);
+
+  // The binder checks the record contract and rejects the int.
+  const dir = mkdtempSync(join(tmpdir(), "yian-binding-contract-"));
+  try {
+    const result = await runFlow(loaded, { x: 2 }, { env: hostEnv(dir) });
+    expect(result.status).toBe("failed");
+    expect(result.failure).not.toBeNull();
+    expect(result.failure!.code).toBe("binding.type");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

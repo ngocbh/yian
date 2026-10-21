@@ -25,7 +25,7 @@
  * would be a `RangeError`, not the `LoadError` the rows expect, so `loadError` fails on it. The
  * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
  *
- * Later (T4): the run half of `test_binding_at_the_limit_passes_the_nesting_check` and
+ * Later (T4-8 follow-up): the run half of `test_binding_at_the_limit_passes_the_nesting_check` and
  * `test_flow_output_at_the_limit_loads_and_runs`.
  */
 

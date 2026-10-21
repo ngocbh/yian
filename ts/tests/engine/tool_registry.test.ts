@@ -1,7 +1,7 @@
 /**
  * The tool registry and `ToolSet`, a port of `tests/engine/test_tool_registry.py` with rows for
  * each construction and group error, `expand`, `forRun`, `toolIds`, `groups`, `validate` and the
- * `CheckedCall` it returns, `invoke` of a call, `isConcurrencySafe` and the `ask_user` options
+ * `CheckedCall` it returns, `invoke` of a call (TS-only: a thrown non-`Error` is wrapped), `isConcurrencySafe` and the `ask_user` options
  * cleaning, plus `test_injected_arguments_are_not_inputs` and `test_function_tool_types` from
  * `test_tool_types.py`. Not ported: `test_invocation_supports_pydantic_v1_schema` and
  * `test_invocation_rejects_unvalidated_json_schema_tools` (TS has only `FunctionTool`s),
@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { ToolContext } from "../../src/tools/context.ts";
+import { TOOL_ERROR } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
   type AskUserRequest,
@@ -650,6 +651,40 @@ describe("invoke of a CheckedCall", () => {
 
     expect(seen[0]![1].runId).toBe("r");
     expect(seen[0]![1].callId).toBe("r/n");
+  });
+
+  test("a thrown non-Error rejects as an Error with the value as its cause; an Error passes as it is", async () => {
+    const thrownBy = (value: unknown): ToolSet =>
+      new ToolSet({
+        fail: new FunctionTool({
+          name: "fail",
+          description: "Fail.",
+          parametersJsonSchema: { type: "object", properties: {} },
+          execute: () => {
+            throw value;
+          },
+        }),
+      });
+    const object = { code: 7 };
+    const rows: [unknown, string][] = [
+      ["boom", "boom"],
+      [object, "[object Object]"],
+      [undefined, "undefined"],
+    ];
+    for (const [value, message] of rows) {
+      const error = await thrownBy(value).invoke("fail", {}).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect((error as Error).constructor).toBe(Error);
+      expect((error as Error).message).toBe(message);
+      expect((error as Error).cause).toBe(value);
+    }
+    const own = new RangeError("own");
+    expect(await thrownBy(own).invoke("fail", {}).catch((reason: unknown) => reason)).toBe(own);
+    // A branded tool error from another realm fails `instanceof Error` but keeps its brand.
+    const branded = { [TOOL_ERROR]: ["permanent"], message: "foreign" };
+    expect(await thrownBy(branded).invoke("fail", {}).catch((reason: unknown) => reason)).toBe(branded);
   });
 
   test("anything but a tool id or a CheckedCall is a TypeError", async () => {

@@ -18,7 +18,7 @@
  * is read.
  *
  * Ported: the load half of every row but the two `test_case_output_over_*_reads_the_taken_branch`
- * rows (Later (T4), whole). A row that applies the suggested rewrite and runs it checks here that
+ * rows (Later (T4-8 follow-up), whole). A row that applies the suggested rewrite and runs it checks here that
  * the rewritten flow assembles: `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_an_else_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_a_suggested_entry_id_skips_ids_already_taken`,
@@ -63,7 +63,7 @@
  * TS-only: a cut value counts code points, so an astral character at the cut stays whole; and the
  * harvested `load-case/compose_case_branches__*` cases.
  *
- * Later (T4): the run of every rewritten flow above (Python's `_taken`),
+ * Later (T4-8 follow-up): the run of every rewritten flow above (Python's `_taken`),
  * `test_case_output_over_node_branches_reads_the_taken_branch`,
  * `test_case_output_over_a_value_entry_branch_reads_the_taken_branch`, and the run of
  * `test_former_reserved_prefixes_name_authored_nodes`.

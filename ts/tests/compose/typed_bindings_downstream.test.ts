@@ -31,7 +31,7 @@
  * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load` (its case is pinned in
  * `engine/inline_composite_bodies.test.ts`) and `test_typed_inline_map_item_binding_runs`.
  *
- * Later (T4): the run halves of the rows above.
+ * Later (T4-8 follow-up): the run halves of the rows above.
  */
 
 import { afterEach, expect, test } from "bun:test";

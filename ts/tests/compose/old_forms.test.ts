@@ -19,16 +19,20 @@
  * Ported through `loadFlow`: `test_bracket_typedef_shows_the_parenthesized_spelling`,
  * `test_bracket_node_output_shows_the_parenthesized_spelling`,
  * `test_typed_binding_text_shows_the_tag`, `test_typed_binding_text_that_reads_as_words_offers_quoting`
- * and `test_untagged_input_in_a_definition_shows_the_tag`.
- *
- * Later (T4-8): `test_text_without_a_type_on_the_left_is_plain_text` (it runs the flow).
+ * and `test_untagged_input_in_a_definition_shows_the_tag`; and, run with `runFlow`,
+ * `test_text_without_a_type_on_the_left_is_plain_text`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { readFlowInputs, readVariables } from "../../src/compose/helpers/types.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -40,6 +44,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 // Pinned before `MESSAGE_REGISTRY` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -147,6 +152,23 @@ test("typed binding text that reads as words offers quoting", async () => {
       '. If you meant the text, quote it: `note: "date = tomorrow"`',
     "      note: date = tomorrow",
   );
+});
+
+describe("text without a type on the left is plain text", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-old-forms-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test.each([
+    ["a = b", "a = b"],
+    ['"int = 5"', "int = 5"],
+    ["itn = 5", "itn = 5"],
+    ["x = ${input.n}", "x = 3"],
+  ])("%p", async (value, text) => {
+    const result = await runFlow(await loadFlow(bindingFlow("note", value)), { n: 3 }, { env: hostEnv(dir) });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toBe(text);
+  });
 });
 
 // ---------- flow inputs and agent variables ----------

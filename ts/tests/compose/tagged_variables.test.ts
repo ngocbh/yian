@@ -17,18 +17,22 @@
  * `run_agent` returns it as the run's output.
  *
  * Ported through `loadFlow`: the definition and flat-definition placements of
- * `test_a_tagged_variable_needs_a_default_that_fits`.
- *
- * Later (T4-8): the definition, flat-definition and inline placements of
- * `test_tagged_variables_render_their_defaults` (a loaded flow run through CALL).
+ * `test_a_tagged_variable_needs_a_default_that_fits`, and the definition, flat-definition and
+ * inline placements of `test_tagged_variables_render_their_defaults`, run with `runFlow` and a
+ * `ScriptedModel` from `models` (the request's prompt checked, as in the compact row).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -39,6 +43,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -170,6 +175,29 @@ describe("tagged variables", () => {
     await node.forward({}, { models: { env, createModel: () => model } });
 
     expect(model.requests[0]!.messages.at(-1)!.text()).toBe("Summarize clearly in 4 sentences, concise.");
+  });
+
+  describe("run through CALL", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yian-tagged-variables-"));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+    test.each([
+      ["definition", definitionFlow],
+      ["flat-definition", flatDefinitionFlow],
+      ["inline", inlineFlow],
+    ])("tagged variables render their defaults at the %s placement", async (_placement, flow) => {
+      const reply = new Message({ role: "assistant", parts: [new TextPart("done")] });
+      const model = new ScriptedModel([new Response({ message: reply, finishReason: "stop" })], DEFAULT_MODEL);
+      const env = hostEnv(dir, {
+        YIAN_DEFAULT_PROVIDER: DEFAULT_MODEL.provider,
+        YIAN_DEFAULT_MODEL: DEFAULT_MODEL.model,
+      });
+
+      const result = await runFlow(await loadFlow(flow(VARIABLES)), {}, { env, models: { env, createModel: () => model } });
+
+      expect(result.status).toBe("succeeded");
+      expect(model.requests[0]!.messages.at(-1)!.text()).toBe("Summarize clearly in 4 sentences, concise.");
+    });
   });
 });
 

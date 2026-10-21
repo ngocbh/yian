@@ -17,12 +17,15 @@
  * `defs:` entry.
  *
  * Ported through `loadFlow`: `test_non_mapping_input_in_a_defs_body_is_located` and the load half
- * of `test_null_or_empty_mapping_input_still_loads`.
- *
- * Later (T4-8): `test_listed_carried_fields_load_and_run`.
+ * of `test_null_or_empty_mapping_input_still_loads`; and, run with `runFlow`,
+ * `test_listed_carried_fields_load_and_run`.
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
@@ -35,6 +38,7 @@ import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
+import { runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
@@ -44,6 +48,7 @@ import {
   parsedNodes,
   runCase,
 } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, DescriptorClass>([
   ["loop", LoopDescriptor],
@@ -188,6 +193,19 @@ test.each([
   ["an empty mapping", " {}"],
 ])("a CODE node with %s input still loads", async (_label, inputText) => {
   await loadFlow(sharedFlow(`  c:\n    kind: code\n    code: return 1\n    input:${inputText}`));
+});
+
+const dir = mkdtempSync(join(tmpdir(), "yian-node-input-shape-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test("listed carried fields load and run", async () => {
+  const loop = "  repeat:\n    kind: loop\n    times: 2\n    call: step\n    input:\n      n: ${seed.output.n}\n";
+  const flow = await loadFlow(sharedFlow(loop + "output: ${repeat.output}"));
+
+  const result = await runFlow(flow, { z: 1 }, { env: hostEnv(dir) });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ n: 3n });
 });
 
 const DEFS_FLOW = `id: input-shape-defs

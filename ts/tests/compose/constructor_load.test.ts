@@ -39,7 +39,7 @@
  * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read); Python
  * reports them there too, but its tests pin them only at binding sites.
  *
- * Later (T4): the run halves of the rows above, `test_a_value_that_fits_passes_unchanged`,
+ * Later (T4-8 follow-up): the run halves of the rows above, `test_a_value_that_fits_passes_unchanged`,
  * `test_keywords_build_the_record`, `test_a_union_typedef_and_an_enum_alias_check` and
  * `test_constructors_in_a_list_literal_and_a_nested_value`.
  */

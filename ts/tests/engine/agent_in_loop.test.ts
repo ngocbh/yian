@@ -14,28 +14,44 @@
  * kind `auth`, so `causeType` is `"ProviderError"`, the JS error name, where Python's fake raises
  * an `AuthenticationError`.
  *
- * Later (T4-8): needs `resumeFlow`: `test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss`.
+ * Ported through `runFlow` and `resumeFlow`, in `hostEnv`:
+ * `test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss`. Changed: the process
+ * loss is `crashAfter`'s log refusing the append of the second turn's AGENT success, after its
+ * tool call ran and its model answered (Python: the model's fourth call raises).
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { afterAll, expect, test } from "bun:test";
+
+import { IN_LOOP_EVENTS, type RunEvent } from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { runFlow } from "../../src/run.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
+import { NodeStartedRecord, NodeSucceededRecord, readRunLog, RunResumedRecord } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
-import { serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-agent-in-loop-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 
 /** A `ping` tool that takes no arguments and answers `pong`. */
-function ping(): FunctionTool {
+function ping(seen: unknown[] = []): FunctionTool {
   return new FunctionTool({
     name: "ping",
     description: "Ping.",
     parametersJsonSchema: { type: "object", properties: {} },
-    execute: () => "pong",
+    execute: (args) => {
+      seen.push(args);
+      return "pong";
+    },
   });
 }
 
@@ -118,4 +134,80 @@ test("auth failure inside loop reaches run result", async () => {
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("provider.auth");
   expect(result.failure!.causeType).toBe("ProviderError");
+});
+
+test("tool calling agent in loop retries whole node after process loss", async () => {
+  // A fresh flow and model retry the one namespaced AGENT the lost process left started.
+  const path = join(dir, "agent-loop.jsonl");
+  const seen: unknown[] = [];
+  const tools = { ping: ping(seen) };
+  const interrupted = new ScriptedModel(
+    [toolCall("ping", {}, "turn-1"), textReply("turn1"), toolCall("ping", {}, "turn-2-before-crash"), textReply("lost")],
+    CONFIG,
+  );
+  // Record 18 is the second turn's `loop#1/reply` success.
+  await crashAfter(18, async () =>
+    runFlow(await loadConformanceFlow(FLOW), { seed: "s" }, {
+      log: path,
+      runId: "agent-loop-recovery",
+      tools,
+      llmConfig: CONFIG,
+      models: serving(interrupted),
+      env: hostEnv(dir),
+    }),
+  );
+
+  const prefix = readRunLog(path).map((envelope) => envelope.record);
+  const last = prefix.at(-1);
+  expect(last).toBeInstanceOf(NodeStartedRecord);
+  const retryId = (last as NodeStartedRecord).nodeId;
+  expect(retryId).toBe("loop#1/reply");
+  expect(prefix.filter((r) => r instanceof NodeSucceededRecord && r.nodeId.endsWith("/reply")).length).toBe(1);
+  expect(seen).toEqual([{}, {}]);
+
+  const recoveredModel = new ScriptedModel([toolCall("ping", {}, "turn-2-retry"), textReply("turn2")], CONFIG);
+  const recoveredEvents: RunEvent[] = [];
+  const recovered = await resumeFlow(await loadConformanceFlow(FLOW), {
+    log: path,
+    tools,
+    onEvent: (event) => void recoveredEvents.push(event),
+    models: serving(recoveredModel),
+    env: hostEnv(dir),
+  });
+  expect(recovered.status, recovered.failure?.message).toBe("succeeded");
+  expect(recovered.output).toBe("s|turn1|turn2");
+  expect(recovered.runId).toBe("agent-loop-recovery");
+  // Only the re-executed AGENT publishes fresh in-loop observers; none are replayed.
+  expect(recovered.events).toEqual(
+    recoveredEvents.filter((event) => !IN_LOOP_EVENTS.some((type) => event instanceof type)),
+  );
+  expect(seen).toEqual([{}, {}, {}]);
+  const records = readRunLog(path).map((envelope) => envelope.record);
+  expect(records.filter((r) => r instanceof RunResumedRecord)).toEqual([new RunResumedRecord([retryId], 8)]);
+  expect(records.filter((r) => r instanceof NodeStartedRecord && r.nodeId === retryId).length).toBe(2);
+  expect(records.filter((r) => r instanceof NodeSucceededRecord && r.nodeId === retryId).length).toBe(1);
+
+  // Terminal replay builds no model and leaves the log as it is.
+  const unexpected = {
+    env: () => undefined,
+    createModel: (): never => {
+      throw new Error("terminal replay must not build a model");
+    },
+  };
+  const before = readFileSync(path);
+  const terminalEvents: RunEvent[] = [];
+  const terminal = await resumeFlow(await loadConformanceFlow(FLOW), {
+    log: path,
+    tools,
+    onEvent: (event) => void terminalEvents.push(event),
+    models: unexpected,
+    env: hostEnv(dir),
+  });
+  expect(terminal.status, terminal.failure?.message).toBe("succeeded");
+  expect(terminal.output).toBe(recovered.output);
+  expect(terminal.runId).toBe(recovered.runId);
+  expect(terminal.events).toEqual([]);
+  expect(terminalEvents).toEqual([]);
+  expect(readFileSync(path).equals(before)).toBe(true);
+  expect(seen).toEqual([{}, {}, {}]);
 });

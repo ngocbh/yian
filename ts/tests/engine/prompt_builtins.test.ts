@@ -13,7 +13,7 @@
  * `test_loader_rejects_undeclared_input_inside_call`, `test_loader_rejects_unknown_builtin`) load
  * with `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`.
  *
- * Later (T4): `test_prompt_default_fires_in_a_running_flow`.
+ * Later (T4-8 follow-up): `test_prompt_default_fires_in_a_running_flow`.
  */
 
 import { afterEach, expect, test } from "bun:test";

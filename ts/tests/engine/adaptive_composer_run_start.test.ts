@@ -7,19 +7,29 @@
  * `test_composer_label_is_render_only`. Changed: the replayed-map and recorded-field errors are
  * `RangeError`s where Python raises `ValueError`.
  *
- * Later (T4-8): `test_run_start_error_names_the_gate`,
- * `test_run_start_error_in_a_child_flow_names_the_gate_and_callsite` and
- * `test_plain_agent_run_start_error_is_unchanged` (runs).
+ * Ported through `runFlow`, with no `AZURE_OPENAI_ENDPOINT` in the run's `env`:
+ * `test_run_start_error_names_the_gate` and `test_plain_agent_run_start_error_is_unchanged`; the
+ * run-start errors are `RangeError`s too.
+ *
+ * Covered by `run-agent/engine_adaptive_composer_run_start__an_error_in_a_child_flow_names_the_callsite`,
+ * the harvested `test_run_start_error_in_a_child_flow_names_the_gate_and_callsite` (the same
+ * flow and input; it pins the whole message).
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { applyEffectiveLlmMap, resolveLlmCascade, staticAgentLabels } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
-import { checkRecordedLlmFields } from "../../src/run.ts";
+import { checkRecordedLlmFields, runFlow } from "../../src/run.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { rejection } from "./run_state_fixtures.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 
@@ -91,4 +101,29 @@ test("composer label is render only", async () => {
   expect(flowFingerprint(unlabeled)).toBe(flowFingerprint(flow));
   const plain = (await loadFlow(AGENT_FLOW)).compiled.nodes.get("w") as AgentNode;
   expect(plain.llmConfigLabel).toBeNull();
+});
+
+// ---------- run start ----------
+
+const AZURE = "{provider: azure, model: d}";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-adaptive-run-start-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** The message of the `RangeError` running `text` on `inputs` rejects with. */
+async function runStartError(text: string, inputs: Record<string, unknown>): Promise<string> {
+  const error = await rejection(runFlow(await loadFlow(text), inputs, { env: hostEnv(dir) }));
+  expect(error).toBeInstanceOf(RangeError);
+  return (error as RangeError).message;
+}
+
+test("a run start error names the gate", async () => {
+  const message = await runStartError(GATE_FLOW.replace(OPENAI, AZURE), { proj: "x" });
+  expect(message).toStartWith(`${LLM_SITE}: provider azure needs llm_config.base_url`);
+  expect(message).not.toContain("ask__compose");
+});
+
+test("a plain agent run start error is unchanged", async () => {
+  const message = await runStartError(AGENT_FLOW.replace(OPENAI, AZURE), {});
+  expect(message).toStartWith("Agent 'w': provider azure");
 });

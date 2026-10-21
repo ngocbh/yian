@@ -1,8 +1,8 @@
 /**
  * Builders shared by the run-state tests (Python's `_fakes.py`, `_backward_fakes.py`,
  * `_graph_builder.py` and the helpers `test_run_state_initialization.py`,
- * `test_run_state_growth.py`, `test_runtime_memory_learning.py` and `test_expand.py` lend to other
- * files).
+ * `test_run_state_growth.py`, `test_runtime_memory_learning.py`, `test_expand.py` and
+ * `test_growth_index.py` lend to other files, and the `_resolver` several run tests define).
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here.
@@ -17,6 +17,9 @@ import {
   resolveMemoryLayout,
 } from "../../src/compile/memory_layout.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
+import type { ChildResolver } from "../../src/compose/loader.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { type FeedbackValue, ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
@@ -64,6 +67,8 @@ import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitPrepared,
   type GrowBuilder,
+  type GrowthIndex,
+  growthIndex,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRecord,
@@ -74,6 +79,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { loadConformanceFlow } from "../compose/declarations.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";
@@ -586,8 +592,9 @@ export const noGrowth: GrowBuilder = () => {
  * `_graph_builder._engine`): `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
  * is ready. The run's id is `runId` (`RUN_ID` by default). The pool primes START with `inputs`,
  * START's wiring reads each as `${input.<name>}`, and the run records `effectiveLlmByStaticPath`
- * (none by default) and the memory configuration given. A learnable flow gets its execution
- * layout first. The other options go to `FlowEngine`.
+ * (none by default), the memory configuration given and the `yian.defaults` values in `defaults`
+ * (none by default). A learnable flow gets its execution layout first. The other options go to
+ * `FlowEngine`.
  */
 export function engine(
   flow: CompiledFlow,
@@ -599,6 +606,7 @@ export function engine(
     memories?: readonly MemorySpec[] | null;
     memoryStacks?: readonly MemoryStack[] | null;
     memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
+    defaults?: Readonly<Record<string, bigint>>;
   } & Partial<FlowEngineOptions> = {},
 ): FlowEngine {
   const {
@@ -611,6 +619,7 @@ export function engine(
     memories = null,
     memoryStacks = null,
     memorySnapshots = null,
+    defaults = {},
     ...rest
   } = options;
   if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
@@ -630,9 +639,70 @@ export function engine(
     memories,
     memoryStacks,
     memorySnapshots,
+    defaults,
   });
   commitPrepared(log, state, prepared);
   return new FlowEngine(state, log, { growBuilder, numWorkers, ...rest });
+}
+
+/**
+ * Return a child resolver that serves `children[path]` for a `uses: <path>`, loaded on first use
+ * (and then reused) with the conformance fixtures as its base directory (Python's
+ * `_resolver(**children)`, which loads every child up front); an unknown path is a `LoadError`.
+ */
+export function childResolver(children: Readonly<Record<string, string>>): ChildResolver {
+  const loaded = new Map<string, Promise<ComposedFlow>>();
+  return (path) => {
+    const text = children[path];
+    if (text === undefined) throw new LoadDiagnostics().error(`unknown child ${JSON.stringify(path)}`);
+    if (!loaded.has(path)) loaded.set(path, loadConformanceFlow(text));
+    return loaded.get(path)!;
+  };
+}
+
+/**
+ * Expect `state.growthIndex` to equal one rebuilt from the live state, and every edge and reducer
+ * container to name only live nodes (`_require_index_matches_rebuild` of `test_growth_index.py`).
+ */
+export function expectIndexMatchesRebuild(state: RunState): void {
+  const flow = state.flow;
+  const kept = state.growthIndex!;
+  state.growthIndex = null;
+  let fresh: GrowthIndex;
+  try {
+    fresh = growthIndex(state);
+  } finally {
+    state.growthIndex = kept;
+  }
+  const sortedIds = (entries: Iterable<readonly [string, ReadonlySet<string>]>) =>
+    Object.fromEntries([...entries].map(([key, ids]) => [key, [...ids].sort()]));
+  expect(Object.fromEntries(kept.names)).toEqual(Object.fromEntries(fresh.names));
+  expect(sortedIds(kept.referrers)).toEqual(sortedIds(fresh.referrers));
+  // The kept index leaves an empty entry for an owner whose grown nodes all moved or retired.
+  expect(sortedIds([...kept.grown].filter(([, ids]) => ids.size > 0))).toEqual(sortedIds(fresh.grown));
+
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, Edge[]>();
+  for (const edge of flow.edges) {
+    expect([edge.id, flow.nodes.has(edge.from) && flow.nodes.has(edge.to)]).toEqual([edge.id, true]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+  }
+  expect(Object.fromEntries(flow.outgoingEdges)).toEqual(Object.fromEntries(outgoing));
+  expect(Object.fromEntries(flow.incomingEdges)).toEqual(Object.fromEntries(incoming));
+  expect([...state.edgeState.keys()].sort()).toEqual(flow.edges.map((edge) => edge.id).sort());
+  expect([...state.nodeState.keys()].sort()).toEqual([...flow.nodes.keys()].sort());
+  for (const ids of [
+    flow.wiring.keys(),
+    state.depth.keys(),
+    state.growthOwner.keys(),
+    state.growthOwner.values(),
+    state.deferredPrune,
+    state.ready,
+    state.inFlight,
+  ]) {
+    expect([...ids].filter((nodeId) => !flow.nodes.has(nodeId))).toEqual([]);
+  }
 }
 
 /** The memory key and policy type `ownerEngine` records. */

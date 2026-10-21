@@ -3,13 +3,16 @@
  * `tests/engine/test_run_flow_workers.py`. A fan-out/fan-in CODE flow runs serial (`0`) and pooled
  * (`>= 1`) to the same output, since workers only execute nodes.
  *
- * Ported: `test_run_flow_serial_and_pooled_same_output`.
+ * Ported: `test_run_flow_serial_and_pooled_same_output`; of
+ * `test_pooled_dispatcher_drops_read_results`, its run (two workers, a 12-turn LOOP) and its status
+ * and output, `12n` (ints are bigints, decision 4a).
  *
  * Changed: `test_run_flow_defaults_to_eight_workers` runs `runFlow` without and with a `signal`,
  * where Python runs `run_flow` and `_run_flow_controlled` (its host stop event); the merge node is
  * an inline body, as the fixtures have no `join_two`.
  *
- * Later (T4-10): `test_pooled_dispatcher_drops_read_results` (a LOOP).
+ * Not ported: `test_pooled_dispatcher_drops_read_results`'s peak count of finished `Future`s held
+ * in memory (Python's `concurrent.futures` and `gc`); TS keeps no retained-future set to inspect.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -93,3 +96,34 @@ for (const withSignal of [false, true]) {
     expect((first as RunStartedRecord).numWorkers).toBe(8);
   });
 }
+
+const LONG_LOOP = `
+id: counter
+name: counter
+input:
+  k: !int
+nodes:
+  l:
+    kind: loop
+    times: 12
+    input:
+      n: 0
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: \${bump.output}
+output: \${l.output.n}
+`;
+
+test("pooled dispatcher drops read results", async () => {
+  const loaded = await loadFlow(LONG_LOOP, { baseDir: FIXTURES });
+  const result = await run(loaded, { k: 0 }, { numWorkers: 2 });
+  expect(result.status, JSON.stringify(result.failure)).toBe("succeeded");
+  expect(result.output).toBe(12n);
+});

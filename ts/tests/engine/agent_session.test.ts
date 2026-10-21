@@ -44,7 +44,7 @@
  * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6 PR 3): every other test of the file, which runs a flow with `run_flow` or resumes one.
+ * Later (T6-6, through runFlow): every other test of the file, which runs a flow with `run_flow` or resumes one.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -90,6 +90,7 @@ import {
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps } from "../../src/nodes/base.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { serving } from "./run_state_fixtures.ts";
 import {
   fakeTurn,
   NEVER,
@@ -529,14 +530,13 @@ for (const pending of [false, true]) {
   });
 }
 
-const CONFIG = SESSION_CONFIG;
 
 /** A `ScriptedModel` that calls `probe` with the call's index before answering it. */
 class ProbedModel extends ScriptedModel {
   readonly probe: (index: number) => void;
 
   constructor(replies: ScriptedReply[], probe: (index: number) => void) {
-    super(replies, CONFIG);
+    super(replies, SESSION_CONFIG);
     this.probe = probe;
   }
 
@@ -553,7 +553,7 @@ function lastTexts(model: ScriptedModel): string[] {
 
 test("admission follows render and recall, and only the current recall is reused", async () => {
   const memory = new SessionMemory();
-  const model = new ScriptedModel([reply("one"), reply("two")], CONFIG);
+  const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
   const events: string[] = [];
   const models = {
     env: () => undefined,
@@ -562,7 +562,7 @@ test("admission follows render and recall, and only the current recall is reused
       return model;
     },
   };
-  const node = new AgentNode("agent", { prompt: "question ${value}", llmConfig: CONFIG });
+  const node = new AgentNode("agent", { prompt: "question ${value}", llmConfig: SESSION_CONFIG });
   for (const [index, note] of ["old recall", "current recall"].entries()) {
     await withHarness(async ({ session }) => {
       let turn = null as ConversationTurn | null;
@@ -594,8 +594,7 @@ test("admission follows render and recall, and only the current recall is reused
 
 /** Run `sessionFlow` as run `runId` with `question`, `memory` backing `session` and `model` serving it. */
 function runSession(memory: SessionMemory, model: ChatModel, runId: string, question: string) {
-  const models = { env: () => undefined, createModel: () => model };
-  return runSessionFlow(sessionFlow(), memory, { runId, inputs: { question }, models });
+  return runSessionFlow(sessionFlow(), memory, { runId, inputs: { question }, models: serving(model) });
 }
 
 test("the request is stored before the provider, and a failed effect remains truthful", async () => {

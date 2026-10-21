@@ -46,7 +46,7 @@
  *   `test_session_provider_corrections_do_not_send_or_store_exception_secrets`: TS never corrects
  *   a provider error, so no provider error text reaches a correction.
  *
- * Later (T6-6 PR 3), they run a flow: `test_structured_runs_restore_actual_history_without_schema_tool_execution`,
+ * Later (T6-6, through runFlow): `test_structured_runs_restore_actual_history_without_schema_tool_execution`,
  * `test_structured_retries_store_raw_replies_and_only_new_correction_deltas` and
  * `test_tool_then_structured_purpose_distinguishes_schema_calls_from_real_grants`.
  */

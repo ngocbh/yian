@@ -120,7 +120,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, rejected, serving } from "./run_state_fixtures.ts";
-import { runSessionFlow, view } from "./session_fakes.ts";
+import { effectsOf, runSessionFlow, storedReplies, view } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -235,18 +235,6 @@ async function run(
     : (await engine(flow, engineOptions).run()).at(-1);
   expect(last).toBeInstanceOf(RunSucceeded);
   return (last as RunSucceeded).output;
-}
-
-/** The kind and status of each effect `memory` holds. */
-function effectsOf(memory: SessionMemory): [string, string][] {
-  return view(memory).effects.map((effect) => [effect.kind, effect.status]);
-}
-
-/** The stored assistant messages of `memory`. */
-function storedReplies(memory: SessionMemory): Message[] {
-  return view(memory)
-    .items.map(decodeMessage)
-    .filter((message) => message.role === "assistant");
 }
 
 /** A direct loop context: agent `chat` prompted "go" with no tools, calling `model`; `extra` overrides. */

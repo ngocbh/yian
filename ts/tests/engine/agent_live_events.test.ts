@@ -98,7 +98,7 @@ import {
   usageOf,
 } from "../../src/nodes/agent/live.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
-import { decodeMessage, invokeModel, prepareHistory } from "../../src/nodes/agent/memory.ts";
+import { invokeModel, prepareHistory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/base.ts";
 import { NodeSteps, ValueContract } from "../../src/nodes/contracts.ts";
@@ -107,8 +107,17 @@ import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
-import { drive, rejected } from "./run_state_fixtures.ts";
-import { NEVER, request, runSessionFlow, sessionFlow, view, withHarness, withTurn } from "./session_fakes.ts";
+import { drive, rejected, serving } from "./run_state_fixtures.ts";
+import {
+  effectsOf,
+  NEVER,
+  request,
+  runSessionFlow,
+  sessionFlow,
+  storedReplies,
+  withHarness,
+  withTurn,
+} from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -835,7 +844,7 @@ test("a model's replay-degraded reasons reach the host once per reason per invoc
 /** A `SessionMemory` that summarizes any prior turn, holding one turn: `first` answered `first`. */
 async function summarizingMemory(): Promise<SessionMemory> {
   const memory = new SessionMemory({ historyBudgetChars: 1, recentTurns: 0 });
-  const models = { env: () => undefined, createModel: () => model(reply("first")) };
+  const models = serving(model(reply("first")));
   await runSessionFlow(sessionFlow(), memory, { runId: "first", inputs: { question: "first" }, models });
   return memory;
 }
@@ -867,7 +876,7 @@ test("history summary calls publish their own observers", async () => {
   const result = await runSessionFlow(sessionFlow(), memory, {
     runId: "second",
     inputs: { question: "q2" },
-    models: { env: () => undefined, createModel: () => chat },
+    models: serving(chat),
     onEvent: (event) => void events.push(event),
   });
   expect(result).toEqual(new RunSucceeded({ output: "second" }));
@@ -884,14 +893,12 @@ test("a structured native turn reports usage and retains the raw reply", async (
   const events: unknown[] = [];
   const result = await runSessionFlow(sessionFlow({ llmConfig: CONFIG, output: INT }), memory, {
     inputs: { question: "q" },
-    models: { env: () => undefined, createModel: () => chat },
+    models: serving(chat),
     onEvent: (event) => void events.push(event),
   });
   expect(result).toEqual(new RunSucceeded({ output: 4n }));
   const finished = events.filter((event) => event instanceof ModelCallFinished);
   expect(finished.map((event) => [event.purpose, event.usage])).toEqual([["structured_native", tokenUsage(7, 2)]]);
-  const stored = view(memory);
-  expect(stored.effects.map((effect) => [effect.kind, effect.status])).toEqual([["model", "completed"]]);
-  const replies = stored.items.map(decodeMessage).filter((message) => message.role === "assistant");
-  expect(replies.map((message) => message.text())).toEqual(['{"value": 4}']);
+  expect(effectsOf(memory)).toEqual([["model", "completed"]]);
+  expect(storedReplies(memory).map((message) => message.text())).toEqual(['{"value": 4}']);
 });

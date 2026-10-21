@@ -52,7 +52,7 @@
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6 PR 3), the rows that need `run_flow`:
+ * Later (T6-6, through runFlow):
  * `test_recalled_transcript_and_current_notes_share_one_context`,
  * `test_changed_grants_keep_history_but_reject_new_ungranted_call`,
  * `test_missing_tool_result_is_repaired_only_in_context_with_truthful_status`,
@@ -103,6 +103,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import * as values from "../../src/typesys/values.ts";
+import { serving } from "./run_state_fixtures.ts";
 import {
   agentContext,
   fakeTurn,
@@ -599,9 +600,6 @@ test("an ungranted call records nothing", async () => {
   expect(effects(view)).toEqual([["model", "completed", { purpose: "chat" }]]);
 });
 
-/** A model access serving `model`. */
-const serve = (model: ChatModel) => ({ env: () => undefined, createModel: () => model });
-
 /** Python's `_call`: a reply with kept reasoning calling `lookup` on `value`, reusing one provider id. */
 function callWithReasoning(value: number): Response {
   const parts = [
@@ -634,7 +632,7 @@ test("two runs restore tool exchanges without executing old calls", async () => 
   const flow = sessionFlow({ tools: ["lookup"] });
   const model = new ScriptedModel([callWithReasoning(1), textOnly("one"), callWithReasoning(2), textOnly("two")]);
   const run = (runId: string, question: string, chat: ChatModel = model) =>
-    runSessionFlow(flow, memory, { runId, inputs: { question }, tools, models: serve(chat) });
+    runSessionFlow(flow, memory, { runId, inputs: { question }, tools, models: serving(chat) });
   expect(await run("first-run", "first")).toEqual(new RunSucceeded({ output: "one" }));
   expect(calls).toEqual([{ value: 1 }]);
   expect(await run("second-run", "second")).toEqual(new RunSucceeded({ output: "two" }));
@@ -954,7 +952,7 @@ test("a result toolText refuses is thrown once the earlier results are committed
   expect(results).toEqual([new ToolResultInteraction("a", "a result")]);
 });
 
-test("an observation fault mid-group stops observing: later calls stay pending, and a CapabilityFault", async () => {
+test("an observation fault mid-group throws a CapabilityFault and leaves later calls pending", async () => {
   const [a, b, c] = [held("a"), held("b"), held("c")];
   const fault = new Error("cannot save");
   const run = groupRun({ a, b, c }, [groupReply("a", "b", "c")], {
@@ -984,9 +982,7 @@ test("an observation fault on a failed call is noted on its error, which is thro
   const { error, view } = await run.running;
   expect(error).toBeInstanceOf(CapabilityFault);
   expect((error as CapabilityFault).original).toBe(failure);
-  expect((failure as RangeError & { notes?: string[] }).notes).toEqual([
-    "Conversation observation failed: Error: cannot save",
-  ]);
+  expect(failure).toHaveProperty("notes", ["Conversation observation failed: Error: cannot save"]);
   expect(toolStatuses(view)).toEqual([
     ["c0", "pending"],
     ["c1", "pending"],
@@ -1005,7 +1001,7 @@ test("an observation fault wins over a later call's failure", async () => {
   const { error, view } = await run.running;
   expect(error).toBeInstanceOf(CapabilityFault);
   expect((error as CapabilityFault).original).toBe(fault);
-  expect(failure as RangeError & { notes?: string[] }).not.toHaveProperty("notes");
+  expect(failure).not.toHaveProperty("notes");
   expect(toolStatuses(view)).toEqual([
     ["c0", "pending"],
     ["c1", "pending"],
@@ -1024,7 +1020,7 @@ test("an earlier call's failure wins over a later observation fault", async () =
   a.reject(failure);
   const { error, view } = await run.running;
   expect(error).toBe(failure);
-  expect(failure as RangeError & { notes?: string[] }).not.toHaveProperty("notes");
+  expect(failure).not.toHaveProperty("notes");
   expect(toolStatuses(view)).toEqual([
     ["c0", "failed"],
     ["c1", "pending"],

@@ -40,7 +40,7 @@
  * `test_invalid_summary_reply_is_an_ordinary_invocation_failure`: a `Response` is always an
  * assistant message.
  *
- * Later (T6-6 PR 3): `test_refused_summary_call_fails_provider_auth`.
+ * Later (T6-6, through runFlow): `test_refused_summary_call_fails_provider_auth`.
  */
 
 import { expect, test } from "bun:test";

@@ -9,6 +9,7 @@ import { expect } from "bun:test";
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
+import type { Message } from "../../src/llm/messages.ts";
 import {
   ConversationInvocation,
   ConversationItem,
@@ -25,6 +26,7 @@ import {
 import { conversationViewFromJson } from "../../src/memory/conversation.ts";
 import { type Session, SessionMemory, type Turn } from "../../src/memory/session.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
+import { decodeMessage } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { MemoryContextOpener } from "../../src/runtime/eval_node.ts";
@@ -214,6 +216,18 @@ export function agentContext(
 /** The conversation view of `memory`'s current snapshot (Python's `_view`). */
 export function view(memory: SessionMemory): ConversationView {
   return conversationViewFromJson(snapshot(memory)["conversation"] as JsonObject);
+}
+
+/** The kind and status of each effect `memory` holds. */
+export function effectsOf(memory: SessionMemory): [string, string][] {
+  return view(memory).effects.map((effect) => [effect.kind, effect.status]);
+}
+
+/** The assistant messages `memory` stores, in order. */
+export function storedReplies(memory: SessionMemory): Message[] {
+  return view(memory)
+    .items.map(decodeMessage)
+    .filter((message) => message.role === "assistant");
 }
 
 /** The LLM config of `sessionFlow`'s AGENT. */

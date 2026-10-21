@@ -63,14 +63,13 @@ import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
-import { decodeMessage } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/base.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { drive, rejected } from "./run_state_fixtures.ts";
-import { runSessionFlow, sessionFlow, view } from "./session_fakes.ts";
+import { drive, rejected, serving } from "./run_state_fixtures.ts";
+import { effectsOf, runSessionFlow, sessionFlow, storedReplies, view } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -394,18 +393,11 @@ test("two streamed tool calls aggregate by index", async () => {
 
 // The session rows: the AGENT of `sessionFlow` through `FlowEngine` with a `SessionMemory`.
 
-/** The assistant messages `memory` stores, in order. */
-function storedReplies(memory: SessionMemory): Message[] {
-  return view(memory)
-    .items.map(decodeMessage)
-    .filter((message) => message.role === "assistant");
-}
-
 test("a streamed tool exchange is retained and restored like an invoked one", async () => {
   const memory = new SessionMemory();
   const chat = model(streamedCalls("", [["a", "call-1"]]), streamed("one"), streamed("two"));
   const flow = sessionFlow({ tools: ["lookup"] });
-  const options = { tools: lookupTools(), models: { env: () => undefined, createModel: () => chat } };
+  const options = { tools: lookupTools(), models: serving(chat) };
   const chunks: StreamChunk[] = [];
   const first = await runSessionFlow(flow, memory, {
     ...options,
@@ -432,7 +424,7 @@ test("a mid-stream failure in a session turn retains a failed model effect", asy
   const events: unknown[] = [];
   const result = await runSessionFlow(sessionFlow(), memory, {
     inputs: { question: "q1" },
-    models: { env: () => undefined, createModel: () => chat },
+    models: serving(chat),
     onStream: (item) => void chunks.push(item),
     onEvent: (event) => void events.push(event),
   });
@@ -441,6 +433,6 @@ test("a mid-stream failure in a session turn retains a failed model effect", asy
   expect(events.filter((event) => event instanceof ModelCallFinished).map((event) => event.error)).toEqual([
     "ProviderError",
   ]);
-  expect(view(memory).effects.map((effect) => [effect.kind, effect.status])).toEqual([["model", "failed"]]);
+  expect(effectsOf(memory)).toEqual([["model", "failed"]]);
   expect(storedReplies(memory)).toEqual([]);
 });

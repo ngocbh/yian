@@ -54,7 +54,7 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, rejected, textReply } from "./run_state_fixtures.ts";
+import { drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
 import { runSessionFlow, sessionFlow, view, withSessionOpener } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -255,9 +255,8 @@ async function stoppedSession(
   options: Parameters<typeof runSessionFlow>[2],
 ) {
   const memory = new SessionMemory();
-  const models = { env: () => undefined, createModel: () => model };
   const error = await rejected(
-    runSessionFlow(sessionFlow(flowOptions), memory, { inputs: { question: "q" }, models, ...options }),
+    runSessionFlow(sessionFlow(flowOptions), memory, { inputs: { question: "q" }, models: serving(model), ...options }),
   );
   return { error, view: view(memory) };
 }

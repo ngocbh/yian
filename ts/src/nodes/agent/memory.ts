@@ -465,6 +465,12 @@ export async function interruptTurn(turn: ConversationTurn | null | undefined): 
 /** How one tool call ended: it returned `value` (a `ReportedToolError` when `reported`), or threw `error`. */
 export type ToolOutcome = { readonly value: unknown; readonly reported: boolean } | { readonly error: unknown };
 
+/** One started call of a tool group: its identity, its request's ordinal, and how it ended. */
+export interface StartedTool extends ToolCallIdentity {
+  readonly ordinal: number;
+  readonly outcome: ToolOutcome;
+}
+
 /**
  * Persist one tool call separately from representing its result.
  *
@@ -576,7 +582,8 @@ async function settleToolEffect(
  * The stop a turn throws after publishing doesn't end the observations, nor does a failed call's
  * own error, nor a result that can't be represented (observed `completed` without items; the
  * caller throws its error when it commits the results). A fault observing a call the stop cut
- * short is swallowed, as `observePreservingError` swallows it under a stop, and observing goes on.
+ * short is swallowed, as `observePreservingError` swallows it under a stop, and observing goes on;
+ * so is a fault observing a call whose own error is a `CapabilityFault`, noted on that error.
  *
  * Any other fault ends the observations, the faulting call and every later one left `pending`.
  * Then a pending stop is thrown; else, when an earlier call failed or couldn't be represented, the
@@ -591,23 +598,24 @@ async function settleToolEffect(
  */
 export async function observeToolGroup(
   turn: ConversationTurn,
-  calls: readonly (ToolCallIdentity & { readonly ordinal: number; readonly outcome: ToolOutcome })[],
+  calls: readonly StartedTool[],
   signal: AbortSignal | undefined,
 ): Promise<void> {
-  // Whether a call observed so far failed or couldn't be represented.
-  let earlier = false;
+  let earlierFailed = false;
   for (const { ordinal, outcome, ...call } of calls) {
     try {
       await settleToolEffect(turn, ordinal, outcome, { ...call, signal });
     } catch (error) {
-      // The stop and a failed call's own error are thrown once the observation is stored.
-      const stored = isStop(error, signal) || ("error" in outcome && error === outcome.error);
-      if (!stored && error instanceof CapabilityFault) {
+      const stopped = isStop(error, signal);
+      // The stop, and a failed call's own error, are what `settleToolEffect` throws once it has
+      // observed the call, or swallowed a fault observing it; either way the next call is observed.
+      const own = "error" in outcome && error === outcome.error;
+      if (!stopped && !own && error instanceof CapabilityFault) {
         signal?.throwIfAborted();
-        if (earlier) return;
+        if (earlierFailed) return;
         throw error;
       }
-      if (!isStop(error, signal)) earlier = true;
+      if (!stopped) earlierFailed = true;
     }
   }
 }

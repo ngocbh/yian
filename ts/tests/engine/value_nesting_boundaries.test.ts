@@ -46,7 +46,7 @@
  * schema-missing native reply is stored `completed`, as a prompted one is (Python: `failed`, not
  * stored); the exhausted schema miss fails `agent.output_invalid`, as without memory.
  *
- * Later (T6-6 PR 3): the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`
+ * Later (T6-6, through runFlow): the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`
  * (it runs a flow and learns from its feedback).
  *
  * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
@@ -77,8 +77,8 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadErrorAsync } from "../compose/declarations.ts";
-import { drive } from "./run_state_fixtures.ts";
-import { runSessionFlow, sessionFlow, view } from "./session_fakes.ts";
+import { drive, serving } from "./run_state_fixtures.ts";
+import { effectsOf, runSessionFlow, sessionFlow } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -395,9 +395,8 @@ async function sessionRun(model: ScriptedModel, options: { output?: Type; retrie
   const memory = new SessionMemory();
   const llmConfig = { provider: model.provider, model: model.model };
   const flow = sessionFlow({ llmConfig, retries, output, tools: tools ? ["lookup"] : [] });
-  const models = { env: () => undefined, createModel: () => model };
-  const result = await runSessionFlow(flow, memory, { inputs: { question: "q" }, models, tools });
-  return { result, effects: view(memory).effects.map((effect) => [effect.kind, effect.status]) };
+  const result = await runSessionFlow(flow, memory, { inputs: { question: "q" }, models: serving(model), tools });
+  return { result, effects: effectsOf(memory) };
 }
 
 /** The failure of the run's terminal event; fails the test when the run didn't fail. */

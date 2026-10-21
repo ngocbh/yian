@@ -36,7 +36,7 @@ import { ReportedToolError } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { drive, rejected, serving } from "./run_state_fixtures.ts";
-import { runSessionFlow, sessionFlow, view } from "./session_fakes.ts";
+import { effectsOf, runSessionFlow, sessionFlow, view } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -180,12 +180,12 @@ test("a session records the reported call completed with its message", async () 
       models: serving(model),
     });
   expect(await run("first", "q")).toEqual(new RunSucceeded({ output: "missing" }));
-  const stored = view(memory);
-  expect(stored.effects.map((effect) => [effect.kind, effect.status])).toEqual([
+  expect(effectsOf(memory)).toEqual([
     ["model", "completed"],
     ["tool", "completed"],
     ["model", "completed"],
   ]);
+  const stored = view(memory);
   expect(stored.effects[1]!.failure).toBeNull();
   const parts = stored.items.map(decodeMessage).flatMap((message) => message.parts);
   const results = parts.filter((part) => part instanceof ToolResultPart);

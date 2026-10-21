@@ -75,6 +75,7 @@ import {
   recordSkippedTool,
   reportedText,
   requestTool,
+  type StartedTool,
   systemPromptWithMemory,
   type ToolOutcome,
   toolText,
@@ -474,8 +475,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
   };
   try {
     for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
-    const started: (ReturnType<typeof effectOf> & { ordinal: number })[] = [];
-    const outcomes: Promise<ToolOutcome>[] = [];
+    const settling: Promise<StartedTool>[] = [];
     for (const planned of group) {
       if (controller.signal.aborted) break;
       const { call, index } = planned;
@@ -492,46 +492,40 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
         // effect stays `pending`, which the node's failed turn allows.
         if (controller.signal.aborted) break;
       }
-      let begun = false;
+      let started = false;
       const running = observeToolCall(
         live,
         () => {
-          begun = true;
+          started = true;
           return planned.invoke(controller.signal);
         },
         identityOf(turn, call, index),
         { signal, text: (value) => toolText(call.name, value) },
       );
-      started.push({ ...effect, ordinal });
-      outcomes.push(
-        running.then(
-          (value) => ({ value, reported: false }),
-          (error) => {
-            if (isReportedToolError(error)) return { value: error, reported: true };
-            fail(error);
-            return { error };
-          },
-        ),
+      const outcome = running.then(
+        (value): ToolOutcome => ({ value, reported: false }),
+        (error): ToolOutcome => {
+          if (isReportedToolError(error)) return { value: error, reported: true };
+          fail(error);
+          return { error };
+        },
       );
+      settling.push(outcome.then((ended) => ({ ...effect, ordinal, outcome: ended })));
       // `observeToolCall` calls `invoke` synchronously unless publishing the started event threw;
       // its rejection is seen only later, so the next call must not start in the meantime.
-      if (!begun) break;
+      if (!started) break;
     }
-    const settled = await Promise.all(outcomes);
-    if (transcript) {
-      const observed = started.map((effect, position) => ({ ...effect, outcome: settled[position]! }));
-      await observeToolGroup(transcript, observed, signal);
-    }
+    const settled = await Promise.all(settling);
+    if (transcript) await observeToolGroup(transcript, settled, signal);
     // A stop pending when the calls settle wins over the first failure and over their results.
     checkNodeStopped(turn);
     if (failure !== null) throw failure.error;
-    for (const [position, outcome] of settled.entries()) {
-      const { call } = group[position]!;
+    for (const { name, toolCallId, outcome } of settled) {
       // No outcome is an error: a failure was thrown above.
       const { value, reported } = outcome as Extract<ToolOutcome, { value: unknown }>;
-      const content = reported ? reportedText(call.name, value) : toolText(call.name, value);
-      recordToolResult(ctx.evaluationTrace, call.name, content);
-      const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError: reported });
+      const content = reported ? reportedText(name, value) : toolText(name, value);
+      recordToolResult(ctx.evaluationTrace, name, content);
+      const part = new ToolResultPart({ callId: toolCallId, name, content, isError: reported });
       turn.messages.push(new Message({ role: "tool", parts: [part] }));
     }
   } finally {

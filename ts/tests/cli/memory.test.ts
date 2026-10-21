@@ -55,9 +55,13 @@
  *   a fake session backend.
  * - No-flags-in-RAM ignores the run log's own `run.jsonl.lock`.
  *
- * Later (with `--resume`): `test_custom_type_points_to_the_python_api` (resume row),
- * `test_flags_are_accepted_with_resume`, `test_resume_opens_memory_only_when_the_record_needs_it`
- * and `test_resume_accepts_one_def_called_from_two_nodes`.
+ * Ported through `main` (`yian run --resume`, the "yian run --resume" block):
+ * `test_custom_type_points_to_the_python_api` (resume row), `test_flags_are_accepted_with_resume`,
+ * `test_resume_opens_memory_only_when_the_record_needs_it` (4 rows) and
+ * `test_resume_accepts_one_def_called_from_two_nodes`. Changed there: the recorded runs are
+ * `runFlow` calls with the offline model and the command's env; the opens are counted on
+ * `SessionMemory.prototype.openRun` (Python wraps the built-in constructors), the holder opening
+ * its file before the count starts; Python's patched key checks aren't needed, xAI's key being set.
  *
  * Not ported: `test_no_memory_flow_imports_no_concrete_backend` (TS imports the backends
  * statically; `platform.ts` loads the SQLite driver only on first open);
@@ -97,13 +101,17 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
+import { NodeStarted, type RunEvent, RunStarted } from "../../src/events.ts";
 import { DeclSite, MemoryDecl, MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { SessionMemory } from "../../src/memory/session.ts";
+import { buildMemories } from "../../src/memory_host.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
 let tmp: string;
@@ -496,26 +504,44 @@ function flowFile(text: string): string {
  */
 async function runCli(flow: string, ...extra: string[]) {
   const log = join(tmp, "run.jsonl");
+  return { ...(await cli([flow, "--log", log, "--quiet", ...extra])), log };
+}
+
+/** Run `yian run <flow> --resume <log> --quiet ...extra` as `runCli` runs a fresh one. */
+function resumeCli(flow: string, log: string, ...extra: string[]) {
+  return cli([flow, "--resume", log, "--quiet", ...extra]);
+}
+
+/** The command's env for `runCli` and `resumeCli`. */
+const CLI_VARS = (): Record<string, string> => ({
+  HOME: join(tmp, "home"),
+  XAI_API_KEY: "test-xai-key",
+  YIAN_DEFAULT_PROVIDER: "xai",
+  YIAN_DEFAULT_MODEL: "grok-4.3",
+});
+
+/** `CLI_VARS` as an `Env`. */
+function cliEnv(): Env {
+  const vars = CLI_VARS();
+  return (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined);
+}
+
+/** Run `yian run <args>` with an offline model; return its code and output. */
+async function cli(args: readonly string[]) {
   const out: string[] = [];
   const err: string[] = [];
-  const vars: Record<string, string> = {
-    HOME: join(tmp, "home"),
-    XAI_API_KEY: "test-xai-key",
-    YIAN_DEFAULT_PROVIDER: "xai",
-    YIAN_DEFAULT_MODEL: "grok-4.3",
-  };
   const io: CliIo = {
     stdout: { write: async (text) => void out.push(text) },
     stderr: { write: async (text) => void err.push(text) },
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
-    env: (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined),
+    env: cliEnv(),
   };
   const send = globalThis.fetch;
   globalThis.fetch = offlineModel as unknown as typeof fetch;
   try {
-    const code = await main(["run", flow, "--log", log, "--quiet", ...extra], io);
-    return { code, stdout: out.join(""), stderr: err.join(""), log };
+    const code = await main(["run", ...args], io);
+    return { code, stdout: out.join(""), stderr: err.join("") };
   } finally {
     globalThis.fetch = send;
   }
@@ -749,5 +775,105 @@ describe("yian run", () => {
     expect(text).toContain("KEY=PATH");
     expect(text).toContain("Without either flag, memory lives in process RAM.");
     expect(text).not.toContain("POLICY");
+  });
+});
+
+describe("yian run --resume", () => {
+  beforeEach(() => {
+    mkdirSync(join(tmp, "home"));
+  });
+
+  test("custom type points to the TS API (resume)", async () => {
+    const finished = await runCli(flowFile(codeFlowText(null)));
+    expect(finished.code, finished.stderr).toBe(0);
+    const before = readFileSync(finished.log);
+    const result = await resumeCli(flowFile(codeFlowText("{vec: vector}")), finished.log);
+    expect(result.code).toBe(1);
+    const text = plain(result.stderr);
+    expect(text.startsWith("resume failed:"), text).toBe(true);
+    expect(text).toContain("Use the API");
+    expect(text).toContain("buildMemories");
+    expect(hasStack(result.stderr)).toBe(false);
+    expect(readFileSync(finished.log)).toEqual(before);
+  });
+
+  test("flags are accepted with resume", async () => {
+    const root = join(tmp, "mem");
+    const result = await runCli(flowFile(codeFlowText()), "--memory-root", root);
+    expect(result.code, result.stderr).toBe(0);
+    const before = readFileSync(result.log);
+    const resumed = await resumeCli(flowFile(codeFlowText()), result.log, "--memory-root", root);
+    expect(resumed.code, resumed.stderr).toBe(0);
+    expect(readFileSync(result.log)).toEqual(before);
+  });
+
+  describe.each([false, true])("resume opens memory only when the record needs it (terminal %p)", (terminal) => {
+    test.each([false, true])("enabled %p", async (enabled) => {
+      const flow = flowFile(SESSION_FLOW);
+      const log = join(tmp, "run.jsonl");
+      const memoryPath = join(tmp, "memory.sqlite");
+      const loaded = await loadFlow(SESSION_FLOW);
+      const primary = new Error("stop before work");
+      const stop = (event: RunEvent) => {
+        if (!terminal && event instanceof NodeStarted && event.nodeId === "work") throw primary;
+      };
+      const backend = new SessionMemory();
+      const send = globalThis.fetch;
+      globalThis.fetch = offlineModel as unknown as typeof fetch;
+      try {
+        const memory = enabled ? new Map([["chat", backend]]) : null;
+        const options = { log, onEvent: stop, env: cliEnv(), memory };
+        const running = runFlow(loaded, {}, options);
+        if (terminal) expect((await running).status).toBe("succeeded");
+        else await expect(running).rejects.toBe(primary);
+      } finally {
+        globalThis.fetch = send;
+        backend.close();
+      }
+      const before = readFileSync(log);
+
+      const opened: string[] = [];
+      // An occupied store must not matter to terminal or historically dormant recovery; opening a
+      // run takes the file.
+      const holder = terminal || !enabled ? new SessionMemory({ storage: memoryPath }) : null;
+      holder?.openRun().close();
+      const openRun = SessionMemory.prototype.openRun;
+      SessionMemory.prototype.openRun = function (this: SessionMemory, ...args) {
+        opened.push("session");
+        return openRun.apply(this, args);
+      };
+      let result;
+      try {
+        result = await resumeCli(flow, log, "--memory-storage", `chat=${memoryPath}`);
+      } finally {
+        SessionMemory.prototype.openRun = openRun;
+        holder?.close();
+      }
+      expect(opened).toEqual(terminal || !enabled ? [] : ["session"]);
+      expect(result.code, result.stderr).toBe(0);
+      const after = readFileSync(log);
+      expect(after.subarray(0, before.length)).toEqual(before);
+      if (terminal) expect(after).toEqual(before);
+    });
+  });
+
+  test("resume accepts one def called from two nodes", async () => {
+    const text =
+      "id: two-calls\nname: two_calls\nlong_term_memory: {notes: episodic}\n" +
+      "defs:\n  child:\n    nodes:\n      work: {kind: code, code: return 1, output: int}\n" +
+      "    output: ${work.output}\n" +
+      "nodes:\n  one: {kind: call, call: child}\n  two: {kind: call, call: child}\n" +
+      "output: ${one.output + two.output}\n";
+    const flow = flowFile(text);
+    const log = join(tmp, "run.jsonl");
+    const stopAfterStart = (event: RunEvent) => {
+      if (event instanceof RunStarted) throw new Error("host stop");
+    };
+    const composed = await loadFlow(text);
+    await using registry = await buildMemories(composed);
+    const run = runFlow(composed, {}, { log, memory: registry, onEvent: stopAfterStart, env: cliEnv() });
+    await expect(run).rejects.toThrow("host stop");
+    const resumed = await resumeCli(flow, log);
+    expect(resumed.code, resumed.stderr).toBe(0);
   });
 });

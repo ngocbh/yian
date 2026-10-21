@@ -4,7 +4,8 @@
  * default log path, and the signals that stop a run.
  *
  * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
- *   servers when it needs them, runs it on a fresh log and prints its output or its failure;
+ *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
+ *   `--resume` log, checking its recorded keys, and prints its output or its failure;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
  *   document; `status` inspects a run log.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
@@ -32,7 +33,7 @@ import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
-import type { Env } from "../defaults.ts";
+import { current, type Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
@@ -44,13 +45,32 @@ import {
   type Value,
   writeAsText,
 } from "../typesys/values.ts";
+import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
-import { type Connection, connectionCredentials, connectionSnapshot } from "../llm_clients/connection.ts";
+import {
+  type AgentConfig,
+  type Connection,
+  connectionCredentials,
+  connectionSnapshot,
+  HEADER_NAMES_KEY,
+  HOST_KEY_MARKER,
+  keyIdentity,
+} from "../llm_clients/connection.ts";
 import { MemoryOperationError } from "../memory/contracts.ts";
 import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { hostInputs, type RunResult, runFlow, runStartLlm, skillGrants, staticNodes } from "../run.ts";
+import { FileLockError } from "../platform.ts";
+import {
+  hostInputs,
+  type LlmConfigsCheck,
+  resumeFlow,
+  type RunResult,
+  runFlow,
+  runStartLlm,
+  skillGrants,
+  staticNodes,
+} from "../run.ts";
 import { McpConnectError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
@@ -655,9 +675,10 @@ interface RunOptions {
 }
 
 /**
- * Whether `error` is a host failure `run` reports as `run failed:` rather than with its stack: a
- * bad value, an unreadable file, a memory failure, an MCP server that didn't start, the missing MCP
- * SDK.
+ * Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
+ * with its stack: a bad value (a damaged or empty log, a defaults mismatch, a memory setup failure
+ * included), an unreadable file, a run log another writer holds, a memory failure, an MCP server
+ * that didn't start, the missing MCP SDK.
  */
 function isSetupError(error: unknown): error is Error {
   return (
@@ -666,6 +687,8 @@ function isSetupError(error: unknown): error is Error {
     error instanceof AuthError ||
     error instanceof MemoryOperationError ||
     error instanceof McpConnectError ||
+    // A locked log, Python's `BlockingIOError`, is a plain `Error` over the lock's.
+    (error instanceof Error && error.cause instanceof FileLockError) ||
     // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
     (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
     isSystemError(error)
@@ -866,6 +889,155 @@ export async function ensureProviderKeys(
   }
 }
 
+/** A resumed run's recorded provider credentials are not available. */
+class ResumeKeyError extends Error {
+  override name = "ResumeKeyError";
+}
+
+/** The resume key checks' arguments: the command's environment, its terminal if any, the stop. */
+interface ResumeKeyContext extends PromptContext {
+  signal: AbortSignal;
+}
+
+/**
+ * Require `envVar` to hold the key a recorded run started with.
+ *
+ * Only a missing key prompts, at `context.terminal`; a typed key that passes is `set` in
+ * `context.env`, as a fresh run's prompted key is.
+ *
+ * @param provider The provider name shown in prompts and errors.
+ * @param identity The recorded `keyIdentity` of the key, or `null` when the record has none, in
+ *   which case any non-empty key passes.
+ * @throws {ResumeKeyError} The key is set but differs from the recorded one, is missing with no
+ *   terminal, is declined or left empty `current().maxKeyPrompts` times, or a typed key differs
+ *   from the recorded one.
+ * @throws The signal's reason when the stop closes the prompt.
+ */
+async function resumeEnvKey(
+  provider: string,
+  envVar: string,
+  identity: string | null,
+  { env, terminal, signal }: ResumeKeyContext,
+): Promise<void> {
+  const existing = env.read(envVar);
+  if (existing) {
+    if (identity !== null && keyIdentity(existing) !== identity) {
+      throw new ResumeKeyError(
+        `$${envVar} is not the key this run started with; set it to that key and resume again`,
+      );
+    }
+    return;
+  }
+  if (terminal === null) {
+    throw new ResumeKeyError(
+      `provider ${reprText(provider)} needs an API key but $${envVar} is not set; set it and resume again`,
+    );
+  }
+  const cancelled = `no API key provided for ${reprText(provider)} ($${envVar}); set it and resume again`;
+  for (let attempt = 0; attempt < current().maxKeyPrompts; attempt++) {
+    const answer = await terminal.askText(`Enter ${envVar} for provider ${reprText(provider)}:`, {
+      secret: true,
+      signal,
+    });
+    // A prompt the stop closed (Ctrl-C, the end of input, a signal) is the stop, not a decline.
+    signal.throwIfAborted();
+    if (answer === null) throw new ResumeKeyError(cancelled);
+    const key = answer.trim();
+    if (!key) continue;
+    if (identity !== null && keyIdentity(key) !== identity) {
+      throw new ResumeKeyError(
+        `the key entered is not the one this run started with; set $${envVar} to that key and resume again`,
+      );
+    }
+    env.set(envVar, key);
+    return;
+  }
+  throw new ResumeKeyError(cancelled);
+}
+
+/**
+ * Return the error refusing a resume whose `provider` key came from a host's
+ * `llmConfig.api_key`, pointing to `resumeFlow`; `headerNames` are the recorded names of headers
+ * sent with the key, if any.
+ */
+function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError {
+  // Header values the host sent with its key are not recorded either.
+  const given = Array.isArray(headerNames) && headerNames.length > 0 ? "apiKey, headers" : "apiKey";
+  return new ResumeKeyError(
+    `this run's ${provider} API key came from a host's llmConfig.api_key, which the CLI cannot ` +
+      `supply; resume it from TypeScript with resumeFlow(flow, {${given}})`,
+  );
+}
+
+/**
+ * Check that the recorded model configs of a resumed run can authenticate (`resumeFlow`'s
+ * `checkLlmConfigs`).
+ *
+ * Like a fresh run's preflight, it requires each provider's environment key unless the agent
+ * recorded a saved login; it also requires an OpenAI environment key to be the one the run started
+ * with. Only a missing key prompts. Every saved login (any provider) and every OpenAI connection
+ * then resolves its credentials, so a replaced saved credential fails here instead of at the first
+ * model call. Checks run once per distinct saved or OpenAI connection and once per other provider;
+ * providers without a key variable, and optional-key providers (`vllm`) whose variable is unset,
+ * are skipped.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path, with the config
+ *   each started call-time agent recorded. Only each config's `provider`, `_connection`, host-key
+ *   marker and recorded header names are read.
+ * @param callTimeHost The host key the call-time agents' selection names (`provider` and any
+ *   `header_names`); a call-time agent that hasn't started may still resolve to it, so it is
+ *   refused like a marked agent.
+ * @throws {ResumeKeyError} A key is missing, differs from the recorded one, was not given at the
+ *   prompt, belongs to a host, or a recorded saved or OpenAI connection can no longer resolve its
+ *   credentials.
+ * @throws {RangeError} As `connectionCredentials` does, for invalid connection metadata.
+ * @throws The signal's reason when the stop closes a prompt.
+ */
+async function checkResumeCredentials(
+  effective: Readonly<Record<string, AgentConfig>>,
+  callTimeHost: Readonly<Record<string, unknown>> | null,
+  context: ResumeKeyContext,
+): Promise<void> {
+  const connections: [string, Connection][] = [];
+  const providers: string[] = [];
+  for (const config of Object.values(effective)) {
+    const provider = config["provider"] as string;
+    const connection = (config["_connection"] as Connection | undefined) ?? null;
+    if (config[HOST_KEY_MARKER] || connection?.source === "host") {
+      throw hostKeyRefusal(provider, config[HEADER_NAMES_KEY]);
+    }
+    if (connection !== null && (provider === "openai" || connection.source === "store")) {
+      const pair: [string, Connection] = [provider, connection];
+      if (!connections.some((other) => isDeepStrictEqual(other, pair))) connections.push(pair);
+    } else if (!providers.includes(provider)) {
+      providers.push(provider);
+    }
+  }
+  if (callTimeHost !== null) {
+    throw hostKeyRefusal(callTimeHost["provider"] as string, callTimeHost["header_names"]);
+  }
+
+  for (const [provider, connection] of connections) {
+    const { source } = connection;
+    if (provider === "openai" && (source === "environment" || source === "legacy_environment")) {
+      await resumeEnvKey("openai", "OPENAI_API_KEY", connection.credential_id, context);
+    }
+  }
+  for (const [provider, connection] of connections) {
+    try {
+      await connectionCredentials(connection, provider, { env: context.env.read });
+    } catch (error) {
+      if (!(error instanceof AuthError)) throw error;
+      throw new ResumeKeyError(error.message, { cause: error });
+    }
+  }
+  for (const provider of providers) {
+    const envVar = getApiKeyEnv(provider);
+    if (envVar === null || (OPTIONAL_API_KEY_PROVIDERS.has(provider) && !context.env.read(envVar))) continue;
+    await resumeEnvKey(provider, envVar, null, context);
+  }
+}
+
 /**
  * Return what `body` resolves to once `registry` has closed. When `body` throws, its error is
  * rethrown, with a close failure, and that failure's notes, appended to its `notes`; otherwise a
@@ -888,8 +1060,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
 }
 
 /**
- * Start a durable run of the flow at `flowPath`; returns the exit code. Recovering one (`resume`)
- * isn't ported yet and throws after the flow loads.
+ * Start a durable run of the flow at `flowPath`, or recover the one recorded at `resume`; returns
+ * the exit code.
  *
  * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
  * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
@@ -908,7 +1080,18 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
  * stderr and exits 1. A host failure (a bad option value, a log that can't be created, an MCP
  * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
- * `McpConnectError`'s notes on the lines below, and exits 1. Under `json`, stdout holds one
+ * `McpConnectError`'s notes on the lines below, and exits 1.
+ *
+ * With `resume`, the flow loads and its memories, skills and MCP config are read as for a fresh
+ * run; then the log path is printed and `resumeFlow` recovers the run, with no input prompts, no
+ * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count.
+ * Before anything is appended, the keys the recorded configs need are checked: a missing one is
+ * prompted for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
+ * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
+ * host failure, an empty, damaged or locked log included, prints `resume failed: <message>`. A
+ * finished log prints its recorded outcome and appends nothing.
+ *
+ * Under `json`, stdout holds one
  * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
  * (`compose.load`, `run.cancelled`, `run.setup`).
  *
@@ -995,9 +1178,10 @@ async function startRun(
   };
   // An McpConnectError's notes (the ids no started server supplies, the other servers that
   // failed) follow its message; other notes, such as a cleanup failure, stay out of it.
+  const action = options.resume === undefined ? "run" : "resume";
   const setupFailed = async (error: Error) => {
     const notes = error instanceof McpConnectError ? ((error as { notes?: string[] }).notes ?? []) : [];
-    const label = paint("run failed: ", "red bold", io.stderr, io.env);
+    const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
     const text = [error.message, ...notes].map((line) => paint(line, "red", io.stderr, io.env));
     await io.stderr.write(`${label}${text.join("\n")}\n`);
     await writeStack(error);
@@ -1081,9 +1265,41 @@ async function startRun(
         const banner = flowBanner(flow, io.stderr, io.env);
         if (banner !== null) await io.stderr.write(banner);
       }
-      // Recovering a run isn't ported yet; until then `--resume` runs nothing.
+      const onEvent = reporter === null ? null : (event: RunEvent) => reporter.handle(event);
+      const memory = registry.size > 0 ? registry : null;
+      const selection = { signal: controller.signal, warn };
+      // Recovery takes no inputs, `--provider`/`--model` or key preflight: the log holds the run's
+      // configuration, and its recorded keys are checked once it is replayed.
       if (options.resume !== undefined) {
-        throw new Error("yian run --resume is not ported to TypeScript yet");
+        const log = options.resume;
+        controller.signal.throwIfAborted();
+        await reportRunLog(log, io.stderr, io.env);
+        host.started.value = true;
+        const keys = {
+          env: commandEnv,
+          terminal: io.stdin.isTTY === true ? terminal : null,
+          signal: controller.signal,
+        };
+        const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
+          checkResumeCredentials(effective, callTimeHost, keys);
+        return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
+          await writeWarnings();
+          try {
+            return await resumeFlow(flow, {
+              log,
+              numWorkers: options.numWorkers ?? null,
+              onEvent,
+              memory,
+              tools: { ...registeredTools(), ...selected, ask_user: terminal.askUser },
+              skills,
+              env: commandEnv.read,
+              signal: controller.signal,
+              checkLlmConfigs,
+            });
+          } finally {
+            reporter?.stop();
+          }
+        });
       }
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
@@ -1127,7 +1343,6 @@ async function startRun(
       const log = options.log ?? defaultRunLogPath(runId, io.env);
       await reportRunLog(log, io.stderr, io.env);
       host.started.value = true;
-      const selection = { signal: controller.signal, warn };
       return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
         await writeWarnings();
         try {
@@ -1136,8 +1351,8 @@ async function startRun(
             runId,
             llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
             numWorkers: options.numWorkers ?? 8,
-            onEvent: reporter === null ? null : (event) => reporter.handle(event),
-            memory: registry.size > 0 ? registry : null,
+            onEvent,
+            memory,
             tools: { ...registeredTools(), ...selected, ask_user: terminal.askUser },
             skills,
             env: commandEnv.read,
@@ -1159,6 +1374,10 @@ async function startRun(
     if (error instanceof TerminalStopped && error.reason === "eof") {
       await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
       return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+    }
+    if (error instanceof ResumeKeyError) {
+      await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
+      return fail(new Diagnostic({ code: "run.setup", message: error.message }));
     }
     if (!isSetupError(error)) throw error;
     return setupFailed(error);

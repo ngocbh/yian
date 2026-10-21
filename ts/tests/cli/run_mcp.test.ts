@@ -2,9 +2,7 @@
  * `yian run` starts the MCP servers a flow needs from `~/.yian/mcp.json` and `--mcp-config`: a port
  * of `tests/cli/test_run_mcp.py`, over the fake server in `tests/fixtures/mcp/`.
  *
- * Ported under their names: every row but the two resume rows,
- * `test_resume_re_supplies_the_servers` and `test_resuming_a_finished_run_starts_no_granted_server`,
- * which wait for `yian run --resume`.
+ * Ported under their names: every row.
  *
  * Changed:
  * - Python's `isolated_cli_home` fixture is `HOME` in the command's env; each run gets a fresh
@@ -23,6 +21,9 @@
  * - Config warnings have no `UserWarning` to leak; that row checks only the `warning:` line.
  * - The missing ids print in the text form (`["echo"]`, decision 43), not Python's list repr; a
  *   TS-only row checks the `--json` document's `run.setup` error keeps the notes.
+ * - The crash before a resume is a frozen log: the local `whoami` tool freezes every durable log,
+ *   whose next append throws, and the run rejects with it (Python: the tool raises
+ *   `_SimulatedCrash`).
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -35,7 +36,10 @@ import { main } from "../../src/cli/index.ts";
 import { loadMcpConfig } from "../../src/cli/mcp_config.ts";
 import { openMcpServers } from "../../src/cli/run.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { runFlow } from "../../src/run.ts";
+import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
+import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { McpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
@@ -136,8 +140,11 @@ function lastLine(text: string): string {
   return text.trim().split("\n").at(-1)!;
 }
 
-/** Run `yian run <args> --quiet` with `HOME` and `vars` as its env; return its code and output. */
-async function run(args: string[], vars: Record<string, string> = {}) {
+/**
+ * Run `yian run <args> --quiet` with `HOME` and `vars` as its env, on a fresh `--log` or, with
+ * `resume`, recovering that log; return its code and output.
+ */
+async function run(args: string[], vars: Record<string, string> = {}, resume?: string) {
   const out: string[] = [];
   const err: string[] = [];
   const env: Record<string, string> = { HOME: home, ...vars };
@@ -149,8 +156,8 @@ async function run(args: string[], vars: Record<string, string> = {}) {
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
   };
   runs += 1;
-  const log = join(tmp, `run-${runs}.jsonl`);
-  const code = await main(["run", ...args, "--quiet", "--log", log], io);
+  const logArgs = resume === undefined ? ["--log", join(tmp, `run-${runs}.jsonl`)] : ["--resume", resume];
+  const code = await main(["run", ...args, "--quiet", ...logArgs], io);
   const stdout = out.join("");
   const stderr = err.join("");
   return { code, stdout, stderr, output: stdout + stderr };
@@ -351,6 +358,90 @@ test(
     expect(pids(fakePid)).toHaveLength(1);
     expect(existsSync(otherPid)).toBe(false);
     await expectNoChildren(fakePid);
+  },
+  SLOW,
+);
+
+const WHOAMI_FLOW = `id: mcp_resume
+name: mcp_resume
+nodes:
+  call:
+    kind: tool
+    tool_id: whoami
+output: \${call.output}
+`;
+
+test(
+  "test_resume_re_supplies_the_servers",
+  async () => {
+    const flow = flowFile(WHOAMI_FLOW);
+    const log = join(tmp, "run.jsonl");
+    const crash = new Error("simulated crash");
+    let frozen = false;
+    const append = JsonlRunLog.prototype.append;
+    JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
+      if (frozen) throw crash;
+      return append.call(this, record);
+    };
+    const whoami = tool({
+      name: "whoami",
+      description: "Crash the process on the call.",
+      parameters: { type: "object", properties: {} },
+      execute: () => {
+        frozen = true;
+        return "never recorded";
+      },
+    });
+    try {
+      const options = { log, tools: { whoami }, runId: "run-5c2e", env: () => undefined };
+      const crashed = runFlow(await loadFlow(WHOAMI_FLOW), {}, options);
+      await expect(crashed).rejects.toBe(crash);
+    } finally {
+      JsonlRunLog.prototype.append = append;
+    }
+    const pid = marker();
+    const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
+
+    const result = await run([flow, "--mcp-config", cfg], {}, log);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toStartWith("run-5c2e/call ");
+    expect(pids(pid)).toHaveLength(1);
+    await expectNoChildren(pid);
+  },
+  SLOW,
+);
+
+test(
+  "test_resuming_a_finished_run_starts_no_granted_server",
+  async () => {
+    const flow = flowFile(AGENT_FLOW);
+    const log = join(tmp, "run.jsonl");
+    const vars = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const echo = tool({
+      name: "echo",
+      description: "Return `text`.",
+      parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+      execute: ({ text }) => text,
+    });
+    const send = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(DONE, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+    try {
+      const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name as keyof typeof vars] : undefined);
+      const finished = await runFlow(await loadFlow(AGENT_FLOW), {}, { log, tools: { fake: [echo] }, env });
+      expect(finished.status, String(finished.failure?.message)).toBe("succeeded");
+    } finally {
+      globalThis.fetch = send;
+    }
+    const pid = marker();
+    const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
+
+    const result = await run([flow, "--mcp-config", cfg], vars, log);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("done");
+    expect(existsSync(pid)).toBe(false);
   },
   SLOW,
 );

@@ -18,20 +18,28 @@
  * The harvested `load-case/compose_value_entry_parse__*` cases are pinned at the end; each fails
  * at its first entry, so no stand-in is registered.
  *
- * Later (T4-8): `test_the_example_entry_loads`, which loads the example and runs it.
+ * Ported through `loadFlow` and `runFlow`: `test_the_example_entry_loads`, which reads the
+ * example from `parseNodes`'s error, then loads and runs it.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { containsItself, exampleType, parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { loadError, nodesOf, runTextCase } from "./declarations.ts";
 import { standIn } from "./stand_ins.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 afterEach(() => forget());
 
@@ -125,6 +133,34 @@ describe("untagged scalar or list shows the tag to write", () => {
 
     expect(error.diagnostic.message).toBe(`${NODE_OR_VALUE}, e.g. ${example}`);
     expect(errorLine(error)).toBe(lineOf(text, "  x:"));
+  });
+});
+
+describe("the example entry loads", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-value-entry-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test.each<[string, unknown]>([
+    ["  x: [null, 1]\n", [null, 1n]],
+    // A float field keeps an int, as in Python, whose `[1.0, 2.5]` compares equal to `[1, 2.5]`.
+    ["  x: [1, 2.5]\n", [1n, 2.5]],
+    ["  x: [[1], [null]]\n", [[1n], [null]]],
+    ["  x: [[], [1]]\n", [[], [1n]]],
+    ["  x: [null, [1]]\n", [null, [1n]]],
+    ["  x: [1, a]\n", [1n, "a"]],
+    ["  x: [[1], [a]]\n", [[1n], ["a"]]],
+    ["  x: [{a: 1}, 2]\n", [{ a: 1n }, 2n]],
+    ["  x: [null, 1, a]\n", [null, 1n, "a"]],
+    ["  x: [[1, a], [b, 2]]\n", [[1n, "a"], ["b", 2n]]],
+    ["  x: !!str 3\n", "3"],
+    ["  x: !!str true\n", "true"],
+  ])("%j", async (entry, value) => {
+    const found = /, e\.g\. `([^`]+)`$/.exec(parseError(flow(entry)).diagnostic.message);
+    expect(found).not.toBeNull();
+
+    const text = `id: f\nname: f\nnodes:\n  ${found![1]}\noutput: \${x.output}\n`;
+
+    expect((await runFlow(await loadFlow(text), {}, { env: hostEnv(dir) })).output).toEqual(value);
   });
 });
 

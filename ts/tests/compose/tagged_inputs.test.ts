@@ -19,11 +19,16 @@
  * TS-only: the harvested-case table, which makes the loader's call on the `input:` declarations
  * of the conformance cases these readers decide, comparing the message and the last frame.
  *
- * Later (T4-8): `test_tagged_inputs_load_and_run_with_their_defaults` and
- * `test_a_tagged_input_without_a_value_is_required` (they run the flow).
+ * Ported through `loadFlow` and `runFlow`: `test_tagged_inputs_load_and_run_with_their_defaults`
+ * and `test_a_tagged_input_without_a_value_is_required`. The worker's CODE body is TS's
+ * (`return {...inputs}` for Python's `return dict(inputs)`).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { readFlowInputs } from "../../src/compose/helpers/types.ts";
 import { START_ID } from "../../src/compile/model.ts";
@@ -31,9 +36,11 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import type { StartNode } from "../../src/nodes/start/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { isListKind } from "../../src/typesys/values.ts";
 import { type CaseRow, inputsAt, loadError, loadErrorAsync, parametersFromYaml, runCase } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -67,7 +74,7 @@ typedefs:
   Message: {role: str, content: str}
 `;
 
-const WORKER = "kind: code\noutput: object\ncode: return dict(inputs)\n";
+const WORKER = "kind: code\noutput: object\ncode: return {...inputs}\n";
 
 /** Bind every declared input by name, as a multi-node body must. */
 function workerBindings(declarations: string): string {
@@ -95,6 +102,33 @@ function flowAt(placement: (typeof PLACEMENTS)[number], declarations: string): s
       : `input:\n${block}${WORKER}`;
   return `${HEADER}defs:\n  child:\n${indented(child, "    ")}${caller}`;
 }
+
+describe("tagged inputs run", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-tagged-inputs-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test.each(PLACEMENTS)("tagged inputs load and run with their defaults: %s", async (placement) => {
+    const result = await runFlow(await loadFlow(flowAt(placement, DECLARATIONS)), { qty: 3 }, { env: hostEnv(dir) });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toEqual({
+      qty: 3n,
+      history: [],
+      model: null,
+      note: null,
+      cfg: { kind: "cfg", a: 1n },
+      s: "${x}",
+    });
+  });
+
+  test.each(["root", "compact"] as const)("a tagged input without a value is required: %s", async (placement) => {
+    const result = await runFlow(await loadFlow(flowAt(placement, DECLARATIONS)), {}, { env: hostEnv(dir) });
+
+    expect(result.status).toBe("failed");
+    expect(result.failure!.code).toBe("binding.evaluate");
+    expect(result.failure!.message).toContain("required input 'qty' is unbound");
+  });
+});
 
 describe("tagged declarations", () => {
   test("a tag does not fill in a missing field", () => {

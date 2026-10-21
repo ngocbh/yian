@@ -42,9 +42,11 @@
  * `test_generated_child_clone_preserves_case_predicate_origins` and
  * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`.
  *
+ * Covered by `run-case/compose_kind_case_parse__a_failing_when_in_a_called_child_is_located`:
+ * `test_named_definition_case_failure_keeps_child_predicate_origin`.
+ *
  * Later (T4): the run half of
- * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T4-8):
- * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T4):
+ * `test_searched_case_origins_are_positional_and_select_the_failing_entry`, and
  * `test_inline_definition_case_failure_keeps_child_predicate_origin`.
  *
  * The harvested cases whose error the CASE parse or build raises are pinned at the end, with

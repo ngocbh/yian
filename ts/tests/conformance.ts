@@ -42,7 +42,7 @@ import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
-import type { Diagnostic, Failure } from "../src/diagnostics.ts";
+import { type Diagnostic, type Failure, reprText } from "../src/diagnostics.ts";
 import {
   constructorNames,
   evalExpr,
@@ -53,9 +53,19 @@ import {
 } from "../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
+import { virtualScheduler } from "../src/platform.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../src/run.ts";
+import type { ToolContext } from "../src/tools/context.ts";
+import {
+  PermanentToolError,
+  ReportedToolError,
+  ToolCheckError,
+  TransientToolError,
+} from "../src/tools/errors.ts";
+import { tool } from "../src/tools/function_tools.ts";
+import type { AskUserHandler, AskUserRequest, ToolEntry } from "../src/tools/registry.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
-import type { JsonMode } from "../src/typesys/json.ts";
+import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
 import { buildValueAs, FileRef, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
@@ -1054,6 +1064,160 @@ function runOptions(run: Case): RunFlowOptions {
   );
 }
 
+/** An error class a script's `raise` can name. */
+type ErrorClass = new (message: string, options?: ErrorOptions & { retryAfter?: number }) => Error;
+
+/** The classes a stub tool's `raise` can name; any other name is a plain `Error` of that name. */
+const TOOL_ERRORS: ReadonlyMap<string, ErrorClass> = new Map<string, ErrorClass>([
+  ["PermanentToolError", PermanentToolError],
+  ["TransientToolError", TransientToolError],
+  ["ReportedToolError", ReportedToolError],
+  ["ToolCheckError", ToolCheckError],
+]);
+
+/**
+ * Return a script's error `{class, message, retry_after}`: an error of the class `classes` names,
+ * else a plain `Error` named `class` (`TimeoutError` and `ConnectionError` among them).
+ */
+function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): Error {
+  const name = error["class"] as string;
+  const message = error["message"] as string;
+  const Class = classes.get(name);
+  if (Class === undefined) return Object.assign(new Error(message), { name });
+  return new Class(message, Object.hasOwn(error, "retry_after") ? { retryAfter: Number(error["retry_after"]) } : {});
+}
+
+/** Return `name`, a camelCase field name, in snake_case. */
+function snakeCase(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Return an `ask_user` request as a case writes its `args`: snake_case keys, each question's
+ * too, null fields left out.
+ */
+function askUserArgs(request: AskUserRequest): Case {
+  const args: Case = {};
+  for (const [key, value] of Object.entries(request)) {
+    if (value === null) continue;
+    args[snakeCase(key)] =
+      key === "questions"
+        ? (value as Value[]).map((question) =>
+            isMapping(question)
+              ? Object.fromEntries(Object.entries(question).map(([name, item]) => [snakeCase(name), item]))
+              : question,
+          )
+        : (value as Value);
+  }
+  return args;
+}
+
+/** Return how many records the log file at `path` holds: the `nextSequence` of its next append. */
+function nextSequence(path: string): number {
+  return existsSync(path) ? readFileSync(path, "utf8").split("\n").length - 1 : 0;
+}
+
+/** A case's scripted host: what `runFlow` gets from it, what it records, and its check. */
+interface Host {
+  /** A stub per `host.tools` entry, and `ask_user` for `host.human`. */
+  tools: Record<string, ToolEntry>;
+  /** The draws retry backoffs take, from `host.jitter`; `null` for the implementation's own. */
+  random: (() => number) | null;
+  /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
+  calls: Map<string, Case[]>;
+  /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
+  taken: { label: string; entry: Value; sequence: number }[];
+  /**
+   * Throw a `CaseFailure` when a script ran out or was missing; return a message per script with
+   * entries left.
+   */
+  check: () => string[];
+}
+
+/**
+ * Return the case's host: each stub tool call is recorded and takes its script's next entry, as
+ * each `ask_user` call takes the next `host.human` answer of its node and each backoff the next
+ * `host.jitter` draw. `log` is the run's log file.
+ */
+function host(case_: Case, log: string): Host {
+  const spec = get(case_, "host", {}) as Case;
+  const calls = new Map<string, Case[]>();
+  const problems: string[] = [];
+  const taken: Host["taken"] = [];
+  const scripts = new Map<string, Value[]>(
+    Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
+      `host.human.${node}`,
+      [...(answers as Value[])],
+    ]),
+  );
+
+  const take = (label: string, what: string): Value => {
+    const script = scripts.get(label);
+    if (script === undefined) {
+      problems.push(`${what} found no \`${label}\` list`);
+    } else if (script.length === 0) {
+      problems.push(`${what} found \`${label}\` used up`);
+    } else {
+      const entry = script.shift()!;
+      taken.push({ label, entry, sequence: nextSequence(log) });
+      return entry;
+    }
+    // Permanent, so a TOOL node doesn't retry the overrun; `check()` reports it either way.
+    throw new PermanentToolError(`\`${label}\` is used up`);
+  };
+
+  const call = (name: string, label: string, ctx: ToolContext, args: Case): Value => {
+    const record = { args, call_id: ctx.callId, attempt: BigInt(ctx.attempt), node: ctx.node };
+    calls.set(name, [...(calls.get(name) ?? []), record]);
+    return take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+  };
+
+  const tools: [string, ToolEntry][] = [];
+  for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
+    const stub = entry as Case;
+    const results = stub["results"];
+    const byNode = isMapping(results);
+    if (byNode) {
+      for (const [node, script] of Object.entries(results)) {
+        scripts.set(`host.tools.${name}.results.${node}`, [...(script as Value[])]);
+      }
+    } else {
+      scripts.set(`host.tools.${name}.results`, [...(results as Value[])]);
+    }
+    const execute = (args: Record<string, unknown>, ctx: ToolContext): unknown => {
+      const label = `host.tools.${name}.results${byNode ? `.${ctx.node}` : ""}`;
+      const step = call(name, label, ctx, args as Case) as Case;
+      if (Object.hasOwn(step, "return")) return step["return"];
+      throw scriptedError(step["raise"] as Case, TOOL_ERRORS);
+    };
+    const description = get(stub, "description", "") as string;
+    const isConcurrencySafe = stub["concurrency_safe"] === true ? () => true : null;
+    const parameters = stub["parameters"] as JsonObject;
+    tools.push([name, tool({ name, description, parameters, execute, isConcurrencySafe })]);
+  }
+  if (Object.hasOwn(spec, "human")) {
+    const askUser: AskUserHandler = (request, ctx) =>
+      call("ask_user", `host.human.${ctx.node}`, ctx, askUserArgs(request));
+    tools.push(["ask_user", askUser]);
+  }
+  let random: (() => number) | null = null;
+  if (Object.hasOwn(spec, "jitter")) {
+    scripts.set("host.jitter", [...(spec["jitter"] as Value[])]);
+    random = () => Number(take("host.jitter", "a backoff draw"));
+  }
+
+  const check = (): string[] => {
+    if (problems.length > 0) throw new CaseFailure(problems.join("\n"));
+    return [...scripts]
+      .filter(([, script]) => script.length > 0)
+      .map(([label, script]) => {
+        const entries = script.length === 1 ? "entry" : "entries";
+        return `\`${label}\` has ${script.length} ${entries} left`;
+      });
+  };
+  return { tools: Object.fromEntries(tools), random, calls, taken, check };
+}
+
 /** Return a run's `failure` in the case's failure form. */
 function failureForm(failure: Failure, flow: ComposedFlow): Case {
   return { ...diagnosticForm(flow.diagnose(failure)), node: failure.nodeId };
@@ -1068,16 +1232,23 @@ function output(result: RunResult, flow: ComposedFlow): Case {
 }
 
 /**
- * Run the flow with `inputs` and the `run` arguments, logged to `run.jsonl` in the case directory,
- * and return its results: `output`, or the host error as `raises` and `error` (never compared).
+ * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
+ * the case directory, its waits on a virtual clock that starts at the real current time. Return
+ * its results: `output`, or the host error as `raises` and `error` (never compared), and `left`, a
+ * message per script with entries left.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
+  const log = join(ctx.dir, "run.jsonl");
+  const { tools, random, check } = host(case_, log);
   // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
   const options: RunFlowOptions = {
     ...runOptions(get(case_, "run", {}) as Case),
-    log: join(ctx.dir, "run.jsonl"),
+    log,
     env: caseEnv(ctx),
+    tools,
+    random,
+    scheduler: virtualScheduler(Date.now()),
   };
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
@@ -1086,11 +1257,13 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   } catch (error) {
     caught = { raises: raised(error), error };
   }
+  // A call past a script's end is the case's own error, whatever it made differ.
+  const left = check();
   // In placeholder order: ids are numbered walking the results in this order.
   const actual = {
     ...(result !== undefined ? { output: output(result, flow) } : {}),
   };
-  return { ...actual, ...caught };
+  return { ...actual, ...caught, left };
 }
 
 /**
@@ -1110,6 +1283,9 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
   }
+  // Last: a leftover entry usually follows from a divergence the comparisons show.
+  const left = actual["left"] as string[];
+  if (left.length > 0) throw new CaseFailure(left.join("\n"));
 }
 
 /** Run a `run` case: run the flow and compare its results with `expect`. */

@@ -95,8 +95,9 @@ Every case runs in a new temporary directory, the *case directory*:
   `stdin` and `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
   if one appears in the trace, events, stream, tool calls, output, the raised error's message,
   stdout, stderr or a run log file.
-- **Time.** The TS runner uses a virtual scheduler, so waits take no time. The Python runner
-  waits for real, so a case keeps its waits short.
+- **Time.** The TS runner's runs use a virtual clock that starts at the real current time and
+  moves only by the waits, so waits take no time. The Python runner waits for real, so a case
+  keeps its waits short.
 
 ## Kinds
 

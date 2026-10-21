@@ -73,11 +73,9 @@ import {
 import { normalizeNodeSignatureCursor, parseNodes } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-// T3-15 imports
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
-// T3-17 imports
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
 import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
@@ -101,7 +99,6 @@ import {
   type ItemType,
   type ProducerType,
 } from "./inline_inputs.ts";
-// T3-18 imports
 import type { ExprNode } from "../../expr/grammar.ts";
 import { NodeKind } from "../../nodes/base.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
@@ -124,7 +121,6 @@ import { checkReservedSources } from "../validate/reserved_sources.ts";
 import { stampToolInputTypes } from "../validate/tool_inputs.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
 import { checkWiringParity } from "../validate/wiring_parity.ts";
-// T3-19 imports
 import { ExpressionError } from "../../expr/index.ts";
 import { LLM_CONFIG_KEY, splitLayers, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
@@ -137,7 +133,6 @@ import {
   inferBindingType,
   localInputContracts,
 } from "../validate/typed_bindings.ts";
-// T3-20 imports
 import { lowerFlowAsserts, validateNodeAsserts } from "../validate/asserts.ts";
 import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
@@ -2425,25 +2420,3 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   compiled.flowLlmValueTypes = flowLlmValueTypes;
   return new ComposedFlow(compiled, { version, name, description });
 }
-
-// ---------- Passes not ported yet ----------
-//
-// Every placeholder, by owner. Kind 1 is a stub in its owner's sub-block below: the owner deletes
-// the stub and imports the port under its import slot, keeping the sub-block header. A local type
-// alias is replaced by a `type` import of the same name under that slot, never just deleted.
-// `TypeFn` is imported from compose/helpers/output_contracts.ts.
-// Kind 2 is a pipeline helper stubbed at its Python position: the owner ports its body in place,
-// adding the private helpers named beside it. Kind 3 is a `const` inside `assemble`: the owner
-// replaces that line. Until then a placeholder returns nothing, except as noted; "throws" means
-// `Error("<python name> is not ported yet (T3-xx)")`.
-
-// T3-15: compose/nodes/{agent,code,tool,human_input,wait}.ts
-
-// T3-17: compose/desugar/*.ts, compose/edges/*.ts, compose/build/{boundary,inline_inputs}.ts
-
-// T3-18: compose/validate/{value_nesting,tool_inputs,wiring_parity,references,human_questions,
-// reserved_sources,cycles,handles}.ts
-
-// T3-19: compose/validate/{typed_bindings,call_types,loop_types,llm_config_sources}.ts
-
-// T3-20: compose/validate/{case_branches,narrowing,case_exhaustive,asserts,skips}.ts

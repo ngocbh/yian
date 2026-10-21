@@ -59,7 +59,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
-import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, ToolIterationLimitError } from "./context.ts";
+import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
 import { modelFailureCode } from "./live.ts";
 import {
   type CallTimeLLM,
@@ -683,14 +683,8 @@ export class AgentNode extends Node {
     try {
       return await runAgent(ctx);
     } catch (error) {
-      let sent: readonly string[] = [];
-      try {
-        sent = ctx.sent();
-      } catch {
-        // A failing read must not replace the error being scrubbed.
-      }
       // Providers may echo any credential the call sent; the failure record must not carry it.
-      throw scrubCallCredentials(error, config, { env, sent });
+      throw scrubCallCredentials(error, config, { env, sent: sentCredentials(ctx) });
     }
   }
 

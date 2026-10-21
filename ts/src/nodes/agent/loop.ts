@@ -70,9 +70,8 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * Makes one model call without tools or skills, otherwise runs the tool loop until the model
  * answers. Sets `ctx.sent` to the built model's route credentials once the model is built. Each
  * reason the model gives for leaving out replay state reaches `ctx.emitEvent` once, as
- * `ReplayDegraded`. Model
- * calls are numbered from 1 in call order; with `ctx.steps`, each retry of call `n` first records
- * a `model_attempt` step for it (`retrySettings`).
+ * `ReplayDegraded`. Model calls are numbered from 1 in call order; with `ctx.steps`, each retry
+ * of call `n` first records a `model_attempt` step for it (`retrySettings`).
  *
  * @returns The checked structured value, or the final reply's visible text; after a host
  *   interrupt, the latest reply's visible text (`""` before any).
@@ -118,8 +117,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.prompt, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
   // Every model call of this start, chat or structured, takes the next call number.
-  let calls = 0;
-  const nextCall = () => retrySettings(ctx, ++calls);
+  let modelCalls = 0;
+  const nextCall = () => retrySettings(ctx, ++modelCalls);
   const structuredOptions = {
     retries: ctx.retries,
     live,

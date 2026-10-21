@@ -71,7 +71,7 @@
  * failing credentials read doesn't replace the error being scrubbed. Through `FlowEngine` with a
  * run log: a retried model call's `model_attempt` step comes before the node's outcome; a resumed
  * call-time agent (state replayed from the log, a fresh engine) restarts past its `model_attempt`
- * step, finds its recorded `effective_llm_config`, and numbers its calls from 1 again.
+ * step, records its `effective_llm_config` again, and numbers its calls from 1 again.
  *
  * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
  * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
@@ -1233,7 +1233,7 @@ describe("model_attempt steps through the engine", () => {
     expect(chatRecords(built)).toEqual(["NodeStartedRecord", ATTEMPT, "NodeSucceededRecord"]);
   });
 
-  test("a resumed call-time agent restarts past its model_attempt step and finds its recorded config", async () => {
+  test("a resumed call-time agent restarts past its model_attempt step and numbers its calls from 1 again", async () => {
     install({ ...BUILTIN, modelRetries: 1 });
     const failure = () => new ProviderError("server", "boom", { status: 500 });
     const agent = new AgentNode("chat", { prompt: "hi" });
@@ -1262,8 +1262,7 @@ describe("model_attempt steps through the engine", () => {
       random: () => 1,
     });
     expect((await resumed.run()).at(-1)).toEqual(new RunSucceeded({ output: "done" }));
-    // The new start checks its config against the recorded one past the attempt, and numbers its
-    // calls from 1 again.
+    // The new start records its config again and numbers its calls from 1 again.
     expect(chatRecords(resumed).slice(3)).toEqual(["NodeStartedRecord", config, ATTEMPT, "NodeSucceededRecord"]);
   });
 });

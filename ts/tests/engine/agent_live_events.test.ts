@@ -45,8 +45,8 @@
  * retry, a recording scheduler and a draw of 1: a retried call records one step before the failed
  * attempt's `ModelCallFinished{error}` (call and attempt `1n`, the error's kind and message,
  * `partial` `null`, `retry_in` the wait the scheduler got, from the backoff the draw gave); a step
- * holds the partial reply's JSON; the second call of a tool loop records call `2n`; a key echoed in
- * the error is scrubbed; without steps nothing is recorded and the call still retries; a
+ * holds the partial reply's JSON; the second call of a tool loop records call `2n`, and so does
+ * the final structured pass after a chat reply; a key echoed in the error is scrubbed; without steps nothing is recorded and the call still retries; a
  * `steps.record` fault ends the call as a host fault, unretried, with no finished event after it.
  * `ReplayDegraded`: the reasons a built model signals over a two-turn tool loop reach the event
  * sink once per reason.
@@ -746,6 +746,17 @@ test("the second model call of a tool loop records call 2", async () => {
   expect((outcome as Output).value).toBe("acme is fine");
   const steps = log.filter((item) => !(item instanceof ModelCallStarted || item instanceof ModelCallFinished)) as ValueRecord[];
   const attempts = steps.filter((step) => "model_attempt" in step).map((step) => step["model_attempt"] as ValueRecord);
+  expect(attempts.map((step) => [step["call"], step["attempt"]])).toEqual([[2n, 1n]]);
+});
+
+test("the final structured pass after a chat reply records call 2", async () => {
+  const failure = new ProviderError("server", "boom", { status: 500 });
+  const chat = model(reply("about four"), failure, reply('{"value": 4}'));
+  const { outcome, log } = await withSteps(chat, { tools: lookupTools(), output: INT });
+  expect((outcome as Output).value).toBe(4n);
+  const attempts = log
+    .filter((item): item is ValueRecord => !(item instanceof ModelCallStarted || item instanceof ModelCallFinished))
+    .map((step) => step["model_attempt"] as ValueRecord);
   expect(attempts.map((step) => [step["call"], step["attempt"]])).toEqual([[2n, 1n]]);
 });
 

@@ -77,6 +77,16 @@ export interface AgentRunContext {
   readonly random?: () => number;
 }
 
+/** Return the credentials `ctx`'s model sends, or none when the read fails. */
+export function sentCredentials(ctx: AgentRunContext): readonly string[] {
+  try {
+    return ctx.sent();
+  } catch {
+    // A failing read must not replace the error being scrubbed.
+    return [];
+  }
+}
+
 /** How one model call retries: the clock and jitter of its waits, and what runs before each wait. */
 export interface RetrySettings {
   readonly scheduler?: Scheduler;
@@ -97,13 +107,7 @@ export function retrySettings(ctx: AgentRunContext, call: number): RetrySettings
   const { steps, scheduler, random } = ctx;
   if (steps === undefined) return { scheduler, random };
   const onRetry = (retry: RetryInfo): void => {
-    let sent: readonly string[] = [];
-    try {
-      sent = ctx.sent();
-    } catch {
-      // A failing read must not replace the error being scrubbed.
-    }
-    const error = scrubCallCredentials(retry.error, ctx.llmConfig, { env: ctx.models.env, sent });
+    const error = scrubCallCredentials(retry.error, ctx.llmConfig, { env: ctx.models.env, sent: sentCredentials(ctx) });
     steps.record({
       model_attempt: {
         call: BigInt(call),

@@ -251,7 +251,11 @@
       "required": ["node_id", "reason"],
       "properties": {
         "node_id": {"type": "string"},
-        "reason": {"type": "string", "description": "Why the replay state was left out: missing, malformed, unknown_version, other_protocol, other_provider, other_model, other_account or unknown_field; later versions may add reasons."}
+        "reason": {
+          "description": "Why the replay state was left out.",
+          "type": "string",
+          "enum": ["missing", "malformed", "unknown_version", "other_protocol", "other_provider", "other_model", "other_account", "unknown_field"]
+        }
       }
     },
     "RunStarted": {

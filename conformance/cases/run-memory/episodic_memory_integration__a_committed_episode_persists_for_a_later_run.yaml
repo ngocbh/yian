@@ -2,7 +2,7 @@
 # Pins: an AGENT-level episodic memory commits the earlier run's episode (the AGENT's only) on its
 # backward, and it persists for a later run (fresh memories over the same root); the earlier run's
 # request has no memory block. The main run's request (the episode recalled in the memory block)
-# isn't carried: it would pin the episode's entry_id formula (a T6-6 hand-off).
+# is pinned by episodic_memory_integration__a_recalled_episode_reaches_the_request.
 kind: run
 flow: |
   id: episodic-history

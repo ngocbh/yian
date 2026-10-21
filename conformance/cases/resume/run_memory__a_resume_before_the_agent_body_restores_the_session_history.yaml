@@ -2,7 +2,10 @@
 # (the session history a `before` run seeds, as in tests/engine/test_agent_session.py).
 # Pins: a session AGENT whose run is cut before its body (record 2, `__start__`'s success, so
 # `agent` never starts) runs once on resume, and its request holds the earlier run's turn
-# restored from the session, then this run's message.
+# restored from the session, then this run's message. The cut is one record earlier than the
+# test's stop at the AGENT's start: a cut after record 3 lets the body run (that is
+# memory_storage_integration__a_resume_reopens_the_latest_saved_history); this one pins a resume
+# that runs the AGENT fresh (`retry_node_ids: []`).
 kind: resume
 flow: |
   id: plain-session

@@ -2,6 +2,9 @@
 # Pins: a session AGENT's tool exchange from an earlier run (a `before` run) is restored in this
 # run's request: the assistant tool call and its tool result under the provider's call id, then
 # the reply; the old call isn't run again (the stub has one result).
+# `tool_calls` is left out: the `before` run's call id `r1/agent/<32 hex>/0` holds an exchange id
+# that never gets a placeholder (no `before` event is a result); the one-result stub pins that the
+# old call doesn't run again.
 kind: run
 flow: |
   id: plain-session

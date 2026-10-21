@@ -1,7 +1,8 @@
 # From tests/engine/test_episodic_memory_integration.py::test_backward_commits_episode_recalled_by_a_fresh_run.
 # Pins: the episode an earlier run's backward commits is recalled into a later run's system prompt:
 # the stored entry as canonical JSON, with its entry_id (the SHA-256 of the episode's identity) and
-# the float input `weight` written `1.0`.
+# the float input `weight` written `1.0`. The entry_id is a literal hash, not a placeholder,
+# because a model request is compared exactly, without placeholders.
 kind: run
 flow: |
   id: episodic-history

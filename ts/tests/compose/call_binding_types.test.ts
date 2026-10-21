@@ -10,7 +10,8 @@
  * `test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write`; the load halves of
  * `test_bindings_that_fit_load_and_run` (16),
  * `test_text_from_an_unproven_source_is_not_converted_at_the_child_start` and
- * `test_text_supplied_to_the_top_level_flow_is_still_converted`.
+ * `test_text_supplied_to_the_top_level_flow_is_still_converted`, and their run halves, through
+ * `runFlow` on the same flow text with its own `child` def.
  *
  * Changed: the four date params of `test_unprovable_fit_is_a_load_error`
  * (`("date", "2026-01-01")`, `("datetime", "2026-01-01T10:00:00")`, `("str", "2026-01-01")` and
@@ -21,7 +22,15 @@
  * `test_no_rewrite_hint_when_rewriting_cannot_help` shows `[true,"no"]` and `"no"` (Python:
  * `[true, "no"]` and `'no'`; rule `messages`).
  * `test_no_rewrite_hint_for_text_spelling_an_int_past_the_digit_limit` gets the hint: TS has no
- * int digit limit, so the text reads as that int. The CODE bodies are TS.
+ * int digit limit, so the text reads as that int. The CODE bodies are TS. The runs' child body
+ * returns `JSON.stringify(inputs["t"])` where Python returns `repr(inputs["t"])`, so each expected
+ * output is the text form (decision 7): Python's `"1"` stays `"1"`, `"'z'"` is `"\"z\""`, `"None"`
+ * is `"null"`, a date reads as text so `"'2026-01-01'"` is `"\"2026-01-01\""`, and the `float`
+ * rows' `"1.0"` and `"5.0"` are `"1"` and `"5"`: a CODE body gets ints as `number` and can't tell
+ * an int from a float (decision 45), so these rows pin only the value (that a whole number in a
+ * `float` input stays an int, decision 38, is pinned by `values/int_fills_float`). The unproven
+ * text's message shows `"3"` (Python: `'3'`), and the top-level row's output is
+ * `[3,2.5,true]` (Python: `[3, 2.5, True]`).
  *
  * TS-only: a float spelling past the double range (`"1e400"`) and `"inf"` (YAML reads an unquoted
  * inf as text) for a `float` input get no hint; the
@@ -31,14 +40,13 @@
  * `types/compose_open_range_flows__call_with_a_wider_open_range_source`.
  * `load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none` is pinned in
  * `union_narrowing.test.ts`, its Python file's mirror.
- *
- * Later (T4): the run halves of the load rows above.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
@@ -49,6 +57,7 @@ import {
   type CaseRow,
   caseRegistry,
   handChild,
+  loadConformanceFlow,
   loadError,
   parametersFromYaml,
   runCase,
@@ -83,7 +92,7 @@ defs:
         input:
           t: \${input.t}
         output: str
-        code: return String(inputs["t"])
+        code: return JSON.stringify(inputs["t"])
     output: \${n.output}
 nodes:
   c:
@@ -313,9 +322,35 @@ test.each<[string, string, string | null]>([
   expect(composed.compiled.nodes.has("c")).toBe(true);
 });
 
-test("text from an unproven source is not converted at the child start (loads)", () => {
-  // `g` has no declared output, so its "3" is unproven at load; the child's start refuses it.
-  const text = `id: p
+/** The run inputs of the fit rows; `m`, `n` and `d` are left out, so they are null. */
+const INPUTS = { s: "x", xs: [1n], ds: ["2026-01-01"], rs: [{ a: 1n }], os: ["x"] };
+
+test.each<[string, string, string | null, unknown]>([
+  ["int", "${item}", "${input.xs}", ["1"]],
+  ["float", "${item}", "${input.xs}", ["1"]],
+  ["int", "${item.a}", "${input.rs}", ["1"]],
+  ["float", "5", null, "5"],
+  ["date", '${input.d:-"2026-01-01"}', null, '"2026-01-01"'],
+  ["date", '"2026-01-01"', null, '"2026-01-01"'],
+  ["int(1..3)", "2", null, "2"],
+  ["Optional(str)", "null", null, "null"],
+  ["str", '${input.m:-"z"}', null, '"z"'],
+  ["int", "${input.n:-5}", null, "5"],
+  ["str", "${input.m:-input.s}", null, '"x"'],
+  ["Optional(str)", "${input.m:-null}", null, "null"],
+  ["str", '${item:-"z"}', "${input.os}", ['"x"']],
+  ["date", "${item}", '["2026-01-01"]', ['"2026-01-01"']],
+  ["int", "${item:-3}", "[null, 1]", ["3", "1"]],
+  ["int", "${input.n | 3}", null, "3"],
+])("bindings that fit load and run: %s from %s over %p", async (type, binding, over, output) => {
+  const result = await runFlow(await loadConformanceFlow(flow(type, binding, over)), INPUTS);
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual(output);
+});
+
+/** A CALL whose binding comes from `g`, which has no declared output. */
+const OPAQUE_TEXT = `id: p
 name: p
 defs:
   child:
@@ -327,7 +362,7 @@ defs:
         input:
           t: \${input.t}
         output: str
-        code: return String(inputs["t"])
+        code: return JSON.stringify(inputs["t"])
     output: \${n.output}
 nodes:
   g:
@@ -341,11 +376,21 @@ nodes:
 output: \${c.output}
 `;
 
-  load(text, child("int"));
+test("text from an unproven source is not converted at the child start (loads)", () => {
+  // `g` has no declared output, so its "3" is unproven at load; the child's start refuses it.
+  load(OPAQUE_TEXT, child("int"));
 });
 
-test("text supplied to the top-level flow is still converted (loads)", () => {
-  const text = `id: p
+test("text from an unproven source is not converted at the child start", async () => {
+  const result = await runFlow(await loadConformanceFlow(OPAQUE_TEXT), {});
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("contract.input");
+  expect(result.failure!.message).toContain('"3" does not match declared type int');
+});
+
+/** A CALL passing the top-level flow's `int`, `float` and `bool` inputs on to its child. */
+const TOP_LEVEL = `id: p
 name: p
 input:
   n: !int
@@ -377,13 +422,22 @@ nodes:
       b: \${input.b}
 output: \${c.output}
 `;
+
+test("text supplied to the top-level flow is still converted (loads)", () => {
   const childFlow = handChild({
     inputs: parametersFromYaml("input:\n  n: !int\n  f: !float\n  b: !bool\n", new Map()),
     producers: { e: new ValueContract(Type.scalar(ValueKind.STRING)) },
     output: "${e.output}",
   });
 
-  load(text, childFlow);
+  load(TOP_LEVEL, childFlow);
+});
+
+test("text supplied to the top-level flow is still converted", async () => {
+  const result = await runFlow(await loadConformanceFlow(TOP_LEVEL), { n: " 3 ", f: "2.5", b: "yes" });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("[3,2.5,true]");
 });
 
 // ---------- harvested conformance cases ----------

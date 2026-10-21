@@ -4,12 +4,11 @@
  * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
  *
  * Ported, loaded with `loadFlow` and run with `runFlow`:
- * `test_map_over_literal_list_without_spans_still_loads` and
- * `test_nested_references_in_a_loop_body_run_after_growth`; the load half of
+ * `test_map_over_literal_list_without_spans_still_loads`,
+ * `test_nested_references_in_a_loop_body_run_after_growth` and
+ * `test_nested_case_output_expands_in_inputs_and_outputs` (both rows); the load half of
  * `test_nested_references_in_a_map_child_run_after_growth`, whose run is covered by
  * `run-core/compose_nested_template_walkers__nested_references_in_a_map_child`.
- *
- * Later (T4): `test_nested_case_output_expands_in_inputs_and_outputs` (a run).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -348,6 +347,16 @@ output: \${loop.output}
 
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ n: 3n });
+});
+
+test.each([
+  [true, "yes"],
+  [false, "no"],
+])("nested case output expands in inputs and outputs: go %p", async (go, picked) => {
+  const result = await runFlow(await loadFlow(CASE_FLOW), { go }, { env: hostEnv(dir) });
+
+  expect(result.failure).toBeNull();
+  expect(result.output).toEqual({ c: { picked, note: `took ${picked}` }, direct: [picked] });
 });
 
 // ---------- harvested conformance cases ----------

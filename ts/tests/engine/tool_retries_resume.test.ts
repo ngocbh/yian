@@ -13,6 +13,8 @@
  * `test_a_crash_inside_attempt_two_resumes_at_attempt_three_with_one_retry_used`,
  * `test_a_crash_inside_attempt_two_with_no_retry_left_fails_on_resume`,
  * `test_a_retries_zero_crash_resumes_at_attempt_two_without_steps`,
+ * `test_a_crash_during_the_backoff_wait_rewaits_and_resumes_at_attempt_two`,
+ * `test_a_crash_during_the_second_backoff_rewaits_the_last_recorded_delay`,
  * `test_two_crashes_rewait_the_recorded_delay_each_resume`,
  * `test_a_crash_mid_retry_resumes_across_worker_modes` (both rows),
  * `test_an_interrupted_first_attempt_shows_in_the_final_message`,
@@ -28,11 +30,12 @@
  * `test_a_finished_log_with_retries_replays_to_the_live_steps`, and
  * `test_a_long_loop_keeps_no_steps_for_finished_iterations` (50 iterations, Python's flow).
  *
- * Covered by `resume/tool_retries_resume__a_crash_in_the_backoff_resumes_at_attempt_two`:
- * `test_a_crash_during_the_backoff_wait_rewaits_and_resumes_at_attempt_two`; by
- * `resume/tool_retries_resume__a_crash_during_the_second_backoff_rewaits_the_last_delay`:
- * `test_a_crash_during_the_second_backoff_rewaits_the_last_recorded_delay`; by
- * `resume/tool_retries_resume__a_finished_run_with_retries_resumes_read_only`: the resume half of
+ * The two backoff rows also have the cases
+ * `resume/tool_retries_resume__a_crash_in_the_backoff_resumes_at_attempt_two` and
+ * `resume/tool_retries_resume__a_crash_during_the_second_backoff_rewaits_the_last_delay`, which pin
+ * the trace and the tool calls but not the waits.
+ *
+ * Covered by `resume/tool_retries_resume__a_finished_run_with_retries_resumes_read_only`: the resume half of
  * `test_a_finished_log_with_retries_replays_to_the_live_steps` (two read-only resumes, the log
  * unchanged, the tool not called again).
  *
@@ -259,6 +262,56 @@ test("a retries zero crash resumes at attempt two without steps", async () => {
   expect(script.callIds()).toEqual(new Set(["r1/call"]));
   expect(steps(path)).toEqual([]);
   expect(waited).toEqual([]);
+});
+
+test("a crash during the backoff wait rewaits and resumes at attempt two", async () => {
+  const path = freshLog();
+  const flow = await flowOf(3);
+  // `retryAfter` makes the recorded delay 7, where a recomputed backoff would be 1.
+  const script = new Script(new TransientToolError("a", { retryAfter: 7 }));
+  const { scheduler, waited } = clock();
+
+  // Record 5 is attempt 2's `started` step, after the wait.
+  await crashAfter(5, () =>
+    runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
+  );
+  expect(steps(path)).toEqual([failed(1, "a", 7, "TransientToolError")]);
+
+  const result = await resumeFlow(flow, { log: path, tools: script.tools(), ...host(scheduler) });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(script.attempts()).toEqual([1, 2]);
+  expect(script.callIds()).toEqual(new Set(["r1/call"]));
+  expect(waited).toEqual([7000, 7000]);
+  // The resumed attempt 2 is the node's own start, so it records no `started` step.
+  expect(steps(path)).toEqual([failed(1, "a", 7, "TransientToolError")]);
+});
+
+test("a crash during the second backoff rewaits the last recorded delay", async () => {
+  const path = freshLog();
+  const flow = await flowOf(3);
+  // Recorded delays 7 then 5; a recomputed second backoff would be 2.
+  const script = new Script(
+    new TransientToolError("a", { retryAfter: 7 }),
+    new TransientToolError("b", { retryAfter: 5 }),
+  );
+  const { scheduler, waited } = clock();
+
+  // Record 7 is attempt 3's `started` step, after the second wait.
+  await crashAfter(7, () =>
+    runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
+  );
+  const result = await resumeFlow(flow, { log: path, tools: script.tools(), ...host(scheduler) });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(script.attempts()).toEqual([1, 2, 3]);
+  expect(script.callIds()).toEqual(new Set(["r1/call"]));
+  expect(waited).toEqual([7000, 5000, 5000]);
+  expect(steps(path)).toEqual([
+    failed(1, "a", 7, "TransientToolError"),
+    started(2),
+    failed(2, "b", 5, "TransientToolError"),
+  ]);
 });
 
 test("two crashes rewait the recorded delay each resume", async () => {

@@ -8,6 +8,9 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
+ * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow` and `RunResult`, and
+ * re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering` (`nodes/base.ts`).
+ *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                nodes, platform, runtime, skills, tools, typesys.
  * Never imports: the CLI.
@@ -104,6 +107,9 @@ import {
   type ValueRecord,
   writeAsText,
 } from "./typesys/values.ts";
+
+export type { Steering } from "./nodes/base.ts";
+export { BackwardOutcome } from "./runtime/contracts.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */
 export type EventHook = (event: RunEvent) => unknown;

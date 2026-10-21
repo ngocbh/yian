@@ -57,7 +57,9 @@
  * Changed: `test_run_flow_accepts_any_mapping` becomes "a plain object is refused; a Map runs":
  * `memory` must be a `Map`, as `skills` must.
  *
- * Later (T4-8): `test_package_exports_the_host_builder`, `test_resume_checks_registry_types_too`,
+ * Ported: `test_package_exports_the_host_builder`, on `index.ts`.
+ *
+ * Later (T4-8): `test_resume_checks_registry_types_too`,
  * `test_resume_accepts_one_callee_called_from_two_nodes` (every case) and
  * `test_backward_checks_registry_types_too`.
  */
@@ -72,6 +74,7 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import * as yian from "../../src/index.ts";
 import {
   DeclSite,
   type Memory,
@@ -777,6 +780,12 @@ function runnableFlow(memory: string): Promise<ComposedFlow> {
       "  echo: {kind: code, code: return 1, output: int}\noutput: ${echo.output}\n",
   );
 }
+
+// test_package_exports_the_host_builder
+test("the package root exports the host builder", () => {
+  expect(yian.buildMemories).toBe(buildMemories);
+  expect(yian.MemoryRegistry).toBe(MemoryRegistry);
+});
 
 /** `runFlow` with no inputs, in an environment holding only the test's credential store. */
 function run(flow: ComposedFlow, memory: unknown) {

@@ -16,7 +16,13 @@ function testIo() {
   const out: string[] = [];
   const err: string[] = [];
   const writer = (chunks: string[]): Writer => ({ write: async (text) => void chunks.push(text) });
-  const io: CliIo = { stdout: writer(out), stderr: writer(err), stdin: new PassThrough(), env: () => undefined };
+  const io: CliIo = {
+    stdout: writer(out),
+    stderr: writer(err),
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: () => undefined,
+  };
   return { io, stdout: () => out.join(""), stderr: () => err.join("") };
 }
 

@@ -70,8 +70,8 @@ function learnerOptions(key: string, { env, models, onEvent }: Learners) {
   return { env: models === null ? env : models.env, createModel, onRetry };
 }
 
-/** Attach one cleanup failure, and the notes it carries, to `target`. */
-function noteCleanup(target: unknown, cleanup: unknown, label: string): void {
+/** @internal Attach one cleanup failure, and the notes it carries, to `target`. */
+export function noteCleanup(target: unknown, cleanup: unknown, label: string): void {
   addNote(target, () => {
     const [name, message] =
       cleanup instanceof Error ? [cleanup.name, cleanup.message] : [jsTypeName(cleanup), String(cleanup)];

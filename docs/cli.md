@@ -9,13 +9,15 @@ yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memor
 yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--quiet] [--verbose] [--engine-trace] [--json]
 yian check [--root DIR] FLOW.yaml... [--json]
 yian skills check DIR... [--json]
+yian status LOG [--json]
 yian config check [--json] < llm_config.json
 yian providers [--json]
 yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--json]
 ```
 
 `yian check` loads flows without running them, `yian skills check` checks skill
-directories, `yian config check` checks an `llm_config` layer, `yian providers`
+directories, `yian status` (TS yian only) reports where the run in a run log stands,
+`yian config check` checks an `llm_config` layer, `yian providers`
 lists the providers, and `yian models` lists the models a login or a key offers.
 With `--json`, these commands, `yian auth --remove`, and `yian run` write one JSON
 document on stdout, and device sign-in writes JSON lines; see
@@ -185,6 +187,9 @@ they run and may use that key. An agent of that kind that had started before the
 crash recorded its config, and its key is checked like the others; one that had not
 started is checked when it resolves. A saved login's connection settings need nothing: they are pinned
 with the login.
+
+Changed (TS yian): a TS host resumes such a run with `resumeFlow(flow, { log, apiKey, headers })`;
+the CLI's message keeps Python's names.
 
 `--resume` also needs the `YIAN_<NAME>` defaults and limits the run started with. A
 run records the ones that differ from the built-in values, and a log that started
@@ -405,6 +410,10 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    A default applied by START was already validated at load and is not
    string-coerced.
 
+Changed (TS yian): a JSON number with an integral value in `--inputs` (`2.0`, `1e3`), at any
+depth, reads as an int, as a TS host's number does, so it fills an `int` input; Python yian
+refuses it. A value beyond 2^53 - 1 in size stays a float.
+
 Changed (TS yian): text for a `float` input reads by the TS text rules. An int spelling is an
 int at any size (`--input x=2` gives `2`, kept an int in the float slot), `2.0` or `1e3` is a
 float, and `inf`/`-inf` is infinity; a spelling beyond the float range is refused. Digits are
@@ -571,6 +580,10 @@ does not cancel the surrounding conversation.
 - Once an invocation reaches run-log setup, the path is reported even under
   `--quiet`, so an interrupted run remains discoverable.
 
+Changed (TS yian): the output is not rendered as Markdown. A string prints as is, and any other
+output in the text form (`true`, `[1,"a"]`, `{"k":"v"}`). Colour is used only on a terminal, and
+never when `NO_COLOR` is set to a non-empty value.
+
 ## Concurrency (`--num-workers`)
 
 Fresh runs default to a pool of eight workers, so **independent** ready nodes
@@ -616,6 +629,7 @@ Schema `conformance/schema/cli.schema.json` in the repository.
 | `yian auth --remove --auth-file F --json` | `{"format", "ok"}` | the removal failed |
 | `yian auth openai --method subscription --login device --json` | JSON lines: `{"format", "event", ...}` | sign-in failed |
 | `yian run FLOW ... --json` (fresh or `--resume`) | `{"format", "status", ...}` | the run failed |
+| `yian status LOG --json` (TS yian only) | `{"format", "status", "in_flight", "interrupted_attempts"}` | the log can't be read |
 
 Every document follows these rules:
 
@@ -903,6 +917,37 @@ During a `--json` run, anything else written to stdout, such as a CODE node's
 `print` or the output of a command it starts, goes to stderr. `--json` changes nothing
 else: prompts, key checks, and exit codes are the same as without it.
 
+Changed (TS yian): `--json` runs the flow in a child process whose stdout is the parent's
+stderr, so raw writes to fd 1 go to stderr. A stop signal sent to the parent is forwarded to the
+child; a second one kills the child and exits 130.
+
+### Run status
+
+`yian status LOG` (TS yian only) reports where the run recorded in the run log `LOG` stands. It
+reads the log and never appends to it or takes its lock, so it works while the run is going.
+
+```json
+{"format": "yian.cli.v1", "status": "interrupted", "in_flight": ["draft"], "interrupted_attempts": {"draft": 1}}
+```
+
+- `status` is `running` while a writer holds the log's lock; `succeeded` or `failed` once the run
+  finished; `stopped` when the host stopped its last segment (Ctrl-C or a signal); otherwise
+  `interrupted`, when the process ended mid-run. A `stopped` or `interrupted` run can be resumed
+  with `--resume`.
+- `in_flight` lists the nodes started and not settled, in start order; it is empty for a finished
+  run.
+- `interrupted_attempts` maps a node id to the attempts a resume retried, or would retry, as
+  interrupted.
+
+It reads the records alone, not the flow, so a run whose process ended after its END succeeded,
+but before a node that was already ready started, reads as finished, though `--resume` would still
+run that node.
+
+It exits 0 whatever the status. A log it can't read (empty, damaged, not a run log, or unreadable)
+exits 1 with a `run.setup` error document; a missing LOG is a usage error (exit 2). Without
+`--json`, it prints `status: STATUS`, then `in flight: ID, ...` and
+`interrupted attempts: ID=N, ...` when there are any.
+
 ## Exit codes
 
 | Status | Exit code |
@@ -923,6 +968,13 @@ else: prompts, key checks, and exit codes are the same as without it.
 problem, and `yian config check` exits `2` when stdin is not a JSON object. With
 `--json`, a failed check exits `1` with its document on stdout, as does every other
 reported problem; see [Machine-readable output](#machine-readable-output).
+
+Changed (TS yian): SIGINT, SIGTERM and SIGHUP stop a run as Ctrl-C does (exit `130`) from
+the command's start, including while the flow loads and at the prompts before the run, where
+Python prints `Aborted!` and exits `1`. Once the first signal has been taken, a second one
+kills the process. A synchronous body (a CODE body or a tool) that blocks the event loop
+holds every signal until it returns, so a stop during the last node's body can be lost and
+the run reported as succeeded; under `--json`, a second signal kills the run even then.
 
 `yian auth` exits `1` when it fails or is cancelled, and `2` for a usage error, such as
 `--json` on a form that doesn't take it. Under `--json`, Ctrl-C makes it exit `130`, as
@@ -953,6 +1005,9 @@ flow has unresolved references:
 
 Pass `--engine-trace` to **also** print the engine's Python traceback under the
 located error — for debugging the engine itself, not your flow.
+
+Changed (TS yian): `--engine-trace` prints the JavaScript stack, or a failed run's captured
+traceback, in a box titled `traceback`.
 
 An error that spans **several** places (e.g. a **cycle**, which implicates every node
 in the loop) highlights *all* of them, widens the frame to cover both ends, and prints a

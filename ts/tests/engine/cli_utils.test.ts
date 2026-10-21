@@ -1,6 +1,9 @@
 // Ported from tests/engine/test_cli_utils.py: the key and endpoint helpers, with a fake terminal
 // standing in for questionary and a TTY; plus the argument parser, the usage text and `printJson`.
-// The `_agent_connections` / `_ensure_provider_keys` tests come with `yian run`.
+// The `_agent_connections` / `_ensure_provider_keys` rows load the hello-agent seed from its
+// harvested case, `load-core/seed_00_hello_agent`, and set the default provider and model the
+// Python suite's conftest sets where they rely on it.
+// Added: `ensureProviderKeys` resolves a saved login without a prompt.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
+import { agentConnections, ensureProviderKeys } from "../../src/cli/run.ts";
 import {
   CommandEnv,
   type CommandSpec,
@@ -17,6 +21,7 @@ import {
   flush,
   helpText,
   JSON_FORMAT,
+  MissingKeyError,
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
@@ -26,9 +31,11 @@ import {
   usageError,
   type Writer,
 } from "../../src/cli/utils.ts";
-import type { Env } from "../../src/defaults.ts";
+import { type Env, forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
+import { caseText } from "../compose/declarations.ts";
 
 // Each test's environment: a private home and auth store, so no real login is read.
 let home: string;
@@ -270,6 +277,73 @@ describe("confirmOllamaEndpoint", () => {
     const env = new CommandEnv(base);
     expect(await confirmOllamaEndpoint({ env, terminal: fakeTerminal("") })).toBe("http://gpu-box:11434");
     expect(env.read("OLLAMA_BASE_URL")).toBe("http://gpu-box:11434");
+  });
+});
+
+describe("agentConnections / ensureProviderKeys pre-flight", () => {
+  // `caseText` applies the case's env to the process's defaults.
+  afterEach(() => forget());
+
+  // The hello-agent seed: one agent, `note`, that sets no provider or model.
+  const helloAgent = () =>
+    loadFlow(caseText("load-core/seed_00_hello_agent").text, { env: base });
+
+  /** Each distinct agent connection as `[provider, source]`. */
+  async function connectionSources(cliCfg: Record<string, string>): Promise<[string, unknown][]> {
+    const connections = agentConnections(await helloAgent(), cliCfg, { env: base });
+    return connections.map(([provider, connection]) => [provider, connection?.source]);
+  }
+
+  /** The default provider and model the Python suite's conftest sets. */
+  function conftestDefaults(): void {
+    vars.set("YIAN_DEFAULT_PROVIDER", "openai");
+    vars.set("YIAN_DEFAULT_MODEL", "gpt-5.5");
+  }
+
+  test("fails when nothing sets a provider", async () => {
+    const flow = await helloAgent();
+    const error = thrown(() => agentConnections(flow, {}, { env: base }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toMatch(/^Agent 'note' has no provider or model; .*--provider\/--model/);
+  });
+
+  test("use the environment then the saved provider", async () => {
+    vars.set("YIAN_DEFAULT_PROVIDER", "anthropic");
+    vars.set("YIAN_DEFAULT_MODEL", "env-model");
+    expect(await connectionSources({})).toEqual([["anthropic", "environment"]]);
+    vars.delete("YIAN_DEFAULT_PROVIDER");
+    vars.delete("YIAN_DEFAULT_MODEL");
+    await new AuthStore(null, { env: base }).save("xai", new ApiKeyCredentials("key"), "saved-model");
+    expect(await connectionSources({})).toEqual([["xai", "store"]]);
+  });
+
+  test("the CLI layer fills the gap", async () => {
+    conftestDefaults();
+    vars.set("OPENAI_API_KEY", "sk-present");
+    // The agent sets no provider, so the CLI layer fills it.
+    expect(await connectionSources({ provider: "openai" })).toEqual([["openai", "environment"]]);
+  });
+
+  test("ensureProviderKeys passes when the key is present", async () => {
+    conftestDefaults();
+    vars.set("OPENAI_API_KEY", "sk-present");
+    await ensureProviderKeys(await helloAgent(), {}, {}, { env: new CommandEnv(base), terminal: null });
+  });
+
+  test("ensureProviderKeys throws when the key is missing", async () => {
+    conftestDefaults();
+    const flow = await helloAgent();
+    const context = { env: new CommandEnv(base), terminal: null };
+    const error = await rejection(ensureProviderKeys(flow, {}, {}, context));
+    expect(error).toBeInstanceOf(MissingKeyError);
+    expect(error.message).toContain("OPENAI_API_KEY");
+  });
+
+  test("a saved login is resolved without a key prompt", async () => {
+    await new AuthStore(null, { env: base }).save("anthropic", new ApiKeyCredentials("saved-k"), "m");
+    const terminal = fakeTerminal("typed");
+    await ensureProviderKeys(await helloAgent(), {}, {}, { env: new CommandEnv(base), terminal });
+    expect(terminal.prompts).toEqual([]);
   });
 });
 
@@ -527,7 +601,8 @@ describe("streamWriter", () => {
     void writer.write("a");
     void writer.write("b");
     let flushed = false;
-    const done = flush({ stdout: writer, stderr: writer, stdin: process.stdin, env: base }).then(() => (flushed = true));
+    const io = { stdout: writer, stderr: writer, stdin: process.stdin, stderrStream: process.stderr, env: base };
+    const done = flush(io).then(() => (flushed = true));
     while (callbacks.length > 0 || written.length < 2) {
       await new Promise((resolve) => setTimeout(resolve, 1));
       expect(flushed).toBe(false);

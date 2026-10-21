@@ -6,6 +6,8 @@
  *   `parseArgs`, then converts int and float options and checks paths with Click's messages;
  *   `helpText` and `usageError` give the text a command prints for `--help` and for a `UsageError`.
  * - `printJson` writes the one `yian.cli.v1` document a `--json` command prints.
+ * - `relay` copies the `run --json` child's document to the entry's stdout; `abortOnSignal` turns
+ *   the stop the entry forwards to the child into its `CliIo.stop`, aborted with a `HostStop`.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
  *   prompt instead of a failure on the first API call. `ensureApiKey` resolves a provider's saved
@@ -42,12 +44,21 @@ export interface Writer {
   readonly columns?: number;
 }
 
-/** A command's standard streams and environment. */
+/**
+ * A command's standard streams and environment: `stdin` and `stderrStream` are the raw streams a
+ * `Terminal` prompts on, `stderrStream` being the stream under `stderr`.
+ */
 export interface CliIo {
   stdout: Writer;
   stderr: Writer;
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
+  stderrStream: NodeJS.WritableStream & { columns?: number };
   env: Env;
+  /**
+   * A stop from outside the process's signals, aborted with a `HostStop`: aborted, or aborting
+   * later, it stops the run.
+   */
+  stop?: AbortSignal;
 }
 
 /** The last write each `streamWriter` started, which `flush` awaits. */
@@ -97,6 +108,7 @@ export function processIo(): CliIo {
     stdout: streamWriter(process.stdout),
     stderr: streamWriter(process.stderr),
     stdin: process.stdin,
+    stderrStream: process.stderr,
     env: processEnv,
   };
 }
@@ -109,6 +121,43 @@ export function processIo(): CliIo {
  */
 export async function flush(io: CliIo): Promise<void> {
   await Promise.allSettled([lastWrites.get(io.stdout), lastWrites.get(io.stderr)]);
+}
+
+/** Write what `from` gives to `to`, resolving once `from` has ended and `to` took the last. */
+export async function relay(from: NodeJS.ReadableStream, to: Writer): Promise<void> {
+  from.setEncoding("utf8");
+  for await (const text of from) await to.write(text as string);
+}
+
+/**
+ * The reason a run's controller is aborted with when the host stops it: a signal, or Ctrl-C at a
+ * prompt (`SIGINT`).
+ */
+export class HostStop extends Error {
+  override name = "HostStop";
+  /** The signal that stopped the run. */
+  readonly signal: NodeJS.Signals;
+
+  constructor(signal: NodeJS.Signals) {
+    super(`stopped by ${signal}`);
+    this.signal = signal;
+  }
+}
+
+/**
+ * Return a signal aborted with `reason` on the first `name` signal `target` emits.
+ *
+ * The listener is on from the call, so a signal while the process is still starting isn't lost,
+ * and it stays on: a later `name` signal does nothing instead of getting the default action.
+ */
+export function abortOnSignal(
+  name: NodeJS.Signals,
+  reason: unknown,
+  target: Pick<NodeJS.EventEmitter, "on"> = process,
+): AbortSignal {
+  const controller = new AbortController();
+  target.on(name, () => controller.abort(reason));
+  return controller.signal;
 }
 
 /** A command's view of the environment: the values it `set`, over the base environment. */
@@ -402,6 +451,11 @@ export async function printJson(document: Readonly<Record<string, unknown>>, out
   await out.write(`{${fields.join(",")}}\n`);
 }
 
+/** A provider key that is required but not set, and that no prompt supplied. */
+export class MissingKeyError extends Error {
+  override name = "MissingKeyError";
+}
+
 /** The key and endpoint helpers' arguments: the command's environment and terminal, if any. */
 export interface PromptContext {
   env: CommandEnv;
@@ -418,7 +472,7 @@ export interface PromptContext {
  * @returns The key, or `null` for a saved subscription or a provider that needs no key.
  * @throws {AuthError} If the saved login can't be read.
  * @throws {RangeError} If the saved logins or the default-provider environment are invalid.
- * @throws {Error} As `ensureEnvKey` does, when there is no saved login.
+ * @throws {MissingKeyError} As `ensureEnvKey` does, when there is no saved login.
  */
 export async function ensureApiKey(provider: string, context: PromptContext): Promise<string | null> {
   const name = provider.toLowerCase();
@@ -442,8 +496,8 @@ export async function ensureApiKey(provider: string, context: PromptContext): Pr
  *
  * @param provider The LLM provider name (such as `"anthropic"`), matched case-insensitively.
  * @returns The key, or `null` when the provider needs none.
- * @throws {Error} If the provider needs a key, none is set, and there is no terminal, the user
- *   cancels the prompt, or every attempt was empty.
+ * @throws {MissingKeyError} If the provider needs a key, none is set, and there is no terminal,
+ *   the user cancels the prompt, or every attempt was empty.
  */
 export async function ensureEnvKey(provider: string, { env, terminal }: PromptContext): Promise<string | null> {
   const envVar = getApiKeyEnv(provider);
@@ -452,7 +506,7 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
   if (existing) return existing;
   if (OPTIONAL_API_KEY_PROVIDERS.has(provider.toLowerCase())) return null;
   if (terminal === null) {
-    throw new Error(
+    throw new MissingKeyError(
       `provider ${reprText(provider)} needs an API key but $${envVar} is not set ` +
         `(set it in the environment, or run interactively to be prompted). ` +
         `Or run 'yian auth ${provider.toLowerCase()}' to save a login`,
@@ -463,14 +517,14 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
   const tries = current().maxKeyPrompts;
   for (let attempt = 0; attempt < tries; attempt++) {
     const answer = await terminal.askText(`Enter ${envVar} for provider ${reprText(provider)}:`, { secret: true });
-    if (answer === null) throw new Error(`no API key provided for ${reprText(provider)} ($${envVar})`);
+    if (answer === null) throw new MissingKeyError(`no API key provided for ${reprText(provider)} ($${envVar})`);
     const key = answer.trim();
     if (key) {
       env.set(envVar, key);
       return key;
     }
   }
-  throw new Error(`no API key provided for ${reprText(provider)} ($${envVar}) after ${tries} attempts`);
+  throw new MissingKeyError(`no API key provided for ${reprText(provider)} ($${envVar}) after ${tries} attempts`);
 }
 
 /**

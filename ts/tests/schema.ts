@@ -12,7 +12,10 @@ export type Schema = Record<string, unknown>;
 
 /** How `validate` reads a schema. */
 export interface ValidateOptions {
-  /** Refuse any key a subschema's `properties` doesn't list, as if it had `additionalProperties: false`. */
+  /**
+   * Refuse any key a subschema's `properties` doesn't list, as if it had `additionalProperties:
+   * false`, unless its `additionalProperties` is a schema, which checks those keys instead.
+   */
   closed?: boolean;
 }
 
@@ -71,7 +74,7 @@ export function resolveRef(root: Schema, ref: unknown): Schema | undefined {
 
 /**
  * Validate `value` against `schema`, a subschema of `root`, for the keywords in `KEYWORDS`,
- * returning `path: problem` strings. `additionalProperties` supports only `false`.
+ * returning `path: problem` strings. `additionalProperties` is `false` or a schema.
  */
 export function validate(
   root: Schema,
@@ -119,10 +122,13 @@ export function validate(
       if (!Object.hasOwn(object, key)) problems.push(`${path}: missing ${key}`);
     }
     const properties = (schema.properties ?? {}) as Record<string, Schema>;
-    const closed = schema.additionalProperties === false || (options.closed === true && "properties" in schema);
+    const extra = schema.additionalProperties;
+    const closed = extra === false || (options.closed === true && "properties" in schema);
     for (const [key, inner] of Object.entries(object)) {
       if (Object.hasOwn(properties, key)) {
         problems.push(...validate(root, properties[key]!, inner, options, `${path}.${key}`));
+      } else if (typeof extra === "object") {
+        problems.push(...validate(root, extra as Schema, inner, options, `${path}.${key}`));
       } else if (closed) {
         problems.push(`${path}: undeclared key ${key}`);
       }
@@ -170,8 +176,8 @@ export function validate(
 
 /**
  * Return `path: problem` strings for keywords outside the validator's list, an
- * `additionalProperties` other than `false`, a length bound that isn't a non-negative integer,
- * and `$ref`s that don't resolve in `root`.
+ * `additionalProperties` other than `false` or a schema, a length bound that isn't a non-negative
+ * integer, and `$ref`s that don't resolve in `root`.
  */
 export function lintSchema(root: Schema, schema: unknown, path = "$"): string[] {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
@@ -186,7 +192,7 @@ export function lintSchema(root: Schema, schema: unknown, path = "$"): string[] 
       const types = Array.isArray(inner) ? inner : [inner];
       for (const type of types) if (!TYPES.has(type)) problems.push(`${at}: unknown type`);
     }
-    if (key === "additionalProperties" && inner !== false) problems.push(`${at}: only false is supported`);
+    if (key === "additionalProperties" && inner !== false) problems.push(...lintSchema(root, inner, at));
     const bound = ["minItems", "maxItems", "minLength"].includes(key);
     if (bound && !(Number.isInteger(inner) && (inner as number) >= 0)) {
       problems.push(`${at}: not a non-negative integer`);

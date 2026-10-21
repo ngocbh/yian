@@ -3,15 +3,19 @@
  * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
  * default log path, and the signals that stop a run.
  *
- * - `run` checks the run-log options, reads the flow and loads it; `check` loads each flow, or
- *   confined to `--root`, and reports each as text or one `--json` document; `status` inspects a
- *   run log.
+ * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
+ *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
+ *   `--resume` log, checking its recorded keys, and prints its output or its failure;
+ *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
+ *   document; `status` reports where the run in a run log stands, as text or a `--json` document.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
- *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part.
+ *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
+ *   `renderRunError` renders a failed run's diagnostic.
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
  * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log; `reportRunLog` prints it.
+ * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
  * - `stopOnSignals` stops a run's controller with a `HostStop` on SIGINT, SIGTERM or SIGHUP.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
@@ -20,28 +24,73 @@
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
-import { END_ID, START_ID } from "../compile/model.ts";
+import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
+import { copyGraph, END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
+import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
-import { loadSkillDir } from "../compose/skills.ts";
-import type { Env } from "../defaults.ts";
-import { Diagnostic, reprText } from "../diagnostics.ts";
+import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
+import { current, type Env } from "../defaults.ts";
+import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
-import { isSystemError, resolvedPath, SkillError } from "../skills/catalog.ts";
+import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
-import { FileRef, isRecord, type Value, writeAsText } from "../typesys/values.ts";
-import { type CliIo, osReason, printJson, UsageError, type Writer } from "./utils.ts";
-
-// The TS loader and run inspection aren't ported yet; each throws until its module lands.
-async function loadFlow(text: string, options: { searchPaths?: string[]; sourceLabel: string }): Promise<ComposedFlow> {
-  throw new Error("loadFlow is not ported to TypeScript yet");
-}
-
-async function inspectRun(log: string): Promise<never> {
-  throw new Error("inspectRun is not ported to TypeScript yet");
-}
+import {
+  canonicalTypeLabel,
+  FileRef,
+  isRecord,
+  type Value,
+  writeAsText,
+} from "../typesys/values.ts";
+import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
+import { AuthError } from "../llm_clients/auth/index.ts";
+import {
+  type AgentConfig,
+  type Connection,
+  connectionCredentials,
+  connectionSnapshot,
+  HEADER_NAMES_KEY,
+  HOST_KEY_MARKER,
+  keyIdentity,
+} from "../llm_clients/connection.ts";
+import { MemoryOperationError } from "../memory/contracts.ts";
+import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
+import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
+import type { Parameter } from "../nodes/contracts.ts";
+import { FileLockError } from "../platform.ts";
+import {
+  hostInputs,
+  inspectRun,
+  type LlmConfigsCheck,
+  resumeFlow,
+  type RunInspection,
+  type RunResult,
+  runFlow,
+  runStartLlm,
+  skillGrants,
+  staticNodes,
+} from "../run.ts";
+import { McpConnectError, type McpServer } from "../tools/mcp.ts";
+import { registeredTools, type ToolEntry } from "../tools/registry.ts";
+import { defaultRunId } from "../typesys/seeding.ts";
+import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
+import { buildCliMemories, MemoryOptionError } from "./memory.ts";
+import { Terminal, TerminalStopped } from "./terminal.ts";
+import {
+  type CliIo,
+  CommandEnv,
+  ensureEnvKey,
+  HostStop,
+  MissingKeyError,
+  osReason,
+  printJson,
+  type PromptContext,
+  UsageError,
+  type Writer,
+} from "./utils.ts";
 
 const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
 
@@ -150,6 +199,36 @@ export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
   }
   if (diag.notes.length > 0) document.notes = [...diag.notes];
   return document;
+}
+
+/** Return `text`, a stack or captured traceback, in a box titled `traceback`, ending in a newline. */
+function tracebackBox(text: string, out: Writer, env: Env): string {
+  const lines = splitLines(text.trimEnd());
+  const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
+  return `${box(rows, "red", out, env, "traceback")}\n`;
+}
+
+/**
+ * Write a failed run's diagnostic to `out` and return it: the flow's `diagnose` of its failure,
+ * or an unlocated `(no detail)` when it has none. With `engineTrace`, the traceback the diagnostic
+ * captured follows it, boxed, when it holds one.
+ */
+export async function renderRunError(
+  result: RunResult,
+  flow: ComposedFlow,
+  engineTrace: boolean,
+  out: Writer,
+  env: Env,
+): Promise<Diagnostic> {
+  const diagnostic =
+    result.failure === null
+      ? new Diagnostic({ code: "node.execute", message: "(no detail)" })
+      : flow.diagnose(result.failure);
+  await renderDiagnostic(diagnostic, out, env);
+  if (engineTrace && diagnostic.traceback) {
+    await out.write(tracebackBox(diagnostic.traceback, out, env));
+  }
+  return diagnostic;
 }
 
 /**
@@ -415,6 +494,32 @@ export function mergeInputs(inputs: string | undefined, inputValues: readonly st
   return Object.assign(Object.create(null), fromFile, parseKv(inputValues));
 }
 
+// Click's hint for an error in the inputs `--input` and `--inputs` supply together.
+const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
+
+/**
+ * Return the inputs to add to `supplied`: each declaration it lacks (key presence) answered at
+ * `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted inputs absent
+ * for START. Returns null when a prompt is cancelled.
+ *
+ * @throws {UsageError} Without a terminal, when required inputs are missing, naming them all in
+ *   declaration order.
+ */
+async function gatherMissingInputs(
+  decls: readonly Parameter[],
+  supplied: Readonly<Record<string, unknown>>,
+  terminal: Terminal | null,
+): Promise<Record<string, unknown> | null> {
+  if (terminal !== null) return terminal.promptInputs(decls, supplied);
+  const required = decls.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
+  if (required.length > 0) {
+    const noun = required.length === 1 ? "input" : "inputs";
+    const names = required.map((decl) => decl.name).join(", ");
+    throw new UsageError(`${INPUTS_HINT}: missing required flow ${noun}: ${names}`);
+  }
+  return {};
+}
+
 /** Whether a directory entry exists at `path`, a dangling symlink included. */
 function lexists(path: string): boolean {
   try {
@@ -491,21 +596,6 @@ export async function reportRunLog(path: string, out: Writer, env: Env): Promise
   await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
 }
 
-/**
- * The reason a run's controller is aborted with when the host stops it: a signal, or Ctrl-C at a
- * prompt (`SIGINT`).
- */
-export class HostStop extends Error {
-  override name = "HostStop";
-  /** The signal that stopped the run. */
-  readonly signal: NodeJS.Signals;
-
-  constructor(signal: NodeJS.Signals) {
-    super(`stopped by ${signal}`);
-    this.signal = signal;
-  }
-}
-
 const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 /**
@@ -557,27 +647,543 @@ function readFlowText(path: string): string {
   return text.replace(/\r\n?/g, "\n");
 }
 
-/** The options `run` reads; an absent option is `undefined`, no `--input` an empty list. */
+/**
+ * The options `run` reads; an absent option is `undefined`, an absent repeatable one an empty list,
+ * an absent flag `false`.
+ */
 interface RunOptions {
   inputValues: readonly string[];
   inputs?: string | undefined;
   log?: string | undefined;
   resume?: string | undefined;
+  quiet: boolean;
+  memoryRoot?: string | undefined;
+  memoryStorage: readonly string[];
+  verbose: boolean;
+  numWorkers?: number | undefined;
   provider?: string | undefined;
   model?: string | undefined;
+  engineTrace: boolean;
+  mcpConfig: readonly string[];
   json: boolean;
 }
 
 /**
- * Start or recover a durable run of the flow at `flowPath`; returns the exit code.
+ * Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
+ * with its stack: a bad value (a damaged or empty log, a defaults mismatch, a memory setup failure
+ * included), an unreadable file, a run log another writer holds, a memory failure, an MCP server
+ * that didn't start, the missing MCP SDK.
+ */
+function isSetupError(error: unknown): error is Error {
+  return (
+    error instanceof TypeError ||
+    error instanceof RangeError ||
+    error instanceof AuthError ||
+    error instanceof MemoryOperationError ||
+    error instanceof McpConnectError ||
+    // A lock file that is unsafe, not private or changed; a locked log (Python's
+    // `BlockingIOError`) is a plain `Error` over the lock's.
+    error instanceof FileLockError ||
+    (error instanceof Error && error.cause instanceof FileLockError) ||
+    // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
+    (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
+    isSystemError(error)
+  );
+}
+
+/**
+ * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the ids its
+ * static AGENT nodes grant, which name tools or tool groups.
+ */
+function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
+  const toolIds = new Set<string>();
+  const grants = new Set<string>();
+  for (const [, node] of staticNodes(flow.compiled)) {
+    const call = node.hostToolCall();
+    if (call !== null) toolIds.add(call.toolId);
+    for (const grant of node.grantedTools()) grants.add(grant);
+  }
+  return [toolIds, grants];
+}
+
+/**
+ * @internal Run `body` with the configured MCP servers `flow` needs, and close every server in
+ * `servers` when it settles.
  *
- * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text is
- * reported on stderr, and as a `compose.load` error document on stdout under `json`, and exits 1.
+ * A server an AGENT grants by name (its tool group) is selected unopened, so the run starts it
+ * after its own checks and closes it. A TOOL node's id names one tool, never a group, so it counts
+ * as unresolved unless it is in `known`; so does a grant that is neither in `known` nor a server
+ * name. When some id is unresolved, the granted servers open here instead, and if their tools don't
+ * supply every unresolved id, every other server opens to show its tools; those that list a
+ * still-unresolved id stay open and the rest close before the run, so an unused server's tool
+ * names can't collide with another's. A server opened only to show its tools that fails to start is
+ * skipped with a `warn` call, unless the flow still lacks a needed id afterwards. Once `signal`
+ * aborts, no further server opens, and only the servers already open are selected. Nothing is
+ * selected when the flow needs no tools.
  *
- * @throws {UsageError} As `validateRunLogOptions` does.
+ * @param servers The configured servers by name, none of them open.
+ * @param toolIds The tool ids the flow's static TOOL nodes call.
+ * @param grants The tool and tool-group ids the flow's static AGENT nodes grant.
+ * @param known The tool ids the run supplies without MCP.
+ * @param options.signal The run's stop.
+ * @param options.warn Called with `<error>; skipped, the flow doesn't need it` for each unneeded
+ *   server that failed to start.
+ * @param body Called with the selected servers by name, as tool groups for the run.
+ * @returns What `body` resolves to.
+ * @throws {McpConnectError} A server the flow names doesn't start or lists bad tools; or a needed
+ *   id is still missing and some server failed to start, the first failure then noting the missing
+ *   ids and each other failure.
+ * @throws {Error} A server must open here and the MCP SDK is not installed.
+ * @throws The signal's reason, when it aborts while a server opens.
+ */
+export async function openMcpServers<T>(
+  servers: Readonly<Record<string, McpServer>>,
+  toolIds: ReadonlySet<string>,
+  grants: ReadonlySet<string>,
+  known: ReadonlySet<string>,
+  { signal, warn }: { signal: AbortSignal; warn: (message: string) => void },
+  body: (selected: Record<string, McpServer>) => Promise<T>,
+): Promise<T> {
+  const toolNames = (selected: Record<string, McpServer>) =>
+    new Set(Object.values(selected).flatMap((server) => server.tools.map((tool) => tool.name)));
+  try {
+    let selected: Record<string, McpServer> = {};
+    const named = Object.entries(servers).filter(([name]) => grants.has(name));
+    const unresolved = new Set([
+      ...[...toolIds].filter((id) => !known.has(id)),
+      ...[...grants].filter((id) => !known.has(id) && !Object.hasOwn(servers, id)),
+    ]);
+    if (unresolved.size === 0) {
+      selected = Object.fromEntries(named);
+    } else {
+      for (const [name, server] of named) {
+        if (signal.aborted) break;
+        selected[name] = await server.open({ signal });
+      }
+      // No other server needs to start for an id a granted server supplies.
+      for (const name of toolNames(selected)) unresolved.delete(name);
+      const failed: McpConnectError[] = [];
+      for (const [name, server] of Object.entries(servers)) {
+        if (unresolved.size === 0 || Object.hasOwn(selected, name) || signal.aborted) continue;
+        try {
+          await server.open({ signal });
+        } catch (error) {
+          if (!(error instanceof McpConnectError)) throw error;
+          failed.push(error);
+          continue;
+        }
+        if (server.tools.some((tool) => unresolved.has(tool.name))) selected[name] = server;
+        else await server.close();
+      }
+      if (signal.aborted) {
+        // The run throws the stop; only what is already open goes to it.
+        selected = Object.fromEntries(Object.entries(selected).filter(([, server]) => server.isOpen));
+      } else {
+        const supplied = toolNames(selected);
+        const missing = [...unresolved].filter((id) => !supplied.has(id)).sort(compareCodeUnits);
+        if (missing.length > 0 && failed.length > 0) {
+          // A server that failed to start may be the one that supplies them.
+          const [error, ...others] = failed as [McpConnectError, ...McpConnectError[]];
+          const notes = ((error as { notes?: string[] }).notes ??= []);
+          notes.push(`the flow needs ${writeAsText(missing)}, which no started server supplies`);
+          for (const other of others) notes.push(other.message);
+          throw error;
+        }
+      }
+      for (const error of failed) warn(`${error.message}; skipped, the flow doesn't need it`);
+    }
+    return await body(selected);
+  } finally {
+    // Closing a server that never opened, or that its run already closed, does nothing; this
+    // also covers one stopped between opening and being recorded.
+    for (const server of Object.values(servers)) await server.close();
+  }
+}
+
+/**
+ * @internal Return the distinct provider and connection of every agent in `flow`, as a fresh run
+ * would bind them.
+ *
+ * Snapshots the provider and model defaults and the connections once, resolves the `llm_config`
+ * cascade as a fresh run would (`cliCfg` its outermost gap-fill layer, values read from `inputs`)
+ * on a throwaway copy of the compiled flow, and binds each agent's connection as a fresh run would.
+ * An agent whose config resolves only when it runs counts when its provider is already known, an
+ * Azure one with the `base_url` its layers set; otherwise its key is checked at its model call.
+ *
+ * @param cliCfg The `--provider`/`--model` layer, possibly empty.
+ * @param inputs The run's supplied inputs, before coercion; absent supplies none.
+ * @returns The distinct `[provider, connection]` pairs in first-seen order, the connection `null`
+ *   for a provider without one (`ollama`).
+ * @throws {RangeError} If no layer gives an agent a provider and model, a supplied input can't be
+ *   coerced, an input or a value the `llm_config` reads is invalid, or the saved logins or the
+ *   default-provider environment are invalid.
+ * @throws {TypeError} As `hostInputs` and `coerceInputs` do.
+ */
+export function agentConnections(
+  flow: ComposedFlow,
+  cliCfg: Readonly<Record<string, string>>,
+  { inputs = {}, env }: { inputs?: Readonly<Record<string, unknown>>; env: Env },
+): [string, Connection | null][] {
+  const probe = copyGraph(flow.compiled);
+  const snapshot = connectionSnapshot({ env });
+  // Coerced as `runFlow` coerces, so an input selects the provider the run will use.
+  const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
+  const runLlm = runStartLlm(probe, coerced, { ...cliCfg }, snapshot);
+  // A call-time agent whose provider no value can change needs its key as surely as a static
+  // agent; finding out at its model call would waste the nodes before it.
+  const known = knownCallTimeProviders(probe, runLlm.callTime, snapshot.defaults);
+  const baseUrls = knownCallTimeBaseUrls(probe, runLlm.callTime);
+  const effective: Record<string, Record<string, unknown>> = { ...runLlm.effective };
+  for (const [path, provider] of known) {
+    if (!provider) continue;
+    effective[path] = { provider };
+    // A saved Azure key covers only its own resource, so the endpoint picks the key.
+    const baseUrl = baseUrls.get(path);
+    if (provider === "azure" && baseUrl !== undefined) effective[path]["base_url"] = baseUrl;
+  }
+  const seen: [string, Connection | null][] = [];
+  for (const config of Object.values(snapshot.bind(effective))) {
+    const connection = (config["_connection"] as Connection | undefined) ?? null;
+    const pair: [string, Connection | null] = [config["provider"] as string, connection];
+    if (!seen.some((other) => isDeepStrictEqual(other, pair))) seen.push(pair);
+  }
+  return seen;
+}
+
+/**
+ * @internal Check every key `flow`'s agents will need before the run starts, prompting at
+ * `context.terminal` if one is missing.
+ *
+ * Each distinct agent connection (`agentConnections`) is checked once: a saved login resolves its
+ * stored credential without a prompt; any other agent needs its provider's key variable, through
+ * `ensureEnvKey`, which skips keyless and unknown providers and an unset optional key. An Azure
+ * agent whose `base_url` names another resource than the saved login needs `AZURE_OPENAI_API_KEY`.
+ * A prompted key is `set` in `context.env`.
+ *
+ * @param cliCfg The `--provider`/`--model` layer, possibly empty.
+ * @param supplied The run's supplied inputs, which `llm_config` values may read to select a
+ *   provider.
+ * @throws {MissingKeyError} As `ensureEnvKey` does, for a required key that is missing.
+ * @throws {AuthError} If a saved login can't be resolved.
+ * @throws {RangeError} As `agentConnections` and `connectionCredentials` do.
+ * @throws {TypeError} As `agentConnections` does, for inputs that can't be coerced.
+ * @throws {Error} A system error when a saved login can't be read.
+ */
+export async function ensureProviderKeys(
+  flow: ComposedFlow,
+  cliCfg: Readonly<Record<string, string>>,
+  supplied: Readonly<Record<string, unknown>>,
+  context: PromptContext,
+): Promise<void> {
+  const env = context.env.read;
+  for (const [provider, connection] of agentConnections(flow, cliCfg, { inputs: supplied, env })) {
+    if (connection !== null && connection.source === "store") {
+      await connectionCredentials(connection, provider, { env });
+    } else {
+      await ensureEnvKey(provider, context);
+    }
+  }
+}
+
+/** A resumed run's recorded provider credentials are not available. */
+class ResumeKeyError extends Error {
+  override name = "ResumeKeyError";
+}
+
+/** The resume key checks' arguments: the command's environment, its terminal if any, the stop. */
+interface ResumeKeyContext extends PromptContext {
+  signal: AbortSignal;
+}
+
+/**
+ * Require `envVar` to hold the key a recorded run started with.
+ *
+ * Only a missing key prompts, at `context.terminal`; a typed key that passes is `set` in
+ * `context.env`, as a fresh run's prompted key is.
+ *
+ * @param provider The provider name shown in prompts and errors.
+ * @param identity The recorded `keyIdentity` of the key, or `null` when the record has none, in
+ *   which case any non-empty key passes.
+ * @throws {ResumeKeyError} The key is set but differs from the recorded one, is missing with no
+ *   terminal, is declined or left empty `current().maxKeyPrompts` times, or a typed key differs
+ *   from the recorded one.
+ * @throws The signal's reason when the stop closes the prompt.
+ */
+async function resumeEnvKey(
+  provider: string,
+  envVar: string,
+  identity: string | null,
+  { env, terminal, signal }: ResumeKeyContext,
+): Promise<void> {
+  const existing = env.read(envVar);
+  if (existing) {
+    if (identity !== null && keyIdentity(existing) !== identity) {
+      throw new ResumeKeyError(
+        `$${envVar} is not the key this run started with; set it to that key and resume again`,
+      );
+    }
+    return;
+  }
+  if (terminal === null) {
+    throw new ResumeKeyError(
+      `provider ${reprText(provider)} needs an API key but $${envVar} is not set; set it and resume again`,
+    );
+  }
+  const cancelled = `no API key provided for ${reprText(provider)} ($${envVar}); set it and resume again`;
+  for (let attempt = 0; attempt < current().maxKeyPrompts; attempt++) {
+    const answer = await terminal.askText(`Enter ${envVar} for provider ${reprText(provider)}:`, {
+      secret: true,
+      signal,
+    });
+    // A prompt the stop closed (Ctrl-C, the end of input, a signal) is the stop, not a decline.
+    signal.throwIfAborted();
+    if (answer === null) throw new ResumeKeyError(cancelled);
+    const key = answer.trim();
+    if (!key) continue;
+    if (identity !== null && keyIdentity(key) !== identity) {
+      throw new ResumeKeyError(
+        `the key entered is not the one this run started with; set $${envVar} to that key and resume again`,
+      );
+    }
+    env.set(envVar, key);
+    return;
+  }
+  throw new ResumeKeyError(cancelled);
+}
+
+/**
+ * Return the error refusing a resume whose `provider` key came from a host's
+ * `llm_config.api_key`, pointing to `resume_flow` (messages keep Python's names); `headerNames`
+ * are the recorded names of headers sent with the key, if any.
+ */
+function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError {
+  // Header values the host sent with its key are not recorded either.
+  const withHeaders = Array.isArray(headerNames) && headerNames.length > 0;
+  const given = withHeaders ? "api_key=..., headers=..." : "api_key=...";
+  return new ResumeKeyError(
+    `this run's ${provider} API key came from a host's llm_config.api_key, which the CLI cannot ` +
+      `supply; resume it with resume_flow(${given})`,
+  );
+}
+
+/**
+ * Check that the recorded model configs of a resumed run can authenticate (`resumeFlow`'s
+ * `checkLlmConfigs`).
+ *
+ * Like a fresh run's preflight, it requires each provider's environment key unless the agent
+ * recorded a saved login; it also requires an OpenAI environment key to be the one the run started
+ * with. Only a missing key prompts. Every saved login (any provider) and every OpenAI connection
+ * then resolves its credentials, so a replaced saved credential fails here instead of at the first
+ * model call. Checks run once per distinct saved or OpenAI connection and once per other provider;
+ * providers without a key variable, and optional-key providers (`vllm`) whose variable is unset,
+ * are skipped.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path, with the config
+ *   each started call-time agent recorded. Only each config's `provider`, `_connection`, host-key
+ *   marker and recorded header names are read.
+ * @param callTimeHost The host key the call-time agents' selection names (`provider` and any
+ *   `header_names`); a call-time agent that hasn't started may still resolve to it, so it is
+ *   refused like a marked agent.
+ * @throws {ResumeKeyError} A key is missing, differs from the recorded one, was not given at the
+ *   prompt, belongs to a host, or a recorded saved or OpenAI connection can no longer resolve its
+ *   credentials.
+ * @throws {RangeError} As `connectionCredentials` does, for invalid connection metadata.
+ * @throws The signal's reason when the stop closes a prompt.
+ */
+async function checkResumeCredentials(
+  effective: Readonly<Record<string, AgentConfig>>,
+  callTimeHost: Readonly<Record<string, unknown>> | null,
+  context: ResumeKeyContext,
+): Promise<void> {
+  const connections: [string, Connection][] = [];
+  const providers: string[] = [];
+  for (const config of Object.values(effective)) {
+    const provider = config["provider"] as string;
+    const connection = (config["_connection"] as Connection | undefined) ?? null;
+    if (config[HOST_KEY_MARKER] || connection?.source === "host") {
+      throw hostKeyRefusal(provider, config[HEADER_NAMES_KEY]);
+    }
+    if (connection !== null && (provider === "openai" || connection.source === "store")) {
+      const pair: [string, Connection] = [provider, connection];
+      if (!connections.some((other) => isDeepStrictEqual(other, pair))) connections.push(pair);
+    } else if (!providers.includes(provider)) {
+      providers.push(provider);
+    }
+  }
+  if (callTimeHost !== null) {
+    throw hostKeyRefusal(callTimeHost["provider"] as string, callTimeHost["header_names"]);
+  }
+
+  for (const [provider, connection] of connections) {
+    const { source } = connection;
+    if (provider === "openai" && (source === "environment" || source === "legacy_environment")) {
+      await resumeEnvKey("openai", "OPENAI_API_KEY", connection.credential_id, context);
+    }
+  }
+  for (const [provider, connection] of connections) {
+    try {
+      await connectionCredentials(connection, provider, { env: context.env.read });
+    } catch (error) {
+      if (!(error instanceof AuthError)) throw error;
+      throw new ResumeKeyError(error.message, { cause: error });
+    }
+  }
+  for (const provider of providers) {
+    const envVar = getApiKeyEnv(provider);
+    if (envVar === null || (OPTIONAL_API_KEY_PROVIDERS.has(provider) && !context.env.read(envVar))) continue;
+    await resumeEnvKey(provider, envVar, null, context);
+  }
+}
+
+/**
+ * Return what `body` resolves to once `registry` has closed. When `body` throws, its error is
+ * rethrown, with a close failure, and that failure's notes, appended to its `notes`; otherwise a
+ * close failure is thrown.
+ */
+async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>): Promise<T> {
+  let value: T;
+  try {
+    value = await body();
+  } catch (error) {
+    try {
+      await registry.close();
+    } catch (cleanup) {
+      noteCleanup(error, cleanup, "Memory cleanup failed");
+    }
+    throw error;
+  }
+  await registry.close();
+  return value;
+}
+
+/**
+ * Start a durable run of the flow at `flowPath`, or recover the one recorded at `resume`; returns
+ * the exit code.
+ *
+ * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
+ * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
+ * 1. The flow's memories are built from `memoryRoot` and `memoryStorage`, passed to the run, and
+ * closed when the command ends. When an AGENT grants skills, the Claude Code and Codex skill
+ * folders are read, each invalid skill a `warning:` line on stderr. When a static TOOL node or
+ * AGENT grant names a tool yian lacks, `~/.yian/mcp.json` (when it is a file) and the `mcpConfig`
+ * files are read, a bad config printed and exiting 1; just before the run, `openMcpServers` selects
+ * the servers the flow needs, each unneeded server that failed to start a `warning:` line on
+ * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
+ * progress go to stderr; the log path always does. On a TTY stdin, each input not supplied is
+ * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
+ * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
+ * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
+ * printed and exits 1. The log is `log`, else a fresh one under `~/.yian/runs` named by the run id.
+ * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
+ * stderr and exits 1. A host failure (a bad option value, a log that can't be created, an MCP
+ * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
+ * `McpConnectError`'s notes on the lines below, and exits 1.
+ *
+ * With `resume`, the flow loads and its memories, skills and MCP config are read as for a fresh
+ * run; then the log path is printed and `resumeFlow` recovers the run, with no input prompts, no
+ * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count.
+ * Before anything is appended, the keys the recorded configs need are checked: a missing one is
+ * prompted for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
+ * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
+ * host failure, an empty, damaged or locked log included, prints `resume failed: <message>`. A
+ * finished log prints its recorded outcome and appends nothing.
+ *
+ * Under `json`, stdout holds one
+ * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
+ * (`compose.load`, `run.cancelled`, `run.setup`).
+ *
+ * SIGINT, SIGTERM or SIGHUP from the command's start, Ctrl-C at a prompt during the run, or
+ * `io.stop` aborting (with a `HostStop`) stops the run, closing a prompt that is up before it:
+ * `cancelled by user` on stderr, exit 130, no document. The end of input at a prompt during the
+ * run prints `run cancelled` and exits 1 (`run.cancelled`). The first stop wins.
+ *
+ * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
+ *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
+ *   inputs.
  */
 export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
+  const controller = new AbortController();
+  // From the command's start, so a signal during the load or the prompts stops the run too.
+  const disposeSignals = stopOnSignals(controller);
+  const stop = io.stop;
+  const forwardStop = () => controller.abort(stop?.reason);
+  if (stop?.aborted) forwardStop();
+  else stop?.addEventListener("abort", forwardStop, { once: true });
+  // Building it has no side effects; the terminal pauses it while a prompt is up.
+  const { quiet, verbose } = options;
+  const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
+  // `startRun` sets it just before `runFlow`.
+  const started = { value: false };
+  // Building it touches neither stream; it reads keys only when it prompts.
+  const terminal = new Terminal({
+    input: io.stdin,
+    output: io.stderrStream,
+    // Before the run, a stopped prompt answers null and the command reports it.
+    onStop: (reason) => {
+      if (!started.value) return;
+      const why = reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof");
+      controller.abort(why);
+    },
+    onActive: (active) => {
+      if (active) reporter?.pause();
+      // The terminal calls this before `onStop`, so whether the run is stopping is known later.
+      else queueMicrotask(() => {
+        if (!controller.signal.aborted) reporter?.resume();
+      });
+    },
+  });
+  // A stop before the run ends a prompt that is up rather than waiting for its answer.
+  const closePrompt = () => {
+    if (!started.value) terminal.close();
+  };
+  controller.signal.addEventListener("abort", closePrompt, { once: true });
+  try {
+    return await startRun(flowPath, options, io, { terminal, controller, reporter, started });
+  } finally {
+    controller.signal.removeEventListener("abort", closePrompt);
+    terminal.close();
+    disposeSignals();
+    stop?.removeEventListener("abort", forwardStop);
+    reporter?.stop();
+  }
+}
+
+/** What `run` builds for its body: the terminal, the run's stop, progress, whether it started. */
+interface RunHost {
+  terminal: Terminal;
+  controller: AbortController;
+  reporter: ProgressReporter | null;
+  started: { value: boolean };
+}
+
+/** `run`'s body, prompting at `host.terminal`, stopped through `host.controller`. */
+async function startRun(
+  flowPath: string,
+  options: RunOptions,
+  io: CliIo,
+  host: RunHost,
+): Promise<number> {
+  const { terminal, controller, reporter } = host;
   validateRunLogOptions(options);
+  const { json, quiet, engineTrace } = options;
+  const fail = async (diagnostic: Diagnostic) => {
+    if (json) await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
+    return 1;
+  };
+  const writeStack = async (error: Error) => {
+    if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
+  };
+  const action = options.resume === undefined ? "run" : "resume";
+  // An McpConnectError's notes (the ids no started server supplies, the other servers that
+  // failed) follow its message; other notes, such as a cleanup failure, stay out of it.
+  const setupFailed = async (error: Error) => {
+    const notes = error instanceof McpConnectError ? ((error as { notes?: string[] }).notes ?? []) : [];
+    const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
+    const text = [error.message, ...notes].map((line) => paint(line, "red", io.stderr, io.env));
+    await io.stderr.write(`${label}${text.join("\n")}\n`);
+    await writeStack(error);
+    return fail(new Diagnostic({ code: "run.setup", message: error.message, notes }));
+  };
   let text: string;
   try {
     text = readFlowText(flowPath);
@@ -585,15 +1191,208 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
     if (!(error instanceof NotUtf8Error)) throw error;
     const message = `can't read ${flowPath}: not UTF-8 text`;
     await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
-    if (options.json) {
-      const diagnostic = new Diagnostic({ code: "compose.load", message });
-      await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
-    }
-    return 1;
+    return fail(new Diagnostic({ code: "compose.load", message }));
   }
-  await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath) });
-  // Running the loaded flow is ported together with the loader; until then nothing runs.
-  throw new Error("yian run is not ported to TypeScript yet");
+  let flow: ComposedFlow;
+  try {
+    const loading = { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env };
+    flow = await loadFlow(text, loading);
+  } catch (error) {
+    if (!(error instanceof LoadError)) throw error;
+    // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
+    await renderDiagnostic(error.diagnostic, io.stderr, io.env);
+    await writeStack(error);
+    return fail(error.diagnostic);
+  }
+
+  const commandEnv = new CommandEnv(io.env);
+  // Building opens nothing: built-in storage opens when the run starts.
+  let registry: MemoryRegistry;
+  try {
+    const { memoryRoot: root, memoryStorage: storageOptions } = options;
+    registry = await buildCliMemories(flow, { root, storageOptions, env: commandEnv.read });
+  } catch (error) {
+    if (error instanceof MemoryOptionError) {
+      throw new UsageError(`Invalid value for ${error.paramHint}: ${error.message}`);
+    }
+    if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+    return setupFailed(error);
+  }
+  const warned: string[] = [];
+  const warn = (message: string) => void warned.push(message);
+  const writeWarnings = async () => {
+    for (const message of warned.splice(0)) {
+      await io.stderr.write(`${paint(`warning: ${message}`, "yellow", io.stderr, io.env)}\n`);
+    }
+  };
+
+  let outcome: RunResult | number;
+  try {
+    outcome = await closingAfter(registry, async () => {
+      // Claude Code and Codex skill folders (user, then project up to the git root), read only
+      // when an AGENT grants skills. An invalid skill is warned about and skipped rather than
+      // blocking the run.
+      let skills: Map<string, Skill> | null = null;
+      if (skillGrants(flow.compiled).length > 0) {
+        const roots = defaultSkillRoots({ cwd: process.cwd(), env: commandEnv.read });
+        skills = loadSkills(roots, { skipInvalid: true, warn });
+        await writeWarnings();
+      }
+
+      // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
+      // broken config file can't block flows that never use MCP. The servers stay unopened here;
+      // `openMcpServers` selects the ones the flow needs just before the run.
+      const known = new Set([...Object.keys(registeredTools()), "ask_user", "load_skill"]);
+      const [toolIds, grants] = mcpNeededNames(flow);
+      let servers: Record<string, McpServer> = {};
+      if ([...toolIds, ...grants].some((id) => !known.has(id))) {
+        const user = userMcpConfig(commandEnv.read);
+        const paths = [...(statOrNull(user)?.isFile() ? [user] : []), ...options.mcpConfig];
+        try {
+          servers = loadMcpConfig(paths, commandEnv.read, { reserved: known, warn });
+        } catch (error) {
+          if (!(error instanceof McpConfigError)) throw error;
+          await writeWarnings();
+          await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
+          return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+        }
+        await writeWarnings();
+      }
+      if (!quiet) {
+        const banner = flowBanner(flow, io.stderr, io.env);
+        if (banner !== null) await io.stderr.write(banner);
+      }
+      const onEvent = reporter === null ? null : (event: RunEvent) => reporter.handle(event);
+      const memory = registry.size > 0 ? registry : null;
+      const selection = { signal: controller.signal, warn };
+      /** Print `log`, then start the run with `start`, given the run's tools and MCP servers. */
+      type Start = (tools: Record<string, ToolEntry>) => Promise<RunResult>;
+      const startLogged = async (log: string, start: Start) => {
+        // Not after the log path is printed: a stopped run creates no log.
+        controller.signal.throwIfAborted();
+        await reportRunLog(log, io.stderr, io.env);
+        host.started.value = true;
+        return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
+          await writeWarnings();
+          try {
+            return await start({ ...registeredTools(), ...selected, ask_user: terminal.askUser });
+          } finally {
+            // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+            reporter?.stop();
+          }
+        });
+      };
+      // Recovery takes no inputs, `--provider`/`--model` or key preflight: the log holds the run's
+      // configuration, and its recorded keys are checked once it is replayed.
+      if (options.resume !== undefined) {
+        const log = options.resume;
+        const keyContext = {
+          env: commandEnv,
+          terminal: io.stdin.isTTY === true ? terminal : null,
+          signal: controller.signal,
+        };
+        const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
+          checkResumeCredentials(effective, callTimeHost, keyContext);
+        return startLogged(log, (tools) =>
+          resumeFlow(flow, {
+            log,
+            numWorkers: options.numWorkers ?? null,
+            onEvent,
+            memory,
+            tools,
+            skills,
+            env: commandEnv.read,
+            signal: controller.signal,
+            checkLlmConfigs,
+          }),
+        );
+      }
+      const supplied = mergeInputs(options.inputs, options.inputValues);
+      // Before prompting, so a typo'd name fails instead of prompting for the real one.
+      try {
+        checkInputNames(flow.input, supplied);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
+      }
+      // A signal during the load stops the command before it prompts.
+      controller.signal.throwIfAborted();
+      const prompter = io.stdin.isTTY === true ? terminal : null;
+      const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
+      // A stop closes the prompt, which then answers null: that is the stop, not a cancel.
+      controller.signal.throwIfAborted();
+      if (gathered === null) {
+        await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
+        return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+      }
+      Object.assign(supplied, gathered);
+
+      // The flags supply the outermost cascade layer (fill the gap), not an override: an agent's
+      // own llm_config and the flow's still win.
+      const cliCfg: Record<string, string> = {};
+      if (options.provider) cliCfg["provider"] = options.provider;
+      if (options.model) cliCfg["model"] = options.model;
+      // Any required key is asked for before the run creates its log.
+      try {
+        await ensureProviderKeys(flow, cliCfg, supplied, { env: commandEnv, terminal: prompter });
+      } catch (error) {
+        // A key prompt the stop closed is the stop, not a missing key.
+        controller.signal.throwIfAborted();
+        if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
+        await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
+        return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+      }
+
+      const runId = defaultRunId();
+      const log = options.log ?? defaultRunLogPath(runId, io.env);
+      return startLogged(log, (tools) =>
+        runFlow(flow, supplied, {
+          log,
+          runId,
+          llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+          numWorkers: options.numWorkers ?? 8,
+          onEvent,
+          memory,
+          tools,
+          skills,
+          env: commandEnv.read,
+          signal: controller.signal,
+        }),
+      );
+    });
+  } catch (error) {
+    if (error instanceof HostStop) {
+      // No document: as Ctrl-C, the stop ends the command with nothing on stdout.
+      await io.stderr.write(`${paint("cancelled by user", "yellow", io.stderr, io.env)}\n`);
+      return 130;
+    }
+    // The end of input isn't Ctrl-C: the same outcome as a cancelled prompt before the run.
+    if (error instanceof TerminalStopped && error.reason === "eof") {
+      await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
+      return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+    }
+    if (error instanceof ResumeKeyError) {
+      await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
+      return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+    }
+    if (!isSetupError(error)) throw error;
+    return setupFailed(error);
+  }
+  if (typeof outcome === "number") return outcome;
+  const result = outcome;
+
+  if (result.status === "succeeded") {
+    if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);
+    // A string prints as is; any other value in yian's text form.
+    else await io.stdout.write(`${writeAsText(result.output as Value)}\n`);
+    return 0;
+  }
+  const diagnostic = await renderRunError(result, flow, engineTrace, io.stderr, io.env);
+  if (json) {
+    const failure = { ...diagnosticJson(diagnostic), node: result.failure?.nodeId ?? null };
+    await printJson({ status: "failed", failure }, io.stdout);
+  }
+  return 1;
 }
 
 /**
@@ -609,23 +1408,40 @@ function resolveFlowPath(path: string): string {
   }
 }
 
+/** Whether `shown`, a path relative to the root, leaves it. */
+function leavesRoot(shown: string): boolean {
+  return shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown);
+}
+
 /**
- * Load the flow at `path` from inside `root`, labelled with its path relative to `root`.
+ * Load the flow at `path` from inside `root`, labelled with its path relative to `root`; its
+ * `uses:` children load the same way, each ref only from `<importing file's dir>/<ref>.yaml`.
+ *
+ * The loader puts the `uses:` alias frame on a child's `LoadError` and turns anything else a child
+ * throws into a `compose.load` error there.
  *
  * @param root The resolved root directory.
+ * @param loading The resolved paths of the flows importing this one.
  * @throws {LoadError} `compose.outside_root` for a flow outside `root`; `compose.load` for a flow
- *   whose YAML doesn't parse or that sets `system.paths`.
+ *   whose YAML doesn't parse, that sets `system.paths`, or that doesn't load.
+ * @throws {Error} A reference cycle.
  * @throws {NotUtf8Error} When the flow isn't UTF-8 text.
  * @throws {Error} A system error when the flow can't be read.
  */
-async function loadConfined(root: string, path: string): Promise<ComposedFlow> {
+async function loadConfined(
+  root: string,
+  path: string,
+  loading: ReadonlySet<string>,
+  env: Env,
+): Promise<ComposedFlow> {
   // Resolved paths are compared, so a symlinked root (/var -> /private/var on macOS) works.
   const resolved = resolveFlowPath(path);
   const shown = relative(root, resolved) || ".";
-  if (shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown)) {
+  if (leavesRoot(shown)) {
     const message = `${shown} is outside the root`;
     throw new LoadError(new Diagnostic({ code: "compose.outside_root", message }));
   }
+  if (loading.has(resolved)) throw new Error(`flow-reference cycle at ${shown}`);
   const text = readFlowText(resolved);
   const doc = parseSourceDocument(text, shown).root.value;
   // The loader doesn't search `system.paths` when given a child resolver, so such a flow would
@@ -638,11 +1454,47 @@ async function loadConfined(root: string, path: string): Promise<ComposedFlow> {
       }),
     );
   }
-  return loadFlow(text, { sourceLabel: shown });
+  const dir = dirname(resolved);
+  const importing = new Set([...loading, resolved]);
+  // Unlike the default file resolver, this keeps no reuse cache, so a child imported along several
+  // paths loads once per path; that is fine for a check.
+  const childResolver = async (ref: string, version: string | null): Promise<ComposedFlow> => {
+    const childPath = join(dir, `${ref}.yaml`);
+    // A missing child outside the root is reported as outside, by `loadConfined`.
+    const inside = !leavesRoot(relative(root, resolveFlowPath(childPath)));
+    if (inside && !statOrNull(childPath)?.isFile()) {
+      throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
+    }
+    const child = await loadConfined(root, childPath, importing, env);
+    if (version !== null && child.version !== version) {
+      const shownVersion = child.version === null ? "null" : reprText(child.version);
+      throw new Error(`${ref} is version ${shownVersion}, not ${reprText(version)}`);
+    }
+    return child;
+  };
+  // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child.
+  return loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, env });
 }
 
-/** One `yian check` result: the flow loaded, or the diagnostic saying why it didn't. */
-type CheckResult = { path: string; ok: true } | { path: string; ok: false; diagnostic: Diagnostic };
+/** A loaded flow's input in a `yian check` result. */
+interface CheckInput {
+  name: string;
+  type: string;
+  required: boolean;
+  has_default: boolean;
+}
+
+/** One `yian check` result: the loaded flow's id, name, description and inputs, or why it failed. */
+type CheckResult =
+  | {
+      path: string;
+      ok: true;
+      id: string | null;
+      name: string | null;
+      description: string | null;
+      inputs: CheckInput[];
+    }
+  | { path: string; ok: false; diagnostic: Diagnostic };
 
 /**
  * Load the flow file `path` as `yian run` loads it, or confined to `root`, running nothing.
@@ -650,12 +1502,14 @@ type CheckResult = { path: string; ok: true } | { path: string; ok: false; diagn
  * A `LoadError`, a flow that isn't UTF-8 text, or one that can't be read is a failed result;
  * another error is thrown.
  */
-async function checkFlow(path: string, root: string | undefined): Promise<CheckResult> {
+async function checkFlow(path: string, root: string | undefined, env: Env): Promise<CheckResult> {
+  let flow: ComposedFlow;
   try {
     if (root === undefined) {
-      await loadFlow(readFlowText(path), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
+      const text = readFlowText(path);
+      flow = await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env });
     } else {
-      await loadConfined(root, path);
+      flow = await loadConfined(root, path, new Set(), env);
     }
   } catch (error) {
     if (error instanceof LoadError) return { path, ok: false, diagnostic: error.diagnostic };
@@ -666,8 +1520,15 @@ async function checkFlow(path: string, root: string | undefined): Promise<CheckR
     const diagnostic = new Diagnostic({ code: "compose.load", message: `can't read ${path}: ${reason}` });
     return { path, ok: false, diagnostic };
   }
-  // A loaded flow's id, name, description and inputs are added once flows load in TS.
-  return { path, ok: true };
+  const inputs = flow.input.map((decl) => ({
+    name: decl.name,
+    // A flow's `input:` entry always declares its type, so its contract is set.
+    type: canonicalTypeLabel(decl.contract!.type),
+    required: decl.required,
+    has_default: decl.hasDefault,
+  }));
+  const { name, description } = flow;
+  return { path, ok: true, id: flow.compiled.flowId, name, description, inputs };
 }
 
 /**
@@ -686,7 +1547,7 @@ export async function check(
 ): Promise<number> {
   const resolvedRoot = root === undefined ? undefined : realpathSync(root);
   const results: CheckResult[] = [];
-  for (const path of flows) results.push(await checkFlow(path, resolvedRoot));
+  for (const path of flows) results.push(await checkFlow(path, resolvedRoot, io.env));
   if (json) {
     const documents = results.map((result) =>
       result.ok ? result : { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] },
@@ -705,9 +1566,46 @@ export async function check(
   return results.every((result) => result.ok) ? 0 : 1;
 }
 
-/** Report the run recorded in the run log `log`; returns the exit code. */
-export async function status(log: string): Promise<number> {
-  return inspectRun(log);
+/**
+ * Report where the run recorded in the run log `log` stands (`inspectRun`), without appending to
+ * it or taking its lock; returns the exit code.
+ *
+ * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `interrupted attempts:
+ * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
+ * start order) and `interrupted_attempts`. A log that isn't a readable run log (empty, damaged,
+ * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
+ */
+export async function status(log: string, { json }: { json: boolean }, io: CliIo): Promise<number> {
+  let inspection: RunInspection;
+  try {
+    inspection = inspectRun(log);
+  } catch (error) {
+    let message: string;
+    if (error instanceof RangeError) message = error.message;
+    else if (isSystemError(error)) message = `can't read ${log}: ${osReason(error)}`;
+    else throw error;
+    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+    if (json) {
+      const diagnostic = new Diagnostic({ code: "run.setup", message });
+      await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
+    }
+    return 1;
+  }
+  const { status: runStatus, inFlight, interruptedAttempts } = inspection;
+  if (json) {
+    // `printJson` writes a number as a float and a `bigint` as an int.
+    const counts = Object.fromEntries([...interruptedAttempts].map(([node, n]) => [node, BigInt(n)]));
+    await printJson({ status: runStatus, in_flight: inFlight, interrupted_attempts: counts }, io.stdout);
+    return 0;
+  }
+  let text = `status: ${runStatus}\n`;
+  if (inFlight.length > 0) text += `in flight: ${inFlight.join(", ")}\n`;
+  if (interruptedAttempts.size > 0) {
+    const counts = [...interruptedAttempts].map(([node, n]) => `${node}=${n}`);
+    text += `interrupted attempts: ${counts.join(", ")}\n`;
+  }
+  await io.stdout.write(text);
+  return 0;
 }
 
 /** One `yian skills check` result: the skill's name and description, or why it failed to load. */

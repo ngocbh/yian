@@ -7,22 +7,32 @@
  *
  * Before a command parses its arguments, `main` checks the `YIAN_<NAME>` defaults in the command's
  * environment, as Python's root callback does.
+ *
+ * Run as the entry script, `yian run ... --json` runs in a child of this runtime whose fd 1 goes to
+ * stderr and whose `stdout` writer is fd 3, so stdout holds only the document even when a CODE body
+ * or a tool writes to fd 1 (Python points fd 1 at stderr with `os.dup2`, which Node and Bun lack).
  */
 
-import { realpathSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createWriteStream, realpathSync, writeSync } from "node:fs";
+import { constants } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { DefaultsError, read } from "../defaults.ts";
 import {
   type CliIo,
   type CommandSpec,
+  abortOnSignal,
   flush,
   helpText,
+  HostStop,
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
   printJson,
   processIo,
+  relay,
+  streamWriter,
   UsageError,
   usageError,
 } from "./utils.ts";
@@ -137,8 +147,15 @@ const COMMANDS: Readonly<Record<string, Command>> = {
             inputs: o["inputs"] as string | undefined,
             log: o["log"] as string | undefined,
             resume: o["resume"] as string | undefined,
+            quiet: o["quiet"] === true,
+            memoryRoot: o["memory-root"] as string | undefined,
+            memoryStorage: o["memory-storage"] as string[],
+            verbose: o["verbose"] === true,
+            numWorkers: o["num-workers"] as number | undefined,
             provider: o["provider"] as string | undefined,
             model: o["model"] as string | undefined,
+            engineTrace: o["engine-trace"] === true,
+            mcpConfig: o["mcp-config"] as string[],
             json: o["json"] === true,
           },
           io,
@@ -250,7 +267,8 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     },
     load: async () => {
       const { status } = await import("./run.ts");
-      return ({ args }) => status(args["log"] as string);
+      return ({ args, options }, io) =>
+        status(args["log"] as string, { json: options["json"] === true }, io);
     },
   },
   providers: {
@@ -424,10 +442,100 @@ function isEntry(): boolean {
   }
 }
 
-if (isEntry()) {
+/**
+ * The internal first argument the entry re-runs itself with for `run --json`: the child it marks
+ * writes the document on fd 3. Users never pass it, and `main` never sees it.
+ */
+const JSON_CHILD = "--yian-json-child";
+
+/** Whether `args` is a `run` command with `--json` before any `--`. */
+function isRunJson(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  return args[0] === "run" && args.slice(0, end === -1 ? undefined : end).includes("--json");
+}
+
+/**
+ * Run `args` in a child of this runtime marked `JSON_CHILD`, whose fd 1 is this process's fd 2 (as
+ * Python's `os.dup2(2, 1)`), copy its fd 3 to stdout, and exit as it did.
+ *
+ * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2, a signal no terminal sends, so a
+ * group Ctrl-C (which the child gets too) and the forwarded stop are one stop; the second kills
+ * the child and exits 130. A child that died by SIGUSR2, before its listener was on, exits 130.
+ * When the child can't start, or stdout fails other than by a closed pipe (once the child has
+ * ended), it prints the error and exits 1.
+ */
+async function runJsonParent(args: readonly string[]): Promise<never> {
   const io = processIo();
-  const code = await main(process.argv.slice(2), io);
+  let stops = 0;
+  // Listeners run from the event loop, after the synchronous `spawn` below has set `child`.
+  const onStop = () => {
+    stops += 1;
+    if (stops === 1) {
+      child.kill("SIGUSR2");
+      return;
+    }
+    // A run whose synchronous body blocks its loop never takes the forwarded stop.
+    child.kill("SIGKILL");
+    process.exit(130);
+  };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  // On before the spawn, so a stop during it isn't the default action; it reaches the child after.
+  for (const name of signals) process.on(name, onStop);
+  // A `bun build --compile` binary has a `$bunfs` argv[1] and an empty execArgv: a release build
+  // must build this command line itself.
+  const command = [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
+  const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe"] });
+  child.on("error", (error) => {
+    // Once started, only a failed `kill` errors, and the run goes on.
+    if (child.pid !== undefined) return;
+    // Synchronous, so it exits before the `close` that can follow a failed start.
+    writeSync(2, `Error: cannot start the run: ${error.message}\n`);
+    process.exit(1);
+  });
+  const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+    child.on("close", (code, signal) => resolve([code, signal]));
+  });
+  // Ending the relay early destroys the pipe, so the child's later writes end quietly too.
+  const relayed = relay(child.stdio[3] as NodeJS.ReadableStream, io.stdout).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  const [[code, signal], failed] = await Promise.all([closed, relayed]);
+  if (failed !== undefined) {
+    const reason = failed instanceof Error ? failed.message : String(failed);
+    await io.stderr.write(`Error: cannot write to stdout: ${reason}\n`);
+    await flush(io);
+    process.exit(1);
+  }
+  if (code !== null) process.exit(code);
+  if (signal === "SIGUSR2") process.exit(130);
+  for (const name of signals) process.off(name, onStop);
+  process.kill(process.pid, signal!);
+  // Reached only when the signal doesn't end this process.
+  process.exit(128 + constants.signals[signal!]);
+}
+
+/**
+ * Run `args` as the `run --json` child: `main` with `stdout` writing to fd 3, and `CliIo.stop`
+ * aborted with a `HostStop("SIGINT")` by the SIGUSR2 the parent forwards. Return the exit code.
+ */
+async function runJsonChild(args: readonly string[]): Promise<number> {
+  // First, so a stop during start-up is kept until `run` links it.
+  const stop = abortOnSignal("SIGUSR2", new HostStop("SIGINT"));
+  const stdout = streamWriter(createWriteStream("", { fd: 3 }));
+  const io: CliIo = { ...processIo(), stdout, stop };
+  const code = await main(args, io);
   await flush(io);
-  // The explicit exit ends a run whose CODE body left a timer, as Python's process exit does.
+  return code;
+}
+
+if (isEntry()) {
+  const args = process.argv.slice(2);
+  // The explicit exits end a run whose CODE body left a timer, as Python's process exit does.
+  if (args[0] === JSON_CHILD) process.exit(await runJsonChild(args.slice(1)));
+  if (isRunJson(args)) await runJsonParent(args);
+  const io = processIo();
+  const code = await main(args, io);
+  await flush(io);
   process.exit(code);
 }

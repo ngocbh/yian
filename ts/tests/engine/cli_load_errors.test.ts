@@ -1,11 +1,16 @@
-// Ported from tests/engine/test_cli_load_errors.py (the `test_render_*` tests): a load error's
-// diagnostic is shown as a boxed source frame titled `file:line`, the message below. The CLI-run
-// tests come with `yian run`.
+// Ported from tests/engine/test_cli_load_errors.py: a load error's diagnostic is shown as a boxed
+// source frame titled `file:line`, the message below; through `yian run`, a broken flow is located
+// and exits 1 without an engine stack, which `--engine-trace` adds, and a cycle frames both nodes.
 
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
+import { main } from "../../src/cli/index.ts";
 import { renderDiagnostic } from "../../src/cli/run.ts";
-import type { Writer } from "../../src/cli/utils.ts";
+import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 
@@ -62,4 +67,76 @@ test("render notes printed under message", async () => {
     diagnostics.error("a cycle", { range: new SourceRange(1, 1, 1, 6), notes: ["a depends on b (a.input.x)"] }),
   );
   expect(out.indexOf("a cycle")).toBeLessThan(out.indexOf("↳ a depends on b (a.input.x)"));
+});
+
+// ---------- CLI integration: a real broken flow ----------
+
+const BROKEN =
+  "id: f\nname: f\nnodes:\n" +
+  "  a:\n    kind: agent\n    prompt: hi\n" +
+  "  b:\n    kind: agent\n    input:\n      brief: ${frame_typo.output}\n    prompt: use ${brief}\n" +
+  "output: ${b.output}\n";
+
+// A cycle a -> b -> a: each node implicates the other, so the error spans both lines.
+const CYCLE =
+  "id: f\nname: f\nnodes:\n" +
+  "  a:\n    kind: agent\n    input:\n      x: ${b.output}\n    prompt: use ${x}\n" +
+  "  b:\n    kind: agent\n    input:\n      y: ${a.output}\n    prompt: use ${y}\n" +
+  "output: ${a.output}\n";
+
+let tmp: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "yian-cli-load-"));
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+/** Run `yian run flow.yaml ...args` on `text`; return the exit code and stderr. */
+async function runCli(text: string, args: string[] = []): Promise<{ code: number; err: string }> {
+  const flow = join(tmp, "flow.yaml");
+  writeFileSync(flow, text);
+  const chunks: string[] = [];
+  const io: CliIo = {
+    stdout: { write: async () => {} },
+    stderr: { write: async (chunk) => void chunks.push(chunk) },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "HOME" ? tmp : undefined),
+  };
+  const code = await main(["run", flow, ...args], io);
+  return { code, err: chunks.join("") };
+}
+
+test("cli compile error is located, not a stack", async () => {
+  const { code, err } = await runCli(BROKEN);
+  expect(code).toBe(1);
+  expect(err).toContain("flow.yaml:");
+  expect(err).toContain("frame_typo"); // the offending ref is named
+  expect(err).not.toContain("    at "); // no engine stack by default
+});
+
+test("cli --engine-trace adds the stack", async () => {
+  const { code, err } = await runCli(BROKEN, ["--engine-trace"]);
+  expect(code).toBe(1);
+  expect(err).toContain("flow.yaml:"); // still located
+  expect(err).toContain("LoadError"); // plus the engine stack
+  expect(err).toContain("    at ");
+});
+
+test("cli cycle error highlights both nodes", async () => {
+  const { code, err } = await runCli(CYCLE);
+  expect(code).toBe(1);
+  // Node `a` is on line 4, node `b` on line 9; each is its own ordered source frame.
+  expect(err).toContain("source locations:");
+  expect(err).toContain("flow.yaml:4");
+  expect(err).toContain("flow.yaml:9");
+  expect(err).toContain("a:");
+  expect(err).toContain("b:");
+  expect(err).toContain("cycle");
+  // The "why" legend names each dependency edge that closes the loop.
+  expect(err).toContain("a depends on b (a.input.x)");
+  expect(err).toContain("b depends on a (b.input.y)");
 });

@@ -677,7 +677,7 @@ function isSetupError(error: unknown): error is Error {
     error instanceof AuthError ||
     error instanceof MemoryOperationError ||
     error instanceof McpConnectError ||
-    // Any other plain `Error` is a bug and keeps its stack.
+    // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
     (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
     isSystemError(error)
   );
@@ -777,8 +777,7 @@ export async function openMcpServers<T>(
           // A server that failed to start may be the one that supplies them.
           const [error, ...others] = failed as [McpConnectError, ...McpConnectError[]];
           const notes = ((error as { notes?: string[] }).notes ??= []);
-          const shown = `[${missing.map(reprText).join(", ")}]`;
-          notes.push(`the flow needs ${shown}, which no started server supplies`);
+          notes.push(`the flow needs ${writeAsText(missing)}, which no started server supplies`);
           for (const other of others) notes.push(other.message);
           throw error;
         }

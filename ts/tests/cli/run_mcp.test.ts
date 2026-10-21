@@ -21,8 +21,8 @@
  *   patched `_run_flow_controlled` raising `ImportError`); for another error `main` prints its
  *   stack (Python: the `ImportError` escapes the runner).
  * - Config warnings have no `UserWarning` to leak; that row checks only the `warning:` line.
- * - The missing ids print as Python's list repr; a TS-only row checks the `--json` document's
- *   `run.setup` error keeps the notes.
+ * - The missing ids print in the text form (`["echo"]`, decision 43), not Python's list repr; a
+ *   TS-only row checks the `--json` document's `run.setup` error keeps the notes.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -374,7 +374,7 @@ test(
 
     expect(result.code).toBe(1);
     expect(result.output).toContain("MCP server 'broken'");
-    expect(flat(result.output)).toContain("the flow needs ['echo'], which no started server supplies");
+    expect(flat(result.output)).toContain('the flow needs ["echo"], which no started server supplies');
   },
   SLOW,
 );
@@ -394,7 +394,7 @@ test(
     expect(error.code).toBe("run.setup");
     expect(error.message).toContain("MCP server 'broken'");
     expect(error.notes).toHaveLength(2);
-    expect(error.notes[0]).toBe("the flow needs ['echo'], which no started server supplies");
+    expect(error.notes[0]).toBe('the flow needs ["echo"], which no started server supplies');
     expect(error.notes[1]).toContain("MCP server 'gone'");
   },
   SLOW,

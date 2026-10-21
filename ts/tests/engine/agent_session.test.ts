@@ -19,7 +19,7 @@
  * `test_provider_change_requires_reset_then_starts_fresh` and
  * `test_postassertion_failure_retains_actual_reply_and_failed_turn`. Through `runFlow` and
  * `resumeFlow`: `test_reply_after_stop_is_saved_and_resume_retries_using_latest_history`, the
- * host stop aborting `runFlow`'s `signal` once the first reply's last event is read (Python sets
+ * host stop aborting `runFlow`'s `signal` once the first reply's stream is read to the end (Python sets
  * the node's stop event inside the model call).
  *
  * Changed: the expected `message_format` is TS's own `yian.message.v1`, not Python's

@@ -303,6 +303,7 @@ for (const tampered of ["stacks", "table"] as const) {
       const emptied = record.memoryStacks!.map((stack) => new MemoryStack(stack.locator, []));
       changed = new RunStartedRecord({ ...record, memoryStacks: emptied });
     } else {
+      expect(record.memories).toHaveLength(1);
       const [spec] = record.memories!;
       const edited = new MemorySpec(spec!.key, spec!.type, { recall_limit: 1n }, spec!.owners, false);
       changed = new RunStartedRecord({ ...record, memories: [edited] });

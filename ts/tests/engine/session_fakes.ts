@@ -355,7 +355,7 @@ export function resumeWith(
 }
 
 /**
- * A `ScriptedModel` whose first call's stream aborts `controller` once its last event is read: a
+ * A `ScriptedModel` whose first call's stream aborts `controller` once its stream is read to the end: a
  * host stop landing after the reply arrived, before the node stores it.
  */
 export class StopAfterFirstReply extends ScriptedModel {

@@ -15,7 +15,7 @@
  * `load` and `save` that throw stand in for Python forbidding `sqlite3.connect`.
  * `test_snapshot_identity_survives_a_real_process_restart`: the child is a `bun -e` script
  * importing the backend's module that prints the snapshot as `logJson`. The host stop of the
- * resume row aborts `runFlow`'s `signal` once the first reply's last event is read (Python sets
+ * resume row aborts `runFlow`'s `signal` once the first reply's stream is read to the end (Python sets
  * the node's stop event inside the model call).
  *
  * Later (T6-6, with RunResult.backward): `test_explicit_learning_remains_saved_after_reopen` (2 rows)

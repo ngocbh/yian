@@ -46,8 +46,8 @@
  * schema-missing native reply is stored `completed`, as a prompted one is (Python: `failed`, not
  * stored); the exhausted schema miss fails `agent.output_invalid`, as without memory.
  *
- * Later (T6-6, through runFlow): the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`
- * (it runs a flow and learns from its feedback).
+ * Later (T6-6, with RunResult.backward): the learning half of
+ * `test_tool_arguments_at_the_limit_run_and_are_learned_from` (it learns from backward feedback).
  *
  * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
  * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python

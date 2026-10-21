@@ -2,8 +2,9 @@
  * The conformance runner's own unit tests: reading a case file, the format check, case values,
  * comparison, the case directory, selection and the report. Not a port of
  * `tests/test_conformance.py`, which `conformance.ts` is, except for
- * `test_steering_unreached_action_fails`, which no case can cover: a passing case reaches every
- * action.
+ * `test_steering_unreached_action_fails`, which no case can cover (a passing case reaches every
+ * action), and `test_memory_expect_refuses_a_session_key`. TS-only: an undeclared `expect.memory`
+ * key fails the case, and a `host.memory.before` entry with backward calls is refused.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

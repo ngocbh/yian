@@ -1,7 +1,9 @@
 /**
  * A unit-only backend-owned turn harness without a provider or run log: a port of
  * `tests/engine/_session_fakes.py`, plus the promise helpers, the hand-built `runAgent` context
- * and the one-AGENT session flow run through `FlowEngine` that the session tests share.
+ * and the one-AGENT session flow run through `FlowEngine` that the session tests share, and the
+ * `runFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`, `NO_ENV`, `sentTexts`,
+ * `reply`, `recording`).
  */
 
 import { expect } from "bun:test";

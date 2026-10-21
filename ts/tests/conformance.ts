@@ -2093,7 +2093,8 @@ const ID_FIELDS: ReadonlySet<string> = new Set(["exchange_id", "commit_id", "mut
  * Return `results` with each made-up id in their text replaced by `<id:N>`.
  *
  * The ids are `runId` (unless `null`) and every text value of an `ID_FIELDS` key, numbered in
- * order of first appearance walking `results` in their order, with mapping keys in UTF-16 order.
+ * order of first appearance walking `results` in their order (the `before` traces first, `memory`
+ * last), with mapping keys in UTF-16 order.
  */
 function placeholders(results: Record<string, unknown>, runId: string | null): Record<string, unknown> {
   const ids = new Set<string>(runId === null ? [] : [runId]);

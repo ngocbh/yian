@@ -686,7 +686,6 @@ for (const [policy, backend] of noSession) {
   });
 }
 
-
 test("compatible model and prompt changes retain history with the current system", async () => {
   const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
   const models = recording(() => model);

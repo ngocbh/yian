@@ -18,19 +18,33 @@
  * Ported, after rewrite (`graph()` with a `FuncNode` reading `${input.x}`, for the loaded CODE
  * node): the engine half of `test_engine_schedules_start_and_emits_succeeded`.
  *
- * Later (T4-8), through `run_flow`: `test_run_result_is_end_node_value`, the `run_flow` half of
- * `test_engine_schedules_start_and_emits_succeeded` and the run half of
+ * Ported through `loadConformanceFlow` and `runFlow`, in `hostEnv`: `test_run_result_is_end_node_value`,
+ * the `run_flow` half of `test_engine_schedules_start_and_emits_succeeded` and the run half of
  * `test_terminal_output_of_a_skipped_producer_is_null`.
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, test } from "bun:test";
 
 import { Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeStarted, NodeSucceeded } from "../../src/events.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
+import { runFlow } from "../../src/run.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { assembleText } from "../compose/declarations.ts";
+import { assembleText, loadConformanceFlow } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-boundary-nodes-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Load `text` with the conformance fixtures and run it on `inputs` in `hostEnv`. */
+async function run(text: string, inputs: Record<string, unknown>) {
+  return runFlow(await loadConformanceFlow(text), inputs, { env: hostEnv(dir) });
+}
 
 const FLOW = `
 id: f
@@ -61,6 +75,13 @@ test("the loader synthesizes START and END nodes", () => {
   expect(pairs).toContain(`n ${END_ID}`);
   // The n -> END_ID edge carries the output's input group (a real data edge).
   expect(flow.edges).toContainEqual(new Edge(`n->${END_ID}#0`, "n", END_ID, { inputGroup: "result" }));
+});
+
+test("the run result is the END node's value", async () => {
+  const result = await run(FLOW, { x: "ACME" });
+  expect(result.status).toBe("succeeded");
+  // END commits the value the run returns.
+  expect(result.output).toBe("ACME");
 });
 
 test("an input read mints a producer edge from START", () => {
@@ -117,6 +138,13 @@ test("the terminal output of a skipped producer is null (loads)", () => {
   expect(flow.outputs[0]!.binding.source).toBe("${kept.output:-null}");
 });
 
+test("the terminal output of a skipped producer is null (runs)", async () => {
+  // score = 0, so `gate` routes to `cold` and `kept` is skipped.
+  const result = await run(SKIPPED_TERMINAL, { seed: 0.0 });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBeNull();
+});
+
 test("inputs resolve to the START node", () => {
   const pool = new VariablePool();
   // START commits the bound input record, so `${input.x}` reads START's `x`.
@@ -138,4 +166,7 @@ test("the engine schedules START and emits its success", async () => {
   expect(events.some((event) => event instanceof NodeStarted && event.nodeId === START_ID)).toBe(true);
   expect(events.some((event) => event instanceof NodeSucceeded && event.nodeId === START_ID)).toBe(true);
   expect(built.state.pool.get(START_ID)).toEqual({ x: "ACME" });
+  const result = await run(FLOW, { x: "ACME" });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("ACME");
 });

@@ -386,8 +386,7 @@ A case can't hold code, so its host is declared under `host`.
   at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
   In TS, the memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
   scripted model access; the events `onEvent` gets (the learners' `ModelCallRetried` and
-  `ReplayDegraded`, TS-only) are kept apart and never compared with `expect.events`. The TS
-  runner doesn't make backward calls yet, so a `before` entry with `backward` fails the case.
+  `ReplayDegraded`, TS-only) are kept apart and never compared with `expect.events`.
 - **`steering`**: `{<node id>: [<action>, ...]}`, the host inbox a steerable AGENT polls (Python:
   the `steering` argument of `run_flow` and `resume_flow`). The node id is the occurrence id, as
   in `tool_calls`' `node` (`loop#0/chat` inside a LOOP or MAP). An action is
@@ -695,12 +694,13 @@ also cuts each serial `run` case that expects `output`, isn't `pending`, and has
 checks the invariants, plus the output and node outcomes when the case has no `host.human` or
 `host.jitter` and its tool scripts only return.
 
-A `run` or `resume` case may have a **golden log**, `<name>.log.jsonl` beside it: the TS run log
-the case writes (for a `resume` case, the whole log after the resume), pinned byte for byte. Before
+A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
+TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
+case, with its backward records), pinned byte for byte. Before
 the comparison, every `traceback` value and the seeded clock values (`initial_pool.system`'s
 `now` and `today`) are replaced by `"<masked>"`, and each line is written again with the log's own
 encoder, which gives back the line as written. Bun and Node write the same bytes. A golden log goes
 with a serial case that sets `run.run_id`, makes no random ids (no AGENT or memory), and holds no
 file paths; the error texts in it are a stub's or the runner's own (the stop's `conformance stop`).
-`--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`
-and `resume` case instead of comparing it. The Python runner ignores golden logs.
+`--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`,
+`resume` and `backward` case instead of comparing it. The Python runner ignores golden logs.

@@ -1131,7 +1131,7 @@ export interface CaseContext {
   crashSweep?: boolean;
   /** The path of the case's golden log, `<group>/<name>.log.jsonl` beside it. */
   golden?: string;
-  /** Whether `--write-logs` asks a `run` or `resume` case to write its golden log. */
+  /** Whether `--write-logs` asks a `run`, `resume` or `backward` case to write its golden log. */
   writeLogs?: boolean;
 }
 
@@ -1144,10 +1144,7 @@ function caseEnv(ctx: CaseContext): Env {
 export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
 // `RESERVED` shrinks as the kinds that read `host` support its keys.
-/**
- * The kind runners. A case whose kind has none fails. A kind is added by replacing its comment
- * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
- */
+/** The kind runners. A case whose kind has none fails. */
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
   load: runLoad,
   run: runRun,
@@ -1267,7 +1264,8 @@ export interface MainOptions {
  * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
  * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`,
- * which needs `--case`, writes each selected `run` and `resume` case's golden log (`goldenLog`).
+ * which needs `--case`, writes each selected `run`, `resume` and `backward` case's golden log
+ * (`goldenLog`).
  */
 export async function main(
   argv: readonly string[],
@@ -2527,11 +2525,14 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     } catch (error) {
       caught = { raises: raised(error), error };
     }
-    // The memories stay open for the backward calls.
-    const entries = get(case_, "backward", []) as Case[];
-    if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
-    // Outside the `try`, so a close error never replaces the run's `raises`.
-    await memory?.close();
+    // The memories stay open for the backward calls, and close even when one fails the case; the
+    // close is outside the run's `try`, so a close error never replaces its `raises`.
+    try {
+      const entries = get(case_, "backward", []) as Case[];
+      if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
+    } finally {
+      await memory?.close();
+    }
   }
   const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
   let recalled: Record<string, string> | undefined;

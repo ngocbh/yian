@@ -10,6 +10,11 @@
 import { expect } from "bun:test";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
+import {
+  applyMemoryLayout,
+  memoryStacks as layoutStacks,
+  resolveMemoryLayout,
+} from "../../src/compile/memory_layout.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { type FeedbackValue, ValueRoute } from "../../src/expr/lineage.ts";
@@ -29,6 +34,7 @@ import { comparePaths, Parameter } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
   type LearnContext,
+  MemoryDecl,
   MemoryScope,
   MemorySnapshotEnvelope,
   MemorySpec,
@@ -628,30 +634,21 @@ export const POLICY = "reflective";
 
 /**
  * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY` (Python's
- * `test_runtime_memory_learning._owner_engine`), with the recorded table and stacks. Every node
- * gets `new MemoryScope([id], { memories: [POLICY] })`, the table is one root-owned spec, the stacks
- * are `stacks(...scopes)` and each snapshot is `{}`. It stands in for T3-22's
- * `resolveMemoryLayout` on graphs without children. Unlike Python's, it leaves `flow.flowId` and
- * `flow.memories` at their defaults (`null`, `[]`), which the runtime never reads.
- *
- * Python's `_owner_engine`, run on the flat flow `START -> a -> b -> END`, prints the same layout:
- * table `(MemorySpec(key='reflective', type='reflective', owners=(DeclSite(scope=(),
- * owner=('root',), node=None),), conversation_eligible=False),)`; stacks `(('__end__',),
- * ('__start__',), ('a',), ('b',))`, each with `memories=('reflective',)`; every node's scope
- * `MemoryScope(static_path=(<id>,), memories=('reflective',), occurrence_path=())`; snapshots
- * `(MemorySnapshotEnvelope(memory='reflective'),)` with state `{}`.
+ * `test_runtime_memory_learning._owner_engine`), with the recorded table and stacks: the flow's
+ * `memories` become one root-owned `POLICY` declaration, `resolveMemoryLayout` and
+ * `applyMemoryLayout` scope every node, the table and stacks are the layout's, and each snapshot
+ * is `{}`. Unlike Python's, it leaves `flow.flowId` at its default (`null`), which the runtime
+ * never reads, and applies no effective LLM map.
  */
 export function ownerEngine(
   flow: CompiledFlow,
   options: { inputs?: Readonly<Record<string, unknown>> } & Partial<FlowEngineOptions> = {},
 ): { engine: FlowEngine; memories: MemorySpec[]; stacks: MemoryStack[] } {
-  const scopes = [...flow.nodes.keys()].map((id) => {
-    const scope = new MemoryScope([id], { memories: [POLICY] });
-    flow.nodes.get(id)!.memoryScope = scope;
-    return scope;
-  });
-  const memories = [new MemorySpec(POLICY, POLICY, {}, [new DeclSite([], ["root"])], false)];
-  const memoryStacks = stacks(...scopes);
+  flow.memories = [new MemoryDecl(POLICY, POLICY, {}, new DeclSite([], ["root"]))];
+  const layout = resolveMemoryLayout(flow);
+  applyMemoryLayout(flow, layout);
+  const memories = layout.memories.map((memory) => memory.spec);
+  const memoryStacks = [...layoutStacks(layout)];
   const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
   const built = engine(flow, { ...options, learnable: true, memories, memoryStacks, memorySnapshots });
   return { engine: built, memories, stacks: memoryStacks };

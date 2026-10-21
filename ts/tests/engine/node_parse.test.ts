@@ -17,7 +17,8 @@
  * `test_map_without_over_is_loud` and `test_over_on_kind_call_is_loud` pin the whole message,
  * where Python checks that it names the field.
  *
- * Later (T3-22): `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`.
+ * Ported through `loadFlow`: `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`,
+ * which pins the whole message, where Python matches a pattern.
  *
  * Changed: `test_referenced_hyphenated_node_names_the_id_not_split_refs` reads its flow through
  * `parseFile`, `flowNodesCursor` and `parseNodes`, where Python loads it;
@@ -38,6 +39,7 @@ import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
@@ -48,6 +50,7 @@ import {
   type CaseRow,
   caseText,
   loadError,
+  loadErrorAsync,
   nodesOf,
   runCase,
   runTextCase,
@@ -184,6 +187,49 @@ output: \${outer.output}
       "node id 'inner-step' must be an identifier (ASCII letters, digits, and _, not starting with a " +
         "digit) so ${inner-step.output} can reference it; try 'inner_step'",
     );
+  });
+
+  test("a hyphenated single-node def is rejected but a multi-node def name loads", async () => {
+    const single = `
+id: f
+name: f
+input: {}
+defs:
+  my-def:
+    kind: code
+    code: "return 1"
+    output: int
+nodes:
+  a:
+    kind: call
+    call: my-def
+output: \${a.output}
+`;
+    const error = await loadErrorAsync(loadFlow(single));
+    expect(error.message).toBe(
+      "defs entry 'my-def': node id 'my-def' must be an identifier (ASCII letters, digits, and _, not " +
+        "starting with a digit) so ${my-def.output} can reference it; try 'my_def'",
+    );
+
+    const multi = `
+id: f
+name: f
+input: {}
+defs:
+  my-def:
+    input: {}
+    nodes:
+      b:
+        kind: code
+        code: "return 1"
+    output: \${b.output}
+nodes:
+  a:
+    kind: call
+    call: my-def
+output: \${a.output}
+`;
+    await loadFlow(multi);
   });
 });
 

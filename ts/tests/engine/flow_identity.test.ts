@@ -141,11 +141,13 @@
  * identity, and an unknown field, `skills` or `tools` that aren't arrays and a skill that isn't a
  * string refused.
  *
- * Later (T3-22): the loader rows `test_loaded_flow_stores_only_exact_parameter_carriers`,
- * `test_flow_fingerprint_ignores_comments_and_python_object_identity`,
+ * Ported through `loadFlow` (at the end): `test_loaded_flow_stores_only_exact_parameter_carriers`,
+ * `test_flow_fingerprint_ignores_comments_and_python_object_identity` (the two loads' `step` nodes
+ * are distinct objects, for Python's `_code` objects),
  * `test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semantics`,
  * `test_inline_manifest_canonicalizes_generated_structural_input_types`,
- * `test_reference_code_identity_is_the_token_not_the_callable_body`,
+ * `test_reference_code_identity_is_the_token_not_the_callable_body` (a TS module in a temporary
+ * `baseDir`, `./identity_refmod.ts:fn`, which the load checks exists but never imports),
  * `test_a_flow_file_cannot_put_api_key_in_a_manifest`,
  * `test_flow_without_formerly_redacted_values_keeps_its_fingerprint`,
  * `test_loaded_flow_output_forms_keep_their_fingerprints`,
@@ -153,7 +155,9 @@
  * `test_loaded_zero_and_one_field_records_differ_from_their_value_forms`,
  * `test_call_over_a_single_node_def_keeps_its_fingerprint`,
  * `test_loaded_value_output_and_single_node_def_use_a_value_end` and
- * `test_loop_with_max_keeps_its_fingerprint`.
+ * `test_loop_with_max_keeps_its_fingerprint`; the pinned fingerprints are TS pins: the manifest
+ * writes an inline CODE body as `{inline: <body>}` (design 6.7) where Python writes the bare text,
+ * and the inline bodies are TS (`+ 1n`); with both put back, Python's pins reproduce.
  *
  * Later (T4): `test_resume_rejects_a_flow_with_an_edited_literal` (a run and a resume).
  *
@@ -169,9 +173,14 @@
 
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { compareCodeUnits, OriginRef } from "../../src/diagnostics.ts";
 import {
   DeclSite,
@@ -189,6 +198,7 @@ import {
   ContractOrigins,
   ExecutionPosition,
   ExecutionScope,
+  isExactly,
   Parameter,
   SeedConnection,
   ValueContract,
@@ -2526,4 +2536,369 @@ test("an execution scope that isn't an ExecutionScope is refused", () => {
   Object.assign(code(flow, "body"), { executionScope: { staticPath: ["body"] } });
 
   expectError(() => expansionDigest(flow), TypeError, "expansion.nodes.body.executionScope must be an ExecutionScope");
+});
+
+// ---- Loaded flows ----------------------------------------------------------------------------
+
+const INLINE_FLOW = `
+id: stable
+name: Stable
+input:
+  x: !int 1
+env:
+  beta: 2
+  alpha: 1
+nodes:
+  step:
+    kind: code
+    input:
+      x: \${input.x}
+    output: int
+    code: |
+      return inputs["x"] + 1n
+    asserts:
+      - x >= 0
+      - x < 100
+      - output > x
+output: \${step.output}
+`;
+
+const INLINE_FLOW_WITH_COMMENTS = `
+# This comment and the blank lines move every source range and inline-code frame.
+
+id: stable
+name: Stable
+input:
+  x: !int 1
+env:
+  alpha: 1
+  beta: 2  # mapping presentation is not program identity
+nodes:
+  step:
+    kind: code
+    input:
+      x: \${input.x}
+    output: int
+    code: |
+      return inputs["x"] + 1n
+    asserts:
+      - x >= 0
+      - x < 100
+      - output > x
+output: \${step.output}
+`;
+
+/** Load `source` and return its compiled flow (Python's `_compiled`). */
+async function loaded(source: string = INLINE_FLOW): Promise<CompiledFlow> {
+  return (await loadFlow(source)).compiled;
+}
+
+test("test_loaded_flow_stores_only_exact_parameter_carriers", async () => {
+  // Compose builders and synthesized boundaries share one compiled parameter shape.
+  const flow = await loaded();
+
+  for (const node of flow.nodes.values()) {
+    if (node.params === null) continue;
+    expect(Array.isArray(node.params)).toBe(true);
+    expect(node.params.every((parameter) => isExactly(parameter, Parameter))).toBe(true);
+  }
+});
+
+const INLINE_COMPOSITE_IDENTITY = `
+id: inline-identity
+name: inline_identity
+input:
+  value: !int
+nodes:
+  wrapper:
+    kind: call
+    input:
+      value: \${input.value}
+    nodes:
+      step:
+        kind: code
+        input:
+          value: \${input.value}
+        output: int
+        code: |
+          return inputs["value"] + 1n
+    output: \${step.output}
+output: \${wrapper.output}
+`;
+
+test("test_flow_fingerprint_ignores_comments_and_python_object_identity", async () => {
+  const plain = await loaded();
+  const moved = await loaded(INLINE_FLOW_WITH_COMMENTS);
+
+  expect(plain.nodes.get("step")).not.toBe(moved.nodes.get("step"));
+  expect(flowManifest(plain)).toEqual(flowManifest(moved));
+  expect(flowFingerprint(plain)).toBe(flowFingerprint(moved));
+});
+
+test("test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semantics", async () => {
+  const baseline = await loaded(INLINE_COMPOSITE_IDENTITY);
+  const formatted = await loaded(
+    "# moves every authored range without changing the program\n\n" + INLINE_COMPOSITE_IDENTITY,
+  );
+  const changedChild = await loaded(
+    INLINE_COMPOSITE_IDENTITY.replace('return inputs["value"] + 1n', 'return inputs["value"] + 2n'),
+  );
+  const renamedOwner = await loaded(
+    INLINE_COMPOSITE_IDENTITY.replace("wrapper:", "renamed:").replace("${wrapper.output}", "${renamed.output}"),
+  );
+
+  const flowIdOf = (flow: CompiledFlow, id: string) => (flow.nodes.get(id) as CallNode).flowId;
+  const baselineId = flowIdOf(baseline, "wrapper");
+  expect(flowIdOf(formatted, "wrapper")).toBe(baselineId);
+  expect(flowIdOf(changedChild, "wrapper")).toBe(baselineId);
+  expect(flowIdOf(renamedOwner, "renamed")).not.toBe(baselineId);
+
+  expect(flowManifest(formatted)).toEqual(flowManifest(baseline));
+  expect(flowFingerprint(formatted)).toBe(flowFingerprint(baseline));
+  expect(flowFingerprint(changedChild)).not.toBe(flowFingerprint(baseline));
+  expect(flowFingerprint(renamedOwner)).not.toBe(flowFingerprint(baseline));
+});
+
+test("test_inline_manifest_canonicalizes_generated_structural_input_types", async () => {
+  const flow = await loaded(`id: inline-manifest-structural-input
+name: inline_manifest_structural_input
+typedefs:
+  Row:
+    z: int
+    a: Optional(str)
+input:
+  row: !Row
+nodes:
+  wrapper:
+    kind: call
+    input:
+      row: \${input.row}
+    nodes:
+      echo:
+        kind: code
+        code: |
+          return inputs["row"]
+        input:
+          row: \${input.row}
+        output: Row
+    output: \${echo.output}
+output: \${wrapper.output}
+`);
+
+  const wrapper = (flowManifest(flow).nodes as JsonObject).wrapper as JsonObject;
+  const childStart = ((wrapper.child as JsonObject).nodes as JsonObject)[START_ID] as JsonObject;
+  const generated = (childStart.params as JsonObject[])[0]!;
+  const fields = ((generated.contract as JsonObject).type as JsonObject).fields as JsonObject[];
+
+  expect(fields.map((field) => field.name)).toEqual(["a", "z"]);
+});
+
+test("test_reference_code_identity_is_the_token_not_the_callable_body", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-identity-"));
+  try {
+    const module = join(dir, "identity_refmod.ts");
+    writeFileSync(module, "export function fn(inputs) {\n  return 'one';\n}\n");
+    const text = `
+id: ref
+name: Ref
+nodes:
+  leaf:
+    kind: code
+    output: str
+    code: ./identity_refmod.ts:fn
+output: \${leaf.output}
+`;
+    const fingerprint = async (source: string) => flowFingerprint((await loadFlow(source, { baseDir: dir })).compiled);
+    const before = await fingerprint(text);
+
+    const changed = "export function fn(inputs) {\n  return 'a changed body';\n}\n";
+    writeFileSync(module, changed);
+    writeFileSync(join(dir, "identity_refmod_other.ts"), changed);
+
+    expect(await fingerprint(text)).toBe(before);
+    expect(await fingerprint(text.replace("identity_refmod.ts:fn", "identity_refmod_other.ts:fn"))).not.toBe(before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ["api_key: sk-flow-secret", "llm_config.api_key is a host credential"],
+  ["openai: {api_key: sk-flow-secret}", "`openai.api_key` is not a supported field"],
+  ["anthropic: {api_key: sk-flow-secret}", "`anthropic.api_key` is not a supported field"],
+])("test_a_flow_file_cannot_put_api_key_in_a_manifest: %s", async (layer, message) => {
+  let caught: unknown = null;
+  try {
+    await loaded(`
+id: keyed
+name: Keyed
+llm_config:
+  provider: openai
+  ${layer}
+nodes:
+  ask:
+    kind: agent
+    prompt: Answer briefly.
+    output: str
+output: \${ask.output}
+`);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(LoadError);
+  expect((caught as LoadError).message).toContain(message);
+  expect((caught as LoadError).message).not.toContain("sk-flow-secret");
+});
+
+const GOLDEN_FLOW = `
+id: golden
+name: golden
+input:
+  topic: !str
+  limit: !int 3
+  mode: !str 'fast'
+llm_config:
+  provider: openai
+  model: gpt-4o
+env:
+  max_tool_iterations: 40
+long_term_memory:
+  notes:
+    type: episodic
+    config:
+      max_episodes: 5
+nodes:
+  fetch:
+    kind: code
+    code: |
+      return inputs
+    env:
+      region: eu
+    input:
+      topic: \${input.topic}
+      url: 'https://example.com/search?q=\${input.topic}'
+      opts: {depth: 2, tags: [a, b]}
+      label: 'plain text'
+  write:
+    kind: agent
+    prompt: Summarize \${fetch.output}.
+    llm_config:
+      model: gpt-4o-mini
+    input:
+      fetch: \${fetch.output}
+      limit: \${input.limit}
+output:
+  summary: \${write.output}
+  mode: \${input.mode}
+`;
+
+test("test_flow_without_formerly_redacted_values_keeps_its_fingerprint", async () => {
+  expect(flowFingerprint(await loaded(GOLDEN_FLOW))).toBe(
+    "786dc8194fcfbd44f554e4151e29991b1faf373d4f6445bb5a387196a2a28314",
+  );
+});
+
+/** The pin flow with `outputSection` (Python's `_PIN_FLOW % output_section`). */
+const pinFlow = (outputSection: string) => `
+id: pin
+name: pin
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "filled"
+${outputSection}`;
+
+const PIN_DEF_FLOW = `
+id: pdef
+name: pdef
+defs:
+  greet:
+    kind: code
+    output: str
+    code: |
+      return "hi"
+nodes:
+  c:
+    kind: call
+    call: greet
+output: \${c.output}
+`;
+
+// These pins guard that the value form, an absent output, and multi-field records keep their
+// encoding when END record semantics change; the END-manifest tests above are the primary guard.
+test.each([
+  ["value", "output: ${step.output}\n", "62defc93158f3d2e3b0e973c7c51270d98da4a6c4cba0c416e87cff51b7aa36a"],
+  ["none", "", "2ce711f32439e55e347dad1e19e608e649cf9bbf12876a12fd3769ea2ebb0ef7"],
+  [
+    "two-fields",
+    "output:\n  order: ${step.output}\n  note: ${step.output}\n",
+    "f8dfe98712cff57decbe0a06ce38ce89670c41cf40fce95aef873a53cbd678b4",
+  ],
+])("test_loaded_flow_output_forms_keep_their_fingerprints: %s", async (_, outputSection, expected) => {
+  expect(flowFingerprint(await loaded(pinFlow(outputSection)))).toBe(expected);
+});
+
+test("test_loaded_one_field_record_flow_has_its_pinned_fingerprint", async () => {
+  expect(flowFingerprint(await loaded(pinFlow("output:\n  order: ${step.output}\n")))).toBe(
+    "f882c54e76f793a662ab6967970c58476d90ebfa771f51b006a72ccaa72f8073",
+  );
+});
+
+test("test_loaded_zero_and_one_field_records_differ_from_their_value_forms", async () => {
+  const named = flowFingerprint(await loaded(pinFlow("output:\n  result: ${step.output}\n")));
+  const value = flowFingerprint(await loaded(pinFlow("output: ${step.output}\n")));
+  const empty = flowFingerprint(await loaded(pinFlow("output: {}\n")));
+  const absent = flowFingerprint(await loaded(pinFlow("")));
+
+  expect(named).not.toBe(value);
+  expect(empty).not.toBe(absent);
+});
+
+test("test_call_over_a_single_node_def_keeps_its_fingerprint", async () => {
+  expect(flowFingerprint(await loaded(PIN_DEF_FLOW))).toBe(
+    "90a5fb6b7cf746fd492fb240d500d5b5b3f04bb045aaac1faac21d56ae5e7a0f",
+  );
+});
+
+test("test_loaded_value_output_and_single_node_def_use_a_value_end", async () => {
+  const flow = await loaded(pinFlow("output: ${step.output}\n"));
+  expect((flow.nodes.get(flow.endId) as EndNode).returnsRecord).toBe(false);
+
+  const call = (await loaded(PIN_DEF_FLOW)).nodes.get("c") as CallNode;
+  const child = call.child as Flow;
+  expect((child.nodes.get(child.endId) as EndNode).returnsRecord).toBe(false);
+});
+
+/** The loop flow with `predicate` and `max: 5` (Python's `_LOOP_IDENTITY % predicate`). */
+const loopIdentity = (predicate: string) => `
+id: count
+name: count
+nodes:
+  loop:
+    kind: loop
+    input:
+      n: 0
+    ${predicate}
+    max: 5
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1n}
+    output: \${bump.output}
+output: \${loop.output.n}
+`;
+
+test.each([
+  ["while: n < 3", "99eeb626fcb47ff8d0bd152d0a1b6eb19f210156f9a91cb528a78783598e99a7"],
+  ["until: n >= 3", "e01bdcef87cf52de28135353b42e02f6d15b2154940b976f48f58a72e0497e5b"],
+])("test_loop_with_max_keeps_its_fingerprint: %s", async (predicate, digest) => {
+  // Pinned before `max:` became optional: a loop that sets `max:` keeps its identity.
+  expect(flowFingerprint(await loaded(loopIdentity(predicate)))).toBe(digest);
 });

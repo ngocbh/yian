@@ -35,7 +35,8 @@
  * agent's don't. `test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls`: the event half
  * (the interrupt set once the reply finished; both calls skipped with brackets); the transcript
  * half Later (T6-6). `test_python_built_steerable_agent_with_structured_output_fails_before_the_model`:
- * the `run({})` half; its `eval_node` half Later (T3-22).
+ * the output contract is built directly where Python reads it from a loaded flow; the evaluator
+ * half goes through `drive`.
  * `test_interrupt_mid_stream_in_a_pooled_run_keeps_partial_text` runs with `numWorkers: 2`; the
  * model pauses after its second word until the host saw it, as Python's thread does.
  *
@@ -267,7 +268,7 @@ test("test_run_context_receives_steering_only_when_steerable (Changed: the inbox
   }
 });
 
-test("python built steerable agent with structured output fails before the model (run half)", async () => {
+test("python built steerable agent with structured output fails before the model", async () => {
   const contract = new ValueContract(
     new Type({
       kind: ValueKind.OBJECT,
@@ -281,6 +282,11 @@ test("python built steerable agent with structured output fails before the model
   const result = node.run({});
   await expect(result).rejects.toBeInstanceOf(RangeError);
   await expect(result).rejects.toThrow("AGENT node 'chat': steerable needs `str` output");
+  // Malformed node setup escapes the evaluator, as for any other kind.
+  const model = new ScriptedModel([], CONFIG);
+  const evaluated = drive(node, { steering: new Inbox({}, ["chat"]), models: serving(model) });
+  await expect(evaluated).rejects.toThrow("AGENT node 'chat': steerable needs `str` output");
+  expect(model.requests).toEqual([]);
 });
 
 // --- steer messages ----------------------------------------------------------- //

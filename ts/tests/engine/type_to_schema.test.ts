@@ -36,7 +36,7 @@
  * (`[0, "scores", 0, 1]`). TS-only: an open record drops unknown fields and comes back in declared
  * field order.
  *
- * Later (T4-8/T3-22), it loads and runs a flow: `test_agent_with_any_output_loads_and_returns_the_value`.
+ * Later (T4-8), it loads and runs a flow: `test_agent_with_any_output_loads_and_returns_the_value`.
  */
 
 import { describe, expect, test } from "bun:test";

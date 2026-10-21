@@ -30,15 +30,18 @@
  *   where Python prints `['extra']`).
  * - `json.dumps(manifest)` is `JSON.stringify`.
  *
- * Later (T3-22): the loader rows `test_a_flow_without_templates_keeps_its_fingerprint` and
- * `test_a_literal_llm_config_flow_keeps_its_fingerprint` (pinned fingerprints of loaded flows), and
+ * Ported through `loadFlow`: the loader rows `test_a_flow_without_templates_keeps_its_fingerprint`
+ * and `test_a_literal_llm_config_flow_keeps_its_fingerprint` (Python's pinned fingerprint), and
  * `test_a_literal_llm_config_with_a_doubled_dollar_reads_unescaped` (the loader's `$$` reading).
+ * Changed: the template-free row pins TS's own fingerprint, since the TS manifest writes an inline
+ * CODE body as `{inline: <text>}` where Python writes the text; the rest of the manifest is equal.
  */
 
 import { expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
@@ -326,4 +329,78 @@ test("a flow llm config value is fingerprinted as written", () => {
   expect(llmFingerprint({ model: "m" }, valueLayer("provider", "m"))).not.toBe(
     llmFingerprint({ model: "m" }, valueLayer("provider", "n")),
   );
+});
+
+// ---------- loaded flows ----------
+
+const UNTYPED_FLOW = `
+id: plain
+name: Plain
+input:
+  x: !int
+  token: !str
+nodes:
+  step:
+    kind: code
+    input:
+      x: \${input.x}
+      request: {headers: {Authorization: "Bearer $\${input.token}"}, items: [1, "a"]}
+      password: "\${input.token}"
+    output: int
+    code: |
+      return inputs["x"] + 1
+output: \${step.output}
+`;
+
+test("a flow without templates keeps its fingerprint", async () => {
+  // A template-free flow must not move. TS's fingerprint: its manifest writes the inline CODE as
+  // `{inline: <text>}`, where Python's (c5ea81e9...) writes the bare text.
+  expect(flowFingerprint((await loadFlow(UNTYPED_FLOW)).compiled)).toBe(
+    "e1abe2e3f331a207810eb89af00120062b61906b7a98c03c0a43240157a96762",
+  );
+});
+
+/** Python's `_LLM_FLOW` text, with the node and flow `llm_config` layers given. */
+const llmFlow = (nodeLayer: string, flowLayer: string) => `id: f
+name: f
+input: {m: !str , n: !str , cfg: !object }
+${flowLayer}
+nodes:
+  a:
+    kind: agent
+    prompt: Go.
+    llm_config: ${nodeLayer}
+output: \${a.output}
+`;
+
+test("a literal llm config flow keeps its fingerprint", async () => {
+  // The fingerprint Python's main gives this flow, from before `llm_config` read values.
+  const text = `id: f
+name: f
+llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}
+nodes:
+  a:
+    kind: agent
+    prompt: Go.
+    llm_config: {model: claude-x, inherit: true, anthropic: {temperature: 0.2}}
+output: \${a.output}
+`;
+  expect(flowFingerprint((await loadFlow(text)).compiled)).toBe(
+    "0f2c73ac336010ede82bbbc2f9a6584bbe70a5c7453285d4a2eedbdb81e4376e",
+  );
+});
+
+test("a literal llm config with a doubled dollar reads unescaped", async () => {
+  // A literal layer is read as a template would be, so `$$` is one `$` and the fingerprint is that
+  // of the unescaped text.
+  const flowLayer = "llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}";
+  const fingerprint = async (nodeLayer: string) =>
+    flowFingerprint((await loadFlow(llmFlow(nodeLayer, flowLayer))).compiled);
+  expect(await fingerprint('{model: "a$$b"}')).toBe(await fingerprint('{model: "a$b"}'));
+
+  const flow = await loadFlow(llmFlow('{model: "a$$b"}', ""));
+  expect(((flowManifest(flow.compiled).nodes as JsonObject).a as JsonObject).own_llm_config).toEqual({
+    entries: [{ key: { type: "str", value: "model" }, value: { type: "str", value: "a$b" } }],
+    type: "mapping",
+  });
 });

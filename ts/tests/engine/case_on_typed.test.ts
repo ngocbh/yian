@@ -74,11 +74,9 @@
  * `test_literal_value_case_listing_every_tag_needs_no_else`,
  * `test_unquoted_date_when_narrows_a_date_shaped_union_tag`.
  *
- * Later (T3-22): `test_routing_only_call_child_literal_input_missing_a_tag`, which composes a
- * `defs:` entry; its harvested case is pinned at the end with the entry assembled as its own root,
- * comparing the message after the loader's `defs entry 'child': ` prefix (which TS adds only from
- * T3-22) and the last frame only. T3-22 replaces that
- * pin with a `full: true` one (the definition frame included) rather than adding a second.
+ * Ported through `loadFlow`: `test_routing_only_call_child_literal_input_missing_a_tag`, which
+ * composes a `defs:` entry; its harvested case is pinned at the end with `full` (the definition
+ * frame and the loader's `defs entry 'child': ` prefix included).
  *
  * The harvested cases the CASE build, the `when:` value check and the exhaustiveness check decide
  * are pinned at the end.
@@ -86,10 +84,10 @@
 
 import { expect, test } from "bun:test";
 
-import { assemble } from "../../src/compose/build/pipeline.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor, onMatchKey } from "../../src/compose/nodes/case.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { duplicateWhenMessage } from "../../src/compose/validate/case_exhaustive.ts";
 import { evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
@@ -98,10 +96,9 @@ import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import {
   assembled,
   assembleText,
-  type CaseCall,
   type CaseRow,
-  cursorAt,
   loadError,
+  loadErrorAsync,
   nodesOf,
   runCase,
 } from "../compose/declarations.ts";
@@ -844,6 +841,23 @@ test("routing-only map child Literal input missing a tag", () => {
   expect(errorLine(error)).toBe(lineOf(text, "      route:"));
 });
 
+test("routing-only call child Literal input missing a tag", async () => {
+  const text =
+    "id: f\nname: f\ntypedefs:\n  K: Literal(a, b)\ninput:\n  k: !K\n" +
+    "defs:\n  child:\n    input:\n      k: !K\n    nodes:\n" +
+    "      route:\n        kind: case\n        on: ${input.k}\n        cases:\n" +
+    "          - when: a\n            then: one\n" +
+    branchBody("one", "str", '"one"') +
+    "    output: ${one.output}\n" +
+    "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      k: ${input.k}\n" +
+    "output: ${c.output}\n";
+
+  const error = await loadErrorAsync(loadFlow(text));
+
+  expect(error.message).toEndWith(uncovered("${input.k}"));
+  expect(errorLine(error)).toBe(lineOf(text, "      route:"));
+});
+
 // ---------- harvested conformance cases ----------
 
 test("assembled: load-case/engine_case_on_typed__infinite_when_on_a_float", () => {
@@ -877,34 +891,10 @@ test.each<CaseRow>(
   ].map((name) => ({ id: `load-case/engine_case_on_typed__${name}`, call: assembled })),
 )("assembled: $id", runCase);
 
-/**
- * Assemble the case's `defs.child` entry as its own root, in the case's document so its ranges
- * are the file's; the loader's `defs entry 'child': ` prefix and definition frame are T3-22's.
- */
-const childAssembled: CaseCall = (document, registry, _diagnostics, builder) => {
-  const child = cursorAt(document, ["defs", "child"]);
-  return assemble({
-    inputsSection: child.child("input").value as Readonly<Record<string, unknown>>,
-    inputsCursor: child.child("input"),
-    nodesCursor: child.child("nodes"),
-    outputsSection: child.child("output").value,
-    assertsSection: [],
-    registry,
-    scope: {
-      catalogBuilder: builder,
-      registerPrivate: () => {},
-      resolve: () => {
-        throw new Error("the child calls no flow");
-      },
-    },
-    owner: ["child"],
-  });
-};
-
-test("assembled child: load-case/engine_case_on_typed__routing_only_call_child_literal_missing_a_tag", () => {
+test("assembled: load-case/engine_case_on_typed__routing_only_call_child_literal_missing_a_tag", () => {
   runCase({
     id: "load-case/engine_case_on_typed__routing_only_call_child_literal_missing_a_tag",
-    call: childAssembled,
-    prefix: "defs entry 'child': ",
+    call: assembled,
+    full: true,
   });
 });

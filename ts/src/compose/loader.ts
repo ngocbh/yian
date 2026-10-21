@@ -150,8 +150,8 @@ function restoreNodeSurface(nodes: Value): Value {
   );
 }
 
-/** Return the authored def cursor's `nodes:`, or a surface-restored virtual fallback. */
-function defAssemblyCursor(defCursor: SourceCursor | null, normalizedNodes: Value): SourceCursor {
+/** Return the authored def cursor's `nodes:`, or a surface-restored virtual fallback. Exported for tests. */
+export function defAssemblyCursor(defCursor: SourceCursor | null, normalizedNodes: Value): SourceCursor {
   if (defCursor !== null) {
     try {
       return defCursor.child("nodes");
@@ -178,9 +178,10 @@ function sourceChild(cursor: SourceCursor | null, key: string): SourceCursor | n
  *
  * The node body is the def's body without its signature, plus one generated `p: ${input.p}`
  * binding per parameter and the def's `output:` type. Each projected entry keeps the authored
- * source it came from: a generated binding points at its parameter's declaration.
+ * source it came from: a generated binding points at its parameter's declaration. Exported for
+ * tests.
  */
-function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: SourceCursor | null): SourceCursor {
+export function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: SourceCursor | null): SourceCursor {
   const paramTypes = isRecord(body["inputs"]) ? body["inputs"] : {};
   const generatedInputs: ValueRecord = Object.fromEntries(
     Object.keys(paramTypes).map((param) => [param, `\${input.${param}}`]),
@@ -832,8 +833,10 @@ function typedefErrorRange(root: SourceCursor, path: ValuePath): SourceRange | n
  *   `system.paths` inert.
  * @param ctx The load context shared by the whole import graph.
  * @param baseDir The directory the file's CODE references resolve against.
+ *
+ * Exported for tests; hosts call `loadFlow`.
  */
-async function loadFlowFile(
+export async function loadFlowFile(
   document: SourceDocument,
   childResolver: ChildResolver | null,
   searchPaths: readonly string[] | null,

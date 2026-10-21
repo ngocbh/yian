@@ -5,23 +5,19 @@
  * `test_system_prompt_reaches_the_agent_node`, `test_compact_flow_accepts_system_prompt`,
  * `test_system_prompt_sees_the_node_variables`, `test_unknown_ref_points_at_the_system_prompt_line`,
  * `test_unknown_ref_in_a_compact_flow_is_located`, `test_non_string_system_prompt_points_at_its_line`
- * (loaded with `assembleText` where Python calls `load_flow`), the manifest-key half of
+ * (loaded with `assembleText` where Python calls `load_flow`),
  * `test_flow_without_system_prompt_keeps_its_fingerprint` and `test_system_prompt_is_identity`.
  *
- * Changed: the message says `or null` where Python's says `or None`. The identity rows build the
- * `reply` node by hand where Python loads `_flow`.
+ * Changed: the message says `or null` where Python's says `or None`.
  *
  * TS-only: the harvested cases of the `123` row, as `parseNodes` reads it, and of the compact
  * flow and the pool ref, which assemble.
- *
- * Later (T3-22): the pinned fingerprints of
- * `test_flow_without_system_prompt_keeps_its_fingerprint` (loaded `_flow` and `_compact`).
  */
 
 import { afterEach, expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
-import { Flow } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
@@ -72,15 +68,8 @@ prompt: \${message}
 /** Assemble `text` and return its `reply` node. */
 const replyOf = (text: string) => assembleText(text).flow.compiled.nodes.get("reply") as AgentNode;
 
-/** A one-node flow of the `reply` agent, with `systemPrompt` when given. */
-function replyFlow(systemPrompt: string | null = null): Flow {
-  const reply = new AgentNode("reply", { prompt: "${message}", systemPrompt });
-  return new Flow(new Map([["reply", reply]]), [], {
-    wiring: new Map([["reply", new Map()]]),
-    startId: "reply",
-    endId: "reply",
-  });
-}
+/** Load `text` and return its compiled flow. */
+const compiledOf = async (text: string) => (await loadFlow(text)).compiled;
 
 test("system prompt reaches the agent node", () => {
   expect(replyOf(chatFlow(`    system_prompt: "${PERSONA}"`)).systemPrompt).toBe(PERSONA);
@@ -132,14 +121,24 @@ test("agent node rejects a non-string system prompt", () => {
   expect(() => new AgentNode("reply", { systemPrompt: "" })).toThrow(TypeError);
 });
 
-test("flow without system prompt keeps its fingerprint (the manifest key)", () => {
-  expect("system_prompt" in ((flowManifest(replyFlow()).nodes as JsonObject).reply as JsonObject)).toBe(false);
+test("flow without system prompt keeps its fingerprint", async () => {
+  // An absent `system_prompt:` adds nothing to identity. Pinned after `mode` left the AGENT
+  // manifest.
+  for (const compiled of [await compiledOf(chatFlow("")), await compiledOf(compactFlow(""))]) {
+    expect("system_prompt" in ((flowManifest(compiled).nodes as JsonObject).reply as JsonObject)).toBe(false);
+  }
+  expect(flowFingerprint(await compiledOf(chatFlow("")))).toBe(
+    "fc15ce95efcac79320ef54dad98e219283ab094c8521dbdcd8d6a9f65397e801",
+  );
+  expect(flowFingerprint(await compiledOf(compactFlow("")))).toBe(
+    "a86275835f7f45b1a3eb6f9f4604cec49955a760339c13f0de26d9a539c47312",
+  );
 });
 
-test("system prompt is identity", () => {
-  const base = flowFingerprint(replyFlow());
-  const persona = flowFingerprint(replyFlow(PERSONA));
-  const other = flowFingerprint(replyFlow("You are ${name}."));
+test("system prompt is identity", async () => {
+  const base = flowFingerprint(await compiledOf(chatFlow("")));
+  const persona = flowFingerprint(await compiledOf(chatFlow(`    system_prompt: "${PERSONA}"`)));
+  const other = flowFingerprint(await compiledOf(chatFlow('    system_prompt: "You are ${name}."')));
 
   expect(new Set([base, persona, other]).size).toBe(3);
 });

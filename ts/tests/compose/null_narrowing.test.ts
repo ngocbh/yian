@@ -26,8 +26,7 @@
  * `::test_a_field_narrowed_to_null_leaves_the_records_around_it_alone`,
  * `::test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive` and
  * `::test_a_field_of_an_unchecked_optional_parent_may_still_be_null`. Through `assembleText`, the
- * rows the CALL type check decides, the `need` def built by hand (`handChild`, since def bodies
- * load in T3-22): `::test_a_narrowed_optional_field_fills_a_required_input` (4),
+ * rows the CALL type check decides: `::test_a_narrowed_optional_field_fills_a_required_input` (4),
  * `::test_a_narrowed_field_makes_its_parent_non_null` (2) and
  * `::test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input`, pinning the whole
  * message where Python matches a fragment.
@@ -40,7 +39,7 @@
  * pinned `compose_null_narrowing__*` cases are at the end: `…__a_null_when_is_no_on_value_even_on_a_narrowed_field`,
  * whose error the CASE build raises, for `test_a_null_when_is_no_on_value_even_on_a_narrowed_field`;
  * `…__an_unnarrowed_optional_field_into_a_required_input`, whose error the cross-flow binding
- * check raises (`assembledWith`, the `need` def built by hand); the three `checkImpossibleWhens`
+ * check raises; the three `checkImpossibleWhens`
  * raises; and `…__a_field_of_an_unchecked_optional_parent_may_be_null`, whose error the
  * exhaustiveness check raises; and `…__a_node_assert_check_made_impossible_is_reported`, whose
  * error the node-assert check raises, for
@@ -84,12 +83,9 @@ import { readTypedefs } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
-  handChild,
   loadError,
-  parametersFromYaml,
   runCase,
 } from "./declarations.ts";
 
@@ -384,21 +380,11 @@ const nestedFlow = (when: string, aType = "A", source = "${input.a.b}", sink = "
   "        input:\n          o: ${input.v}\n        code: return 1\n" +
   "    output: ${p.output}\n";
 
-/** The `need` def built by hand: input `v: !<sink>` (default `str`), an untyped `p`, returned. */
-const need = (sink = "str") =>
-  handChild({
-    inputs: parametersFromYaml(`input:\n  v: !${sink}\n`, readTypedefs({ A: { b: "Optional(str)" } })),
-    producers: { p: null },
-    output: "${p.output}",
-  });
-
-const NEED = need();
-
 describe("a narrowed optional field fills a required input", () => {
   for (const when of ["isinstance(input.a.b, str)", "input.a.b != null"]) {
     for (const aType of ["A", "Optional(A)"]) {
       test(`${when} on ${aType}`, () => {
-        assembleText(nestedFlow(when, aType), "flow.yaml", { children: { need: NEED } });
+        assembleText(nestedFlow(when, aType));
       });
     }
   }
@@ -407,14 +393,12 @@ describe("a narrowed optional field fills a required input", () => {
 test.each(["isinstance(input.a.b, str)", "input.a.b != null"])(
   "a narrowed field makes its parent non-null: %s",
   (when) => {
-    assembleText(nestedFlow(when, "Optional(A)", "${input.a}", "A"), "flow.yaml", { children: { need: need("A") } });
+    assembleText(nestedFlow(when, "Optional(A)", "${input.a}", "A"));
   },
 );
 
 test("an unnarrowed optional field still cannot fill a required input", () => {
-  const error = loadError(() =>
-    assembleText(nestedFlow("input.a.b == null"), "flow.yaml", { children: { need: NEED } }),
-  );
+  const error = loadError(() => assembleText(nestedFlow("input.a.b == null")));
 
   expect(error.message).toBe(
     "node 'route' cases[0].then call(need) argument 'v' — child expects 'str', source is 'Optional(str)'",
@@ -577,10 +561,10 @@ test("assembled: load-types/compose_null_narrowing__a_null_when_is_no_on_value_e
   });
 });
 
-test("assembledWith: load-types/compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input", () => {
+test("assembled: load-types/compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input", () => {
   runCase({
     id: "load-types/compose_null_narrowing__an_unnarrowed_optional_field_into_a_required_input",
-    call: assembledWith({ need: NEED }),
+    call: assembled,
   });
 });
 

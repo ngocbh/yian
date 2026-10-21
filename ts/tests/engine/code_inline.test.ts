@@ -54,8 +54,8 @@
  * `test_dynamic_same_filename_code_falls_back_to_owned_call_site` (Python `compile` and `exec`);
  * `test_reference_failure_does_not_inspect_origin_truthiness` (Python `__bool__`).
  *
- * Later (T3-22, T4-8): `test_inline_flow_loads_and_runs` and `test_inline_raise_becomes_failed_run`
- * (they need `loadFlow` and `runFlow`).
+ * Later (T4-8): `test_inline_flow_loads_and_runs` and `test_inline_raise_becomes_failed_run`
+ * (they need `runFlow`).
  */
 
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";

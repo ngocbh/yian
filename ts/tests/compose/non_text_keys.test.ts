@@ -10,25 +10,25 @@
  * The harvested `yaml/compose_non_text_keys__*` cases are pinned at the end; the child-file case
  * parses the child file.
  *
- * Changed: `test_case_on_needs_no_exemption` parses the flow's nodes with the real `case` kind,
- * where Python loads it.
- *
- * Later (T3-22): `test_the_flow_loads_with_text_names_everywhere`, the loading of
- * `test_case_on_needs_no_exemption` and of `test_a_child_flow_file_reports_its_own_key`, and the
- * loading halves of
- * `test_a_quoted_key_follows_the_usual_name_rules` and
- * `test_words_yaml_1_1_read_as_booleans_are_text_keys`; here a quoted key and a YAML 1.1 word
- * parse with no error.
+ * Ported through `loadFlow`: `test_the_flow_loads_with_text_names_everywhere`,
+ * `test_a_quoted_key_follows_the_usual_name_rules`,
+ * `test_words_yaml_1_1_read_as_booleans_are_text_keys`, `test_case_on_needs_no_exemption` (which
+ * also parses the flow's nodes with the real `case` kind) and
+ * `test_a_child_flow_file_reports_its_own_key` (the child file read through `searchPaths`).
  */
+
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
-import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { standIn } from "./stand_ins.ts";
+import { loadError, loadErrorAsync, nodesOf, runTextCase } from "./declarations.ts";
 
 afterEach(() => forget());
 
@@ -113,6 +113,13 @@ function keyRange(text: string, key: string, site: Site): SourceRange {
   return new SourceRange(line, column, line, column + key.length);
 }
 
+/** Load `text` as `k.yaml`. */
+const load = (text: string) => loadFlow(text, { sourceLabel: "k.yaml" });
+
+test("the flow loads with text names everywhere", async () => {
+  expect(await load(flowWith("x_block", "n_x_block"))).not.toBeNull();
+});
+
 /** Return the `LoadError` parsing `text` throws. */
 function parseError(text: string) {
   return loadError(() => parseSourceDocument(text, "k.yaml"));
@@ -157,19 +164,17 @@ test("an empty key asks for a name", () => {
   );
 });
 
-test("a quoted key follows the usual name rules", () => {
-  // The loading halves are later; the quoted keys parse.
-  parseFile(parseSourceDocument(flowWith("root_node", '"True"'), "k.yaml"));
-  parseFile(parseSourceDocument(flowWith("x_block", "'2026-10-13'"), "k.yaml"));
+test("a quoted key follows the usual name rules", async () => {
+  await load(flowWith("root_node", '"True"'));
+  await load(flowWith("x_block", "'2026-10-13'"));
 
-  const call = standIn("call", { allow: ["nodes", "outputs"] });
-  const error = loadError(() => nodesOf(flowWith("root_node", "'1'"), [call]));
+  const error = await loadErrorAsync(load(flowWith("root_node", "'1'")));
 
   expect(error.diagnostic.message).not.toContain("names in a flow must be text");
   expect(error.diagnostic.message).toContain("_1");
 });
 
-test("case on needs no exemption", () => {
+test("case on needs no exemption", async () => {
   const text = `id: f
 name: f
 input:
@@ -190,11 +195,35 @@ output: \${done.output}
 `;
 
   expect((nodesOf(text, []).get("route") as CaseDescriptor).on).toBe("${input.x}");
+  await load(text);
 });
 
-test.each(["yes", "on", "off", "no"])("yaml 1.1 boolean words are text keys: %s", (key) => {
-  parseSourceDocument(flowWith("root_node", key), "k.yaml");
-  parseSourceDocument(flowWith("flow_input", key), "k.yaml");
+test.each(["yes", "on", "off", "no"])("yaml 1.1 boolean words are text keys: %s", async (key) => {
+  await load(flowWith("root_node", key));
+  await load(flowWith("flow_input", key));
+});
+
+test("a child flow file reports its own key", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "yian-non-text-keys-"));
+  try {
+    writeFileSync(
+      join(tmp, "child.yaml"),
+      "id: child\nname: child\nnodes:\n  a:\n    1: x\n    kind: code\n" +
+        "    code: return 1\n    output: int\noutput: ${a.output}\n",
+    );
+    const parent =
+      "id: parent\nname: parent\nnodes:\n  c:\n    kind: call\n    call: kid\n" +
+      "output: ${c.output}\nuses:\n  kid: child\n";
+
+    const error = await loadErrorAsync(loadFlow(parent, { searchPaths: [tmp] }));
+
+    const frame = error.diagnostic.frames.at(-1)!;
+    expect(error.diagnostic.message).toContain("was read by YAML as an integer");
+    expect(frame.label).toBe("child.yaml");
+    expect(frame.range).toEqual(new SourceRange(5, 5, 5, 6));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test.each([

@@ -3,7 +3,7 @@
  * `tests/engine/test_agent_defaults.py`.
  *
  * Ported: `test_the_manifest_holds_two_retries_by_default` and
- * `test_the_manifest_holds_the_agent_retries_default`.
+ * `test_the_manifest_holds_the_agent_retries_default` (through `loadFlow` of `_STRUCTURED`).
  *
  * Ported at node level, through `evalNode` (`drive`) with a `ScriptedModel` from `models`, where
  * Python loads `_STRUCTURED` or `_LOOPING` and runs it (`runFlow`, T4-8):
@@ -14,15 +14,14 @@
  * `env`, the `lookup` tool in the run's `ToolSet`).
  *
  * Changed: `YIAN_AGENT_RETRIES=0` and `YIAN_AGENT_MAX_TOOL_ITERATIONS=1` are set with `reload`,
- * which Python's `set_defaults` fixture does. The manifest halves read a hand-built one-agent flow
- * where Python loads `_STRUCTURED`. The exhausted bad reply fails with code
+ * which Python's `set_defaults` fixture does. The exhausted bad reply fails with code
  * `agent.output_invalid` (Python: `node.execute`).
  */
 
 import { afterEach, expect, test } from "bun:test";
 
 import { flowManifest } from "../../src/compile/manifest.ts";
-import { Flow } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -40,30 +39,42 @@ afterEach(() => {
   forget();
 });
 
-/** The manifest `retries` of a flow whose one node is a default AGENT `agent`. */
-function manifestRetries(): unknown {
-  const flow = new Flow(new Map([["agent", new AgentNode("agent", { prompt: "${question}" })]]), [], {
-    wiring: new Map([["agent", new Map()]]),
-    startId: "agent",
-    endId: "agent",
-  });
-  return ((flowManifest(flow).nodes as JsonObject).agent as JsonObject).retries;
+// The sentinel model has no native structured output, so the reply is parsed from text and a bad
+// reply costs one retry.
+const STRUCTURED = `id: scored
+name: scored
+llm_config: {provider: vllm, model: no-structured-sentinel}
+input:
+  question: !str
+nodes:
+  agent:
+    kind: agent
+    prompt: \${question}
+    input:
+      question: \${input.question}
+    output: {score: float}
+output: \${agent.output}
+`;
+
+/** The manifest `retries` of the loaded `STRUCTURED` flow's AGENT `agent`. */
+async function manifestRetries(): Promise<unknown> {
+  const flow = await loadFlow(STRUCTURED);
+  return ((flowManifest(flow.compiled).nodes as JsonObject).agent as JsonObject).retries;
 }
 
-test("the manifest holds two retries by default", () => {
-  expect(manifestRetries()).toBe(2);
+test("the manifest holds two retries by default", async () => {
+  expect(await manifestRetries()).toBe(2);
   expect(new AgentNode("n").retries).toBe(2);
 });
 
-test("the manifest holds the agent retries default", () => {
+test("the manifest holds the agent retries default", async () => {
   reload((name) => (name === "YIAN_AGENT_RETRIES" ? "0" : undefined));
-  expect(manifestRetries()).toBe(0);
+  expect(await manifestRetries()).toBe(0);
   expect(new AgentNode("n").retries).toBe(0);
   expect(new AgentNode("n", { retries: 3 }).retries).toBe(3);
 });
 
-// The sentinel model has no native structured output, so the reply is parsed from text and a bad
-// reply costs one retry.
+// The sentinel model, as `STRUCTURED`'s `llm_config`.
 const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
 
 /**

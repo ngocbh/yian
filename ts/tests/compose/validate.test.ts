@@ -40,16 +40,14 @@
  * frame and the notes): `load-core/engine_limit_overrides__written_value_over_the_set_value_limit`
  * (its `env:` sets the value limit, restored by the `afterEach`), the type-table pass's
  * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, the reference
- * check's `load-core/compose_expression_nesting__too_deep_{call_argument,case_on,human_question,prompt_span}`
- * (the call argument's `g` def a hand-built child),
+ * check's `load-core/compose_expression_nesting__too_deep_{call_argument,case_on,human_question,prompt_span}`,
  * `yaml/compose_load_error_ranges__mapped_root_output_keeps_the_retained_range`,
  * `load-case/engine_case_when_escape_e2e__*`, `load-core/unknown_namespace`,
  * `load-case/engine_value_entries_run__a_routed_entry_reading_an_excluded_field` (the `else`
  * branch's narrowed view of `d.output` gives its "unknown field" message), the node-assert check's
  * `load-core/compose_expression_nesting__too_deep_node_assert`, the flow-assert lowering's
  * `load-core/compose_expression_nesting__too_deep_flow_assert`, and the `ok` cases with flow asserts
- * `load-leaves/seed_23_asserts_scopes` (its `score_one` def built by hand, without the def's own
- * asserts, which load in T3-22), `load-core/seed_19_binding_stances` and
+ * `load-leaves/seed_23_asserts_scopes`, `load-core/seed_19_binding_stances` and
  * `load-core/seed_27_expr_ops`.
  *
  * The reference validator's rows: `test_validate_references_diag_has_range` (its leaves built from
@@ -57,8 +55,8 @@
  * `test_validate_references_diag_locates_case_when_via_synth_param`,
  * `test_validate_references_diag_case_on_form_locates_at_on_line`,
  * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when` and
- * `test_validate_references_diag_case_then_call_locates_at_then_line` (its `helper` def a hand-built
- * child), through `assembleText` where Python calls `load_flow`; and their cases
+ * `test_validate_references_diag_case_then_call_locates_at_then_line`, through `assembleText` where
+ * Python calls `load_flow`; and their cases
  * `load-core/compose_validate__unknown_namespace_in_a_case_{when,on,then_call}`.
  */
 
@@ -84,14 +82,11 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
   fileOf,
-  handChild,
   loadError,
   nodesOf,
-  parametersFromYaml,
   runCase,
 } from "./declarations.ts";
 
@@ -126,14 +121,6 @@ function builtFlow(text: string): {
   }
   return { buildResults, wiring, producers };
 }
-
-/** The `helper` def the CASE `then: call(...)` flows call: `x: !int` into `h`, whose `int` it returns. */
-const helper = () =>
-  handChild({
-    inputs: parametersFromYaml("input:\n  x: !int\n", new Map()),
-    producers: { h: new ValueContract(Type.scalar(ValueKind.INTEGER)) },
-    output: "${h.output}",
-  });
 
 describe("rejectCycles", () => {
   test("a cycle's diagnostic has a frame per node in authored order", () => {
@@ -533,9 +520,14 @@ describe("validateReferences", () => {
       '    cases:\n      - when: "s.output >= 1"\n' +
       "        then: call(helper, x=${nope.output})\n" + // `then:` on line 12
       "    else: s\n" +
-      "output: ${gate.output}\n";
+      "output: ${gate.output}\n" +
+      "defs:\n" +
+      "  helper:\n    input:\n      x: !int\n" +
+      "    nodes:\n      h:\n        kind: code\n        code: \"return {'output': 1}\"\n" +
+      "        input:\n          x: ${input.x}\n        output: int\n" +
+      "    output: ${h.output}\n";
 
-    const error = loadError(() => assembleText(text, "flow.yaml", { children: { helper: helper() } }));
+    const error = loadError(() => assembleText(text));
 
     expect(error.message).toContain(
       "node 'gate' cases[0].then call(helper) argument 'x' from: reference ${nope.output}",
@@ -682,14 +674,6 @@ test("a case output over a 1000-link alias chain is rejected as a case output", 
 
 // ---------- harvested cases from files with no TS mirror ----------
 
-/** The `score_one` def of the asserts seed: `topic: !str`, `window: !int` into `raw`, a `float`. */
-const scoreOne = () =>
-  handChild({
-    inputs: parametersFromYaml("input:\n  topic: !str\n  window: !int\n", new Map()),
-    producers: { raw: new ValueContract(Type.scalar(ValueKind.NUMBER)) },
-    output: "${raw.output}",
-  });
-
 test.each<CaseRow>([
   {
     id: "load-core/engine_limit_overrides__written_value_over_the_set_value_limit",
@@ -714,13 +698,7 @@ test.each<CaseRow>([
   ].map((id) => ({ id, call: assembled, full: true })),
   {
     id: "load-core/compose_expression_nesting__too_deep_call_argument",
-    call: assembledWith({
-      g: handChild({
-        inputs: parametersFromYaml("input:\n  d: !int\n", new Map()),
-        producers: { run: new ValueContract(Type.scalar(ValueKind.STRING)) },
-        output: "${run.output}",
-      }),
-    }),
+    call: assembled,
     full: true,
   },
   {
@@ -733,7 +711,7 @@ test.each<CaseRow>([
     call: assembled,
     full: true,
   },
-  { id: "load-leaves/seed_23_asserts_scopes", call: assembledWith({ score_one: scoreOne() }), full: true },
+  { id: "load-leaves/seed_23_asserts_scopes", call: assembled, full: true },
   { id: "load-core/seed_19_binding_stances", call: assembled, full: true },
   { id: "load-core/seed_27_expr_ops", call: assembled, full: true },
 ])("assemble: $id", runCase);
@@ -743,7 +721,7 @@ test.each<CaseRow>([
   { id: "load-core/compose_validate__unknown_namespace_in_a_case_on", call: assembled, full: true },
   {
     id: "load-core/compose_validate__unknown_namespace_in_a_case_then_call",
-    call: assembledWith({ helper: helper() }),
+    call: assembled,
     full: true,
   },
 ])("assemble: $id", runCase);

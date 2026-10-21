@@ -58,7 +58,7 @@
  * - `test_owner_contexts_include_general_occurrences_and_empty_memories`: `engine` with the memory
  *   options; `declaredVariables` and `callback` are replaced on the node; the entries and episodes
  *   are frozen, so the tail's edits throw a `TypeError` (asserted) where Python's land on copies.
- * - On `ownerEngine` (a hand-built root-only memory layout, not Python's resolved one):
+ * - On `ownerEngine` (the resolved layout of a root-owned memory, as Python's):
  *   `test_owner_feedback_retains_literals_and_opaque_local_stops` (2 rows; the template function
  *   registered with `registerTemplateFn` and restored in `afterEach`),
  *   `test_owner_contexts_keep_unavailable_inputs_and_causal_failures` (3 rows; the binding row
@@ -88,16 +88,17 @@
  *   `LearnContext.fromFrozen` throws a `RangeError` on the root-fallback call (the second, after
  *   START's occurrence) and passes the others to the original; the driven failure names no node.
  *   The spy is restored in `finally`.
+ * - `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope`: the expansion and
+ *   the replay grow through `buildGrow`; the dynamic scope's class is checked by its constructor.
  *
- * Later: `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory` (T4-10's MAP,
- * T3-22's `buildGrow` and child memory layout) and
- * `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope` (T3-22's `buildGrow`).
+ * Later (T4-10's MAP run): `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory`.
  */
 
 import { createHash } from "node:crypto";
 
 import { afterEach, expect, spyOn, test } from "bun:test";
 
+import { buildGrow } from "../../src/compile/expand.ts";
 import { CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
@@ -126,8 +127,10 @@ import {
   Output,
   Route,
 } from "../../src/nodes/base.ts";
-import { Binding, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { Binding, comparePaths, ExecutionPosition, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
+import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
 import type { AttributedBackwardResult, BackwardOutcome } from "../../src/runtime/contracts.ts";
@@ -747,6 +750,68 @@ test("a graph outcome uses constant memory roots and an indexed scope", () => {
   const after = [state.memories, state.memoryStacks, state.memorySnapshots];
   after.forEach((root, index) => expect(root).toBe(roots[index]!));
   expect(state.trace!.occurrences.at(-1)!.memoryScope).toBe(node.memoryScope);
+});
+
+test("an expanded MAP occurrence projects and replays from the live node scope", async () => {
+  const childAgent = new AgentNode("agent", { prompt: "visible" });
+  const child = graph([childAgent], [
+    [START_ID, childAgent.id],
+    [childAgent.id, END_ID],
+  ]);
+  for (const [nodeId, node] of child.nodes) {
+    node.memoryScope = new MemoryScope(["flow", "map", "child", nodeId], { memories: ["outer"] });
+  }
+  const spawner = new MapNode("map", { flowId: "child", child, childInputs: [] });
+  spawner.memoryScope = new MemoryScope(["flow", "map"], { memories: ["outer"] });
+  const { state, log } = startTraceNode(spawner, {
+    keys: ["outer"],
+    learnable: true,
+    stacks: stacks(spawner.memoryScope, ...[...child.nodes.values()].map((node) => node.memoryScope!)),
+  });
+  const pristineFlow = copyGraph(state.flow);
+
+  commitPrepared(
+    log,
+    state,
+    prepareExpanded(state, spawner.id, new Grow([{}]), buildGrow, {
+      forwardCapture: forwardCapture(spawner, { over: [{}] }),
+    }),
+  );
+
+  const succeed = (nodeId: string, value: unknown, nodeEvidence: EvaluationEvidence | null = null) => {
+    expect(state.ready[0]).toBe(nodeId);
+    commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+    commitPrepared(
+      log,
+      state,
+      prepareNodeSucceeded(state, nodeId, value, {
+        evidence: nodeEvidence,
+        forwardCapture: forwardCapture(state.flow.nodes.get(nodeId)!, nodeEvidence?.boundInputs ?? {}),
+      }),
+    );
+  };
+
+  succeed("map/__start__", {});
+  succeed("map#0/__start__", {});
+  const dynamicScope = state.flow.nodes.get("map#0/agent")!.memoryScope!;
+  expect(dynamicScope.constructor).toBe(MemoryScope);
+  expect(dynamicScope.staticPath).toEqual(["flow", "map", "child", "agent"]);
+  succeed("map#0/agent", "visible", evidence(dynamicScope));
+  succeed("map#0/__end__", null);
+  succeed("map/__end__", [null]);
+  succeed(END_ID, null);
+  expect(state.result).toBeInstanceOf(RunSucceeded);
+
+  const episodes = (await contexts(state)).get("outer")!.episodes;
+  const owned = episodes.filter((item) => comparePaths(item.ownerStaticPath, dynamicScope.staticPath) === 0);
+  expect(owned).toHaveLength(1);
+  expect(owned[0]!.occurrencePath).toEqual([
+    new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["flow", "map"], 0),
+  ]);
+  expect(owned[0]!.interactions).toEqual([new ModelTextInteraction("answer")]);
+
+  const replayed = replayRecords(new RunState(pristineFlow), log.records(), { growBuilder: buildGrow });
+  expect((await contexts(replayed)).get("outer")!.episodes).toEqual(episodes);
 });
 
 // Owner contexts over engine runs.

@@ -10,8 +10,8 @@
  * TS-only: a lone surrogate in `prompt:`, the `adaptive_questions.prompt:` brief or a literal
  * question's text is refused at the text.
  *
- * Held here until T3-22: the harvested cases at the end, whose error the HUMAN_INPUT parse raises,
- * each under a comment naming the Python file it comes from, and the flows that assemble.
+ * Pinned at the end: the harvested cases whose error the HUMAN_INPUT parse raises, each under a
+ * comment naming the Python file it comes from, and the flows that assemble.
  */
 
 import { describe, expect, test } from "bun:test";

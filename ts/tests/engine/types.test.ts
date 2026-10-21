@@ -14,8 +14,9 @@
  * declarations with `parametersFromYaml`.
  *
  * TS-only: the harvested-case table of the conformance cases whose typedefs `readTypedefs`
- * refuses, comparing its message, its path and the range the loader picks for that path. The
- * loader (T3-22) adds the `bad typedefs: ` prefix and the range.
+ * refuses, comparing its message, its path and the range the loader picks for that path; the
+ * table adds the `bad typedefs: ` prefix as `loadFlow` does (the conformance runner's `load` kind
+ * runs these cases whole).
  *
  * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
  * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);

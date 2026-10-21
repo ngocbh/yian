@@ -6,7 +6,7 @@
  *
  * Changed: `test_text_agent_without_tools_makes_one_unbound_call` and
  * `test_structured_agent_without_tools_makes_one_structured_call` run a hand-built
- * `START -> chat -> END` flow through `FlowEngine` (Python: `load_flow` and `run_flow`, T3-22/T4-8),
+ * `START -> chat -> END` flow through `FlowEngine` (Python: `load_flow` and `run_flow`, T4-8),
  * with a `ScriptedModel` from `FlowEngineOptions.models`; the request sending no tools stands for
  * Python's unbound and structured calls.
  *

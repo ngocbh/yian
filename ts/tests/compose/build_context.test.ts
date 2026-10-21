@@ -7,14 +7,12 @@
  *
  * Dropped: `test_build_result_range_metadata_does_not_affect_equality` (TS has no dataclass
  * `==`).
- *
- * Later (T3-22): the `load_flow` half of
- * `test_build_context_owner_defaults_to_root_and_is_threaded_by_assemble`, each flow's
- * descriptors seeing that flow's owner path.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, BuildResult } from "../../src/compose/nodes/base.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
@@ -46,6 +44,28 @@ test("BuildResult is frozen", () => {
   expect(Object.isFrozen(result.edges)).toBe(true);
 });
 
-test("BuildContext owner defaults to root", () => {
+test("BuildContext owner defaults to root and is threaded by assemble", async () => {
+  // Each flow's descriptors see that flow's lexical owner path.
   expect(new BuildContext({ registry: new Map() }).owner).toEqual(["root"]);
+
+  const seen: (readonly string[])[] = [];
+  const original = AgentDescriptor.prototype.build;
+  const spy = spyOn(AgentDescriptor.prototype, "build").mockImplementation(function (
+    this: AgentDescriptor,
+    ctx: BuildContext,
+  ) {
+    seen.push(ctx.owner);
+    return original.call(this, ctx);
+  });
+  try {
+    await loadFlow(
+      "id: p\nname: p\ndefs:\n  child:\n    kind: agent\n    prompt: hi\n" +
+        "    output: str\nnodes:\n  top:\n    kind: agent\n    prompt: hi\n" +
+        "    output: str\n  invoke:\n    kind: call\n    call: child\n" +
+        "output: ${top.output}\n",
+    );
+  } finally {
+    spy.mockRestore();
+  }
+  expect([...seen].sort((a, b) => (a.join("/") < b.join("/") ? -1 : 1))).toEqual([["def", "child"], ["root"]]);
 });

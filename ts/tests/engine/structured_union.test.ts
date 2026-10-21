@@ -22,7 +22,7 @@
  * `["limit"]` for `("limit", "zz")`). The value check's own error, the `cause`, keeps the field in
  * its path and message.
  *
- * Later (T4-8/T3-22), they load and run a flow:
+ * Later (T4-8), they load and run a flow:
  * `test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields` and
  * `test_agent_union_output_with_an_unknown_tag_fails_the_agent`.
  */

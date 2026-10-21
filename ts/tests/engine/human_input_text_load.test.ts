@@ -12,14 +12,15 @@
  * reference validator decides; `compose/kind_human_input_parse.test.ts` pins
  * `load-leaves/engine_human_input_text_load__a_clean_gate_loads`.
  *
- * Later (T3-22): `test_gate_in_a_defs_body_is_checked` and its case
- * `load-leaves/engine_human_input_text_load__gate_in_a_defs_body_is_checked` (a def body's own
- * assembly).
+ * Ported through `loadFlow`: `test_gate_in_a_defs_body_is_checked`; its case
+ * `load-leaves/engine_human_input_text_load__gate_in_a_defs_body_is_checked` is pinned at the end
+ * with `assembled`, which assembles the def body through the loader's `CallableScope`.
  */
 
 import { expect, test } from "bun:test";
 
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
 
 const GOOD = "${proj}";
 
@@ -116,6 +117,35 @@ test("every bad site is reported", () => {
   for (const prefix of Object.values(SITES)) expect(message).toContain(prefix);
 });
 
+const DEFS_FLOW = `id: f
+name: f
+input:
+  proj: !str
+defs:
+  confirm:
+    input:
+      proj: !str
+    nodes:
+      ask:
+        kind: human_input
+        input:
+          proj: \${input.proj}
+        prompt: "\${nope}"
+    output: \${ask.output}
+nodes:
+  run:
+    kind: call
+    call: confirm
+    input:
+      proj: \${input.proj}
+output: \${run.output}
+`;
+
+test("a gate in a defs body is checked", async () => {
+  const error = await loadErrorAsync(loadFlow(DEFS_FLOW));
+  expect(error.message).toContain("node 'ask' prompt: ${nope} is not a declared input");
+});
+
 test("a prompt error points at the prompt line", () => {
   const text = flow({ prompt: "${other}" });
   const promptLine = text.split("\n").indexOf('    prompt: "${other}"') + 1;
@@ -160,6 +190,7 @@ test("an adaptive gate's prompt is checked", () => {
 
 test.each<CaseRow>(
   [
+    "gate_in_a_defs_body_is_checked",
     "isinstance_in_an_option_description",
     "nested_span_in_a_question",
     "pool_ref_in_a_question",

@@ -44,19 +44,17 @@
  * `test_isinstance_guard_in_a_searched_when_over_a_skippable_union_routes` and
  * `test_arithmetic_on_a_join_over_a_literal_input_loads`.
  *
- * The harvested `load-case/engine_skipped_flow_outputs__*` cases are pinned at the end; the MAP
- * `over:` one with its `child` def built by hand (`handChild`), since def bodies load in T3-22.
+ * The harvested `load-case/engine_skipped_flow_outputs__*` cases are pinned at the end.
  *
  * Changed: CODE bodies are TS; load doesn't run them. The literal output `5` reads as `5n`. The
  * fingerprint row's second half stubs `null_skipped_outputs` in Python's pipeline module to
  * fingerprint the flow without the rewrite; a test can't stub a function another ES module
  * imports, so it puts the authored output source back on a fresh assembly by hand (END's edge
- * keeps the optional stance the rewrite gave it, so only the output source differs). The MAP
- * `over:` row builds its `child` def by hand. The error rows pin the whole message where Python
- * checks fragments.
+ * keeps the optional stance the rewrite gave it, so only the output source differs). The error
+ * rows pin the whole message where Python checks fragments.
  *
- * Later (T3-22), reading a `defs:` child's own output contract:
- * `test_call_output_of_a_skipped_branch_is_optional`,
+ * Ported, reading a `defs:` child's own output contract (through `assembleText`, whose callable
+ * scope builds the def): `test_call_output_of_a_skipped_branch_is_optional`,
  * `test_call_output_of_a_coalesce_over_a_routing_only_case_is_optional`,
  * `test_call_output_of_a_dotted_skipped_read_is_optional`,
  * `test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error`; and the `_sources` half of
@@ -87,12 +85,9 @@ import type { MapNode } from "../../src/nodes/map/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
-  handChild,
   loadError,
-  parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
 
@@ -216,6 +211,92 @@ test("an embedded template is unchanged", () => {
 test("a comparison is unchanged", () => {
   // A comparison over a skipped reference is false, as before.
   expect(sources(flow(R1, '\n  c: ${order.output == "filled"}'))).toEqual(['${order.output == "filled"}']);
+});
+
+test("a defs child returns null to its caller", () => {
+  // A `defs:` child whose output reads a node behind its own CASE returns null; the parent's
+  // output reads the CALL as is.
+  const defs =
+    "defs:\n  child:\n    input:\n      approve: !bool\n    nodes:\n" +
+    "      gate:\n        kind: case\n        cases:\n" +
+    "          - when: ${input.approve}\n            then: order\n" +
+    "      order:\n        kind: code\n        output: str\n" +
+    '        code: |\n          return "filled"\n' +
+    "    output: ${order.output}\n";
+  const nodes = "  c:\n    kind: call\n    call: child\n    input:\n      approve: ${input.approve}\n";
+  expect(sources(flow(nodes, " ${c.output}", { defs }))).toEqual(["${c.output}"]);
+});
+
+/** Return a `defs:` block with one child `name` taking `inputs` (one per line) over `nodes`. */
+function childDefs(nodes: string, output: string, name = "child", inputs = "approve: !bool"): string {
+  return (
+    `defs:\n  ${name}:\n    input:\n${indent(inputs, "      ")}\n    nodes:\n` +
+    `${indent(nodes, "    ")}    output:${indent(output, "    ")}\n`
+  );
+}
+
+const CALL_C1 = "  c1:\n    kind: call\n    call: child\n    input:\n      approve: ${input.approve}\n";
+
+/**
+ * Return the type of `field` in the output contract of a CALL to a child flow over `nodes`
+ * returning `output`. With `other`, the child also takes `other: !bool` and the CALL passes `false`.
+ */
+function callFieldType(nodes: string, output: string, field: string, other = false): Type {
+  let call = CALL_C1;
+  let inputs = "approve: !bool";
+  if (other) {
+    call += "      other: false\n";
+    inputs += "\nother: !bool";
+  }
+  const text = flow(call, " ${c1.output}", { defs: childDefs(nodes, output, "child", inputs) });
+  const contract = assembleText(text).flow.compiled.nodes.get("c1")!.outputContract as ValueContract;
+  return contract.type.fields!.get(field)!;
+}
+
+test("a CALL output of a skipped branch is optional", () => {
+  // A CALL to a child whose output reads a CASE target sees `Optional(str)`.
+  const field = callFieldType(R1, "\n  order: ${order.output}", "order");
+  expect(field.kind).toBe(ValueKind.STRING);
+  expect(field.nullable).toBe(true);
+});
+
+test("a CALL output of a coalesce over a routing-only case is optional", () => {
+  // A coalesce of `str` targets of a CASE that may match nothing is `Optional(str)`.
+  const field = callFieldType(R2, "\n  v: ${a.output | b.output}", "v", true);
+  expect(field.kind).toBe(ValueKind.STRING);
+  expect(field.nullable).toBe(true);
+});
+
+test("a CALL output of a dotted skipped read is optional", () => {
+  // A field read `${order.output.status}` of a CASE target is Optional of its type.
+  const nodes =
+    gate("order", "rejected") + code("order", '{"status": 1n}', "\n      status: int") + code("rejected", '"no"');
+  const field = callFieldType(nodes, "\n  s: ${order.output.status}", "s");
+  expect(field.kind).toBe(ValueKind.INTEGER);
+  expect(field.nullable).toBe(true);
+});
+
+const USE_STR = `  use:
+    input:
+      s: !str
+    nodes:
+      x:
+        kind: code
+        output: str
+        input:
+          s: \${input.s}
+        code: |
+          return inputs["s"]
+    output: \${x.output}
+`;
+
+test("passing a skipped child output to a str input is a load error", () => {
+  // An untyped argument passing an `Optional(str)` child output to `str` is rejected.
+  const defs = childDefs(R1, "\n  order: ${order.output}") + USE_STR;
+  const nodes = `${CALL_C1}  c2:\n    kind: call\n    call: use\n    input:\n      s: \${c1.output.order}\n`;
+  expect(loadError(() => assembleText(flow(nodes, " ${c2.output}", { defs }))).message).toBe(
+    "call node 'c2': binding 's' — child expects 'str', source is 'Optional(str)'",
+  );
 });
 
 test.each(["null", '"a"'])("an on over a nullable Literal may match nothing (cls returns %s)", (value) => {
@@ -530,14 +611,6 @@ const CHILD =
   "        input:\n          n: ${input.n}\n        output: int\n        code: |\n" +
   "          return inputs['n']\n    output: ${k.output}\n";
 
-/** The `child` def built by hand: input `n: !int`, one `k: int` producer, returned. */
-const HAND_CHILD = () =>
-  handChild({
-    inputs: parametersFromYaml("input:\n  n: !int\n", new Map()),
-    producers: { k: new ValueContract(Type.scalar(ValueKind.INTEGER)) },
-    output: "${k.output}",
-  });
-
 // then: order / else: rejected, where `order` returns a list field and a str field
 const ITEMS =
   gate("order", "rejected") +
@@ -549,7 +622,7 @@ test("arithmetic in a map over: names map over", () => {
   const over = "    over: ${order.output.items + [3]}";
   const nodes = `${ITEMS}  m:\n    kind: map\n${over}\n    call: child\n    input:\n      n: \${item}\n`;
   const text = flow(nodes, "\n  r: ${rejected.output}", { defs: CHILD });
-  const error = loadError(() => assembleText(text, "flow.yaml", { children: { child: HAND_CHILD() } }));
+  const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
     `node 'm' map over: ${arithmetic("${order.output.items + [3]}", "order.output.items", "node 'order' is")}`,
   );
@@ -638,6 +711,6 @@ test.each<CaseRow>([
   { id: "load-case/engine_skipped_flow_outputs__arithmetic_in_a_default_is_checked", call: assembled },
 ])("assembled: $id", runCase);
 
-test("assembledWith: load-case/engine_skipped_flow_outputs__arithmetic_in_a_map_over", () => {
-  runCase({ id: "load-case/engine_skipped_flow_outputs__arithmetic_in_a_map_over", call: assembledWith({ child: HAND_CHILD() }) });
+test("assembled: load-case/engine_skipped_flow_outputs__arithmetic_in_a_map_over", () => {
+  runCase({ id: "load-case/engine_skipped_flow_outputs__arithmetic_in_a_map_over", call: assembled });
 });

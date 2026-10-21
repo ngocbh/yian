@@ -10,13 +10,14 @@
  *
  * Changed: the flows assemble with `assembleText`, where Python loads them.
  *
- * Later (T3-22): `test_defs_body_brief_error` (a `defs:` body).
+ * Ported through `loadFlow`: `test_defs_body_brief_error` (a `defs:` body).
  */
 
 import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
 
 const GATE_PROMPT = '    prompt: "Pick one for ${proj}"\n';
 
@@ -122,6 +123,41 @@ adaptive_questions:
   expect(error.message).toContain("node 'f' adaptive_questions.prompt: ${nope}");
   expect(error.message).not.toContain("f__compose");
   expect(lineOf(error)).toBe(6);
+});
+
+test("a defs body's brief error", async () => {
+  const error = await loadErrorAsync(
+    loadFlow(`\
+id: f
+name: f
+input:
+  topic: !str
+defs:
+  pick:
+    input:
+      topic: !str
+    nodes:
+      ask:
+        kind: human_input
+        input:
+          topic: \${input.topic}
+        adaptive_questions:
+          prompt: "Q \${nope}"
+    output: \${ask.output}
+nodes:
+  run:
+    kind: call
+    call: pick
+    input:
+      topic: \${input.topic}
+output: \${run.output}
+`),
+  );
+
+  expect(error.message.startsWith("defs entry 'pick': ")).toBe(true);
+  expect(error.message).toContain("node 'ask' adaptive_questions.prompt: ${nope}");
+  expect(error.message).not.toContain("ask__compose");
+  expect(lineOf(error)).toBe(15);
 });
 
 test("a clean brief loads", () => {

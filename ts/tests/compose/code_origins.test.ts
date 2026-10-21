@@ -2,22 +2,13 @@
  * The CODE node's whole-code and exact-line origins: a port of
  * `tests/compose/test_code_origins.py`.
  *
- * Ported: `test_source_free_code_accepts_empty_origin_carriers` and
- * `test_code_origins_participate_in_local_traversal_and_rewrite`.
+ * Ported: every row but the run below; the CODE bodies keep Python's text, which load doesn't
+ * run.
  *
  * Ported (adapted): `test_code_origin_carriers_reject_invalid_shapes`, its node and descriptor
  * rows `whole-not-origin` and `line-item-not-origin`.
  *
  * Changed: the line origins are an array, not a tuple; a rewrite assigns a fresh array.
- * `test_code_origins_are_noncanonical_manifest_and_fingerprint_metadata` builds its CompiledFlow by
- * hand instead of loading it. `test_literal_code_carries_whole_scalar_and_exact_constructed_lines`,
- * `test_compact_root_code_origins_retain_the_projected_authored_scalar` and
- * `test_nonliteral_code_carries_only_whole_scalar_fallback` assemble the root flow with
- * `assembleText`, where Python loads it, and resolve through the scope's catalog builder in place
- * of `loaded.origin_resolver`; so does
- * `test_inline_child_code_origins_include_the_enclosing_node_path`, reading the CODE node of the
- * CALL's baked child. The origin half of
- * `test_formatting_moves_resolved_ranges_without_changing_semantic_keys` is ported.
  *
  * TS-only: the node keeps a frozen copy of the line origins it is given, and a rewrite assigns a
  * fresh frozen array; a line-origins value that isn't an array is rejected, by the node and the
@@ -26,30 +17,23 @@
  * Not ported: the `lines-not-tuple` row of `test_code_origin_carriers_reject_invalid_shapes` (TS
  * line origins are arrays only).
  *
- * Later (T3-22): `test_multi_node_def_code_origins_use_the_definition_lexical_path`,
- * `test_flat_def_code_origins_retain_the_projected_authored_scalar`,
- * `test_external_alias_rebases_every_code_origin_without_mutating_child`,
- * `test_generated_child_clone_preserves_code_origins_for_original_resolver` and the fingerprint
- * half of `test_formatting_moves_resolved_ranges_without_changing_semantic_keys`.
- *
- * Later (T3-22, T4-8): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
+ * Later (T4-8): `test_runtime_failure_diagnoses_exact_line_across_composition_paths`.
  */
 
 import { expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
-import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
+import { cloneChild } from "../../src/compile/expand.ts";
+import type { CompiledFlow } from "../../src/compile/model.ts";
 import { rewriteFlowOrigins } from "../../src/compile/origins.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
-import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
+import { SourceCatalogBuilder, scopeOrigin } from "../../src/compose/source/catalog.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
-import type { Node } from "../../src/nodes/base.ts";
+import { OriginRef, type OriginResolver, SourceRange } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { EndNode } from "../../src/nodes/end/node.ts";
-import { StartNode } from "../../src/nodes/start/node.ts";
-import { assembleText } from "./declarations.ts";
 
 const CODE_ORIGIN = new OriginRef("/s:root/s:node/s:worker/s:field/s:code");
 const LINE_ORIGINS = [
@@ -69,40 +53,42 @@ nodes:
 output: \${worker.output}
 `;
 
-/**
- * Assemble `text` and return its CODE node `nodeId` and the catalog builder its origins resolve
- * through.
- */
-function workerOf(text: string, nodeId = "worker"): { node: CodeNode; builder: SourceCatalogBuilder } {
-  const { flow, builder } = assembleText(text, "code-origins.yaml");
-  return { node: flow.compiled.nodes.get(nodeId) as CodeNode, builder };
+/** Load `text` and return its CODE node `nodeId` and the resolver its origins resolve through. */
+async function workerOf(text: string, nodeId = "worker"): Promise<{ node: CodeNode; resolver: OriginResolver }> {
+  const loaded = await loadFlow(text, { sourceLabel: "code-origins.yaml" });
+  return { node: loaded.compiled.nodes.get(nodeId) as CodeNode, resolver: loaded.originResolver! };
 }
 
+/** The CODE node `nodeId` of CALL node `callId`'s baked child in `loaded`. */
+const childCode = (loaded: ComposedFlow, callId: string, nodeId: string) =>
+  ((loaded.compiled.nodes.get(callId) as CallNode).child as CompiledFlow).nodes.get(nodeId) as CodeNode;
+
 /** Expect a CODE node's origins to resolve to the one scalar occurrence at `cursor`. */
-function expectResolvesCodeCursor(node: CodeNode, builder: SourceCatalogBuilder, cursor: SourceCursor): void {
-  const whole = builder.resolveRegistered(node.codeOrigin!);
+function expectResolvesCodeCursor(node: CodeNode, resolver: OriginResolver, cursor: SourceCursor): void {
+  expect(resolver).not.toBeNull();
+  const whole = resolver.resolve(node.codeOrigin!);
   expect(whole).not.toBeNull();
   expect(whole!.range).toEqual(cursor.range!);
   expect(whole!.text).toBe(cursor.document!.text);
   const lineRanges = cursor.scalarSource!.constructedLineRanges!;
-  const lineFrames = node.codeLineOrigins.map((origin) => builder.resolveRegistered(origin));
+  const lineFrames = node.codeLineOrigins.map((origin) => resolver.resolve(origin));
   expect(lineFrames.every((frame) => frame !== null && frame.text === cursor.document!.text)).toBe(true);
   expect(lineFrames.map((frame) => frame!.range)).toEqual([...lineRanges]);
 }
 
-test("literal code carries whole scalar and exact constructed lines", () => {
-  const { node, builder } = workerOf(LITERAL_FLOW);
+test("literal code carries whole scalar and exact constructed lines", async () => {
+  const { node, resolver } = await workerOf(LITERAL_FLOW);
 
   expect(node.codeOrigin).toEqual(CODE_ORIGIN);
   expect(node.codeLineOrigins).toEqual(LINE_ORIGINS);
-  expect(builder.resolveRegistered(node.codeOrigin!)!.range).toEqual(new SourceRange(7, 11, 10, 1));
-  expect(node.codeLineOrigins.map((origin) => builder.resolveRegistered(origin)!.range)).toEqual([
+  expect(resolver.resolve(node.codeOrigin!)!.range).toEqual(new SourceRange(7, 11, 10, 1));
+  expect(node.codeLineOrigins.map((origin) => resolver.resolve(origin)!.range)).toEqual([
     new SourceRange(8, 7, 8, 16),
     new SourceRange(9, 7, 9, 19),
   ]);
 });
 
-test("compact root code origins retain the projected authored scalar", () => {
+test("compact root code origins retain the projected authored scalar", async () => {
   const text = `id: compact_worker
 name: compact_worker
 output: int
@@ -112,30 +98,30 @@ code: |-
   return value
 `;
   const codeCursor = SourceDocument.parse(text, "code-origins.yaml").root.child("code");
-  const { node, builder } = workerOf(text, "compact_worker");
+  const { node, resolver } = await workerOf(text, "compact_worker");
 
   expect(node.codeOrigin).toEqual(new OriginRef("/s:root/s:node/s:compact_worker/s:field/s:code"));
   expect(node.codeLineOrigins).toEqual([
     new OriginRef("/s:root/s:node/s:compact_worker/s:field/s:code/s:line/i:0"),
     new OriginRef("/s:root/s:node/s:compact_worker/s:field/s:code/s:line/i:1"),
   ]);
-  expectResolvesCodeCursor(node, builder, codeCursor);
+  expectResolvesCodeCursor(node, resolver, codeCursor);
 });
 
 test.each([
   ["quoted", '    code: "return 1"\n'],
   ["folded", "    code: >-\n      return 1\n"],
-])("nonliteral code carries only whole scalar fallback: %s", (_id, codeSource) => {
+])("nonliteral code carries only whole scalar fallback: %s", async (_id, codeSource) => {
   const text =
     "id: code-origins\nname: code-origins\nnodes:\n  worker:\n    kind: code\n    output: int\n" +
     codeSource +
     "output: ${worker.output}\n";
 
-  const { node, builder } = workerOf(text);
+  const { node, resolver } = await workerOf(text);
 
   expect(node.codeOrigin).toEqual(CODE_ORIGIN);
   expect(node.codeLineOrigins).toEqual([]);
-  expect(builder.resolveRegistered(node.codeOrigin!)).not.toBeNull();
+  expect(resolver.resolve(node.codeOrigin!)).not.toBeNull();
 });
 
 test("source-free code accepts empty origin carriers", () => {
@@ -226,27 +212,8 @@ test.each([
   );
 });
 
-test("code origins are noncanonical manifest and fingerprint metadata", () => {
-  const worker = new CodeNode("worker", {
-    code: "const value = 1\nreturn value",
-    codeOrigin: new OriginRef("worker/code"),
-    codeLineOrigins: [new OriginRef("worker/code/line/0"), new OriginRef("worker/code/line/1")],
-  });
-  const original = CompiledFlow.fromParts(
-    new Map<string, Node>([
-      [START_ID, new StartNode(START_ID, { params: [] })],
-      ["worker", worker],
-      [END_ID, EndNode.value(END_ID, { outputName: "result" })],
-    ]),
-    [new Edge(`worker->${END_ID}`, "worker", END_ID, { inputGroup: "result" })],
-    {
-      wiring: new Map([
-        [START_ID, new Map()],
-        ["worker", new Map()],
-        [END_ID, new Map([["result", "${worker.output}"]])],
-      ]),
-    },
-  );
+test("code origins are noncanonical manifest and fingerprint metadata", async () => {
+  const original = (await loadFlow(LITERAL_FLOW)).compiled;
   const rewritten = rewriteFlowOrigins(original, (origin) => new OriginRef(`rewritten/${origin.key}`));
 
   const originalNode = original.nodes.get("worker") as CodeNode;
@@ -257,7 +224,68 @@ test("code origins are noncanonical manifest and fingerprint metadata", () => {
   expect(flowFingerprint(rewritten)).toBe(flowFingerprint(original));
 });
 
-test("inline child code origins include the enclosing node path", () => {
+test("multi node def code origins use the definition lexical path", async () => {
+  const text = `id: multi-def-code-origins
+name: multi-def-code-origins
+defs:
+  child:
+    nodes:
+      worker:
+        kind: code
+        output: int
+        code: |-
+          value = 1
+          return value
+    output: \${worker.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`;
+  const document = SourceDocument.parse(text);
+  const loaded = await loadFlow(text);
+  const node = childCode(loaded, "invoke", "worker");
+  const codeCursor = document.root.child("defs").child("child").child("nodes").child("worker").child("code");
+
+  expect(node.codeOrigin).toEqual(new OriginRef("/s:def/s:child/s:node/s:worker/s:field/s:code"));
+  expect(node.codeLineOrigins).toEqual([
+    new OriginRef("/s:def/s:child/s:node/s:worker/s:field/s:code/s:line/i:0"),
+    new OriginRef("/s:def/s:child/s:node/s:worker/s:field/s:code/s:line/i:1"),
+  ]);
+  expectResolvesCodeCursor(node, loaded.originResolver!, codeCursor);
+});
+
+test("flat def code origins retain the projected authored scalar", async () => {
+  const text = `id: flat-def-code-origins
+name: flat-def-code-origins
+defs:
+  child:
+    kind: code
+    output: int
+    code: |-
+      value = 1
+      return value
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: \${invoke.output}
+`;
+  const document = SourceDocument.parse(text);
+  const loaded = await loadFlow(text);
+  const node = childCode(loaded, "invoke", "child");
+  const codeCursor = document.root.child("defs").child("child").child("code");
+
+  expect(node.codeOrigin).toEqual(new OriginRef("/s:def/s:child/s:node/s:child/s:field/s:code"));
+  expect(node.codeLineOrigins).toEqual([
+    new OriginRef("/s:def/s:child/s:node/s:child/s:field/s:code/s:line/i:0"),
+    new OriginRef("/s:def/s:child/s:node/s:child/s:field/s:code/s:line/i:1"),
+  ]);
+  expectResolvesCodeCursor(node, loaded.originResolver!, codeCursor);
+});
+
+test("inline child code origins include the enclosing node path", async () => {
   const text = `id: inline-code-origins
 name: inline-code-origins
 nodes:
@@ -273,25 +301,73 @@ nodes:
     output: \${worker.output}
 output: \${invoke.output}
 `;
-  const codeCursor = SourceDocument.parse(text, "code-origins.yaml")
+  const codeCursor = SourceDocument.parse(text)
     .root.child("nodes")
     .child("invoke")
     .child("nodes")
     .child("worker")
     .child("code");
-  const { flow, builder } = assembleText(text, "code-origins.yaml");
-  const invoke = flow.compiled.nodes.get("invoke") as CallNode;
-  const node = (invoke.child as CompiledFlow).nodes.get("worker") as CodeNode;
+  const loaded = await loadFlow(text);
+  const node = childCode(loaded, "invoke", "worker");
 
   expect(node.codeOrigin).toEqual(new OriginRef("/s:root/s:node/s:invoke/s:inline/s:node/s:worker/s:field/s:code"));
   expect(node.codeLineOrigins).toEqual([
     new OriginRef("/s:root/s:node/s:invoke/s:inline/s:node/s:worker/s:field/s:code/s:line/i:0"),
     new OriginRef("/s:root/s:node/s:invoke/s:inline/s:node/s:worker/s:field/s:code/s:line/i:1"),
   ]);
-  expectResolvesCodeCursor(node, builder, codeCursor);
+  expectResolvesCodeCursor(node, loaded.originResolver!, codeCursor);
 });
 
-test("formatting moves resolved ranges without changing semantic keys", () => {
+test("external alias rebases every code origin without mutating child", async () => {
+  const child = await loadFlow(LITERAL_FLOW, { sourceLabel: "child.yaml" });
+  const parent = `id: parent
+name: parent
+nodes:
+  invoke:
+    kind: call
+    call: child_view
+output: \${invoke.output}
+uses:
+  child_view: child
+`;
+
+  const loaded = await loadFlow(parent, { childResolver: () => child });
+  const canonical = child.compiled.nodes.get("worker") as CodeNode;
+  const embedded = childCode(loaded, "invoke", "worker");
+
+  expect(canonical.codeOrigin).toEqual(CODE_ORIGIN);
+  expect(canonical.codeLineOrigins).toEqual(LINE_ORIGINS);
+  expect(embedded.codeOrigin).toEqual(scopeOrigin("child_view", canonical.codeOrigin!));
+  expect(embedded.codeLineOrigins).toEqual(canonical.codeLineOrigins.map((origin) => scopeOrigin("child_view", origin)));
+  const resolver = loaded.originResolver!;
+  const childResolver = child.originResolver!;
+  expect(resolver).not.toBeNull();
+  expect(childResolver).not.toBeNull();
+  expect(resolver.resolve(embedded.codeOrigin!)).toEqual(childResolver.resolve(canonical.codeOrigin!));
+  expect(embedded.codeLineOrigins.map((origin) => resolver.resolve(origin))).toEqual(
+    canonical.codeLineOrigins.map((origin) => childResolver.resolve(origin)),
+  );
+});
+
+test("generated child clone preserves code origins for original resolver", async () => {
+  const loaded = await loadFlow(LITERAL_FLOW);
+  const original = loaded.compiled.nodes.get("worker") as CodeNode;
+
+  const cloned = cloneChild(loaded.compiled, "invoke", {});
+  const generated = cloned.nodes.get("invoke/worker") as CodeNode;
+
+  expect(generated).not.toBe(original);
+  expect(generated.codeOrigin).toEqual(original.codeOrigin);
+  expect(generated.codeLineOrigins).toEqual(original.codeLineOrigins);
+  const resolver = loaded.originResolver!;
+  expect(resolver).not.toBeNull();
+  expect(resolver.resolve(generated.codeOrigin!)).toEqual(resolver.resolve(original.codeOrigin!));
+  expect(generated.codeLineOrigins.map((origin) => resolver.resolve(origin))).toEqual(
+    original.codeLineOrigins.map((origin) => resolver.resolve(origin)),
+  );
+});
+
+test("formatting moves resolved ranges without changing semantic keys", async () => {
   const moved = `id: code-origins
 name: code-origins
 
@@ -310,13 +386,16 @@ output: \${worker.output}
     SourceDocument.parse(text, "code-origins.yaml").root.child("nodes").child("worker").child("code");
   const baselineCursor = codeCursorOf(LITERAL_FLOW);
   const movedCursor = codeCursorOf(moved);
-  const baseline = workerOf(LITERAL_FLOW);
-  const relocated = workerOf(moved);
+  const baselineFlow = await loadFlow(LITERAL_FLOW, { sourceLabel: "code-origins.yaml" });
+  const relocatedFlow = await loadFlow(moved, { sourceLabel: "code-origins.yaml" });
+  const baselineNode = baselineFlow.compiled.nodes.get("worker") as CodeNode;
+  const relocatedNode = relocatedFlow.compiled.nodes.get("worker") as CodeNode;
 
-  expect(relocated.node.codeOrigin).toEqual(baseline.node.codeOrigin);
-  expect(relocated.node.codeLineOrigins).toEqual(baseline.node.codeLineOrigins);
-  expectResolvesCodeCursor(baseline.node, baseline.builder, baselineCursor);
-  expectResolvesCodeCursor(relocated.node, relocated.builder, movedCursor);
+  expect(relocatedNode.codeOrigin).toEqual(baselineNode.codeOrigin);
+  expect(relocatedNode.codeLineOrigins).toEqual(baselineNode.codeLineOrigins);
+  expect(flowFingerprint(relocatedFlow.compiled)).toBe(flowFingerprint(baselineFlow.compiled));
+  expectResolvesCodeCursor(baselineNode, baselineFlow.originResolver!, baselineCursor);
+  expectResolvesCodeCursor(relocatedNode, relocatedFlow.originResolver!, movedCursor);
   expect(movedCursor.range).not.toEqual(baselineCursor.range);
   expect(movedCursor.scalarSource!.constructedLineRanges).not.toEqual(
     baselineCursor.scalarSource!.constructedLineRanges,

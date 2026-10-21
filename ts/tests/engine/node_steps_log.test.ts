@@ -51,7 +51,7 @@
  * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
  * and a list are both an array).
  *
- * Later (T3-22, it needs `build_grow` and `LoopNode.run`):
+ * Later (T4-10, it needs `LoopNode.run`):
  * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune`.
  */
 

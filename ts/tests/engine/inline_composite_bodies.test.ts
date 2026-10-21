@@ -41,7 +41,6 @@
  * `test_inline_map_child_keeps_item_namespace_closed`,
  * `test_inline_sibling_keeps_outer_bad_binding_range` and
  * `test_inline_child_bad_output_uses_retained_output_range`, and the load halves of
- * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` (the flow id, no child inputs),
  * `test_typed_inline_call_preserves_nullable_parent_scalar`,
  * `test_typed_inline_call_canonicalizes_literal_record_and_retains_input_order`,
  * `test_forward_producer_type_builds_once_and_keeps_source_order`,
@@ -56,8 +55,7 @@
  * `test_inline_map_proves_list_any_date_element_and_runs`,
  * `test_inline_map_nullable_root_and_intermediate_infer_optional_and_intermediate_runs_none`,
  * `test_basic_inline_loop_times_bakes_private_child_signature_and_runs`,
- * `test_inline_loop_predicates_run_to_the_same_carried_result` and
- * `test_nested_inline_composites_register_four_lexical_children_once` (the four flow ids). Where
+ * `test_inline_loop_predicates_run_to_the_same_carried_result`. Where
  * Python checks a message fragment, the row pins the whole message.
  *
  * TS-only: `inlineFlowId` pinned for two owners, one holding non-ASCII, control, quote and
@@ -96,22 +94,22 @@
  * `tests/engine/test_templates_load.py` yet), and the node-assert check's
  * `load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts`.
  *
- * Later (T3-22, the callable scope and def assembly):
- * `test_def_assembly_cursor_fallback_restores_only_node_surfaces`,
- * `test_callable_scope_builds_private_once_and_same_owner_registration_is_idempotent`,
- * `test_callable_scope_rejects_non_private_id_without_registering_it`,
- * `test_callable_scope_rejects_private_owner_collision_without_exposing_id`,
- * `test_callable_scope_rejects_private_authored_collision_without_exposing_id`,
- * `test_callable_scope_reports_private_recursion_without_exposing_id`,
- * `test_callable_scope_retries_failed_private_builder_and_caches_success`,
- * `test_callable_scope_reports_unregistered_private_prefix_without_exposing_id`,
- * `test_callable_scope_eager_def_can_resolve_pre_registered_private`,
+ * Ported through `loadFlow` (the fixture CODE references resolve against the conformance dir):
+ * `test_inline_multinode_body_matches_named_def_signature_and_runtime`,
+ * `test_eager_def_inline_call_uses_origin_and_shared_scope`,
+ * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`,
  * `test_eager_def_inline_child_bad_output_preserves_absolute_range`,
- * `test_inline_call_resolver_failure_uses_friendly_child_label`,
- * `test_inline_multinode_body_matches_named_def_signature_and_runtime` (it compares with a real
- * `defs:` child), `test_eager_def_inline_call_uses_origin_and_shared_scope`,
- * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`, and the registration and
- * resolution counts of the zero-input and nested rows (they spy on the real callable scope).
+ * `test_inline_call_resolver_failure_uses_friendly_child_label`, and the load halves of
+ * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` and
+ * `test_nested_inline_composites_register_four_lexical_children_once`, the rows counting
+ * registrations and resolutions with spies on `CallableScope.prototype`'s `registerPrivate` and
+ * `resolve`; on the scope itself, `test_def_assembly_cursor_fallback_restores_only_node_surfaces`
+ * (through `defAssemblyCursor`, exported for it) and the `test_callable_scope_*` rows.
+ * Changed there: the scope's private table is not readable, so the idempotent-registration row
+ * checks the first builder is the one that builds, not the kept label; the eager-def row cannot
+ * patch the module-private def build, so a subclass's `resolve` fakes it for `outer` (and the
+ * row leaves out the def's cached identity). Where Python checks a message fragment, the row
+ * pins the whole message.
  *
  * Later (T4, runs): the run half of every row above that runs, and
  * `test_inline_call_and_loop_outer_post_asserts_still_fire` (run only). The date row's run half
@@ -129,12 +127,13 @@ import {
   type InlineBody,
   inlineFlowId,
 } from "../../src/compose/desugar/inline_bodies.ts";
-import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
 import * as typesHelpers from "../../src/compose/helpers/types.ts";
 import { BuildContext, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
+import { CallableScope, defAssemblyCursor } from "../../src/compose/loader.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
@@ -148,7 +147,9 @@ import {
   assembleText,
   type CaseRow,
   handChild,
+  loadConformanceFlow,
   loadError,
+  loadErrorAsync,
   parametersFromYaml,
   parsedNodes,
   runCase,
@@ -955,8 +956,34 @@ function inputRange(source: string, nodeId: string, key: string): SourceRange {
   return SourceDocument.parse(source).root.child("nodes").child(nodeId).mappingValueRanges("input").get(key)!;
 }
 
-test("a zero-input inline call loads in one file scope", () => {
-  const { flow } = assembleText(`id: inline-call-zero-input
+/**
+ * Run `load` with every `CallableScope`'s private registrations and its resolutions of private
+ * ids recorded: `[scope, flowId, owner, label]` and `[scope, flowId]`.
+ */
+async function recordPrivateScope<T>(load: () => Promise<T>) {
+  const register = spyOn(CallableScope.prototype, "registerPrivate");
+  const resolve = spyOn(CallableScope.prototype, "resolve");
+  try {
+    const result = await load();
+    const registrations = register.mock.calls.map(([flowId, owner, label], index) => [
+      register.mock.contexts[index],
+      flowId,
+      owner,
+      label,
+    ]);
+    const resolutions = resolve.mock.calls.flatMap(([flowId], index) =>
+      flowId.startsWith(INLINE_FLOW_PREFIX) ? [[resolve.mock.contexts[index], flowId]] : [],
+    );
+    return { result, registrations, resolutions };
+  } finally {
+    register.mockRestore();
+    resolve.mockRestore();
+  }
+}
+
+test("a zero-input inline call loads in one file scope", async () => {
+  const { result: flow, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(`id: inline-call-zero-input
 name: inline_call_zero_input
 nodes:
   wrapper:
@@ -970,11 +997,21 @@ nodes:
         output: str
     output: \${constant.output}
 output: \${wrapper.output}
-`);
+`),
+  );
 
+  const owner = ["root", "node", "wrapper", "inline"];
+  const flowId = inlineFlowId(owner);
   const wrapper = driver<CallNode>(flow, "wrapper");
-  expect(wrapper.flowId).toBe(inlineFlowId(["root", "node", "wrapper", "inline"]));
+  expect(wrapper.flowId).toBe(flowId);
   expect(wrapper.childInputs).toEqual([]);
+  expect(registrations).toHaveLength(1);
+  const scope = registrations[0]![0];
+  expect(scope).toBeInstanceOf(CallableScope);
+  expect(registrations[0]).toEqual([scope, flowId, owner, "inline body of node 'wrapper'"]);
+  expect(resolutions).toHaveLength(1);
+  expect(resolutions[0]![0]).toBe(scope);
+  expect(resolutions[0]![1]).toBe(flowId);
 });
 
 test("a typed inline call preserves a nullable parent scalar", () => {
@@ -1377,6 +1414,131 @@ output: \${wrapper.output}
   );
 
   expect(driver<CallNode>(flow, "wrapper").childInputs).toEqual([parameter("value", Type.scalar(ValueKind.INTEGER))]);
+});
+
+test("an inline multi-node body matches the named def's signature", async () => {
+  const body = `    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.x}
+        output: int
+      pack:
+        kind: code
+        code: |
+          return {"value": inputs["value"]}
+        input:
+          value: \${echo.output}
+        output:
+          value: int
+    output: \${pack.output}
+`;
+  const loaded = await loadConformanceFlow(`id: inline-named-equivalence
+name: inline_named_equivalence
+defs:
+  named:
+    input:
+      x: !int
+${body}nodes:
+  named_call:
+    kind: call
+    call: named
+    input:
+      x: 5
+  inline_call:
+    kind: call
+    input:
+      x: 5
+${body}output:
+  named: \${named_call.output}
+  inline: \${inline_call.output}
+`);
+
+  // A parameter's signature, its diagnostic-only origins left out.
+  const semantics = (param: Parameter) => [
+    param.name,
+    parameterType(param),
+    param.required,
+    param.hasDefault,
+    param.default,
+    param.coerceStrings,
+  ];
+  const named = driver<CallNode>(loaded, "named_call");
+  const inline = driver<CallNode>(loaded, "inline_call");
+  expect(named.childInputs.map(semantics)).toEqual(inline.childInputs.map(semantics));
+  expect((named.outputContract as ValueContract).type).toEqual((inline.outputContract as ValueContract).type);
+  const bodyIds = (node: CallNode) =>
+    [...(node.child as CompiledFlow).nodes.keys()].filter((id) => id !== START_ID && id !== END_ID);
+  expect(bodyIds(named)).toEqual(["echo", "pack"]);
+  expect(bodyIds(inline)).toEqual(["echo", "pack"]);
+});
+
+test("an eager def's inline call takes its origin and shares the file scope", async () => {
+  const source = `id: eager-def-inline-call
+name: eager_def_inline_call
+defs:
+  outer:
+    nodes:
+      wrapper:
+        kind: call
+        nodes:
+          constant:
+            kind: code
+            code: ./fixtures/compose_codefns.ts:echo
+            input:
+              topic: inline-ok
+            output: str
+        output: \${constant.output}
+    output: \${wrapper.output}
+nodes:
+  invoke:
+    kind: call
+    call: outer
+output: \${invoke.output}
+`;
+  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() => loadConformanceFlow(source));
+
+  const owner = ["def", "outer", "node", "wrapper", "inline"];
+  const flowId = inlineFlowId(owner);
+  const wrapper = (driver<CallNode>(loaded, "invoke").child as CompiledFlow).nodes.get("wrapper") as CallNode;
+  const keyRange = SourceDocument.parse(source).root.child("defs").child("outer").child("nodes").child("wrapper")
+    .keyRange!;
+  expect(wrapper.flowId).toBe(flowId);
+  expect(wrapper.childInputs).toEqual([]);
+  expect(wrapper.origin).not.toBeNull();
+  expect(loaded.originResolver!.resolve(wrapper.origin!)!.range).toEqual(keyRange);
+  expect(registrations).toHaveLength(1);
+  expect(resolutions).toHaveLength(1);
+  const scope = resolutions[0]![0];
+  expect(registrations[0]).toEqual([scope, flowId, owner, "inline body of node 'wrapper'"]);
+  expect(registrations[0]![0]).toBe(scope);
+  expect(resolutions[0]![1]).toBe(flowId);
+});
+
+test("a def's assembly cursor fallback restores only node surfaces", () => {
+  const literal = { inputs: "literal-input", outputs: "literal-output" };
+  const normalized = {
+    wrapper: {
+      kind: "call",
+      inputs: { payload: literal },
+      nodes: {
+        constant: { kind: "code", inputs: { topic: "inline-ok" }, outputs: "str", env: { literal } },
+      },
+      outputs: "${constant.output}",
+    },
+  };
+
+  const cursor = defAssemblyCursor(null, normalized);
+
+  const wrapper = (cursor.value as ValueRecord)["wrapper"] as ValueRecord;
+  const constant = (wrapper["nodes"] as ValueRecord)["constant"] as ValueRecord;
+  expect(cursor.document).toBeNull();
+  expect(Object.keys(wrapper)).toEqual(["kind", "nodes", "input", "output"]);
+  expect(Object.keys(constant)).toEqual(["kind", "env", "input", "output"]);
+  expect((wrapper["input"] as ValueRecord)["payload"]).toBe((constant["env"] as ValueRecord)["literal"]);
+  expect(literal).toEqual({ inputs: "literal-input", outputs: "literal-output" });
+  expect(Object.keys(normalized.wrapper)).toEqual(["kind", "inputs", "nodes", "outputs"]);
 });
 
 test("an inline MAP over a literal list loads with its inferred item type", () => {
@@ -1803,8 +1965,9 @@ ${LOOP_BODY}`);
   expect(driver<LoopNode>(flow, "repeat").predicateKind).toBe("until");
 });
 
-test("nested inline composites assemble four lexical children", () => {
-  const { flow } = assembleText(`id: nested-inline-composites
+test("nested inline composites register four lexical children once", async () => {
+  const { result: flow, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(`id: nested-inline-composites
 name: nested_inline_composites
 input:
   items: !list(int)
@@ -1855,10 +2018,13 @@ nodes:
 output:
   mapped: \${outer_call.output}
   looped: \${outer_loop.output}
-`);
+`),
+  );
 
   const outerCallOwner = ["root", "node", "outer_call", "inline"];
+  const innerMapOwner = [...outerCallOwner, "node", "inner", "inline"];
   const outerLoopOwner = ["root", "node", "outer_loop", "inline"];
+  const innerCallOwner = [...outerLoopOwner, "node", "inner", "inline"];
   const outerCall = driver<CallNode>(flow, "outer_call");
   const outerLoop = driver<LoopNode>(flow, "outer_loop");
   const innerMap = (outerCall.child as CompiledFlow).nodes.get("inner") as MapNode;
@@ -1866,9 +2032,75 @@ output:
   const flowIds = [outerCall.flowId, innerMap.flowId, outerLoop.flowId, innerCall.flowId];
   expect(flowIds).toEqual([
     inlineFlowId(outerCallOwner),
-    inlineFlowId([...outerCallOwner, "node", "inner", "inline"]),
+    inlineFlowId(innerMapOwner),
     inlineFlowId(outerLoopOwner),
-    inlineFlowId([...outerLoopOwner, "node", "inner", "inline"]),
+    inlineFlowId(innerCallOwner),
+  ]);
+  expect(new Set(flowIds).size).toBe(4);
+  expectRegisteredOnce(registrations, resolutions, [
+    [outerCallOwner, "inline body of node 'outer_call'"],
+    [innerMapOwner, "inline body of node 'inner'"],
+    [outerLoopOwner, "inline body of node 'outer_loop'"],
+    [innerCallOwner, "inline body of node 'inner'"],
+  ]);
+});
+
+/**
+ * Expect `registrations` and `resolutions` (from `recordPrivateScope`) to register and resolve
+ * each of `expected`'s `[owner, label]` once, under its owner's flow id, all in one scope.
+ */
+function expectRegisteredOnce(
+  registrations: unknown[][],
+  resolutions: unknown[][],
+  expected: [string[], string][],
+): void {
+  const scope = registrations[0]![0];
+  expect(registrations.map(([, flowId, owner, label]) => [flowId, owner, label]).sort()).toEqual(
+    expected.map(([owner, label]) => [inlineFlowId(owner), owner, label]).sort(),
+  );
+  expect(resolutions.map(([, flowId]) => flowId).sort()).toEqual(expected.map(([owner]) => inlineFlowId(owner)).sort());
+  for (const [entryScope] of [...registrations, ...resolutions]) expect(entryScope).toBe(scope);
+}
+
+test("an eager def's nested inline calls use their exact lexical owners, once", async () => {
+  const { result: loaded, registrations, resolutions } = await recordPrivateScope(() =>
+    loadConformanceFlow(`id: eager-def-nested-inline-calls
+name: eager_def_nested_inline_calls
+defs:
+  outer:
+    nodes:
+      outer_call:
+        kind: call
+        nodes:
+          inner_call:
+            kind: call
+            nodes:
+              constant:
+                kind: code
+                code: ./fixtures/compose_codefns.ts:echo
+                input:
+                  topic: nested-inline-ok
+                output: str
+            output: \${constant.output}
+        output: \${inner_call.output}
+    output: \${outer_call.output}
+nodes:
+  invoke:
+    kind: call
+    call: outer
+output: \${invoke.output}
+`),
+  );
+
+  const outerOwner = ["def", "outer", "node", "outer_call", "inline"];
+  const innerOwner = [...outerOwner, "node", "inner_call", "inline"];
+  const outerCall = (driver<CallNode>(loaded, "invoke").child as CompiledFlow).nodes.get("outer_call") as CallNode;
+  const innerCall = (outerCall.child as CompiledFlow).nodes.get("inner_call") as CallNode;
+  expect(outerCall.flowId).toBe(inlineFlowId(outerOwner));
+  expect(innerCall.flowId).toBe(inlineFlowId(innerOwner));
+  expectRegisteredOnce(registrations, resolutions, [
+    [outerOwner, "inline body of node 'outer_call'"],
+    [innerOwner, "inline body of node 'inner_call'"],
   ]);
 });
 
@@ -2221,6 +2453,233 @@ output: \${wrapper.output}
 
   expect(error.message).toContain("unknown namespace 'missing'");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected);
+});
+
+test("an eager def's inline child bad output keeps its absolute range", async () => {
+  const source = `id: eager-def-inline-output-range
+name: eager_def_inline_output_range
+defs:
+  outer:
+    nodes:
+      wrapper:
+        kind: call
+        nodes:
+          constant:
+            kind: code
+            code: ./fixtures/compose_codefns.ts:echo
+            input:
+              topic: ready
+            output: str
+        output: \${missing.output}
+    output: \${wrapper.output}
+nodes:
+  invoke:
+    kind: call
+    call: outer
+output: \${invoke.output}
+`;
+  const expected = SourceDocument.parse(source)
+    .root.child("defs")
+    .child("outer")
+    .child("nodes")
+    .child("wrapper")
+    .rangeOf("output")!;
+
+  const error = await loadErrorAsync(loadConformanceFlow(source));
+
+  expect(error.message).toBe(
+    "defs entry 'outer': flow has unresolved references:\n" +
+      "  flow output from: reference ${missing.output} uses unknown namespace 'missing'",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected);
+});
+
+test("an inline call's resolver failure uses the friendly child label", async () => {
+  const resolved: string[] = [];
+  const resolve = spyOn(CallableScope.prototype, "resolve").mockImplementation((flowId) => {
+    resolved.push(flowId);
+    throw new Error("resolver exploded");
+  });
+  try {
+    const error = await loadErrorAsync(
+      loadConformanceFlow(`id: inline-resolver-failure
+name: inline_resolver_failure
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: ready
+        output: str
+    output: \${constant.output}
+output: \${wrapper.output}
+`),
+    );
+
+    expect(resolved).toEqual([inlineFlowId(["root", "node", "wrapper", "inline"])]);
+    expect(error.message).toBe(
+      "call node 'wrapper': could not resolve inline body of node 'wrapper': resolver exploded",
+    );
+  } finally {
+    resolve.mockRestore();
+  }
+});
+
+// ---------- the callable scope's private callables ----------
+
+const WRAPPER_OWNER = ["root", "node", "wrapper", "inline"];
+
+/** A scope over no `defs:` or `uses:`. */
+const emptyScope = () => new CallableScope({}, new Map(), null, {});
+
+/** A stand-in child: the scope only caches and returns it. */
+const stubChild = () => ({}) as ComposedFlow;
+
+test("the callable scope builds a private once and same-owner registration is idempotent", () => {
+  const flowId = `${INLINE_FLOW_PREFIX}opaque-once`;
+  const child = stubChild();
+  const built: string[] = [];
+  const scope = emptyScope();
+  scope.registerPrivate(flowId, WRAPPER_OWNER, "inline body `wrapper`", () => {
+    built.push("first");
+    return child;
+  });
+  scope.registerPrivate(flowId, WRAPPER_OWNER, "ignored label", () => {
+    built.push("ignored");
+    return stubChild();
+  });
+
+  expect(built).toEqual([]);
+  expect(scope.resolve(flowId)).toBe(child);
+  expect(scope.resolve(flowId, "ignored-version")).toBe(child);
+  expect(built).toEqual(["first"]);
+});
+
+test("the callable scope rejects a non-private id without registering it", () => {
+  const built: string[] = [];
+  const scope = emptyScope();
+
+  const error = loadError(() =>
+    scope.registerPrivate("ordinary_name", WRAPPER_OWNER, "inline body `wrapper`", () => {
+      built.push("built");
+      return stubChild();
+    }),
+  );
+
+  expect(error.message).toBe(
+    "compiler-generated callable 'inline body `wrapper`' owned by " +
+      '["root","node","wrapper","inline"] must use the reserved prefix \'__inline_flow_\'',
+  );
+  expect(built).toEqual([]);
+  expect(loadError(() => scope.resolve("ordinary_name")).message).toContain("neither an in-file");
+  expect(built).toEqual([]);
+});
+
+test("the callable scope rejects a private owner collision without exposing the id", () => {
+  const flowId = `${INLINE_FLOW_PREFIX}opaque-owner-collision`;
+  const scope = emptyScope();
+  scope.registerPrivate(flowId, ["root", "node", "first", "inline"], "inline body `first`", stubChild);
+
+  const error = loadError(() =>
+    scope.registerPrivate(flowId, ["root", "node", "second", "inline"], "inline body `second`", stubChild),
+  );
+
+  expect(error.message).toBe(
+    "compiler-generated callable collision in reserved prefix '__inline_flow_': 'inline body `first`' owned by " +
+      '["root","node","first","inline"] conflicts with \'inline body `second`\' owned by ' +
+      '["root","node","second","inline"]',
+  );
+});
+
+test.each(["defs", "uses"])(
+  "the callable scope rejects a private collision with an authored %s: name without exposing the id",
+  (section) => {
+    const flowId = `${INLINE_FLOW_PREFIX}opaque-authored-collision`;
+    const defs: ValueRecord = section === "defs" ? { [flowId]: { nodes: {} } } : {};
+    const uses: Record<string, string> = section === "uses" ? { [flowId]: "library/child" } : {};
+    const scope = new CallableScope(defs, new Map(), null, uses);
+
+    const error = loadError(() => scope.registerPrivate(flowId, WRAPPER_OWNER, "inline body `wrapper`", stubChild));
+
+    expect(error.message).toBe(
+      "compiler-generated callable collision in reserved prefix '__inline_flow_': 'inline body `wrapper`' " +
+        `owned by ["root","node","wrapper","inline"] conflicts with an authored ${section}: name`,
+    );
+  },
+);
+
+test("the callable scope reports a private recursion without exposing the id", () => {
+  const flowId = `${INLINE_FLOW_PREFIX}opaque-recursion`;
+  const scope = emptyScope();
+  let calls = 0;
+  scope.registerPrivate(flowId, WRAPPER_OWNER, "inline body `wrapper`", () => {
+    calls += 1;
+    return scope.resolve(flowId);
+  });
+
+  const error = loadError(() => scope.resolve(flowId));
+
+  expect(error.message).toBe(
+    "recursive compiler-generated callable in reserved prefix '__inline_flow_': 'inline body `wrapper`' " +
+      'owned by ["root","node","wrapper","inline"] is defined in terms of itself (the baked call graph must ' +
+      "be finite)",
+  );
+  expect(calls).toBe(1);
+});
+
+test("the callable scope retries a failed private builder and caches its success", () => {
+  const flowId = `${INLINE_FLOW_PREFIX}opaque-retry`;
+  const child = stubChild();
+  let attempts = 0;
+  const scope = emptyScope();
+  scope.registerPrivate(flowId, WRAPPER_OWNER, "inline body `wrapper`", () => {
+    attempts += 1;
+    if (attempts === 1) throw new LoadDiagnostics().error("temporary child build failure");
+    return child;
+  });
+
+  expect(loadError(() => scope.resolve(flowId)).message).toBe("temporary child build failure");
+  expect(scope.resolve(flowId)).toBe(child);
+  expect(scope.resolve(flowId)).toBe(child);
+  expect(attempts).toBe(2);
+});
+
+test("the callable scope reports an unregistered private prefix without exposing the id", () => {
+  const error = loadError(() => emptyScope().resolve(`${INLINE_FLOW_PREFIX}opaque-unregistered`));
+
+  expect(error.message).toBe(
+    "compiler-generated callable with reserved prefix '__inline_flow_' was not registered in this file scope",
+  );
+});
+
+test("an eager def can resolve a pre-registered private", () => {
+  const flowId = `${INLINE_FLOW_PREFIX}opaque-eager-def`;
+  const privateChild = stubChild();
+  const defChild = stubChild();
+  const events: string[] = [];
+  // The def build is module-private, so a subclass fakes it for `outer`.
+  class FakeDefScope extends CallableScope {
+    override resolve(name: string, version: string | null = null): ComposedFlow {
+      if (name !== "outer" || events.includes("def:outer")) return super.resolve(name, version);
+      events.push("def:outer");
+      expect(this.resolve(flowId)).toBe(privateChild);
+      return defChild;
+    }
+  }
+  const scope = new FakeDefScope({ outer: { nodes: {} } }, new Map(), null, {});
+  const owner = ["def", "outer", "node", "wrapper", "inline"];
+  scope.registerPrivate(flowId, owner, "inline body `wrapper` in defs:`outer`", () => {
+    events.push("private");
+    return privateChild;
+  });
+
+  scope.eagerLoadDefs();
+
+  expect(events).toEqual(["def:outer", "private"]);
+  expect(scope.resolve(flowId)).toBe(privateChild);
 });
 
 // ---------- harvested conformance cases ----------

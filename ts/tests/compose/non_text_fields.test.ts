@@ -10,30 +10,28 @@
  * also assemble it (`assembleText`), the null one failing on its unresolved `when: x`.
  * `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`, where
  * Python loads it. `test_non_text_call_is_a_load_error` and `test_null_call_is_empty` parse the
- * flow's nodes, where Python loads it; the parse half of `test_text_call_still_loads` checks the
- * parsed `call:`. The while and until rows of `test_already_located_fields_are_unchanged` parse the
- * flow's nodes too, since the LOOP parse raises their error.
+ * flow's nodes, where Python loads it; `test_text_call_still_loads` checks the parsed `call:`, then
+ * loads the flow with `loadFlow`. The while and until rows of
+ * `test_already_located_fields_are_unchanged` parse the flow's nodes too, since the LOOP parse
+ * raises their error. The searched-when and on-when rows of that test, whose errors the CASE build
+ * raises, and its then and else rows, whose errors the case-branch check raises, load with
+ * `assembleText`, as the loader assembles the root flow.
  *
  * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
- * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load the node
- * and `adaptive_questions.llm_config` sites with `assembleText`, as the loader assembles the root
- * flow. So do the searched-when and on-when rows of `test_already_located_fields_are_unchanged`,
- * whose errors the CASE build raises, and its then and else rows, whose errors the case-branch
- * check raises.
+ * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load each of
+ * the node, flow, def and `adaptive_questions.llm_config` sites with `loadFlow`, as do the def
+ * `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
+ * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  *
  * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
  * by the call that raises their error. The inline-body rows of
  * `test_code_in_def_compact_merge_and_inline_body` and
  * `test_non_text_kind_in_a_def_and_inline_body` load with `assembleText` (the error comes from the
- * child's assembly) and pin the whole message.
+ * child's assembly) and pin the whole message; their def, compact and merge rows load with
+ * `loadFlow`.
  *
  * Dropped: the date rows (TS reads an unquoted date as text) and
  * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
- *
- * Later (T3-22): the load half of `test_text_call_still_loads`.
- * Later (T3-22): the defs, compact and merge rows of those two tests, the flow and def sites of
- * the `llm_config` rows, and the def `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
- * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -43,6 +41,7 @@ import { notTextError } from "../../src/compose/nodes/base.ts";
 import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import type { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import {
@@ -50,6 +49,7 @@ import {
   assembleText,
   fileOf,
   loadError,
+  loadErrorAsync,
   nodesOf,
   parsedNodes,
   runCase,
@@ -111,6 +111,9 @@ function lineOf(text: string, marker: string): number {
 function startLine(error: LoadError): number {
   return error.diagnostic.frames.at(-1)!.range.startLine;
 }
+
+/** Return the `LoadError` loading `text` with `loadFlow` rejects with. */
+const loadFails = (text: string) => loadErrorAsync(loadFlow(text));
 
 /** Return the `LoadError` `parseFile` throws for `text`. */
 function fileError(text: string): LoadError {
@@ -451,8 +454,9 @@ describe("parseNodes", () => {
       expect(startLine(error)).toBe(lineOf(text, "call: "));
     });
 
-    test("text call still parses", () => {
+    test("text call still loads", async () => {
       expect((nodesOf(callFlow(kind, "body")).get("a") as CallDescriptor | LoopDescriptor).call).toBe("body");
+      await loadFlow(callFlow(kind, "body"));
     });
   });
 
@@ -644,6 +648,71 @@ output: \${a.output}
   );
 });
 
+describe("a def, compact or merged node", () => {
+  const codeInDef = `id: f
+name: f
+defs:
+  body:
+    nodes:
+      one:
+        kind: code
+        output: str
+        code: "return 'x'"
+      two:
+        kind: code
+        output: str
+        code: 5
+    output: \${two.output}
+nodes:
+  a:
+    kind: call
+    call: body
+output: \${a.output}
+`;
+  const codeCompact = "id: f\nname: f\noutput: str\nkind: code\ncode: 5\n";
+  const codeMerged = `id: f
+name: f
+x-base: &base {code: 5}
+nodes:
+  a:
+    <<: *base
+    kind: code
+    output: str
+output: \${a.output}
+`;
+  const kindInDef = `id: f
+name: f
+defs:
+  sub:
+    kind: [a]
+    output: str
+    code: "return 'x'"
+nodes:
+  a:
+    kind: call
+    call: sub
+output: \${a.output}
+`;
+
+  test.each([
+    ["def", codeInDef, "two", lineOf(codeInDef, "code: 5")],
+    ["compact", codeCompact, "f", lineOf(codeCompact, "code: 5")],
+    ["merge", codeMerged, "a", lineOf(codeMerged, "x-base:")],
+  ])("non-text code in a %s is a load error", async (_site, text, node, line) => {
+    const error = await loadFails(text);
+
+    expect(error.message).toContain(`node '${node}' (kind=code): \`code:\` must be text`);
+    expect(startLine(error)).toBe(line);
+  });
+
+  test("non-text kind in a def is a load error", async () => {
+    const error = await loadFails(kindInDef);
+
+    expect(error.message).toContain("`kind:` must be text");
+    expect(startLine(error)).toBe(lineOf(kindInDef, "kind: [a]"));
+  });
+});
+
 describe("llm_config", () => {
   /** A flow whose agent node `a` has `llm_config: <v>`. */
   const llmOnNode = (v: string) => `id: f
@@ -669,15 +738,44 @@ nodes:
       llm_config: ${v}
 output: \${ask.output}
 `;
+  /** A flow with the flow-level `llm_config: <v>`. */
+  const llmOnFlow = (v: string) => `id: f
+name: f
+llm_config: ${v}
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+output: \${a.output}
+`;
+  /** A flow whose `defs:` entry `sub` has `llm_config: <v>`. */
+  const llmOnDef = (v: string) => `id: f
+name: f
+defs:
+  sub:
+    llm_config: ${v}
+    nodes:
+      b:
+        kind: agent
+        prompt: hi
+    output: \${b.output}
+nodes:
+  a:
+    kind: call
+    call: sub
+output: \${a.output}
+`;
   const SITES: [string, (v: string) => string, string][] = [
     ["node", llmOnNode, "node 'a': llm_config: "],
+    ["flow", llmOnFlow, "flow: llm_config: "],
+    ["def", llmOnDef, "defs entry 'sub': llm_config: "],
     ["adaptive", llmOnGate, "adaptive_questions.llm_config: "],
   ];
 
-  test.each(SITES)("a non-text llm_config field is a load error: %s", (_site, builder, prefix) => {
+  test.each(SITES)("a non-text llm_config field is a load error: %s", async (_site, builder, prefix) => {
     const text = builder("{model: 5}");
 
-    const error = loadError(() => assembleText(text));
+    const error = await loadFails(text);
 
     expect(error.message).toContain(
       prefix + "`model:` must be text, but YAML read it as an integer; put it in quotes",
@@ -686,8 +784,8 @@ output: \${ask.output}
     expect(startLine(error)).toBe(lineOf(text, "llm_config: "));
   });
 
-  test.each(SITES)("a nested llm_config text field: %s", (_site, builder, prefix) => {
-    const error = loadError(() => assembleText(builder("{provider: openai, openai: {user: 5}}")));
+  test.each(SITES)("a nested llm_config text field: %s", async (_site, builder, prefix) => {
+    const error = await loadFails(builder("{provider: openai, openai: {user: 5}}"));
 
     expect(error.message).toContain(prefix + "`openai.user:` must be text");
   });
@@ -697,12 +795,60 @@ output: \${ask.output}
       ["{provider: 5}", "1 validation error"],
       ["{provider: azure, azure: {stop: 5}}", "2 validation errors"],
       ["{provider: azure, azure: {stop: [5]}}", "2 validation errors"],
-    ])("%s", (value, count) => {
-      expect(loadError(() => assembleText(builder(value))).message).toContain(prefix + count + " for LLMConfig");
+    ])("%s", async (value, count) => {
+      expect((await loadFails(builder(value))).message).toContain(prefix + count + " for LLMConfig");
     });
   });
 
   test.each(["load-core/compose_non_text_fields__non_text_node_llm_config_field"])("case %s", (id) =>
     runCase({ id, call: assembled }),
   );
+});
+
+describe("def asserts", () => {
+  /** A flow whose multi-node `defs:` entry `b` has `asserts: <v>`. */
+  const defAsserts = (v: string) => `id: f
+name: f
+defs:
+  b:
+    nodes:
+      c:
+        kind: code
+        output: int
+        code: return 1
+    output: \${c.output}
+    asserts: ${v}
+nodes:
+  a:
+    kind: call
+    call: b
+output: \${a.output}
+`;
+
+  test.each(NON_TEXT)("a non-text def assert is a load error: %s", async (value, phrase) => {
+    const text = defAsserts(`\n      - "true"\n      - ${value}`);
+
+    const error = await loadFails(text);
+
+    expect(error.message).toContain(
+      `defs entry 'b': \`asserts[1]:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
+    );
+    expect(startLine(error)).toBe(lineOf(text, `      - ${value}`));
+  });
+
+  test.each(["5", "false", "0", "''", "{}", "{x: 1}", "output > 0"])(
+    "a non-list def asserts is a load error: %s",
+    async (value) => {
+      const text = defAsserts(value);
+
+      const error = await loadFails(text);
+
+      expect(error.message).toContain("defs entry 'b': `asserts:` must be a list of strings");
+      expect(startLine(error)).toBe(lineOf(text, "asserts: "));
+    },
+  );
+
+  test("null def asserts loads", async () => {
+    await loadFlow(defAsserts("null"));
+  });
 });

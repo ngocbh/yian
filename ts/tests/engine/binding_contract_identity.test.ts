@@ -15,30 +15,43 @@
  *   `_typed` deep-copies a loaded flow; the TS helpers type a fresh build, and "a deep copy keeps
  *   the fingerprint" is "a rebuild has the same fingerprint".
  *
- * Later (T3-22): `test_renamespacing_keeps_the_binding_contract` (compile expansion's
- * re-namespacing), `test_flow_origin_traversal_reaches_the_binding_contract` (origin traversal of
- * a loaded typed flow), `test_call_expansion_keeps_a_typed_child_binding` (CALL expansion of a
- * loaded parent) and
- * `test_record_typed_binding_is_never_hashed` (expansion of a loaded parent; its run half is T4,
- * and Python's hashability has no TS counterpart).
+ * Ported through `loadFlow` and `buildGrow`: `test_renamespacing_keeps_the_binding_contract`
+ * (`rensInternal`), `test_flow_origin_traversal_reaches_the_binding_contract`,
+ * `test_call_expansion_keeps_a_typed_child_binding` and the load, manifest and expansion half of
+ * `test_record_typed_binding_is_never_hashed` (Python's hashability has no TS counterpart, and
+ * "a deep copy keeps the fingerprint" is "a second load, typed the same, has the same
+ * fingerprint"). The parent's `child` is served by a `childResolver` over the loaded `_CHILD`.
+ *
+ * Later (T4-8): the run half of `test_record_typed_binding_is_never_hashed` (the binder rejects
+ * the int with `binding.type`).
  */
 
 import { expect, test } from "bun:test";
 
 import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
+import { buildGrow, rensInternal } from "../../src/compile/expand.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { iterFlowOrigins, rewriteFlowOrigins } from "../../src/compile/origins.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import type { Node } from "../../src/nodes/base.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { readTypedefs } from "../../src/typesys/types.ts";
 
 /** Return an exact int contract with an optional root origin. */
 function intContract(origin: OriginRef | null = null): ValueContract {
   return new ValueContract(typeFor("int", new Map()), new ContractOrigins({ default: origin }));
+}
+
+/** Return a record contract (Python's is unhashable, as its fields are a dict). */
+function recordContract(): ValueContract {
+  return new ValueContract(typeFor("Payload", readTypedefs({ Payload: { value: "int" } })));
 }
 
 test("binding fields end with an optional contract", () => {
@@ -212,4 +225,133 @@ test("a typed record output field changes the fingerprint", () => {
   const outputs = flowManifest(typedFlow).outputs as JsonObject[];
   expect(outputs[0]).not.toHaveProperty("type");
   expect((outputs[1]!.type as JsonObject).kind).toBe("int");
+});
+
+const TWO_STEP = `
+id: two-step
+name: two_step
+input:
+  x: !int
+nodes:
+  first:
+    kind: code
+    input:
+      x: \${input.x}
+    output: int
+    code: |
+      return inputs["x"] + 1n
+  second:
+    kind: code
+    input:
+      y: \${first.output}
+    output: int
+    code: |
+      return inputs["y"] * 2n
+output: \${second.output}
+`;
+
+const CHILD = `
+id: child
+name: child
+input:
+  x: !int
+nodes:
+  inner:
+    kind: code
+    input:
+      x: \${input.x}
+    output: int
+    code: |
+      return inputs["x"] + 1n
+output: \${inner.output}
+`;
+
+const PARENT = `
+id: parent
+name: parent
+input:
+  x: !int
+uses:
+  child: child
+nodes:
+  invoke:
+    kind: call
+    call: child
+    input:
+      x: \${input.x}
+output: \${invoke.output}
+`;
+
+/** Load `PARENT` with its `child` served by the loaded `CHILD`. */
+async function loadParent() {
+  const child = await loadFlow(CHILD);
+  return loadFlow(PARENT, { childResolver: () => child });
+}
+
+/** Set `contract` on `nodeWiring`'s binding `param`, keeping its source and origin. */
+function setContract(nodeWiring: Map<string, Binding>, param: string, contract: ValueContract): void {
+  const binding = nodeWiring.get(param)!;
+  nodeWiring.set(param, new Binding(binding.source, { origin: binding.origin, contract }));
+}
+
+test("renamespacing keeps the binding contract", () => {
+  // Re-namespacing a source or a literal keeps origin and contract.
+  const contract = intContract(new OriginRef("type-site"));
+  const expression = new Binding("${inner.output}", { origin: new OriginRef("binding-site"), contract });
+  const literal = new Binding(3n, { origin: new OriginRef("binding-site"), contract });
+
+  const renamed = rensInternal(expression, "invoke");
+  expect(renamed).toEqual(new Binding("${invoke/inner.output}", { origin: new OriginRef("binding-site"), contract }));
+  expect(renamed.contract).toBe(contract);
+  expect(rensInternal(literal, "invoke").contract).toBe(contract);
+});
+
+test("flow origin traversal reaches the binding contract", async () => {
+  // Flow-wide origin iteration and rewriting cover a typed binding's contract.
+  const flow = (await loadFlow(TWO_STEP)).compiled;
+  const typedFlow = typed(() => flow, "second", "y", intContract(new OriginRef("type-site")));
+
+  expect([...iterFlowOrigins(typedFlow)]).toContainEqual(new OriginRef("type-site"));
+
+  const rewritten = rewriteFlowOrigins(typedFlow, (origin) => new OriginRef(`new:${origin.key}`));
+
+  const contract = rewritten.wiring.get("second")!.get("y")!.contract;
+  expect(contract).not.toBeNull();
+  expect(contract!.origins.default).toEqual(new OriginRef("new:type-site"));
+  expect(typedFlow.wiring.get("second")!.get("y")!.contract!.origins.default).toEqual(new OriginRef("type-site"));
+});
+
+test("CALL expansion keeps a typed child binding", async () => {
+  // A CALL child's typed wiring binding keeps its contract in the grown fragment.
+  const parent = (await loadParent()).compiled;
+  const call = parent.nodes.get("invoke") as CallNode;
+  const contract = intContract();
+  setContract((call.child as CompiledFlow).wiring.get("inner") as Map<string, Binding>, "x", contract);
+
+  const fragment = buildGrow(call, { x: 2n });
+
+  expect(fragment.wiring.get("invoke/inner")!.get("x")!.contract).toBe(contract);
+});
+
+test("a record typed binding is never hashed: manifest and expansion", async () => {
+  /** Load the parent and type its CALL's child binding and its own `x` binding with `contract`. */
+  async function typedParent(contract: ValueContract) {
+    const loaded = await loadParent();
+    const call = loaded.compiled.nodes.get("invoke") as CallNode;
+    setContract((call.child as CompiledFlow).wiring.get("inner") as Map<string, Binding>, "x", contract);
+    setContract(loaded.compiled.wiring.get("invoke") as Map<string, Binding>, "x", contract);
+    return { compiled: loaded.compiled, call };
+  }
+  const contract = recordContract();
+  const { compiled, call } = await typedParent(contract);
+  const again = (await typedParent(recordContract())).compiled;
+
+  expect([...again.wiring.get("invoke")!.get("x")!.contract!.type.fields!.keys()]).toEqual(["value"]);
+  const manifest = flowManifest(compiled);
+  expect((((manifest.binding_types as JsonObject).invoke as JsonObject).x as JsonObject).kind).toBe("object");
+  expect(flowFingerprint(again)).toBe(flowFingerprint(compiled));
+
+  const fragment = buildGrow(call, { x: 2n });
+  expect(fragment.wiring.get("invoke/inner")!.get("x")!.contract).toBe(contract);
+  expansionDigest(fragment);
 });

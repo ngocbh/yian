@@ -24,24 +24,29 @@
  *
  * Covered elsewhere: `test_node_origin_id_defaults_none` (`base_node.test.ts`).
  *
+ * Ported through `buildGrow`, the child a hand-built START -> head -> tail -> END flow (Python's
+ * `_child_flow` from `test_expand.py`, written here):
+ * `test_build_grow_rebuilds_body_and_next_driver_on_origin` and
+ * `test_later_loop_growth_does_not_duplicate_the_loop_origin`.
+ *
  * Later (T4-10): `test_run_grows_iteration_zero_with_next_driver_when_continue`,
  * `test_run_commits_seed_when_while_predicate_false`,
  * `test_clone_driver_self_prunes_previous_body_and_self`,
  * `test_respawned_driver_binds_merged_record`, `test_until_do_while_continues_on_iteration_zero`,
- * `test_times_stops_at_count`, `test_runaway_guard_raises_loop_max_exceeded` and
- * `test_unlimited_driver_far_past_any_cap_still_grows`.
- *
- * Later (T3-22 / T4-10): `test_build_grow_rebuilds_body_and_next_driver_on_origin`,
- * `test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte`,
- * `test_later_loop_growth_does_not_duplicate_the_loop_origin` and
+ * `test_times_stops_at_count`, `test_runaway_guard_raises_loop_max_exceeded`,
+ * `test_unlimited_driver_far_past_any_cap_still_grows`, and (they compare with a live driver's
+ * `run`) `test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte` and
  * `test_build_grow_partial_loop_matches_live_and_replay_digest`.
  */
 
 import { expect, test } from "bun:test";
 
+import { buildGrow } from "../../src/compile/expand.ts";
+import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { MemoryScope } from "../../src/memory/contracts.ts";
-import { NodeKind } from "../../src/nodes/base.ts";
+import { type Node, NodeKind } from "../../src/nodes/base.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import {
   Assertion,
   ContractOrigins,
@@ -50,7 +55,10 @@ import {
   Parameter,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
@@ -234,6 +242,77 @@ test("respawn refuses a scope that doesn't end in the driver's position", () => 
     node.executionScope = new ExecutionScope(["loop"], { occurrencePath });
     expectError(() => node.respawn(1), RangeError, "loop scope must end in its current driver position");
   }
+});
+
+/** A child START -> head (reads `${input.x}`) -> tail (reads `${head.output}`) -> END. */
+function childFlow(): CompiledFlow {
+  const head = new CodeNode("head", { code: 'return inputs["x"] + 1' });
+  head.params = [new Parameter("x")];
+  const tail = new CodeNode("tail", { code: 'return inputs["r"] * 10' });
+  tail.params = [new Parameter("r")];
+  const x = new Parameter("x", {
+    contract: new ValueContract(Type.scalar(ValueKind.INTEGER)),
+    required: true,
+    coerceStrings: true,
+  });
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID, { params: [x] })],
+    ["head", head],
+    ["tail", tail],
+    [END_ID, EndNode.value(END_ID, { outputName: "out" })],
+  ]);
+  const edges = [
+    new Edge("__start__->head#0", START_ID, "head", { inputGroup: "x" }),
+    new Edge("head->tail#0", "head", "tail", { inputGroup: "r" }),
+    new Edge("tail->__end__#0", "tail", END_ID, { inputGroup: "out" }),
+  ];
+  const wiring = new Map([
+    ["head", new Map([["x", "${input.x}"]])],
+    ["tail", new Map([["r", "${head.output}"]])],
+    [START_ID, new Map([["x", "${input.x}"]])],
+    [END_ID, new Map([["out", "${tail.output}"]])],
+  ]);
+  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
+}
+
+/** A `while` driver `lp` over `childFlow()`, its params the child START's. */
+function grownLoop(): LoopNode {
+  const child = childFlow();
+  const node = new LoopNode("lp", { flowId: "f", child, predicateKind: "while", predicate: "${x}", maxIters: 10 });
+  node.params = child.nodes.get(child.startId)!.params;
+  return node;
+}
+
+test("buildGrow rebuilds the body and the next driver on the origin", () => {
+  const node = grownLoop();
+  const child = node.child as CompiledFlow;
+
+  // The seed as the log's JSON gives it: body 2 and `lp~3`.
+  const fragment = buildGrow(node, [{ x: 1n }, 2n]);
+
+  expect(fragment.nodes.has(ns(mapCallsite("lp", 2), child.startId))).toBe(true);
+  expect(fragment.nodes.has("lp~3")).toBe(true);
+});
+
+test("later loop growth does not duplicate the loop origin", () => {
+  const outer = new OriginRef("root/nodes/call");
+  const loopOrigin = new OriginRef("child/nodes/loop");
+  const origin = grownLoop();
+  origin.originContext = [outer];
+  origin.origin = loopOrigin;
+
+  const first = buildGrow(origin, [{ x: 1n }, 0n]);
+  const driver = first.nodes.get("lp~1")!;
+  const second = buildGrow(driver, [{ x: 1n }, 1n]);
+
+  expect(driver.failureTrace()).toEqual([outer, loopOrigin]);
+  expect(second.nodes.get("lp~2")!.failureTrace()).toEqual([outer, loopOrigin]);
+  const bodyPrefix = ns(mapCallsite("lp", 1), "");
+  const contexts = [...second.nodes]
+    .filter(([nodeId]) => nodeId.startsWith(bodyPrefix))
+    .map(([, node]) => node.originContext);
+  expect(contexts.length).toBeGreaterThan(0);
+  for (const context of contexts) expect(context).toEqual([outer, loopOrigin]);
 });
 
 test("should stop is the max iters budget", () => {

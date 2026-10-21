@@ -13,10 +13,11 @@
  * (`assemble` as the loader calls it), with `full` (every frame and the notes). Changed: its
  * message writes the node list in the text form (`["a","b"]`, rule `messages`).
  *
- * `test_e06_cross_flow_type_mismatch_is_loud` assembles conformance case
- * `load-core/seed_e06_type_mismatch_ref` (`assembledWith`), its callee `research-one` (seed 03)
- * built by hand (`handChild`) where Python loads the seed with a child resolver; it pins the
- * whole message, where Python matches fragments.
+ * `test_e06_cross_flow_type_mismatch_is_loud` loads conformance case
+ * `load-core/seed_e06_type_mismatch_ref` through `loadFlow`, its callee `research-one` (the case's
+ * file `research-one.yaml`, seed 03) loaded and served by a child resolver, as Python's; it pins
+ * the whole message, where Python matches fragments. The case is also pinned with `assembledWith`,
+ * the callee built by hand (`handChild`).
  *
  * `test_e04_exhaustiveness_mechanism_loud` and `test_e04_else_satisfies_coverage` assemble their
  * inline flows (`assembleText`), where Python loads them; the seed `e17` case
@@ -24,7 +25,7 @@
  * its message writes the uncovered tags in the text form (`["flat"]`, rule `messages`).
  *
  * The load rows assemble their seed's conformance case with `assembleText` where Python calls
- * `load_flow`, a `defs:` entry a hand-built child (`handChild`) with the def's signature:
+ * `load_flow`, and a seed with a `defs:` entry (e35, e36, e37) loads through `loadFlow`:
  * `test_e01_dangling_ref_located`, `test_e03_unknown_field_located`,
  * `test_negative_fixtures_are_located`, the e13, e14, e15 and e17 rows of `test_compile_error_gallery`,
  * `test_invalid_authored_default_carries_input_range`, `test_bad_input_ref_locates_the_offending_entry`,
@@ -41,12 +42,14 @@
  * and `load-case/seed_e38_case_when_ref_locates_node_header`. Changed: the invalid-default row's
  * CODE body is inline JavaScript, where Python names a fixture function.
  *
- * Later (T3-22), as they need the loader's awaited CODE check (`checkFlowCode`): the e30, e31 and
- * e32 rows of `test_compile_error_gallery` and `test_inline_code_construction_errors_carry_ranges`
- * (in TS, `load-leaves/seed_e31_inline_no_return` loads and fails when it runs).
- * Later (T3-22), as they need the loader itself: `test_single_node_def_model_kind_is_removed`
- * (the loader parses the `defs:` entry) and the e16 row of `test_compile_error_gallery` (the loader
- * reports the typedef error as `bad typedefs: ...`).
+ * Ported through `loadFlow`: the e16, e30, e31 and e32 rows of `test_compile_error_gallery` (the
+ * loader reports the typedef error as `bad typedefs: ...`; the CODE rows need its awaited
+ * `checkFlowCode`), `test_inline_code_construction_errors_carry_ranges` and
+ * `test_single_node_def_model_kind_is_removed`. Changed: e30's and e32's message is the language
+ * runtime's syntax-error text after the node's name (TS reads e32's `./helpers.ts`, with no `:fn`
+ * part, as an inline body), so their rows match the `node '...': ` start where Python matches
+ * "never closed" and "did you mean"; e31's TS body (no `return`) loads, failing only when it runs
+ * (the case `run-leaves/seed_e31_inline_no_return`), so the e31 rows check that it loads.
  * Later (T4-8): `test_runtime_error_gallery`, `test_e23_unknown_tool_fails_at_run_start`,
  * `test_flow_input_type_failure_origin_resolves_to_declaration`,
  * `test_false_boundary_assert_origin_resolves_to_assertion`,
@@ -59,6 +62,7 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
@@ -70,9 +74,10 @@ import {
   assembleText,
   type CaseRow,
   caseText,
-  type ChildFlows,
   handChild,
+  loadConformanceFlow,
   loadError,
+  loadErrorAsync,
   nodesOf,
   parametersFromYaml,
   runCase,
@@ -85,27 +90,16 @@ function seed(id: string): () => string {
   return () => caseText(id).text;
 }
 
-/** A hand-built child over `inputs` (a YAML `input:` section) returning one `type` producer. */
-const child = (inputs: string, type: string) =>
-  handChild({
-    inputs: parametersFromYaml(inputs, new Map()),
-    producers: { p: new ValueContract(typeFor(type, new Map())) },
-    output: "${p.output}",
-  });
-
-/** The `defs:` entries of the MAP and CALL seeds, by case. */
-const SEED_DEFS: Readonly<Record<string, ChildFlows>> = {
-  "load-map-call/seed_e35_bad_map_over_ref": { body: child("input:\n  item: !str\n", "int") },
-  "load-map-call/seed_e36_bad_map_input_ref": {
-    body: child("input:\n  item: !str\n  n: !int\n  extra: !int\n", "int"),
-  },
-  "load-map-call/seed_e37_synth_node_inherits_host_ranges": { enrich: child("input:\n  topic: !str\n", "list(str)") },
-};
-
 /** Return the `LoadError` assembling conformance case `id`'s flow throws. */
 function assembleError(id: string): LoadError {
   const { text, label } = caseText(id);
-  return loadError(() => assembleText(text, label, { children: SEED_DEFS[id] ?? {} }));
+  return loadError(() => assembleText(text, label));
+}
+
+/** Return the `LoadError` loading conformance case `id`'s flow rejects with. */
+function loadSeedError(id: string): Promise<LoadError> {
+  const { text, label } = caseText(id);
+  return loadErrorAsync(loadConformanceFlow(text, { sourceLabel: label }));
 }
 
 /** Return the sole frame's range of a single-site error. */
@@ -184,6 +178,61 @@ test.each([
   expect(error.diagnostic.frames[0]!.range.startLine).toBe(line);
 });
 
+test.each([
+  ["e16", "load-types/seed_e16_bad_typedef_name", "shadows", 5],
+  ["e30", "load-leaves/seed_e30_inline_syntax_error", "node 'broken': ", 15],
+  ["e32", "load-leaves/seed_e32_malformed_code_ref", "node 'oops': ", 15],
+] as const)("compile error gallery (loaded): %s", async (_, id, substr, line) => {
+  const error = await loadSeedError(id);
+
+  expect(error.message).toContain(substr);
+  expect(error.diagnostic.frames[0]!.range.startLine).toBe(line);
+});
+
+test("compile error gallery (loaded): e31 loads in TS", async () => {
+  // A TS body with no `return` fails when it runs, not at load.
+  const { text, label } = caseText("load-leaves/seed_e31_inline_no_return");
+  await loadConformanceFlow(text, { sourceLabel: label });
+});
+
+test.each([
+  ["load-leaves/seed_e30_inline_syntax_error", 15],
+  ["load-leaves/seed_e32_malformed_code_ref", 15],
+] as const)("inline code construction errors carry ranges: %s", async (id, line) => {
+  // Every CODE construction rejection exposes one precise source frame.
+  expect(onlyRange(await loadSeedError(id)).startLine).toBe(line);
+});
+
+const SINGLE_NODE_DEF_MODEL = `
+id: def-model
+name: def_model
+input:
+  topic: !str
+defs:
+  score:
+    kind: model
+    model_id: x
+    input:
+      topic: !str
+    output: float
+nodes:
+  rank:
+    kind: call
+    call: score
+    input:
+      topic: \${input.topic}
+output: \${rank.output}
+`;
+
+test("a single-node def of the model kind is removed", async () => {
+  // The removed-kind error keeps the `defs entry` prefix and lands on the def's `kind:`.
+  const error = await loadErrorAsync(loadFlow(SINGLE_NODE_DEF_MODEL));
+
+  expect(error.message).toContain("defs entry 'score'");
+  expect(error.message).toContain("kind 'model' was removed");
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(8);
+});
+
 test("an invalid authored default carries the input's range", () => {
   const source = `id: invalid-default
 name: invalid_default
@@ -217,10 +266,10 @@ test("a bad input ref locates the offending entry", () => {
   expect([range.startLine, range.endLine]).toEqual([11, 11]);
 });
 
-test("a bad MAP per-element input ref locates the offending entry", () => {
+test("a bad MAP per-element input ref locates the offending entry", async () => {
   // e36's MAP per-element branch is its own code path: it reads the node wiring, allows the
   // `${item}` scope and skips the reserved `over` key. `extra:` is on line 33; `input:` spans 31-33.
-  const error = assembleError("load-map-call/seed_e36_bad_map_input_ref");
+  const error = await loadSeedError("load-map-call/seed_e36_bad_map_input_ref");
 
   expect(error.message).toContain("unresolved references");
   expect(error.message).toContain("map input 'extra'");
@@ -228,10 +277,10 @@ test("a bad MAP per-element input ref locates the offending entry", () => {
   expect([range.startLine, range.endLine]).toEqual([33, 33]);
 });
 
-test("a MAP over: ref locates the over: line", () => {
+test("a MAP over: ref locates the over: line", async () => {
   // e35 has a dangling ref in MAP's reserved `over:` key on line 26; its range boxes `over:`
   // itself, not the `input:` block on lines 27-28.
-  const error = assembleError("load-map-call/seed_e35_bad_map_over_ref");
+  const error = await loadSeedError("load-map-call/seed_e35_bad_map_over_ref");
 
   expect(error.message).toContain("unresolved references");
   expect(error.message).toContain("map over"); // names the reserved key, not an input
@@ -252,10 +301,10 @@ test.each([
   expect(onlyRange(error).startLine).toBe(line);
 });
 
-test("a synth node locates at its call directive's line", () => {
+test("a synth node locates at its call directive's line", async () => {
   // e37's inline `call(...)` on L30 desugars to `__call_0`; directive-owned provenance locates the
   // bad `topic` binding at L30, not the host node's like-named input on L29.
-  const error = assembleError("load-map-call/seed_e37_synth_node_inherits_host_ranges");
+  const error = await loadSeedError("load-map-call/seed_e37_synth_node_inherits_host_ranges");
 
   expect(error.message).toContain("unresolved references");
   expect(error.message).toContain("node 'summary' input 'news' call(enrich) argument 'topic' from:");
@@ -282,11 +331,9 @@ test.each<CaseRow>([
   { id: "load-core/seed_e14_unknown_system_ambient", call: assembled, full: true },
   { id: "load-agent/seed_e15_prompt_undeclared_input", call: assembled, full: true },
   { id: "load-core/seed_e33_input_named_like_field", call: assembled, full: true },
-  ...[
-    "load-map-call/seed_e35_bad_map_over_ref",
-    "load-map-call/seed_e36_bad_map_input_ref",
-    "load-map-call/seed_e37_synth_node_inherits_host_ranges",
-  ].map((id) => ({ id, call: assembledWith(SEED_DEFS[id]!), full: true })),
+  { id: "load-map-call/seed_e35_bad_map_over_ref", call: assembled, full: true },
+  { id: "load-map-call/seed_e36_bad_map_input_ref", call: assembled, full: true },
+  { id: "load-map-call/seed_e37_synth_node_inherits_host_ranges", call: assembled, full: true },
   { id: "load-case/seed_e38_case_when_ref_locates_node_header", call: assembled, full: true },
 ])("assemble: $id", runCase);
 
@@ -305,10 +352,11 @@ function researchOne(): ComposedFlow {
   });
 }
 
-test("e06 cross-flow type mismatch is loud", () => {
+test("e06 cross-flow type mismatch is loud", async () => {
   // A float output bound to the callee's str input names the binding and both types.
   const { text, label } = caseText(E06);
-  const error = loadError(() => assembleText(text, label, { children: { "research-one": researchOne() } }));
+  const callee = await loadConformanceFlow(caseText(E06, { file: "research-one.yaml" }).text);
+  const error = await loadErrorAsync(loadFlow(text, { sourceLabel: label, childResolver: () => callee }));
 
   expect(error.message).toBe("call node 'call': binding 'topic' — child expects 'str', source is 'float'");
 });

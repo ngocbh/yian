@@ -32,15 +32,19 @@
  * copy fault a resolved record whose field read throws (for Python's patched `deepcopy`).
  * A variable colliding with an input is a `RangeError` with its full message.
  *
- * Later (T3-22, T4-8), through the loader and a run (the loader's wiring and the flow's
- * `llm_config` cascade are the subject):
- * `test_temperature_variable_renders_independently_of_effective_model_configuration` and
- * `test_ordinary_run_keeps_variables_out_of_wiring_and_pool_and_backward_dormant`.
+ * Ported through `loadFlow` and a `FlowEngine` run (`engine`), as Python's `_engine`:
+ * `test_ordinary_run_keeps_variables_out_of_wiring_and_pool_and_backward_dormant` (the echoing
+ * model stands in for the patched `run_agent`; `AgentNode.backward` throws until it is ported, so a
+ * backward call would fail the run, for Python's patched `backward`).
+ *
+ * Later (T4-8), through the loader and `runFlow` (the flow's `llm_config` cascade is the subject):
+ * `test_temperature_variable_renders_independently_of_effective_model_configuration`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import { FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
@@ -449,4 +453,37 @@ test.each([
   expect(error).toEqual(new RangeError("variable 'tone' collides with an input name"));
   expect(resolved).toEqual([]);
   expect(models.prompts).toEqual([]);
+});
+
+test("an ordinary run keeps variables out of wiring and pool and backward dormant", async () => {
+  const flow = (
+    await loadFlow(`id: local_render
+name: local_render
+input:
+  topic: !str
+nodes:
+  writer:
+    kind: agent
+    input: {topic: '\${input.topic}'}
+    variables:
+      instruction: !str \${absent.output}
+      tone: !str concise
+    prompt: '\${topic}: \${tone}, \${instruction}'
+    output: str
+output: \${writer.output}
+`)
+  ).compiled;
+
+  expect([...flow.wiring.get("writer")!.keys()]).toEqual(["topic"]);
+  expect(flow.nodes.get("writer")!.params!.map((parameter) => parameter.name)).toEqual(["topic"]);
+  expect(flow.edges.every((edge) => edge.from !== "absent")).toBe(true);
+  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: false, models: echo() });
+  await built.run();
+
+  const expected = "reefs: concise, ${absent.output}";
+  expect(built.state.pool.get(END_ID)).toBe(expected);
+  expect(new Set(built.state.pool.store.keys())).toEqual(new Set([START_ID, "writer", END_ID]));
+  expect(built.state.pool.get(START_ID)).toEqual({ topic: "reefs" });
+  expect(built.state.pool.get("writer")).toBe(expected);
+  expect(built.state.trace).toBeNull();
 });

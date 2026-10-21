@@ -2,52 +2,46 @@
  * A flow's `output:` shape decides a child's signature: a port of
  * `tests/engine/test_flow_output_shape.py`.
  *
- * Ported: `test_child_signature_of_a_one_field_record_is_its_exact_record`,
+ * Ported through `loadFlow`: `test_child_signature_of_a_one_field_record_is_its_exact_record`,
  * `test_child_signature_of_a_value_output_is_the_value_contract`,
- * `test_child_signature_of_an_empty_record_is_the_empty_record_contract`,
- * `test_direct_child_signature_must_say_it_returns_a_record`, the contract half of
+ * `test_child_signature_of_an_empty_record_is_the_empty_record_contract`, the contract half of
  * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
  * `test_map_over_a_def_without_fields_is_rejected` (absent, empty record),
- * `test_loop_body_with_an_empty_record_output_is_rejected` and
- * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`; through `assembleText`, the
- * load halves of `test_flow_result_follows_the_output_shape` (the END's mode and names),
+ * `test_loop_value_body_re_exporting_an_empty_record_is_rejected`,
+ * `test_reading_a_missing_field_of_a_record_child_is_rejected_at_load` and
+ * `test_a_non_string_output_name_in_a_def_is_a_load_error`. Ported directly:
+ * `test_direct_child_signature_must_say_it_returns_a_record`. Through `assembleText`:
+ * `test_loop_body_with_an_empty_record_output_is_rejected`, and the load halves of
+ * `test_flow_result_follows_the_output_shape` (the END's mode and names),
  * `test_inline_call_body_with_a_one_field_output_returns_the_record` and
- * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type), and
- * `test_reading_a_missing_field_of_a_record_child_is_rejected_at_load` (the `child` def built by
- * hand); and, on the
- * engine fixtures' `graph`, `engine` and `RecordingBackwardNode`,
+ * `test_loop_body_with_a_one_field_record_output_runs` (the driver's output type). On the engine
+ * fixtures' `graph`, `engine` and `RecordingBackwardNode`:
  * `test_root_feedback_on_a_one_field_record_reaches_its_producer`.
  *
  * Changed: Python's three rows above check only the run output, so the TS load halves check the
- * END's mode and names, or the driver's output type, instead. The child-signature rows build the
- * child with `handChild` (a `step` producer typed `str`), where Python loads a flow; the
- * empty-record row compares with `sameOutputContract` (Python's dataclass `==`). Python's
- * `ValueError` is a `RangeError`. The MAP rows build a `MapDescriptor` over that hand-built child,
- * where Python loads a flow whose def is the child, and pin the whole message, where Python
- * matches a fragment. The LOOP rows load Python's flows and pin the whole message; the re-export
- * row's `empty` def is built by hand.
+ * END's mode and names, or the driver's output type, instead. The empty-record row compares with
+ * `sameOutputContract` (Python's dataclass `==`). Python's `ValueError` is a `RangeError`. The MAP,
+ * LOOP and non-text-name rows pin the whole message, where Python matches a fragment.
  *
- * Pinned at the end: (`assembledWith`, the def built by hand)
- * `load-core/engine_flow_output_shape__map_over_a_def_without_output`,
- * `load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record` and
- * `load-core/engine_flow_output_shape__missing_field_of_an_empty_record_child`; (`assembled`)
+ * Pinned at the end (`assembled`): `load-core/engine_flow_output_shape__map_over_a_def_without_output`,
+ * `load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record`,
+ * `load-core/engine_flow_output_shape__missing_field_of_an_empty_record_child` and
  * `load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output`.
  *
  * TS-only: `ChildSignature`'s constructor errors, which no Python test reaches: a non-contract
  * output, a non-array `declaredOutputs`, a malformed pair, an empty or duplicate name, a
  * non-contract declared output; and the form with no declared evidence, which skips the check.
  *
- * Later (T3-22, T4): `test_call_over_a_one_field_record_def_returns_the_record`,
- * `test_call_over_a_flat_single_node_def_returns_the_bare_value` and
- * `test_nested_value_re_export_of_a_record_def_keeps_the_record` (T3-22, T4); the run halves of
- * `test_flow_result_follows_the_output_shape`,
+ * Later (T4-8): `test_call_over_a_one_field_record_def_returns_the_record`,
+ * `test_call_over_a_flat_single_node_def_returns_the_bare_value`,
+ * `test_nested_value_re_export_of_a_record_def_keeps_the_record` and
+ * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (they run flows).
+ * Later (T4): the run halves of `test_flow_result_follows_the_output_shape`,
  * `test_inline_call_body_with_a_one_field_output_returns_the_record`,
  * `test_loop_body_with_a_one_field_record_output_runs` and
  * `test_map_over_a_one_field_record_def_returns_a_list_of_records`,
  * `test_an_unquoted_yes_flow_output_name_is_text` and
- * `test_a_literal_flow_output_is_returned_as_written` (T4);
- * `test_case_then_call_over_a_one_field_record_def_returns_the_record` (T3-22, T4); and
- * `test_a_non_string_output_name_in_a_def_is_a_load_error` (T3-22).
+ * `test_a_literal_flow_output_is_returned_as_written`.
  *
  * Not ported here: `test_a_non_string_flow_output_name_is_a_load_error_at_its_key` is the source
  * layer's message, which `tests/compose/non_text_keys.test.ts` pins.
@@ -57,33 +51,43 @@ import { expect, test } from "bun:test";
 
 import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
-import { BuildContext } from "../../src/compose/nodes/base.ts";
-import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import {
-  assembled,
-  assembledWith,
-  assembleText,
-  type CaseRow,
-  handChild,
-  loadError,
-  runCase,
-} from "../compose/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
 import { engine, graph, RecordingBackwardNode } from "./run_state_fixtures.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
 
-/** A child whose one producer `step` is typed `str`, returning `output`. */
-function shapeChild(output: Parameters<typeof handChild>[0]["output"]) {
-  return handChild({ producers: { step: new ValueContract(STR) }, output });
-}
+const STEP = `
+  step:
+    kind: code
+    output: str
+    code: |
+      return "filled"
+`;
+
+/** The one-step flow with the `output:` section `section` (Python's `_FLOW % section`). */
+const shapeFlow = (section: string) => `id: shape\nname: shape\nnodes:${STEP}${section}`;
+
+/** A parent whose def `child` has the `output:` lines `defOutput` (Python's `_parent`). */
+const parent = (defOutput: string, nodes: string, output: string) =>
+  "id: parent\nname: parent\ndefs:\n" +
+  '  child:\n    nodes:\n      step:\n        kind: code\n        output: str\n        code: |\n          return "filled"\n' +
+  defOutput +
+  "nodes:\n" +
+  nodes +
+  `output: ${output}\n`;
+
+const ONE_FIELD_DEF_OUTPUT = "    output:\n      order: ${step.output}\n";
+
+const CALL_CHILD = "  c:\n    kind: call\n    call: child\n";
 
 /** Return the error `run` throws, failing when it returns. */
 function thrown(run: () => unknown): Error {
@@ -102,8 +106,8 @@ function expectError(run: () => unknown, cls: typeof Error, message: string): vo
   expect(error.message).toBe(message);
 }
 
-test("the child signature of a one-field record is its exact record", () => {
-  const sig = childSignature(shapeChild({ order: "${step.output}" }));
+test("the child signature of a one-field record is its exact record", async () => {
+  const sig = childSignature(await loadFlow(shapeFlow("output:\n  order: ${step.output}\n")));
 
   expect(sig.returnsRecord).toBe(true);
   expect(isExactly(sig.output, ValueContract)).toBe(true);
@@ -113,16 +117,16 @@ test("the child signature of a one-field record is its exact record", () => {
   expect(typeEquals(output.type.fields!.get("order")!, STR)).toBe(true);
 });
 
-test("the child signature of a value output is the value contract", () => {
-  const sig = childSignature(shapeChild("${step.output}"));
+test("the child signature of a value output is the value contract", async () => {
+  const sig = childSignature(await loadFlow(shapeFlow("output: ${step.output}\n")));
 
   expect(sig.returnsRecord).toBe(false);
   expect(isExactly(sig.output, ValueContract)).toBe(true);
   expect(typeEquals((sig.output as ValueContract).type, STR)).toBe(true);
 });
 
-test("the child signature of an empty record is the empty record contract", () => {
-  const sig = childSignature(shapeChild({}));
+test("the child signature of an empty record is the empty record contract", async () => {
+  const sig = childSignature(await loadFlow(shapeFlow("output: {}\n")));
 
   expect(sig.returnsRecord).toBe(true);
   expect(sameOutputContract(sig.output, combineOutputContracts(new Map()))).toBe(true);
@@ -218,15 +222,15 @@ test("a ChildSignature with no declared evidence skips the evidence check", () =
   expect(Object.isFrozen(sig.inputs)).toBe(true);
 });
 
-/** Build the MAP `each` over `items`, calling `child` (a def built by hand). */
-function buildMap(child: ReturnType<typeof handChild>) {
-  const desc = new MapDescriptor({ id: "each", call: "child", over: "${input.items}" });
-  return desc.build(new BuildContext({ registry: new Map(), resolver: () => child }));
-}
+/** A parent mapping its def `child` (output lines `defOutput`) over `items` (Python's `_map_parent`). */
+const mapParent = (defOutput: string) =>
+  "input:\n  items: !list(str)\n" +
+  parent(defOutput, "  each:\n    kind: map\n    call: child\n    over: ${input.items}\n", "${each.output}");
 
-test("a map over a one-field record def returns a list of records", () => {
-  const contract = buildMap(shapeChild({ order: "${step.output}" })).node.outputContract as ValueContract;
+test("a map over a one-field record def returns a list of records", async () => {
+  const loaded = await loadFlow(mapParent(ONE_FIELD_DEF_OUTPUT));
 
+  const contract = loaded.compiled.nodes.get("each")!.outputContract as ValueContract;
   expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
   const fields = contract.type.element!.fields!;
   expect([...fields.keys()]).toEqual(["order"]);
@@ -234,10 +238,10 @@ test("a map over a one-field record def returns a list of records", () => {
 });
 
 test.each([
-  ["absent", null],
-  ["empty record", {}],
-])("a map over a def without fields is rejected: %s", (_name, output) => {
-  const error = loadError(() => buildMap(shapeChild(output)));
+  ["absent", ""],
+  ["empty record", "    output: {}\n"],
+])("a map over a def without fields is rejected: %s", async (_name, defOutput) => {
+  const error = await loadErrorAsync(loadFlow(mapParent(defOutput)));
 
   expect(error.message).toBe(
     "map node 'each': callable 'child' must declare a non-empty `output:`; " +
@@ -275,14 +279,20 @@ output: \${lp.output}
   expect(error.message).toBe(NO_CARRIED_FIELD);
 });
 
-test("a loop value body re-exporting an empty record is rejected", () => {
-  const empty = shapeChild({});
-
-  const error = loadError(() =>
-    assembleText(
-      `
+test("a loop value body re-exporting an empty record is rejected", async () => {
+  const error = await loadErrorAsync(
+    loadFlow(`
 id: l
 name: l
+defs:
+  empty:
+    nodes:
+      step:
+        kind: code
+        output: int
+        code: |
+          return 1
+    output: {}
 nodes:
   lp:
     kind: loop
@@ -295,10 +305,7 @@ nodes:
         call: empty
     output: \${inner.output}
 output: \${lp.output}
-`,
-      "flow.yaml",
-      { children: { empty } },
-    ),
+`),
   );
 
   expect(error.message).toBe(NO_CARRIED_FIELD);
@@ -315,14 +322,6 @@ function record(fields: Record<string, Type>): Type {
   });
 }
 
-const STEP = `
-  step:
-    kind: code
-    output: str
-    code: |
-      return "filled"
-`;
-
 test.each<[string, string, EndNode["mode"], string[]]>([
   ["one-field", "output:\n  order: ${step.output}\n", "record", ["order"]],
   ["two-fields", "output:\n  order: ${step.output}\n  note: ${step.output}\n", "record", ["order", "note"]],
@@ -330,7 +329,7 @@ test.each<[string, string, EndNode["mode"], string[]]>([
   ["absent", "", "value", []],
   ["empty-record", "output: {}\n", "record", []],
 ])("the flow's END follows the output shape: %s", (_name, section, mode, names) => {
-  const { flow } = assembleText(`id: shape\nname: shape\nnodes:${STEP}${section}`);
+  const { flow } = assembleText(shapeFlow(section));
 
   const end = flow.compiled.nodes.get(END_ID) as EndNode;
   expect([end.mode, end.names]).toEqual([mode, names]);
@@ -404,37 +403,34 @@ test("root feedback on a one-field record reaches its producer", async () => {
 });
 
 test.each([
-  ["one-field", { order: "${step.output}" }],
-  ["empty-record", {}],
-])("reading a missing field of a record child is rejected at load: %s", (_id, output) => {
-  const text = `id: parent
-name: parent
-nodes:
-  c:
-    kind: call
-    call: child
-output: \${c.output.missing}
-`;
-
-  const error = loadError(() => assembleText(text, "flow.yaml", { children: { child: shapeChild(output) } }));
+  ["one-field", ONE_FIELD_DEF_OUTPUT],
+  ["empty-record", "    output: {}\n"],
+])("reading a missing field of a record child is rejected at load: %s", async (_id, defOutput) => {
+  // A field read on a child's statically known record contract is already checked at load, for
+  // one field and for none.
+  const error = await loadErrorAsync(loadFlow(parent(defOutput, CALL_CHILD, "${c.output.missing}")));
 
   expect(error.message).toContain("reads unknown field 'missing' on record");
 });
 
+test("a non-string output name in a def is a load error", async () => {
+  const error = await loadErrorAsync(
+    loadFlow(parent("    output:\n      1: ${step.output}\n", CALL_CHILD, "${c.output}")),
+  );
+
+  expect(error.message).toBe(
+    'the key `1` was read by YAML as an integer, but names in a flow must be text. Quote it ("1") or ' +
+      "choose another name.",
+  );
+});
+
 // ---------- harvested conformance cases ----------
 
-test.each<CaseRow>([
-  {
-    id: "load-core/engine_flow_output_shape__map_over_a_def_without_output",
-    call: assembledWith({ child: shapeChild(null) }),
-  },
-  { id: "load-core/engine_flow_output_shape__loop_body_with_an_empty_record_output", call: assembled },
-  {
-    id: "load-core/engine_flow_output_shape__loop_body_re_exporting_an_empty_record",
-    call: assembledWith({ empty: shapeChild({}) }),
-  },
-  {
-    id: "load-core/engine_flow_output_shape__missing_field_of_an_empty_record_child",
-    call: assembledWith({ child: shapeChild({}) }),
-  },
-])("assemble: $id", runCase);
+test.each<CaseRow>(
+  [
+    "map_over_a_def_without_output",
+    "loop_body_with_an_empty_record_output",
+    "loop_body_re_exporting_an_empty_record",
+    "missing_field_of_an_empty_record_child",
+  ].map((name) => ({ id: `load-core/engine_flow_output_shape__${name}`, call: assembled })),
+)("assemble: $id", runCase);

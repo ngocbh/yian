@@ -1,75 +1,96 @@
 /**
  * CALL and MAP build over a child's signature: a port of `tests/engine/test_call_map.py`.
  *
- * Ported: the signature half of `test_seed03_loads_as_child_flow`;
- * `test_seed04_downstream_dotted_ref_validates_against_child_record`; the build halves of
- * `test_seed04_call_loads_and_reexports_child_output` and
- * `test_seed05_map_loads_with_list_output_and_parallel`; `test_map_input_named_over_is_reserved`,
- * `test_call_binding_to_undeclared_child_input_is_loud`, `test_map_child_with_no_output_is_loud`
- * and `test_call_accepts_proven_null_for_nullable_child_input` (its contract half over a built
- * node, its acceptance half assembling the flow with `assembleText`, the `echo` def built by hand).
+ * Ported through `loadFlow`: `test_seed03_loads_as_child_flow`,
+ * `test_seed04_call_loads_and_reexports_child_output`,
+ * `test_seed04_downstream_dotted_ref_validates_against_child_record`,
+ * `test_seed05_map_loads_with_list_output_and_parallel`, `test_map_input_named_over_is_reserved`,
+ * `test_call_binding_to_undeclared_child_input_is_loud`, `test_map_child_with_no_output_is_loud`,
+ * `test_call_accepts_proven_null_for_nullable_child_input`, `test_call_map_without_resolver_is_loud`
+ * and `test_flow_without_calls_loads_without_resolver`.
  *
- * Changed: every child is built by hand (`handChild`) where Python loads seed 03 or a def. Seed
- * 03's child takes the seed's two parameters (read from its `input:` text) and returns a record
- * over its `synth` producer and `input.as_of`, with `fetch` and `synth` typed as the seed types
- * them. The seed 04 and 05 build halves parse the seed's node (`nodesOf`) and build it over a
- * `BuildContext` whose resolver returns that child; their origin halves, and the downstream dotted-ref row, assemble
- * the seed (`assembleText` with `children`), where Python loads it with a search path. The seeds come from
- * the conformance cases `load-map-call/seed_04_call` (with its file `03-research-one.yaml`) and
- * `load-map-call/seed_05_call_map`. The reserved-`over`, undeclared-binding (both joined errors)
- * and no-output rows pin the whole message, where Python matches fragments.
+ * Changed: the seeds come from the conformance cases `load-map-call/seed_04_call` (with its file
+ * `03-research-one.yaml`, whose CODE reference is TS's `./fixtures/seeds.ts:fetch_facts`),
+ * `load-map-call/seed_05_call_map` and `load-agent/seed_01_structured_agent`; seeds 04 and 05 load
+ * with a search path holding seed 03, written into a temporary directory linked to the
+ * conformance fixtures; seeds 01 and 03 load with the conformance directory as `baseDir`. The seed 04 row also checks where its binding's origin resolves. The
+ * reserved-`over`, undeclared-binding (both joined errors) and no-output rows pin the whole
+ * message, where Python matches fragments. The no-output child's CODE node names
+ * `./fixtures/compose_codefns.ts:echo` (Python: `m:f`), and the MAP flow declares `uses:
+ * {no-output: no-output}`: without the alias the loader rejects the callable before the MAP
+ * check, which Python's row accepts only because the alias error's text contains "output". The
+ * resolver-less seed 04 row pins the loader's `uses:` message, where Python checks for "resolver".
  *
  * TS-only: a MAP over a child whose output is partial leaves its contract unset, and a
- * descriptor's `fieldLabels` name an inline call's argument and the call in the binding errors.
+ * descriptor's `fieldLabels` name an inline call's argument and the call in the binding errors
+ * (both build a descriptor over a hand-built child, `handChild`).
  *
- * Pinned at the end: `load-map-call/engine_call_map__map_input_named_over_is_reserved` (`assembled`),
- * whose check runs before the child is resolved, and the `ok` case
- * `load-map-call/engine_call_map__call_accepts_proven_null_for_nullable_child_input` (`assembledWith`,
- * the `echo` def by hand).
- *
- * Later (T3-22): the seed and def loads of the rows above, `test_call_map_without_resolver_is_loud`
- * (the loader's `uses:` error) and `test_flow_without_calls_loads_without_resolver`.
+ * Pinned at the end: `load-map-call/engine_call_map__map_input_named_over_is_reserved` and the
+ * `ok` case `load-map-call/engine_call_map__call_accepts_proven_null_for_nullable_child_input`
+ * (`assembled`).
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { BuildContext, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+
+import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
-import { childSignature } from "../../src/compose/nodes/resolver.ts";
+import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { OriginRef } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, isExactly, Parameter, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
-  assembleText,
   type CaseRow,
   caseText,
   type ChildFlows,
   handChild,
+  linkConformanceFixtures,
+  loadConformanceFlow,
   loadError,
-  nodesOf,
+  loadErrorAsync,
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
 
 const STR = new ValueContract(Type.scalar(ValueKind.STRING));
 
-/** Seed 03 (`research-one`), built by hand: its parameters, producers and record output. */
-function researchOne(): ComposedFlow {
-  const { text } = caseText("load-map-call/seed_04_call", { file: "03-research-one.yaml" });
-  const facts = typeFor("Facts", readTypedefs({ Facts: { values: "list(float)", news: "list(str)" } }));
-  return handChild({
-    inputs: parametersFromYaml(text, new Map()),
-    producers: { fetch: new ValueContract(facts), synth: STR },
-    output: { report: "${synth.output}", asof: "${input.as_of}" },
-  });
+/** Seed 03 (`research-one`), the child seeds 04 and 05 call. */
+const RESEARCH_ONE = caseText("load-map-call/seed_04_call", { file: "03-research-one.yaml" }).text;
+
+/** The search path holding seed 03, as `03-research-one.yaml`. */
+let seeds: string;
+
+beforeAll(() => {
+  seeds = mkdtempSync(join(tmpdir(), "yian-call-map-"));
+  writeFileSync(join(seeds, "03-research-one.yaml"), RESEARCH_ONE);
+  linkConformanceFixtures(seeds);
+});
+
+afterAll(() => rmSync(seeds, { recursive: true, force: true }));
+
+/** Load the flow of conformance case `id` with seed 03 on the search path. */
+function loadSeed(id: string): Promise<ComposedFlow> {
+  const { text, label } = caseText(id);
+  return loadFlow(text, { searchPaths: [seeds], sourceLabel: label });
+}
+
+/** A child resolver serving seed 03 as `research-one`, and failing on any other id. */
+async function makeResolver() {
+  const children: Record<string, ComposedFlow> = { "research-one": await loadConformanceFlow(RESEARCH_ONE) };
+  return (flowId: string) => {
+    const child = children[flowId];
+    if (child === undefined) throw new Error(`unknown child flow ${flowId}`);
+    return child;
+  };
 }
 
 /** A build context whose resolver hands back `children[flowId]`. */
@@ -84,20 +105,24 @@ function contextWith(children: ChildFlows): BuildContext {
   });
 }
 
-/** Parse node `nodeId` of the flow of conformance case `id`. */
-function seedNode(id: string, nodeId: string): NodeDescriptor {
-  const { text, label } = caseText(id);
-  return nodesOf(text, [], label).get(nodeId)!;
-}
-
 /** Return the field names of record type `type`, in order. */
 function fieldNames(type: Type | undefined): string[] {
   return [...type!.fields!.keys()];
 }
 
-test("seed 03's child signature", () => {
-  const sig = childSignature(researchOne());
+/** Return each binding's source in `wiring`, in order. */
+const sources = (wiring: ReadonlyMap<string, unknown>) =>
+  [...wiring].map(([name, binding]) => [name, (binding as Binding).source]);
 
+// ---------- seed 03: the child flow loads and exposes a signature ----------
+
+test("seed 03 loads as a child flow", async () => {
+  const loaded = await loadConformanceFlow(RESEARCH_ONE);
+  expect(loaded).toBeInstanceOf(ComposedFlow);
+  const sig = childSignature(loaded);
+  expect(sig).toBeInstanceOf(ChildSignature);
+
+  // topic is a required str; as_of has a typed date default, so it isn't required.
   const parameters = new Map(sig.inputs.map((parameter) => [parameter.name, parameter]));
   expect([...parameters.keys()]).toEqual(["topic", "as_of"]);
   expect(
@@ -120,124 +145,116 @@ test("seed 03's child signature", () => {
   expect(fieldNames(output.type)).toEqual(["report", "asof"]);
 });
 
-test("seed 04's call builds and re-exports the child's output", () => {
-  const child = researchOne();
+// ---------- seed 04: CALL loads and re-exports the child's output contract ----------
 
-  const result = seedNode("load-map-call/seed_04_call", "research").build(contextWith({ "research-one": child }));
+test("seed 04's call loads and re-exports the child's output", async () => {
+  const loaded = await loadSeed("load-map-call/seed_04_call");
+  expect(loaded).toBeInstanceOf(ComposedFlow);
 
-  const node = result.node as CallNode;
-  expect(node).toBeInstanceOf(CallNode);
-  expect(node).not.toBeInstanceOf(MapNode);
-  expect("over" in node).toBe(false);
-  expect("parallel" in node).toBe(false);
-  expect(node.flowId).toBe("research-one");
-  expect(node.child).toBe(child.compiled);
-  expect(node.childInputs).toStrictEqual(child.input);
-  expect(node.outputContract).toBeInstanceOf(ValueContract);
-  const contract = node.outputContract as ValueContract;
+  const research = loaded.compiled.nodes.get("research") as CallNode;
+  expect(research).toBeInstanceOf(CallNode);
+  expect(research).not.toBeInstanceOf(MapNode);
+  // CALL carries no over or parallel.
+  expect("over" in research).toBe(false);
+  expect("parallel" in research).toBe(false);
+  expect(research.flowId).toBe("research-one");
+  // The exact contract re-exports the child's one output, a `{report, asof}` record.
+  expect(research.outputContract).toBeInstanceOf(ValueContract);
+  const contract = research.outputContract as ValueContract;
   expect(contract.type.kind).toBe(ValueKind.OBJECT);
   expect(fieldNames(contract.type)).toEqual(["report", "asof"]);
-  expect(result.wiring).toEqual(new Map([["topic", "${input.topic}"]]));
-  expect(node.params!.map((parameter) => parameter.name)).toEqual(["topic"]);
+  // CALL sources live on the flow's wiring; the node carries only the parameter names.
+  const wiring = loaded.compiled.wiring.get("research")!;
+  expect(sources(wiring)).toEqual([["topic", "${input.topic}"]]);
+  const topic = wiring.get("topic") as Binding;
+  expect(topic.origin).not.toBeNull();
+  const { text, label } = caseText("load-map-call/seed_04_call");
+  const authored = SourceDocument.parse(text, label).root.child("nodes").child("research");
+  expect(loaded.originResolver!.resolve(topic.origin!)!.range).toEqual(authored.child("input").rangeOf("topic")!);
+  expect(research.params!.map((parameter) => parameter.name)).toEqual(["topic"]);
+  expect(research.params![0]!.origin).not.toBeNull();
 });
 
-test("seed 04's downstream dotted ref validates against the child record", () => {
+test("seed 04's downstream dotted ref validates against the child record", async () => {
   // `take` reads `${research.output.report}` and `${research.output.asof}`; the CALL node's output
   // contract (a checked record) lets the dotted-field walk pass.
-  const { text, label } = caseText("load-map-call/seed_04_call");
-
-  const { compiled } = assembleText(text, label, { children: { "research-one": researchOne() } }).flow;
+  const { compiled } = await loadSeed("load-map-call/seed_04_call");
 
   const wiring = compiled.wiring.get("take")!;
-  expect(new Map([...wiring].map(([name, binding]) => [name, (binding as Binding).source]))).toEqual(
-    new Map([
-      ["brief", "${research.output.report}"],
-      ["asof", "${research.output.asof}"],
-    ]),
-  );
+  expect(sources(wiring)).toEqual([
+    ["brief", "${research.output.report}"],
+    ["asof", "${research.output.asof}"],
+  ]);
   expect([...wiring.values()].every((binding) => (binding as Binding).origin !== null)).toBe(true);
   expect(compiled.nodes.get("take")!.params!.every((parameter) => parameter.origin !== null)).toBe(true);
 });
 
-test("seed 04's call wiring and parameter carry origins", () => {
-  const { text, label } = caseText("load-map-call/seed_04_call");
-  const research = SourceDocument.parse(text, label).root.child("nodes").child("research");
+// ---------- seed 05: MAP loads with a list of the child's output, parallel ----------
 
-  const { flow, builder } = assembleText(text, label, { children: { "research-one": researchOne() } });
+test("seed 05's map loads with a list output, parallel", async () => {
+  const loaded = await loadSeed("load-map-call/seed_05_call_map");
+  expect(loaded).toBeInstanceOf(ComposedFlow);
 
-  const wiring = flow.compiled.wiring.get("research")!;
-  expect([...wiring].map(([name, binding]) => [name, (binding as Binding).source])).toEqual([
-    ["topic", "${input.topic}"],
-  ]);
-  const topic = wiring.get("topic") as Binding;
-  expect(topic.origin).toBeInstanceOf(OriginRef);
-  expect(builder.resolveRegistered(topic.origin!)!.range).toEqual(research.child("input").rangeOf("topic")!);
-  const node = flow.compiled.nodes.get("research")!;
-  expect(node.params!.map((parameter) => parameter.name)).toEqual(["topic"]);
-  expect(node.params![0]!.origin).toBeInstanceOf(OriginRef);
-});
-
-test("seed 05's map builds a list of the child's output, parallel", () => {
-  const child = researchOne();
-
-  const result = seedNode("load-map-call/seed_05_call_map", "research_each").build(
-    contextWith({ "research-one": child }),
-  );
-
-  const node = result.node as MapNode;
+  const node = loaded.compiled.nodes.get("research_each") as MapNode;
   expect(node).toBeInstanceOf(MapNode);
+  // The source rides the flow's wiring, not the node.
   expect("over" in node).toBe(false);
   expect(node.flowId).toBe("research-one");
   expect(node.parallel).toBe(true);
   expect(node.title).toBe("Research each topic");
-  expect(node.child).toBe(child.compiled);
   const contract = node.outputContract as ValueContract;
   expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
   expect(contract.type.element!.kind).toBe(ValueKind.OBJECT);
   expect(fieldNames(contract.type.element)).toEqual(["report", "asof"]);
   // `over` is the iteration source, wired first; it is not a parameter.
-  expect(result.wiring).toEqual(
-    new Map([
-      ["over", "${input.topics}"],
-      ["topic", "${item}"],
-      ["as_of", '${input.as_of:-"2026-01-01"}'],
-    ]),
-  );
-  expect(node.params!.map((parameter) => parameter.name)).toEqual(["topic", "as_of"]);
-});
-
-test("seed 05's map wiring and parameters carry origins", () => {
-  const { text, label } = caseText("load-map-call/seed_05_call_map");
-
-  const { flow } = assembleText(text, label, { children: { "research-one": researchOne() } });
-
-  const wiring = flow.compiled.wiring.get("research_each")!;
-  expect([...wiring].map(([name, binding]) => [name, (binding as Binding).source])).toEqual([
+  const wiring = loaded.compiled.wiring.get("research_each")!;
+  expect(sources(wiring)).toEqual([
     ["over", "${input.topics}"],
     ["topic", "${item}"],
     ["as_of", '${input.as_of:-"2026-01-01"}'],
   ]);
-  expect([...wiring.values()].every((binding) => (binding as Binding).origin instanceof OriginRef)).toBe(true);
-  const node = flow.compiled.nodes.get("research_each")!;
+  expect([...wiring.values()].every((binding) => (binding as Binding).origin !== null)).toBe(true);
   expect(node.params!.map((parameter) => parameter.name)).toEqual(["topic", "as_of"]);
-  expect(node.params!.every((parameter) => parameter.origin instanceof OriginRef)).toBe(true);
+  expect(node.params!.every((parameter) => parameter.origin !== null)).toBe(true);
 });
 
-test("a map input named over is reserved", () => {
-  // Checked before the child is resolved, so no resolver is needed.
-  const desc = new MapDescriptor({ id: "m", call: "child", over: "${input.xs}", inputs: { over: "${item}" } });
+test("a map input named over is reserved", async () => {
+  // A map's `over` is the iteration source (the reserved wiring key); an `input:` parameter named
+  // `over` collides and is rejected at load.
+  const text =
+    "id: bad-over\nname: bad\ninput:\n  xs: !list(str)\n" +
+    "nodes:\n  m:\n    kind: map\n    call: child\n    over: ${input.xs}\n" +
+    "    input:\n      over: ${item}\n" +
+    "output: ${m.output}\n";
 
-  const error = loadError(() => desc.build(new BuildContext({ registry: new Map() })));
+  const error = await loadErrorAsync(loadFlow(text));
 
   expect(error.message).toBe(
     "map node 'm': input name 'over' is reserved (the iteration source); rename the `input:` entry",
   );
 });
 
-test("a call binding to an undeclared child input is loud", () => {
-  const desc = new CallDescriptor({ id: "research", call: "research-one", inputs: { symbol: "${input.topic}" } });
+// ---------- name and arity checks: loud on a bad binding or a bad MAP child ----------
 
-  const error = loadError(() => desc.build(contextWith({ "research-one": researchOne() })));
+const CALL_BAD_NAME = `
+id: bad-ref
+name: bad_ref
+input:
+  topic: !str
+uses:
+  research-one: research-one
+nodes:
+  research:
+    kind: call
+    call: research-one
+    input:
+      symbol: \${input.topic}     # \`symbol\` is NOT a declared callable input
+output:
+  out: \${research.output}
+`;
+
+test("a call binding to an undeclared child input is loud", async () => {
+  const error = await loadErrorAsync(loadFlow(CALL_BAD_NAME, { childResolver: await makeResolver() }));
 
   expect(error.message).toBe(
     "call node 'research': binding 'symbol' is not a declared input of callable 'research-one'\n" +
@@ -245,24 +262,50 @@ test("a call binding to an undeclared child input is loud", () => {
   );
 });
 
-test("a map child with no output is loud", () => {
-  const child = handChild({
-    inputs: parametersFromYaml("input:\n  topic: !str\n", new Map()),
-    producers: { emit: null },
-    output: null,
-  });
+const CHILD_NO_OUTPUT = `
+id: no-output
+name: no_output
+input:
+  topic: !str
+nodes:
+  emit:
+    kind: code
+    input:
+      topic: \${input.topic}
+    code: ./fixtures/compose_codefns.ts:echo
+`;
+
+const MAP_OVER_NO_OUTPUT = `
+id: bad-map
+name: bad_map
+input:
+  topics: !list(str)
+uses:
+  no-output: no-output
+nodes:
+  each:
+    kind: map
+    call: no-output
+    over: \${input.topics}
+    input:
+      topic: \${item}
+output:
+  out: \${each.output}
+`;
+
+test("a map child with no output is loud", async () => {
+  const child = await loadConformanceFlow(CHILD_NO_OUTPUT);
   const signature = childSignature(child);
   expect(signature.output).toBeNull();
+  // No declaration, so a MAP cannot form list(U).
   expect(signature.outputNames).toEqual([]);
   expect(signature.declaredOutputs).toEqual([]);
-  const desc = new MapDescriptor({
-    id: "each",
-    call: "no-output",
-    over: "${input.topics}",
-    inputs: { topic: "${item}" },
-  });
+  const resolver = (flowId: string) => {
+    expect(flowId).toBe("no-output");
+    return child;
+  };
 
-  const error = loadError(() => desc.build(contextWith({ "no-output": child })));
+  const error = await loadErrorAsync(loadFlow(MAP_OVER_NO_OUTPUT, { childResolver: resolver }));
 
   expect(error.message).toBe(
     "map node 'each': callable 'no-output' must declare a non-empty `output:`; " +
@@ -270,27 +313,15 @@ test("a map child with no output is loud", () => {
   );
 });
 
-/** The `echo` def by hand: `maybe: !Optional(str)` in, returned as is. */
-const nullableEcho = () =>
-  handChild({ inputs: parametersFromYaml("input:\n  maybe: !Optional(str)\n", new Map()), output: "${input.maybe}" });
-
-test("a call over a nullable child input re-exports the nullable output", () => {
-  const echo = nullableEcho();
-  const desc = new CallDescriptor({ id: "invoke", call: "echo", inputs: { maybe: "${null}" } });
-
-  const contract = desc.build(contextWith({ echo })).node.outputContract as ValueContract;
-
-  expect(contract.type.kind).toBe(ValueKind.STRING);
-  expect(contract.type.nullable).toBe(true);
-});
-
-test("a call accepts a proven null for a nullable child input", () => {
-  // The binding check reads a proven null as fitting a nullable input, as the runtime coerces it.
-  const echo = nullableEcho();
-
-  const { flow } = assembleText(
-    `id: null-to-nullable-call
+const NULL_TO_NULLABLE_CALL = `
+id: null-to-nullable-call
 name: null_to_nullable_call
+defs:
+  echo:
+    input:
+      maybe: !Optional(str)
+    nodes: {}
+    output: \${input.maybe}
 nodes:
   invoke:
     kind: call
@@ -298,14 +329,33 @@ nodes:
     input:
       maybe: \${null}
 output: \${invoke.output}
-`,
-    "flow.yaml",
-    { children: { echo } },
-  );
+`;
 
-  const contract = flow.compiled.nodes.get("invoke")!.outputContract as ValueContract;
+test("a call accepts a proven null for a nullable child input", async () => {
+  // Static binding compatibility mirrors runtime nullable coercion.
+  const loaded = await loadFlow(NULL_TO_NULLABLE_CALL);
+
+  const contract = loaded.compiled.nodes.get("invoke")!.outputContract as ValueContract;
+  expect(contract).not.toBeNull();
   expect(contract.type.kind).toBe(ValueKind.STRING);
   expect(contract.type.nullable).toBe(true);
+});
+
+// ---------- a composed call or map needs a resolver ----------
+
+test("a call or map without a resolver is loud", async () => {
+  const error = await loadErrorAsync(loadFlow(caseText("load-map-call/seed_04_call").text));
+
+  expect(error.message).toBe(
+    "callable 'research-one' (uses: '03-research-one') needs a search path or child_resolver to resolve " +
+      "(load with search_paths=[...])",
+  );
+});
+
+test("a flow without calls loads without a resolver", async () => {
+  expect(await loadConformanceFlow(caseText("load-agent/seed_01_structured_agent").text)).toBeInstanceOf(
+    ComposedFlow,
+  );
 });
 
 test("a map over a partial child output leaves its contract unset", () => {
@@ -341,8 +391,5 @@ test("field labels name an inline call's argument and the call", () => {
 
 test.each<CaseRow>([
   { id: "load-map-call/engine_call_map__map_input_named_over_is_reserved", call: assembled },
-  {
-    id: "load-map-call/engine_call_map__call_accepts_proven_null_for_nullable_child_input",
-    call: assembledWith({ echo: nullableEcho() }),
-  },
+  { id: "load-map-call/engine_call_map__call_accepts_proven_null_for_nullable_child_input", call: assembled },
 ])("assemble: $id", runCase);

@@ -22,10 +22,8 @@
  * harvested case
  * `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`.
  *
- * Changed: the `child` and `bump` defs are built by hand (`handChild`: the def's parameters read
- * from its `input:` text, its typed node as a producer with its output contract), since def bodies
- * load in T3-22. The error rows pin the whole message, where Python matches a fragment. CODE
- * bodies are TS; load doesn't run them.
+ * Changed: the error rows pin the whole message, where Python matches a fragment. CODE bodies are
+ * TS; load doesn't run them.
  *
  * Not ported (decided by T3-17's inline inputs, not T3-19 rows; the run halves of the others are
  * T4's): `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
@@ -40,15 +38,12 @@ import { afterEach, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
-import { type Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import type { Parameter } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import { typeFor } from "../../src/typesys/types.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembledWith, assembleText, handChild, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
-
-const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
 
 const STRICT_CHILD = `defs:
   child:
@@ -64,13 +59,6 @@ const STRICT_CHILD = `defs:
           return inputs["x"] * 2n
     output: \${twice.output}
 `;
-
-/** The strict `child` def built by hand: input `x: !int`, one `twice: int` producer, returned. */
-const CHILD = handChild({
-  inputs: parametersFromYaml("input:\n  x: !int\n", new Map()),
-  producers: { twice: INT },
-  output: "${twice.output}",
-});
 
 /** A flow that calls the strict `child` with `x` bound as `binding`, after `producer`'s nodes. */
 function callFlow(binding: string, producer: string): string {
@@ -96,9 +84,8 @@ const INT_PRODUCER = "  i:\n    kind: code\n    output: int\n    code: |\n      
 /** An `opaque` CODE producer with no declared output that returns `value`. */
 const opaque = (value: string) => `  opaque:\n    kind: code\n    code: |\n      return ${value}\n`;
 
-/** Assemble `text` with `children` as its defs (default: the strict `child`). */
-const load = (text: string, children: Record<string, ComposedFlow> = { child: CHILD }) =>
-  assembleText(text, "flow.yaml", { children });
+/** Assemble `text`. */
+const load = (text: string) => assembleText(text);
 
 // ---------- CALL ----------
 
@@ -176,16 +163,8 @@ output: \${loop.output}
 `;
 }
 
-/** The `bump` def built by hand: input `n: <bodyInput>`, one `step: int` producer, returned as `n`. */
-const bump = (bodyInput = "!int") =>
-  handChild({
-    inputs: parametersFromYaml(`input:\n  n: ${bodyInput}\n`, new Map()),
-    producers: { step: INT },
-    output: { n: "${step.output}" },
-  });
-
 test("a declared seed type is checked against the body input", () => {
-  const error = loadError(() => load(loopFlow("!str ${opaque.output}", opaque("1n")), { bump: bump() }));
+  const error = loadError(() => load(loopFlow("!str ${opaque.output}", opaque("1n"))));
 
   expect(error.message).toBe("loop node 'loop': binding 'n' — child expects 'int', source is 'str'");
 });
@@ -193,9 +172,9 @@ test("a declared seed type is checked against the body input", () => {
 test("a declared seed type is compared with the returned field", () => {
   // The producer is untyped, so only the declaration gives the seed a type: the same seed written
   // without one loads. The body takes `n: Any`, so both the seed and the returned `int` fit its input.
-  load(loopFlow("${opaque.output}", opaque("1n"), "!Any"), { bump: bump("!Any") });
+  load(loopFlow("${opaque.output}", opaque("1n"), "!Any"));
 
-  const error = loadError(() => load(loopFlow("!str ${opaque.output}", opaque("1n"), "!Any"), { bump: bump("!Any") }));
+  const error = loadError(() => load(loopFlow("!str ${opaque.output}", opaque("1n"), "!Any")));
 
   expect(error.message).toBe(
     "loop node 'loop': carried field 'n' — body output is 'int', carried source is 'str' " +
@@ -204,14 +183,14 @@ test("a declared seed type is compared with the returned field", () => {
 });
 
 test("a declared seed type types an opaque producer (loads)", () => {
-  load(loopFlow("!int ${opaque.output}", opaque("1n")), { bump: bump() });
+  load(loopFlow("!int ${opaque.output}", opaque("1n")));
 });
 
 test.each([
   ["untyped", "${opaque.output}"],
   ["declared int", "!int ${opaque.output}"],
 ])("a declared seed type is checked on the loop node (loads): %s", (_name, seed) => {
-  load(loopFlow(seed, opaque('"1"')), { bump: bump() });
+  load(loopFlow(seed, opaque('"1"')));
 });
 
 // ---------- inline bodies ----------
@@ -286,6 +265,6 @@ output: \${loop.output}
 test.each([
   {
     id: "load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field",
-    call: assembledWith({ bump: bump("!Any") }),
+    call: assembled,
   },
-])("assembledWith: $id", runCase);
+])("assemble: $id", runCase);

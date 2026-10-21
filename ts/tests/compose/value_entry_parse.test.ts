@@ -18,7 +18,7 @@
  * The harvested `load-case/compose_value_entry_parse__*` cases are pinned at the end; each fails
  * at its first entry, so no stand-in is registered.
  *
- * Later (T3-22): `test_the_example_entry_loads`, which loads the example through `loadFlow`.
+ * Later (T4-8): `test_the_example_entry_loads`, which loads the example and runs it.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

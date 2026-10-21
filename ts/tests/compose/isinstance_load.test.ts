@@ -4,7 +4,7 @@
  *
  * Ported: `test_collect_isinstance_names`;
  * `test_an_inline_body_cannot_take_a_whole_value_isinstance_argument` (pinning the whole message);
- * `test_an_unknown_type_name_is_a_located_load_error` (12 of its 13 sites),
+ * `test_an_unknown_type_name_is_a_located_load_error`,
  * `test_a_flow_assert_error_is_located_by_its_own_assert`,
  * `test_list_is_not_an_isinstance_type_name`,
  * `test_isinstance_in_wait_until_is_a_located_load_error`,
@@ -15,21 +15,17 @@
  * `test_isinstance_in_a_searched_case_is_first_true_wins`, `test_isinstance_in_a_node_assert`,
  * `test_isinstance_in_flow_asserts_fills_start_and_end`, `test_isinstance_in_a_flow_output`,
  * `test_isinstance_in_a_loop_while_runs_several_iterations`,
- * `test_isinstance_in_defs_and_nested_inline_children` (the inline child),
+ * `test_isinstance_in_defs_and_nested_inline_children`,
  * `test_isinstance_in_a_map_per_item_input`, `test_isinstance_in_a_call_directive_argument`,
  * `test_isinstance_in_a_loop_seed_and_until` and `test_isinstance_in_a_case_on`; and
  * `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error` and
- * `test_isinstance_in_a_loop_nodes_asserts_is_a_load_error` (the node-assert check). A `defs:`
- * entry a row calls is a hand-built child (`handChild`) with the def's signature.
+ * `test_isinstance_in_a_loop_nodes_asserts_is_a_load_error` (the node-assert check); and, loaded
+ * with `loadFlow`, `test_a_parent_cannot_use_a_childs_typedef` and the load half of
+ * `test_a_uses_child_resolves_names_against_its_own_typedefs`.
  *
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
  * `isinstanceMembers` test is ported with the narrowing tests).
- *
- * Later (T3-22): the `defs child` site of `test_an_unknown_type_name_is_a_located_load_error` and
- * the `defs:` half of `test_isinstance_in_defs_and_nested_inline_children` (both need the child's
- * own assembly); `test_a_parent_cannot_use_a_childs_typedef` and
- * `test_a_uses_child_resolves_names_against_its_own_typedefs` (`uses:`).
  *
  * Later (T4): the run halves of the type-table rows above,
  * `test_a_failing_flow_input_assert_fails_at_start` and `test_a_run_that_used_isinstance_replays`.
@@ -39,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import {
   collectConstructorNames,
   collectIsinstanceNames,
@@ -48,22 +45,20 @@ import {
   resolveConstructorType,
   resolveIsinstanceType,
 } from "../../src/compose/helpers/isinstance_types.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
-import { Binding, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
 import {
   assembled,
-  assembledWith,
   assembleText,
   type CaseRow,
-  type ChildFlows,
-  handChild,
   loadError,
-  parametersFromYaml,
+  loadErrorAsync,
   runCase,
 } from "./declarations.ts";
 
@@ -185,6 +180,7 @@ const FLOW_REG = readTypedefs({
   Running: "Literal(running)",
 });
 const ORDER = typeFor("Order", FLOW_REG);
+const SELL = typeFor("Sell", FLOW_REG);
 const RUNNING = typeFor("Running", FLOW_REG);
 const OBJECT = typeFor("object", new Map());
 const BOOL = typeFor("bool", new Map());
@@ -225,9 +221,8 @@ function lineOf(text: string, marker: string): number {
 const errorLine = (error: { diagnostic: { frames: readonly { range: { startLine: number } }[] } }) =>
   error.diagnostic.frames.at(-1)!.range.startLine;
 
-/** Assemble `text` as the root flow, its `defs:` entries standing in as `children`; return its nodes. */
-const loadedNodes = (text: string, children: ChildFlows = {}) =>
-  assembleText(text, "flow.yaml", { children }).flow.compiled.nodes;
+/** Assemble `text` as the root flow; return its nodes. */
+const loadedNodes = (text: string) => assembleText(text).flow.compiled.nodes;
 
 /** Check that `node`'s type table holds exactly `expected`, in any order. */
 function expectTypes(node: Node | undefined, expected: Record<string, Type>): void {
@@ -239,16 +234,6 @@ function expectTypes(node: Node | undefined, expected: Record<string, Type>): vo
 /** Return the child flow nodes CALL node `node` was baked with. */
 const childNodes = (node: Node | undefined) => ((node as CallNode).child as CompiledFlow).nodes;
 
-/** A hand-built `defs:` child: START over the `input:` text, one producer `step`, END over it. */
-function def(inputs: string, step: Type | null): ComposedFlow {
-  return handChild({
-    inputs: parametersFromYaml(`input:\n${inputs}`, new Map()),
-    producers: { step: step === null ? null : new ValueContract(step) },
-    output: "${step.output}",
-  });
-}
-
-const record = (fields: Record<string, string>) => typeFor("Rec", readTypedefs({ Rec: fields }));
 
 const INPUT_FLOW = flow(`  check:
     kind: code
@@ -344,7 +329,6 @@ nodes:
     max: 10
 output: \${loop.output}
 `;
-const BUMP = { bump: def("  n: !int\n  status: !str\n", record({ n: "int", status: "str" })) };
 
 const CHILD_FLOWS =
   "id: p\nname: p\n" +
@@ -391,7 +375,6 @@ output:
   sell: \${named.output}
   buy: \${inline.output}
 `;
-const CLASSIFY = { classify: def("  order: !object\n", null) };
 
 const FLAG_DEF = `defs:
   flag:
@@ -406,7 +389,6 @@ const FLAG_DEF = `defs:
           return inputs["is_buy"]
     output: \${e.output}
 `;
-const FLAG = { flag: def("  is_buy: !bool\n", null) };
 
 const MAP_FLOW =
   "id: p\nname: p\n" +
@@ -468,7 +450,6 @@ nodes:
     max: 10
 output: \${loop.output}
 `;
-const BUMP_BUY = { bump: def("  n: !int\n  buy: !bool\n", record({ n: "int", buy: "bool" })) };
 
 const ON_FLOW = flow(`  route:
     kind: case
@@ -514,22 +495,23 @@ describe("type tables (load halves)", () => {
   });
 
   test("test_isinstance_in_a_loop_while_runs_several_iterations", () => {
-    expectTypes(loadedNodes(LOOP_FLOW, BUMP).get("loop"), { Running: RUNNING });
+    expectTypes(loadedNodes(LOOP_FLOW).get("loop"), { Running: RUNNING });
   });
 
-  test("test_isinstance_in_defs_and_nested_inline_children (the inline child)", () => {
-    const nodes = loadedNodes(CHILD_FLOWS, CLASSIFY);
+  test("test_isinstance_in_defs_and_nested_inline_children", () => {
+    const nodes = loadedNodes(CHILD_FLOWS);
+    expectTypes(childNodes(nodes.get("named")).get("inner"), { Sell: SELL });
     const outer = childNodes(nodes.get("inline")).get("outer");
     expectTypes(childNodes(outer).get("inner"), { Buy: BUY });
     expectTypes(nodes.get("inline"), {});
   });
 
   test("test_isinstance_in_a_map_per_item_input", () => {
-    expectTypes(loadedNodes(MAP_FLOW, FLAG).get("each"), { Buy: BUY });
+    expectTypes(loadedNodes(MAP_FLOW).get("each"), { Buy: BUY });
   });
 
   test("test_isinstance_in_a_call_directive_argument", () => {
-    const nodes = loadedNodes(CALL_ARG_FLOW, FLAG);
+    const nodes = loadedNodes(CALL_ARG_FLOW);
     const synths = [...nodes].filter(([nodeId]) => nodeId.startsWith("__call")).map(([, node]) => node);
     expect(synths).toHaveLength(1);
     expectTypes(synths[0], { Buy: BUY });
@@ -537,7 +519,7 @@ describe("type tables (load halves)", () => {
   });
 
   test("test_isinstance_in_a_loop_seed_and_until", () => {
-    expectTypes(loadedNodes(LOOP_SEED_FLOW, BUMP_BUY).get("loop"), { Buy: BUY, bool: BOOL });
+    expectTypes(loadedNodes(LOOP_SEED_FLOW).get("loop"), { Buy: BUY, bool: BOOL });
   });
 
   test("test_isinstance_in_a_case_on", () => {
@@ -575,30 +557,93 @@ output: \${c.output}
   expect(errorLine(error)).toBe(lineOf(text, "is_buy: ${isinstance"));
 });
 
+// ---------- `uses:` children ----------
+
+const USES_CHILD = `id: child
+name: child
+typedefs:
+  Ticket: {kind: 'Literal(ticket)', id: int}
+input:
+  value: !object
+nodes:
+  check:
+    kind: code
+    input:
+      ok: \${isinstance(input.value, Ticket)}
+    code: |
+      return inputs["ok"]
+output: \${check.output}
+`;
+
+const USES_PARENT = `id: parent
+name: parent
+input:
+  value: !object
+uses:
+  child: child
+nodes:
+  run:
+    kind: call
+    call: child
+    input:
+      value: \${input.value}
+output: \${run.output}
+`;
+
+/** A resolver over the loaded `USES_CHILD`; any other name is a load error. */
+async function usesResolver(): Promise<(flowId: string) => ComposedFlow> {
+  const loaded: Record<string, ComposedFlow> = { child: await loadFlow(USES_CHILD) };
+  return (flowId) => {
+    if (Object.hasOwn(loaded, flowId)) return loaded[flowId]!;
+    throw new LoadDiagnostics().error(`unknown child ${JSON.stringify(flowId)}`);
+  };
+}
+
+test("a uses child resolves names against its own typedefs (load half)", async () => {
+  const flow = await loadFlow(USES_PARENT, { childResolver: await usesResolver() });
+
+  const ticket = childNodes(flow.compiled.nodes.get("run")).get("check")!.types.get("Ticket")!;
+  expect(typeEquals(ticket.fields!.get("id")!, typeFor("int", new Map()))).toBe(true);
+});
+
+test("a parent cannot use a child's typedef", async () => {
+  const text = USES_PARENT.replace(
+    "      value: ${input.value}\n",
+    "      value: ${input.value}\n  probe:\n    kind: code\n    input:\n" +
+      "      ok: ${isinstance(input.value, Ticket)}\n    code: |\n      return 1\n",
+  );
+
+  const error = await loadErrorAsync(loadFlow(text, { childResolver: await usesResolver() }));
+
+  expect(error.message).toContain("unknown type 'Ticket'");
+  expect(errorLine(error)).toBe(lineOf(text, "isinstance(input.value, Ticket)"));
+});
+
 // ---------- located load errors ----------
 
 /** One site of an unknown type name: the flow, its written text, the misspelling, its line's marker. */
-const UNKNOWN_SITES: Record<string, [string, ChildFlows, string, string, string]> = {
-  "node input": [INPUT_FLOW, {}, "d.output, Buy", "Buyy", "ok:"],
-  "case when": [CASE_FLOW, {}, "d.output, Order", "Ordr", "Ordr"],
-  "node assert": [NODE_ASSERT_FLOW, {}, "output, Buy", "Bu", "isinstance(output, Bu)"],
-  "flow assert": [FLOW_ASSERT_FLOW, {}, "d.output, Buy", "Byu", "Byu"],
-  "flow output": [FLOW_OUTPUT_FLOW, {}, "d.output, Buy", "Bye", "is_buy:"],
-  "loop while": [LOOP_FLOW, BUMP, "status, Running", "Runing", "while:"],
-  "inline child": [CHILD_FLOWS, CLASSIFY, "input.order, Buy", "By", "is_buy:"],
-  "map per-item input": [MAP_FLOW, FLAG, "item, Buy", "Buyy", "is_buy: ${isinstance(item"],
-  "call argument": [CALL_ARG_FLOW, FLAG, "d.output, Buy", "Buyy", "res: call"],
-  "loop seed": [LOOP_SEED_FLOW, BUMP_BUY, "input.order, Buy", "Buyy", "buy: ${isinstance"],
-  "loop until": [LOOP_SEED_FLOW, BUMP_BUY, "buy, bool", "boo", "until:"],
-  "case on": [ON_FLOW, {}, "d.output, Buy", "Buyy", "on: ${isinstance"],
+const UNKNOWN_SITES: Record<string, [string, string, string, string]> = {
+  "node input": [INPUT_FLOW, "d.output, Buy", "Buyy", "ok:"],
+  "case when": [CASE_FLOW, "d.output, Order", "Ordr", "Ordr"],
+  "node assert": [NODE_ASSERT_FLOW, "output, Buy", "Bu", "isinstance(output, Bu)"],
+  "flow assert": [FLOW_ASSERT_FLOW, "d.output, Buy", "Byu", "Byu"],
+  "flow output": [FLOW_OUTPUT_FLOW, "d.output, Buy", "Bye", "is_buy:"],
+  "loop while": [LOOP_FLOW, "status, Running", "Runing", "while:"],
+  "defs child": [CHILD_FLOWS, "input.order, Sell", "Sel", "is_sell:"],
+  "inline child": [CHILD_FLOWS, "input.order, Buy", "By", "is_buy:"],
+  "map per-item input": [MAP_FLOW, "item, Buy", "Buyy", "is_buy: ${isinstance(item"],
+  "call argument": [CALL_ARG_FLOW, "d.output, Buy", "Buyy", "res: call"],
+  "loop seed": [LOOP_SEED_FLOW, "input.order, Buy", "Buyy", "buy: ${isinstance"],
+  "loop until": [LOOP_SEED_FLOW, "buy, bool", "boo", "until:"],
+  "case on": [ON_FLOW, "d.output, Buy", "Buyy", "on: ${isinstance"],
 };
 
 test.each(Object.keys(UNKNOWN_SITES).sort())("an unknown type name is a located load error: %s", (site) => {
-  const [source, children, written, name, marker] = UNKNOWN_SITES[site]!;
+  const [source, written, name, marker] = UNKNOWN_SITES[site]!;
   const text = source.replace(written, `${written.split(", ")[0]}, ${name}`);
   expect(text).not.toBe(source);
 
-  const error = loadError(() => loadedNodes(text, children));
+  const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toContain(`unknown type '${name}'`);
   expect(error.message).toContain("typedefs");
@@ -671,7 +716,7 @@ nodes:
 output: \${each.output}
 `;
 
-  const error = loadError(() => loadedNodes(text, { one: def("  x: !int\n", null) }));
+  const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toContain("isinstance is not supported in a map node's over:");
   expect(errorLine(error)).toBe(lineOf(text, "over:"));
@@ -680,7 +725,7 @@ output: \${each.output}
 test("isinstance in a call node's asserts is a located load error", () => {
   const text = CHILD_FLOWS.replace("    call: classify\n", "    call: classify\n    asserts:\n      - isinstance(output, bool)\n");
 
-  const error = loadError(() => loadedNodes(text, CLASSIFY));
+  const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toBe(
     "flow has invalid node asserts:\n" +
@@ -693,7 +738,7 @@ test("isinstance in a call node's asserts is a located load error", () => {
 test("isinstance in a loop node's asserts is a load error", () => {
   const text = LOOP_FLOW.replace("    max: 10\n", "    max: 10\n    asserts:\n      - isinstance(output, Buy)\n");
 
-  expect(loadError(() => loadedNodes(text, BUMP)).message).toBe(
+  expect(loadError(() => loadedNodes(text)).message).toBe(
     "flow has invalid node asserts:\n" +
       "  node 'loop' assert 'isinstance(output, Buy)': isinstance in a loop node's asserts is not " +
       "supported; assert inside the child flow",
@@ -752,13 +797,13 @@ test.each<CaseRow>([
   { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_a_flow_assert", call: assembled },
   { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_a_flow_output", call: assembled },
   // The inline body assembles through the harness's private-child registry.
-  { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_an_inline_body", call: assembledWith(CLASSIFY) },
+  { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_an_inline_body", call: assembled },
   { id: "load-types/compose_isinstance_load__isinstance_in_wait_until", call: assembled },
   { id: "load-types/compose_isinstance_load__isinstance_in_an_agent_prompt", call: assembled },
   {
     id: "load-types/compose_isinstance_load__isinstance_in_map_over",
-    call: assembledWith({ one: def("  x: !int\n", null) }),
+    call: assembled,
   },
-  { id: "load-types/compose_isinstance_load__isinstance_in_a_call_nodes_asserts", call: assembledWith(CLASSIFY) },
-  { id: "load-types/compose_isinstance_load__isinstance_in_a_loop_nodes_asserts", call: assembledWith(BUMP) },
+  { id: "load-types/compose_isinstance_load__isinstance_in_a_call_nodes_asserts", call: assembled },
+  { id: "load-types/compose_isinstance_load__isinstance_in_a_loop_nodes_asserts", call: assembled },
 ])("assemble: $id", runCase);

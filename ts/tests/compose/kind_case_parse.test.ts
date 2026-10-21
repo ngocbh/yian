@@ -38,13 +38,14 @@
  *
  * Dropped: `test_case_keeps_no_key_normalization` (Python class-dict introspection).
  *
- * Later (T4): the run half of
- * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T3-22, T4):
- * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T4):
- * `test_inline_definition_case_failure_keeps_child_predicate_origin`. Later (T3-22):
- * `test_external_alias_rebases_case_and_generated_binding_origins`,
- * `test_generated_child_clone_preserves_case_predicate_origins`,
+ * Ported through `loadFlow`: `test_external_alias_rebases_case_and_generated_binding_origins`,
+ * `test_generated_child_clone_preserves_case_predicate_origins` and
  * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`.
+ *
+ * Later (T4): the run half of
+ * `test_searched_case_origins_are_positional_and_select_the_failing_entry`. Later (T4-8):
+ * `test_named_definition_case_failure_keeps_child_predicate_origin`. Later (T4):
+ * `test_inline_definition_case_failure_keeps_child_predicate_origin`.
  *
  * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
  * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
@@ -56,15 +57,20 @@
 
 import { expect, test } from "bun:test";
 
+import { cloneChild } from "../../src/compile/expand.ts";
+import { flowFingerprint } from "../../src/compile/manifest.ts";
+import type { CompiledFlow, Flow } from "../../src/compile/model.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
-import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
+import { SourceCatalogBuilder, scopeOrigin } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
+import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
@@ -558,6 +564,75 @@ test("a lone surrogate in a searched when is refused at that when", () => {
   expect(error.message).toBe("node 'g' field 'cases[1].when': text holding a lone surrogate is not a yian value");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(
     readerFor(text, "g").child("cases").child(1).child("when").range!,
+  );
+});
+
+// ---------- loaded origins ----------
+
+/** The `__r0` binding of node `nodeId` in `flow`'s wiring. */
+const r0Of = (flow: Flow, nodeId: string) => flow.wiring.get(nodeId)!.get("__r0") as Binding;
+
+test("external alias rebases case and generated binding origins", async () => {
+  // An external view scopes CASE carriers without mutating its canonical child.
+  const child = await loadFlow(SEARCHED_ORIGIN_FLOW, { sourceLabel: "child-case.yaml" });
+  const parent = `id: parent-case-origin
+name: parent-case-origin
+nodes:
+  invoke:
+    kind: call
+    call: child_view
+output: \${invoke.output}
+uses:
+  child_view: child
+`;
+  const loaded = await loadFlow(parent, { childResolver: () => child });
+  const canonical = child.compiled.nodes.get("gate") as CaseNode;
+  const embeddedFlow = (loaded.compiled.nodes.get("invoke") as CallNode).child as CompiledFlow;
+  const embedded = embeddedFlow.nodes.get("gate") as CaseNode;
+
+  expect(embedded.cases.map((branch) => branch.origin)).toEqual(
+    canonical.cases.map((branch) => scopeOrigin("child_view", branch.origin!)),
+  );
+  expect(r0Of(embeddedFlow, "gate").origin).toEqual(scopeOrigin("child_view", r0Of(child.compiled, "gate").origin!));
+  const resolver = loaded.originResolver!;
+  const childResolver = child.originResolver!;
+  expect(resolver).not.toBeNull();
+  expect(childResolver).not.toBeNull();
+  expect(embedded.cases.map((branch) => resolver.resolve(branch.origin!))).toEqual(
+    canonical.cases.map((branch) => childResolver.resolve(branch.origin!)),
+  );
+});
+
+test("generated child clone preserves case predicate origins", async () => {
+  // CALL cloning keeps ordered CASE sites and generated binding provenance.
+  const loaded = await loadFlow(SEARCHED_ORIGIN_FLOW);
+  const original = loaded.compiled.nodes.get("gate") as CaseNode;
+
+  const cloned = cloneChild(loaded.compiled, "invoke", {});
+  const generated = cloned.nodes.get("invoke/gate") as CaseNode;
+
+  expect(generated).not.toBe(original);
+  expect(generated.cases.map((branch) => branch.origin)).toEqual(original.cases.map((branch) => branch.origin));
+  expect(r0Of(cloned, "invoke/gate").origin).toEqual(r0Of(loaded.compiled, "gate").origin);
+});
+
+test("formatting moves case ranges without changing keys or fingerprint", async () => {
+  // Semantic CASE identities survive comments while resolution follows the text.
+  const moved = SEARCHED_ORIGIN_FLOW.replace(
+    "  gate:\n    kind: case\n",
+    "  # Formatting-only comments move the CASE.\n  gate:\n    kind: case\n",
+  ).replace("    cases:\n", "    # The ordered predicates keep their semantic indices.\n    cases:\n");
+  const baseline = await loadFlow(SEARCHED_ORIGIN_FLOW);
+  const relocated = await loadFlow(moved);
+  const baselineOrigins = (baseline.compiled.nodes.get("gate") as CaseNode).cases.map((branch) => branch.origin!);
+  const relocatedOrigins = (relocated.compiled.nodes.get("gate") as CaseNode).cases.map((branch) => branch.origin!);
+
+  expect(relocatedOrigins).toEqual(baselineOrigins);
+  expect(flowFingerprint(relocated.compiled)).toBe(flowFingerprint(baseline.compiled));
+  expect(baseline.originResolver).not.toBeNull();
+  expect(relocated.originResolver).not.toBeNull();
+  expect(baselineOrigins.map((origin) => baseline.originResolver!.resolve(origin)!.range)).not.toEqual(
+    relocatedOrigins.map((origin) => relocated.originResolver!.resolve(origin)!.range),
   );
 });
 

@@ -17,8 +17,8 @@
  * TS-only: `build` passes the context's `baseDir`, the descriptor's code origins and its title to
  * the node, and compiles nothing; `checkFlowCode` reaches a CODE node inside a child flow.
  *
- * Held here until T3-22: the harvested cases at the end, whose error the CODE parse raises, each
- * under a comment naming the Python file it comes from, and the flows that assemble.
+ * Pinned at the end: the harvested cases whose error the CODE parse raises, each under a comment
+ * naming the Python file it comes from, and the flows that assemble.
  */
 
 import { expect, test } from "bun:test";
@@ -221,9 +221,10 @@ output: \${invoke.output}
 });
 
 // ---------- harvested conformance cases ----------
-// Later (T3-22, T4-8): `load-leaves/seed_e30_inline_syntax_error`, `load-leaves/seed_e32_malformed_code_ref`
-// and `load-leaves/compose_kind_code_parse__quoted_body_syntax_error_frames_the_whole_scalar`,
-// whose errors come from compiling the CODE body.
+// Covered by the conformance cases `load-leaves/seed_e30_inline_syntax_error`,
+// `load-leaves/seed_e32_malformed_code_ref` and
+// `load-leaves/compose_kind_code_parse__quoted_body_syntax_error_frames_the_whole_scalar`, whose
+// errors come from compiling the CODE body, which the runner's `load` kind runs.
 
 test.each<CaseRow>([
   // tests/seeds/errors/

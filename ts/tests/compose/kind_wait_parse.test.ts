@@ -8,8 +8,8 @@
  * timestamp as text, so it is checked as text and bound as written, where Python bound the
  * timestamp it read in `isoformat()` spelling. `build` passes the title to the node.
  *
- * Held here until T3-22: the harvested cases at the end, whose error the WAIT parse raises, each
- * under a comment naming the Python file it comes from; the last,
+ * Pinned at the end: the harvested cases whose error the WAIT parse raises, each under a comment
+ * naming the Python file it comes from; the last,
  * `load-leaves/compose_map_wait_source_types__literal_until_check_in_an_inline_body`, whose WAIT
  * sits in an inline `call` body, through `assembled`.
  */

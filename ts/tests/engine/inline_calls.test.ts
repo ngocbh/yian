@@ -13,9 +13,11 @@
  * `load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected` is
  * pinned at the end too.
  *
- * Later (T3-22): `test_inline_call_resolves_through_external_resolver` (`uses:` and a child
- * resolver), `test_inline_call_inside_defs_body_runs` (a `defs:` body) and
- * `test_inline_call_unknown_callee_is_loud` (`defs:` resolution of an unknown callee).
+ * Ported through `loadFlow` (the fixture CODE references resolve against the conformance dir):
+ * the load halves of `test_inline_call_resolves_through_external_resolver` (its resolver also
+ * loads the external flow) and `test_inline_call_inside_defs_body_runs` (the def's synth call is
+ * read off the baked child), and `test_inline_call_unknown_callee_is_loud`, which pins the whole
+ * message where Python matches fragments.
  * Later (T4): the run half of every load-and-run row.
  *
  * The origin rows locate each synth call node and its argument bindings at the authored binding
@@ -51,7 +53,9 @@ import {
   assembleText,
   type CaseRow,
   handChild,
+  loadConformanceFlow,
   loadError,
+  loadErrorAsync,
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
@@ -270,6 +274,115 @@ nodes:
 output: call(enrich, topic=\${seed.output})
 `);
   expect(callees(compiled)).toEqual({ __call_0: "enrich" });
+});
+
+test("inline call resolves through external resolver", async () => {
+  const external = `
+id: ext_flow
+name: ext_flow
+input:
+  topic: !str
+nodes:
+  x:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: \${input.topic}
+    output: str
+output: \${x.output}
+`;
+  const text = `
+id: ic_ext
+name: ic_ext
+input:
+  topic: !str
+uses:
+  ext_flow: ext_flow
+nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(ext_flow, topic=\${input.topic})
+    output: str
+output: \${use.output}
+`;
+  const asked: string[] = [];
+  const loaded = await loadConformanceFlow(text, {
+    childResolver: (flowId) => {
+      asked.push(flowId);
+      return loadConformanceFlow(external);
+    },
+  });
+  expect(asked).toEqual(["ext_flow"]);
+  expect(callees(loaded.compiled)).toEqual({ __call_0: "ext_flow" });
+});
+
+test("inline call inside defs body loads", async () => {
+  // The desugar runs for def bodies too (shared assembly); the def's synth ids live in their own
+  // namespace. Here `enrich`'s own node hosts an inline call to `helper`.
+  const text = `
+id: ic_defbody
+name: ic_defbody
+input:
+  topic: !str
+defs:
+  helper:
+    input:
+      topic: !str
+    nodes:
+      x:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: \${input.topic}
+        output: str
+    output: \${x.output}
+  enrich:
+    input:
+      topic: !str
+    nodes:
+      y:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          topic: call(helper, topic=\${input.topic})
+        output: str
+    output: \${y.output}
+nodes:
+  go:
+    kind: call
+    call: enrich
+    input:
+      topic: \${input.topic}
+output: \${go.output}
+`;
+  const { compiled } = await loadConformanceFlow(text);
+  expect(callees(compiled)).toEqual({ go: "enrich" });
+  const enrich = (compiled.nodes.get("go") as CallNode).child as ReturnType<typeof load>;
+  expect(callees(enrich)).toEqual({ __call_0: "helper" });
+});
+
+test("inline call unknown callee is loud", async () => {
+  const text = `
+id: ic_unk
+name: ic_unk
+input:
+  topic: !str
+nodes:
+  use:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: call(nope, x=\${input.topic})
+    output: str
+output: \${use.output}
+`;
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toBe(
+    "callable 'nope' is neither an in-file defs: callable nor a uses: alias — external flows are reachable " +
+      "only through a uses: alias (declare `uses: {nope: <ref>}`)",
+  );
 });
 
 // ---------- guards: `${item}` capture, the reserved synth-id prefix, a malformed call ----------

@@ -22,19 +22,34 @@
  * `["limit"]` for `("limit", "zz")`). The value check's own error, the `cause`, keeps the field in
  * its path and message.
  *
- * Later (T4-8), they load and run a flow:
- * `test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields` and
- * `test_agent_union_output_with_an_unknown_tag_fails_the_agent`.
+ * Ported through `runFlow`, with the model config as the run's `llmConfig`:
+ * `test_agent_union_output_with_an_unknown_tag_fails_the_agent` and the `sell` and `hold` rows of
+ * `test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields`. Changed: the
+ * `sell` row's `2 * 1.5` stays the int `3n` (a `float` slot only checks); the unknown tag fails
+ * with `agent.output_invalid` (Python: `node.execute`) and TS's message, which names the tag
+ * field and the members' tags (Python's names pydantic's `literal_error`).
+ *
+ * Covered by `run-agent/engine_structured_union__an_agent_union_output_routes_a_case`, the
+ * harvested `buy` row of `test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields`
+ * (the same flow, reply and output).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { generateStructured, OutputInvalidError } from "../../src/nodes/agent/structured.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError } from "../../src/typesys/values.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { serving } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -173,4 +188,93 @@ test("test_untagged_union_with_no_match_maps_to_the_union_position", async () =>
 test("test_untagged_union_reply_returns_the_matching_member", async () => {
   const model = replies('{"value": {"name": "lookup", "input": {"q": 1}}}');
   expect(await generateStructured(model, [], t("Union(Text, Call)"))).toEqual({ name: "lookup", input: { q: 1n } });
+});
+
+// ---------- an AGENT with a union output, through the runner ----------
+
+const AGENT_FLOW = `
+id: decide
+name: decide
+typedefs:
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Hold: {action: 'Literal(hold)', note: str}
+  Decision: Union(Buy, Sell, Hold)
+nodes:
+  a:
+    kind: agent
+    prompt: decide a trade
+    output: Decision
+  route:
+    kind: case
+    on: \${a.output.action}
+    cases:
+      - when: buy
+        then: place_buy
+      - when: sell
+        then: place_sell
+    else: log_hold
+  place_buy:
+    kind: code
+    input:
+      qty: \${a.output.qty}
+    code: |
+      return "buy " + str(inputs["qty"])
+    output: str
+  place_sell:
+    kind: code
+    input:
+      qty: \${a.output.qty}
+      price: \${a.output.price}
+    code: |
+      return inputs["qty"] * inputs["price"]
+    output: float
+  log_hold:
+    kind: code
+    input:
+      note: \${a.output.note}
+    code: |
+      return "hold: " + inputs["note"]
+    output: str
+output:
+  decision: \${a.output}
+  trade: \${place_buy.output | place_sell.output | log_hold.output}
+`;
+
+const dir = mkdtempSync(join(tmpdir(), "yian-structured-union-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Run `AGENT_FLOW` with `a` answering `decision` to every request. */
+async function runDecision(decision: string): Promise<[ScriptedModel, Awaited<ReturnType<typeof runFlow>>]> {
+  const model = replies(`{"value": ${decision}}`, 10);
+  const result = await runFlow(await loadFlow(AGENT_FLOW), {}, {
+    llmConfig: NATIVE,
+    models: serving(model),
+    env: hostEnv(dir),
+  });
+  return [model, result];
+}
+
+describe("test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields", () => {
+  test.each([
+    ['{"action": "sell", "qty": 2, "price": 1.5}', { action: "sell", qty: 2n, price: 1.5 }, 3n],
+    ['{"action": "hold", "note": "wait"}', { action: "hold", note: "wait" }, "hold: wait"],
+  ])("%s", async (reply, decision, trade) => {
+    const [model, result] = await runDecision(reply);
+    expect(result.failure).toBeNull();
+    expect(result.output).toEqual({ decision, trade });
+    expect(model.requests).toHaveLength(1);
+  });
+});
+
+test("test_agent_union_output_with_an_unknown_tag_fails_the_agent", async () => {
+  const [, result] = await runDecision('{"action": "wait"}');
+  expect(result.status).toBe("failed");
+  const failure = result.failure!;
+  expect([failure.nodeId, failure.code]).toEqual(["a", "agent.output_invalid"]);
+  expect(failure.message).toBe(
+    'structured output at action: "wait" is not a tag of the union (expected one of ["buy","hold","sell"])',
+  );
+  // The unknown tag maps to the union's tag field; a typedef output locates it at the contract.
+  expect(failure.trace.map((origin) => origin.key)).toEqual(["/s:root/s:node/s:a/s:output/s:contract/s:root"]);
 });

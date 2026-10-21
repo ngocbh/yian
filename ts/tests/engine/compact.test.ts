@@ -11,12 +11,20 @@
  * compiled-nodes check of `test_full_form_flow_id_may_keep_hyphens` loads the flow
  * (`loadConformanceFlow`, its CODE reference TS's `./fixtures/compose_codefns.ts:echo`).
  *
- * Later (T4-8): `test_compact_code_runs`, `test_compact_record_output_runs`, which run flows.
+ * Ported through `runFlow`: `test_compact_record_output_runs` (its CODE reference TS's
+ * `./fixtures/compose_codefns.ts:make_plan`).
+ *
+ * Covered by `run-core/engine_compact__compact_code_runs`, the harvested
+ * `test_compact_code_runs` (the same flow and input, succeeding with `ACME`).
  *
  * The harvested cases whose error `parseFile` raises are pinned at the end, with
  * `load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling` (from
  * `tests/compose/test_tagged_inputs.py`).
  */
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -25,7 +33,9 @@ import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compo
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
+import { runFlow } from "../../src/run.ts";
 import { fileOf, loadConformanceFlow, loadError, runTextCase } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 
 afterEach(() => forget());
 
@@ -201,6 +211,28 @@ output: \${greet.output}
   expect(f.id).toBe("hello-agent");
   expect(Object.keys(f.nodes)).toEqual(["greet"]);
   expect((await loadConformanceFlow(text)).compiled.nodes.has("greet")).toBe(true);
+});
+
+test("a compact record output runs", async () => {
+  const flow = await loadConformanceFlow(`
+id: plan
+name: plan
+input:
+  topic: !str
+output:
+  rating: str
+  score: float
+kind: code
+code: ./fixtures/compose_codefns.ts:make_plan
+`);
+  const dir = mkdtempSync(join(tmpdir(), "yian-compact-"));
+  try {
+    const result = await runFlow(flow, { topic: "ACME" }, { env: hostEnv(dir) });
+    expect(result.failure).toBeNull();
+    expect(result.output).toEqual({ rating: "plan for ACME", score: 0.9 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test.each([

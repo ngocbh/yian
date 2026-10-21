@@ -18,21 +18,26 @@
  * - ints are `bigint`s (the child's value is `80n`), and the budget is `BUILTIN.maxTotalNodes`
  *   (Python's `Defaults()`).
  *
- * Later (T4-8): needs `resumeFlow`: `test_deep_static_call_map_chain_resumes_after_its_last_expansion`.
+ * Ported, through `runFlow` and `resumeFlow` in an environment holding only a credential store
+ * path in a fresh directory: `test_deep_static_call_map_chain_resumes_after_its_last_expansion`.
  */
 
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildGrow, rensInternal } from "../../src/compile/expand.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN } from "../../src/defaults.ts";
-import { RunFailed, RunSucceeded } from "../../src/events.ts";
+import { NodeStarted, RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { childFlow, engine, intParameter, parentWithSpawner } from "./run_state_fixtures.ts";
 
@@ -190,6 +195,34 @@ test.each([0, 4])("deep static CALL/MAP chain loads and succeeds (%p workers)", 
   expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
   expect((events.at(-1) as RunSucceeded).output).toEqual(DEEP_OUTPUT);
   expect(Math.max(...built.state.depth.values())).toBe(DEEP_LEVELS);
+});
+
+test("deep static CALL/MAP chain resumes after its last expansion", async () => {
+  // Record replay re-validates every recorded growth (depth included): cut the deep run's log right
+  // after its last `node_expanded` record, so resume must replay all 8 expansions and then run the
+  // deepest leaf fresh.
+  const dir = mkdtempSync(join(tmpdir(), "yian-expand-"));
+  const env = (name: string) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
+  try {
+    const source = mixedChainSource(DEEP_LEVELS);
+    const path = join(dir, "deep.jsonl");
+    const first = await runFlow(await loadFlow(source), { v: "go" }, { log: path, numWorkers: 0, env });
+    expect(first.failure).toBeNull();
+    const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
+    const expanded = lines.flatMap((line, index) => (JSON.parse(line).kind === "node_expanded" ? [index] : []));
+    expect(expanded).toHaveLength(DEEP_LEVELS);
+    writeFileSync(path, `${lines.slice(0, expanded.at(-1)! + 1).join("\n")}\n`);
+
+    const resumed = await resumeFlow(await loadFlow(source), { log: path, env });
+
+    expect(resumed.failure).toBeNull();
+    expect(resumed.output).toEqual(DEEP_OUTPUT);
+    const started = resumed.events.flatMap((event) => (event instanceof NodeStarted ? [event.nodeId] : []));
+    // The leaf ran after replay.
+    expect(started.some((nodeId) => nodeId.endsWith("/e"))).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /**

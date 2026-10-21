@@ -16,10 +16,10 @@
  * (`buildGrow` refuses an AGENT), pinning the whole message where Python matches a fragment.
  * Ported (adapted): `test_final_log_only_runtime_and_public_surface`: the retired events, `Pause`,
  * engine methods and `resumeCommand` are absent; `FlowEngine` isn't on the package root; the
- * `runFlow` parameter row checks `RunFlowOptions`'s keys (TS-only: `signal`, `env`, `scheduler`,
- * `random`, `models`) and the `RunResult` row its own fields and getters (TS-only:
- * `interruptedAttempts`; `_backward_handle` is a private field).
- * Later (T4-8): that test's `resume_flow` row.
+ * `run_flow` and `resume_flow` parameter rows check `RunFlowOptions`'s and `ResumeFlowOptions`'s
+ * keys (TS-only: `signal`, `env`, `scheduler`, `random`, `models`, and the `@internal`
+ * `checkLlmConfigs` of Python's `_resume_flow_controlled`) and the `RunResult` row its own fields
+ * and getters (TS-only: `interruptedAttempts`; `_backward_handle` is a private field).
  *
  * TS-only: the package root (`index.ts`) exports exactly its documented root list plus the memory
  * storage names and `ToolAttemptsFailed`, each the owning module's export, and `yian/run`
@@ -134,6 +134,27 @@ test("only the final log-only runtime and run API remain", () => {
   };
   expect(Object.keys(options)).toHaveLength(17);
   expect(run.runFlow.length).toBe(2);
+  const resumeOptions: Record<keyof run.ResumeFlowOptions, true> = {
+    log: true,
+    numWorkers: true,
+    onEvent: true,
+    onStream: true,
+    memory: true,
+    tools: true,
+    skills: true,
+    steering: true,
+    apiKey: true,
+    headers: true,
+    context: true,
+    signal: true,
+    env: true,
+    scheduler: true,
+    random: true,
+    models: true,
+    checkLlmConfigs: true,
+  };
+  expect(Object.keys(resumeOptions)).toHaveLength(17);
+  expect(run.resumeFlow.length).toBe(2);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
   expect(Object.keys(result)).toEqual([
@@ -156,6 +177,7 @@ test("the package root exports exactly its documented root list plus the memory 
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
+    resumeFlow: run.resumeFlow,
     buildMemories,
     MemoryRegistry,
     SQLiteStorage,

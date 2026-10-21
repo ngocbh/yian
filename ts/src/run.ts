@@ -2,14 +2,16 @@
  * The package-root run boundary over one authoritative append-only log.
  *
  * `runFlow` initializes a private copy of a loaded flow, commits its complete canonical start
- * state, and drives only post-durable observer notifications.
+ * state, and drives only post-durable observer notifications. `resumeFlow` replays a durable log
+ * silently onto a private copy and drives the unfinished rest the same way.
  *
  * The runtime borrows an already-open log. This module owns log creation and closure after the
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow` and `RunResult`, and
- * re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering` (`nodes/base.ts`).
+ * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `resumeFlow` and
+ * `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering`
+ * (`nodes/base.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -28,6 +30,7 @@ import {
   bindHostCredentials,
   callTimeSelection,
   hostKeyProviders,
+  inFlightLlmConfigs,
   knownCallTimeProviders,
   resolveRunLlm,
   type RunLLM,
@@ -47,7 +50,7 @@ import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
-import { current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
+import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
@@ -63,6 +66,7 @@ import {
   HOST_KEY_MARKER,
   headerNameDiff,
   legacyConnectionConfig,
+  legacyConnectionMap,
   refusedBlock,
   type SelectionRecord,
   splitModelConfig,
@@ -75,18 +79,36 @@ import {
   MemorySetupError,
   type MemorySpec,
   type MemoryStack,
+  sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
 import type { Node, Steering } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
-import { type HostToolCall, isExactly, iterSourceStrings, type Parameter } from "./nodes/contracts.ts";
+import {
+  type HostToolCall,
+  isExactly,
+  iterSourceStrings,
+  type OutputContract,
+  type Parameter,
+  sameItems,
+  sameOptional,
+} from "./nodes/contracts.ts";
 import { realScheduler, type Scheduler } from "./platform.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
-import { FlowEngine } from "./runtime/engine.ts";
+import { FlowEngine, resumedAttemptEvents } from "./runtime/engine.ts";
 import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
-import { JsonlRunLog, MemoryRunLog, type RunLog } from "./runtime/log.ts";
+import {
+  decodeRecord,
+  encodeRecord,
+  JsonlRunLog,
+  MemoryRunLog,
+  type RecordEnvelope,
+  type RunLog,
+  type RunResumedRecord,
+  RunStartedRecord,
+} from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
-import { commitPrepared, prepareRunStarted, RunState } from "./runtime/state.ts";
+import { commitPrepared, prepareRunResumed, prepareRunStarted, RunState, replayRecords } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
@@ -117,7 +139,7 @@ export type EventHook = (event: RunEvent) => unknown;
 export type StreamHook = (chunk: StreamChunk) => unknown;
 
 /**
- * The terminal, surface-independent result of a fresh run.
+ * The terminal, surface-independent result of a run.
  *
  * `events` holds only the observers committed during this call.
  */
@@ -128,7 +150,7 @@ export class RunResult {
   readonly status: "succeeded" | "failed";
   /** The durable identity shared by the state and its run log. */
   readonly runId: string;
-  /** The JSONL log path as given to `runFlow`, or `null` for a process-local run. */
+  /** The JSONL log path as given to `runFlow` or `resumeFlow`, or `null` for a process-local run. */
   readonly log: string | null;
   /** The terminal flow value on success; otherwise `null`. */
   readonly output: unknown;
@@ -323,7 +345,7 @@ export async function runFlow(
  * @throws TypeError when `scheduler` lacks `now` or `sleep`, `random` isn't a function, or
  *   `models` lacks `env` or `createModel`.
  */
-function checkTestOptions(options: RunFlowOptions): void {
+function checkTestOptions(options: Pick<RunFlowOptions, "scheduler" | "random" | "models">): void {
   const { scheduler = null, random = null, models = null } = options;
   if (
     scheduler !== null &&
@@ -682,6 +704,220 @@ async function startRun(
 }
 
 /**
+ * @internal A check of the recorded model configs before a resume appends anything (the CLI's
+ * credential check). It gets a copy of the recorded effective map plus each started call-time
+ * agent's recorded config keyed by its node id (old OpenAI records adapted to their legacy
+ * connection), and as `callTimeHost` the host key the call-time agents' selection names. A throw,
+ * or a rejection of the promise it returns, stops the resume and appends nothing.
+ */
+export type LlmConfigsCheck = (
+  configs: Record<string, AgentConfig>,
+  options: { callTimeHost: Record<string, unknown> | null },
+) => unknown;
+
+/** The options of one `resumeFlow` call. */
+export interface ResumeFlowOptions {
+  /** The existing JSONL run log to lock, repair to its last complete line, check and replay. */
+  log: string;
+  /**
+   * The non-negative worker bound of the new segment; `null` (the default) keeps the last recorded
+   * one.
+   */
+  numWorkers?: number | null;
+  /**
+   * Sees each observer committed by this call only, plus the transient in-loop AGENT events; the
+   * replayed history and a finished log publish nothing. Called as `runFlow`'s is.
+   */
+  onEvent?: EventHook | null;
+  /** Sees each new transient stream chunk; chunks are never replayed. */
+  onStream?: StreamHook | null;
+  /**
+   * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Required when
+   * the run recorded memory and has unfinished work; a finished log opens no memory.
+   */
+  memory?: ReadonlyMap<string, Memory> | null;
+  /**
+   * The tools the resumed segment sees, with `runFlow`'s rules. Tools are not recorded, so pass the
+   * ones the run used (`ask_user` included). An unopened `McpServer` is opened only when the run is
+   * unfinished, after the log is replayed, and closed when the resume ends; a finished log opens
+   * none.
+   */
+  tools?: Readonly<Record<string, ToolEntry>> | null;
+  /** The skills the run was given; an unfinished run of a flow that grants skills needs them. */
+  skills?: ReadonlyMap<string, Skill> | null;
+  /** The host inbox for AGENT nodes authored `steerable: true`. */
+  steering?: Steering | null;
+  /**
+   * The provider key of a run started with `llmConfig.api_key`, for the agents the log marks for it
+   * (and a call-time agent resolving to its provider); never recorded. A log that marks no agent
+   * ignores it.
+   */
+  apiKey?: string | null;
+  /**
+   * The header values a run started with `llmConfig.headers` sent with its key; their names must
+   * be the recorded ones, compared without case. Never recorded; a log that marks no agent ignores
+   * them.
+   */
+  headers?: Readonly<Record<string, string>> | null;
+  /** The host's app object a tool receives as `ctx.context`; the log doesn't hold it. */
+  context?: unknown;
+  /**
+   * The host's stop: aborting it stops the resumed segment, which rejects with its reason. An
+   * already-aborted signal rejects before the log is locked.
+   */
+  signal?: AbortSignal | null;
+  /** The environment, as `runFlow`'s `env`; the run's recorded `YIAN_*` values must match it. */
+  env?: Env | null;
+  /** For tests: as `runFlow`'s `scheduler`. */
+  scheduler?: Scheduler | null;
+  /** For tests: as `runFlow`'s `random`. */
+  random?: (() => number) | null;
+  /** For tests: as `runFlow`'s `models`. */
+  models?: ModelAccess | null;
+  /** @internal See `LlmConfigsCheck`; not called for a finished log. */
+  checkLlmConfigs?: LlmConfigsCheck | null;
+}
+
+/**
+ * Recover a durable run, or read a finished one, without backward work.
+ *
+ * The recorded history is replayed silently on a private copy of `flow`; recovery never reads the
+ * ambient model defaults, mints a new identity or takes new inputs or configuration. A finished
+ * log returns its result with no events, opening no server and no memory. Otherwise the starts
+ * the log left unfinished are retried first, in their recorded order, after one `RunResumed`
+ * observer and one `NodeAttemptResumed` per retried node.
+ *
+ * @param flow The loaded flow whose fingerprint must match the log's `RunStarted`.
+ * @param options See `ResumeFlowOptions`.
+ * @returns The recorded terminal result, or the terminal result of the resumed segment with its
+ *   post-durable observers.
+ * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, a `tools`
+ *   entry is malformed, `skills`, `steering`, `scheduler`, `random` or `models` is malformed, a
+ *   worker count isn't an integer, or a recorded carrier has the wrong type.
+ * @throws ExpressionError as `runFlow`, for an unfinished run.
+ * @throws RangeError when the log's prefix is invalid, the flow fingerprint differs, the worker
+ *   count is negative, `apiKey` or `headers` is refused or their header names aren't the recorded
+ *   ones (the message never echoes a value), a recorded agent config has an invalid field, the
+ *   recorded memory table doesn't match the flow, or, for an unfinished run, a tool or skill
+ *   check of `runFlow` fails or a `tools` server was opened by another run in progress.
+ * @throws MemorySetupError when the run recorded memory and has unfinished work, and `memory` is
+ *   missing, lacks a key, is a `MemoryRegistry` built for another flow, or can't reproduce the
+ *   recorded snapshots.
+ * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
+ * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
+ * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
+ * @throws The signal's reason when it aborts.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist, and the lock, repair, append, sync or
+ *   close error of the log.
+ */
+export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions): Promise<RunResult> {
+  // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
+  // here, before the log is opened.
+  return withEnv(options.env ?? processEnv, async () => {
+    current();
+    const { log, tools = null, steering = null, context, signal = null } = options;
+    if (!(flow instanceof ComposedFlow)) throw new TypeError("resumeFlow expects a ComposedFlow");
+    if (signal !== null && !(signal instanceof AbortSignal)) {
+      throw new TypeError("signal must be an AbortSignal or null");
+    }
+    signal?.throwIfAborted();
+    const [otherTools, unopened] = splitRunServers(tools);
+    // The other entries' errors come before the log is opened.
+    new ToolSet(otherTools, { context });
+    const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
+    let apiKey = rawKey === null ? null : secretKey(rawKey);
+    let headers = rawHeaders === null ? null : secretHeaders(rawHeaders);
+    requireSteering(steering);
+    checkTestOptions(options);
+    const authority = JsonlRunLog.resume(resolve(log));
+    let memoryRuntime: MemoryRuntime | null = null;
+    let runServers: McpServer[] = [];
+    let primary: { error: unknown } | null = null;
+    try {
+      const state = replayRunLog(flow, authority, { apiKey, headers });
+      const callTime = state.callTimeLlm as CallTimeLlm | null;
+      if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
+        apiKey = null;
+        headers = null;
+      } else if (apiKey !== null || headers !== null) {
+        // Checked before the terminal return too, since a later backward call sends them.
+        checkHostHeaderNames(state.effectiveLlmByStaticPath, headers, callTime);
+      }
+      if (state.result !== null) return resultFromState(state, log, []);
+      // The checks that need no tools come before any server starts.
+      checkConditions(flow.compiled);
+      checkTemplates(flow.compiled);
+      const skills = checkSkills(flow.compiled, options.skills ?? null);
+      // A started call-time agent resumes with the config it recorded; one not yet started is
+      // checked when it resolves.
+      const inFlight = inFlightLlmConfigs(state.flow.nodes, state.nodeSteps);
+      const recordedLlm = { ...state.effectiveLlmByStaticPath, ...inFlight };
+      checkRecordedLlmFields(
+        recordedLlm,
+        staticAgentLabels(flow.compiled),
+        staticPathKeys(state.flow.nodes, Object.keys(inFlight)),
+      );
+      if (options.checkLlmConfigs != null) {
+        await options.checkLlmConfigs(legacyConnectionMap(recordedLlm), { callTimeHost: selectionHost(callTime) });
+      }
+      const memory = options.memory ?? null;
+      if (state.memories !== null && memory === null) {
+        throw new MemorySetupError("resuming this run requires its enabled memory mapping");
+      }
+      runServers = await openRunServers(unopened, signal);
+      const runTools = new ToolSet(tools, { context });
+      checkToolGrants(flow.compiled, runTools);
+      checkToolTypes(flow.compiled, runTools);
+
+      if (state.memories !== null) {
+        checkRegistryTypes(memory!, state.memories);
+        const authored = resolveAuthoredMemoryLayout(flow);
+        checkRecordedMemoryTable(state.memories, state.memoryStacks, authored.memories, authored.stacks, "supplied flow");
+        memoryRuntime = await MemoryRuntime.open({
+          memories: state.memories,
+          origins: authored.origins,
+          memory: memory!,
+          snapshots: state.memorySnapshots,
+        });
+      }
+
+      const numWorkers = options.numWorkers ?? state.numWorkers;
+      const prepared = prepareRunResumed(state, { numWorkers });
+      const observers = commitPrepared(authority, state, prepared);
+      const runtime = memoryRuntime;
+      const env = options.env ?? processEnv;
+      // Built before publishing so a callback's rejected promise can stop it.
+      const engine = new FlowEngine(state, authority, {
+        growBuilder: buildGrow,
+        numWorkers,
+        onEvent: options.onEvent ?? null,
+        onStream: options.onStream ?? null,
+        memoryContextOpener:
+          runtime === null ? null : (scope, request, opts) => runtime.openContext(scope, request, opts),
+        tools: runTools,
+        skills,
+        steering,
+        models: options.models ?? defaultModelAccess(env),
+        signal,
+        scheduler: options.scheduler ?? realScheduler,
+        random: options.random ?? null,
+      });
+      const events: RunEvent[] = [];
+      const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
+      publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
+      events.push(...(await engine.run()));
+      return resultFromState(state, log, events);
+    } catch (error) {
+      primary = { error };
+      throw error;
+    } finally {
+      await closeRunServers(runServers);
+      await closeRunResources(memoryRuntime, authority, primary);
+    }
+  });
+}
+
+/**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
  * An AGENT grant may name a tool group; a TOOL node must name one tool. Every static node is
@@ -1015,6 +1251,123 @@ export function staticNodes(flow: Flow, path: readonly string[] = []): [string, 
   return found;
 }
 
+/**
+ * @internal Silently rebuild the state of one borrowed, locked log prefix.
+ *
+ * The authored fingerprint is checked before copying. The private graph gets only the complete
+ * effective model map and the call-time agents `RunStarted` recorded; recovery never reads the
+ * current model defaults. Recorded transitions go through the live reducer and growth builder.
+ * A host `apiKey`, and the `headers` sent with it, go to the agents the map marks for it and to
+ * the call-time agents. The run result reads its files through the flow's output contract, as
+ * `runFlow`'s does.
+ *
+ * @throws TypeError when `flow` isn't a `ComposedFlow`.
+ * @throws RangeError, and the other errors of `replayCompiledRunLog`.
+ */
+export function replayRunLog(
+  flow: ComposedFlow,
+  log: RunLog,
+  options: { apiKey?: string | null; headers?: Readonly<Record<string, string>> | null } = {},
+): RunState {
+  if (!(flow instanceof ComposedFlow)) throw new TypeError("replayRunLog expects a ComposedFlow");
+  return replayCompiledRunLog(flow.compiled, log, { ...options, resultContract: childSignature(flow).output });
+}
+
+/**
+ * @internal Replay a log prefix over a private copy of an authored compiled program.
+ *
+ * `resultContract` is the contract the terminal output is read through to restore its files
+ * (`RunState.resultContract`); a finished log produces its terminal during replay, so it is set
+ * before any record is folded.
+ *
+ * @throws RangeError when the log's run id or sequence is malformed or changes while it is read,
+ *   the prefix is empty, an envelope isn't in canonical form or breaks the run id or the sequence,
+ *   the first record isn't `RunStarted`, the flow fingerprint differs, the recorded memory table
+ *   doesn't match the flow, or a record isn't the exact next transition.
+ * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from the ones in
+ *   effect.
+ */
+export function replayCompiledRunLog(
+  flow: CompiledFlow,
+  log: RunLog,
+  options: {
+    apiKey?: string | null;
+    headers?: Readonly<Record<string, string>> | null;
+    resultContract?: OutputContract | null;
+  } = {},
+): RunState {
+  const { apiKey = null, headers = null, resultContract = null } = options;
+  const sourceRunId = log.runId;
+  const sourceSequence = log.nextSequence;
+  if (typeof sourceRunId !== "string" || sourceRunId === "") {
+    throw new RangeError("run log run_id must be a non-empty string");
+  }
+  if (!Number.isSafeInteger(sourceSequence) || sourceSequence < 0) {
+    throw new RangeError("run log next_sequence must be a non-negative integer");
+  }
+
+  const supplied = [...log];
+  if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
+    throw new RangeError("run log changed while its historical prefix was read");
+  }
+  if (sourceSequence !== supplied.length) {
+    throw new RangeError(
+      `run log sequence mismatch: next_sequence is ${sourceSequence}, prefix length is ${supplied.length}`,
+    );
+  }
+  if (supplied.length === 0) throw new RangeError("cannot replay an empty run log");
+
+  const canonical: RecordEnvelope[] = [];
+  for (const [expectedSequence, suppliedEnvelope] of supplied.entries()) {
+    const line = encodeRecord(suppliedEnvelope);
+    const envelope = decodeRecord(line);
+    // Envelopes are frozen and compared by their canonical lines, as Python compares values.
+    if (encodeRecord(envelope) !== line) {
+      throw new RangeError(`run log envelope ${expectedSequence} is not in canonical wire form`);
+    }
+    if (envelope.seq !== expectedSequence) {
+      throw new RangeError(`run log sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
+    }
+    if (envelope.runId !== sourceRunId) {
+      throw new RangeError(
+        `run log run_id mismatch: expected ${reprText(sourceRunId)}, found ${reprText(envelope.runId)}`,
+      );
+    }
+    canonical.push(envelope);
+  }
+
+  const first = canonical[0]!.record;
+  if (!(first instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+  // Values like AGENT_RETRIES change the loaded flow, so a mismatch checked after the fingerprint
+  // would surface as a fingerprint error instead of naming them.
+  checkRecorded(first.defaults);
+  const actualFingerprint = flowFingerprint(flow);
+  if (actualFingerprint !== first.flowFingerprint) {
+    throw new RangeError(
+      `flow fingerprint mismatch: recorded ${reprText(first.flowFingerprint)}, supplied ${reprText(actualFingerprint)}`,
+    );
+  }
+
+  const privateFlow = copyGraph(flow);
+  applyEffectiveLlmMap(privateFlow, legacyConnectionMap(first.effectiveLlmByStaticPath), first.callTimeLlm);
+  if (apiKey !== null) {
+    // A run that marked no agent ignores the key and headers: no static agent is marked, and a
+    // call-time agent gets them only when its selection names the key's provider, and uses them
+    // only when its resolved config is marked.
+    bindHostCredentials(privateFlow, apiKey, headers);
+  }
+  if (first.learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+  if (first.memories !== null) {
+    const replayed = resolveRuntimeMemoryLayout(privateFlow);
+    checkRecordedMemoryTable(first.memories, first.memoryStacks, replayed.memories, replayed.stacks, "supplied flow");
+  }
+  const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, { growBuilder: buildGrow });
+  if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
+    throw new RangeError("run log changed while its historical prefix was replayed");
+  }
+  return state;
+}
+
 /** A layout's record-facing key table, per-key origins and stacks. */
 type MemoryLayoutParts = {
   memories: readonly MemorySpec[];
@@ -1025,9 +1378,9 @@ type MemoryLayoutParts = {
 /**
  * Derive the key table, origins and stacks, and stamp one private graph.
  *
- * First check that each session key resolves one conversation compatibility across its
- * placements; `callTimeKnown` gives the provider of each placement resolved only when it runs,
- * when run start knows it (`checkSessionCompatibility`).
+ * With `effectiveLlm`, first check that each session key resolves one conversation compatibility
+ * across its placements; `callTimeKnown` gives the provider of each placement resolved only when
+ * it runs, when run start knows it (`checkSessionCompatibility`).
  *
  * @param flow The run's private flow copy; its nodes get their memory scopes.
  * @throws MemorySetupError when the layout breaks a rule or two placements of a session key
@@ -1035,11 +1388,13 @@ type MemoryLayoutParts = {
  */
 function resolveRuntimeMemoryLayout(
   flow: CompiledFlow,
-  effectiveLlm: Readonly<Record<string, Readonly<AgentConfig>>>,
-  callTimeKnown: ReadonlyMap<string, string | null>,
+  effectiveLlm: Readonly<Record<string, Readonly<AgentConfig>>> | null = null,
+  callTimeKnown: ReadonlyMap<string, string | null> = new Map(),
 ): MemoryLayoutParts {
   const resolved = resolveMemoryLayout(flow);
-  checkSessionCompatibility(resolved, effectiveLlm, { callTimeKnown: Object.fromEntries(callTimeKnown) });
+  if (effectiveLlm !== null) {
+    checkSessionCompatibility(resolved, effectiveLlm, { callTimeKnown: Object.fromEntries(callTimeKnown) });
+  }
   applyMemoryLayout(flow, resolved);
   return memoryLayoutParts(resolved);
 }
@@ -1069,6 +1424,43 @@ function checkRegistryTypes(memory: ReadonlyMap<string, Memory>, specs: readonly
           `built it as ${reprText(built)}; build the registry from the flow you run`,
       );
     }
+  }
+}
+
+/**
+ * Resolve memory on the authored static program, never on replayed growth.
+ *
+ * Nothing is stamped, so a def called from several nodes needs no de-aliasing; the table, origins
+ * and stacks equal those a fresh run records.
+ *
+ * @throws TypeError when `flow` isn't a `ComposedFlow`.
+ * @throws MemorySetupError when the layout breaks a rule.
+ */
+function resolveAuthoredMemoryLayout(flow: ComposedFlow): MemoryLayoutParts {
+  if (!(flow instanceof ComposedFlow)) throw new TypeError("memory layout resolution expects a ComposedFlow");
+  return memoryLayoutParts(resolveMemoryLayout(flow.compiled));
+}
+
+/**
+ * Reject a recorded key table or stack set that the flow doesn't resolve.
+ *
+ * @param subject What resolved `memories` and `stacks`, for the message.
+ * @throws RangeError when the table or the stacks differ.
+ */
+function checkRecordedMemoryTable(
+  recordedMemories: readonly MemorySpec[] | null,
+  recordedStacks: readonly MemoryStack[] | null,
+  memories: readonly MemorySpec[],
+  stacks: readonly MemoryStack[],
+  subject: string,
+): void {
+  const sameStack = (a: MemoryStack, b: MemoryStack): boolean =>
+    sameItems(a.locator, b.locator) && sameItems(a.memories, b.memories);
+  if (
+    !sameOptional(recordedMemories, memories, (a, b) => sameItems(a, b, sameMemorySpec)) ||
+    !sameOptional(recordedStacks, stacks, (a, b) => sameItems(a, b, sameStack))
+  ) {
+    throw new RangeError(`recorded memory table or stacks do not match the ${subject}`);
   }
 }
 

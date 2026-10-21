@@ -12,7 +12,12 @@
  * `test_admission_follows_render_and_recall_and_only_current_recall_is_reused` (through
  * `AgentNode.forward` with an async `openMemoryContext`, the model's build counted as `model`) and
  * `test_request_is_stored_before_provider_and_failed_effect_remains_truthful` (two `FlowEngine`
- * runs with distinct run ids over a `MemoryRuntime` backed by one `SessionMemory`).
+ * runs with distinct run ids over a `MemoryRuntime` backed by one `SessionMemory`). Through
+ * `runFlow`: `test_two_fresh_plain_runs_retain_actual_history_without_learning`,
+ * `test_no_session_backend_keeps_plain_calls_fresh` (3 rows),
+ * `test_compatible_model_and_prompt_changes_retain_history_with_current_system`,
+ * `test_provider_change_requires_reset_then_starts_fresh` and
+ * `test_postassertion_failure_retains_actual_reply_and_failed_turn`.
  *
  * Changed: the expected `message_format` is TS's own `yian.message.v1`, not Python's
  * `yian.langchain-message.v1`, and the codec rows use `yian.message.v1` messages. A stored payload
@@ -26,7 +31,9 @@
  * The `history` stage's hand-made view has empty ledgers, so its unknown-format item is the fault
  * (a `RangeError`), not a missing field. The refused provider call throws an `Error`, so its
  * sanitized failure names `Error`; the engine row also checks the evaluator's close: the turn closes
- * `failed` with the node's error, and a clean close adds no cleanup note to it.
+ * `failed` with the node's error, and a clean close adds no cleanup note to it. The reflective row's
+ * memory reads its learner's default model from this file's environment, as Python's conftest sets
+ * one; the recorded model configs are the ones `models.createModel` receives.
  *
  * TS-only: a record's `api_key` is not kept when the provider resolves from the defaults, a
  * passed `snapshot` is used, and no provider anywhere throws `RangeError`; each `decodeMessage`
@@ -44,7 +51,7 @@
  * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
  *
- * Later (T6-6, through runFlow): every other test of the file, which runs a flow with `run_flow` or resumes one.
+ * Later (T6-6, with resumeFlow): `test_reply_after_stop_is_saved_and_resume_retries_using_latest_history`.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -52,6 +59,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel, EventStream } from "../../src/llm/events.ts";
@@ -74,9 +82,13 @@ import {
   ConversationItem,
   type ConversationTurn,
   type ConversationView,
+  type Memory,
   MemoryContext,
+  MemoryOperationError,
   MemorySection,
 } from "../../src/memory/contracts.ts";
+import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import {
@@ -89,14 +101,21 @@ import {
 } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps } from "../../src/nodes/base.ts";
+import { Assertion } from "../../src/nodes/contracts.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { serving } from "./run_state_fixtures.ts";
 import {
   fakeTurn,
   NEVER,
+  NO_ENV,
+  PLAIN_FLOW,
+  recording,
   rejected,
+  reply,
   request,
   runSessionFlow,
+  runWith,
+  sentTexts,
   SESSION_CONFIG,
   sessionFlow,
   snapshot,
@@ -341,8 +360,6 @@ test("the memory boundary passes a fault and the stop through and wraps anything
   expect((early as CapabilityFault).original).toBe(stop);
 });
 
-const reply = (text: string): Response =>
-  new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
 const newInput = new Message({ role: "user", parts: [new TextPart("new")] });
 
 for (const stage of ["request", "observe"] as const) {
@@ -556,7 +573,7 @@ test("admission follows render and recall, and only the current recall is reused
   const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
   const events: string[] = [];
   const models = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: () => {
       events.push("model");
       return model;
@@ -626,4 +643,96 @@ test("the request is stored before the provider, and a failed effect remains tru
     'Session history status (context only): [{"invocation":"failed"},{"effect":"model","status":"failed"}]',
     "second",
   ]);
+});
+
+test("two fresh plain runs retain actual history without learning", async () => {
+  const model = new ScriptedModel([reply("first reply"), reply("second reply")], SESSION_CONFIG);
+  const memory = new SessionMemory();
+  const flow = await loadFlow(PLAIN_FLOW);
+  const first = await runWith(flow, { question: "first question" }, memory, model);
+  const second = await runWith(flow, { question: "second question" }, memory, model);
+  expect([first.output, second.output]).toEqual(["first reply", "second reply"]);
+  expect([first.learning, second.learning]).toEqual([null, null]);
+  expect(sentTexts(model, 1)).toEqual(["first question", "first reply", "second question"]);
+  expect(model.requests[1]!.messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+  const stored = view(memory);
+  // Two new inputs and one reply per call, never repeated history.
+  expect(stored.items).toHaveLength(6);
+  expect(new Set(stored.items.map((item) => item.itemId)).size).toBe(6);
+  const exchangeIds = stored.effects.map((effect) => effect.request["exchange_id"]);
+  expect(new Set(exchangeIds).size).toBe(2);
+  expect(stored.items.map((item) => item.payload["exchange_id"])).toEqual([
+    ...Array(3).fill(exchangeIds[0]),
+    ...Array(3).fill(exchangeIds[1]),
+  ]);
+  expect(stored.effects.every((effect) => effect.status === "completed")).toBe(true);
+});
+
+const noSession: [string, () => ReadonlyMap<string, Memory> | null][] = [
+  ["session", () => null],
+  ["episodic", () => new Map([["episodic", new EpisodicMemory()]])],
+  // Its learner's model resolves from the conftest-style default this file's environment sets.
+  ["reflective", () => new Map([["reflective", new ReflectiveMemory({ env })]])],
+];
+
+for (const [policy, backend] of noSession) {
+  test(`no session backend keeps plain calls fresh: ${policy}`, async () => {
+    const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
+    const memory = backend();
+    const flow = await loadFlow(PLAIN_FLOW.replace("long_term_memory: session", `long_term_memory: ${policy}`));
+    await runWith(flow, { question: "first" }, memory, model);
+    await runWith(flow, { question: "second" }, memory, model);
+    expect(sentTexts(model, 1)).toEqual(["second"]);
+  });
+}
+
+test("compatible model and prompt changes retain history with the current system", async () => {
+  const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
+  const models = recording(() => model);
+  const memory = new SessionMemory();
+  const system = (text: string) => `    kind: agent\n    system_prompt: ${text}\n`;
+  const original = PLAIN_FLOW.replace("    kind: agent\n", system("old system instructions"));
+  expect(original).not.toBe(PLAIN_FLOW);
+  await runWith(await loadFlow(original), { question: "first" }, memory, model, { models });
+  const changed = PLAIN_FLOW.replace("test-model", "different-model")
+    .replace("prompt: ${question}", "prompt: changed ${question}")
+    .replace("    kind: agent\n", system("current system instructions"));
+  expect(changed).toContain("current system instructions");
+  await runWith(await loadFlow(changed), { question: "second" }, memory, model, { models });
+  expect(models.configs.at(-1)!["model"]).toBe("different-model");
+  expect(model.requests.at(-1)!.messages.map((message) => message.text())).toEqual([
+    "current system instructions",
+    "first",
+    "one",
+    "changed second",
+  ]);
+  expect(Object.keys(view(memory).compatibility).sort()).toEqual(["message_format", "provider"]);
+});
+
+test("a provider change requires a reset, then starts fresh", async () => {
+  const model = new ScriptedModel([reply("one"), reply("two")], SESSION_CONFIG);
+  const models = recording(() => model);
+  const memory = new SessionMemory();
+  await runWith(await loadFlow(PLAIN_FLOW), { question: "first" }, memory, model, { models });
+  const changed = await loadFlow(PLAIN_FLOW.replace("provider: openai", "provider: anthropic"));
+  const error = await rejected(runWith(changed, { question: "second" }, memory, model, { models }));
+  expect(error).toBeInstanceOf(MemoryOperationError);
+  expect((error as Error).message).toContain("reset");
+  expect(models.configs).toHaveLength(1);
+  memory.reset();
+  expect((await runWith(changed, { question: "second" }, memory, model, { models })).output).toBe("two");
+  expect(sentTexts(model)).toEqual(["second"]);
+});
+
+test("a postassertion failure retains the actual reply and a failed turn", async () => {
+  const model = new ScriptedModel([reply("actual reply")], SESSION_CONFIG);
+  const memory = new SessionMemory();
+  const flow = await loadFlow(PLAIN_FLOW);
+  flow.compiled.nodes.get("agent")!.postAsserts = [new Assertion("false", "must fail")];
+  const result = await runWith(flow, { question: "input" }, memory, model);
+  expect(result.failure!.code).toBe("assertion.failed");
+  const stored = view(memory);
+  expect(stored.effects.at(-1)!.status).toBe("completed");
+  expect(decodeMessage(stored.items.at(-1)!).text()).toBe("actual reply");
+  expect(stored.closedInvocations.at(-1)!.status).toBe("failed");
 });

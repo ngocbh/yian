@@ -8,11 +8,25 @@
  * `test_restored_unclosed_invocation_reports_unknown_completion_without_changing_history`. Through
  * `FlowEngine` with a `SessionMemory` (`runSessionFlow`), three runs with distinct run ids:
  * `test_two_runs_restore_tool_exchanges_without_executing_old_calls`, which also checks that the
- * evaluator closed both turns `completed`.
+ * evaluator closed both turns `completed`. Through `runFlow`:
+ * `test_recalled_transcript_and_current_notes_share_one_context`,
+ * `test_changed_grants_keep_history_but_reject_new_ungranted_call`,
+ * `test_missing_tool_result_is_repaired_only_in_context_with_truthful_status` (2 rows),
+ * `test_unpairable_provider_call_shapes_become_inert_context_only` (2 rows),
+ * `test_stop_boundaries_retain_surfaced_tool_truth_before_unwind` (3 stages) and
+ * `test_session_tool_calls_keep_public_argument_validation`.
  *
  * Changed: a host stop is the aborted signal, its reason what the tool throws, rather than a
  * `_HostStop`; an observation failure's note is on the error's own `notes` array. The restored
- * test checks the exact status text.
+ * test checks the exact status text. TS has no tool binding, so Python's `bindings` read as each
+ * request's tool names. The unrepresentable result is a class instance `fromHost` refuses (Python:
+ * an object whose `__str__` raises). The unpairable shapes are the two a `yian.message.v1` reply can
+ * hold, an unparsed call (Python's malformed raw `tool_calls` and `invalid_tool_calls`) and an empty
+ * name; Python's raw `function_call` and Anthropic `tool_use` content block have no TS form. The stop
+ * before the model lands in `models.createModel`, after the turn is admitted (Python: in
+ * `bind_tools`), and the stop after the model at the call's `ModelCallFinished` through `onEvent`;
+ * the run rejects with the signal's reason. The refused extra argument's message is TS's
+ * `unsupported argument(s)` text, not Python's `public invocation` one.
  *
  * TS-only: a result is a `completed` tool message under the snake_case request payload; a reported
  * error is a `completed` error result; a stop pending at a reported error records `interrupted`
@@ -51,19 +65,13 @@
  *
  * Not ported: the `encode` stage of `test_tool_memory_fault_cannot_repeat_external_action`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
- *
- * Later (T6-6, through runFlow):
- * `test_recalled_transcript_and_current_notes_share_one_context`,
- * `test_changed_grants_keep_history_but_reject_new_ungranted_call`,
- * `test_missing_tool_result_is_repaired_only_in_context_with_truthful_status`,
- * `test_unpairable_provider_call_shapes_become_inert_context_only`,
- * `test_mismatched_responses_call_blocks_are_inert_history`,
- * `test_stop_boundaries_retain_surfaced_tool_truth_before_unwind` and
- * `test_session_tool_calls_keep_public_argument_validation`.
+ * `test_mismatched_responses_call_blocks_are_inert_history`: LangChain's Responses `function_call`
+ * content blocks beside `tool_calls`; a `yian.message.v1` reply holds its calls once, as parts.
  */
 
 import { expect, spyOn, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { ModelCallFinished, RunSucceeded } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import {
@@ -76,11 +84,13 @@ import {
   ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   type ConversationTurn,
   type ConversationView,
   type EvaluationTrace,
   type JsonObject,
+  type Memory,
   ToolResultInteraction,
   type VisibleInteraction,
 } from "../../src/memory/contracts.ts";
@@ -103,15 +113,19 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import * as values from "../../src/typesys/values.ts";
+import { FakeMemory } from "./memory_fakes.ts";
 import { serving } from "./run_state_fixtures.ts";
 import {
   agentContext,
   fakeTurn,
   type Mutable,
   NEVER,
+  NO_ENV,
+  PLAIN_FLOW,
   rejected,
   request,
   runSessionFlow,
+  runWith,
   sessionFlow,
   snapshot,
   view,
@@ -524,14 +538,9 @@ function context(model: ChatModel, transcript: ConversationTurn, overrides: Part
 
 /** A `lookup` tool taking an integer `value`; it must not run. */
 function lookupTool(): FunctionTool {
-  return new FunctionTool({
-    name: "lookup",
-    description: "Look a value up.",
-    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
-    execute: () => {
-      throw new Error("the tool ran");
-    },
-  });
+  return recordedTool(() => {
+    throw new Error("the tool ran");
+  }).tool;
 }
 
 /** A reply with `text` and one tool call per `[name, arguments, id]`. */
@@ -614,19 +623,12 @@ const textOnly = (text: string): Response => replyOf(new TextPart(text));
 
 test("two runs restore tool exchanges without executing old calls", async () => {
   const memory = new SessionMemory();
-  const calls: unknown[] = [];
-  const lookup = new FunctionTool({
-    name: "lookup",
-    description: "Look a value up.",
-    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
-    execute: (args) => {
-      // The call is requested, after the reply that made it, before it runs.
-      const current = view(memory);
-      expect([current.effects.at(-1)!.kind, current.effects.at(-1)!.status]).toEqual(["tool", "pending"]);
-      expect(decodeMessage(current.items.at(-1)!).parts.some((part) => part instanceof ToolCallPart)).toBe(true);
-      calls.push(args);
-      return `result:${args.value}`;
-    },
+  const { tool: lookup, calls } = recordedTool((args) => {
+    // The call is requested, after the reply that made it, before it runs.
+    const current = view(memory);
+    expect([current.effects.at(-1)!.kind, current.effects.at(-1)!.status]).toEqual(["tool", "pending"]);
+    expect(decodeMessage(current.items.at(-1)!).parts.some((part) => part instanceof ToolCallPart)).toBe(true);
+    return `result:${args["value"]}`;
   });
   const tools = new ToolSet({ lookup });
   const flow = sessionFlow({ tools: ["lookup"] });
@@ -1045,4 +1047,219 @@ test("a pending stop wins over an observation fault", async () => {
     ["c0", "pending"],
     ["c1", "pending"],
   ]);
+});
+
+// Python's `_TOOL_FLOW`: `PLAIN_FLOW` with the AGENT granted `lookup`.
+const TOOL_FLOW = PLAIN_FLOW.replace("    kind: agent\n", "    kind: agent\n    tools: [lookup]\n");
+
+/** Python's `_Tool`: a tool taking an integer `value`, recording each call's arguments; `action` answers. */
+function recordedTool(
+  action: (args: Record<string, unknown>) => unknown = (args) => `result:${args["value"]}`,
+  name = "lookup",
+): { tool: FunctionTool; calls: unknown[] } {
+  const calls: unknown[] = [];
+  const tool = new FunctionTool({
+    name,
+    description: "Look a value up.",
+    parametersJsonSchema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] },
+    execute: (args) => {
+      calls.push(args);
+      return action(args);
+    },
+  });
+  return { tool, calls };
+}
+
+/** The tool messages `model`'s last request sent. */
+function sentToolMessages(model: ScriptedModel): Message[] {
+  return model.requests.at(-1)!.messages.filter((message) => message.role === "tool");
+}
+
+test("a recalled transcript and the current notes share one context", async () => {
+  const session = new SessionMemory();
+  const recallCount: unknown[] = [];
+  // A custom session contributes a transcript only through its recall result: the runtime can't
+  // find it by probing this session's methods.
+  const delegating: Memory = {
+    openRun: (options) => {
+      const opened = session.openRun(options);
+      return {
+        snapshot: opened.snapshot,
+        recall: (context) => {
+          recallCount.push(context);
+          return opened.recall(context);
+        },
+        learn: (context) => opened.learn(context),
+        commit: (commitId, mutations) => opened.commit(commitId, mutations),
+        close: () => opened.close(),
+      };
+    },
+    reset: () => session.reset(),
+  };
+  const notes = new FakeMemory({ recallText: "old project instructions" });
+  const { tool, calls } = recordedTool();
+  const chat = new ScriptedModel([callWithReasoning(7), textOnly("first answer"), textOnly("second answer")]);
+  const flow = await loadFlow(TOOL_FLOW.replace("name: plain_session\n", "name: plain_session\nlong_term_memory: notes\n"));
+  const memory = new Map<string, Memory>([
+    ["session", delegating],
+    ["notes", notes],
+  ]);
+  const tools = { lookup: tool };
+  expect((await runWith(flow, { question: "first" }, memory, chat, { tools })).output).toBe("first answer");
+  notes.recallText = "current project instructions";
+  expect((await runWith(flow, { question: "second" }, memory, chat, { tools })).output).toBe("second answer");
+
+  expect(recallCount).toHaveLength(2);
+  expect(notes.recallContexts).toHaveLength(2);
+  const restored = chat.requests.at(-1)!.messages;
+  expect(restored[0]!.text()).toContain("current project instructions");
+  expect(JSON.stringify(restored.map((message) => message.toJSON()))).not.toContain("old project instructions");
+  expect(restored.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant", "user"]);
+  expect(restored[2]!.toJSON()).toEqual(callWithReasoning(7).message.toJSON());
+  expect(restored[3]!.parts).toEqual([
+    new ToolResultPart({ callId: "reused-provider-id", name: "lookup", content: "result:7" }),
+  ]);
+  expect(restored.at(-1)!.text()).toBe("second");
+  expect(calls).toEqual([{ value: 7 }]);
+});
+
+test("changed grants keep history but reject a new ungranted call", async () => {
+  const old = recordedTool();
+  const current = recordedTool(undefined, "current");
+  const chat = new ScriptedModel([callWithReasoning(1), textOnly("one"), callWithReasoning(1)]);
+  const tools = { lookup: old.tool, current: current.tool };
+  const memory = new SessionMemory();
+  await runWith(await loadFlow(TOOL_FLOW), { question: "first" }, memory, chat, { tools });
+  const changed = await loadFlow(TOOL_FLOW.replace("tools: [lookup]", "tools: [current]"));
+  const failed = await runWith(changed, { question: "second" }, memory, chat, { tools });
+  expect(failed.failure!.code).toBe("node.execute");
+  expect(failed.failure!.message).toContain("not granted");
+  expect([old.calls, current.calls]).toEqual([[{ value: 1 }], []]);
+  expect(chat.requests.map((sent) => sent.tools.map((spec) => spec.name))).toEqual([["lookup"], ["lookup"], ["current"]]);
+  expect(chat.requests.at(-1)!.messages.some((message) => message.role === "tool")).toBe(true);
+});
+
+for (const representationFailure of [false, true]) {
+  const label = representationFailure ? "an unrepresentable result" : "a failing tool";
+  test(`a missing tool result is repaired only in context with a truthful status: ${label}`, async () => {
+    const { tool, calls } = recordedTool(() => {
+      if (representationFailure) return new (class Unprintable {})();
+      throw new RangeError("tool failed");
+    });
+    const chat = new ScriptedModel([callWithReasoning(1), textOnly("later")]);
+    const memory = new SessionMemory();
+    const flow = await loadFlow(TOOL_FLOW);
+    const tools = { lookup: tool };
+    expect((await runWith(flow, { question: "first" }, memory, chat, { tools })).failure).not.toBeNull();
+    const status = representationFailure ? "completed" : "failed";
+    const prior = view(memory);
+    expect(prior.effects.at(-1)!.status).toBe(status);
+    expect(prior.items).toHaveLength(3);
+    expect((await runWith(flow, { question: "second" }, memory, chat, { tools })).output).toBe("later");
+    const repairs = sentToolMessages(chat);
+    expect(repairs).toHaveLength(1);
+    const repair = repairs[0]!.parts[0] as ToolResultPart;
+    expect(repair.isError).toBe(true);
+    expect(repair.content).toContain(status);
+    expect(repair.content).toContain("unavailable");
+    expect(
+      chat.requests
+        .at(-1)!
+        .messages.some(
+          (message) => message.role === "user" && message.text().includes("invocation") && message.text().includes("failed"),
+        ),
+    ).toBe(true);
+    expect(view(memory).items).toHaveLength(6);
+    expect(calls).toHaveLength(1);
+    expect(view(memory).items.every((item) => decodeMessage(item).role !== "tool")).toBe(true);
+  });
+}
+
+const unpairableReplies: [string, Part][] = [
+  ["an unparsed call", new ToolCallPart({ id: "broken", name: "lookup", arguments: null, rawArguments: "{" })],
+  ["an empty name", new ToolCallPart({ id: "call", name: "", arguments: {} })],
+];
+
+for (const [label, part] of unpairableReplies) {
+  test(`unpairable provider call shapes become inert context only: ${label}`, async () => {
+    const { tool, calls } = recordedTool();
+    const chat = new ScriptedModel([replyOf(new TextPart("bad tool"), part), textOnly("later")]);
+    const memory = new SessionMemory();
+    const flow = await loadFlow(TOOL_FLOW);
+    const tools = { lookup: tool };
+    await runWith(flow, { question: "first" }, memory, chat, { tools });
+    const original = view(memory).items.at(-1)!.payload;
+    const second = await runWith(flow, { question: "second" }, memory, chat, { tools });
+    expect(second.output).toBe("later");
+    expect(calls).toEqual([]);
+    const sent = chat.requests.at(-1)!.messages;
+    expect(sent.some((message) => message.role === "user" && message.text().includes("context only"))).toBe(true);
+    expect(sent.every((message) => message.parts.every((sentPart) => !(sentPart instanceof ToolCallPart)))).toBe(true);
+    expect(view(memory).items[2]!.payload).toEqual(original);
+  });
+}
+
+for (const stage of ["before_model", "after_model", "after_tool"] as const) {
+  test(`stop boundaries retain surfaced tool truth before unwind: ${stage}`, async () => {
+    const controller = new AbortController();
+    const stop = new Error("host stop");
+    const chat = new ScriptedModel([callWithReasoning(1), textOnly("later")]);
+    const { tool, calls } = recordedTool(() => {
+      if (stage === "after_tool") controller.abort(stop);
+      return "actual result";
+    });
+    // The stop before the model lands as the AGENT builds it, after its turn is admitted.
+    const models: ModelAccess = {
+      env: NO_ENV,
+      createModel: () => {
+        if (stage === "before_model") controller.abort(stop);
+        return chat;
+      },
+    };
+    // The stop after the model lands once its reply has surfaced.
+    const onEvent = (event: unknown) => {
+      if (stage === "after_model" && event instanceof ModelCallFinished) controller.abort(stop);
+    };
+    const memory = new SessionMemory();
+    const flow = await loadFlow(TOOL_FLOW);
+    const tools = { lookup: tool };
+    const error = await rejected(
+      runWith(flow, { question: "first" }, memory, chat, { tools, models, onEvent, signal: controller.signal }),
+    );
+    expect(error).toBe(stop);
+    const stored = view(memory);
+    expect(stored.closedInvocations.at(-1)!.status).toBe("interrupted");
+    expect(chat.requests).toHaveLength(stage === "before_model" ? 0 : 1);
+    expect(calls).toHaveLength(stage === "after_tool" ? 1 : 0);
+    expect(stored.effects.every((effect) => effect.status === "completed")).toBe(true);
+    if (stage === "before_model") {
+      expect(stored.items).toEqual([]);
+      return;
+    }
+    await runWith(flow, { question: "second" }, memory, chat, { tools });
+    const restored = sentToolMessages(chat);
+    expect(restored).toHaveLength(1);
+    const result = restored[0]!.parts[0] as ToolResultPart;
+    if (stage === "after_tool") {
+      expect([result.content, result.isError]).toEqual(["actual result", false]);
+      expect(decodeMessage(view(memory).items[3]!).role).toBe("tool");
+    } else {
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("outcome unknown");
+      expect(view(memory).items.every((item) => decodeMessage(item).role !== "tool")).toBe(true);
+    }
+  });
+}
+
+test("session tool calls keep public argument validation", async () => {
+  const { tool, calls } = recordedTool();
+  const memory = new SessionMemory();
+  const bad = new ToolCallPart({ id: "call", name: "lookup", arguments: { value: 1, private: "no" } });
+  const chat = new ScriptedModel([replyOf(bad)]);
+  const result = await runWith(await loadFlow(TOOL_FLOW), { question: "first" }, memory, chat, {
+    tools: { lookup: tool },
+  });
+  expect(result.failure!.message).toBe('tool \'lookup\' received unsupported argument(s) ["private"]; allowed: ["value"]');
+  expect(calls).toEqual([]);
+  expect(view(memory).effects.at(-1)!.status).toBe("failed");
 });

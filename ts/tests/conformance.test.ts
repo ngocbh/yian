@@ -2,8 +2,9 @@
  * The conformance runner's own unit tests: reading a case file, the format check, case values,
  * comparison, the case directory, selection and the report. Not a port of
  * `tests/test_conformance.py`, which `conformance.ts` is, except for
- * `test_steering_unreached_action_fails`, which no case can cover: a passing case reaches every
- * action.
+ * `test_steering_unreached_action_fails`, which no case can cover (a passing case reaches every
+ * action), and `test_memory_expect_refuses_a_session_key`. TS-only: an undeclared `expect.memory`
+ * key fails the case, and a `host.memory.before` entry with backward calls is refused.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -285,6 +286,37 @@ describe("checkCase", () => {
       `\`host.models.n.x\`: the consumer must be one of ${CONSUMER_LIST}`,
     ],
     [`${RUN}host: {models: {n: {"memory:a": []}}}`, MEMORY_CONSUMER],
+    [`${RUN}host: {memory: 1}`, "`host.memory` must be a mapping"],
+    [`${RUN}host: {memory: {after: []}}`, "unknown key `host.memory.after`"],
+    [`${RUN}host: {memory: {before: {}}}`, "`host.memory.before` must be a list"],
+    [`${RUN}host: {memory: {before: [{run: {}}]}}`, "`host.memory.before[0].run.run_id` is required"],
+    [`${RUN}host: {memory: {before: [{}]}}`, "`host.memory.before[0].run` is required"],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r}, x: 1}]}}`,
+      "unknown key `host.memory.before[0].x`",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r}, inputs: 1}]}}`,
+      "`host.memory.before[0].inputs` must be a mapping",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r, context: x}}]}}`,
+      "`host.memory.before[0].run.context` must be `present`",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r, api_key: k}}]}}`,
+      "unknown key `host.memory.before[0].run.api_key`",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r, learnable: true}, backward: []}]}}`,
+      "`host.memory.before[0].backward` must be a non-empty list",
+    ],
+    [
+      `${RUN}host: {memory: {before: [{run: {run_id: r}, backward: [{feedback: f}]}]}}`,
+      "`host.memory.before[0].backward` needs `host.memory.before[0].run.learnable: true`",
+    ],
+    [EXPECT("memory: {a: x}"), "`expect.memory` needs `host.memory`"],
+    [`${EXPECT("memory: {a: 1}")}host: {memory: {}}`, "`expect.memory` values must be text"],
     [`${RUN}host: {models: {__memory__: {agent: []}}}`, MEMORY_CONSUMER],
     [`${RUN}host: {models: {n: {agent: {}}}}`, "`host.models.n.agent` must be a list"],
     [MODEL("1"), `\`${AT}\` must be a mapping`],
@@ -508,6 +540,10 @@ describe("checkCase", () => {
       `{usage: ${USAGE}}, {finish: null}]}`),
     MODEL("{chunks: [], raise: {class: ConnectionError, message: m}}"),
     MODEL("{chunks: [{text: a}], raise: {class: X, message: m, status: 503}}"),
+    `${RUN}host: {memory: {}}`,
+    `${EXPECT("memory: {a: x}")}host: {memory: {before: [{inputs: {q: a}, ` +
+      "run: {run_id: r, num_workers: 0, learnable: true, context: present}, " +
+      "backward: [{feedback: f, api_key: k, headers: {}}]}]}}",
     `${RUN}host: {models: {__memory__: {"memory:a/b": []}, n: {compose: [], ` +
       "structured_retry: []}}}",
     STEER("[{steer: [x]}, {after: {model_call: 1, chunk: 2}, interrupt: true}, " +
@@ -919,6 +955,45 @@ describe("run", () => {
     await expect(unreached).rejects.toBeInstanceOf(CaseFailure);
     await expect(unreached).rejects.toThrow("`host.steering.chat[1]` was never reached");
   });
+
+  /**
+   * A `run` case whose AGENT `answer` replies `a1` to `q`, declaring `agentMemory` when given, with
+   * `host.memory` set to `memory` and `expect.memory` to `expected`.
+   */
+  const MEMORY_CASE = (agentMemory: string, memory: string, expected: string) =>
+    "kind: run\nflow: |\n  id: tutor\n  name: tutor\n" +
+    "  llm_config: {provider: openai, model: gpt-5.5}\n" +
+    "  input:\n    q: !str\n  nodes:\n    answer:\n      kind: agent\n" +
+    (agentMemory ? `      long_term_memory: ${agentMemory}\n` : "") +
+    '      input: {q: "${input.q}"}\n      system_prompt: Tutor.\n      prompt: "${q}"\n' +
+    "      output: str\n  output: ${answer.output}\n" +
+    "inputs: {q: first}\nrun: {num_workers: 0}\n" +
+    `host:\n  memory: ${memory}\n` +
+    "  models: {answer: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
+    "parts: [{type: text, text: a1}]}}]}}\n" +
+    `expect: {output: {status: succeeded, output: a1}, memory: ${expected}}\n`;
+
+  // test_memory_expect_refuses_a_session_key
+  test("a session key in `expect.memory` fails the case when the runner reads it", async () => {
+    const read = runCase(MEMORY_CASE("{chat: session}", "{}", "{chat: ''}"));
+    await expect(read).rejects.toBeInstanceOf(CaseFailure);
+    await expect(read).rejects.toThrow("`expect.memory.chat` is a session memory");
+  });
+
+  test("a key the flow doesn't declare in `expect.memory` fails the case", async () => {
+    const read = runCase(MEMORY_CASE("", "{}", "{nope: ''}"));
+    await expect(read).rejects.toBeInstanceOf(CaseFailure);
+    await expect(read).rejects.toThrow("`expect.memory.nope` names no memory the flow declares");
+  });
+
+  test("a `before` entry with backward calls fails the case before any run", async () => {
+    const before = "{before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: f}]}]}";
+    const failed = runCase(MEMORY_CASE("", before, "{}"));
+    await expect(failed).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failed).rejects.toThrow(
+      "`host.memory.before[0].backward` is not supported by the TS runner yet",
+    );
+  });
 });
 
 describe("main", () => {
@@ -1049,7 +1124,7 @@ describe("main", () => {
   test("fails a case using a reserved key before setting it up", async () => {
     const files = {
       "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, stop: {}}\nexpect: {output: {}}\n",
-      "r/memory.yaml": "kind: run\nflow: x\nexpect: {output: {}, memory: {}}\n",
+      "r/skills.yaml": "kind: run\nflow: x\nhost: {skills: {}}\nexpect: {output: {}}\n",
       "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
     };
     const ids: string[] = [];
@@ -1060,7 +1135,7 @@ describe("main", () => {
       code: 1,
       out: [
         "FAIL r/host: `host.stop` is not supported by the TS runner yet",
-        "FAIL r/memory: `expect.memory` is not supported by the TS runner yet",
+        "FAIL r/skills: `host.skills` is not supported by the TS runner yet",
         "3 cases: 1 passed, 2 failed, 0 pending",
       ],
       err: [],

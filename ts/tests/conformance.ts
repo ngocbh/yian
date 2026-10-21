@@ -84,6 +84,7 @@ import {
 } from "../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
+import { buildMemories, type MemoryRegistry } from "../src/memory_host.ts";
 import { virtualScheduler } from "../src/platform.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../src/run.ts";
 import type { ToolContext } from "../src/tools/context.ts";
@@ -186,16 +187,15 @@ const RUN_KEYS: ReadonlySet<string> = new Set([
 ]);
 const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
 // Host keys the format reserves and this runner doesn't support yet.
-const RESERVED_HOST_KEYS: readonly string[] = ["stop", "memory", "skills"];
+const RESERVED_HOST_KEYS: readonly string[] = ["stop", "skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "steering", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "memory", "steering", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
-const RESERVED: readonly (readonly [string, string])[] = [
-  ...RESERVED_HOST_KEYS.map((key) => ["host", key] as const),
-  ["expect", "memory"],
-];
+const RESERVED: readonly (readonly [string, string])[] = RESERVED_HOST_KEYS.map(
+  (key) => ["host", key] as const,
+);
 // `host.models` consumers, besides `memory:<key>` under `LEARNER_NODE`.
 const CONSUMERS: readonly string[] = ["agent", "structured_retry", "compose", "backward", "summary"];
 // The node id memory learners' model calls are scripted under.
@@ -550,6 +550,53 @@ function checkSteering(steering: Value | undefined): void {
   }
 }
 
+/** Throw unless `value` is run or resume arguments with only `allowed` keys and the `required`. */
+function checkArguments(
+  where: string,
+  value: Value | undefined,
+  allowed: ReadonlySet<string>,
+  required: readonly string[] = [],
+): void {
+  const args = keys(where, value, allowed, { required });
+  if (get(args, "context", "present") !== "present") {
+    throw new Error(`\`${where}.context\` must be \`present\``);
+  }
+}
+
+/** Throw unless `value` is a non-empty list of `{feedback, api_key, headers}`. */
+function checkBackward(where: string, value: Value | undefined): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`\`${where}\` must be a non-empty list`);
+  }
+  value.forEach((entry, index) => {
+    keys(`${where}[${index}]`, entry, new Set(["feedback", "api_key", "headers"]), {
+      required: ["feedback"],
+    });
+  });
+}
+
+/**
+ * Throw unless `value` is `host.memory`: `{before: [{inputs, run, backward}, ...]}`. Each earlier
+ * run gives `run.run_id`, and one with `backward` is learnable.
+ */
+function checkMemory(value: Value | undefined): void {
+  const memory = keys("host.memory", value, new Set(["before"]));
+  const before = get(memory, "before", []);
+  if (!Array.isArray(before)) throw new Error("`host.memory.before` must be a list");
+  before.forEach((item, index) => {
+    const where = `host.memory.before[${index}]`;
+    const entry = keys(where, item, new Set(["inputs", "run", "backward"]), { required: ["run"] });
+    mapping(`${where}.inputs`, get(entry, "inputs", {}));
+    checkArguments(`${where}.run`, entry["run"], RUN_KEYS, ["run_id"]);
+    if (Object.hasOwn(entry, "backward")) {
+      checkBackward(`${where}.backward`, entry["backward"]);
+      if (get(entry["run"] as Case, "learnable") !== true) {
+        throw new Error(`\`${where}.backward\` needs \`${where}.run.learnable: true\``);
+      }
+    }
+  });
+}
+
 /**
  * Throw if an `expect` mapping's `events` or `stream` write the `attempt: 1` the data form leaves
  * out of a model call event or stream chunk; `key` names the mapping.
@@ -622,6 +669,7 @@ function checkHost(value: Value | undefined, kind: Kind): void {
     }
   }
   checkModels(get(host, "models", {}));
+  if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkSteering(get(host, "steering", {}));
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
@@ -750,12 +798,7 @@ export function checkCase(case_: Case): Case {
     }
   }
   for (const [key, allowed] of [["run", RUN_KEYS], ["resume", RESUME_KEYS]] as const) {
-    if (Object.hasOwn(case_, key)) {
-      const args = keys(key, case_[key], allowed);
-      if (get(args, "context", "present") !== "present") {
-        throw new Error(`\`${key}.context\` must be \`present\``);
-      }
-    }
+    if (Object.hasOwn(case_, key)) checkArguments(key, case_[key], allowed);
   }
   if (Object.hasOwn(case_, "signal")) {
     const signal = keys("signal", case_["signal"], new Set(["name", "after"]), {
@@ -785,18 +828,19 @@ export function checkCase(case_: Case): Case {
     }
     checkAttempts(key, expect);
   }
-  if (Object.hasOwn(case_, "backward")) {
-    const backward = case_["backward"];
-    if (!Array.isArray(backward) || backward.length === 0) {
-      throw new Error("`backward` must be a non-empty list");
-    }
-    backward.forEach((entry, index) => {
-      keys(`backward[${index}]`, entry, new Set(["feedback", "api_key", "headers"]), {
-        required: ["feedback"],
-      });
-    });
-  }
+  if (Object.hasOwn(case_, "backward")) checkBackward("backward", case_["backward"]);
   if (Object.hasOwn(case_, "host")) checkHost(case_["host"], kind);
+  for (const key of ["expect", "python_expect"]) {
+    const expect = get(case_, key, {}) as Case;
+    if (!Object.hasOwn(expect, "memory")) continue;
+    if (!Object.hasOwn(get(case_, "host", {}) as Case, "memory")) {
+      throw new Error(`\`${key}.memory\` needs \`host.memory\``);
+    }
+    const texts = Object.values(mapping(`${key}.memory`, expect["memory"]));
+    if (texts.some((text) => typeof text !== "string")) {
+      throw new Error(`\`${key}.memory\` values must be text`);
+    }
+  }
   // Both were checked as mappings above when present.
   const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
@@ -1059,7 +1103,7 @@ function caseEnv(ctx: CaseContext): Env {
 /** Run one prepared case of a kind; throw (a `CaseFailure`, normally) when it fails. */
 export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
-// `RESERVED` shrinks as the kinds that read `host` and `expect.memory` support its keys.
+// `RESERVED` shrinks as the kinds that read `host` support its keys.
 /**
  * The kind runners. A case whose kind has none fails. A kind is added by replacing its comment
  * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
@@ -1381,14 +1425,19 @@ function scriptedError(error: Case, classes: ReadonlyMap<string, ErrorClass>): E
 
 // How the user message `generateStructured` adds after an invalid reply starts.
 const CORRECTION = "Your previous output was invalid:";
+// How the system message of an AGENT's history summary request starts.
+const SUMMARY_PROMPT = "Summarize the historical conversation";
 
 /**
- * Return the consumer a model call of node `nodeId` with `request` is scripted under:
+ * Return the consumer a forward model call of node `nodeId` with `request` is scripted under:
+ * `summary` for an AGENT's history summary (its first message is the summary system prompt),
  * `structured_retry` for a structured call's attempts after its first (each ends in the
  * correction an invalid reply adds), else `compose` for a `<gate>__compose` node and `agent` for
  * any other.
  */
 function consumerOf(nodeId: string, request: Request): string {
+  const first = request.messages[0];
+  if (first?.role === "system" && first.text().startsWith(SUMMARY_PROMPT)) return "summary";
   const last = request.messages.at(-1);
   if (last?.role === "user" && last.text().startsWith(CORRECTION)) return "structured_retry";
   return nodeId.endsWith("__compose") ? "compose" : "agent";
@@ -1565,7 +1614,8 @@ async function* reaching(
 
 /**
  * Return a builder of chat models that serve each call the next `host.models` entry of its node
- * and consumer (`consumerOf`), taken through `take` when the call is made. A call's request that
+ * and consumer, taken through `take` when the call is made: the consumer the model was built for
+ * (`backward`, `memory:<key>`), else the call's own (`consumerOf`). A call's request that
  * differs from its entry's `request` is added to `problems`. A call `take` refuses fails at its
  * stream's first read, as a provider's failure does. An `agent` call reaches its `inbox` points
  * (`reaching`).
@@ -1574,13 +1624,13 @@ function scriptedModels(
   take: (label: string, what: string) => Value,
   problems: string[],
   inbox: Inbox,
-): (provider: string, model: string, nodeId: string) => ChatModel {
+): (provider: string, model: string, nodeId: string, builtFor?: string) => ChatModel {
   const served = new Map<string, number>();
-  return (provider, model, nodeId) => ({
+  return (provider, model, nodeId, builtFor) => ({
     provider,
     model,
     stream: (request, options = {}) => {
-      const consumer = consumerOf(nodeId, request);
+      const consumer = builtFor ?? consumerOf(nodeId, request);
       const label = `host.models.${nodeId}.${consumer}`;
       let entry: Case;
       try {
@@ -1753,12 +1803,12 @@ function host(case_: Case, log: string, env: Env): Host {
   // Installed even without `host.models`, so an unscripted model call never reaches a provider.
   const models: ModelAccess = {
     env,
-    createModel: (config, { nodeId }) => {
+    createModel: (config, { nodeId, consumer }) => {
       // The script replaces only the provider: the config is resolved and checked as yian's own
       // factory does, so its errors stay yian's. No credential is read.
       const values = fromHost(config, "llm_config") as Record<string, unknown>;
       const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
-      return scripted(validated.provider!, validated.model!, nodeId);
+      return scripted(validated.provider!, validated.model!, nodeId, consumer);
     },
   };
 
@@ -2043,7 +2093,8 @@ const ID_FIELDS: ReadonlySet<string> = new Set(["exchange_id", "commit_id", "mut
  * Return `results` with each made-up id in their text replaced by `<id:N>`.
  *
  * The ids are `runId` (unless `null`) and every text value of an `ID_FIELDS` key, numbered in
- * order of first appearance walking `results` in their order, with mapping keys in UTF-16 order.
+ * order of first appearance walking `results` in their order (the `before` traces first, `memory`
+ * last), with mapping keys in UTF-16 order.
  */
 function placeholders(results: Record<string, unknown>, runId: string | null): Record<string, unknown> {
   const ids = new Set<string>(runId === null ? [] : [runId]);
@@ -2081,10 +2132,88 @@ function placeholders(results: Record<string, unknown>, runId: string | null): R
 }
 
 /**
+ * Return the whole recall text of memory `key` in `memory`, after the main run. Fails the case for
+ * a key the flow doesn't declare, and for a session key, whose whole recall is empty by contract
+ * (a session is checked through a later run's request).
+ */
+async function recall(memory: MemoryRegistry, key: string): Promise<string> {
+  const type = memory.types.get(key);
+  if (type === undefined) {
+    throw new CaseFailure(`\`expect.memory.${key}\` names no memory the flow declares`);
+  }
+  if (type === "session") {
+    throw new CaseFailure(
+      `\`expect.memory.${key}\` is a session memory, whose whole recall is empty; check it ` +
+        "through a later run's request",
+    );
+  }
+  const session = await memory.get(key)!.openRun();
+  try {
+    const content = await session.recall(null);
+    return typeof content === "string" ? content : content.text;
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * Run each `host.memory.before` entry in order, logged to `before-<n>.jsonl` in the case
+ * directory, with `options` and memories from `memories()`, closed after the run. Return the log
+ * texts by where they are reported and each run's trace (grouped when the run is pooled). A raise
+ * fails the case, and so does an entry with `backward` (before any run), which needs
+ * `RunResult.backward`.
+ */
+async function beforeRuns(
+  case_: Case,
+  ctx: CaseContext,
+  flow: ComposedFlow,
+  options: RunFlowOptions,
+  memories: () => Promise<MemoryRegistry | null>,
+): Promise<{ logs: Record<string, string>; traces: Value[][][] }> {
+  const logs: Record<string, string> = {};
+  const traces: Value[][][] = [];
+  const memory = get(get(case_, "host", {}) as Case, "memory", {}) as Case;
+  const before = get(memory, "before", []) as Case[];
+  // Checked before any run: backward calls need `RunResult.backward`, which isn't ported yet.
+  const learning = before.findIndex((entry) => Object.hasOwn(entry, "backward"));
+  if (learning !== -1) {
+    throw new CaseFailure(
+      `\`host.memory.before[${learning}].backward\` is not supported by the TS runner yet`,
+    );
+  }
+  for (const [index, entry] of before.entries()) {
+    const where = `host.memory.before[${index}]`;
+    const log = join(ctx.dir, `before-${index + 1}.jsonl`);
+    const run = entry["run"] as Case;
+    try {
+      const registry = await memories();
+      try {
+        const inputs = get(entry, "inputs", {}) as Case;
+        await runFlow(flow, inputs, { ...options, ...runOptions(run), log, memory: registry });
+      } finally {
+        await registry?.close();
+      }
+    } catch (error) {
+      throw new CaseFailure(`\`${where}\` raised\n${failureText(error)}`);
+    }
+    const text = readFileSync(log, "utf8");
+    logs[`the log of \`${where}\``] = text;
+    const lines = trace(text.split("\n").filter((line) => line !== ""), flow);
+    const isPooled = !isZero(get(run, "num_workers", 8n));
+    traces.push(isPooled ? grouped(lines, (record) => record[1] as string | null) : lines);
+  }
+  return { logs, traces };
+}
+
+/**
  * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
  * the case directory, its waits on a virtual clock that starts at the real current time. Return
- * its results: `output`, or the host error as `raises` and `error` (never compared), and `left`, a
- * message per script with entries left.
+ * its results: `output`, or the host error as `raises` and `error` (never compared), `memory`
+ * when `expect.memory` lists keys, and `left`, a message per script with entries left.
+ *
+ * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run gets the flow's
+ * memories built afresh under `<case dir>/memory`, closed after the run; `expect.memory` is read
+ * from memories built after the main run. Learner events are kept apart, never compared.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
@@ -2092,19 +2221,36 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const env = caseEnv(ctx);
   const { tools, random, models, inbox, calls, check } = host(case_, log, env);
   const run = get(case_, "run", {}) as Case;
+  const spec = get(case_, "host", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
+  // The learners' events (TS-only, from `buildMemories`' `onEvent`) are never read: collected here
+  // so they stay out of the run's `events`, which `expect.events` compares.
+  const apart: unknown[] = [];
+  // A run without `host.memory` gets none, leaving the flow's declarations dormant.
+  const memories = async (): Promise<MemoryRegistry | null> =>
+    Object.hasOwn(spec, "memory")
+      ? buildMemories(flow, {
+          root: join(ctx.dir, "memory"),
+          models,
+          onEvent: (event) => apart.push(event),
+        })
+      : null;
   // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
-  const options: RunFlowOptions = {
-    ...runOptions(run),
-    log,
+  const shared: RunFlowOptions = {
     env,
     tools,
     random,
     models,
-    // Only with `host.steering`, as Python passes it.
-    ...(Object.hasOwn(get(case_, "host", {}) as Case, "steering") ? { steering: inbox } : {}),
     scheduler: virtualScheduler(Date.now()),
+  };
+  const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
+  const options: RunFlowOptions = {
+    ...shared,
+    ...runOptions(run),
+    log,
+    // Only with `host.steering`, as Python passes it.
+    ...(Object.hasOwn(spec, "steering") ? { steering: inbox } : {}),
     onEvent: (event) => {
       events.push(event);
     },
@@ -2114,27 +2260,45 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   };
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
+  let memory: MemoryRegistry | null = null;
   inbox.armed = true;
   try {
-    result = await runFlow(flow, get(case_, "inputs", {}) as Case, options);
+    memory = await memories();
+    result = await runFlow(flow, get(case_, "inputs", {}) as Case, { ...options, memory });
   } catch (error) {
     caught = { raises: raised(error), error };
+  }
+  await memory?.close();
+  const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
+  let recalled: Record<string, string> | undefined;
+  if (listed !== undefined) {
+    const fresh = (await memories())!;
+    try {
+      recalled = {};
+      for (const key of Object.keys(listed)) recalled[key] = await recall(fresh, key);
+    } finally {
+      await fresh.close();
+    }
   }
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
   const text = existsSync(log) ? readFileSync(log, "utf8") : "";
   const lines = text.split("\n").filter((line) => line !== "");
-  // In placeholder order: ids are numbered walking the results in this order.
+  // In placeholder order: ids are numbered walking the results in this order. The `before`
+  // traces come first and are dropped once numbered.
   let actual: Record<string, unknown> = {
+    before: traces,
     trace: trace(lines, flow),
     events: events.map((event) => eventForm(event, flow)),
     stream: chunks.map((chunk) => fields(chunk, flow)),
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
+    ...(recalled !== undefined ? { memory: recalled } : {}),
   };
   checkSecrets(case_, {
     ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
     "the run log": text,
+    ...logs,
     "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
   });
   if (!isZero(get(run, "num_workers", 8n))) actual = pooled(actual);
@@ -2144,6 +2308,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       : ((parseJson(lines[0]!, "codec") as Case)["run_id"] as string);
   // A raised error is compared as is, without placeholders.
   actual = placeholders(actual, runId);
+  delete actual["before"];
   return { ...actual, ...caught, left };
 }
 
@@ -2164,9 +2329,9 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
   }
-  for (const name of ["trace", "events", "stream", "tool_calls"]) {
+  for (const name of ["trace", "events", "stream", "tool_calls", "memory"]) {
     // Only a run's events, stream and tool calls compare numbers by value; the trace keeps kinds.
-    const byValue = name !== "trace";
+    const byValue = ["events", "stream", "tool_calls"].includes(name);
     if (Object.hasOwn(expect, name)) compare(name, actual[name], expect[name], { byValue });
   }
   // Last: a leftover entry usually follows from a divergence the comparisons show.

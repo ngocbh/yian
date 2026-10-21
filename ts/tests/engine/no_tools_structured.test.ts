@@ -13,14 +13,15 @@
  * asserts the structured purpose and the value for an `ollama` `ScriptedModel`.
  *
  * TS-only: `systemPromptWithMemory` with no sections returns the base unchanged, and with
- * sections appends Python's text and canonical JSON; a memory transcript and a steering inbox are
- * refused before the model is built; a granted tool runs in the loop; a grant without a tool set
- * reads the registry (`new ToolSet()`), so an unregistered grant fails with `resolve`'s
- * `RangeError` before the model call; a granted skill binds `load_skill`; a reply with a parsed
- * tool call and no grant fails at a cap of 1 with `ToolIterationLimitError`, else with the
- * ungranted `AgentLoopError`; an unparsed tool call is ignored; a stop during the call wins over
- * its text or tool-call reply, before any tool call is recorded; `ctx.sent()` returns the built
- * `RouteModel`'s route credentials; the prompt is recorded in the evaluation trace.
+ * sections appends Python's text and canonical JSON; a memory transcript is refused before the
+ * model is built; a steering inbox's steers join the loop's request after the prompt; a granted
+ * tool runs in the loop; a grant without a tool set reads the registry (`new ToolSet()`), so an
+ * unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted skill
+ * binds `load_skill`; a reply with a parsed tool call and no grant fails at a cap of 1 with
+ * `ToolIterationLimitError`, else with the ungranted `AgentLoopError`; an unparsed tool call is
+ * ignored; a stop during the call wins over its text or tool-call reply, before any tool call is
+ * recorded; `ctx.sent()` returns the built `RouteModel`'s route credentials; the prompt is
+ * recorded in the evaluation trace.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -182,27 +183,25 @@ test("the memory sections follow the system prompt in the request", async () => 
   expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
 });
 
-const steering: Steering = {
-  interruptSignal: () => new AbortController().signal,
-  drain: () => [],
-};
+test("a memory transcript is refused before the model is built", async () => {
+  const transcript = new MemoryContext({ transcript: {} as ConversationTurn });
+  const ctx = context(new ScriptedModel([]), { memoryContext: transcript });
+  const error = await rejection(runAgent(ctx));
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toBe("AGENT memory transcripts are not ported yet (T6-6)");
+  expect(ctx.built).toBe(0);
+});
 
-for (const [name, overrides, message] of [
-  [
-    "a memory transcript",
-    { memoryContext: new MemoryContext({ transcript: {} as ConversationTurn }) },
-    "AGENT memory transcripts are not ported yet (T6-6)",
-  ],
-  ["a steering inbox", { steering }, "AGENT steering is not ported yet (T5-11b)"],
-] as const) {
-  test(`${name} is refused before the model is built`, async () => {
-    const ctx = context(new ScriptedModel([]), overrides as Partial<AgentRunContext>);
-    const error = await rejection(runAgent(ctx));
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(message);
-    expect(ctx.built).toBe(0);
-  });
-}
+test("a steering inbox's steers join the loop's request after the prompt", async () => {
+  const model = new ScriptedModel([textReply("ok")]);
+  const steering: Steering = { interruptSignal: () => new AbortController().signal, drain: () => ["be brief"] };
+  expect((await runAgent(context(model, { steering }))).value).toBe("ok");
+  expect(model.requests[0]!.messages.map((message) => [message.role, message.text()])).toEqual([
+    ["system", DEFAULT_SYSTEM],
+    ["user", "x"],
+    ["user", "be brief"],
+  ]);
+});
 
 const CALL = new ToolCallPart({ id: "c1", name: "lookup", arguments: { q: "x" } });
 

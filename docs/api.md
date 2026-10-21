@@ -1521,6 +1521,17 @@ awaits it between its effects. Nothing runs on a worker thread, so the inbox nee
 lock. The `Steering` interface lives in `nodes/base.ts`; the run entry point will
 re-export it once it is ported.
 
+Also changed (TS yian): every model call streams, so the interrupt is read before each later
+text chunk of every chat call, and a host without `onStream` can cut a reply too; a reply
+whose text had all arrived is kept whole. So an interrupt during a reply's reasoning or
+tool-call stream takes effect at its next text chunk, or once the reply is complete. An interrupt during the wait before retrying a failed model
+call ends the wait at once, and the node succeeds with no new text (`""`, the cut call's
+empty reply). Steers are awaited at the top of each iteration only, and an interrupt that lands while
+an async `drain` settles stops the node before the next model call. A reply's tool calls
+are checked for an interrupt before each call's check, before each group, and before the
+node fails at a call whose check failed (see
+[Tool context](#tool-context)), and a group that is running finishes.
+
 ## Injecting agent memory
 
 YAML names each memory and its type without importing an implementation:

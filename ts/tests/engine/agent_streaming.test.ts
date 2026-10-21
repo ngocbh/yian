@@ -35,7 +35,8 @@
  * there is no duck-typed client or LangChain normalization).
  *
  * TS-only: structured purposes stream nothing; a retried attempt's chunks carry `attempt: 2`;
- * empty text deltas send no chunk.
+ * empty text deltas send no chunk; a host interrupt cuts a chat call before its next non-empty
+ * text delta, ending its stream with the final chunk, and the cut reply holds the text shown.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -54,6 +55,7 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import { Finish, type Event, TextDelta, ToolCallDelta, UsageReport } from "../../src/llm/events.ts";
 import { Message, Request, TextPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type Output } from "../../src/nodes/base.ts";
@@ -190,6 +192,27 @@ test("empty text deltas send no chunk", async () => {
   const { live, chunks } = sinks({ events: false });
   await callModel(live, model(streamed("", "hi", "")), REQUEST, { purpose: "chat", exchangeId: "x1" });
   expect(chunks).toEqual([chunk("hi"), chunk("", 1, true)]);
+});
+
+test("an interrupted call ends its stream with the final chunk", async () => {
+  const interrupt = new AbortController();
+  const events: unknown[] = [];
+  const chunks: StreamChunk[] = [];
+  const live = liveSinks({
+    nodeId: "writer",
+    llmConfig: CONFIG,
+    emitEvent: (event) => void events.push(event),
+    emitStream: (item) => {
+      chunks.push(item);
+      if (item.chunk === " big") interrupt.abort(new Error("interrupted"));
+    },
+  });
+  const options = { purpose: "chat" as const, exchangeId: "x1", interrupt: interrupt.signal };
+  const cut = await rejected(callModel(live, model(streamed("hello", " big", " world")), REQUEST, options));
+  expect(cut).toBeInstanceOf(ReplyInterrupted);
+  expect((cut as ReplyInterrupted).reply).toEqual(new Message({ role: "assistant", parts: [new TextPart("hello big")] }));
+  expect(chunks).toEqual([chunk("hello"), chunk(" big"), chunk("", 1, true)]);
+  expect(events.map((event) => (event as { type: string }).type)).toEqual(["ModelCallStarted", "ModelCallFinished"]);
 });
 
 // ---------- through the node ----------

@@ -39,7 +39,9 @@
  * the result's text and the call's identity, reports a rejecting call by its `name` and rethrows,
  * lets a `CapabilityFault` through with no finished event, emits no finished event once the given
  * signal has aborted (success or failure), and without an event sink emits nothing and returns the
- * result; `observeSkippedToolCall` emits started, then finished with `error: "interrupted"`.
+ * result; `observeSkippedToolCall` emits started, then finished with `error: "interrupted"`; a
+ * call a host interrupt cut reports `ModelCallFinished` with the usage received before the cut
+ * and no error, and isn't marked.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -56,7 +58,7 @@ import {
 } from "../../src/events.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
-import { Finish, TextDelta } from "../../src/llm/events.ts";
+import { Finish, TextDelta, UsageReport } from "../../src/llm/events.ts";
 import { Message, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import {
@@ -71,6 +73,7 @@ import {
   SKIPPED_TOOL_ERROR,
   usageOf,
 } from "../../src/nodes/agent/live.ts";
+import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type Output } from "../../src/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
@@ -202,6 +205,29 @@ test("a retryable provider error then a reply publishes one pair per attempt in 
     new ModelCallFinished({ ...identity("x1"), attempt: 2 }),
   ]);
   expect(modelFailureCode(failure)).toBeNull();
+});
+
+test("an interrupted call reports the usage received so far and no error", async () => {
+  const interrupt = new AbortController();
+  const events: unknown[] = [];
+  const live = liveSinks({
+    nodeId: "writer",
+    llmConfig: CONFIG,
+    emitEvent: (event) => void events.push(event),
+    emitStream: (chunk) => void (chunk.chunk === "a" && interrupt.abort(new Error("interrupted"))),
+  });
+  const usage = new Usage({ inputTokens: 9, outputTokens: 1, totalTokens: 10 });
+  const replyEvents = [new UsageReport(usage), new TextDelta(0, "a"), new TextDelta(0, "b"), new Finish({ reason: "stop" })];
+  const options = { purpose: "chat" as const, exchangeId: "x1", interrupt: interrupt.signal };
+  const cut = await rejected(callModel(live, model(replyEvents), REQUEST, options));
+  expect(cut).toBeInstanceOf(ReplyInterrupted);
+  const counted = new TokenUsage({ inputTokens: 9, outputTokens: 1, totalTokens: 10 });
+  expect((cut as ReplyInterrupted).usage).toEqual(counted);
+  expect(events).toEqual([
+    new ModelCallStarted({ ...identity("x1"), attempt: 1 }),
+    new ModelCallFinished({ ...identity("x1"), usage: counted, attempt: 1 }),
+  ]);
+  expect(modelFailureCode(cut)).toBeNull();
 });
 
 test("event sink failure escapes unchanged and unmarked, with no finished event", async () => {

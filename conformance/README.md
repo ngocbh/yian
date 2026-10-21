@@ -307,8 +307,9 @@ A case can't hold code, so its host is declared under `host`.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's `ask_user` tool gives to the
   calling node, in order; the same rules when they run out or are left over. A case with `human`
   doesn't declare a tool named `ask_user`.
-- **`jitter`**: the random draws in `[0, 1)` TOOL retry backoffs take, in order: one per retry
-  that waits a backoff, even a zero one, and none for a `retry_after` wait. The same rules apply.
+- **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
+  retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
+  and none for a `retry_after` wait. The same rules apply.
   Without `jitter`, draws are the implementation's own, and the case doesn't depend on them.
 - **`models`**: scripted model calls, `{<node id>: {<consumer>: [<entry>, ...]}}`; each call
   takes the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),

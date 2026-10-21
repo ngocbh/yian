@@ -277,9 +277,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   layouts, LOOP `respawn`); their `forward` throws "not ported yet".
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
-  runs an AGENT with its tools and skills (below), and `backward` is not ported yet. `callTime` is
-  an accessor over an own field, so setting it also sets `needsSteps`, and a shallow copy carries
-  both.
+  runs an AGENT with its tools and skills (below), and `backward` is not ported yet. Every AGENT has
+  `needsSteps`: it records a `model_attempt` step before each model retry, and a call-time agent
+  (`callTime` set) also records its `effective_llm_config`.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`,
   `evaluationTrace`, `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent

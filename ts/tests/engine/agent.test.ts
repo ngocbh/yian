@@ -55,8 +55,8 @@
  * `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward` not
  * ported yet; the load-time hooks (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`,
  * `llmNullable`, `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`,
- * `validatePrompts`, `validateExecutionSetup`) and `needsSteps` following `callTime`, also on a
- * shallow copy; `needsModels`; each `provider.*` code through the node (a `ProviderError` of the
+ * `validatePrompts`, `validateExecutionSetup`); `needsSteps` on every agent, call-time or not,
+ * also on a shallow copy, which carries `callTime`; `needsModels`; each `provider.*` code through the node (a `ProviderError` of the
  * kind `kindForStatus` reads from a status and message, the message kept); in the tool loop: a call
  * with invalid arguments gets `ToolCallStarted` then `ToolCallFinished{error: "RangeError"}` before
  * the node fails, an ungranted call gets no brackets, the request carries the bound `ToolSpec`s in
@@ -68,7 +68,10 @@
  * differs from the recorded one is a host fault before any model is built; a reply calling a tool
  * at a cap of one model turn fails with `agent.max_tool_iterations`; without `models` the node
  * builds through `defaultModelAccess` (an unknown provider's `ValidationError`, no network); a
- * failing credentials read doesn't replace the error being scrubbed.
+ * failing credentials read doesn't replace the error being scrubbed. Through `FlowEngine` with a
+ * run log: a retried model call's `model_attempt` step comes before the node's outcome; a resumed
+ * call-time agent (state replayed from the log, a fresh engine) restarts past its `model_attempt`
+ * step, finds its recorded `effective_llm_config`, and numbers its calls from 1 again.
  *
  * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
  * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
@@ -83,10 +86,10 @@ import { join } from "node:path";
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { copyGraph } from "../../src/compile/model.ts";
+import { copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { BUILTIN, current, type Env, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { ModelCallStarted, TokenUsage, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { ModelCallStarted, RunSucceeded, TokenUsage, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
@@ -134,7 +137,11 @@ import {
 import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { virtualScheduler } from "../../src/platform.ts";
+import { FlowEngine } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { NodeStepRecord } from "../../src/runtime/log.ts";
+import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { loadSkillTool } from "../../src/skills/tool.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
@@ -144,7 +151,7 @@ import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.t
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { drive, rejected } from "./run_state_fixtures.ts";
+import { drive, engine, graph, noGrowth, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 test("textOf returns a string as it is", () => {
   expect(textOf("hello\nworld")).toBe("hello\nworld");
@@ -479,21 +486,19 @@ test("llmNullable answers from llmValueTypes", () => {
   expect(node.llmNullable()("${pick.output}", [])).toBe(true);
 });
 
-test("needsSteps follows callTime, also on a shallow copy", () => {
+test("every AGENT has needsSteps, call-time or not, also on a shallow copy", () => {
   const node = new AgentNode("chat");
-  expect(node.needsSteps).toBe(false);
+  expect(node.needsSteps).toBe(true);
   const at = callTime();
   node.callTime = at;
-  expect(node.callTime).toBe(at);
   expect(node.needsSteps).toBe(true);
 
   const copy = copyGraph(node);
   expect(copy.callTime).toBe(at);
   expect(copy.needsSteps).toBe(true);
   copy.callTime = null;
-  expect(copy.needsSteps).toBe(false);
+  expect(copy.needsSteps).toBe(true);
   expect(node.callTime).toBe(at);
-  expect(node.needsSteps).toBe(true);
 });
 
 test("recordedLlmConfig returns a copy of the last recorded config", () => {
@@ -1175,5 +1180,90 @@ describe("forward", () => {
     const same = { model: "gpt-older", [HOST_KEY_MARKER]: true, provider: "openai" };
     await callTimeAgent().run({ [LLM_CONFIG_KEY]: same }, { steps, models });
     expect(recorded).toEqual([{ effective_llm_config: same }]);
+  });
+});
+
+describe("model_attempt steps through the engine", () => {
+  const NATIVE = { provider: "openai", model: "gpt-5.5" };
+
+  /** The callback error that stops a run. */
+  const CRASH = new Error("crash");
+
+  /**
+   * Return an engine for `START -> chat -> END` over `agent`, built through `models` on a virtual
+   * scheduler with a draw of 1; the other options go to the fixture.
+   */
+  function agentEngine(agent: AgentNode, models: ModelAccess, options: Parameters<typeof engine>[1] = {}): FlowEngine {
+    // The reserved binding `splitLayers` builds for a node layer holding values, here a literal.
+    const layers = new Binding(new ValueTemplate({ node: { model: "gpt-5.5" } }));
+    const wiring = agent.wiresLlmConfig ? { chat: { [LLM_CONFIG_KEY]: layers } } : undefined;
+    const flow = graph([agent], [[START_ID, "chat"]], {
+      outputs: [new FlowOutput("output", "${chat.output}")],
+      ...(wiring === undefined ? {} : { wiring }),
+    });
+    return engine(flow, { models, scheduler: virtualScheduler(), random: () => 1, ...options });
+  }
+
+  /** The kinds of `built`'s records about `chat`, a step as its payload. */
+  function chatRecords(built: FlowEngine): unknown[] {
+    return built.log
+      .records()
+      .map((envelope) => envelope.record)
+      .filter((record) => (record as { nodeId?: string }).nodeId === "chat")
+      .map((record) => (record instanceof NodeStepRecord ? record.step : record.constructor.name));
+  }
+
+  const ATTEMPT = {
+    model_attempt: {
+      call: 1n,
+      attempt: 1n,
+      status: "failed",
+      error: { kind: "server", message: "boom" },
+      partial: null,
+      retry_in: 0.375,
+    },
+  };
+
+  test("the run log holds the model_attempt step before the node's outcome", async () => {
+    install({ ...BUILTIN, modelRetries: 1 });
+    const failure = new ProviderError("server", "boom", { status: 500 });
+    const agent = new AgentNode("chat", { prompt: "hi", llmConfig: NATIVE });
+    const built = agentEngine(agent, serving(new ScriptedModel([failure, textReply("ok")], NATIVE)));
+    expect((await built.run()).at(-1)).toEqual(new RunSucceeded({ output: "ok" }));
+    expect(chatRecords(built)).toEqual(["NodeStartedRecord", ATTEMPT, "NodeSucceededRecord"]);
+  });
+
+  test("a resumed call-time agent restarts past its model_attempt step and finds its recorded config", async () => {
+    install({ ...BUILTIN, modelRetries: 1 });
+    const failure = () => new ProviderError("server", "boom", { status: 500 });
+    const agent = new AgentNode("chat", { prompt: "hi" });
+    agent.callTime = callTime({}, "openai");
+    agent.hostCredentials = new HostConnection({ apiKey: "sk-host" });
+    agent.wiresLlmConfig = true;
+    const models = serving(new ScriptedModel([failure(), textReply("lost"), failure(), textReply("done")], NATIVE));
+    // The first start's retried attempt streams, and the host's stream sink crashes the run.
+    const first = agentEngine(agent, models, {
+      onStream: () => {
+        throw CRASH;
+      },
+    });
+    expect(await rejected(first.run())).toBe(CRASH);
+    const [, config] = chatRecords(first) as [unknown, Record<string, Record<string, unknown>>];
+    expect(chatRecords(first)).toEqual(["NodeStartedRecord", config, ATTEMPT]);
+    expect([config["effective_llm_config"]!["model"], config["effective_llm_config"]![HOST_KEY_MARKER]]).toEqual(["gpt-5.5", true]);
+
+    const state = replayRecords(new RunState(copyGraph(first.state.flow)), first.log.records(), { growBuilder: noGrowth });
+    commitPrepared(first.log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    const resumed = new FlowEngine(state, first.log, {
+      growBuilder: noGrowth,
+      numWorkers: 0,
+      models,
+      scheduler: virtualScheduler(),
+      random: () => 1,
+    });
+    expect((await resumed.run()).at(-1)).toEqual(new RunSucceeded({ output: "done" }));
+    // The new start checks its config against the recorded one past the attempt, and numbers its
+    // calls from 1 again.
+    expect(chatRecords(resumed).slice(3)).toEqual(["NodeStartedRecord", config, ATTEMPT, "NodeSucceededRecord"]);
   });
 });

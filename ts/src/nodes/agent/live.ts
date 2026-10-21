@@ -40,7 +40,7 @@ import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
 import { copyValue } from "../binding.ts";
-import type { AgentRunContext } from "./context.ts";
+import type { AgentRunContext, RetrySettings } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 
 /** The stream key of AGENT reply text. */
@@ -139,7 +139,9 @@ function errorName(error: unknown): string {
  *
  * @param live The sinks, or `null` when there are none.
  * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call;
- *   `interrupt` is the host's interrupt signal; `scheduler` and `random` run the retry waits.
+ *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
+ *   waits, and its `onRetry` runs before each failed attempt's `ModelCallFinished`, its errors
+ *   treated as a sink's.
  * @returns The successful attempt's reply.
  * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
  *   reply and `null` usage for a cut wait; it is never marked.
@@ -153,11 +155,11 @@ export async function callModel(
     exchangeId: string;
     signal?: AbortSignal;
     interrupt?: AbortSignal;
-    scheduler?: Scheduler;
-    random?: () => number;
+    retry?: RetrySettings;
   },
 ): Promise<Response> {
-  const { purpose, exchangeId, signal, interrupt, scheduler = realScheduler, random } = options;
+  const { purpose, exchangeId, signal, interrupt, retry = {} } = options;
+  const { scheduler = realScheduler, random, onRetry } = retry;
   const emitEvent = live?.emitEvent ?? null;
   const emitStream = purpose === "chat" ? (live?.emitStream ?? null) : null;
   const identity = { nodeId: live?.nodeId ?? "", exchangeId, purpose, provider: live?.provider, model: live?.model };
@@ -195,8 +197,9 @@ export async function callModel(
         shownText += text;
         emitStream?.(chunk(text, k));
       },
-      onRetry: (retry) => {
-        emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(retry.error), attempt: retry.attempt }));
+      onRetry: (info) => {
+        onRetry?.(info);
+        emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(info.error), attempt: info.attempt }));
       },
     });
     emitStream?.(chunk("", attempt, true));

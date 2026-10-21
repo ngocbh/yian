@@ -51,7 +51,8 @@
  * path; a value check message reads `structured output at <path>:`; a reply whose value nests past
  * `YIAN_MAX_VALUE_NESTING` is corrected naming the path, then fails with no path, and a value
  * exactly at the limit passes (the wrapper is not a level); the native strategy records the value
- * in the evaluation trace, the prompt strategy every reply's text.
+ * in the evaluation trace, the prompt strategy every reply's text; `retry` is called once per
+ * structured call, so a transport retry of a later call reports that call.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -61,7 +62,7 @@ import { ModelCallFinished } from "../../src/events.ts";
 import { NoAuth } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import type { EventStream } from "../../src/llm/events.ts";
-import { RouteModel } from "../../src/llm/executor.ts";
+import { type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
 import {
   Message,
   type Part,
@@ -83,6 +84,7 @@ import {
   OutputInvalidError,
 } from "../../src/nodes/agent/structured.ts";
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -172,6 +174,21 @@ test("a provider error propagates uncorrected (Changed)", async () => {
   const model = scripted([failure, text('{"value": 42}')]);
   expect(await rejection(generateStructured(model, [], INT, { retries: 2 }))).toBe(failure);
   expect(model.requests).toHaveLength(1);
+});
+
+test("each structured attempt takes its own retry settings, so its transport retry knows its call", async () => {
+  install({ ...BUILTIN, modelRetries: 1 });
+  const failure = new ProviderError("server", "upstream failed", { status: 500 });
+  const model = scripted([text("bad json"), failure, text('{"value": 42}')]);
+  const retried: [number, number][] = [];
+  let calls = 0;
+  const retry = () => {
+    const call = ++calls;
+    return { scheduler: virtualScheduler(), onRetry: (info: RetryInfo) => void retried.push([call, info.attempt]) };
+  };
+  expect(await generateStructured(model, [], INT, { retries: 1, retry })).toBe(42n);
+  expect(retried).toEqual([[2, 1]]);
+  expect(model.requests).toHaveLength(3);
 });
 
 test("test_retry_on_invalid_provider_shape_then_succeeds (a reply without the wrapper field)", async () => {

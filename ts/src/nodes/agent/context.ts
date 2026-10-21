@@ -1,16 +1,21 @@
 /**
  * Process-local context for one AGENT invocation.
  *
- * Knows about:   llm_clients factory, memory contracts, nodes/base, skills, tools and typesys.
+ * Knows about:   llm executor types, llm_clients (connection, factory), memory contracts, nodes/base,
+ *                nodes/contracts, platform, skills, tools and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
+import type { RetryInfo } from "../../llm/executor.ts";
+import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { EvaluationTrace, MemoryContext } from "../../memory/contracts.ts";
+import type { Scheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import type { Type } from "../../typesys/values.ts";
 import type { NodeCaps, Steering } from "../base.ts";
+import type { NodeSteps } from "../contracts.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =
@@ -64,6 +69,53 @@ export interface AgentRunContext {
   readonly models: ModelAccess;
   /** The credentials the built model's route sends, for scrubbing; `() => []` until it is built. */
   sent: () => readonly string[];
+  /** This start's durable steps; absent for direct loop tests, which record nothing. */
+  readonly steps?: NodeSteps;
+  /** The clock model-retry waits run on; the real one when absent. */
+  readonly scheduler?: Scheduler;
+  /** A draw in [0, 1) for model-retry backoff jitter; `Math.random` when absent. */
+  readonly random?: () => number;
+}
+
+/** How one model call retries: the clock and jitter of its waits, and what runs before each wait. */
+export interface RetrySettings {
+  readonly scheduler?: Scheduler;
+  readonly random?: () => number;
+  readonly onRetry?: (retry: RetryInfo) => void;
+}
+
+/**
+ * Return the retry settings of model call `call` (1-based within this start) of an invocation.
+ *
+ * With steps, `onRetry` records `{model_attempt: {call, attempt, status: "failed", error: {kind,
+ * message}, partial, retry_in}}` for the failed attempt, with the error scrubbed of every
+ * credential the call may have sent. `partial` is the `yian.message.v1` JSON of what arrived, or
+ * `null` before the first event; `retry_in` is the wait in seconds. A resumed AGENT restarts and
+ * never reads these steps.
+ */
+export function retrySettings(ctx: AgentRunContext, call: number): RetrySettings {
+  const { steps, scheduler, random } = ctx;
+  if (steps === undefined) return { scheduler, random };
+  const onRetry = (retry: RetryInfo): void => {
+    let sent: readonly string[] = [];
+    try {
+      sent = ctx.sent();
+    } catch {
+      // A failing read must not replace the error being scrubbed.
+    }
+    const error = scrubCallCredentials(retry.error, ctx.llmConfig, { env: ctx.models.env, sent });
+    steps.record({
+      model_attempt: {
+        call: BigInt(call),
+        attempt: BigInt(retry.attempt),
+        status: "failed",
+        error: { kind: error.kind, message: error.message },
+        partial: retry.partial?.toJSON() ?? null,
+        retry_in: retry.retryIn,
+      },
+    });
+  };
+  return { scheduler, random, onRetry };
 }
 
 /** Unwind before starting another external effect once the host stopped the invocation. */

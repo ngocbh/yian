@@ -525,8 +525,12 @@ describe("raised", () => {
   }
 
   test("gives the class name and message", () => {
-    expect(raised(new RangeError("m"))).toEqual({ class: "RangeError", message: "m" });
+    expect(raised(new TypeError("m"))).toEqual({ class: "TypeError", message: "m" });
     expect(raised(new Foo("m"))).toEqual({ class: "Foo", message: "m" });
+  });
+
+  test("names a RangeError ValueError", () => {
+    expect(raised(new RangeError("m"))).toEqual({ class: "ValueError", message: "m" });
   });
 
   test("reads the name through the error-class table", () => {
@@ -571,7 +575,7 @@ describe("expectRaises and results", () => {
     };
     const failure = expectRaises(expected, call);
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: RangeError\n");
+    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: ValueError\n");
   });
 
   test("lets the case's own failure through", async () => {

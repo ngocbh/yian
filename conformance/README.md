@@ -88,8 +88,9 @@ Every case runs in a new temporary directory, the *case directory*:
   doesn't exist, unless `env` sets them. Values in `env` are text.
 - **Values keep their kinds.** A runner hands case values to the implementation as yian values
   with the kinds the case file gives them: `inputs`, stub tool results, human answers,
-  `value`, `values` and `item`. (So `2.0` reaches a TS run as a float; a TS runner passes these
-  without the host number intake of design 3.2.1.)
+  `value`, `values` and `item`. A TS run still takes `inputs`, a tool result and an answer
+  through host intake (design 3.2.1), as it takes any host's, so a whole float reaches it as an
+  int: `2.0` is the int `2` (`2.5` stays a float).
 - **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`,
   `stdin` and `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
   if one appears in the trace, events, stream, tool calls, output, the raised error's message,
@@ -476,6 +477,9 @@ are the case names.
   carries `rules: [numbers]`.
 - In `raises`, a Python class whose name starts with `_` is private, and its case name is its
   nearest public base class's (`_NoUnionMember` is `TypeCheckError`).
+- TS's `RangeError` is the case's `ValueError`: TS throws it wherever Python raises `ValueError`
+  at a yian boundary. A JS-internal `RangeError`, such as a stack overflow, reads as `ValueError`
+  too.
 - Any other class compares by its name as given, a stub's declared class included.
 - A row mapping a TS class to a different case name is added by the change that introduces that
   TS class; rows are only added.

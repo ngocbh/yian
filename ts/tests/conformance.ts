@@ -42,7 +42,7 @@ import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
-import type { Diagnostic } from "../src/diagnostics.ts";
+import type { Diagnostic, Failure } from "../src/diagnostics.ts";
 import {
   constructorNames,
   evalExpr,
@@ -53,6 +53,7 @@ import {
 } from "../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
+import { type RunFlowOptions, type RunResult, runFlow } from "../src/run.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
@@ -690,9 +691,12 @@ export function compare(
 /**
  * TS error class names that differ from the case names, mapped to the case names. A change that
  * introduces such a class adds its entry here and the matching row to the error-class table in
- * `conformance/README.md`; empty while no class differs.
+ * `conformance/README.md`.
  */
-export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map();
+export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
+  // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
+  ["RangeError", "ValueError"],
+]);
 
 /**
  * Return `error` in the case's `raises` form: `{class, message}`, plus `path` for a
@@ -767,7 +771,7 @@ export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>
  */
 export const KINDS: Partial<Record<Kind, KindRunner>> = {
   load: runLoad,
-  // run: not run yet
+  run: runRun,
   // resume: not run yet
   // backward: not run yet
   expr: runExpr,
@@ -1030,6 +1034,88 @@ async function runLoad(case_: Case, ctx: CaseContext): Promise<void> {
 }
 
 // ---- run ----
+
+/** The `runFlow` option each `run` key sets. */
+const RUN_OPTIONS: Readonly<Record<string, keyof RunFlowOptions>> = {
+  run_id: "runId",
+  num_workers: "numWorkers",
+  learnable: "learnable",
+  llm_config: "llmConfig",
+  context: "context",
+};
+
+/** Return the `run` arguments as `runFlow` options: an int as a JS number, `context` an object. */
+function runOptions(run: Case): RunFlowOptions {
+  return Object.fromEntries(
+    Object.entries(run).map(([key, value]) => [
+      RUN_OPTIONS[key],
+      key === "context" ? {} : typeof value === "bigint" ? Number(value) : value,
+    ]),
+  );
+}
+
+/** Return a run's `failure` in the case's failure form. */
+function failureForm(failure: Failure, flow: ComposedFlow): Case {
+  return { ...diagnosticForm(flow.diagnose(failure)), node: failure.nodeId };
+}
+
+/** Return `result` in the form of `expect.output`. */
+function output(result: RunResult, flow: ComposedFlow): Case {
+  if (result.status === "succeeded") {
+    return { status: "succeeded", output: dataForm(result.output as YianValue) };
+  }
+  return { status: result.status, failure: failureForm(result.failure!, flow) };
+}
+
+/**
+ * Run the flow with `inputs` and the `run` arguments, logged to `run.jsonl` in the case directory,
+ * and return its results: `output`, or the host error as `raises` and `error` (never compared).
+ */
+async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
+  const flow = await loadText(case_["flow"] as string, ctx);
+  // `env` scopes the case's YIAN_* values to the run, so nothing is installed around it.
+  const options: RunFlowOptions = {
+    ...runOptions(get(case_, "run", {}) as Case),
+    log: join(ctx.dir, "run.jsonl"),
+    env: caseEnv(ctx),
+  };
+  let result: RunResult | undefined;
+  let caught: Record<string, unknown> = {};
+  try {
+    result = await runFlow(flow, get(case_, "inputs", {}) as Case, options);
+  } catch (error) {
+    caught = { raises: raised(error), error };
+  }
+  // In placeholder order: ids are numbered walking the results in this order.
+  const actual = {
+    ...(result !== undefined ? { output: output(result, flow) } : {}),
+  };
+  return { ...actual, ...caught };
+}
+
+/**
+ * Throw a `CaseFailure` unless the results in `actual` are the ones `expect` holds: the raised
+ * error, or the output, which compares numbers by value for a success.
+ */
+function checkResults(expect: Case, actual: Record<string, unknown>): void {
+  if (Object.hasOwn(expect, "raises") && !Object.hasOwn(actual, "raises")) {
+    const expected = str(get(expect["raises"] as Case, "class"));
+    throw new CaseFailure(`expected ${expected} to be raised, but nothing was`);
+  }
+  if (Object.hasOwn(actual, "raises") && !Object.hasOwn(expect, "raises")) {
+    throw new CaseFailure(`unexpected error\n${failureText(actual["error"])}`);
+  }
+  if (Object.hasOwn(expect, "raises")) compare("raises", actual["raises"], expect["raises"]);
+  if (Object.hasOwn(expect, "output")) {
+    const form = actual["output"] as Case;
+    compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
+  }
+}
+
+/** Run a `run` case: run the flow and compare its results with `expect`. */
+async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
+  checkResults(case_["expect"] as Case, await actualRun(case_, ctx));
+}
 
 // ---- resume ----
 

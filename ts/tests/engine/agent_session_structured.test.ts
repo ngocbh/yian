@@ -18,10 +18,12 @@
  * no binding step, so the `before` stage covers it. Exhausted corrections throw
  * `OutputInvalidError` with the schema error as `cause`, its location in `path`, rather than the
  * schema error itself. `test_provider_error_and_failed_publication_bypass_retry_with_original_public_identity`
- * runs `generateStructured` with a turn rather than `run_flow`; the provider error is a
- * `ProviderError`, and as `invokeModel` does, it is thrown wrapped in `CapabilityFault` once
- * recording the failure failed (Python rethrows the original). Python's `FutureCancelledError`
- * row is not ported (below). `test_no_session_provider_correction_text_and_retry_behavior_are_unchanged`:
+ * calls `generateStructured` with a turn rather than `run_flow`, so it sees the `CapabilityFault`
+ * carrying the original, as Python's `generate_structured` raises it (Python's test sees the
+ * original only through `run_flow`'s evaluator unwrapping it); the provider error is a
+ * `ProviderError`. Its `FutureCancelledError` row is not ported: TS has no `FutureCancelledError`,
+ * and a stop during the call is covered by the stop rows.
+ * `test_no_session_provider_correction_text_and_retry_behavior_are_unchanged`:
  * TS never corrects a provider error, with or without a turn; it propagates after one call
  * (transport failures are `callWithRetries`' job).
  *
@@ -55,20 +57,19 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ModelCallFinished } from "../../src/events.ts";
 import { NoAuth } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
-import type { EventStream } from "../../src/llm/events.ts";
+import type { ChatModel, EventStream } from "../../src/llm/events.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
 import { Message, type Part, type Request, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { MissingToolCallError, StructuredPlan } from "../../src/llm/structured.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import type { ChatModel } from "../../src/llm/events.ts";
 import type { ConversationView } from "../../src/memory/contracts.ts";
 import { conversationViewFromJson } from "../../src/memory/conversation.ts";
 import { SessionMemory, type Turn } from "../../src/memory/session.ts";
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
 import { decodeMessage } from "../../src/nodes/agent/memory.ts";
-import { generateStructured, OutputInvalidError } from "../../src/nodes/agent/structured.ts";
+import { generateStructured, OutputInvalidError, userMessage } from "../../src/nodes/agent/structured.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { fakeTurn, NEVER, rejected, request, snapshot, withHarness, withTurn } from "./session_fakes.ts";
@@ -85,10 +86,6 @@ const STRATEGIES = [
 const INT = Type.scalar(ValueKind.INTEGER);
 const MISSING = "the reply did not call the ScalarWrapper tool; call it with the answer";
 
-function user(text: string): Message {
-  return new Message({ role: "user", parts: [new TextPart(text)] });
-}
-
 function reply(...parts: Part[]): Response {
   return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "stop" });
 }
@@ -97,7 +94,7 @@ function text(text: string): Response {
   return reply(new TextPart(text));
 }
 
-const QUESTION = user("question");
+const QUESTION = userMessage("question");
 
 /** A `RouteModel` on OpenAI Chat (`gpt-5.5`, so the tool strategy) that replays `replies`. */
 class ToolRoute extends RouteModel {
@@ -146,18 +143,15 @@ async function inTurn<T>(
 function generateInTurn(
   model: ChatModel,
   memory: SessionMemory,
-  options: { retries?: number; signal?: AbortSignal; live?: LiveSinks; newMessages?: Message[] } = {},
+  retries?: number,
 ): Promise<{ result?: unknown; error?: unknown }> {
-  const { signal = NEVER, ...rest } = options;
-  return inTurn(memory, (turn) => generateStructured(model, [QUESTION], INT, { ...rest, signal, transcript: turn }), signal);
+  return inTurn(memory, (turn) => generateStructured(model, [QUESTION], INT, { retries, transcript: turn }));
 }
 
 describe.each(STRATEGIES)("%s", (_label, strategy) => {
   test("test_structured_exhaustion_retains_schema_error_identity_and_origin", async () => {
     const memory = new SessionMemory();
-    const { error } = await generateInTurn(new ScriptedModel([text('{"value": "bad"}')], strategy), memory, {
-      retries: 0,
-    });
+    const { error } = await generateInTurn(new ScriptedModel([text('{"value": "bad"}')], strategy), memory, 0);
     expect(error).toBeInstanceOf(OutputInvalidError);
     expect((error as OutputInvalidError).cause).toBeInstanceOf(TypeCheckError);
     expect((error as OutputInvalidError).path).toEqual([]);
@@ -244,15 +238,15 @@ describe.each(STRATEGIES)("%s", (_label, strategy) => {
         },
         emitStream: null,
       };
+      const memory = new SessionMemory();
+      // The turn's close throws a pending stop too, so the call's own outcome is checked.
+      let thrown: unknown;
       const parse = StructuredPlan.prototype.parse;
       const spy = spyOn(StructuredPlan.prototype, "parse").mockImplementation(function (this: StructuredPlan, response) {
         const data = parse.call(this, response);
         if (stage === "after_parse") controller.abort(stop);
         return data;
       });
-      const memory = new SessionMemory();
-      // The turn's close throws a pending stop too, so the call's own outcome is checked.
-      let thrown: unknown;
       try {
         const { error } = await inTurn(
           memory,
@@ -264,7 +258,8 @@ describe.each(STRATEGIES)("%s", (_label, strategy) => {
           },
           controller.signal,
         );
-        expect([thrown, error]).toEqual([stop, stop]);
+        expect(thrown).toBe(stop);
+        expect(error).toBe(stop);
       } finally {
         spy.mockRestore();
       }
@@ -284,7 +279,7 @@ describe.each(STRATEGIES)("%s", (_label, strategy) => {
   test("the first request stores newMessages and the instruction, a later one only its correction", async () => {
     const model = new ScriptedModel([text("bad json"), text('{"value": 2}')], strategy);
     const memory = new SessionMemory();
-    const earlier = user("earlier, already stored");
+    const earlier = userMessage("earlier, already stored");
     const { result } = await inTurn(memory, (turn) =>
       generateStructured(model, [earlier, QUESTION], INT, { retries: 1, transcript: turn, newMessages: [QUESTION] }),
     );
@@ -310,7 +305,7 @@ describe("a reply without the schema's tool call", () => {
     const call = new ToolCallPart({ id: "format-id", name: "ScalarWrapper", arguments: { value: 7n } });
     const model = new ToolRoute([text("42"), reply(call)]);
     const memory = new SessionMemory();
-    const { result } = await generateInTurn(model, memory, { retries: 2 });
+    const { result } = await generateInTurn(model, memory, 2);
     expect(result).toBe(7n);
     const requests = model.script.requests;
     expect(requests).toHaveLength(2);
@@ -326,7 +321,7 @@ describe("a reply without the schema's tool call", () => {
   test("test_native_carriers_without_a_parsed_value_fail_once_retries_are_spent", async () => {
     const model = new ToolRoute([text("42"), text("42")]);
     const memory = new SessionMemory();
-    const { error } = await generateInTurn(model, memory, { retries: 1 });
+    const { error } = await generateInTurn(model, memory, 1);
     expect(model.script.requests).toHaveLength(2);
     expect(error).toBeInstanceOf(OutputInvalidError);
     expect((error as Error).cause).toBeInstanceOf(MissingToolCallError);

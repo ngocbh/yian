@@ -440,8 +440,8 @@ export function userMessage(text: string): Message {
  *
  * With a `transcript`, each call stores only its new input (the first: `newMessages` and the
  * prompt strategy's instruction; a later one: its correction) and its raw reply, before the reply
- * is parsed, so an invalid reply is stored too; a stop pending once the reply is checked wins over
- * its value.
+ * is parsed, so an invalid reply is stored too; a stop that lands while the reply is parsed wins
+ * over its value.
  *
  * @param messages The conversation so far; not changed.
  * @param typ The declared output type; `typeToSchema` must give it a schema.
@@ -503,7 +503,7 @@ export async function generateStructured(
       pending = [correction];
       continue;
     }
-    // As in Python, with a transcript a stop that landed while the reply was read wins over its value.
+    // As in Python, with a transcript a stop that lands while the reply is parsed wins over its value.
     if (transcript) signal?.throwIfAborted();
     if (!prompted) recordModelValue(evaluationTrace, value);
     return value;

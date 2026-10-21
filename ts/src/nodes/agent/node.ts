@@ -8,16 +8,17 @@
  * host interruption unwinds the node; no conversation or continuation state is stored in the
  * graph or variable pool.
  *
- * Here: everything but `backward`, which is not ported yet.
+ * Backward makes one tool-free model call over the recorded invocation (`backward.ts`).
  *
  * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, memory contracts,
- *                llm_clients (config, connection, factory), expr templates, skills, defaults,
- *                diagnostics and typesys.
+ *                llm_clients (config, connection, factory), expr (templates, lineage), skills,
+ *                defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
+import type { FeedbackValue } from "../../expr/lineage.ts";
 import { renderTemplateRecord } from "../../expr/template.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
@@ -44,7 +45,17 @@ import {
   valueRepr,
   writeAsText,
 } from "../../typesys/values.ts";
-import { CapabilityFault, checkNamedPrompt, Node, type NodeCaps, NodeKind, type Output } from "../base.ts";
+import {
+  type BackwardContext,
+  type BackwardOptions,
+  type BackwardResult,
+  CapabilityFault,
+  checkNamedPrompt,
+  Node,
+  type NodeCaps,
+  NodeKind,
+  type Output,
+} from "../base.ts";
 import { applyDefaults, BindingError, copyValue, type ReservedBinder } from "../binding.ts";
 import {
   Binding,
@@ -59,6 +70,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
+import { backwardAgent } from "./backward.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
 import { modelFailureCode } from "./live.ts";
 import {
@@ -728,9 +740,51 @@ export class AgentNode extends Node {
     return copyValue(applyDefaults(this.variables, {}) as ValueRecord) as ValueRecord;
   }
 
-  /** The tool-free backward call; not ported yet. */
-  override backward(): never {
-    throw new Error(`node ${reprText(this.id)} (AgentNode) backward is not ported yet (T6-6)`);
+  /**
+   * Return the host key and header values bound to this node for the run, if any.
+   *
+   * @param recorded The recorded config of the invocation backward revisits. A call-time agent
+   *   gets the host's secrets only when it is marked (`invocationConfig`); any other agent, its
+   *   own `llmConfig`'s `api_key` and `headers`.
+   * @returns The key and the header values, each `null` when unbound.
+   */
+  private hostSecrets(recorded: unknown): { apiKey: string | null; headers: Readonly<Record<string, string>> | null } {
+    let config: Readonly<Record<string, unknown>> | null = this.llmConfig;
+    // Through `invocationConfig`, so the host-key marker rule lives in one place.
+    if (this.callTime !== null) config = isRecord(recorded) ? invocationConfig(recorded, this.hostCredentials) : null;
+    if (config === null) return { apiKey: null, headers: null };
+    return {
+      apiKey: (config["api_key"] as string | undefined) ?? null,
+      headers: (config["headers"] as Record<string, string> | undefined) ?? null,
+    };
+  }
+
+  /**
+   * Use only recorded invocation material for one tool-free backward call (`backwardAgent`).
+   *
+   * Live node fields are unused, except a host `api_key` and `headers` bound for the run.
+   *
+   * @param context Accepted context, including the recorded model configuration and the
+   *   render/evidence components.
+   * @param feedback Ordered ordinary output messages. Empty effective feedback skips model
+   *   construction.
+   * @param options The model access (default `defaultModelAccess()`) and the observer for the
+   *   call's retry and replay events.
+   * @returns Independent input, self, and variable channels for common result validation by the
+   *   caller before upstream routing.
+   * @throws TypeError when the context, feedback, captured fields, or response channels are
+   *   malformed.
+   * @throws RangeError when the feedback shape, a required capture, or the response is invalid.
+   *   Model and host errors propagate, model errors with every credential the call sent scrubbed.
+   */
+  override async backward(
+    context: BackwardContext,
+    feedback: readonly FeedbackValue[],
+    options: BackwardOptions = {},
+  ): Promise<BackwardResult> {
+    // The only live fields: a host key and its header values, which are never recorded.
+    const { apiKey, headers } = this.hostSecrets(context.nodeData["effective_llm_config"]);
+    return backwardAgent(context, feedback, { ...options, apiKey, headers });
   }
 
   /** Return the canonical local declarations in their authored order. */

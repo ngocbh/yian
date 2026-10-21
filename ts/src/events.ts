@@ -7,7 +7,8 @@
  * as are the in-loop AGENT observers (`ModelCallStarted`/`ModelCallFinished` with
  * `TokenUsage`, `ToolCallStarted`/`ToolCallFinished`, `ReplayDegraded`): they reach `onEvent`
  * between a node's start and outcome but are never yielded, recorded, or replayed,
- * and `NodeSkipped` is derived from a route's durable skip closure. A node only
+ * and `NodeSkipped` is derived from a route's durable skip closure. `ModelCallRetried`
+ * is transient too, published outside a forward node. A node only
  * describes its result; the reducer owns graph state and variable-pool writes.
  *
  * Run observers bracket a fresh or recovered execution segment with `RunStarted`
@@ -457,6 +458,10 @@ export class ToolCallFinished {
  * An AGENT's model left out replay state it couldn't send back for `reason`
  * (`other_account`, `other_provider`, ...), published once per reason per invocation.
  * The replayed turns' text and tool calls were still sent.
+ *
+ * One published during AGENT backward (under the AGENT's node id) or with `nodeId`
+ * `"__memory__"` (a memory's learner) comes from outside a forward node; in practice it
+ * can't fire there, since those requests replay no assistant message.
  */
 export class ReplayDegraded {
   readonly type = "ReplayDegraded" as const;
@@ -475,8 +480,52 @@ export class ReplayDegraded {
 }
 
 /**
+ * A model call outside a forward node failed with a retryable error and is sent again
+ * after `retryIn` seconds; published before the wait. TS-only: Python yian publishes nothing.
+ *
+ * `consumer` names what the model was built for, as `ModelAccess.createModel`'s `consumer`
+ * option does (`llm_clients/factory.ts`). `attempt` is the
+ * failed attempt, from 1; `error` is the provider error's kind and message, scrubbed of
+ * credentials. Transient and published outside a node, so it is not in `IN_LOOP_EVENTS`.
+ */
+export class ModelCallRetried {
+  readonly type = "ModelCallRetried" as const;
+  readonly nodeId: string;
+  readonly consumer: string;
+  readonly attempt: number;
+  readonly error: { readonly kind: string; readonly message: string };
+  readonly retryIn: number;
+
+  constructor(options: {
+    nodeId: string;
+    consumer: string;
+    attempt: number;
+    error: ModelCallRetried["error"];
+    retryIn: number;
+  }) {
+    this.nodeId = options.nodeId;
+    this.consumer = options.consumer;
+    this.attempt = options.attempt;
+    this.error = options.error;
+    this.retryIn = options.retryIn;
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return {
+      node_id: this.nodeId,
+      consumer: this.consumer,
+      attempt: this.attempt,
+      error: { kind: this.error.kind, message: this.error.message },
+      retry_in: this.retryIn,
+    };
+  }
+}
+
+/**
  * The in-loop AGENT event classes, so hosts sharing one `onEvent` callback can
- * separate them from post-durable observers.
+ * separate them from post-durable observers. `ModelCallRetried` is transient too, but it is
+ * published outside a node, so it isn't listed here.
  */
 export const IN_LOOP_EVENTS = [
   ModelCallStarted,
@@ -556,6 +605,7 @@ export type RunEvent =
   | ToolCallStarted
   | ToolCallFinished
   | ReplayDegraded
+  | ModelCallRetried
   | RunStarted
   | RunResumed
   | RunSucceeded

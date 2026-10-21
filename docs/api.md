@@ -194,6 +194,19 @@ run before appending any record.
   it couldn't send back (another provider's or account's reasoning, an unknown
   record version), while the replayed turns' text and tool calls were still
   sent. It arrives once per reason per node start.
+  Changed (TS yian): `ModelCallRetried` (`node_id`, `consumer`, `attempt`,
+  `error: {kind, message}`, `retry_in`) reports a model call outside a forward
+  node that failed with a retryable error and is sent again after `retry_in`
+  seconds; it arrives before the wait. `consumer` is `"backward"` for AGENT
+  backward (under the AGENT's `node_id`) or `"memory:<key>"` for a memory's
+  learner (under `node_id` `"__memory__"`), and `error` is the provider error's
+  kind and message, scrubbed of credentials. It is transient and not in
+  `IN_LOOP_EVENTS`, since it comes from outside a node. A `ReplayDegraded`
+  published during backward or with `node_id` `"__memory__"` comes from outside a
+  forward node too. Python yian publishes no retry event.
+  Changed (TS yian): a learner's `ModelCallRetried` and `ReplayDegraded`
+  reach the `onEvent` given to `buildMemories`, never a run's `on_event`, since
+  learners run outside any run.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
   chat replies stream visible text as `StreamChunk(node_id, "text", chunk,
@@ -1708,38 +1721,40 @@ memory = build_memories(
 )
 ```
 
-Changed (TS yian): `await buildMemories(flow, { root, storage, supplied, factories, env })` is
-async and resolves to a `MemoryRegistry`, a read-only `Map` subclass whose `types` is a read-only
-`Map` too (`set`, `delete`, `clear` and the upserts throw `TypeError`). `storage`, `supplied` and
-`factories` are plain records, and a `storage` value must be a string. `env` (default
-`processEnv`) reaches the reflective and profile backends the call builds. A built-in gets its
+Changed (TS yian): `await buildMemories(flow, { root, storage, supplied, factories, env, models,
+onEvent })` is async and resolves to a `MemoryRegistry`, a read-only `Map` subclass whose `types` is
+a read-only `Map` too (`set`, `delete`, `clear` and the upserts throw `TypeError`). `storage`,
+`supplied` and `factories` are plain records, and a `storage` value must be a string. `env` (default
+`processEnv`) reaches the reflective and profile backends the call builds. Those learners build
+their models through `models` (a `ModelAccess`, under the node id `__memory__` with consumer
+`"memory:<key>"`; its `env` wins over `env`), and `onEvent` receives each learner retry as a
+`ModelCallRetried`, its error scrubbed of the call's credentials, and each replay reason as a
+`ReplayDegraded`; a throw from `onEvent` during a retry fails that learner call. A built-in gets its
 YAML `config` keys in camelCase (`max_episodes` is `maxEpisodes`). A factory is called with
 `toHost(config)` (safe ints as `number`) and may return a promise, which is awaited; a factory or
-constructor that throws `TypeError` or `RangeError` "rejected its config", and the setup error
-keeps it as `cause`. `await registry.close()` awaits each owned object's `close()`, which may
-return a promise; a call made while a close is in flight returns that close's promise. Use
-`await using registry = await buildMemories(flow)` where the runtime or compiler supports it
-(else `try`/`finally` with `await registry.close()`): when the body throws and the close fails too,
-JS throws a `SuppressedError` whose `error` is the close failure and whose `suppressed` is the
-body's error, where Python notes the cleanup failure on the primary. Messages show lists and
-quoted keys in the text form (`memory key(s) ["other"]`, `storage["notes"]`) and drop Python's
-`=` from keyword names (`use supplied to replace one built-in instance`).
+constructor that throws `TypeError` or `RangeError` "rejected its config", and the setup error keeps
+it as `cause`. `await registry.close()` awaits each owned object's `close()`, which may return a
+promise; a call made while a close is in flight returns that close's promise. Use `await using
+registry = await buildMemories(flow)` where the runtime or compiler supports it (else
+`try`/`finally` with `await registry.close()`): when the body throws and the close fails too, JS
+throws a `SuppressedError` whose `error` is the close failure and whose `suppressed` is the body's
+error, where Python notes the cleanup failure on the primary. Messages show lists and quoted keys in
+the text form (`memory key(s) ["other"]`, `storage["notes"]`) and drop Python's `=` from keyword
+names (`use supplied to replace one built-in instance`).
 
-Changed (TS yian): `new ReflectiveMemory({ llmConfig, maxItems, recallLimit, storage,
-createParent, env, createModel, onRetry })` takes an options object. `env` is where
-the learner's model defaults and credentials are read (default `processEnv`).
-`createModel(config)` builds the learner's model from the pinned config (default
-`chatModelFromConfig`), and `onRetry` sees each transport retry. `recall` and `learn`
-are async. The learner makes one structured call through `callWithRetries`, so only
-transport errors retry, under the process's `YIAN_MODEL_RETRIES`. yian checks the
-reply itself (exactly `actions`); an invalid reply fails `reflective.contract` without
-a retry, and a model without native structured output fails
-`reflective.structured_output`. The reflection prompt shows its materials in the text
-form (`1.0` is `1`, bare `Infinity`, JS key order). Limits are integral `number`s or
-`bigint`s; snapshots are deep-frozen; `recall` awaits `rewriteQuery`, which may return a
-promise, and the default query uses `logJson`; blank checks use JS `trim()` whitespace.
-Messages keep Python's wording, with `null` for `None`, `array` for `tuple` and
-`rewriteQuery()` for `rewrite_query()`.
+Changed (TS yian): `new ReflectiveMemory({ llmConfig, maxItems, recallLimit, storage, createParent,
+env, createModel, onRetry })` takes an options object. `env` is where the learner's model defaults
+and credentials are read (default `processEnv`). `createModel(config)` builds the learner's model
+from the pinned config (default `chatModelFromConfig`), and `onRetry` sees each transport retry, its
+error scrubbed of the call's credentials. `recall` and `learn` are async. The learner makes one
+structured call through `callWithRetries`, so only transport errors retry, under the process's
+`YIAN_MODEL_RETRIES`. yian checks the reply itself (exactly `actions`); an invalid reply fails
+`reflective.contract` without a retry, and a model without native structured output fails
+`reflective.structured_output`. The reflection prompt shows its materials in the text form (`1.0` is
+`1`, bare `Infinity`, JS key order). Limits are integral `number`s or `bigint`s; snapshots are
+deep-frozen; `recall` awaits `rewriteQuery`, which may return a promise, and the default query uses
+`logJson`; blank checks use JS `trim()` whitespace. Messages keep Python's wording, with `null` for
+`None`, `array` for `tuple` and `rewriteQuery()` for `rewrite_query()`.
 
 ### Profile memory
 
@@ -1773,13 +1788,13 @@ See [profile memory](learning.md#profile-memory) for recall, learning, and store
 rules.
 
 Changed (TS yian): `new ProfileMemory(store, { llmConfig, maxChars, inputBudgetChars, env,
-createModel, onRetry })`; `openRun`, `read`, `write`, `learn` and `commit` are async; store
-errors map by kind: a Node system error is `profile.store_unavailable`, a `RangeError`
+createModel, onRetry })`; `openRun`, `read`, `write`, `learn` and `commit` are async; store errors
+map by kind: a Node system error is `profile.store_unavailable`, a `RangeError`
 `profile.store_invalid`. `env` is where the learner's model defaults and credentials are read
-(default `processEnv`). `createModel(config)` gets the resolved config with the host
-credentials (default `chatModelFromConfig`), and `onRetry` sees each transport retry. The
-learner makes one plain call through `callWithRetries`, so only transport errors retry; a reply
-without `<profile>` tags fails `profile.contract` without a retry.
+(default `processEnv`). `createModel(config)` gets the resolved config with the host credentials
+(default `chatModelFromConfig`), and `onRetry` sees each transport retry, its error scrubbed of the
+call's credentials. The learner makes one plain call through `callWithRetries`, so only transport
+errors retry; a reply without `<profile>` tags fails `profile.contract` without a retry.
 
 ### Optional durable memory
 

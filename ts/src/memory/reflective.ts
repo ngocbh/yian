@@ -676,8 +676,8 @@ export class ReflectiveMemory implements Memory {
    *   `processEnv`.
    * @param options.createModel Build the learner's model from the config Python passes to
    *   `model_from_config`; default `chatModelFromConfig(config, {env})`.
-   * @param options.onRetry Called before the learner's model call is retried; unset publishes
-   *   nothing.
+   * @param options.onRetry Called before the learner's model call is retried, with the error
+   *   scrubbed of the call's credentials; unset publishes nothing.
    * @throws TypeError when a limit or `llmConfig` has an invalid type, or `createParent` isn't a
    *   boolean.
    * @throws RangeError when a limit or the model settings are invalid.
@@ -1359,7 +1359,7 @@ export class ReflectiveSession implements MemorySession {
           cause: scrubCallCredentials(error, callConfig, { env }),
         });
       }
-      const scrub = (error: unknown) => {
+      const scrub = <T>(error: T): T => {
         let sent: readonly string[] = [];
         try {
           if (model instanceof RouteModel) sent = model.route.auth.credentials();
@@ -1392,7 +1392,11 @@ export class ReflectiveSession implements MemorySession {
       const request = plan.apply(new Request({ messages: [system, user] }));
       let response: Response;
       try {
-        response = await callWithRetries(model, request, { onRetry: memory["onRetry"] });
+        // Providers may echo any credential the call sent; a retry observer must not see it.
+        const onRetry = memory["onRetry"];
+        response = await callWithRetries(model, request, {
+          onRetry: onRetry && ((retry) => onRetry({ ...retry, error: scrub(retry.error) })),
+        });
       } catch (error) {
         throw operationError("learn", "reflective.provider", "reflector invocation failed", {
           retryable: true,

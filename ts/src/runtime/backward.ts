@@ -22,6 +22,7 @@ import {
 } from "../memory/contracts.ts";
 import {
   type BackwardContext,
+  type BackwardOptions,
   BackwardResult,
   copyBackwardValue,
   markerMessage,
@@ -105,6 +106,9 @@ function computeFailure(context: BackwardContext, code: string, error: unknown):
  *   actual terminal output. Failed terminals accept text or `null`.
  * @param options.cache The pass's route-context cache over `trace`, so the owner projection can
  *   reuse it; `null` or omitted starts a new one.
+ * @param options.models Builds the model a callback calls (AGENT backward); passed to each
+ *   callback, which defaults it to `defaultModelAccess()`.
+ * @param options.onEvent Receives the transient events callbacks publish; passed to each callback.
  * @returns Root input feedback and results in accepted-outcome order, including unreached
  *   occurrences whose callbacks were not invoked.
  * @throws TypeError (as a rejection, as are all below) for malformed feedback or trace carriers.
@@ -117,8 +121,9 @@ function computeFailure(context: BackwardContext, code: string, error: unknown):
 export async function computeBackward(
   trace: RetainedTrace,
   rootFeedback: FeedbackValue,
-  options: { cache?: ContextCache | null } = {},
+  options: { cache?: ContextCache | null } & BackwardOptions = {},
 ): Promise<[BackwardResult, readonly AttributedBackwardResult[]]> {
+  const { models, onEvent } = options;
   const cache = options.cache ?? new ContextCache(trace);
   const [pending, directRoot] = seedBackward(trace, rootFeedback);
   const occurrences = trace.occurrences;
@@ -143,7 +148,7 @@ export async function computeBackward(
     if (handler === undefined) throw new Error("backward occurrence has no retained handler");
     let result: BackwardResult;
     try {
-      result = await handler(context, feedback);
+      result = await handler(context, feedback, { models, onEvent });
     } catch (error) {
       throw computeFailure(context, "backward.execute", error);
     }
@@ -211,6 +216,7 @@ async function driveOpenedBackward(
   state: RunState,
   log: RunLog,
   memory: MemoryRuntime | null,
+  options: BackwardOptions,
 ): Promise<BackwardOutcome> {
   const started = state.backwardState.started!;
   const attemptId = started.attemptId;
@@ -219,7 +225,7 @@ async function driveOpenedBackward(
   let root: BackwardResult;
   let attributed: readonly AttributedBackwardResult[];
   try {
-    [root, attributed] = await computeBackward(trace, started.feedback, { cache });
+    [root, attributed] = await computeBackward(trace, started.feedback, { cache, ...options });
   } catch (error) {
     if (!(error instanceof BackwardComputeError)) throw error;
     return finishBackward(
@@ -321,6 +327,8 @@ async function driveOpenedBackward(
  * @param options.openMemory Fresh resource opener using the recorded memory table and snapshots;
  *   required only for enabled memories, and called only then. This driver closes the returned
  *   runtime on every exit.
+ * @param options.models Builds the model a callback calls (AGENT backward); `computeBackward`'s.
+ * @param options.onEvent Receives the transient events callbacks publish; `computeBackward`'s.
  * @returns The exact accepted Finished disposition. An unfinished earlier attempt, including one
  *   with unconfirmed commit requests, is first closed as interrupted; all callbacks and proposals
  *   are recomputed.
@@ -338,7 +346,7 @@ export async function driveBackward(
   state: RunState,
   log: RunLog,
   rootFeedback: FeedbackValue,
-  options: { openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null } = {},
+  options: { openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null } & BackwardOptions = {},
 ): Promise<BackwardOutcome> {
   if (!isExactly(state, RunState) || !isRunLog(log)) {
     throw new TypeError("backward driving requires a RunState and RunLog");
@@ -375,7 +383,7 @@ export async function driveBackward(
     }
     acceptBackward(state, log, first);
     if (interrupted) acceptBackward(state, log, started);
-    return await driveOpenedBackward(state, log, memory);
+    return await driveOpenedBackward(state, log, memory, { models: options.models, onEvent: options.onEvent });
   } catch (error) {
     primary = { error };
     throw error;

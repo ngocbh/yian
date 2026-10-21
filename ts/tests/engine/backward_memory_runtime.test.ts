@@ -85,7 +85,8 @@
  * can't finish the newer attempt, which then finishes itself (choice 11); an opener result that
  * isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
  * `MemoryOperationError` with an `AbortError` or `CapabilityFault` cause is a learner or commit
- * failure; a thrown `undefined` still closes the runtime and is rethrown.
+ * failure; a thrown `undefined` still closes the runtime and is rethrown; a drive hands its
+ * `models` and `onEvent` to a node's backward hook as its third argument.
  *
  * Not ported:
  * - `test_typed_backend_wrappers_preserve_original_host_error`: it walks the cause chain for the
@@ -122,7 +123,8 @@ import {
   MemorySnapshotEnvelope,
   MemorySpec,
 } from "../../src/memory/contracts.ts";
-import { BackwardResult, CapabilityFault } from "../../src/nodes/base.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { type BackwardContext, type BackwardOptions, BackwardResult, CapabilityFault } from "../../src/nodes/base.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
 import { BackwardFailure, BackwardOutcome, MemoryProposal } from "../../src/runtime/contracts.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
@@ -458,6 +460,39 @@ test("a backward without policies still records Ready and Finished without openi
   expect(again.status).toBe("succeeded");
   expect(again.feedback!.inputFeedback).toEqual({ topic: ["again"] });
   expect(node.calls).toHaveLength(2);
+});
+
+test("a drive hands its models and onEvent to the backward hook", async () => {
+  const received: (BackwardOptions | undefined)[] = [];
+  class OptionsNode extends RecordingBackwardNode {
+    override backward(context: BackwardContext, feedback: readonly FeedbackValue[], options?: BackwardOptions) {
+      received.push(options);
+      return super.backward(context, feedback);
+    }
+  }
+  const node = new OptionsNode(
+    "work",
+    (inputs) => inputs.topic,
+    (_context, feedback) => new BackwardResult({ inputFeedback: { topic: feedback } }),
+    { reads: { topic: "${input.topic}" } },
+  );
+  const flow = graph([node], [[START_ID, "work"]], { outputs: [new FlowOutput("answer", "${work.output}")] });
+  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: true });
+  await built.run();
+  const models: ModelAccess = {
+    env: () => undefined,
+    createModel: () => {
+      throw new Error("the hook builds no model");
+    },
+  };
+  const onEvent = () => {};
+
+  const outcome = await driveBackward(built.state, built.log, "review", { models, onEvent });
+
+  expect(outcome.status).toBe("succeeded");
+  expect(received).toHaveLength(1);
+  expect(received[0]!.models).toBe(models);
+  expect(received[0]!.onEvent).toBe(onEvent);
 });
 
 /**

@@ -17,7 +17,10 @@
  * `test_no_session_backend_keeps_plain_calls_fresh` (3 rows),
  * `test_compatible_model_and_prompt_changes_retain_history_with_current_system`,
  * `test_provider_change_requires_reset_then_starts_fresh` and
- * `test_postassertion_failure_retains_actual_reply_and_failed_turn`.
+ * `test_postassertion_failure_retains_actual_reply_and_failed_turn`. Through `runFlow` and
+ * `resumeFlow`: `test_reply_after_stop_is_saved_and_resume_retries_using_latest_history`, the
+ * host stop aborting `runFlow`'s `signal` once the first reply's last event is read (Python sets
+ * the node's stop event inside the model call).
  *
  * Changed: the expected `message_format` is TS's own `yian.message.v1`, not Python's
  * `yian.langchain-message.v1`, and the codec rows use `yian.message.v1` messages. A stored payload
@@ -50,12 +53,10 @@
  * defaults and tool-call discriminators; `yian.message.v1` has neither. The `encode_input` and
  * `encode_reply` stages of `test_adapter_memory_faults_are_distinct_from_provider_failures`: a TS
  * `Message` always encodes, and the `observe` stage covers a fault after the call.
- *
- * Later (T6-6, with resumeFlow): `test_reply_after_stop_is_saved_and_resume_retries_using_latest_history`.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,12 +114,14 @@ import {
   rejected,
   reply,
   request,
+  resumeWith,
   runSessionFlow,
   runWith,
   sentTexts,
   SESSION_CONFIG,
   sessionFlow,
   snapshot,
+  StopAfterFirstReply,
   view,
   withHarness,
   withTurn,
@@ -722,6 +725,41 @@ test("a provider change requires a reset, then starts fresh", async () => {
   memory.reset();
   expect((await runWith(changed, { question: "second" }, memory, model, { models })).output).toBe("two");
   expect(sentTexts(model)).toEqual(["second"]);
+});
+
+test("a reply after the stop is saved, and resume retries using the latest history", async () => {
+  const memory = new SessionMemory();
+  const controller = new AbortController();
+  const surfaced = new Response({
+    message: new Message({
+      role: "assistant",
+      parts: [new ReasoningPart("retained"), new TextPart("surfaced before cancellation")],
+    }),
+  });
+  const model = new StopAfterFirstReply([surfaced, reply("retry done")], controller, SESSION_CONFIG);
+  const flow = await loadFlow(PLAIN_FLOW);
+  const log = join(home, "retry.jsonl");
+  const options = { log, signal: controller.signal };
+  const stop = await rejected(runWith(flow, { question: "question" }, memory, model, options));
+  expect(stop).toBe(controller.signal.reason);
+  const prefix = readFileSync(log);
+  let stored = view(memory);
+  expect(stored.effects[0]!.status).toBe("completed");
+  expect(stored.closedInvocations.at(-1)!.status).toBe("interrupted");
+  expect(decodeMessage(stored.items.at(-1)!).text()).toBe("surfaced before cancellation");
+  const resumed = await resumeWith(flow, log, memory, model);
+  expect(resumed.output).toBe("retry done");
+  expect(readFileSync(log).subarray(0, prefix.length)).toEqual(prefix);
+  expect(sentTexts(model)).toEqual([
+    "question",
+    "surfaced before cancellation",
+    'Session history status (context only): [{"invocation":"interrupted"}]',
+    "question",
+  ]);
+  stored = view(memory);
+  expect(stored.effects).toHaveLength(2);
+  expect(stored.items).toHaveLength(6);
+  expect(stored.effects[0]!.invocation).not.toEqual(stored.effects[1]!.invocation);
 });
 
 test("a postassertion failure retains the actual reply and a failed turn", async () => {

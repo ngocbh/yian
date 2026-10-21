@@ -7,18 +7,19 @@
  * `test_idle_run_does_not_keep_storage_owned_after_backend_close` (3 rows); through `runFlow`:
  * `test_api_session_history_is_used_after_reopening_storage`,
  * `test_api_summary_cache_survives_reopen_under_current_budget` and
- * `test_more_recent_turns_on_reopen_restores_raw_context`.
+ * `test_more_recent_turns_on_reopen_restores_raw_context`; through `runFlow` and `resumeFlow`:
+ * `test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot`.
  *
  * Changed: Python's `with <backend>:` is `withBackend`, which closes the backend in `finally`.
  * `test_process_local_backends_never_open_sqlite`: spies on `SQLiteStorage.prototype.ensureOpen`,
  * `load` and `save` that throw stand in for Python forbidding `sqlite3.connect`.
  * `test_snapshot_identity_survives_a_real_process_restart`: the child is a `bun -e` script
- * importing the backend's module that prints the snapshot as `logJson`.
+ * importing the backend's module that prints the snapshot as `logJson`. The host stop of the
+ * resume row aborts `runFlow`'s `signal` once the first reply's last event is read (Python sets
+ * the node's stop event inside the model call).
  *
  * Later (T6-6, with RunResult.backward): `test_explicit_learning_remains_saved_after_reopen` (2 rows)
  * and `test_api_session_learned_notes_survive_storage_reopen`.
- *
- * Later (T6-6, with resumeFlow): `test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot`.
  */
 
 import { spawnSync } from "node:child_process";
@@ -37,7 +38,7 @@ import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { reply, runWith, sentTexts, snapshot } from "./session_fakes.ts";
+import { rejected, reply, resumeWith, runWith, sentTexts, snapshot, StopAfterFirstReply } from "./session_fakes.ts";
 
 const MODEL_CONFIG = { provider: "openai", model: "storage-test-model" };
 const AGENT_FLOW = `id: durable-session
@@ -161,6 +162,41 @@ test("api session history is used after reopening storage", async () => {
     expect(sentTexts(model, 1)).toEqual(["first", "reply 1", "second"]);
     expect((snapshot(reopened)["conversation"] as JsonObject)["items"]).toHaveLength(6);
   });
+});
+
+test("resume reopens the latest saved history instead of the old run snapshot", async () => {
+  const controller = new AbortController();
+  const model = new StopAfterFirstReply(
+    [reply("reply saved before cancellation"), reply("retry complete")],
+    controller,
+    MODEL_CONFIG,
+  );
+  const flow = await loadFlow(AGENT_FLOW);
+  const file = path.join(dir, "memory.sqlite");
+  const log = path.join(dir, "run.jsonl");
+  const saved = await withBackend(new SessionMemory({ storage: file }), async (memory) => {
+    const options = { log, signal: controller.signal };
+    const stop = await rejected(runWith(flow, { question: "question" }, memory, model, options));
+    expect(stop).toBe(controller.signal.reason);
+    const recorded = snapshot(memory);
+    expect(((recorded["conversation"] as JsonObject)["effects"] as JsonObject[])[0]!["status"]).toBe("completed");
+    return recorded;
+  });
+  const prefix = fs.readFileSync(log);
+  await withBackend(new SessionMemory({ storage: file }), async (reopened) => {
+    expect(snapshot(reopened)).toEqual(saved);
+    const resumed = await resumeWith(flow, log, reopened, model);
+    expect(resumed.output).toBe("retry complete");
+    const texts = context(model);
+    expect(texts).toContain("reply saved before cancellation");
+    expect(texts.filter((text) => text === "question")).toHaveLength(2);
+    const effects = (snapshot(reopened)["conversation"] as JsonObject)["effects"] as JsonObject[];
+    expect(effects).toHaveLength(2);
+    expect(effects[0]!["invocation"]).not.toEqual(effects[1]!["invocation"]);
+  });
+  const written = fs.readFileSync(log);
+  expect(written.subarray(0, prefix.length)).toEqual(prefix);
+  expect(written.includes(file)).toBe(false);
 });
 
 test("api summary cache survives reopen under current budget", async () => {

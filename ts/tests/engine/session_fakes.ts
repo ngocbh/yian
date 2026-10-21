@@ -2,8 +2,8 @@
  * A unit-only backend-owned turn harness without a provider or run log: a port of
  * `tests/engine/_session_fakes.py`, plus the promise helpers, the hand-built `runAgent` context
  * and the one-AGENT session flow run through `FlowEngine` that the session tests share, and the
- * `runFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`, `NO_ENV`, `sentTexts`,
- * `reply`, `recording`).
+ * `runFlow` and `resumeFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`,
+ * `resumeWith`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`, `recording`).
  */
 
 import { expect } from "bun:test";
@@ -11,9 +11,10 @@ import { expect } from "bun:test";
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunFailed, RunSucceeded } from "../../src/events.ts";
-import type { ChatModel } from "../../src/llm/events.ts";
+import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import {
   ConversationInvocation,
   ConversationItem,
@@ -35,7 +36,7 @@ import { decodeMessage } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { MemoryContextOpener } from "../../src/runtime/eval_node.ts";
-import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
+import { type ResumeFlowOptions, resumeFlow, type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import type { Type } from "../../src/typesys/values.ts";
 import { engine, graph, serving } from "./run_state_fixtures.ts";
@@ -336,6 +337,50 @@ export function runWith(
 ): Promise<RunResult> {
   const registry = memory instanceof SessionMemory ? new Map([["session", memory]]) : memory;
   return runFlow(flow, inputs, { memory: registry, models: serving(model), env: NO_ENV, ...options });
+}
+
+/**
+ * `resumeFlow` of `flow` from `log`, with `runWith`'s `memory`, `model` and `NO_ENV`; the other
+ * options go to `resumeFlow`.
+ */
+export function resumeWith(
+  flow: ComposedFlow,
+  log: string,
+  memory: SessionMemory | ReadonlyMap<string, Memory> | null,
+  model: ChatModel,
+  options: Omit<ResumeFlowOptions, "log"> = {},
+): Promise<RunResult> {
+  const registry = memory instanceof SessionMemory ? new Map([["session", memory]]) : memory;
+  return resumeFlow(flow, { log, memory: registry, models: serving(model), env: NO_ENV, ...options });
+}
+
+/**
+ * A `ScriptedModel` whose first call's stream aborts `controller` once its last event is read: a
+ * host stop landing after the reply arrived, before the node stores it.
+ */
+export class StopAfterFirstReply extends ScriptedModel {
+  readonly controller: AbortController;
+
+  constructor(
+    replies: ScriptedReply[],
+    controller: AbortController,
+    options: { provider?: string; model?: string } = {},
+  ) {
+    super(replies, options);
+    this.controller = controller;
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    const first = this.requests.length === 0;
+    const inner = super.stream(request, options);
+    if (!first) return inner;
+    const controller = this.controller;
+    async function* events() {
+      yield* inner;
+      controller.abort(new Error("host stop"));
+    }
+    return new EventStream(events(), () => inner.close());
+  }
 }
 
 /** The texts of the messages of `model`'s request `index` (the last by default) after its system prompt. */

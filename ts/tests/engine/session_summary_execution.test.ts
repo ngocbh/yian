@@ -4,24 +4,29 @@
  *
  * Ported: `test_soft_budget_keeps_four_prior_turns_and_all_raw_messages`,
  * `test_summary_failure_is_a_node_failure_without_answer_or_history_deletion` and
- * `test_new_summary_uses_current_model_without_a_second_model_factory`.
+ * `test_new_summary_uses_current_model_without_a_second_model_factory`; with `resumeFlow`:
+ * `test_interrupted_summary_can_resume_against_existing_memory`.
  *
  * Changed: the model factory Python patches is `models.createModel`, which records each config
- * it builds from. The summary request's input is read as its messages' texts joined.
- *
- * Later (T6-6, with resumeFlow): `test_interrupted_summary_can_resume_against_existing_memory`.
+ * it builds from. The summary request's input is read as its messages' texts joined. The
+ * interrupted summary is a host stop: the model aborts `runFlow`'s `signal` as the summary
+ * request starts, consuming an unread reply (Python's model raises `KeyboardInterrupt`).
  */
+
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { ChatModel } from "../../src/llm/events.ts";
+import type { ChatModel, EventStream } from "../../src/llm/events.ts";
 import type { Request, Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { JsonObject } from "../../src/memory/contracts.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
-import { recording, reply, runWith, snapshot } from "./session_fakes.ts";
+import { recording, rejected, reply, resumeWith, runWith, snapshot } from "./session_fakes.ts";
 
 const FLOW = `id: summarized-session
 name: summarized_session
@@ -127,4 +132,55 @@ test("a new summary uses the current model without a second model factory", asyn
   expect(models.configs.at(-1)!["model"]).toBe("new-model");
   expect([old.requests.length, current.requests.length]).toEqual([5, 2]);
   expect(texts(current.requests[0]!).join("\n")).toContain(QUESTIONS[0]!);
+});
+
+/** A `ScriptedModel` that aborts `controller` with `reason` as its request `index` starts. */
+class StopAtRequest extends ScriptedModel {
+  readonly index: number;
+  readonly controller: AbortController;
+  readonly reason: Error;
+
+  constructor(replies: Response[], index: number, controller: AbortController, reason: Error) {
+    super(replies);
+    this.index = index;
+    this.controller = controller;
+    this.reason = reason;
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (this.requests.length === this.index) this.controller.abort(this.reason);
+    return super.stream(request, options);
+  }
+}
+
+test("an interrupted summary can resume against the existing memory", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-session-summary-"));
+  try {
+    const flow = await loadFlow(FLOW);
+    const memory = new SessionMemory({ historyBudgetChars: 1 });
+    const controller = new AbortController();
+    const stopped = new Error("interrupted summary");
+    const model = new StopAtRequest(
+      [...replies(), reply("never read"), reply(SUMMARY), reply("recovered")],
+      5,
+      controller,
+      stopped,
+    );
+    await seed(flow, memory, model);
+    const before = conversation(memory)["items"] as JsonObject[];
+    const log = join(dir, "interrupted.jsonl");
+    const options = { log, signal: controller.signal };
+    const stop = await rejected(runWith(flow, { question: "recover this" }, memory, model, options));
+    expect(stop).toBe(stopped);
+    expect(conversation(memory)["items"]).toEqual(before);
+
+    const resumed = await resumeWith(flow, log, memory, model);
+
+    expect(resumed.output).toBe("recovered");
+    expect(model.requests).toHaveLength(8);
+    expect((conversation(memory)["items"] as JsonObject[]).slice(0, before.length)).toEqual(before);
+    expect(texts(model.requests.at(-1)!).at(-1)).toBe("recover this");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

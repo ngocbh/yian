@@ -48,7 +48,10 @@
  * `__shared_field_in_a_node_assert_loads` are pinned at the end, the map item's `each` def built by
  * hand (`assembledWith`).
  *
- * Later (T4-8 follow-up): `::test_runtime_growth_allows_member_only_fields` (runtime growth).
+ * Ported through `prepareExpanded`: `::test_runtime_growth_allows_member_only_fields`, where Python
+ * calls the private `_validate_growth_wiring_refs`. The grown fragment's START carries the
+ * `Decision` contract and its END wires `value` from it (the `run_state_fixtures.ts` spawner and
+ * fragment); a member-only read prepares, and an unknown field is a `GrowthRejected`.
  */
 
 import { expect, test } from "bun:test";
@@ -60,11 +63,16 @@ import { answerSchema } from "../../src/compose/nodes/human_input.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import {
+  Binding,
   isExactly,
   outputContractFieldError,
   PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
+import { Edge, GrowthRejected } from "../../src/compile/model.ts";
+import { Grow } from "../../src/nodes/base.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { prepareExpanded } from "../../src/runtime/state.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -78,6 +86,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+import { fragment, initializedSpawner } from "../engine/run_state_fixtures.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -352,6 +361,33 @@ test("a loop carrying a union keeps the non-record error", () => {
       'field (a subset of the carried record ["action"]); write `output: {field: ...}` or a whole reference ' +
       "to a node with a record output",
   );
+});
+
+test("runtime growth allows member-only fields", () => {
+  /** Prepare growing a fragment whose END reads `field` of its START's `Decision` output. */
+  const grow = (field: string) => {
+    const { state } = initializedSpawner();
+    return prepareExpanded(state, "spawn", new Grow({}), () => {
+      const built = fragment("spawn");
+      built.nodes.get(built.startId)!.outputContract = new ValueContract(decision());
+      const end = EndNode.value(built.endId, { outputName: "value" });
+      end.commitAs = "spawn";
+      built.nodes.set(built.endId, end);
+      built.wiring.set(built.endId, new Map([["value", new Binding(`\${${built.startId}.output.${field}}`)]]));
+      built.edges[0] = new Edge(built.edges[0]!.id, built.startId, built.endId, { inputGroup: "value" });
+      return built;
+    });
+  };
+
+  grow("qty");
+  let error: unknown = null;
+  try {
+    grow("zzz");
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(GrowthRejected);
+  expect((error as GrowthRejected).message).toContain("reads unknown field 'zzz' on record");
 });
 
 test("canonicalizeInlineType keeps variants", () => {

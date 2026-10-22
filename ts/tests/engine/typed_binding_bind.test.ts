@@ -8,17 +8,23 @@
  * Python's `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a
  * JSON record and this one holds a `Binding`; Python's bare `Node` is a minimal subclass.
  *
- * Later: the three run tests
- * (`test_run_fails_the_consumer_with_binding_type`, `test_map_run_fails_an_item_with_binding_type`,
- * `test_run_fails_a_typed_flow_output_with_binding_type`) land with compose and the runner.
+ * Ported through `loadFlow` and `runFlow`: `test_run_fails_the_consumer_with_binding_type`,
+ * `test_map_run_fails_an_item_with_binding_type` and
+ * `test_run_fails_a_typed_flow_output_with_binding_type`; each types a loaded binding in code, as
+ * Python does, replacing the node's wiring map rather than mutating it, as `Flow` asks. The CODE
+ * bodies are JavaScript.
  */
 
 import { expect, test } from "bun:test";
 
+import type { Flow } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { Node, NodeKind } from "../../src/nodes/base.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { nodeFlow } from "./run_state_fixtures.ts";
@@ -198,4 +204,83 @@ test("an untyped binding and raw sources are unchanged", () => {
     qty: "many",
   });
   expect(bindParams([new Parameter("qty")], new Map([["qty", "${a.output}"]]), pool)).toEqual({ qty: "many" });
+});
+
+// ---------- runs ----------
+
+const FLOW = `
+id: typed
+name: typed
+nodes:
+  produce:
+    kind: code
+    code: |
+      return "thirty"
+    output: str
+  consume:
+    kind: code
+    code: |
+      return inputs["qty"]
+    input:
+      qty: \${produce.output}
+    output: str
+output: \${consume.output}
+`;
+
+/** Type the binding of `nodeId`'s `name` as `valueType`, replacing the node's wiring map. */
+function typeWiring(compiled: Flow, nodeId: string, name: string, valueType: Type): void {
+  const wiring = compiled.wiring.get(nodeId)!;
+  const binding = wiring.get(name) as Binding;
+  const typed = new Binding(binding.source, { origin: binding.origin, contract: new ValueContract(valueType) });
+  compiled.wiring.set(nodeId, new Map([...wiring, [name, typed]]));
+}
+
+/** Run `loaded` with no inputs, expecting it to fail with `binding.type` at `nodeId`. */
+async function failsWithBindingType(loaded: ComposedFlow, nodeId: string): Promise<void> {
+  const result = await runFlow(loaded, {});
+  expect(result.status).toBe("failed");
+  expect(result.failure?.code).toBe("binding.type");
+  expect(result.failure?.nodeId).toBe(nodeId);
+}
+
+test("a run fails the consumer with binding.type", async () => {
+  const loaded = await loadFlow(FLOW);
+  typeWiring(loaded.compiled, "consume", "qty", INTEGER);
+
+  await failsWithBindingType(loaded, "consume");
+});
+
+const MAP_FLOW = `
+id: typed-map
+name: typed_map
+nodes:
+  outer:
+    kind: map
+    over: [item]
+    input:
+      value: \${item}
+    nodes:
+      work:
+        kind: code
+        code: |
+          return inputs["value"]
+        input:
+          value: \${input.value}
+        output: str
+    output: \${work.output}
+output: \${outer.output}
+`;
+
+test("a map run fails an item with binding.type", async () => {
+  const loaded = await loadFlow(MAP_FLOW);
+  typeWiring(loaded.compiled, "outer", "value", INTEGER);
+
+  await failsWithBindingType(loaded, "outer");
+});
+
+test("a run fails a typed flow output with binding.type", async () => {
+  const loaded = await loadFlow(FLOW);
+  typeWiring(loaded.compiled, loaded.compiled.endId, "result", INTEGER);
+
+  await failsWithBindingType(loaded, loaded.compiled.endId);
 });

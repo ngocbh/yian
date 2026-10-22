@@ -24,9 +24,9 @@
  * Changed:
  * - `buildMemories` and `close` are async. The registry is a read-only `Map` subclass, and so is
  *   its `types`.
- * - `test_exit_keeps_the_primary_exception`: `await using` throws a `SuppressedError` whose `error`
- *   is the cleanup failure (with its `notes`) and whose `suppressed` is the primary (the language's
- *   rule; Python notes the cleanup failure on the primary).
+ * - `test_exit_keeps_the_primary_exception`: disposing in a `finally` throws the cleanup failure
+ *   (with its `notes`) in place of the primary, which gets no notes (Node 22 has no `await using`
+ *   and its `SuppressedError`; Python notes the cleanup failure on the primary).
  * - `storage`, `supplied` and `factories` are plain records. A factory gets `toHost(config)` (safe
  *   ints as `number`) and may be async. JS ignores extra arguments, so the "rejected its config" row
  *   uses a factory throwing `RangeError` (Python's `ValueError`).
@@ -323,8 +323,12 @@ test("close closes owned objects in reverse order once", async () => {
     { owned: [a, b] },
   );
   {
-    await using held = registry;
-    expect(held).toBe(registry);
+    const held = registry;
+    try {
+      expect(held).toBe(registry);
+    } finally {
+      await held[Symbol.asyncDispose]();
+    }
   }
   expect(log).toEqual(["b", "a"]);
   await registry.close();
@@ -394,20 +398,20 @@ test("close copies the notes of later failures", async () => {
   expect(error.notes).toEqual(["Additional memory cleanup failed: Error: second", "second detail"]);
 });
 
-test("await using reports the cleanup failure and suppresses the primary", async () => {
+test("disposing after a failure reports the cleanup failure in place of the primary", async () => {
   const log: string[] = [];
   const cleanup = failureWithNote("cleanup", "cleanup detail");
   const primary = new RangeError("primary");
   const a = new Closable(log, "a", cleanup);
   const error = await caught(async () => {
-    await using _registry = new MemoryRegistry(new Map([["a", a]]), [["a", "t"]], { owned: [a] });
-    throw primary;
+    const registry = new MemoryRegistry(new Map([["a", a]]), [["a", "t"]], { owned: [a] });
+    try {
+      throw primary;
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   });
-  // `SuppressedError` is outside the ES2024 lib the project compiles against.
-  const Suppressed = (globalThis as unknown as { SuppressedError: new () => Error }).SuppressedError;
-  expect(error).toBeInstanceOf(Suppressed);
-  expect((error as { error?: unknown }).error).toBe(cleanup);
-  expect((error as { suppressed?: unknown }).suppressed).toBe(primary);
+  expect(error).toBe(cleanup);
   expect((cleanup as Error & { notes?: string[] }).notes).toEqual(["cleanup detail"]);
   expect(Object.hasOwn(primary, "notes")).toBe(false);
 });
@@ -465,32 +469,44 @@ test("builtins are constructed from declared config", async () => {
     [decl("lessons", "reflective"), decl("notes", "episodic", { max_episodes: 5n }), decl("about", "profile")],
     { agentMemories: [new MemoryDecl("chat", "session", { recent_turns: 2n }, new DeclSite([], ["root"], "ask"))] },
   );
-  await using registry = await buildMemories(flow);
-  expect([...registry.keys()]).toEqual(["about", "chat", "lessons", "notes"]);
-  expect(registry.get("notes")!.constructor).toBe(EpisodicMemory);
-  expect(registry.get("lessons")!.constructor).toBe(ReflectiveMemory);
-  expect(registry.get("chat")!.constructor).toBe(SessionMemory);
-  expect(registry.get("about")!.constructor).toBe(ProfileMemory);
-  expect(Object.fromEntries(registry.types)).toEqual({
-    about: "profile",
-    chat: "session",
-    lessons: "reflective",
-    notes: "episodic",
-  });
-  // The YAML keys reach the constructors in camelCase.
-  expect(field(registry.get("notes"), "requested")).toEqual([5, null]);
-  expect(field(registry.get("chat"), "recentTurns")).toBe(2);
+  const registry = await buildMemories(flow);
+  try {
+    expect([...registry.keys()]).toEqual(["about", "chat", "lessons", "notes"]);
+    expect(registry.get("notes")!.constructor).toBe(EpisodicMemory);
+    expect(registry.get("lessons")!.constructor).toBe(ReflectiveMemory);
+    expect(registry.get("chat")!.constructor).toBe(SessionMemory);
+    expect(registry.get("about")!.constructor).toBe(ProfileMemory);
+    expect(Object.fromEntries(registry.types)).toEqual({
+      about: "profile",
+      chat: "session",
+      lessons: "reflective",
+      notes: "episodic",
+    });
+    // The YAML keys reach the constructors in camelCase.
+    expect(field(registry.get("notes"), "requested")).toEqual([5, null]);
+    expect(field(registry.get("chat"), "recentTurns")).toBe(2);
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 test("env reaches reflective and profile memory and defaults to processEnv", async () => {
   const flow = hostFlow([decl("lessons", "reflective"), decl("about", "profile")]);
   const env = (_name: string): string | undefined => undefined;
-  await using given = await buildMemories(flow, { env });
-  expect(field(given.get("lessons"), "env")).toBe(env);
-  expect(field(given.get("about"), "env")).toBe(env);
-  await using defaulted = await buildMemories(flow);
-  expect(field(defaulted.get("lessons"), "env")).toBe(processEnv);
-  expect(field(defaulted.get("about"), "env")).toBe(processEnv);
+  const given = await buildMemories(flow, { env });
+  try {
+    expect(field(given.get("lessons"), "env")).toBe(env);
+    expect(field(given.get("about"), "env")).toBe(env);
+    const defaulted = await buildMemories(flow);
+    try {
+      expect(field(defaulted.get("lessons"), "env")).toBe(processEnv);
+      expect(field(defaulted.get("about"), "env")).toBe(processEnv);
+    } finally {
+      await defaulted[Symbol.asyncDispose]();
+    }
+  } finally {
+    await given[Symbol.asyncDispose]();
+  }
 });
 
 /** A `ModelAccess` returning `model` that records the options of each `createModel` call. */
@@ -516,19 +532,23 @@ test("a learner builds through models under its memory key", async () => {
   const { access, model, options } = recording();
   const events: unknown[] = [];
   const env = (_name: string): string | undefined => "unused";
-  await using registry = await buildMemories(flow, { env, models: access, onEvent: (event) => events.push(event) });
-  for (const key of ["lessons", "about"]) {
-    expect(field(registry.get(key), "env")).toBe(access.env);
-    expect(await buildLearner(registry.get(key), { provider: "ollama", model: "qwen" })).toBe(model);
-    const given = options.at(-1)!;
-    expect([given.nodeId, given.consumer, given.signal.aborted]).toEqual(["__memory__", `memory:${key}`, false]);
-    given.onReplayDegraded!("other_provider");
-    given.onReplayDegraded!("other_provider");
+  const registry = await buildMemories(flow, { env, models: access, onEvent: (event) => events.push(event) });
+  try {
+    for (const key of ["lessons", "about"]) {
+      expect(field(registry.get(key), "env")).toBe(access.env);
+      expect(await buildLearner(registry.get(key), { provider: "ollama", model: "qwen" })).toBe(model);
+      const given = options.at(-1)!;
+      expect([given.nodeId, given.consumer, given.signal.aborted]).toEqual(["__memory__", `memory:${key}`, false]);
+      given.onReplayDegraded!("other_provider");
+      given.onReplayDegraded!("other_provider");
+    }
+    expect(events).toEqual([
+      new ReplayDegraded({ nodeId: "__memory__", reason: "other_provider" }),
+      new ReplayDegraded({ nodeId: "__memory__", reason: "other_provider" }),
+    ]);
+  } finally {
+    await registry[Symbol.asyncDispose]();
   }
-  expect(events).toEqual([
-    new ReplayDegraded({ nodeId: "__memory__", reason: "other_provider" }),
-    new ReplayDegraded({ nodeId: "__memory__", reason: "other_provider" }),
-  ]);
 });
 
 test("each learner retry reaches onEvent, with and without models", async () => {
@@ -536,29 +556,37 @@ test("each learner retry reaches onEvent, with and without models", async () => 
   const retry: RetryInfo = { attempt: 2, error: new ProviderError("rate_limit", "slow down"), partial: null, retryIn: 0.5 };
   for (const models of [recording().access, undefined]) {
     const events: unknown[] = [];
-    await using registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
-    for (const key of ["lessons", "about"]) {
-      await (field(registry.get(key), "onRetry") as (retry: RetryInfo) => unknown)(retry);
+    const registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
+    try {
+      for (const key of ["lessons", "about"]) {
+        await (field(registry.get(key), "onRetry") as (retry: RetryInfo) => unknown)(retry);
+      }
+      expect(events).toEqual(
+        ["lessons", "about"].map(
+          (key) =>
+            new ModelCallRetried({
+              nodeId: "__memory__",
+              consumer: `memory:${key}`,
+              attempt: 2,
+              error: { kind: "rate_limit", message: "slow down" },
+              retryIn: 0.5,
+            }),
+        ),
+      );
+    } finally {
+      await registry[Symbol.asyncDispose]();
     }
-    expect(events).toEqual(
-      ["lessons", "about"].map(
-        (key) =>
-          new ModelCallRetried({
-            nodeId: "__memory__",
-            consumer: `memory:${key}`,
-            attempt: 2,
-            error: { kind: "rate_limit", message: "slow down" },
-            retryIn: 0.5,
-          }),
-      ),
-    );
   }
   // Without `onEvent` a retry publishes nothing; without `models` a learner builds its default
   // model, here an ollama route, which needs no key.
-  await using quiet = await buildMemories(flow, { env: () => undefined });
-  for (const key of ["lessons", "about"]) {
-    expect(field(quiet.get(key), "onRetry")).toBeUndefined();
-    expect(await buildLearner(quiet.get(key), { provider: "ollama", model: "qwen" })).toBeInstanceOf(RouteModel);
+  const quiet = await buildMemories(flow, { env: () => undefined });
+  try {
+    for (const key of ["lessons", "about"]) {
+      expect(field(quiet.get(key), "onRetry")).toBeUndefined();
+      expect(await buildLearner(quiet.get(key), { provider: "ollama", model: "qwen" })).toBeInstanceOf(RouteModel);
+    }
+  } finally {
+    await quiet[Symbol.asyncDispose]();
   }
 });
 
@@ -579,35 +607,39 @@ test("a real learn through models publishes its retry with the echoed key redact
   ]);
   const models: ModelAccess = { ...access, env: (name) => vars.get(name) };
   const events: unknown[] = [];
-  await using registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
-  const session = await registry.get("lessons")!.openRun();
-  // One retry whatever YIAN_MODEL_RETRIES the environment sets.
-  install({ ...BUILTIN, modelRetries: 1 });
+  const registry = await buildMemories(flow, { models, onEvent: (event) => events.push(event) });
   try {
-    const episode = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hello" }, {
-      output: { answer: "HELLO" },
-    });
-    expect(await session.learn(new LearnContext("run-1", "lessons", [episode]))).toEqual([]);
+    const session = await registry.get("lessons")!.openRun();
+    // One retry whatever YIAN_MODEL_RETRIES the environment sets.
+    install({ ...BUILTIN, modelRetries: 1 });
+    try {
+      const episode = new MemoryEpisode("run-1", [], ["agent"], MemoryEpisodeStatus.SUCCEEDED, { text: "hello" }, {
+        output: { answer: "HELLO" },
+      });
+      expect(await session.learn(new LearnContext("run-1", "lessons", [episode]))).toEqual([]);
+    } finally {
+      forget();
+      await session.close();
+    }
+    expect(options.map(({ nodeId, consumer }) => [nodeId, consumer])).toEqual([["__memory__", "memory:lessons"]]);
+    expect(events).toEqual([
+      new ModelCallRetried({
+        nodeId: "__memory__",
+        consumer: "memory:lessons",
+        attempt: 1,
+        error: { kind: "rate_limit", message: "Incorrect API key provided: [REDACTED]" },
+        retryIn: 0.001,
+      }),
+    ]);
   } finally {
-    forget();
-    await session.close();
+    await registry[Symbol.asyncDispose]();
   }
-  expect(options.map(({ nodeId, consumer }) => [nodeId, consumer])).toEqual([["__memory__", "memory:lessons"]]);
-  expect(events).toEqual([
-    new ModelCallRetried({
-      nodeId: "__memory__",
-      consumer: "memory:lessons",
-      attempt: 1,
-      error: { kind: "rate_limit", message: "Incorrect API key provided: [REDACTED]" },
-      retryIn: 0.001,
-    }),
-  ]);
 });
 
 test("a custom factory gets only its config when models and onEvent are given", async () => {
   const flow = hostFlow([decl("vec", "vector", { top_k: 3n })]);
   const got: unknown[][] = [];
-  await using registry = await buildMemories(flow, {
+  const registry = await buildMemories(flow, {
     models: recording().access,
     onEvent: () => {},
     factories: {
@@ -617,16 +649,24 @@ test("a custom factory gets only its config when models and onEvent are given", 
       },
     },
   });
-  expect(got).toEqual([[{ top_k: 3 }]]);
-  expect(registry.get("vec")).toBeInstanceOf(Custom);
+  try {
+    expect(got).toEqual([[{ top_k: 3 }]]);
+    expect(registry.get("vec")).toBeInstanceOf(Custom);
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 test("supplied wins and is not closed", async () => {
   const log: string[] = [];
   const mine = new Closable(log, "mine");
   {
-    await using registry = await buildMemories(hostFlow([decl("notes", "episodic")]), { supplied: { notes: mine } });
-    expect(registry.get("notes")).toBe(mine);
+    const registry = await buildMemories(hostFlow([decl("notes", "episodic")]), { supplied: { notes: mine } });
+    try {
+      expect(registry.get("notes")).toBe(mine);
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   }
   expect(log).toEqual([]);
 });
@@ -770,26 +810,38 @@ test("a wrapped config failure keeps its cause", async () => {
 });
 
 test("flow without memory builds an empty registry", async () => {
-  await using registry = await buildMemories(hostFlow([], { flowId: "none" }));
-  expect(registry.size).toBe(0);
+  const registry = await buildMemories(hostFlow([], { flowId: "none" }));
+  try {
+    expect(registry.size).toBe(0);
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 test("null records read as empty", async () => {
   // As Python's `None` for these options.
   const options = { storage: null, supplied: null, factories: null };
-  await using nulls = await buildMemories(hostFlow([decl("notes", "episodic")]), options);
-  expect(nulls.get("notes")).toBeInstanceOf(EpisodicMemory);
+  const nulls = await buildMemories(hostFlow([decl("notes", "episodic")]), options);
+  try {
+    expect(nulls.get("notes")).toBeInstanceOf(EpisodicMemory);
+  } finally {
+    await nulls[Symbol.asyncDispose]();
+  }
 });
 
 test("root layout follows flow id, scope and name", async () => {
   const root = path.join(tmp, "mem");
   {
-    await using registry = await buildMemories(importFlow(), { root });
-    expect([...registry.keys()]).toEqual(["about", "lib.notes", "notes"]);
-    expect(fs.existsSync(root)).toBe(false); // construction is effect-free
-    for (const key of ["notes", "lib.notes", "about"]) await registry.get(key)!.openRun();
-    expect(fs.statSync(path.join(root, "app", "notes.sqlite")).isFile()).toBe(true);
-    expect(fs.statSync(path.join(root, "app", "lib", "notes.sqlite")).isFile()).toBe(true);
+    const registry = await buildMemories(importFlow(), { root });
+    try {
+      expect([...registry.keys()]).toEqual(["about", "lib.notes", "notes"]);
+      expect(fs.existsSync(root)).toBe(false); // construction is effect-free
+      for (const key of ["notes", "lib.notes", "about"]) await registry.get(key)!.openRun();
+      expect(fs.statSync(path.join(root, "app", "notes.sqlite")).isFile()).toBe(true);
+      expect(fs.statSync(path.join(root, "app", "lib", "notes.sqlite")).isFile()).toBe(true);
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   }
   expect(fs.existsSync(path.join(root, "app", ".about.md.lock"))).toBe(true);
 });
@@ -798,9 +850,13 @@ test("an empty root derives paths relative to the current directory", async () =
   const before = process.cwd();
   process.chdir(tmp);
   try {
-    await using registry = await buildMemories(hostFlow([decl("notes", "episodic")]), { root: "" });
-    await registry.get("notes")!.openRun();
-    expect(fs.statSync(path.join(tmp, "host-flow", "notes.sqlite")).isFile()).toBe(true);
+    const registry = await buildMemories(hostFlow([decl("notes", "episodic")]), { root: "" });
+    try {
+      await registry.get("notes")!.openRun();
+      expect(fs.statSync(path.join(tmp, "host-flow", "notes.sqlite")).isFile()).toBe(true);
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   } finally {
     process.chdir(before);
   }
@@ -816,10 +872,14 @@ test("explicit storage overrides root and needs an existing parent", async () =>
   const explicit = path.join(tmp, "missing", "notes.sqlite");
   {
     const options = { root: path.join(tmp, "mem"), storage: { notes: explicit } };
-    await using registry = await buildMemories(importFlow(), options);
-    expect(await operationCode(() => registry.get("notes")!.openRun())).toBe("storage.io");
-    expect(fs.existsSync(path.dirname(explicit))).toBe(false);
-    await registry.get("lib.notes")!.openRun();
+    const registry = await buildMemories(importFlow(), options);
+    try {
+      expect(await operationCode(() => registry.get("notes")!.openRun())).toBe("storage.io");
+      expect(fs.existsSync(path.dirname(explicit))).toBe(false);
+      await registry.get("lib.notes")!.openRun();
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   }
   expect(fs.statSync(path.join(tmp, "mem", "app", "lib", "notes.sqlite")).isFile()).toBe(true);
 });
@@ -850,9 +910,13 @@ test("no root means RAM and no flow id is needed", async () => {
   process.chdir(tmp);
   try {
     const flow = hostFlow([decl("notes", "episodic"), decl("about", "profile")], { flowId: null });
-    await using registry = await buildMemories(flow);
-    await registry.get("notes")!.openRun();
-    await registry.get("about")!.openRun();
+    const registry = await buildMemories(flow);
+    try {
+      await registry.get("notes")!.openRun();
+      await registry.get("about")!.openRun();
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   } finally {
     process.chdir(before);
   }
@@ -900,12 +964,20 @@ test("factory result that is not a memory is closed", async () => {
 
 test("second registry on one root is busy until the first closes", async () => {
   const flow = hostFlow([decl("notes", "episodic")]);
-  await using first = await buildMemories(flow, { root: tmp });
-  await first.get("notes")!.openRun();
-  await using second = await buildMemories(flow, { root: tmp });
-  expect(await operationCode(() => second.get("notes")!.openRun())).toBe("storage.busy");
-  await first.close();
-  await second.get("notes")!.openRun();
+  const first = await buildMemories(flow, { root: tmp });
+  try {
+    await first.get("notes")!.openRun();
+    const second = await buildMemories(flow, { root: tmp });
+    try {
+      expect(await operationCode(() => second.get("notes")!.openRun())).toBe("storage.busy");
+      await first.close();
+      await second.get("notes")!.openRun();
+    } finally {
+      await second[Symbol.asyncDispose]();
+    }
+  } finally {
+    await first[Symbol.asyncDispose]();
+  }
 });
 
 test.each([["episodic"], ["reflective"], ["profile"]] as const)(
@@ -954,9 +1026,13 @@ test("a plain object is refused; a Map runs", async () => {
 });
 
 test("registry built for another flow is rejected", async () => {
-  await using other = await buildMemories(await runnableFlow("{notes: reflective}"));
-  const flow = await runnableFlow("{notes: episodic}");
-  await setupError(() => run(flow, other), /'notes'.*'episodic'.*'reflective'/);
+  const other = await buildMemories(await runnableFlow("{notes: reflective}"));
+  try {
+    const flow = await runnableFlow("{notes: episodic}");
+    await setupError(() => run(flow, other), /'notes'.*'episodic'.*'reflective'/);
+  } finally {
+    await other[Symbol.asyncDispose]();
+  }
 });
 
 /** A `FakeMemory` whose sessions' `close` throws `Error(message)`. */
@@ -993,8 +1069,12 @@ test("a run error gets one note for the memory sessions that fail to close", asy
 
 test("registry for this flow runs", async () => {
   const flow = await runnableFlow("{notes: episodic}");
-  await using registry = await buildMemories(flow);
-  expect((await run(flow, registry)).status).toBe("succeeded");
+  const registry = await buildMemories(flow);
+  try {
+    expect((await run(flow, registry)).status).toBe("succeeded");
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 /** A host callback that stops a run once its `RunStarted` is published. */
@@ -1013,16 +1093,28 @@ test("resume checks registry types too", async () => {
   const log = path.join(tmp, "run.jsonl");
   const root = path.join(tmp, "mem");
   {
-    await using registry = await buildMemories(flow, { root });
-    const stopped = await caught(() => run(flow, registry, { log, onEvent: stopAfterStart }));
-    expect((stopped as Error).message).toBe("host stop");
+    const registry = await buildMemories(flow, { root });
+    try {
+      const stopped = await caught(() => run(flow, registry, { log, onEvent: stopAfterStart }));
+      expect((stopped as Error).message).toBe("host stop");
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   }
   {
-    await using other = await buildMemories(await runnableFlow("{notes: reflective}"));
-    await setupError(() => resume(flow, log, other), /'notes'.*'episodic'.*'reflective'/);
+    const other = await buildMemories(await runnableFlow("{notes: reflective}"));
+    try {
+      await setupError(() => resume(flow, log, other), /'notes'.*'episodic'.*'reflective'/);
+    } finally {
+      await other[Symbol.asyncDispose]();
+    }
   }
-  await using registry = await buildMemories(flow, { root });
-  expect((await resume(flow, log, registry)).status).toBe("succeeded");
+  const registry = await buildMemories(flow, { root });
+  try {
+    expect((await resume(flow, log, registry)).status).toBe("succeeded");
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 const TWO_CALLS = `id: two-calls
@@ -1059,25 +1151,37 @@ test.each(["def", "uses"])("resume accepts one callee called from two nodes: %s"
   const load = () => loadFlow(text, { searchPaths: [tmp] });
   const log = path.join(tmp, "run.jsonl");
 
-  await using registry = await buildMemories(await load());
-  const stopped = await caught(async () => run(await load(), registry, { log, onEvent: stopAfterStart }));
-  expect((stopped as Error).message).toBe("host stop");
-  const resumed = await resume(await load(), log, registry);
-  expect(resumed.status).toBe("succeeded");
-  expect(resumed.output).toBe(2n);
+  const registry = await buildMemories(await load());
+  try {
+    const stopped = await caught(async () => run(await load(), registry, { log, onEvent: stopAfterStart }));
+    expect((stopped as Error).message).toBe("host stop");
+    const resumed = await resume(await load(), log, registry);
+    expect(resumed.status).toBe("succeeded");
+    expect(resumed.output).toBe(2n);
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 test("backward checks registry types too", async () => {
   const flow = await runnableFlow("{notes: episodic}");
   const log = path.join(tmp, "run.jsonl");
   {
-    await using registry = await buildMemories(flow);
-    expect((await run(flow, registry, { learnable: true, log })).status).toBe("succeeded");
+    const registry = await buildMemories(flow);
+    try {
+      expect((await run(flow, registry, { learnable: true, log })).status).toBe("succeeded");
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   }
   const before = fs.readFileSync(log);
-  await using other = await buildMemories(await runnableFlow("{notes: reflective}"));
-  // A finished run opens no memory on resume; backward is where it is used.
-  const resumed = await resume(flow, log, other);
-  await setupError(() => resumed.backward("Review."), /'notes'.*'episodic'.*'reflective'/);
-  expect(fs.readFileSync(log)).toEqual(before);
+  const other = await buildMemories(await runnableFlow("{notes: reflective}"));
+  try {
+    // A finished run opens no memory on resume; backward is where it is used.
+    const resumed = await resume(flow, log, other);
+    await setupError(() => resumed.backward("Review."), /'notes'.*'episodic'.*'reflective'/);
+    expect(fs.readFileSync(log)).toEqual(before);
+  } finally {
+    await other[Symbol.asyncDispose]();
+  }
 });

@@ -300,11 +300,13 @@ describe("lockFile", () => {
     expect(fs.readdirSync(dir)).toEqual(["db.sqlite"]);
   });
 
-  test("a using block releases at its end", () => {
-    {
-      using lock = lockFile(file);
+  test("disposing releases the lock", () => {
+    const lock = lockFile(file);
+    try {
       expect(lock.path).toBe(file);
       expect(isLocked(file)).toBe(true);
+    } finally {
+      lock[Symbol.dispose]();
     }
     expect(isLocked(file)).toBe(false);
   });

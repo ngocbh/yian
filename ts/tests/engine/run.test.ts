@@ -840,11 +840,15 @@ test("a boundary callback whose promise rejects stops the run", async () => {
       event instanceof RunStarted ? Promise.reject(failure) : undefined;
     const flow = await load(PLAN_FLOW);
     await expect(run(flow, { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
-    using log = JsonlRunLog.resume(path);
-    const stopped = log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
-    expect(stopped.map((record) => [record.reason, record.message])).toEqual([["callback", "host listener failed"]]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(unhandled).toEqual([]);
+    const log = JsonlRunLog.resume(path);
+    try {
+      const stopped = log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
+      expect(stopped.map((record) => [record.reason, record.message])).toEqual([["callback", "host listener failed"]]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      log[Symbol.dispose]();
+    }
   } finally {
     process.off("unhandledRejection", collect);
   }
@@ -857,8 +861,12 @@ test("a boundary callback that throws rejects the run with no stop record", asyn
     if (event instanceof RunStarted) throw failure;
   };
   await expect(run(await load(PLAN_FLOW), { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
-  using log = JsonlRunLog.resume(path);
-  expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started"]);
+  const log = JsonlRunLog.resume(path);
+  try {
+    expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started"]);
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 // ---- The run-start LLM chain ----

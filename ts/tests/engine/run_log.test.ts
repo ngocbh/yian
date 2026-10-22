@@ -604,9 +604,13 @@ test("a memory log iterates a snapshot and returns a fresh frozen records array"
 test("disposing a memory log closes it and keeps its records", () => {
   let log: MemoryRunLog;
   {
-    using scoped = new MemoryRunLog("run");
-    scoped.append(new NodeStartedRecord("work"));
-    log = scoped;
+    const scoped = new MemoryRunLog("run");
+    try {
+      scoped.append(new NodeStartedRecord("work"));
+      log = scoped;
+    } finally {
+      scoped[Symbol.dispose]();
+    }
   }
   expectError(() => log.append(new NodeStartedRecord("late")), Error, "run log is closed");
   expect(log.records()).toHaveLength(1);
@@ -652,8 +656,12 @@ test("readRunLog reads the complete prefix without the lock", () => {
 
   expect(nodeIds(readRunLog(file))).toEqual(["work", "next"]);
   expect(fs.existsSync(`${file}.lock`)).toBe(false);
-  using _lock = lockFile(`${file}.lock`);
-  expect(nodeIds(readRunLog(file))).toEqual(["work", "next"]);
+  const lock = lockFile(`${file}.lock`);
+  try {
+    expect(nodeIds(readRunLog(file))).toEqual(["work", "next"]);
+  } finally {
+    lock[Symbol.dispose]();
+  }
 });
 
 test("readRunLog ignores an incomplete tail and leaves it in place", () => {
@@ -1107,10 +1115,14 @@ test("jsonl create is exclusive and preserves an existing file", () => {
 test("jsonl create sets owner read-write permissions", () => {
   const file = path.join(dir, "run.jsonl");
   {
-    using log = JsonlRunLog.create(file, "run");
-    expect(log.path).toBe(file);
-    expect(log.runId).toBe("run");
-    expect(log.nextSequence).toBe(0);
+    const log = JsonlRunLog.create(file, "run");
+    try {
+      expect(log.path).toBe(file);
+      expect(log.runId).toBe("run");
+      expect(log.nextSequence).toBe(0);
+    } finally {
+      log[Symbol.dispose]();
+    }
   }
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
 });
@@ -1124,8 +1136,12 @@ test("jsonl create refuses a lone-surrogate run id before any file exists", () =
 test("jsonl resume locks before its first read", () => {
   const file = path.join(dir, "run.jsonl");
   {
-    using created = JsonlRunLog.create(file, "run");
-    created.append(new NodeStartedRecord("work"));
+    const created = JsonlRunLog.create(file, "run");
+    try {
+      created.append(new NodeStartedRecord("work"));
+    } finally {
+      created[Symbol.dispose]();
+    }
   }
   const real = fs.readFileSync;
   const lockedAtRead: boolean[] = [];
@@ -1134,8 +1150,12 @@ test("jsonl resume locks before its first read", () => {
     return Reflect.apply(real, fs, [target, ...rest]);
   }) as typeof fs.readFileSync);
   try {
-    using resumed = JsonlRunLog.resume(file);
-    expect(nodeIds(resumed)).toEqual(["work"]);
+    const resumed = JsonlRunLog.resume(file);
+    try {
+      expect(nodeIds(resumed)).toEqual(["work"]);
+    } finally {
+      resumed[Symbol.dispose]();
+    }
   } finally {
     spy.mockRestore();
   }
@@ -1150,8 +1170,12 @@ test("jsonl excludes a second writer", () => {
   } finally {
     first.close();
   }
-  using reopened = JsonlRunLog.resume(file);
-  expect(reopened.runId).toBe("run");
+  const reopened = JsonlRunLog.resume(file);
+  try {
+    expect(reopened.runId).toBe("run");
+  } finally {
+    reopened[Symbol.dispose]();
+  }
 });
 
 test("jsonl lock contention names the log and the likely cause", () => {
@@ -1218,9 +1242,13 @@ test.each([
     return Reflect.apply(realFsync, fs, [fd]);
   }) as typeof fs.fsyncSync);
   try {
-    using resumed = JsonlRunLog.resume(file);
-    expect(nodeIds(resumed)).toEqual(["first"]);
-    expect(resumed.nextSequence).toBe(1);
+    const resumed = JsonlRunLog.resume(file);
+    try {
+      expect(nodeIds(resumed)).toEqual(["first"]);
+      expect(resumed.nextSequence).toBe(1);
+    } finally {
+      resumed[Symbol.dispose]();
+    }
   } finally {
     truncateSpy.mockRestore();
     fsyncSpy.mockRestore();
@@ -1362,23 +1390,35 @@ test("jsonl close is idempotent, keeps its records and releases the lock", () =>
   expect([...log]).toEqual(records);
   expect(log.records()).toEqual(records);
   expectError(() => log.append(new NodeStartedRecord("late")), Error, "run log is closed");
-  using reopened = JsonlRunLog.resume(file);
-  expect([...reopened]).toEqual(records);
+  const reopened = JsonlRunLog.resume(file);
+  try {
+    expect([...reopened]).toEqual(records);
+  } finally {
+    reopened[Symbol.dispose]();
+  }
 });
 
 test("disposing a jsonl log releases the lock when the body throws", () => {
   const file = path.join(dir, "run.jsonl");
   expectError(
     () => {
-      using log = JsonlRunLog.create(file, "run");
-      log.append(new NodeStartedRecord("work"));
-      throw new Error("body failed");
+      const log = JsonlRunLog.create(file, "run");
+      try {
+        log.append(new NodeStartedRecord("work"));
+        throw new Error("body failed");
+      } finally {
+        log[Symbol.dispose]();
+      }
     },
     Error,
     "body failed",
   );
-  using reopened = JsonlRunLog.resume(file);
-  expect(reopened.nextSequence).toBe(1);
+  const reopened = JsonlRunLog.resume(file);
+  try {
+    expect(reopened.nextSequence).toBe(1);
+  } finally {
+    reopened[Symbol.dispose]();
+  }
 });
 
 test("isRunLogLocked reports whether a writer holds the log", () => {
@@ -1407,10 +1447,14 @@ test("a symlink to a log shares the real log's lock", () => {
   }
   expect(isRunLogLocked(link)).toBe(false);
   {
-    using resumed = JsonlRunLog.resume(link);
-    expect(resumed.path).toBe(link);
-    expect(isRunLogLocked(real)).toBe(true);
-    resumed.append(new NodeStartedRecord("second"));
+    const resumed = JsonlRunLog.resume(link);
+    try {
+      expect(resumed.path).toBe(link);
+      expect(isRunLogLocked(real)).toBe(true);
+      resumed.append(new NodeStartedRecord("second"));
+    } finally {
+      resumed[Symbol.dispose]();
+    }
   }
   expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
   expect(nodeIds(readRunLog(real))).toEqual(["first", "second"]);
@@ -1462,14 +1506,22 @@ test("jsonl append and cache are isolated from caller mutation", () => {
   const file = path.join(dir, "run.jsonl");
   const seed = { items: [1n] };
   {
-    using log = JsonlRunLog.create(file, "run");
-    const envelope = log.append(new NodeExpandedRecord("each", seed, [], DIGEST));
-    seed.items.push(2n);
-    expect(seedOf(envelope)).toEqual({ items: [1n] });
-    expect(seedOf([...log][0]!)).toEqual({ items: [1n] });
+    const log = JsonlRunLog.create(file, "run");
+    try {
+      const envelope = log.append(new NodeExpandedRecord("each", seed, [], DIGEST));
+      seed.items.push(2n);
+      expect(seedOf(envelope)).toEqual({ items: [1n] });
+      expect(seedOf([...log][0]!)).toEqual({ items: [1n] });
+    } finally {
+      log[Symbol.dispose]();
+    }
   }
-  using resumed = JsonlRunLog.resume(file);
-  expect(seedOf([...resumed][0]!)).toEqual({ items: [1n] });
+  const resumed = JsonlRunLog.resume(file);
+  try {
+    expect(seedOf([...resumed][0]!)).toEqual({ items: [1n] });
+  } finally {
+    resumed[Symbol.dispose]();
+  }
 });
 
 test("a jsonl log never exposes its retained mutable payload", () => {
@@ -1490,9 +1542,13 @@ test("a jsonl log never exposes its retained mutable payload", () => {
   expect(fs.readFileSync(file, "utf8")).toBe(durable);
   log.close();
 
-  using resumed = JsonlRunLog.resume(file);
-  expect(seedOf(resumed[Symbol.iterator]().next().value!)).toEqual({ items: [{ value: 1n }] });
-  expect(fs.readFileSync(file, "utf8")).toBe(durable);
+  const resumed = JsonlRunLog.resume(file);
+  try {
+    expect(seedOf(resumed[Symbol.iterator]().next().value!)).toEqual({ items: [{ value: 1n }] });
+    expect(fs.readFileSync(file, "utf8")).toBe(durable);
+  } finally {
+    resumed[Symbol.dispose]();
+  }
 });
 
 test("an append rollback preserves the log", () => {
@@ -1521,96 +1577,120 @@ test("an append rollback preserves the log", () => {
     log.close();
   }
   expect(fs.readFileSync(file, "utf8").startsWith(prefix)).toBe(true);
-  using resumed = JsonlRunLog.resume(file);
-  expect(nodeIds(resumed)).toEqual(["work", "second"]);
-  expect(resumed.append(new NodeStartedRecord("third")).seq).toBe(2);
+  const resumed = JsonlRunLog.resume(file);
+  try {
+    expect(nodeIds(resumed)).toEqual(["work", "second"]);
+    expect(resumed.append(new NodeStartedRecord("third")).seq).toBe(2);
+  } finally {
+    resumed[Symbol.dispose]();
+  }
 });
 
 test("an invalid append retains the prior complete prefix and doesn't poison the log", () => {
   const file = path.join(dir, "run.jsonl");
-  using log = baselineLog(file);
-  const error = expectAppendFailure(log, file, () => log.append({ nodeId: "x" } as never));
-  expect((error as Error).constructor).toBe(TypeError);
-  expect((error as Error).message).toBe("unsupported run record: Object");
-  expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
+  const log = baselineLog(file);
+  try {
+    const error = expectAppendFailure(log, file, () => log.append({ nodeId: "x" } as never));
+    expect((error as Error).constructor).toBe(TypeError);
+    expect((error as Error).message).toBe("unsupported run record: Object");
+    expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 test("a write failure rolls back to the prior complete prefix", () => {
   const file = path.join(dir, "run.jsonl");
-  using log = baselineLog(file);
-  const failure = new Error("write failed");
-  const spy = spyOnLog("writeSync", file, (real, args) => {
-    const [fd, buffer, offset, length, position] = args;
-    real(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
-    throw failure;
-  });
+  const log = baselineLog(file);
   try {
-    expect(expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second")))).toBe(failure);
-    expectPoisoned(log, file, failure);
+    const failure = new Error("write failed");
+    const spy = spyOnLog("writeSync", file, (real, args) => {
+      const [fd, buffer, offset, length, position] = args;
+      real(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+      throw failure;
+    });
+    try {
+      expect(expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second")))).toBe(failure);
+      expectPoisoned(log, file, failure);
+    } finally {
+      spy.mockRestore();
+    }
   } finally {
-    spy.mockRestore();
+    log[Symbol.dispose]();
   }
 });
 
 test("an fsync failure rolls back and syncs the prior complete prefix", () => {
   const file = path.join(dir, "run.jsonl");
-  using log = baselineLog(file);
-  const failure = new Error("fsync failed");
-  let calls = 0;
-  const spy = spyOnLog("fsyncSync", file, (real, args) => {
-    calls++;
-    if (calls === 1) throw failure;
-    return real(...args);
-  });
+  const log = baselineLog(file);
   try {
-    expect(expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second")))).toBe(failure);
-    expectPoisoned(log, file, failure);
+    const failure = new Error("fsync failed");
+    let calls = 0;
+    const spy = spyOnLog("fsyncSync", file, (real, args) => {
+      calls++;
+      if (calls === 1) throw failure;
+      return real(...args);
+    });
+    try {
+      expect(expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second")))).toBe(failure);
+      expectPoisoned(log, file, failure);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls).toBe(2);
   } finally {
-    spy.mockRestore();
+    log[Symbol.dispose]();
   }
-  expect(calls).toBe(2);
 });
 
 test("a short write is completed by writing the rest", () => {
   const file = path.join(dir, "run.jsonl");
-  using log = baselineLog(file);
-  const prefix = fs.readFileSync(file, "utf8");
-  let calls = 0;
-  const spy = spyOnLog("writeSync", file, (real, args) => {
-    calls++;
-    const [fd, buffer, offset, length, position] = args;
-    return real(fd, buffer, offset, calls === 1 ? length - 1 : length, position);
-  });
+  const log = baselineLog(file);
   try {
-    expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
+    const prefix = fs.readFileSync(file, "utf8");
+    let calls = 0;
+    const spy = spyOnLog("writeSync", file, (real, args) => {
+      calls++;
+      const [fd, buffer, offset, length, position] = args;
+      return real(fd, buffer, offset, calls === 1 ? length - 1 : length, position);
+    });
+    try {
+      expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls).toBe(2);
+    expect(log.nextSequence).toBe(2);
+    expect(fs.readFileSync(file, "utf8")).toBe(`${prefix}${wireLine({ seq: 1, nodeId: "second" })}\n`);
   } finally {
-    spy.mockRestore();
+    log[Symbol.dispose]();
   }
-  expect(calls).toBe(2);
-  expect(log.nextSequence).toBe(2);
-  expect(fs.readFileSync(file, "utf8")).toBe(`${prefix}${wireLine({ seq: 1, nodeId: "second" })}\n`);
 });
 
 test("a write of 0 bytes after a partial write is an append failure and rolls back", () => {
   const file = path.join(dir, "run.jsonl");
-  using log = baselineLog(file);
-  const total = wireLine({ seq: 1, nodeId: "second" }).length + 1;
-  const half = Math.floor(total / 2);
-  let calls = 0;
-  const spy = spyOnLog("writeSync", file, (real, args) => {
-    calls++;
-    const [fd, buffer, offset, , position] = args;
-    return calls === 1 ? real(fd, buffer, offset, half, position) : 0;
-  });
+  const log = baselineLog(file);
   try {
-    const error = expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second"))) as Error;
-    expect(error.constructor).toBe(Error);
-    expect(error.message).toBe(`short run-log write: wrote ${half} of ${total} bytes`);
-    expectPoisoned(log, file, error);
+    const total = wireLine({ seq: 1, nodeId: "second" }).length + 1;
+    const half = Math.floor(total / 2);
+    let calls = 0;
+    const spy = spyOnLog("writeSync", file, (real, args) => {
+      calls++;
+      const [fd, buffer, offset, , position] = args;
+      return calls === 1 ? real(fd, buffer, offset, half, position) : 0;
+    });
+    try {
+      const error = expectAppendFailure(log, file, () => log.append(new NodeStartedRecord("second"))) as Error;
+      expect(error.constructor).toBe(Error);
+      expect(error.message).toBe(`short run-log write: wrote ${half} of ${total} bytes`);
+      expectPoisoned(log, file, error);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls).toBe(2);
   } finally {
-    spy.mockRestore();
+    log[Symbol.dispose]();
   }
-  expect(calls).toBe(2);
 });
 
 test("a write failure whose rollback truncate also fails is an AggregateError and poisons the log", () => {

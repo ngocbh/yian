@@ -201,15 +201,19 @@ async function expectLearns(
   feedback: unknown,
   model: ScriptedModel | null = null,
 ): Promise<void> {
-  await using memory = await buildMemories(flow);
-  const models = model === null ? undefined : serving(model);
-  const result = await runFlow(flow, inputs, { memory, learnable: true, models, env: NO_ENV });
-  expect(result.status).toBe("succeeded");
+  const memory = await buildMemories(flow);
+  try {
+    const models = model === null ? undefined : serving(model);
+    const result = await runFlow(flow, inputs, { memory, learnable: true, models, env: NO_ENV });
+    expect(result.status).toBe("succeeded");
 
-  const outcome = await result.backward(feedback);
+    const outcome = await result.backward(feedback);
 
-  expect(outcome.status).toBe("succeeded");
-  expect(outcome.learning!.status).toBe("succeeded");
+    expect(outcome.status).toBe("succeeded");
+    expect(outcome.learning!.status).toBe("succeeded");
+  } finally {
+    await memory[Symbol.asyncDispose]();
+  }
 }
 
 test("backward rejects feedback over the limit and stays usable", async () => {
@@ -456,22 +460,26 @@ output: \${w.output}
   const call = new ToolCallPart({ id: "1", name: "lookup", arguments: { q: atLimit } as JsonObject });
   const model = new ScriptedModel([partsReply(call), partsReply(new TextPart("finished")), backwardReply()], NATIVE);
   const calls: unknown[] = [];
-  await using memory = await buildMemories(flow);
-  const result = await runFlow(flow, {}, {
-    memory,
-    learnable: true,
-    tools: { lookup: lookupTool(calls) },
-    models: serving(model),
-    env: NO_ENV,
-  });
-  expect([result.status, result.output]).toEqual(["succeeded", "finished"]);
-  expect(calls).toEqual([{ q: atLimit }]);
+  const memory = await buildMemories(flow);
+  try {
+    const result = await runFlow(flow, {}, {
+      memory,
+      learnable: true,
+      tools: { lookup: lookupTool(calls) },
+      models: serving(model),
+      env: NO_ENV,
+    });
+    expect([result.status, result.output]).toEqual(["succeeded", "finished"]);
+    expect(calls).toEqual([{ q: atLimit }]);
 
-  const outcome = await result.backward("good");
+    const outcome = await result.backward("good");
 
-  expect(outcome.status).toBe("succeeded");
-  expect(outcome.learning!.status).toBe("succeeded");
-  expect(model.requests).toHaveLength(3);
+    expect(outcome.status).toBe("succeeded");
+    expect(outcome.learning!.status).toBe("succeeded");
+    expect(model.requests).toHaveLength(3);
+  } finally {
+    await memory[Symbol.asyncDispose]();
+  }
 });
 
 const STRUCTURED_FLOW = `id: nesting
@@ -510,12 +518,16 @@ test.each([126, 1500])("a model value over the limit fails the agent and backwar
   const flow = await memoryFlow(STRUCTURED_FLOW);
   // The first reply and both `retries:` attempts.
   const model = structured(deepText(levels), deepText(levels), deepText(levels));
-  await using memory = await buildMemories(flow);
-  const result = await runFlow(flow, {}, { memory, learnable: true, models: serving(model), env: NO_ENV });
+  const memory = await buildMemories(flow);
+  try {
+    const result = await runFlow(flow, {}, { memory, learnable: true, models: serving(model), env: NO_ENV });
 
-  expectFailedTooDeep(result, "agent.output_invalid", "structured output at t.a");
+    expectFailedTooDeep(result, "agent.output_invalid", "structured output at t.a");
 
-  expect((await result.backward("good")).status).toBe("succeeded");
+    expect((await result.backward("good")).status).toBe("succeeded");
+  } finally {
+    await memory[Symbol.asyncDispose]();
+  }
 });
 
 test.each([124, 1500])("tool arguments over the limit fail the agent and backward still learns (%d levels)", async (levels) => {
@@ -534,19 +546,23 @@ output: \${w.output}
   const call = new ToolCallPart({ id: "1", name: "lookup", arguments: null, rawArguments });
   const model = new ScriptedModel([partsReply(call), backwardReply()], NATIVE);
   const calls: unknown[] = [];
-  await using memory = await buildMemories(flow);
-  const result = await runFlow(flow, {}, {
-    memory,
-    learnable: true,
-    tools: { lookup: lookupTool(calls) },
-    models: serving(model),
-    env: NO_ENV,
-  });
+  const memory = await buildMemories(flow);
+  try {
+    const result = await runFlow(flow, {}, {
+      memory,
+      learnable: true,
+      tools: { lookup: lookupTool(calls) },
+      models: serving(model),
+      env: NO_ENV,
+    });
 
-  expectFailedTooDeep(result, "node.execute", "tool call 'lookup' arguments at q.a");
-  expect(calls).toEqual([]);
+    expectFailedTooDeep(result, "node.execute", "tool call 'lookup' arguments at q.a");
+    expect(calls).toEqual([]);
 
-  expect((await result.backward("good")).status).toBe("succeeded");
+    expect((await result.backward("good")).status).toBe("succeeded");
+  } finally {
+    await memory[Symbol.asyncDispose]();
+  }
 });
 
 test("a too-deep later call of a streamed reply stops every call of the reply", async () => {

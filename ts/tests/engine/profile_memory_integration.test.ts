@@ -282,12 +282,16 @@ test("human edit during learning fails the commit without a model", async () => 
   expect(built).toHaveLength(1);
   expect(learner.requests).toHaveLength(1);
   expect((await memory.read())[0]).toBe("# Ada\n- Edited by Ada.\n");
-  using log = JsonlRunLog.resume(path);
-  const failed = log
-    .records()
-    .map((envelope) => envelope.record)
-    .filter((record) => record.constructor === MemoryCommitFailedRecord) as MemoryCommitFailedRecord[];
-  expect(failed.map((record) => record.failure.code)).toEqual(["profile.version_mismatch"]);
+  const log = JsonlRunLog.resume(path);
+  try {
+    const failed = log
+      .records()
+      .map((envelope) => envelope.record)
+      .filter((record) => record.constructor === MemoryCommitFailedRecord) as MemoryCommitFailedRecord[];
+    expect(failed.map((record) => record.failure.code)).toEqual(["profile.version_mismatch"]);
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 test("resume reopens the recorded version for backward", async () => {
@@ -298,10 +302,14 @@ test("resume reopens the recorded version for backward", async () => {
   const registry = new Map([["profile", memory]]);
   await runWith(flow, { message: "hi" }, registry, chat(["Hello."], 0), { log: path, learnable: true, env });
   {
-    using log = JsonlRunLog.resume(path);
-    const started = log.records()[0]!.record as RunStartedRecord;
-    expect(started.memorySnapshots).toHaveLength(1);
-    expect(started.memorySnapshots![0]!.snapshot["profile_version"]).toBe(recordedVersion);
+    const log = JsonlRunLog.resume(path);
+    try {
+      const started = log.records()[0]!.record as RunStartedRecord;
+      expect(started.memorySnapshots).toHaveLength(1);
+      expect(started.memorySnapshots![0]!.snapshot["profile_version"]).toBe(recordedVersion);
+    } finally {
+      log[Symbol.dispose]();
+    }
   }
   await memory.write("# Ada\n- Edited later.\n", { baseVersion: recordedVersion });
 

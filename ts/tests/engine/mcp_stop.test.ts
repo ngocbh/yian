@@ -187,28 +187,32 @@ for (const numWorkers of [0, 8]) {
       const stopB = new AbortController();
       const [unopened] = fake();
       {
-        await using server = await unopened.open();
-        const outcomeA = settled(
-          run(flow, { seconds: 30 }, { numWorkers, tools: { fake: server }, signal: stopA.signal }),
-        );
-        expect(await waitFor(() => callsInFlight(server) > 0, 20_000)).toBe(true);
-        const outcomeB = settled(
-          run(flow, { seconds: 1.5 }, { numWorkers, tools: { fake: server }, signal: stopB.signal }),
-        );
-        expect(await waitFor(() => callsInFlight(server) >= 2, 20_000)).toBe(true);
-        const stoppedAt = await stopAfterCall(server, stopA);
-        const a = await outcomeA;
-        const b = await outcomeB;
+        const server = await unopened.open();
+        try {
+          const outcomeA = settled(
+            run(flow, { seconds: 30 }, { numWorkers, tools: { fake: server }, signal: stopA.signal }),
+          );
+          expect(await waitFor(() => callsInFlight(server) > 0, 20_000)).toBe(true);
+          const outcomeB = settled(
+            run(flow, { seconds: 1.5 }, { numWorkers, tools: { fake: server }, signal: stopB.signal }),
+          );
+          expect(await waitFor(() => callsInFlight(server) >= 2, 20_000)).toBe(true);
+          const stoppedAt = await stopAfterCall(server, stopA);
+          const a = await outcomeA;
+          const b = await outcomeB;
 
-        expect(a.error).toBe(stopA.signal.reason);
-        expect((a.ended - stoppedAt) / 1000).toBeLessThan(STOP_WITHIN);
-        expect(b.error).toBeUndefined();
-        expect(b.result!.failure).toBeNull();
-        expect(b.result!.output).toBe("done");
-        expect(stopB.signal.aborted).toBe(false);
-        expect(server.isOpen).toBe(true);
-        const third = await run(flow, { seconds: 0 }, { numWorkers, tools: { fake: server } });
-        expect(third.status).toBe("succeeded");
+          expect(a.error).toBe(stopA.signal.reason);
+          expect((a.ended - stoppedAt) / 1000).toBeLessThan(STOP_WITHIN);
+          expect(b.error).toBeUndefined();
+          expect(b.result!.failure).toBeNull();
+          expect(b.result!.output).toBe("done");
+          expect(stopB.signal.aborted).toBe(false);
+          expect(server.isOpen).toBe(true);
+          const third = await run(flow, { seconds: 0 }, { numWorkers, tools: { fake: server } });
+          expect(third.status).toBe("succeeded");
+        } finally {
+          await server[Symbol.asyncDispose]();
+        }
       }
       await expectClosed(unopened);
     },

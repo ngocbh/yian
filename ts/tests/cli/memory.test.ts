@@ -274,15 +274,23 @@ test("custom type points to the TS API", async () => {
 });
 
 test("no declarations build an empty registry", async () => {
-  await using registry = await buildCliMemories(codeFlow([]), { root: undefined, storageOptions: [] });
-  expect(registry.size).toBe(0);
+  const registry = await buildCliMemories(codeFlow([]), { root: undefined, storageOptions: [] });
+  try {
+    expect(registry.size).toBe(0);
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 test("env reaches the built memories", async () => {
   const env = (_name: string): string | undefined => undefined;
   const flow = codeFlow([decl("lessons", "reflective")]);
-  await using registry = await buildCliMemories(flow, { root: undefined, storageOptions: [], env });
-  expect((registry.get("lessons") as unknown as { env: unknown }).env).toBe(env);
+  const registry = await buildCliMemories(flow, { root: undefined, storageOptions: [], env });
+  try {
+    expect((registry.get("lessons") as unknown as { env: unknown }).env).toBe(env);
+  } finally {
+    await registry[Symbol.asyncDispose]();
+  }
 });
 
 test.each([
@@ -290,12 +298,16 @@ test.each([
   ["reflective", { max_items: 5n, recall_limit: 3n }],
 ] as const)("YAML config reaches the %s constructor", async (type, config) => {
   const flow = codeFlow([decl(type, type, config)]);
-  await using registry = await buildCliMemories(flow, { root: undefined, storageOptions: [], env: modelEnv() });
-  const session = await registry.get(type)!.openRun();
+  const registry = await buildCliMemories(flow, { root: undefined, storageOptions: [], env: modelEnv() });
   try {
-    expect(session.snapshot.config).toEqual(config);
+    const session = await registry.get(type)!.openRun();
+    try {
+      expect(session.snapshot.config).toEqual(config);
+    } finally {
+      await session.close();
+    }
   } finally {
-    await session.close();
+    await registry[Symbol.asyncDispose]();
   }
 });
 
@@ -352,10 +364,14 @@ describe.each(["episodic", "reflective", "session"] as const)("CLI builds %s mem
 
   /** Build with `options`, open and close one session of `key`, and close the registry. */
   async function openOnce(options: { root: string | undefined; storageOptions: readonly string[] }) {
-    await using registry = await buildCliMemories(flow(), { ...options, env: modelEnv() });
-    expect([...registry.keys()]).toEqual([key]);
-    const session = await registry.get(key)!.openRun();
-    await session.close();
+    const registry = await buildCliMemories(flow(), { ...options, env: modelEnv() });
+    try {
+      expect([...registry.keys()]).toEqual([key]);
+      const session = await registry.get(key)!.openRun();
+      await session.close();
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   }
 
   test("at the given --memory-storage path", async () => {
@@ -685,12 +701,16 @@ describe("yian run", () => {
         // The CLI must release the file before returning.
         const loaded = await loadFlow(readFileSync(flow, "utf8"));
         const reopening = { root: undefined, storageOptions: options, env: modelEnv() };
-        await using registry = await buildCliMemories(loaded, reopening);
-        const session = await registry.get(key)!.openRun();
+        const registry = await buildCliMemories(loaded, reopening);
         try {
-          expect(Bun.inspect(session.snapshot)).not.toContain(path);
+          const session = await registry.get(key)!.openRun();
+          try {
+            expect(Bun.inspect(session.snapshot)).not.toContain(path);
+          } finally {
+            await session.close();
+          }
         } finally {
-          await session.close();
+          await registry[Symbol.asyncDispose]();
         }
       }
     });
@@ -870,10 +890,14 @@ describe("yian run --resume", () => {
       if (event instanceof RunStarted) throw new Error("host stop");
     };
     const composed = await loadFlow(text);
-    await using registry = await buildMemories(composed);
-    const run = runFlow(composed, {}, { log, memory: registry, onEvent: stopAfterStart, env: cliEnv() });
-    await expect(run).rejects.toThrow("host stop");
-    const resumed = await resumeCli(flow, log);
-    expect(resumed.code, resumed.stderr).toBe(0);
+    const registry = await buildMemories(composed);
+    try {
+      const run = runFlow(composed, {}, { log, memory: registry, onEvent: stopAfterStart, env: cliEnv() });
+      await expect(run).rejects.toThrow("host stop");
+      const resumed = await resumeCli(flow, log);
+      expect(resumed.code, resumed.stderr).toBe(0);
+    } finally {
+      await registry[Symbol.asyncDispose]();
+    }
   });
 });

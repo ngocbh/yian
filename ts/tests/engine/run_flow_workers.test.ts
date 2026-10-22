@@ -90,10 +90,14 @@ for (const withSignal of [false, true]) {
     const signal = withSignal ? new AbortController().signal : null;
     const result = await run(loaded, { topic: "X" }, { log: path, signal });
     expect(result.status).toBe("succeeded");
-    using log = JsonlRunLog.resume(path);
-    const first = log.records()[0]!.record;
-    expect(first).toBeInstanceOf(RunStartedRecord);
-    expect((first as RunStartedRecord).numWorkers).toBe(8);
+    const log = JsonlRunLog.resume(path);
+    try {
+      const first = log.records()[0]!.record;
+      expect(first).toBeInstanceOf(RunStartedRecord);
+      expect((first as RunStartedRecord).numWorkers).toBe(8);
+    } finally {
+      log[Symbol.dispose]();
+    }
   });
 }
 

@@ -157,17 +157,21 @@ describe("an MCP server in a ToolSet", () => {
   test(
     "test_a_dead_server_is_rejected with a real server",
     async () => {
-      await using quitter = await mcpServer({ ...stdioOptions("--marker", marker), label: "quitter" }).open();
-      let error: unknown;
+      const quitter = await mcpServer({ ...stdioOptions("--marker", marker), label: "quitter" }).open();
       try {
-        await new ToolSet({ fake: quitter }).invoke("exit_now", {});
-      } catch (caught) {
-        error = caught;
+        let error: unknown;
+        try {
+          await new ToolSet({ fake: quitter }).invoke("exit_now", {});
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toBeInstanceOf(McpServerClosed);
+        expect(thrown(() => new ToolSet({ fake: quitter }), RangeError)).toBe(
+          `tools["fake"]: MCP server 'quitter' is closed`,
+        );
+      } finally {
+        await quitter[Symbol.asyncDispose]();
       }
-      expect(error).toBeInstanceOf(McpServerClosed);
-      expect(thrown(() => new ToolSet({ fake: quitter }), RangeError)).toBe(
-        `tools["fake"]: MCP server 'quitter' is closed`,
-      );
     },
     // Opening spawns a process; the default 5 s is too tight on a loaded machine.
     15_000,

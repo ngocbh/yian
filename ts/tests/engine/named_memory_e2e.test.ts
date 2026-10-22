@@ -108,16 +108,20 @@ test("the API's named memories persist and stack", async () => {
   const root = join(tmp, "mem");
 
   {
-    await using memory = await buildMemories(flow, { root });
-    expect(Object.fromEntries(memory.types)).toEqual({ chat: "session", "lib.notes": "episodic", notes: "episodic" });
-    expect(existsSync(root)).toBe(false); // construction is lazy
-    const first = await runWith(flow, { question: "q1" }, memory, MODEL, { learnable: true });
-    expect(first.status).toBe("succeeded");
-    expect(first.output).toEqual({ answer: "users=1 memories=", summary: "users=1 memories=" });
-    const outcome = await first.backward();
-    expect(outcome.status).toBe("succeeded");
-    expect(outcome.learning).not.toBeNull();
-    expect(outcome.learning!.status).toBe("succeeded");
+    const memory = await buildMemories(flow, { root });
+    try {
+      expect(Object.fromEntries(memory.types)).toEqual({ chat: "session", "lib.notes": "episodic", notes: "episodic" });
+      expect(existsSync(root)).toBe(false); // construction is lazy
+      const first = await runWith(flow, { question: "q1" }, memory, MODEL, { learnable: true });
+      expect(first.status).toBe("succeeded");
+      expect(first.output).toEqual({ answer: "users=1 memories=", summary: "users=1 memories=" });
+      const outcome = await first.backward();
+      expect(outcome.status).toBe("succeeded");
+      expect(outcome.learning).not.toBeNull();
+      expect(outcome.learning!.status).toBe("succeeded");
+    } finally {
+      await memory[Symbol.asyncDispose]();
+    }
   }
 
   expect(sqliteFiles(join(root, "e2e-memory"))).toEqual(["chat.sqlite", join("lib", "notes.sqlite"), "notes.sqlite"]);
@@ -125,8 +129,12 @@ test("the API's named memories persist and stack", async () => {
   // A fresh registry over the same root sees the learned episodes and the session.
   let second;
   {
-    await using memory = await buildMemories(flow, { root });
-    second = await runWith(flow, { question: "q2" }, memory, MODEL);
+    const memory = await buildMemories(flow, { root });
+    try {
+      second = await runWith(flow, { question: "q2" }, memory, MODEL);
+    } finally {
+      await memory[Symbol.asyncDispose]();
+    }
   }
   expect(second.status).toBe("succeeded");
   const output = second.output as { answer: string; summary: string };

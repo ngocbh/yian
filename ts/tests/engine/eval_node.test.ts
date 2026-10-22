@@ -114,7 +114,7 @@ import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/run
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
-import { drive, engine, FuncNode, graph, nodeFlow, rejected } from "./run_state_fixtures.ts";
+import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected } from "./run_state_fixtures.ts";
 
 /** Return the failure `drive` resolves to, or fail when it resolves to anything else. */
 async function driveFailure(
@@ -671,8 +671,7 @@ describe("the models capability", () => {
   });
 
   test("defaultModelAccess keeps the given env and builds through chatModelFromConfig", async () => {
-    const env = (name: string): string | undefined =>
-      name === "OPENAI_API_KEY" ? "sk-test" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined;
+    const env = (name: string): string | undefined => (name === "OPENAI_API_KEY" ? "sk-test" : NO_ENV(name));
     const access = defaultModelAccess(env);
     const signal = new AbortController().signal;
 
@@ -685,8 +684,7 @@ describe("the models capability", () => {
   });
 
   test("defaultModelAccess passes onReplayDegraded to chatModelFromConfig", async () => {
-    const env = (name: string): string | undefined =>
-      name === "OPENAI_API_KEY" ? "sk-test" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined;
+    const env = (name: string): string | undefined => (name === "OPENAI_API_KEY" ? "sk-test" : NO_ENV(name));
     const reasons: string[] = [];
     const onReplayDegraded = (reason: string) => void reasons.push(reason);
     const signal = new AbortController().signal;

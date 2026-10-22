@@ -75,7 +75,7 @@ import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { FileRef, Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { engine, graph, rejected, textReply } from "./run_state_fixtures.ts";
+import { engine, graph, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -99,7 +99,7 @@ function echo(onCreate: (config: Readonly<Record<string, unknown>>) => void = ()
   const prompts: string[] = [];
   const access: ModelAccess & { prompts: string[] } = {
     prompts,
-    env: (name) => (name === "YIAN_AUTH_FILE" ? process.env[name] : DEFAULT_ENV[name]),
+    env: (name) => DEFAULT_ENV[name] ?? NO_ENV(name),
     createModel: (config): ChatModel => {
       onCreate(config);
       return {

@@ -15,7 +15,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { memorySections, reply, runWith } from "./session_fakes.ts";
+import { memorySections, NO_ENV, reply, runWith } from "./session_fakes.ts";
 
 const FLOW = `id: episodic-history
 name: episodic_history
@@ -38,7 +38,7 @@ const VARS = new Map([
   ["YIAN_DEFAULT_PROVIDER", "openai"],
   ["YIAN_DEFAULT_MODEL", "test-model"],
 ]);
-const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? process.env[name] : VARS.get(name));
+const env: Env = (name) => VARS.get(name) ?? NO_ENV(name);
 
 /** The memory section texts the system prompt of `model`'s last request shows. */
 function recalled(model: ScriptedModel): string[] {

@@ -29,7 +29,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { RunFlowOptions, RunResult } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { textReply } from "./run_state_fixtures.ts";
+import { NO_ENV, textReply } from "./run_state_fixtures.ts";
 import { runWith } from "./session_fakes.ts";
 
 afterEach(() => {
@@ -71,9 +71,9 @@ test("the manifest holds the agent retries default", async () => {
   expect(new AgentNode("n", { retries: 3 }).retries).toBe(3);
 });
 
-/** An environment setting only `name` to `value`, as Python's `set_defaults` does. */
+/** An environment setting `name` to `value` over `NO_ENV`, as Python's `set_defaults` does. */
 function setting(name: string, value: string): Env {
-  return (each) => (each === name ? value : each === "YIAN_AUTH_FILE" ? process.env[each] : undefined);
+  return (each) => (each === name ? value : NO_ENV(each));
 }
 
 /** Load `text` and run it on `{question: "q"}` with `model`, in `env`; the other options go to `runFlow`. */

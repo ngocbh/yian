@@ -41,7 +41,7 @@ import { type ResumeFlowOptions, resumeFlow, type RunFlowOptions, type RunResult
 import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import type { Type } from "../../src/typesys/values.ts";
-import { Crash, engine, graph, rejected, serving } from "./run_state_fixtures.ts";
+import { Crash, engine, graph, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
 
 export { rejected };
 
@@ -315,12 +315,7 @@ nodes:
 output: \${agent.output}
 `;
 
-/**
- * An environment holding only the test's `YIAN_AUTH_FILE` and `HOME`, read per call, so a run
- * reads no host setting and its default store and home are the test's.
- */
-export const NO_ENV = (name: string): string | undefined =>
-  name === "YIAN_AUTH_FILE" || name === "HOME" ? process.env[name] : undefined;
+export { NO_ENV } from "./run_state_fixtures.ts";
 
 /**
  * `runFlow` of `flow` with `inputs`, `memory` backing memory `session` (or each memory key of a

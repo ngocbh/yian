@@ -25,9 +25,9 @@ const CLEARED = [
   "YIAN_DEFAULT_MODEL",
 ];
 for (const name of CLEARED) delete process.env[name];
-const BASELINE: Readonly<Record<string, string | undefined>> = Object.freeze({ ...process.env });
+const BASELINE: Readonly<Record<string, string | undefined>> = { ...process.env };
 
-const made: string[] = [];
+const tempDirs: string[] = [];
 
 /** Put `process.env` back to the baseline, with a fresh empty auth store and home. */
 function isolate(): void {
@@ -36,7 +36,7 @@ function isolate(): void {
   }
   Object.assign(process.env, BASELINE);
   const dir = fs.mkdtempSync(join(tmpdir(), "yian-test-"));
-  made.push(dir);
+  tempDirs.push(dir);
   fs.mkdirSync(join(dir, "home"));
   process.env.YIAN_AUTH_FILE = join(dir, "auth.json");
   process.env.HOME = join(dir, "home");
@@ -45,9 +45,11 @@ function isolate(): void {
 // Removed once at exit rather than after each test: Bun and Node order a file's `afterEach`
 // hooks differently against the preload's, and a test's own cleanup may still need them.
 process.on("exit", () => {
-  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// Module-level code and `beforeAll` hooks run before any `beforeEach`; give them a store and home too.
+// Module-level code and `beforeAll` hooks run before any `beforeEach`. Bun loads the preload once
+// per process, so this covers only the first test file's: a later file's see the previous test's
+// store and home, still temp dirs but not necessarily empty.
 isolate();
 beforeEach(isolate);

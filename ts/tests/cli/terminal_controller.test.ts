@@ -188,7 +188,7 @@ test("an observer failure wins over the prompt it cancels", async () => {
     return "done";
   };
   const out = sink();
-  const env = (name: string) => (name === "NO_COLOR" ? "1" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined);
+  const env = (name: string) => (name === "NO_COLOR" ? "1" : NO_ENV(name));
   const io: CliIo = { stdout: out.out, stderr, stdin: input, stderrStream: output, env };
   const code = await withTool("cli_done_at_prompt", execute, () =>
     main(["run", flow, "--log", join(tmp, "run.jsonl")], io),

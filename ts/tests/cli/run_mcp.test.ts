@@ -418,12 +418,7 @@ test(
   async () => {
     const flow = flowFile(AGENT_FLOW);
     const log = join(tmp, "run.jsonl");
-    const vars = {
-      XAI_API_KEY: "test-xai-key",
-      YIAN_DEFAULT_PROVIDER: "xai",
-      YIAN_DEFAULT_MODEL: "grok-4.3",
-      YIAN_AUTH_FILE: process.env.YIAN_AUTH_FILE!,
-    };
+    const vars = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
     const echo = tool({
       name: "echo",
       description: "Return `text`.",
@@ -434,7 +429,7 @@ test(
     globalThis.fetch = (async () =>
       new Response(DONE, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
     try {
-      const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name as keyof typeof vars] : undefined);
+      const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name as keyof typeof vars] : NO_ENV(name));
       const finished = await runFlow(await loadFlow(AGENT_FLOW), {}, { log, tools: { fake: [echo] }, env });
       expect(finished.status, String(finished.failure?.message)).toBe("succeeded");
     } finally {

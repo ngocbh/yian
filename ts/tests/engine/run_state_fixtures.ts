@@ -94,7 +94,6 @@ import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
-import { NO_ENV } from "./session_fakes.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";
@@ -470,8 +469,15 @@ export function callReply(...calls: [string, JsonObject, string][]): Response {
 }
 
 /**
- * Return a model access over `env` (default: `NO_ENV`) that serves `model`; `built`
- * counts the builds and `configs` holds the config given to each build, in order.
+ * An environment holding only the test's `YIAN_AUTH_FILE` and `HOME`, read per call, so a run
+ * reads no host setting and its default store and home are the test's.
+ */
+export const NO_ENV = (name: string): string | undefined =>
+  name === "YIAN_AUTH_FILE" || name === "HOME" ? process.env[name] : undefined;
+
+/**
+ * Return a model access over `env` (default: `NO_ENV`) that serves `model`; `built` counts the
+ * builds and `configs` holds the config given to each build, in order.
  */
 export function serving(
   model: ChatModel,

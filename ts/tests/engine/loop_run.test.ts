@@ -99,7 +99,7 @@ import { JsonlRunLog, NodeExpandedRecord } from "../../src/runtime/log.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { engine } from "./run_state_fixtures.ts";
+import { engine, NO_ENV } from "./run_state_fixtures.ts";
 
 const COUNTER = `
 id: counter
@@ -562,7 +562,7 @@ test("until runs body at least once", async () => {
 
 test("loop budget exceeded in step fails run", async () => {
   // A budget trip inside a driver's growth must become a failed run, not an escape.
-  const env = (name: string) => (name === "YIAN_MAX_TOTAL_NODES" ? "6" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined);
+  const env = (name: string) => (name === "YIAN_MAX_TOTAL_NODES" ? "6" : NO_ENV(name));
   const result = await runFlow(await loadConformanceFlow(COUNTER), {}, { env });
   expect(result.status).not.toBe("succeeded");
   expect(result.failure!.message).toContain("node budget");

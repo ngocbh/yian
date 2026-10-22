@@ -434,7 +434,7 @@ describe("the test preload", () => {
     const home = process.env.HOME;
     if (authFile === undefined || home === undefined) throw new Error("YIAN_AUTH_FILE and HOME must be set");
     expect(dirname(authFile).startsWith(tmpdir())).toBe(true);
-    expect(fs.readdirSync(dirname(authFile)).includes("auth.json")).toBe(false);
+    expect(fs.existsSync(authFile)).toBe(false);
     expect(new AuthStore().path).toBe(authFile);
     expect(new AuthStore(null, { env: NO_ENV }).path).toBe(authFile);
     expect(home.startsWith(tmpdir())).toBe(true);
@@ -450,7 +450,7 @@ describe("the test preload", () => {
     seen.push({ authFile, home });
   }
 
-  test("gives a test an empty store at YIAN_AUTH_FILE, read with no env too, and an empty HOME", () => {
+  test("gives a test an empty store at YIAN_AUTH_FILE, the default path also through NO_ENV, and an empty HOME", () => {
     checkIsolated();
     // The next test sees neither this variable nor this store.
     process.env.YIAN_PRELOAD_LEAK = "1";

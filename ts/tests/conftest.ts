@@ -40,7 +40,10 @@ const BASELINE: Readonly<Record<string, string | undefined>> = { ...process.env 
 
 const tempDirs: string[] = [];
 
-/** Put `process.env` back to the baseline, with a fresh empty auth store and home, and drop the cached defaults. */
+/**
+ * Put `process.env` back to the baseline, with a fresh empty auth store and home, and drop the
+ * cached defaults.
+ */
 function isolate(): void {
   for (const name of Object.keys(process.env)) {
     if (!Object.hasOwn(BASELINE, name)) delete process.env[name];

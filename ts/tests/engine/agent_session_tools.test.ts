@@ -34,7 +34,8 @@
  * `SKIPPED_TOOL_RESULT`; a representation error leaves the effect `completed` without items and
  * propagates; `interruptTurn` calls a turn's optional `interrupt`, and a failing one is a
  * `CapabilityFault`; a stop the turn throws after publishing wins over a representation error (a
- * spied `fromHost` throws it), which gets no observation note; a `CapabilityFault` with a stop
+ * spied `String.prototype.isWellFormed` throws it as `fromHost` checks the result's text), which
+ * gets no observation note; a `CapabilityFault` with a stop
  * pending is recorded `failed` and thrown, without the stop check; a skip under an already aborted
  * signal throws the stop, not a `CapabilityFault`, and records nothing, since a session turn
  * checks the stop before publishing a request. The history projection: a call without its result
@@ -304,8 +305,12 @@ test("a stop the turn throws after publishing wins over a representation error",
   const stop = new Error("stopped");
   // The representation error itself, to check it gets no observation note.
   const representation = new TypeError("not representable");
-  const spy = spyOn(values, "fromHost").mockImplementation(() => {
-    throw representation;
+  // Thrown where `fromHost` checks the result's text: Node's ESM namespaces are frozen, so the
+  // `fromHost` export itself can't be spied on.
+  const isWellFormed = String.prototype.isWellFormed;
+  const spy = spyOn(String.prototype, "isWellFormed").mockImplementation(function (this: string) {
+    if (String(this) === "actual") throw representation;
+    return isWellFormed.call(this);
   });
   const invoke = async (): Promise<unknown> => {
     controller.abort(stop);

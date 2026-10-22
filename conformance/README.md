@@ -502,6 +502,8 @@ are the case names.
 - TS's `RangeError` is the case's `ValueError`: TS throws it wherever Python raises `ValueError`
   at a yian boundary. A JS-internal `RangeError`, such as a stack overflow, reads as `ValueError`
   too.
+- TS's `RunLogSchemaError`, the `RangeError` a run log of a schema TS can't read throws, is the
+  case's `ValueError`, which Python raises there.
 - Any other class compares by its name as given, a stub's declared class included.
 - A row mapping a TS class to a different case name is added by the change that introduces that
   TS class; rows are only added.

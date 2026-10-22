@@ -62,7 +62,7 @@ import { NodeStarted, type RunEvent, StreamChunk } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { type RunResult, runFlow } from "../../src/run.ts";
+import { type RunInspection, type RunResult, runFlow } from "../../src/run.ts";
 import {
   decodePool,
   encodePool,
@@ -1465,4 +1465,9 @@ export function requiredEndFlow(loaded: ComposedFlow): ComposedFlow {
     description: loaded.description,
     originResolver: loaded.originResolver,
   });
+}
+
+/** The progress parts of an `inspectRun` result: its status, nodes in flight and interrupted counts. */
+export function progressOf({ status, inFlight, interruptedAttempts }: RunInspection) {
+  return { status, inFlight, interruptedAttempts };
 }

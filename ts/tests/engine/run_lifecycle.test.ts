@@ -132,7 +132,7 @@ import { TransientToolError } from "../../src/tools/errors.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, rejected, requiredEndFlow, startedRun, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, progressOf, rejected, requiredEndFlow, startedRun, textReply } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
@@ -1251,7 +1251,7 @@ describe("the SIGKILL platform sweep", () => {
 
           // The kill landed while the node ran: its start is the last record.
           expect(lineCount(log)).toBe(k + 1);
-          expect(inspectRun(log)).toEqual({
+          expect(progressOf(inspectRun(log))).toEqual({
             status: "interrupted",
             inFlight: [nodeId],
             interruptedAttempts: new Map([[nodeId, 1]]),

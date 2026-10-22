@@ -477,9 +477,20 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   the prefix and poisons the log: later appends throw `run log <path> refuses appends after a
   failed append` (cause: the original error), and a failed rollback throws an `AggregateError`. A
   record refused before any write doesn't poison the log.
-- For inspection, `readRunLog(path)` reads the complete prefix without the lock and without
-  changing the file, so it may see a line a concurrent writer later rolls back;
-  `isRunLogLocked(path)` probes the resolved log's `.lock`.
+- For inspection, `iterRunRecords(path, { afterOffset, runId, afterSeq, kinds, payloads })`
+  streams the complete lines without the lock and without changing the file, in 64 KiB reads
+  (memory bounded by the largest line), yielding `{ seq, offset, end, runId, kind, nodeId,
+  envelope }`; it stops at an unterminated last line, and with `payloads: false` checks only the
+  envelope and node id. A host saves the last entry's `{ end, runId, seq }` and passes them back
+  as `afterOffset`, `runId` and `afterSeq`. `RunLogChangedError` (a `RangeError`) says the file is
+  shorter than where the reader got to, or, given `runId`/`afterSeq`, doesn't continue the saved
+  record (the offset no longer ends a line, or the next record isn't seq `afterSeq + 1` of that
+  run): read from 0 again. It may see a line a concurrent writer later rolls back.
+  `readRunLog(path)` collects its envelopes; `isRunLogLocked(path)` probes the resolved log's
+  `.lock`.
+- Changed: a schema the reader can't read throws `RunLogSchemaError` (a `RangeError`, `schema`
+  the number named), where Python raises `ValueError`; the decoders keep its class when they add
+  the line to the message.
 - `src/runtime/trace.ts` holds the retained trace of a learnable run (`RetainedTrace`: accepted
   sources, occurrences, current writers, boundaries and the terminal). `prepareTrace` checks one
   record against the trace and returns a frozen `TraceDelta`; the caller applies it
@@ -600,8 +611,14 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   and model configs, opens its memory sessions and MCP servers, creates the log and drives a
   `FlowEngine` to a result, then closes what it opened. `resumeFlow` locks an existing log,
   replays it on a private copy of the flow and drives the rest (a finished log returns its result
-  and appends nothing). `inspectRun` reads a log's status, in-flight nodes and interrupted counts
-  without taking its lock.
+  and appends nothing). `inspectRun` reads a log's status, in-flight nodes, interrupted counts,
+  run id, schema, flow fingerprint, learnable flag, last seq and a failed run's failure without
+  taking its lock; a shrink under the read while a writer holds the lock (a rolled-back append)
+  reads the log once more. `staticNodes(flow)` lists every static node path of a flow and its
+  child flows with its node, so a host can name a logged node's kind; `staticPathOf(nodeId)`
+  (`nodes/ids.ts`, beside `mapCallsite`) maps a grown node's id onto that path by dropping each
+  segment's MAP element `#<i>` and LOOP iteration `~<k>` suffixes. `run.ts` re-exports
+  `staticPathOf`, `iterRunRecords`, `RunLogChangedError` and `RunLogSchemaError` for hosts.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

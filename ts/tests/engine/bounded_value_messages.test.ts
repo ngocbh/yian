@@ -33,7 +33,9 @@
  * (no tuples; an array is the only list).
  *
  * Not ported: the long-int placeholders (`<int with N digits>`; an int is a `bigint` with no
- * digit limit), the set rendering (no set is a yian value) and `_sort_repr` (Python-only: it orders
+ * digit limit, and a message shows its digits cut at the cap, which `long_ints.test.ts` checks as
+ * `test_long_ints.py::test_value_repr_shows_a_digit_count_for_a_long_int`), the set rendering (no
+ * set is a yian value) and `_sort_repr` (Python-only: it orders
  * names whose cut renderings are equal, which TS sorts uncut).
  */
 

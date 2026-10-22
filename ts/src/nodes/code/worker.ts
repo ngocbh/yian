@@ -248,9 +248,9 @@ async function importReference(reference: string, baseDir: string | null): Promi
 // Copying a result back recurses on both threads: measured, Node's main thread reads about
 // 2,100 levels and Bun about 40,000. A deeper result is refused here, by the commit's own check;
 // a shallower one over the limit is copied and still meets the node's post-asserts first.
-// Not a YIAN_* setting: YIAN_MAX_VALUE_NESTING is at most 100, so no accepted value gets near
-// it, and it only picks which check reports a too-deep result; past the copy depth it would
-// crash the copy instead.
+// Not a YIAN_* setting: YIAN_MAX_VALUE_NESTING is at most 100, so this bound never refuses an
+// accepted value; it only picks which check reports a too-deep result. Raised past what the
+// copy carries (about 2,100 levels on Node), it would let the copy crash instead.
 const COPY_DEPTH = 1000;
 
 /** Whether `value` nests deeper than the copy back to the main thread can carry. */

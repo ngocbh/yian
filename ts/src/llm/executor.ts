@@ -25,10 +25,8 @@ import { type Exchange, openExchange } from "./transport.ts";
 // The openai and anthropic SDKs send this Accept on every request, streamed ones too.
 const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
 const MAX_ERROR_BODY = 64 * 1024;
-/**
- * openai's MAX_RETRY_DELAY: the longest backoff between model retries, in seconds. Fixed, as in
- * Python; YIAN_MODEL_RETRIES bounds how long retrying takes.
- */
+// Fixed, as in Python, not a setting: YIAN_MODEL_RETRIES bounds how long retrying takes.
+/** openai's MAX_RETRY_DELAY: the longest backoff between model retries, in seconds. */
 const MAX_RETRY_DELAY_SECONDS = 8;
 
 /** What every wire protocol has. */

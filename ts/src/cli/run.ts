@@ -297,6 +297,23 @@ export function jsonValue(value: unknown): unknown {
 }
 
 /**
+ * Return a line's `spans` with each tab replaced by spaces up to the next 8-cell stop, counted
+ * from the line's start across the spans, as rich's `expand_tabs` does.
+ */
+function expandTabs(spans: readonly [string, Style | null][]): [string, Style | null][] {
+  let column = 0;
+  return spans.map(([text, style]) => {
+    let expanded = "";
+    for (const char of text) {
+      const piece = char === "\t" ? " ".repeat(8 - (column % 8)) : char;
+      column += cells(piece);
+      expanded += piece;
+    }
+    return [expanded, style];
+  });
+}
+
+/**
  * Return the box printed when a run starts: `Running flow: <name>  (version: v)` and
  * `Description: …`, wrapped inside a box no wider than the terminal's columns (80 when unknown),
  * ending in a newline; `null` when the flow has no name, description or version.
@@ -318,10 +335,13 @@ export function flowBanner(
       lines.push(i === 0 ? [[label, "bold"], [line.slice(label.length), null]] : [[line, null]]);
     });
   }
-  const plains = lines.map((spans) => spans.map(([text]) => text).join(""));
-  const inner = Math.max(1, Math.min(Math.max(...plains.map(cells)), (out.columns || 80) - 4));
+  // Rich measures the box before it expands tabs, counting a tab as no cells.
+  const widest = Math.max(...lines.map((spans) => cells(spans.map(([text]) => text.replaceAll("\t", "")).join(""))));
+  const inner = Math.max(1, Math.min(widest, (out.columns || 80) - 4));
+  const expanded = lines.map(expandTabs);
+  const plains = expanded.map((spans) => spans.map(([text]) => text).join(""));
   const rows: [string, string][] = [];
-  lines.forEach((spans, i) => {
+  expanded.forEach((spans, i) => {
     for (const [start, end] of wrapLine(plains[i]!, inner)) {
       let printed = "";
       let at = 0;

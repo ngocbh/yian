@@ -15,8 +15,9 @@
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors, `--licenses`,
 // `--version` and the routing to `cli/auth.ts`; `check`, on its own and confined to `--root`;
-// `run`'s `--json` documents, its `run failed:` setup errors and its stops (Ctrl-C at a run's
-// prompt, `io.stop`); the entry's `run --json` child, its command line in a binary and as a script
+// `run`'s `--json` documents, its `run failed:` setup errors, its stops (Ctrl-C at a run's
+// prompt, `io.stop`) and the `warning:` lines a run's warnings print as, through progress and
+// under `--quiet`; the entry's `run --json` child, its command line in a binary and as a script
 // (`childCommand`) and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
 // stuck in a CODE body; `status`, TS-only, on logs these runs write. From
 // tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
@@ -321,6 +322,21 @@ describe("flowBanner", () => {
         "│ around here ok                       │",
         "╰──────────────────────────────────────╯",
       ),
+    );
+  });
+
+  test("expands tabs to 8-cell stops, sizing the box with a tab as no cells as rich does", () => {
+    expect(banner(40, { name: "tab", description: "tab\there\tand\tthere and more words to wrap" })).toBe(
+      lines(
+        "╭──────────────────────────────────────╮",
+        "│ Running flow: tab                    │",
+        "│ Description: tab        here    and  │",
+        "│ there and more words to wrap         │",
+        "╰──────────────────────────────────────╯",
+      ),
+    );
+    expect(banner(80, { name: "t", description: "a\tb" })).toBe(
+      lines("╭─────────────────╮", "│ Running flow: t │", "│ Description: a  │", "│ b               │", "╰─────────────────╯"),
     );
   });
 
@@ -802,7 +818,11 @@ describe("warnings during a run", () => {
           `llm_config: {provider: anthropic, model: ${model}}\n`,
       );
       mkdirSync(join(tmp, "home"), { recursive: true });
-      const { io, stderr } = testIo({ HOME: join(tmp, "home"), ANTHROPIC_API_KEY: "sk-ant-test" });
+      const plain = testIo({ HOME: join(tmp, "home"), ANTHROPIC_API_KEY: "sk-ant-test" });
+      const stderr = plain.stderr;
+      // Through progress, a TTY stderr (stdin stays non-TTY, so nothing prompts) makes the
+      // reporter paint the line yellow, which `main`'s plain handler never does.
+      const io = argv.length === 0 ? { ...plain.io, stderr: { ...plain.io.stderr, isTTY: true } } : plain.io;
       const send = globalThis.fetch;
       globalThis.fetch = (async () => Response.json({ error: { message: "nope" } }, { status: 401 })) as never;
       const emit = spyOn(process, "emitWarning");
@@ -813,10 +833,9 @@ describe("warnings during a run", () => {
         emit.mockRestore();
         globalThis.fetch = send;
       }
-      const lines = stderr().split("\n");
-      expect(lines).toContain(
-        `warning: Model '${model}' is not in the known model list for provider 'anthropic'. Continuing anyway.`,
-      );
+      const line = `warning: Model '${model}' is not in the known model list for provider 'anthropic'. Continuing anyway.`;
+      if (argv.length === 0) expect(stderr()).toContain(`\x1b[33m${line}\x1b[0m`);
+      else expect(stderr().split("\n")).toContain(line);
       expect(stderr()).not.toContain("(node:");
       expect(stderr()).not.toContain("--trace-warnings");
     });

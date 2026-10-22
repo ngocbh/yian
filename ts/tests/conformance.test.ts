@@ -1552,7 +1552,11 @@ describe("runCli", () => {
   test(
     "gives the command only PATH, HOME, COLUMNS and `env`, and `stdin`",
     async () => {
-      const keys = "console.log(Object.keys(process.env).sort().join(' '), process.env.COLUMNS);\n";
+      // Node on macOS adds `__CF_USER_TEXT_ENCODING` to its own environment as it starts, whatever
+      // environment it was given.
+      const keys =
+        "const names = Object.keys(process.env).filter((name) => name !== '__CF_USER_TEXT_ENCODING');\n" +
+        "console.log(names.sort().join(' '), process.env.COLUMNS);\n";
       await cli(
         `kind: cli\nenv: {A: "1"}\nexpect: {exit: 0, stdout: "A COLUMNS HOME PATH 1000\\n"}\n`,
         keys,

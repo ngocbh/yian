@@ -2724,10 +2724,10 @@ the life of the process, and an idle thread never keeps the process alive. Input
 result are copied between threads; the checks above are unchanged, except that a result
 nesting deeper than 1,000 levels, too deep to copy, fails `contract.output` by the nesting
 limit before its post-asserts run. A call may land on a new thread or on one an earlier call
-used, so module state and globals may or may not
-persist between calls (don't rely on either), and a referenced module's top-level code may
-run more than once in a run, once per thread. The host's own globals and modules aren't
-visible. `console` output reaches the host's console as text, in order, before the node
+used, so module state and globals may or may not persist between calls (don't rely on
+either), and a referenced module's top-level code may run more than once in a run, once per
+thread. The host's own globals and modules aren't visible.
+`console` output reaches the host's console as text, in order, before the node
 finishes; `console.dir` and direct `process.stdout` or `process.stderr` writes don't go
 through it, so they may arrive out of order or be lost. A body that calls `process.exit`,
 or awaits a promise nothing can resolve while nothing else is pending on its thread, fails

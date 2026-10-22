@@ -292,7 +292,7 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
 const port = parentPort;
 if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true && port !== null) {
   /** The id of the job running now, else `null`. */
-  let current: number | null = null;
+  let running: number | null = null;
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
   // refuses); the main thread must still hear back.
   const reply = (id: number, make: () => CodeReply, late?: true): void => {
@@ -303,8 +303,8 @@ if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true
     }
   };
   const lateError = (error: unknown): void => {
-    if (current !== null) {
-      reply(current, () => ({ ok: false, as: "code", thrown: thrownOf(error) }), true);
+    if (running !== null) {
+      reply(running, () => ({ ok: false, as: "code", thrown: thrownOf(error) }), true);
       return;
     }
     const text = error instanceof Error ? `${error.name}: ${error.message}` : format(error);
@@ -325,14 +325,14 @@ if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true
     };
   }
   port.on("message", (job: CodeJob & { id: number }) => {
-    current = job.id;
+    running = job.id;
     // A listened port keeps the thread alive; while a job runs only the body's own work should.
     port.unref();
     install(job.defaults);
     const done = (make: () => CodeReply): void => {
       reply(job.id, make);
-      if (current === job.id) {
-        current = null;
+      if (running === job.id) {
+        running = null;
         port.ref();
       }
     };

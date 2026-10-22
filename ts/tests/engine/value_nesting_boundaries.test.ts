@@ -889,10 +889,18 @@ test("a CODE result over the limit meets its post-asserts before the commit refu
 test("a CODE result too deep to copy back fails its output before its post-asserts", async () => {
   const deep = await run(assertedFlow(listBody(10_000)));
   expectTooDeep(deep, "deep");
-  // The worker's refusal reads as the commit's: same message and trace.
-  const committed = await run(codeFlow(listBody(150)));
+  // The worker's refusal reads as the commit's: same message and trace, the trace located at the
+  // output field the too-deep value sits in.
+  const field = { outputLine: "    output: {s: Any}" };
+  const wrapped = (levels: number) => listBody(levels).replace("return v", "return { s: v }");
+  const deepField = await run(codeFlow(wrapped(10_000), field));
+  const committed = await run(codeFlow(wrapped(150), field));
+  expectTooDeep(deepField, "deep");
   expectTooDeep(committed, "deep");
-  expect([deep.failure!.message, deep.failure!.trace]).toEqual([committed.failure!.message, committed.failure!.trace]);
+  expect([deepField.failure!.message, deepField.failure!.trace]).toEqual([
+    committed.failure!.message,
+    committed.failure!.trace,
+  ]);
 });
 
 test("a map result list at the limit succeeds", async () => {

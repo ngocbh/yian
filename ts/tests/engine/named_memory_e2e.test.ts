@@ -4,7 +4,7 @@
  *
  * Ported, through `runFlow` and `RunResult.backward`: `test_python_api_named_memories_persist_and_stack`.
  * Changed: the model is a `ChatModel` from `models` (Python patches `model_from_config`); the runs'
- * environment is empty, so no `HOME` is set aside.
+ * environment is `NO_ENV`, so `HOME` is the test preload's per-test home where Python uses `tmp_path`.
  *
  * Ported through the CLI, each `yian run` a `main` call (`cli`), as
  * `tests/cli/memory_persistence.test.ts` runs it: `test_cli_memory_root_persists_session_across_processes`
@@ -12,7 +12,7 @@
  * its own memory registry in this process, so only the storage files carry the session from one
  * to the next (Python runs a child process per command); the model is a fake `fetch` answering as
  * xAI's chat endpoint (`runCli` with `describeCliSeen`), so the flows' `llm_config` names xAI, its
- * key in the command's env, where Python patches `model_from_config`; the printed output is its
+ * key in the command's env (`HOME` is the preload's per-test home), where Python patches `model_from_config`; the printed output is its
  * text form, compact JSON (design 3.2.3), not Python's `repr`.
  */
 

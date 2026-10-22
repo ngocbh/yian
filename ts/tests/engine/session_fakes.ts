@@ -5,7 +5,7 @@
  * `runFlow` and `resumeFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`,
  * `resumeWith`, `CrashAt`, `crashes`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`,
  * `backwardReply`, `memorySections`, `recording`), and the in-process `yian run` over a fake chat
- * endpoint that the CLI memory tests share (`runCli`).
+ * endpoint that the CLI memory tests share (`runCli`, `ChatText`).
  */
 
 import { expect } from "bun:test";
@@ -13,7 +13,6 @@ import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunFailed, RunSucceeded } from "../../src/events.ts";

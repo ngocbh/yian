@@ -148,8 +148,13 @@ test("test_cli_resume_after_process_death_reuses_saved_history_and_repeats_reque
     cwd: tmp,
     encoding: "utf8",
     timeout: 30_000,
-    // The preload's home, which `invoke`'s runs use too.
-    env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", XAI_API_KEY: "test-xai-key" },
+    // The preload's home and auth store, which `invoke`'s runs use too.
+    env: {
+      PATH: process.env["PATH"] ?? "",
+      HOME: process.env["HOME"] ?? "",
+      YIAN_AUTH_FILE: process.env["YIAN_AUTH_FILE"] ?? "",
+      XAI_API_KEY: "test-xai-key",
+    },
   });
   expect(crashed.status, crashed.stdout + crashed.stderr).toBe(42);
   const prefix = readFileSync(log);

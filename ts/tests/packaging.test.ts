@@ -116,7 +116,8 @@ describe("package.json", () => {
   });
 
   test("the yian bin is the built CLI, run by node", () => {
-    expect(PACKAGE.bin).toEqual({ yian: "./dist/src/cli/index.js" });
+    // Without a leading `./`: `npm publish` drops a bin path written with one.
+    expect(PACKAGE.bin).toEqual({ yian: "dist/src/cli/index.js" });
     expect(readFileSync(join(ROOT, "src", "cli", "index.ts"), "utf8").split("\n")[0]).toBe(
       "#!/usr/bin/env node",
     );

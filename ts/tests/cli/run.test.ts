@@ -232,6 +232,105 @@ describe("flowBanner", () => {
     expect(flowBanner({ name: null, description: null, version: null }, out, env)).toBeNull();
     expect(flowBanner({ name: "", description: "", version: "" }, out, env)).toBeNull();
   });
+
+  // The expected boxes are rich's renders of Python's banner at each width.
+  const banner = (
+    columns: number | undefined,
+    flow: { name: string | null; description: string | null; version?: string | null },
+    tty = false,
+    env: (name: string) => string | undefined = () => undefined,
+  ) => {
+    const out: Writer = { write: async () => {}, isTTY: tty, columns };
+    return flowBanner({ version: null, ...flow }, out, env);
+  };
+  const lines = (...rows: string[]) => [...rows, ""].join("\n");
+  const longDescription =
+    "Draft a plan, ask a human to approve or revise it, then finalize accordingly, and then some more words.";
+  const approval = "Draft a plan, ask a human to approve or revise it, then finalize accordingly.";
+  const sixty = lines(
+    "╭──────────────────────────────────────────────────────────╮",
+    "│ Running flow: hi                                         │",
+    "│ Description: Draft a plan, ask a human to approve or     │",
+    "│ revise it, then finalize accordingly, and then some more │",
+    "│ words.                                                   │",
+    "╰──────────────────────────────────────────────────────────╯",
+  );
+
+  test("wraps the text inside a box no wider than the terminal", () => {
+    expect(banner(60, { name: "hi", description: longDescription })).toBe(sixty);
+    expect(banner(40, { name: "human_approval", description: approval, version: "1.0" })).toBe(
+      lines(
+        "╭──────────────────────────────────────╮",
+        "│ Running flow: human_approval         │",
+        "│ (version: 1.0)                       │",
+        "│ Description: Draft a plan, ask a     │",
+        "│ human to approve or revise it, then  │",
+        "│ finalize accordingly.                │",
+        "╰──────────────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("wraps wide characters by their cells", () => {
+    expect(banner(30, { name: "cjk", description: "中文描述这是一个很长的流程说明文字需要换行显示" })).toBe(
+      lines(
+        "╭────────────────────────────╮",
+        "│ Running flow: cjk          │",
+        "│ Description:               │",
+        "│ 中文描述这是一个很长的流程 │",
+        "│ 说明文字需要换行显示       │",
+        "╰────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("folds a word wider than the box", () => {
+    expect(banner(20, { name: "x", description: "averyveryverylongwordthatcannotbreak end" })).toBe(
+      lines(
+        "╭──────────────────╮",
+        "│ Running flow: x  │",
+        "│ Description:     │",
+        "│ averyveryverylon │",
+        "│ gwordthatcannotb │",
+        "│ reak end         │",
+        "╰──────────────────╯",
+      ),
+    );
+  });
+
+  test("is 80 columns wide off a terminal", () => {
+    expect(banner(undefined, { name: "human_approval", description: approval })).toBe(
+      lines(
+        "╭──────────────────────────────────────────────────────────────────────────────╮",
+        "│ Running flow: human_approval                                                 │",
+        "│ Description: Draft a plan, ask a human to approve or revise it, then         │",
+        "│ finalize accordingly.                                                        │",
+        "╰──────────────────────────────────────────────────────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("keeps the description's lines, blank ones too, and wraps each", () => {
+    expect(banner(40, { name: "multi", description: "line one\n\nline three is long enough to wrap around here ok" })).toBe(
+      lines(
+        "╭──────────────────────────────────────╮",
+        "│ Running flow: multi                  │",
+        "│ Description: line one                │",
+        "│                                      │",
+        "│ line three is long enough to wrap    │",
+        "│ around here ok                       │",
+        "╰──────────────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("paints the wrapped rows on a colour terminal", () => {
+    const text = banner(60, { name: "hi", description: longDescription }, true)!;
+    expect(text.replace(/\x1b\[[0-9;]*m/g, "")).toBe(sixty);
+    expect(text).toContain("\x1b[1mRunning flow: \x1b[0m");
+    expect(text).toContain("\x1b[1mDescription: \x1b[0m");
+    expect(text).toContain("\x1b[36m╭");
+  });
 });
 
 describe("stopOnSignals", () => {

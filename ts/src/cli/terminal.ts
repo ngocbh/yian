@@ -136,13 +136,13 @@ function isWide(code: number): boolean {
 const ZERO_WIDTH = /^[\p{Mn}\p{Me}\u200d\ufe00-\ufe0f]$/u;
 
 /** The columns one character takes: 0 for a zero-width one, 2 for a wide one, else 1. */
-function charCells(char: string): number {
+export function charCells(char: string): number {
   if (ZERO_WIDTH.test(char)) return 0;
   return isWide(char.codePointAt(0)!) ? 2 : 1;
 }
 
 /** The columns `text` takes on a terminal, ANSI sequences not counted. */
-function cells(text: string): number {
+export function cells(text: string): number {
   let width = 0;
   for (const char of text.replace(ANSI, "")) width += charCells(char);
   return width;

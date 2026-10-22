@@ -194,7 +194,7 @@ test("tool loop and restored memory use direct model", async () => {
   expect(effects.every((effect) => effect.status === "completed")).toBe(true);
 });
 
-describe("test_partial_stream_fails_before_composer_executes_tool", () => {
+describe("partial stream fails before composer executes tool", () => {
   // A stream cut short is retried; a `response.incomplete` is a whole reply that says it did not
   // finish, so its one attempt fails the call.
   for (const [terminal, attempts] of [
@@ -256,7 +256,7 @@ const reply = (text: string) =>
 /** The conversation items of `memory`'s current snapshot. */
 const items = (memory: SessionMemory) => (snapshot(memory)["conversation"] as JsonObject)["items"] as JsonObject[];
 
-describe("test_rich_responses_summary_keeps_shared_memory_working", () => {
+describe("rich responses summary keeps shared memory working", () => {
   for (const subscription of [false, true]) {
     test(String(subscription), async () => {
       const env = subscription ? fresh() : fresh({ OPENAI_API_KEY: "synthetic" });

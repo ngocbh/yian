@@ -49,7 +49,10 @@ const COMPOSED = [
 ];
 
 /** A model access whose every model composes `COMPOSED`; `configs` records each build's config. */
-const composing = () => serving(new ScriptedModel([textReply(JSON.stringify({ items: COMPOSED }))]), env);
+function composing() {
+  const model = new ScriptedModel([textReply(JSON.stringify({ items: COMPOSED }))]);
+  return Object.assign(serving(model, env), { model });
+}
 
 /** A flow whose `ask` gate composes its questions with `llmConfig`. */
 function gate(llmConfig: string, options: { inputs?: string; typedefs?: string; pick?: string } = {}): string {
@@ -89,6 +92,8 @@ async function run(text: string, inputs: Record<string, unknown>, models: Return
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line));
+  // Python's fixture refuses a plain call: every composer call takes the structured path.
+  for (const request of models.model.requests) expect(request.outputFormat?.name).toBe("ListWrapper");
   return { result, records, requests };
 }
 

@@ -138,7 +138,7 @@ nodes:
 output: \${ask.output}
 `;
 
-describe("test_a_flow_file_cannot_set_a_connection_setting", () => {
+describe("a flow file cannot set a connection setting", () => {
   for (const [id, site, prefix] of [
     ["flow", flowLevel, "flow: llm_config."],
     ["defs", defsLevel, "defs entry 'body': llm_config."],
@@ -160,7 +160,7 @@ describe("test_a_flow_file_cannot_set_a_connection_setting", () => {
   }
 });
 
-describe("test_a_python_built_flow_layer_cannot_set_a_connection_setting", () => {
+describe("a python built flow layer cannot set a connection setting", () => {
   for (const field of ["organization", "project", "headers"]) {
     test(field, async () => {
       // A flow built in code skips the loader; the cascade still refuses the setting.
@@ -216,7 +216,7 @@ test("pop host credentials without settings returns none for them", () => {
   expect([host.organization, host.project, host.headers]).toEqual([null, null, null]);
 });
 
-describe("test_pop_host_credentials_refuses_settings_without_the_layers_key", () => {
+describe("pop host credentials refuses settings without the layers key", () => {
   for (const [id, layer] of [
     ["organization", { provider: "openai", organization: "org-abc" }],
     ["project", { provider: "openai", project: "proj-abc" }],
@@ -458,7 +458,7 @@ test("resume sends the given headers to the key agents", async () => {
   expect(readFileSync(path, "utf8")).not.toContain(HEADER_VALUE);
 });
 
-describe("test_resume_needs_exactly_the_recorded_header_names", () => {
+describe("resume needs exactly the recorded header names", () => {
   for (const [headers, named] of [
     [null, "missing X-Gateway, X-Trace"],
     [{ "X-Gateway": HEADER_VALUE }, "missing X-Trace"],
@@ -709,7 +709,7 @@ test("backward without the headers fails naming them", async () => {
   expectHidden(path, [recovered, outcome], SECRETS);
 });
 
-describe("test_backward_checks_the_given_headers_before_appending", () => {
+describe("backward checks the given headers before appending", () => {
   for (const [headers, message] of [
     [{ "X-Gateway": HEADER_VALUE }, "missing X-Trace"],
     [{ ...HEADERS, "X-Extra": "extra-3f1c" }, "not recorded X-Extra"],

@@ -800,7 +800,7 @@ describe("shortRequest", () => {
   });
 });
 
-const BUILT = path.resolve(import.meta.dir, "../../dist/tests/llm/both_runtimes.js");
+const BUILT = path.resolve(import.meta.dirname, "../../dist/tests/llm/both_runtimes.js");
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set

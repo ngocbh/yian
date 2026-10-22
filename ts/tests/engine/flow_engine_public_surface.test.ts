@@ -68,10 +68,11 @@ import {
   engine,
   FuncNode,
   graph,
+  NO_ENV,
   nodeFailure,
   noGrowth,
-  RUN_ID,
   rejected,
+  RUN_ID,
   StreamNode,
 } from "./run_state_fixtures.ts";
 
@@ -168,7 +169,7 @@ test("the constructor checks its arguments", () => {
   expect(build({ steering: {} })).toThrow(
     new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null"),
   );
-  expect(build({ models: { env: () => undefined, createModel: 1 } })).toThrow(
+  expect(build({ models: { env: NO_ENV, createModel: 1 } })).toThrow(
     new TypeError("models must provide env(name) and createModel(config, options), or be null"),
   );
 });
@@ -311,7 +312,7 @@ test("direct agent uses the run's model factory", async () => {
   const flow = (await loadFlow(AGENT_FLOW)).compiled;
   const effective = resolveLlmCascade(flow, {}, { defaults: { provider: "openai", model: "fake-direct" } });
   const models = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (config: Readonly<Record<string, unknown>>) => {
       configs.push({ ...config });
       return model;

@@ -161,7 +161,7 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, noGrowth, rejected, serving, textReply } from "./run_state_fixtures.ts";
-import { runWith } from "./session_fakes.ts";
+import { NO_ENV, runWith } from "./session_fakes.ts";
 
 test("textOf returns a string as it is", () => {
   expect(textOf("hello\nworld")).toBe("hello\nworld");
@@ -440,7 +440,7 @@ test("backward joins the node's own key and headers, or a marked call-time agent
   async function backwardConfig(node: AgentNode, recorded: Record<string, unknown>) {
     const configs: Record<string, unknown>[] = [];
     const models: ModelAccess = {
-      env: () => undefined,
+      env: NO_ENV,
       createModel: (config) => {
         configs.push({ ...config });
         const message = new Message({ role: "assistant", parts: [new TextPart(empty)] });
@@ -655,7 +655,7 @@ describe("forward", () => {
     const configs: Record<string, unknown>[] = [];
     return {
       configs,
-      env: () => undefined,
+      env: NO_ENV,
       createModel: (config) => {
         configs.push({ ...config });
         return typeof model === "function" ? model() : model;

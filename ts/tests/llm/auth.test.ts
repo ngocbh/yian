@@ -25,6 +25,9 @@ import { Request } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
 import { validateHeaderValue } from "../../src/llm_clients/connection_settings.ts";
 
+/** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
+const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
+
 /** Return a source yielding `values` in turn, and a counter of its calls. */
 function countingSource<T>(...values: T[]): [() => T, { count: number }] {
   const calls = { count: 0 };
@@ -421,7 +424,7 @@ describe("inspect", () => {
       await auth.headers();
       const secrets = auth.credentials();
       expect(secrets.length).toBeGreaterThan(0);
-      const shown = [Bun.inspect(auth), inspect(auth, { depth: Infinity })];
+      const shown = [show(auth), inspect(auth, { depth: Infinity })];
       for (const text of shown) for (const secret of secrets) expect(text).not.toContain(secret);
     });
   }

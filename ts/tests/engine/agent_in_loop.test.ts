@@ -36,6 +36,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
+import { NO_ENV } from "./session_fakes.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-in-loop-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -113,7 +114,7 @@ test("tool calling agent in loop runs", async () => {
     tools: { ping: ping() },
     llmConfig: CONFIG,
     models: serving(model),
-    env: () => undefined,
+    env: NO_ENV,
   });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("s|turn1|turn2");
@@ -129,7 +130,7 @@ test("auth failure inside loop reaches run result", async () => {
     tools: { ping: ping() },
     llmConfig: CONFIG,
     models: serving(model),
-    env: () => undefined,
+    env: NO_ENV,
   });
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("provider.auth");
@@ -189,7 +190,7 @@ test("tool calling agent in loop retries whole node after process loss", async (
 
   // Terminal replay builds no model and leaves the log as it is.
   const unexpected = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (): never => {
       throw new Error("terminal replay must not build a model");
     },

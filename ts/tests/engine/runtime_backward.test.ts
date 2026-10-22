@@ -135,6 +135,7 @@
  */
 
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { isDeepStrictEqual } from "node:util";
 
 import { buildGrow } from "../../src/compile/expand.ts";
 import { CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
@@ -2824,8 +2825,8 @@ test("a MAP's whole-list context and item order survive reversed completion", as
     expect(producer.calls[0]![1]).toEqual(both);
     expect(root.inputFeedback).toEqual({ items: both });
     const itemContext = (index: number) => (detail: Readonly<Record<string, unknown>>) =>
-      detail.role === "output" && Bun.deepEquals(detail.result, [7n, 7n]) &&
-      Bun.deepEquals(detail.positions, [[BigInt(index)]]);
+      detail.role === "output" && isDeepStrictEqual(detail.result, [7n, 7n]) &&
+      isDeepStrictEqual(detail.positions, [[BigInt(index)]]);
     for (const index of [0, 1]) {
       const occurrence = trace.occurrences.find((item) => item.nodeId === `map#${index}/work`)!;
       const [context, feedback] = calls.get(occurrence.source.executionSeq)!;
@@ -2842,7 +2843,7 @@ test("a MAP's whole-list context and item order survive reversed completion", as
     expect(ownerContext!.episodes).toHaveLength(trace.occurrences.length);
     const entries = feedbackEntries(ownerContext!);
     const producerReceived = entries.filter(
-      (entry) => entry.channel === "output" && Bun.deepEquals(entry.owner_static_path, ["producer"]),
+      (entry) => entry.channel === "output" && isDeepStrictEqual(entry.owner_static_path, ["producer"]),
     );
     expect(producerReceived.map((entry) => entry.value)).toEqual(both);
     for (const index of [0, 1]) {
@@ -3038,7 +3039,7 @@ test("an AGENT's inventory is recorded and empty feedback does no backward work"
     expect(root.inputFeedback).toEqual({ topic: ["review"] });
     expect(root.selfFeedback).toEqual([]);
     expect(root.variableFeedback).toEqual({});
-    expect(active.some((result) => Bun.deepEquals(result.result.variableFeedback, { instruction: ["local note"] })))
+    expect(active.some((result) => isDeepStrictEqual(result.result.variableFeedback, { instruction: ["local note"] })))
       .toBe(true);
   } finally {
     forward.mockRestore();
@@ -3118,7 +3119,7 @@ output: \${loop.output}
     expect(calls).toHaveLength(2);
     expect(new Set(calls).size).toBe(2);
     const drivers = trace.occurrences.filter((item) =>
-      Bun.deepEquals(item.record.forwardCapture!.scope!.staticPath, ["loop"]),
+      isDeepStrictEqual(item.record.forwardCapture!.scope!.staticPath, ["loop"]),
     );
     expect(drivers).toHaveLength(3);
     const reached = new Set(results.filter((result) => result.invoked).map((result) => sourceKey(result.source)));

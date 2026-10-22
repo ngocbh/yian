@@ -388,7 +388,7 @@ test("a __proto__ server name and a __proto__ env key stay data", () => {
 });
 
 /** The `ts/` directory. */
-const ROOT = join(import.meta.dir, "../..");
+const ROOT = join(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/cli/mcp_config.js");
 
 /** This process's environment without `YIAN_*` keys, so a child reads no ambient yian settings. */

@@ -78,6 +78,7 @@ import { getEventListeners } from "node:events";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
@@ -87,7 +88,7 @@ import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { HostOutputError, Output } from "../../src/nodes/base.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
-import { TypeStripError } from "../../src/platform.ts";
+import { runtime, TypeStripError } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
@@ -712,7 +713,7 @@ test("a late error while the worker is idle prints a console line and doesn't fa
     expect(await run('setTimeout(() => { throw new RangeError("later") }, 20)\nreturn 1')).toBe(1n);
     const line = "CODE error after its body returned: RangeError: later";
     for (let waited = 0; waited < 2000 && !logged.mock.calls.some(([text]) => text === line); waited += 10) {
-      await Bun.sleep(10);
+      await sleep(10);
     }
 
     expect(logged).toHaveBeenCalledWith(line);
@@ -745,7 +746,7 @@ test(
 
       const pending = rejected(node.run({}, { signal: controller.signal }));
       for (let waited = 0; waited < 10_000 && !log.mock.calls.some(([text]) => text === "busy"); waited += 10) {
-        await Bun.sleep(10);
+        await sleep(10);
       }
       const aborted = performance.now();
       controller.abort(reason);
@@ -768,7 +769,7 @@ test("an already-aborted signal rejects before a worker starts", async () => {
   expect(await rejected(new CodeNode("n", { code: "return 1" }).run({}, { signal: controller.signal }))).toBe(reason);
 });
 
-const BUILT_NODE = join(import.meta.dir, "..", "..", "dist", "src", "nodes", "code", "node.js");
+const BUILT_NODE = join(import.meta.dirname, "..", "..", "dist", "src", "nodes", "code", "node.js");
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
@@ -831,10 +832,10 @@ console.log(JSON.stringify({ same: error === reason, ms: performance.now() - abo
 }
 
 describe("a stopped body leaves no worker: the process exits", () => {
-  test(
+  test.skipIf(runtime !== "bun")(
     "on Bun",
     () => {
-      const source = join(import.meta.dir, "..", "..", "src", "nodes", "code", "node.ts");
+      const source = join(import.meta.dirname, "..", "..", "src", "nodes", "code", "node.ts");
       expectStoppedProcessExits(process.execPath, ["--no-install"], source);
     },
     60_000,

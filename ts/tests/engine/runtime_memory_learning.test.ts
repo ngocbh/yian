@@ -95,6 +95,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import { afterEach, expect, spyOn, test } from "bun:test";
 
@@ -1256,7 +1257,7 @@ test("an owner context of an empty MAP retains the growth and the unexecuted chi
   expect(childContext!.episodes).toEqual([]);
   expect(childContext!.feedback).toEqual([]);
   const grown = outer!.episodes.filter((episode) =>
-    Bun.deepEquals(episode.output, { kind: "grow", seed: [], prune_ids: [] }),
+    isDeepStrictEqual(episode.output, { kind: "grow", seed: [], prune_ids: [] }),
   );
   expect(grown).toHaveLength(1);
   expect(grown[0]!.ownerStaticPath).toEqual(["map"]);

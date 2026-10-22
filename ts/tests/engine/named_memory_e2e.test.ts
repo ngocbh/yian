@@ -4,32 +4,29 @@
  *
  * Ported, through `runFlow` and `RunResult.backward`: `test_python_api_named_memories_persist_and_stack`.
  * Changed: the model is a `ChatModel` from `models` (Python patches `model_from_config`); the runs'
- * environment is empty, so no `HOME` is set aside.
+ * environment is `NO_ENV`, so `HOME` is the test preload's per-test home where Python uses `tmp_path`.
  *
  * Ported through the CLI, each `yian run` a `main` call (`cli`), as
  * `tests/cli/memory_persistence.test.ts` runs it: `test_cli_memory_root_persists_session_across_processes`
  * and `test_cli_memory_storage_override_places_one_key`. Changed: each command builds and closes
  * its own memory registry in this process, so only the storage files carry the session from one
  * to the next (Python runs a child process per command); the model is a fake `fetch` answering as
- * xAI's chat endpoint (`cliFetch`), so the flows' `llm_config` names xAI, its key in the command's
- * env, where Python patches `model_from_config`; the printed output is its text form, compact JSON
- * (design 3.2.3), not Python's `repr`.
+ * xAI's chat endpoint (`runCli` with `describeCliSeen`), so the flows' `llm_config` names xAI, its
+ * key in the command's env (`HOME` is the preload's per-test home), where Python patches `model_from_config`; the printed output is its
+ * text form, compact JSON (design 3.2.3), not Python's `repr`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
 
-import { main } from "../../src/cli/index.ts";
-import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import type { Message } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { buildMemories } from "../../src/memory_host.ts";
-import { memorySections, reply, runWith } from "./session_fakes.ts";
+import { type ChatText, memorySections, reply, runCli, runWith } from "./session_fakes.ts";
 
 const ROOT_FLOW = `id: e2e-memory
 name: e2e_memory
@@ -111,16 +108,20 @@ test("the API's named memories persist and stack", async () => {
   const root = join(tmp, "mem");
 
   {
-    await using memory = await buildMemories(flow, { root });
-    expect(Object.fromEntries(memory.types)).toEqual({ chat: "session", "lib.notes": "episodic", notes: "episodic" });
-    expect(existsSync(root)).toBe(false); // construction is lazy
-    const first = await runWith(flow, { question: "q1" }, memory, MODEL, { learnable: true });
-    expect(first.status).toBe("succeeded");
-    expect(first.output).toEqual({ answer: "users=1 memories=", summary: "users=1 memories=" });
-    const outcome = await first.backward();
-    expect(outcome.status).toBe("succeeded");
-    expect(outcome.learning).not.toBeNull();
-    expect(outcome.learning!.status).toBe("succeeded");
+    const memory = await buildMemories(flow, { root });
+    try {
+      expect(Object.fromEntries(memory.types)).toEqual({ chat: "session", "lib.notes": "episodic", notes: "episodic" });
+      expect(existsSync(root)).toBe(false); // construction is lazy
+      const first = await runWith(flow, { question: "q1" }, memory, MODEL, { learnable: true });
+      expect(first.status).toBe("succeeded");
+      expect(first.output).toEqual({ answer: "users=1 memories=", summary: "users=1 memories=" });
+      const outcome = await first.backward();
+      expect(outcome.status).toBe("succeeded");
+      expect(outcome.learning).not.toBeNull();
+      expect(outcome.learning!.status).toBe("succeeded");
+    } finally {
+      await memory[Symbol.asyncDispose]();
+    }
   }
 
   expect(sqliteFiles(join(root, "e2e-memory"))).toEqual(["chat.sqlite", join("lib", "notes.sqlite"), "notes.sqlite"]);
@@ -128,8 +129,12 @@ test("the API's named memories persist and stack", async () => {
   // A fresh registry over the same root sees the learned episodes and the session.
   let second;
   {
-    await using memory = await buildMemories(flow, { root });
-    second = await runWith(flow, { question: "q2" }, memory, MODEL);
+    const memory = await buildMemories(flow, { root });
+    try {
+      second = await runWith(flow, { question: "q2" }, memory, MODEL);
+    } finally {
+      await memory[Symbol.asyncDispose]();
+    }
   }
   expect(second.status).toBe("succeeded");
   const output = second.output as { answer: string; summary: string };
@@ -139,7 +144,7 @@ test("the API's named memories persist and stack", async () => {
   expect(output.summary).toBe("users=1 memories=notes,lib.notes");
 });
 
-/** The flows the CLI runs: each AGENT on xAI's chat route, which `cliFetch` answers. */
+/** The flows the CLI runs: each AGENT on xAI's chat route, which `runCli`'s fake `fetch` answers. */
 function writeFlows(dir: string): string {
   const xai = (text: string) =>
     text.replaceAll("{provider: openai, model: fake-model}", "{provider: xai, model: grok-4.3}");
@@ -149,28 +154,9 @@ function writeFlows(dir: string): string {
   return flow;
 }
 
-/** A chat-completions stream replying `text`. */
-function chatStream(text: string): string {
-  return (
-    [
-      { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
-      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
-    ]
-      .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
-      .join("") + "data: [DONE]\n\n"
-  );
-}
-
-/** The text of a chat message's `content`, a string or a list of text parts. */
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  return (content as { text?: string }[]).map((part) => part.text ?? "").join("");
-}
-
-/** Python's `_Model` behind the CLI: a fake `fetch` answering what the model saw, as `describeSeen`. */
-async function cliFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-  const body = (await new Request(input as string, init).json()) as { messages: { role: string; content: unknown }[] };
-  const texts = (role: string) => body.messages.filter((m) => m.role === role).map((m) => contentText(m.content));
+/** Python's `_Model` behind the CLI: what the model saw, as `describeSeen`. */
+function describeCliSeen(messages: readonly ChatText[]): string {
+  const texts = (role: string) => messages.filter((m) => m.role === role).map((m) => m.text);
   const users = texts("user").filter((text) => !text.startsWith(STATUS_PREFIX));
   const system = texts("system")[0] ?? "";
   const keys: string[] = [];
@@ -178,32 +164,12 @@ async function cliFetch(input: string | URL | Request, init?: RequestInit): Prom
     const payload = JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { memory: string }[] };
     for (const section of payload.sections) if (!keys.includes(section.memory)) keys.push(section.memory);
   }
-  return new Response(chatStream(`users=${users.length} memories=${keys.join(",")}`), {
-    headers: { "content-type": "text/event-stream" },
-  });
+  return `users=${users.length} memories=${keys.join(",")}`;
 }
 
-/** Run `yian run argv` with `cliFetch` as the model; return its code and output. */
-async function cli(argv: readonly string[]) {
-  const out: string[] = [];
-  const err: string[] = [];
-  mkdirSync(join(tmp, "home"), { recursive: true });
-  const vars: Record<string, string> = { HOME: join(tmp, "home"), XAI_API_KEY: "test-xai-key" };
-  const io: CliIo = {
-    stdout: { write: async (text) => void out.push(text) },
-    stderr: { write: async (text) => void err.push(text) },
-    stdin: new PassThrough(),
-    stderrStream: new PassThrough(),
-    env: (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined),
-  };
-  const send = globalThis.fetch;
-  globalThis.fetch = cliFetch as typeof fetch;
-  try {
-    const code = await main(["run", ...argv], io);
-    return { code, stdout: out.join(""), stderr: err.join("") };
-  } finally {
-    globalThis.fetch = send;
-  }
+/** Run `yian run argv` with `describeCliSeen` as the model; return its code and output. */
+function cli(argv: readonly string[]) {
+  return runCli(argv, describeCliSeen);
 }
 
 /** The exact line `yian run` prints for this flow's output. */

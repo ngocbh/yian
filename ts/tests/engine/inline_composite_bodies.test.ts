@@ -69,13 +69,14 @@
  * the private `maskInlineBody`, so it spies on `SourceCursor.prototype.projectMapping`, which
  * masking calls. A wrong-kind descriptor is a CODE descriptor, not an arbitrary object. Descriptor
  * equality leaves out `childLabel`, as Python's `compare=False` does. The monkeypatching rows spy
- * with `spyOn`: on `CodeDescriptor.prototype.build` (the producer's builds), on the
- * `inferInlineBindingType` export (the MAP item proof) and on the `readSourceFlowInputs` export (a
- * `list` input with no element). The partial-LOOP row's `defs:` body is a hand-built child whose
- * `note` producer has no contract, so the LOOP's output is a partial record, as the def's
- * expression output makes it. The nullable-scalar row's `value` param only feeds its run half, so
- * the load half is one row. The basic LOOP row compares the output contract's type (the contract
- * carries the body's origins).
+ * with `spyOn`: on `CodeDescriptor.prototype.build` (the producer's builds) and on the
+ * `inferInlineBindingType` export (the MAP item proof; a module export can be spied on only on Bun,
+ * so that row runs on Bun only); the row patching `read_source_flow_inputs` gives `assemble` its
+ * `list` input with no element as a resolved parameter instead. The partial-LOOP row's `defs:` body
+ * is a hand-built child whose `note` producer has no contract, so the LOOP's output is a partial
+ * record, as the def's expression output makes it. The nullable-scalar row's `value` param only
+ * feeds its run half, so the load half is one row. The basic LOOP row compares the output
+ * contract's type (the contract carries the body's origins).
  *
  * Pinned at the end (`parsedNodes`):
  * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,loop,map}`, whose
@@ -155,7 +156,6 @@ import {
   inlineFlowId,
 } from "../../src/compose/desugar/inline_bodies.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
-import * as typesHelpers from "../../src/compose/helpers/types.ts";
 import { BuildContext, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
@@ -169,6 +169,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
+import { runtime } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import {
@@ -1837,7 +1838,9 @@ output: \${each.output}
   },
 );
 
-test("an inline MAP proves its item type lazily, once", () => {
+// Spies on a module export, which only Bun allows (Node's ESM namespaces are frozen); the proof
+// path calls the function directly, with no object or option to observe it through.
+test.skipIf(runtime !== "bun")("an inline MAP proves its item type lazily, once", () => {
   const infer = spyOn(inlineInputs, "inferInlineBindingType");
   const overRequests = () =>
     infer.mock.calls
@@ -2013,15 +2016,8 @@ nodes:
     output: \${echo.output}
 output: \${each.output}
 `;
-  const inputs = spyOn(typesHelpers, "readSourceFlowInputs").mockReturnValue([
-    parameter("items", new Type({ kind: ValueKind.LIST_ANY })),
-  ]);
-  let error: LoadError;
-  try {
-    error = loadError(() => assembleText(source));
-  } finally {
-    inputs.mockRestore();
-  }
+  const inputParameters = [parameter("items", new Type({ kind: ValueKind.LIST_ANY }))];
+  const error = loadError(() => assembleText(source, "flow.yaml", { inputParameters }));
 
   expect(error.message).toBe(
     "cannot infer type for inline binding 'each.input.value': list type 'list(Optional(Any))' has no proven " +

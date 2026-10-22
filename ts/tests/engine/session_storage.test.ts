@@ -739,7 +739,7 @@ test("first finish failure survives secondary release failure", async () => {
 });
 
 /** The `ts/` directory. */
-const ROOT = path.resolve(import.meta.dir, "../..");
+const ROOT = path.resolve(import.meta.dirname, "../..");
 
 test("process crash keeps completed evidence and unknown effect", async () => {
   const module = (name: string) => JSON.stringify(pathToFileURL(path.join(ROOT, `src/memory/${name}.ts`)).href);

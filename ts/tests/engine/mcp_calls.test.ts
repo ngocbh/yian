@@ -368,9 +368,13 @@ output: \${say.output}
       const env = new Map([["YIAN_AUTH_FILE", join(dir, "auth.json")]]);
       let result: RunResult;
       {
-        await using server = await openFake(["--only", "echo"]);
-        result = await runFlow(flow, {}, { tools: { fake: [...server.tools] }, env: (name) => env.get(name) });
-        expect(server.isOpen).toBe(true);
+        const server = await openFake(["--only", "echo"]);
+        try {
+          result = await runFlow(flow, {}, { tools: { fake: [...server.tools] }, env: (name) => env.get(name) });
+          expect(server.isOpen).toBe(true);
+        } finally {
+          await server[Symbol.asyncDispose]();
+        }
       }
       expect(result.failure).toBeNull();
       expect(result.status).toBe("succeeded");

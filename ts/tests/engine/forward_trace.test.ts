@@ -388,6 +388,7 @@ import {
   textReply,
   traceSnapshot,
 } from "./run_state_fixtures.ts";
+import { NO_ENV } from "./session_fakes.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -3539,7 +3540,7 @@ test("a discarded agent worker keeps its render capture out of the accepted trac
       learnable: true,
       numWorkers: 2,
       effectiveLlmByStaticPath: { slow: config },
-      models: { env: () => undefined, createModel: () => blocking },
+      models: { env: NO_ENV, createModel: () => blocking },
     },
   );
 
@@ -4355,7 +4356,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
   const rendered: string[] = [];
   let replaying = false;
   const models: ModelAccess = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (config) => {
       if (replaying) throw new Error("replay tried to invoke a model");
       return {

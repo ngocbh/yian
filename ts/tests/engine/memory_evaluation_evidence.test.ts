@@ -131,6 +131,7 @@ import {
   stacks,
   textReply,
 } from "./run_state_fixtures.ts";
+import { NO_ENV } from "./session_fakes.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
@@ -557,7 +558,7 @@ describe("through AGENT", () => {
       const answer = stage === "model" ? new Error("model failed") : textReply("answer");
       const model = new ScriptedModel([answer], NATIVE);
       const models: ModelAccess = {
-        env: () => undefined,
+        env: NO_ENV,
         createModel: (config) => {
           factoryCalls.push({ ...config });
           if (stage === "factory") throw new Error("factory failed");

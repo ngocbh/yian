@@ -8,7 +8,7 @@
  * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
  * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows),
  * `test_run_log_protocol_pins_iteration_append_close_and_context_management` (a class assigned
- * to `RunLog`, closed through `using`),
+ * to `RunLog`, closed through `Symbol.dispose`),
  * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
  * values and held arrays too; assignment is a `TypeError`). Python's `ValueError` is a
  * `RangeError` here.
@@ -427,12 +427,16 @@ class ProtocolLog {
 test("the run log protocol pins iteration, append, close and context management", () => {
   const log = new ProtocolLog();
   {
-    using entered: RunLog = log;
-    expect(entered).toBe(log);
-    const envelope = log.append(new NodeStartedRecord("work"));
-    expect(envelope.seq).toBe(0);
-    expect([...log]).toEqual([envelope]);
-    expect(log.nextSequence).toBe(1);
+    const entered: RunLog = log;
+    try {
+      expect(entered).toBe(log);
+      const envelope = log.append(new NodeStartedRecord("work"));
+      expect(envelope.seq).toBe(0);
+      expect([...log]).toEqual([envelope]);
+      expect(log.nextSequence).toBe(1);
+    } finally {
+      entered[Symbol.dispose]();
+    }
   }
 
   log.close();

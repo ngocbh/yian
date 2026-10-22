@@ -146,6 +146,7 @@ import {
   type BackwardCallback,
   engine,
   graph,
+  NO_ENV,
   noGrowth,
   RecordingBackwardNode,
   rejected,
@@ -480,7 +481,7 @@ test("a drive hands its models and onEvent to the backward hook", async () => {
   const built = engine(flow, { inputs: { topic: "reefs" }, learnable: true });
   await built.run();
   const models: ModelAccess = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: () => {
       throw new Error("the hook builds no model");
     },

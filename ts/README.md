@@ -731,9 +731,14 @@ Run from `ts/`:
 bun install --frozen-lockfile
 bun run typecheck
 bun run test                  # or one file: bun test ./tests/engine/layer_direction.test.ts
+bun run test:node             # the same tests on Node, with the `node` on PATH
 bun run build
 YIAN_TEST_NODE=<node> bun test ./tests/engine/platform.test.ts   # after a build: the Node checks
 ```
+
+`bun test` reads the preload `tests/conftest.ts` from `bunfig.toml`, which applies only when
+`bun test` starts in `ts/`. `test:node` needs Node >= 22.18: it loads `tests/node_runner.ts`, which
+runs the `bun:test` files on `node:test`, then the same preload.
 
 ## Conformance
 

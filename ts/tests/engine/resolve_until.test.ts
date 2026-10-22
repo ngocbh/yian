@@ -25,6 +25,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { inspect } from "node:util";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
@@ -40,7 +41,7 @@ function rejection(source: unknown, pool: VariablePool = new VariablePool()): Bi
     expect(error).toBeInstanceOf(BindingError);
     return error as BindingError;
   }
-  throw new Error(`resolveUntil accepted ${Bun.inspect(source)}`);
+  throw new Error(`resolveUntil accepted ${inspect(source)}`);
 }
 
 test("literal iso passthrough", () => {

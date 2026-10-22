@@ -688,7 +688,7 @@ test.each([
 });
 
 /** The `ts/` directory. */
-const ROOT = path.resolve(import.meta.dir, "../..");
+const ROOT = path.resolve(import.meta.dirname, "../..");
 
 /**
  * A child-process script that imports the backend through `load` (a module name such as

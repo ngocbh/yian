@@ -40,6 +40,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { runFlow } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
+import { NO_ENV } from "../engine/session_fakes.ts";
 
 let tmp: string;
 
@@ -207,7 +208,7 @@ describe("fresh runs", () => {
 async function finishedLog(name: string, topic: string, runId: string): Promise<string> {
   const log = join(tmp, name);
   const flow = await loadFlow(FLOW, { searchPaths: [tmp] });
-  const result = await runFlow(flow, { topic }, { log, runId, env: () => undefined });
+  const result = await runFlow(flow, { topic }, { log, runId, env: NO_ENV });
   expect(result.status).toBe("succeeded");
   return log;
 }
@@ -290,7 +291,7 @@ describe("resumed runs", () => {
       if (event instanceof NodeStarted && event.nodeId === "echo") throw new Error("host interruption");
     };
     const runId = `unfinished-${expected}`;
-    const options = { log, runId, numWorkers: 2, onEvent: interrupt, env: () => undefined };
+    const options = { log, runId, numWorkers: 2, onEvent: interrupt, env: NO_ENV };
     await expect(runFlow(flow, { topic: "recovered" }, options)).rejects.toThrow("host interruption");
 
     const { code, stdout, stderr } = await runCli(["--resume", log, "--quiet", ...workerArgs]);

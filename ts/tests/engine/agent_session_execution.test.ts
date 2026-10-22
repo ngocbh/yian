@@ -24,6 +24,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
@@ -96,7 +97,7 @@ function views(memory: SessionMemory): ConversationView[] {
 /** Wait until `memory` holds `count` queued tickets: actual reservations, not timing. */
 async function waitQueue(memory: SessionMemory, count: number): Promise<void> {
   const queue = memory["queue"] as unknown[];
-  for (let turn = 0; turn < 1000 && queue.length !== count; turn++) await Bun.sleep(1);
+  for (let turn = 0; turn < 1000 && queue.length !== count; turn++) await sleep(1);
   expect(queue.length).toBe(count);
 }
 

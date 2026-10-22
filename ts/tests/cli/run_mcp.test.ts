@@ -44,6 +44,7 @@ import { McpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../engine/mcp_helpers.ts";
+import { NO_ENV } from "../engine/session_fakes.ts";
 
 // Each row starts server processes; the default 5 s is too tight on a loaded machine.
 const SLOW = 60_000;
@@ -393,7 +394,7 @@ test(
       },
     });
     try {
-      const options = { log, tools: { whoami }, runId: "run-5c2e", env: () => undefined };
+      const options = { log, tools: { whoami }, runId: "run-5c2e", env: NO_ENV };
       const crashed = runFlow(await loadFlow(WHOAMI_FLOW), {}, options);
       await expect(crashed).rejects.toBe(crash);
     } finally {
@@ -428,7 +429,7 @@ test(
     globalThis.fetch = (async () =>
       new Response(DONE, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
     try {
-      const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name as keyof typeof vars] : undefined);
+      const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name as keyof typeof vars] : NO_ENV(name));
       const finished = await runFlow(await loadFlow(AGENT_FLOW), {}, { log, tools: { fake: [echo] }, env });
       expect(finished.status, String(finished.failure?.message)).toBe("succeeded");
     } finally {

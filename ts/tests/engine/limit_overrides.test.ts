@@ -252,14 +252,17 @@ nodes:
 output: \${deep.output}
 `;
   const flow = await loadFlow(text, { env });
-  await using memory = await buildMemories(flow, { env });
+  const memory = await buildMemories(flow, { env });
+  try {
+    const result = await runFlow(flow, {}, { env, memory, learnable: true });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    const outcome = await result.backward("good");
 
-  const result = await runFlow(flow, {}, { env, memory, learnable: true });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  const outcome = await result.backward("good");
-
-  expect(outcome.status).toBe("succeeded");
-  expect(outcome.learning!.status).toBe("succeeded");
+    expect(outcome.status).toBe("succeeded");
+    expect(outcome.learning!.status).toBe("succeeded");
+  } finally {
+    await memory[Symbol.asyncDispose]();
+  }
 });
 
 for (const numWorkers of [0, 2]) {

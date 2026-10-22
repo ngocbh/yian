@@ -16,6 +16,7 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
+import { ENTRIES } from "../src/defaults.ts";
 import { ProviderError } from "../src/llm/errors.ts";
 import {
   ApiKeyCredentials,
@@ -32,8 +33,9 @@ import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
+import { NO_ENV } from "./engine/session_fakes.ts";
 
-const PLATFORM_URL = pathToFileURL(join(import.meta.dir, "..", "src", "platform.ts")).href;
+const PLATFORM_URL = pathToFileURL(join(import.meta.dirname, "..", "src", "platform.ts")).href;
 
 /** Return the error `run` throws, failing the test if it throws none. */
 function thrown(run: () => unknown): Error {
@@ -421,6 +423,42 @@ describe("isAuthFailure", () => {
       expect(isAuthFailure(error)).toBe(expected);
     });
   }
+});
+
+describe("the test preload", () => {
+  const seen: { authFile: string; home: string }[] = [];
+
+  /** Check this test's store and home and the cleared variables; record the store and home. */
+  function checkIsolated(): void {
+    const authFile = process.env.YIAN_AUTH_FILE;
+    const home = process.env.HOME;
+    if (authFile === undefined || home === undefined) throw new Error("YIAN_AUTH_FILE and HOME must be set");
+    expect(dirname(authFile).startsWith(tmpdir())).toBe(true);
+    expect(fs.existsSync(authFile)).toBe(false);
+    expect(new AuthStore().path).toBe(authFile);
+    expect(new AuthStore(null, { env: NO_ENV }).path).toBe(authFile);
+    expect(home.startsWith(tmpdir())).toBe(true);
+    expect(fs.readdirSync(home)).toEqual([]);
+    expect(process.env.XDG_CONFIG_HOME).toBeUndefined();
+    const cleared = [...ENTRIES.map((each) => each.variable), "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL"];
+    expect(cleared.filter((name) => process.env[name] !== undefined)).toEqual([]);
+    expect(process.env.YIAN_PRELOAD_LEAK).toBeUndefined();
+    for (const before of seen) {
+      expect(dirname(authFile)).not.toBe(dirname(before.authFile));
+      expect(home).not.toBe(before.home);
+    }
+    seen.push({ authFile, home });
+  }
+
+  test("gives a test an empty store at YIAN_AUTH_FILE, the default path also through NO_ENV, and an empty HOME", () => {
+    checkIsolated();
+    // The next test sees neither this variable nor this store.
+    process.env.YIAN_PRELOAD_LEAK = "1";
+  });
+
+  test("gives the next test a fresh store and home and drops what the last one set", () => {
+    checkIsolated();
+  });
 });
 
 describe("AuthStore", () => {
@@ -2803,7 +2841,7 @@ describe("browser callback listener", () => {
   });
 });
 
-const BUILT = join(import.meta.dir, "..", "dist", "tests", "auth_both_runtimes.js");
+const BUILT = join(import.meta.dirname, "..", "dist", "tests", "auth_both_runtimes.js");
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set

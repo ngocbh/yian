@@ -53,6 +53,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
+import { NO_ENV } from "../engine/session_fakes.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
@@ -300,7 +301,7 @@ function testIo(env: Record<string, string> = {}) {
     stderr: err.out,
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
-    env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
+    env: (name) => (Object.hasOwn(env, name) ? env[name] : NO_ENV(name)),
   };
   return { io, stdout: out.text, stderr: err.text };
 }
@@ -923,7 +924,7 @@ describe("run setup errors", () => {
       stderr,
       stdin: new PassThrough(),
       stderrStream: new PassThrough(),
-      env: (name) => (name === "NO_COLOR" ? "1" : undefined),
+      env: (name) => (name === "NO_COLOR" ? "1" : NO_ENV(name)),
     };
     expect(await main(["run", flow, "-q", "--log", join(tmp, "run.jsonl")], io)).toBe(0);
     chunks.length = 0;

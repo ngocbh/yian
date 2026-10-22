@@ -72,6 +72,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { drive, rejected, serving } from "./run_state_fixtures.ts";
 import {
   effectsOf,
+  NO_ENV,
   PLAIN_FLOW,
   runSessionFlow,
   runWith,
@@ -244,7 +245,7 @@ async function evaluate(model: ScriptedModel, options: { events?: boolean; tools
   const observed: Parameters<NonNullable<NodeCaps["emitEvent"]>>[0][] = [];
   const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG, tools: tools ? ["lookup"] : undefined });
   const outcome = await drive(node, {
-    models: { env: () => undefined, createModel: () => model },
+    models: { env: NO_ENV, createModel: () => model },
     tools,
     emitStream: (item) => void chunks.push(item),
     emitEvent: options.events === false ? null : (event) => void observed.push(event),
@@ -284,7 +285,7 @@ test("a stream sink failure escapes the node as the host's error", async () => {
   const broken = new HostBroken("host");
   const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG });
   const run = drive(node, {
-    models: { env: () => undefined, createModel: () => model(streamed("text")) },
+    models: { env: NO_ENV, createModel: () => model(streamed("text")) },
     emitStream: () => {
       throw broken;
     },

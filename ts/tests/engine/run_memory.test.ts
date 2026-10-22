@@ -140,8 +140,12 @@ afterEach(() => {
 
 /** The durable records of the log at `path`, without keeping its lock. */
 function records(path: string): RunRecord[] {
-  using log = JsonlRunLog.resume(path);
-  return log.records().map((envelope) => envelope.record);
+  const log = JsonlRunLog.resume(path);
+  try {
+    return log.records().map((envelope) => envelope.record);
+  } finally {
+    log[Symbol.dispose]();
+  }
 }
 
 /** The conversation `memory` holds now. */

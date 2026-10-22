@@ -679,23 +679,27 @@ describe("McpServer open and close", () => {
       let opened: McpServer;
       let pid: number;
       {
-        await using s = await mcpServer(stdioOptions("--marker", file)).open();
-        opened = s;
-        expect(s.isOpen).toBe(true);
-        expect(s.isClosed).toBe(false);
-        expect(s.openedByRun).toBe(false);
-        expect(s.label).toBe(basename(process.execPath));
-        expect(s.tools.map((tool) => tool.name)).toEqual(listed.map((tool) => tool.name));
-        expect(Object.isFrozen(s.tools)).toBe(true);
-        s.tools.forEach((tool, i) => {
-          expect(tool).toBeInstanceOf(FunctionTool);
-          expect(tool.parametersJsonSchema as unknown).toEqual(listed[i]!.inputSchema);
-          expect(tool.description).toBe(listed[i]!.description!);
-          expect(tool.outputJsonSchema).toBeNull();
-          expect(tool.isConcurrencySafe).toBeNull();
-        });
-        [pid] = pids(file) as [number];
-        expect(childAlive(pid)).toBe(true);
+        const s = await mcpServer(stdioOptions("--marker", file)).open();
+        try {
+          opened = s;
+          expect(s.isOpen).toBe(true);
+          expect(s.isClosed).toBe(false);
+          expect(s.openedByRun).toBe(false);
+          expect(s.label).toBe(basename(process.execPath));
+          expect(s.tools.map((tool) => tool.name)).toEqual(listed.map((tool) => tool.name));
+          expect(Object.isFrozen(s.tools)).toBe(true);
+          s.tools.forEach((tool, i) => {
+            expect(tool).toBeInstanceOf(FunctionTool);
+            expect(tool.parametersJsonSchema as unknown).toEqual(listed[i]!.inputSchema);
+            expect(tool.description).toBe(listed[i]!.description!);
+            expect(tool.outputJsonSchema).toBeNull();
+            expect(tool.isConcurrencySafe).toBeNull();
+          });
+          [pid] = pids(file) as [number];
+          expect(childAlive(pid)).toBe(true);
+        } finally {
+          await s[Symbol.asyncDispose]();
+        }
       }
       expect(opened.isOpen).toBe(false);
       expect(opened.openedByRun).toBe(false);

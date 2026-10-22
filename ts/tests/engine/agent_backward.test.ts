@@ -96,6 +96,7 @@ import {
   forwardCapture,
   FuncNode,
   graph,
+  NO_ENV,
   noGrowth,
   rejected,
   serving,
@@ -157,7 +158,7 @@ test("the backward context exposes only accepted evidence and replays without ag
     learnable: true,
     effectiveLlmByStaticPath: { writer: llmConfig },
     models: {
-      env: () => undefined,
+      env: NO_ENV,
       createModel: () => {
         built++;
         return model;
@@ -246,7 +247,7 @@ function access(model: ChatModel): ModelAccess & { configs: Record<string, unkno
   return {
     configs,
     options,
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (config, given) => {
       configs.push(structuredClone(config) as Record<string, unknown>);
       options.push(given);
@@ -257,7 +258,7 @@ function access(model: ChatModel): ModelAccess & { configs: Record<string, unkno
 
 /** A model access whose build fails the test. */
 const NO_MODEL: ModelAccess = {
-  env: () => undefined,
+  env: NO_ENV,
   createModel: () => {
     throw new Error("backward constructed a model");
   },
@@ -465,7 +466,7 @@ test("AGENT backward builds its model as consumer backward and publishes each re
   const seen: unknown[] = [];
   const given: { nodeId: string; consumer?: string; signal: AbortSignal }[] = [];
   const models: ModelAccess = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (_config, options) => {
       given.push(options);
       options.onReplayDegraded?.("other_account");
@@ -650,7 +651,7 @@ for (const stage of ["factory", "invoke"] as const) {
       const raised = make();
       const chat = new ScriptedModel([raised as Error]);
       const models: ModelAccess = {
-        env: () => undefined,
+        env: NO_ENV,
         createModel: () => {
           if (stage === "factory") throw raised;
           return chat;

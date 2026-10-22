@@ -42,6 +42,9 @@ import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 import type { Send } from "../src/platform.ts";
 
+/** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
+const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
+
 const GATEWAY = "gw-secret-value";
 const AZURE_URL = "https://res.openai.azure.com";
 
@@ -189,7 +192,7 @@ async function assertHeaderValueStaysOut(provider: string): Promise<void> {
   const model = await build({ ...HEADER_CONFIGS[provider], headers: { "X-Gateway": GATEWAY } });
   expect(JSON.stringify(model.route.headers)).not.toContain(GATEWAY);
   // A full inspect: the default depth would stop before the auth object's fields.
-  expect(Bun.inspect(model)).not.toContain(GATEWAY);
+  expect(show(model)).not.toContain(GATEWAY);
   expect(inspect(model, { depth: Infinity })).not.toContain(GATEWAY);
   expect(model.route.auth.credentials()).toContain(GATEWAY);
 }

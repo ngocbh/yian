@@ -134,6 +134,7 @@ import {
   CrashAt,
   crashes,
   effectsOf,
+  NO_ENV,
   resumeWith,
   runSessionFlow,
   runWith,
@@ -753,7 +754,7 @@ test("an interrupted agent in a loop lets the loop continue", async () => {
     onEvent,
     llmConfig: CONFIG,
     models: serving(model),
-    env: () => undefined,
+    env: NO_ENV,
   });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("s|partial|turn2");

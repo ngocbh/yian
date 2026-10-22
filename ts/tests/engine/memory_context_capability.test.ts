@@ -65,6 +65,7 @@
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { StreamChunk } from "../../src/events.ts";
@@ -748,7 +749,7 @@ test("fifo turn covers stream drain and shape check", async () => {
     try {
       await paused;
       b = run(second, "b");
-      for (let turn = 0; turn < 1000 && memory["queue"].length !== 1; turn++) await Bun.sleep(0);
+      for (let turn = 0; turn < 1000 && memory["queue"].length !== 1; turn++) await sleep(0);
       expect(memory["queue"].length).toBe(1);
       expect(secondEntered).toBe(false);
     } finally {

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
+import { NO_ENV } from "../engine/run_state_fixtures.ts";
 
 /** Return a `CliIo` with an empty environment whose streams are collected. */
 function testIo() {
@@ -21,7 +22,7 @@ function testIo() {
     stderr: writer(err),
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
-    env: () => undefined,
+    env: NO_ENV,
   };
   return { io, stdout: () => out.join(""), stderr: () => err.join("") };
 }

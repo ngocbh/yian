@@ -117,7 +117,16 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, progressOf, rejected, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
+import {
+  crashAfter,
+  NO_ENV,
+  progressOf,
+  rejected,
+  requiredEndFlow,
+  startedRun,
+  textReply,
+  thrownBy,
+} from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -470,7 +479,7 @@ test("an aborted signal rejects with its reason before the log exists", async ()
 test.each([
   [{ scheduler: { now: () => 0 } }, "scheduler must be a Scheduler or null"],
   [{ random: 0.5 }, "random must be a function or null"],
-  [{ models: { env: () => undefined } }, "models must provide env(name) and createModel(config, options), or be null"],
+  [{ models: { env: NO_ENV } }, "models must provide env(name) and createModel(config, options), or be null"],
 ])("a bad test option is refused before the log exists (%#)", async (option, message) => {
   const path = join(dir, "run.jsonl");
   const flow = await load(PLAN_FLOW);
@@ -840,11 +849,15 @@ test("a boundary callback whose promise rejects stops the run", async () => {
       event instanceof RunStarted ? Promise.reject(failure) : undefined;
     const flow = await load(PLAN_FLOW);
     await expect(run(flow, { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
-    using log = JsonlRunLog.resume(path);
-    const stopped = log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
-    expect(stopped.map((record) => [record.reason, record.message])).toEqual([["callback", "host listener failed"]]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(unhandled).toEqual([]);
+    const log = JsonlRunLog.resume(path);
+    try {
+      const stopped = log.records().flatMap(({ record }) => (record instanceof RunStoppedRecord ? [record] : []));
+      expect(stopped.map((record) => [record.reason, record.message])).toEqual([["callback", "host listener failed"]]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      log[Symbol.dispose]();
+    }
   } finally {
     process.off("unhandledRejection", collect);
   }
@@ -857,8 +870,12 @@ test("a boundary callback that throws rejects the run with no stop record", asyn
     if (event instanceof RunStarted) throw failure;
   };
   await expect(run(await load(PLAN_FLOW), { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
-  using log = JsonlRunLog.resume(path);
-  expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started"]);
+  const log = JsonlRunLog.resume(path);
+  try {
+    expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started"]);
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 // ---- The run-start LLM chain ----
@@ -882,7 +899,7 @@ function scripted(built: Record<string, unknown>[], env: Env = hostEnv(dir)): Mo
 
 /** A model access whose every build fails the test. */
 const forbidden: ModelAccess = {
-  env: () => undefined,
+  env: NO_ENV,
   createModel: () => {
     throw new Error("no model may be built when the run cannot start");
   },
@@ -1308,20 +1325,24 @@ test("inspectRun reads the failure of a failed run, with and without the flow", 
 
 test("inspectRun reads a running log with no record yet as running with nothing known", () => {
   const path = join(dir, "fresh.jsonl");
-  using _log = JsonlRunLog.create(path, "fresh");
-  expect(inspectRun(path)).toEqual({
-    status: "running",
-    inFlight: [],
-    interruptedAttempts: new Map(),
-    runId: null,
-    schema: null,
-    flowFingerprint: null,
-    learnable: null,
-    lastSeq: null,
-    startedAt: null,
-    endedAt: null,
-    failure: null,
-  });
+  const log = JsonlRunLog.create(path, "fresh");
+  try {
+    expect(inspectRun(path)).toEqual({
+      status: "running",
+      inFlight: [],
+      interruptedAttempts: new Map(),
+      runId: null,
+      schema: null,
+      flowFingerprint: null,
+      learnable: null,
+      lastSeq: null,
+      startedAt: null,
+      endedAt: null,
+      failure: null,
+    });
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 test("inspectRun refuses a log that doesn't start with RunStarted, and a schema it can't read", () => {

@@ -348,13 +348,15 @@ describe("EventStream", () => {
     expect(closes).toEqual([1]);
   });
 
-  test("closes on await using exit", async () => {
+  test("closes on async dispose", async () => {
     const closes: number[] = [];
-    {
-      await using stream = new EventStream([new TextDelta(0, "a"), new TextDelta(0, "b")].values(), () => {
-        closes.push(1);
-      });
+    const stream = new EventStream([new TextDelta(0, "a"), new TextDelta(0, "b")].values(), () => {
+      closes.push(1);
+    });
+    try {
       expect((await stream.next()).value).toEqual(new TextDelta(0, "a"));
+    } finally {
+      await stream[Symbol.asyncDispose]();
     }
     expect(closes).toEqual([1]);
   });

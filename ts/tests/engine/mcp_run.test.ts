@@ -231,11 +231,15 @@ test(
     const flow = await toolFlow("echo", '{text: "hi"}');
     const server = fake();
     {
-      await using opened = await server.open();
-      for (let i = 0; i < 2; i++) {
-        const result = await run(flow, { fake: opened });
-        expect(result.status).toBe("succeeded");
-        expect(opened.isOpen).toBe(true);
+      const opened = await server.open();
+      try {
+        for (let i = 0; i < 2; i++) {
+          const result = await run(flow, { fake: opened });
+          expect(result.status).toBe("succeeded");
+          expect(opened.isOpen).toBe(true);
+        }
+      } finally {
+        await opened[Symbol.asyncDispose]();
       }
     }
     await expectClosed(server);

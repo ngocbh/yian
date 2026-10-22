@@ -1124,7 +1124,8 @@ describe("environment table", () => {
         await drive(provider);
       }
     }
-    // The default store path.
+    // The default store path, under the test's home.
+    vars.set("HOME", home);
     vars.delete("YIAN_AUTH_FILE");
     new AuthStore(null, { env: recording });
 

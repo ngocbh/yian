@@ -63,6 +63,7 @@ import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { runFlow } from "../../src/run.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
 import { drive } from "../engine/run_state_fixtures.ts";
+import { NO_ENV } from "../engine/session_fakes.ts";
 import { assembleText, loadError } from "./declarations.ts";
 
 const NESTED_OUTPUT_FLOW = `id: nested-output-contract
@@ -558,7 +559,7 @@ output: \${writer.output}
   const reply = new Message({ role: "assistant", parts: [new TextPart('{"profile": {"age": "not-an-integer"}}')] });
   const model = new ScriptedModel([new Response({ message: reply, finishReason: "stop" })], config);
 
-  const outcome = await drive(writer, { models: { env: () => undefined, createModel: () => model } });
+  const outcome = await drive(writer, { models: { env: NO_ENV, createModel: () => model } });
 
   expect(outcome).toBeInstanceOf(EvaluationFailure);
   const { failure } = outcome as EvaluationFailure;

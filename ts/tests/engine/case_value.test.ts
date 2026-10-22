@@ -14,8 +14,15 @@
  *
  * (The `then:/else: call(...)` inline-call branch form is covered by `case_call.test.ts`.)
  *
+ * Ported through `loadFlow` and `runFlow`: `test_case_value_returns_taken_branch` and the run half
+ * of `test_case_of_case_value_runs_taken_nested_leaf`. Covered by `run-case` cases running the
+ * same flows on the same inputs: the run halves of `test_node_consuming_case_value_runs`
+ * (`engine_case_value__a_node_input_reads_the_case_value`) and
+ * `test_case_value_in_inline_call_arg_runs`
+ * (`engine_case_value__an_inline_call_argument_reads_the_case_value`).
+ *
  * Changed: the load rows assemble with `assembleText` (a `defs:` callee built by hand with
- * `handChild`), where Python loads and runs; `test_seed_22_case_value_output_expanded` reads seed
+ * `handChild`), where Python loads; `test_seed_22_case_value_output_expanded` reads seed
  * 22 from the `load-case/seed_22_case_value` case. A rejection row pins the whole message where
  * Python matches a fragment. `test_no_case_fast_path_is_identity` checks the same descriptors in a
  * fresh map, since `expandCaseOutputs` returns a mutable `Map` for its read-only input. The load
@@ -24,10 +31,6 @@
  *
  * TS-only: the harvested `load-case/engine_case_value__case_value_in_a_coalesce_is_rejected` and
  * `load-case/seed_22_case_value`, pinned at the end.
- *
- * Later (T4-8 follow-up): the run halves of `test_case_value_returns_taken_branch`,
- * `test_node_consuming_case_value_runs`, `test_case_of_case_value_runs_taken_nested_leaf` and
- * `test_case_value_in_inline_call_arg_runs`.
  */
 
 import { expect, test } from "bun:test";
@@ -43,6 +46,7 @@ import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { Assertion, Binding, ValueContract } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import {
   assembled,
@@ -50,6 +54,7 @@ import {
   type CaseRow,
   caseText,
   handChild,
+  loadConformanceFlow,
   loadError,
   parametersFromYaml,
   runCase,
@@ -296,6 +301,18 @@ test("case value flow output is expanded", () => {
   expect(firstOutput(load(CASE_VALUE_FLOW))).toBe("${pro.output | caut.output}");
 });
 
+test("case value returns the taken branch", async () => {
+  const loaded = await loadConformanceFlow(CASE_VALUE_FLOW);
+  const hit = await runFlow(loaded, { seed: 0.9, topic: "ACME" });
+  expect(hit.status, hit.failure?.message).toBe("succeeded");
+  // The `then:` branch ran.
+  expect(hit.output).toBe("pro case for ACME");
+  const miss = await runFlow(loaded, { seed: 0.1, topic: "ACME" });
+  expect(miss.status, miss.failure?.message).toBe("succeeded");
+  // The `else:` branch ran.
+  expect(miss.output).toBe("cautious note for ACME");
+});
+
 test("node consuming case value loads with data edges from both branches", () => {
   const text = CASE_VALUE_FLOW.replace(
     "output: ${gate.output}\n",
@@ -312,8 +329,7 @@ test("seed 22 case value output expanded", () => {
   expect(firstOutput(load(caseText("load-case/seed_22_case_value").text))).toBe("${positive.output | cautious.output}");
 });
 
-test("case of case value expands through the nested leaf", () => {
-  const compiled = load(`
+const CASE_OF_CASE_FLOW = `
 id: coc
 name: coc
 input:
@@ -351,9 +367,16 @@ nodes:
       topic: "X"
     output: str
 output: \${outer.output}
-`);
+`;
+
+test("case of case value runs the taken nested leaf", async () => {
   // ${outer.output} flattened through `inner` to its leaves (+ outer's else `x`).
-  expect(firstOutput(compiled)).toBe("${hi.output | lo.output | x.output}");
+  expect(firstOutput(load(CASE_OF_CASE_FLOW))).toBe("${hi.output | lo.output | x.output}");
+  const loaded = await loadConformanceFlow(CASE_OF_CASE_FLOW);
+  // outer -> inner -> hi, outer -> inner -> lo, then outer -> x (inner skip-flooded).
+  expect((await runFlow(loaded, { a: 0.9, b: 0.9 })).output).toBe("HI");
+  expect((await runFlow(loaded, { a: 0.9, b: 0.2 })).output).toBe("LO");
+  expect((await runFlow(loaded, { a: 0.2, b: 0.9 })).output).toBe("X");
 });
 
 test("case value in inline call arg expands", () => {

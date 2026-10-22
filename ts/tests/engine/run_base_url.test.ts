@@ -11,12 +11,12 @@
  * receives. A profile memory's learner builds through the same model access. Each run's
  * environment is the file's (`hostEnv`) plus the variables a row sets.
  *
- * Changed: the secret scan (`expectHidden`) looks for this file's key, where Python's imported
- * `_assert_hidden` defaults to `test_run_api_key.py`'s; a host stopping a run from `onEvent` makes
- * the run reject with its error; refused configs are `RangeError`s and refused flow files
- * `LoadError`s (Python's `ValueError`s); `test_a_lower_layer_base_url_cannot_redirect_the_host_key`
- * sets the layers on the loaded flow's `CompiledFlow` and `AgentNode` (Python's `flow_llm_config`
- * and `own_llm_config`).
+ * Stronger than Python: the secret scan (`expectHidden`) looks for this file's key, where Python's
+ * imported `_assert_hidden` scans for `test_run_api_key.py`'s key, never sent here.
+ *
+ * Changed: refused configs are `RangeError`s and refused flow files `LoadError`s (Python's
+ * `ValueError`s); `test_a_lower_layer_base_url_cannot_redirect_the_host_key` sets the layers on the
+ * loaded flow's `CompiledFlow` and `AgentNode` (Python's `flow_llm_config` and `own_llm_config`).
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -39,10 +39,12 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import {
+  adaStore,
   chatText,
   expectHidden,
   inOrder,
   NO_FEEDBACK,
+  profileMemory,
   type Replier,
   recording,
   rejected,
@@ -650,23 +652,6 @@ test("profile memory needs its key beside its base url", () => {
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toContain("https");
 });
-
-/** A profile store under `<root>/profile` holding `# Ada`. */
-async function adaStore(root: string): Promise<FileMarkdownStore> {
-  mkdirSync(join(root, "profile"));
-  const store = new FileMarkdownStore(join(root, "profile", "ada.md"));
-  await store.write("# Ada\n", { baseVersion: (await store.read())[1] });
-  return store;
-}
-
-/** A profile memory over `store` with `llmConfig`, whose learner builds through `models`. */
-function profileMemory(store: FileMarkdownStore, llmConfig: Record<string, string>, models: ReturnType<typeof recording>) {
-  return new ProfileMemory(store, {
-    llmConfig,
-    env: models.env,
-    createModel: (config) => models.createModel(config, { nodeId: "__memory__", signal: new AbortController().signal }),
-  });
-}
 
 const PROFILE_REPLY = "<profile>\n# Ada\n- Prefers brief replies.\n</profile>";
 

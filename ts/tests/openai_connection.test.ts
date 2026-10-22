@@ -2,10 +2,11 @@
  * Mirrors `tests/test_openai_connection.py`. The model calls build with `chatModelFromConfig` and
  * answer from a recording `send` (`engine/run_state_fixtures.ts`'s) that replies with one Responses
  * stream. Adapted: `test_snapshot_does_not_follow_reconnect` fails at build with 0 requests, since
- * TS reads the pinned login at build too; the structured output test keeps the route half (the strategy table
- * is `llm/structured.test.ts`'s); `test_saved_api_key_and_preflight_ignore_incidental_environment`
- * and `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight
- * goes with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
+ * TS reads the pinned login at build too; the structured output test keeps the route half (the
+ * strategy table is `llm/structured.test.ts`'s);
+ * `test_saved_api_key_and_preflight_ignore_incidental_environment` and
+ * `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight goes
+ * with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
  * `connectionCredentials` twin. The two cascade tests are ported over `resolveLlmCascade`. The
  * three run tests go through `runFlow` with the test's environment.
  */

@@ -10,7 +10,7 @@
  * `_plain` and `_assert_hidden` of `test_run_api_key.py`).
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -55,6 +55,8 @@ import {
   MemorySpec,
   MemoryStack,
 } from "../../src/memory/index.ts";
+import { ProfileMemory } from "../../src/memory/profile.ts";
+import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
@@ -633,6 +635,27 @@ export function keyEcho401(key: string): globalThis.Response {
     { error: { message, type: "invalid_request_error", code: "invalid_api_key" } },
     { status: 401 },
   );
+}
+
+/** A profile store under `<root>/profile` holding `# Ada`. */
+export async function adaStore(root: string): Promise<FileMarkdownStore> {
+  mkdirSync(join(root, "profile"));
+  const store = new FileMarkdownStore(join(root, "profile", "ada.md"));
+  await store.write("# Ada\n", { baseVersion: (await store.read())[1] });
+  return store;
+}
+
+/** A profile memory over `store` with `llmConfig`, whose learner builds through `models`. */
+export function profileMemory(
+  store: FileMarkdownStore,
+  llmConfig: Record<string, string>,
+  models: ReturnType<typeof recording>,
+): ProfileMemory {
+  return new ProfileMemory(store, {
+    llmConfig,
+    env: models.env,
+    createModel: (config) => models.createModel(config, { nodeId: "__memory__", signal: new AbortController().signal }),
+  });
 }
 
 /** An AGENT backward reply with no feedback. */

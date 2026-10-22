@@ -8,10 +8,9 @@
  * read the configs `serving` receives, the key being a plain string there (Python's `SecretStr`).
  * The secret scan is `expectHidden`: each value as `inspect` shows it and as `plain`'s JSON (Python's
  * `repr` and `_plain`). Each run's environment is the file's (`hostEnv`) plus the variables a row
- * sets; a profile memory's learner builds over the same `send`.
+ * sets; a profile memory's learner builds through the same model access.
  *
- * Changed: a host stopping a run from `onEvent` makes the run reject with its error, as Python's
- * raise does; refused configs are `RangeError`s and refused flow files `LoadError`s (Python's
+ * Changed: refused configs are `RangeError`s and refused flow files `LoadError`s (Python's
  * `ValueError`s).
  *
  * Covered by `run-agent/engine_run_api_key__key_without_a_provider_is_rejected`:
@@ -30,19 +29,20 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
 import { ProfileMemory } from "../../src/memory/profile.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import {
+  adaStore,
   chatText,
   chatTool,
   expectHidden,
   inOrder,
   keyEcho401,
   NO_FEEDBACK,
+  profileMemory,
   type Reply,
   type Replier,
   recording,
@@ -293,11 +293,18 @@ test("backward without the key fails clearly", async () => {
   const models = recording(env, inOrder(chatText("ok"), chatText(NO_FEEDBACK)));
   await runFlow(await loadFlow(FLOW, { env }), {}, { log: path, onEvent, learnable: true, llmConfig: VLLM, models, env });
   const keyed = envWith({ VLLM_API_KEY: "sk-environment-key" });
-  const recovered = await resumeFlow(await loadFlow(FLOW, { env: keyed }), { log: path, onEvent, models, env: keyed });
+  const keyedModels = recording(keyed, chatText(NO_FEEDBACK));
+  const recovered = await resumeFlow(await loadFlow(FLOW, { env: keyed }), {
+    log: path,
+    onEvent,
+    models: keyedModels,
+    env: keyed,
+  });
   const outcome = await recovered.backward("Be brief.");
   expect(outcome.status).toBe("failed");
   expect(inspect(outcome.failure, { depth: null })).toContain("api_key");
   expect(models.requests).toHaveLength(1);
+  expect(keyedModels.requests).toEqual([]);
   expectHidden(path, [events, recovered, outcome], [SENTINEL]);
 });
 
@@ -444,23 +451,6 @@ function thrown(fn: () => unknown): Error {
     return error as Error;
   }
   throw new Error("expected a throw");
-}
-
-/** A profile store under `<root>/profile` holding `# Ada`. */
-async function adaStore(root: string): Promise<FileMarkdownStore> {
-  mkdirSync(join(root, "profile"));
-  const store = new FileMarkdownStore(join(root, "profile", "ada.md"));
-  await store.write("# Ada\n", { baseVersion: (await store.read())[1] });
-  return store;
-}
-
-/** A profile memory over `store` with `llmConfig`, whose learner builds over `models`' `send`. */
-function profileMemory(store: FileMarkdownStore, llmConfig: Record<string, string>, models: ReturnType<typeof recording>) {
-  return new ProfileMemory(store, {
-    llmConfig,
-    env: models.env,
-    createModel: (config) => chatModelFromConfig(config, { env: models.env, send: models.send, onWarning: () => {} }),
-  });
 }
 
 /** The text of each file under `root`, recursively. */

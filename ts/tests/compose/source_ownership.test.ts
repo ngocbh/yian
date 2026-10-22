@@ -7,10 +7,11 @@
  * slots. Each check is a function of `{path, text}` sources, so snippets prove the
  * rules the real tree is held to.
  *
- * The two `parse_file` rows spy on `SourceDocument.parse`, which TS's parse goes
- * through, where Python patches its document loader. The `load_flow` and root-variant
- * tests need the loader and live with its port; the legacy-module check has no
- * counterpart, and Python's `_root_node` and `_index` slots don't exist in TypeScript.
+ * The `parse_file` and root-variant rows spy on `SourceDocument.parse`, the one way TS makes a
+ * document, where Python patches its document loader; the captured-document row wraps it, where
+ * Python patches the loader's `parse_source_document`. The `load_flow` rows load through
+ * `loadFlow`, each CODE node naming the conformance fixture `echo`. The legacy-module check has
+ * no counterpart, and Python's `_root_node` and `_index` slots don't exist in TypeScript.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";
@@ -21,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { blank, importStatements } from "../engine/source_scan.ts";
-import { loadError } from "./declarations.ts";
+import { loadConformanceFlow, loadError, loadErrorAsync } from "./declarations.ts";
 
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 
@@ -167,11 +168,50 @@ name: owned
 nodes:
   echo:
     kind: code
-    code: tests.engine._compose_codefns:echo
+    code: ./fixtures/compose_codefns.ts:echo
     input:
       value: hello
     output: str
 output: \${echo.output}
+`;
+
+const INLINE_FLOW = `id: owned-inline
+name: owned_inline
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          value: hello
+        output: str
+    output: \${echo.output}
+output: \${wrapper.output}
+`;
+
+const DEFS_FLOW = `id: owned-defs
+name: owned_defs
+defs:
+  echo_child:
+    input:
+      value: !str
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo
+        input:
+          value: \${input.value}
+        output: str
+    output: \${echo.output}
+nodes:
+  invoke:
+    kind: call
+    call: echo_child
+    input:
+      value: hello
+output: \${invoke.output}
 `;
 
 describe("parse ownership", () => {
@@ -194,5 +234,63 @@ describe("parse ownership", () => {
 
     expect(error.message).toContain("invalid YAML");
     expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(1);
+  });
+
+  test.each([
+    ["plain", FLOW],
+    ["inline", INLINE_FLOW],
+    ["defs", DEFS_FLOW],
+  ])("root variants use one document: %s", async (_id, source) => {
+    const parse = spyOn(SourceDocument, "parse");
+    try {
+      await loadConformanceFlow(source);
+
+      expect(parse).toHaveBeenCalledTimes(1);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  test("a root load does not mutate the captured document", async () => {
+    const captured: [SourceDocument, SourceDocument["root"]["value"]][] = [];
+    const original = SourceDocument.parse.bind(SourceDocument);
+    const parse = spyOn(SourceDocument, "parse").mockImplementation((text, label) => {
+      const document = original(text, label);
+      captured.push([document, document.root.value]);
+      return document;
+    });
+    try {
+      await loadConformanceFlow(INLINE_FLOW);
+    } finally {
+      parse.mockRestore();
+    }
+
+    expect(captured).toHaveLength(1);
+    const [document, originalValue] = captured[0]!;
+    expect(document.root.value).toEqual(originalValue);
+  });
+
+  test("loadFlow of a malformed root is a located load error", async () => {
+    const error = await loadErrorAsync(loadConformanceFlow("id: ["));
+
+    expect(error.message).toContain("invalid YAML");
+    expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(1);
+  });
+
+  test("a recursive boundary alias does not escape as a source access error", async () => {
+    const source = `&root
+id: recursive-boundary
+name: recursive_boundary
+input: *root
+nodes:
+  echo:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input: {value: hello}
+    output: str
+output: \${echo.output}
+`;
+
+    await loadErrorAsync(loadConformanceFlow(source));
   });
 });

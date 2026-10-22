@@ -19,7 +19,7 @@ import { createWriteStream, writeSync } from "node:fs";
 import { constants } from "node:os";
 
 import { DefaultsError, read } from "../defaults.ts";
-import { compiled, VERSION } from "../platform.ts";
+import { compiled, VERSION, withWarnings } from "../platform.ts";
 import {
   type CliIo,
   type CommandSpec,
@@ -376,7 +376,8 @@ function groupHelp(group?: string): string {
  * (a bad value is reported on stderr, and as a `defaults.invalid` document when `argv` holds
  * `--json`, 1). A group without its command prints the group's help and returns 2. A command line
  * its spec refuses, or a `UsageError` from the handler, prints the usage and the error and returns
- * 2; any other error prints its stack and returns 1.
+ * 2; any other error prints its stack and returns 1. A warning yian raises while the command runs
+ * prints as a `warning: <message>` line on stderr.
  */
 export async function main(argv: readonly string[], io: CliIo = processIo()): Promise<number> {
   const [first, ...rest] = argv;
@@ -438,7 +439,12 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
       return 0;
     }
     const handler = await load();
-    return await handler(parsed, io);
+    // The CLI is the host, so yian's warnings print as its own lines; a library host keeps
+    // `process.emitWarning`.
+    return await withWarnings(
+      (message) => void io.stderr.write(`warning: ${message}\n`).catch(() => {}),
+      () => handler(parsed, io),
+    );
   } catch (error) {
     if (error instanceof UsageError) {
       await io.stderr.write(usageError(spec, error));

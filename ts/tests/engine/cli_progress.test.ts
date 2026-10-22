@@ -1,7 +1,8 @@
 // Ported from tests/engine/test_cli_progress.py (the reporter tests): per-node progress, `✓` on
 // success, `✗` and the error on failure, the output when verbose. They run on a non-TTY writer,
 // the path the CLI takes off a terminal: no spinner, only each node's final line. Added here: the
-// spinner a TTY writer gets, and `pause`/`resume`. The CLI-run tests drive a CODE-only flow
+// spinner a TTY writer gets, `pause`/`resume`, and `warn`'s line above the spinners, held while
+// paused. The CLI-run tests drive a CODE-only flow
 // through `yian run` instead of a faked runner: `--verbose` prints the output, `--quiet` streams no
 // events, and the worker count is read from the run log's `RunStarted` record.
 
@@ -157,6 +158,36 @@ test("pause and resume stop and restart the redraw", () => {
   const count = chunks.length;
   jest.advanceTimersByTime(400);
   expect(chunks).toHaveLength(count);
+});
+
+test("a warning prints on its own line above the spinners", () => {
+  jest.useFakeTimers();
+  const tty = sinkReporter({ isTTY: true });
+  tty.reporter.handle(started("frame"));
+  tty.reporter.warn("w");
+  expect(tty.chunks).toEqual(["\r\x1b[K⠋ frame", "\r\x1b[Kwarning: w\n", "\r\x1b[K⠋ frame"]);
+  tty.reporter.stop();
+
+  const plain = sinkReporter();
+  plain.reporter.handle(started("frame"));
+  plain.reporter.warn("w");
+  expect(plain.text()).toBe("warning: w\n");
+});
+
+test("a warning while paused is held until resume or stop", () => {
+  jest.useFakeTimers();
+  const { reporter, chunks } = sinkReporter({ isTTY: true });
+  reporter.handle(started("frame"));
+  reporter.pause();
+  reporter.warn("w");
+  expect(chunks).toEqual(["\r\x1b[K⠋ frame", "\r\x1b[K"]);
+  reporter.resume();
+  expect(chunks.slice(2)).toEqual(["warning: w\n", "\r\x1b[K⠋ frame"]);
+  reporter.pause();
+  reporter.warn("x");
+  const count = chunks.length;
+  reporter.stop();
+  expect(chunks.slice(count)).toEqual(["warning: x\n"]);
 });
 
 // ---------- the flags of `yian run` ----------

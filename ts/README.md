@@ -25,8 +25,9 @@ The first release isn't published yet; until then, `npm pack` in `ts/` makes the
 - The MCP SDK is an optional peer dependency, loaded only when a server opens.
 - Single-file binaries need neither Node nor Bun: `yian-darwin-arm64`, `yian-darwin-x64`,
   `yian-linux-x64` and `yian-linux-arm64`. None is published yet; build them from a clone with
-  `bun run build:bin` in `ts/` (into `ts/bin/`). They bundle the MCP SDK and don't load a `.env` or
-  `bunfig.toml` from the working directory.
+  `bun run build:bin` in `ts/` (into `ts/bin/`). They bundle the MCP SDK and read no `bunfig.toml`.
+  Run from a clone with `bun src/cli/index.ts`, yian sees the `.env` Bun loads from the working
+  directory; the binaries load none.
 - `yian --licenses` prints yian's notice, Bun's, and the licenses of the packages the binaries
   bundle.
 - `yian --version` prints the package version.
@@ -409,7 +410,9 @@ function `${...}` expressions can call; each `default` goes through host intake.
 ## CLI
 
 The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
-`yian --help` lists its commands, and `yian --version` prints the version.
+`yian --help` lists its commands, and `yian --version` prints the version. yian's warnings (an
+unknown model, TLS checks off, ...) reach a library host through `process.emitWarning`
+(`process.on("warning")`); the CLI prints them as `warning:` lines.
 
 [conformance/schema/events.schema.json]: https://github.com/ngocbh/yian/blob/main/conformance/schema/events.schema.json
 [docs/api.md]: https://github.com/ngocbh/yian/blob/main/docs/api.md

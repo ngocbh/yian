@@ -35,6 +35,7 @@ import {
 } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
+import { warn } from "../../platform.ts";
 import {
   copyJson,
   isPlainObject,
@@ -206,7 +207,7 @@ export class AnthropicMessages implements SseProtocol {
    * blocks are dropped. Leading system messages are lifted to `system`. A later one stays in
    * place when the model accepts that, it follows a user turn and an assistant turn or the end
    * comes next; otherwise it is hoisted to `system`, with LangChain's warning through
-   * `process.emitWarning` (once per instance). An assistant message is sent as its blocks in
+   * `warn` (once per instance). An assistant message is sent as its blocks in
    * part order: thinking, redacted thinking, text and `tool_use` (an invalid call with empty
    * `input`), one lone text as a string; refusals are not sent. Its reasoning goes back from its
    * replay records to the provider and account that wrote it, from any Claude model, only with a
@@ -493,7 +494,7 @@ export class AnthropicMessages implements SseProtocol {
     if (this.#hoistWarned) return content;
     this.#hoistWarned = true;
     // LangChain's text, with the model in Python repr quotes (model ids hold no quote or escape).
-    process.emitWarning(
+    warn(
       "A non-leading `SystemMessage` was moved to the top-level `system` field and now applies to the " +
         "entire conversation. To send it in place, use a supported model and place it after a human or " +
         `tool message, either last or before an AI message (model: '${this.model}').`,

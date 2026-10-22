@@ -15,13 +15,14 @@
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors, `--licenses`,
 // `--version` and the routing to `cli/auth.ts`; `check`, on its own and confined to `--root`;
-// `run`'s `--json` documents, its `run failed:` setup errors and its stops (Ctrl-C at a run's
-// prompt, `io.stop`); the entry's `run --json` child, its command line in a binary and as a script
+// `run`'s `--json` documents, its `run failed:` setup errors, its stops (Ctrl-C at a run's
+// prompt, `io.stop`) and the `warning:` lines a run's warnings print as, through progress and
+// under `--quiet`; the entry's `run --json` child, its command line in a binary and as a script
 // (`childCommand`) and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
 // stuck in a CODE body; `status`, TS-only, on logs these runs write. From
 // tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -231,6 +232,120 @@ describe("flowBanner", () => {
     );
     expect(flowBanner({ name: null, description: null, version: null }, out, env)).toBeNull();
     expect(flowBanner({ name: "", description: "", version: "" }, out, env)).toBeNull();
+  });
+
+  // The expected boxes are rich's renders of Python's banner at each width.
+  const banner = (
+    columns: number | undefined,
+    flow: { name: string | null; description: string | null; version?: string | null },
+    tty = false,
+    env: (name: string) => string | undefined = () => undefined,
+  ) => {
+    const out: Writer = { write: async () => {}, isTTY: tty, columns };
+    return flowBanner({ version: null, ...flow }, out, env);
+  };
+  const lines = (...rows: string[]) => [...rows, ""].join("\n");
+  const longDescription =
+    "Draft a plan, ask a human to approve or revise it, then finalize accordingly, and then some more words.";
+  const approval = "Draft a plan, ask a human to approve or revise it, then finalize accordingly.";
+  const sixty = lines(
+    "╭──────────────────────────────────────────────────────────╮",
+    "│ Running flow: hi                                         │",
+    "│ Description: Draft a plan, ask a human to approve or     │",
+    "│ revise it, then finalize accordingly, and then some more │",
+    "│ words.                                                   │",
+    "╰──────────────────────────────────────────────────────────╯",
+  );
+
+  test("wraps the text inside a box no wider than the terminal", () => {
+    expect(banner(60, { name: "hi", description: longDescription })).toBe(sixty);
+    expect(banner(40, { name: "human_approval", description: approval, version: "1.0" })).toBe(
+      lines(
+        "╭──────────────────────────────────────╮",
+        "│ Running flow: human_approval         │",
+        "│ (version: 1.0)                       │",
+        "│ Description: Draft a plan, ask a     │",
+        "│ human to approve or revise it, then  │",
+        "│ finalize accordingly.                │",
+        "╰──────────────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("wraps wide characters by their cells", () => {
+    expect(banner(30, { name: "cjk", description: "中文描述这是一个很长的流程说明文字需要换行显示" })).toBe(
+      lines(
+        "╭────────────────────────────╮",
+        "│ Running flow: cjk          │",
+        "│ Description:               │",
+        "│ 中文描述这是一个很长的流程 │",
+        "│ 说明文字需要换行显示       │",
+        "╰────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("folds a word wider than the box", () => {
+    expect(banner(20, { name: "x", description: "averyveryverylongwordthatcannotbreak end" })).toBe(
+      lines(
+        "╭──────────────────╮",
+        "│ Running flow: x  │",
+        "│ Description:     │",
+        "│ averyveryverylon │",
+        "│ gwordthatcannotb │",
+        "│ reak end         │",
+        "╰──────────────────╯",
+      ),
+    );
+  });
+
+  test("is 80 columns wide off a terminal", () => {
+    expect(banner(undefined, { name: "human_approval", description: approval })).toBe(
+      lines(
+        "╭──────────────────────────────────────────────────────────────────────────────╮",
+        "│ Running flow: human_approval                                                 │",
+        "│ Description: Draft a plan, ask a human to approve or revise it, then         │",
+        "│ finalize accordingly.                                                        │",
+        "╰──────────────────────────────────────────────────────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("keeps the description's lines, blank ones too, and wraps each", () => {
+    expect(banner(40, { name: "multi", description: "line one\n\nline three is long enough to wrap around here ok" })).toBe(
+      lines(
+        "╭──────────────────────────────────────╮",
+        "│ Running flow: multi                  │",
+        "│ Description: line one                │",
+        "│                                      │",
+        "│ line three is long enough to wrap    │",
+        "│ around here ok                       │",
+        "╰──────────────────────────────────────╯",
+      ),
+    );
+  });
+
+  test("expands tabs to 8-cell stops, sizing the box with a tab as no cells as rich does", () => {
+    expect(banner(40, { name: "tab", description: "tab\there\tand\tthere and more words to wrap" })).toBe(
+      lines(
+        "╭──────────────────────────────────────╮",
+        "│ Running flow: tab                    │",
+        "│ Description: tab        here    and  │",
+        "│ there and more words to wrap         │",
+        "╰──────────────────────────────────────╯",
+      ),
+    );
+    expect(banner(80, { name: "t", description: "a\tb" })).toBe(
+      lines("╭─────────────────╮", "│ Running flow: t │", "│ Description: a  │", "│ b               │", "╰─────────────────╯"),
+    );
+  });
+
+  test("paints the wrapped rows on a colour terminal", () => {
+    const text = banner(60, { name: "hi", description: longDescription }, true)!;
+    expect(text.replace(/\x1b\[[0-9;]*m/g, "")).toBe(sixty);
+    expect(text).toContain("\x1b[1mRunning flow: \x1b[0m");
+    expect(text).toContain("\x1b[1mDescription: \x1b[0m");
+    expect(text).toContain("\x1b[36m╭");
   });
 });
 
@@ -690,6 +805,41 @@ describe("run outcomes", () => {
     expect(quiet.stderr).not.toContain("Running flow");
     expect(quiet.stderr).not.toContain("✓");
   });
+});
+
+describe("warnings during a run", () => {
+  // `warnOnce` shows each text once per process, so each run names its own unknown model.
+  for (const [label, argv] of [["through progress", []], ["under --quiet", ["-q"]]] as const) {
+    test(`print as warning: lines, ${label}`, async () => {
+      const model = `no-such-model-${Date.now()}-${argv.length}`;
+      const flow = file(
+        "flow.yaml",
+        `id: w\nname: w\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: \${agent.output}\n` +
+          `llm_config: {provider: anthropic, model: ${model}}\n`,
+      );
+      mkdirSync(join(tmp, "home"), { recursive: true });
+      const plain = testIo({ HOME: join(tmp, "home"), ANTHROPIC_API_KEY: "sk-ant-test" });
+      const stderr = plain.stderr;
+      // Through progress, a TTY stderr (stdin stays non-TTY, so nothing prompts) makes the
+      // reporter paint the line yellow, which `main`'s plain handler never does.
+      const io = argv.length === 0 ? { ...plain.io, stderr: { ...plain.io.stderr, isTTY: true } } : plain.io;
+      const send = globalThis.fetch;
+      globalThis.fetch = (async () => Response.json({ error: { message: "nope" } }, { status: 401 })) as never;
+      const emit = spyOn(process, "emitWarning");
+      try {
+        expect(await main(["run", flow, ...argv], io)).toBe(1);
+        expect(emit).not.toHaveBeenCalled();
+      } finally {
+        emit.mockRestore();
+        globalThis.fetch = send;
+      }
+      const line = `warning: Model '${model}' is not in the known model list for provider 'anthropic'. Continuing anyway.`;
+      if (argv.length === 0) expect(stderr()).toContain(`\x1b[33m${line}\x1b[0m`);
+      else expect(stderr().split("\n")).toContain(line);
+      expect(stderr()).not.toContain("(node:");
+      expect(stderr()).not.toContain("--trace-warnings");
+    });
+  }
 });
 
 const REQUIRED_INPUTS_FLOW = `id: cli_required_inputs

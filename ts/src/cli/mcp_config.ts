@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import type { Env } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { warn as platformWarn } from "../platform.ts";
 import { isSystemError } from "../skills/catalog.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../typesys/json.ts";
@@ -62,7 +63,7 @@ export function userMcpConfig(env: Env): string {
  * @param paths The config files to read, each of which must exist. Later files win.
  * @param env The variables `${VAR}` references expand from.
  * @param options `reserved` names no enabled server may take, such as the run's other tool ids
- *   (default none); `warn` receives each unknown-key warning (default `process.emitWarning`).
+ *   (default none); `warn` receives each unknown-key warning (default yian's `warn`).
  * @returns The enabled servers by name, in a null-prototype record, each labelled with its name
  *   and not yet open. As in any JS record, integer-like names come first, then the rest in file order.
  * @throws {McpConfigError} When a file can't be read or isn't JSON, has no `mcpServers` object,
@@ -80,7 +81,7 @@ export function loadMcpConfig(
   env: Env,
   {
     reserved = [],
-    warn = (message: string) => process.emitWarning(message),
+    warn = (message: string) => platformWarn(message),
   }: { reserved?: Iterable<string>; warn?: (message: string) => void } = {},
 ): Record<string, McpServer> {
   // Null-prototype records, so a server named `__proto__` stays data.

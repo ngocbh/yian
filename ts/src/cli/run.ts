@@ -60,7 +60,7 @@ import { MemoryOperationError } from "../memory/contracts.ts";
 import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError } from "../platform.ts";
+import { FileLockError, withWarnings } from "../platform.ts";
 import {
   hostInputs,
   inspectRun,
@@ -78,7 +78,7 @@ import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
-import { Terminal, TerminalStopped } from "./terminal.ts";
+import { cells, charCells, Terminal, TerminalStopped } from "./terminal.ts";
 import {
   type CliIo,
   CommandEnv,
@@ -112,19 +112,67 @@ function splitLines(text: string): string[] {
 }
 
 /**
- * Return `rows` in a box drawn in `border`, `title` set into its top edge. Each row is its plain
- * text, which sizes the box, and the text to print.
+ * Return `rows` in a box drawn in `border`, `title` set into its top edge, at least `width` cells
+ * inside. Each row is its plain text, which sizes the box, and the text to print.
  */
-function box(rows: readonly (readonly [string, string])[], border: Style, out: Writer, env: Env, title = ""): string {
+function box(
+  rows: readonly (readonly [string, string])[],
+  border: Style,
+  out: Writer,
+  env: Env,
+  title = "",
+  width = 0,
+): string {
   const heading = title ? `─ ${title} ` : "";
-  const width = Math.max(heading.length - 1, ...rows.map(([plain]) => plain.length));
+  const inner = Math.max(width, cells(heading) - 1, ...rows.map(([plain]) => cells(plain)));
   const edge = (text: string) => paint(text, border, out, env);
-  const lines = [edge(`╭${heading}${"─".repeat(width + 2 - heading.length)}╮`)];
+  const lines = [edge(`╭${heading}${"─".repeat(inner + 2 - cells(heading))}╮`)];
   for (const [plain, printed] of rows) {
-    lines.push(`${edge("│")} ${printed}${" ".repeat(width - plain.length)} ${edge("│")}`);
+    lines.push(`${edge("│")} ${printed}${" ".repeat(inner - cells(plain))} ${edge("│")}`);
   }
-  lines.push(edge(`╰${"─".repeat(width + 2)}╯`));
+  lines.push(edge(`╰${"─".repeat(inner + 2)}╯`));
   return lines.join("\n");
+}
+
+/**
+ * Return the UTF-16 ranges of `text`'s rows wrapped to `width` cells, each ending before its
+ * row's trailing whitespace; an empty line is one empty row. Follows rich's `divide_line`: a word
+ * keeps its trailing spaces, moves to a new row when it doesn't fit the rest of this one, and is
+ * folded by characters when it is wider than a row.
+ */
+function wrapLine(text: string, width: number): [start: number, end: number][] {
+  const starts = [0];
+  let used = 0;
+  for (const match of text.matchAll(/\s*\S+\s*/g)) {
+    const word = match[0];
+    const length = cells(word.trimEnd());
+    if (length <= width - used) {
+      used += cells(word);
+    } else if (length > width) {
+      // Folded: each chunk of at most `width` cells starts a row; a character that doesn't fit
+      // starts the next chunk.
+      if (match.index > 0) starts.push(match.index);
+      let at = match.index;
+      let chunk = 0;
+      for (const char of word) {
+        const size = charCells(char);
+        if (chunk > 0 && chunk + size > width) {
+          starts.push(at);
+          chunk = 0;
+        }
+        chunk += size;
+        at += char.length;
+      }
+      used = chunk;
+    } else {
+      starts.push(match.index);
+      used = cells(word);
+    }
+  }
+  return starts.map((start, i) => {
+    const row = text.slice(start, starts[i + 1] ?? text.length);
+    return [start, start + row.trimEnd().length];
+  });
 }
 
 // Lines of source shown above and below the marked lines, so a large flow isn't printed whole.
@@ -249,9 +297,26 @@ export function jsonValue(value: unknown): unknown {
 }
 
 /**
+ * Return a line's `spans` with each tab replaced by spaces up to the next 8-cell stop, counted
+ * from the line's start across the spans, as rich's `expand_tabs` does.
+ */
+function expandTabs(spans: readonly [string, Style | null][]): [string, Style | null][] {
+  let column = 0;
+  return spans.map(([text, style]) => {
+    let expanded = "";
+    for (const char of text) {
+      const piece = char === "\t" ? " ".repeat(8 - (column % 8)) : char;
+      column += cells(piece);
+      expanded += piece;
+    }
+    return [expanded, style];
+  });
+}
+
+/**
  * Return the box printed when a run starts: `Running flow: <name>  (version: v)` and
- * `Description: …`, ending in a newline; `null` when the flow has no name, description or
- * version.
+ * `Description: …`, wrapped inside a box no wider than the terminal's columns (80 when unknown),
+ * ending in a newline; `null` when the flow has no name, description or version.
  */
 export function flowBanner(
   flow: { name: string | null; description: string | null; version: string | null },
@@ -260,20 +325,35 @@ export function flowBanner(
 ): string | null {
   const { name, description, version } = flow;
   if (!(name || description || version)) return null;
-  let plain = `Running flow: ${name || "(unnamed)"}`;
-  let printed = paint("Running flow: ", "bold", out, env) + (name || "(unnamed)");
-  if (version) {
-    plain += `  (version: ${version})`;
-    printed += paint(`  (version: ${version})`, "dim", out, env);
-  }
-  const rows: [string, string][] = [[plain, printed]];
+  // Each logical line is a list of [text, style] spans, wrapped as one plain text.
+  const head: [string, Style | null][] = [["Running flow: ", "bold"], [name || "(unnamed)", null]];
+  if (version) head.push([`  (version: ${version})`, "dim"]);
+  const lines = [head];
   if (description) {
     const label = "Description: ";
     splitLines(label + description).forEach((line, i) => {
-      rows.push([line, i === 0 ? paint(label, "bold", out, env) + line.slice(label.length) : line]);
+      lines.push(i === 0 ? [[label, "bold"], [line.slice(label.length), null]] : [[line, null]]);
     });
   }
-  return `${box(rows, "cyan", out, env)}\n`;
+  // Rich measures the box before it expands tabs, counting a tab as no cells.
+  const widest = Math.max(...lines.map((spans) => cells(spans.map(([text]) => text.replaceAll("\t", "")).join(""))));
+  const inner = Math.max(1, Math.min(widest, (out.columns || 80) - 4));
+  const expanded = lines.map(expandTabs);
+  const plains = expanded.map((spans) => spans.map(([text]) => text).join(""));
+  const rows: [string, string][] = [];
+  expanded.forEach((spans, i) => {
+    for (const [start, end] of wrapLine(plains[i]!, inner)) {
+      let printed = "";
+      let at = 0;
+      for (const [text, style] of spans) {
+        const piece = text.slice(Math.max(0, start - at), Math.max(0, end - at));
+        if (piece) printed += style === null ? piece : paint(piece, style, out, env);
+        at += text.length;
+      }
+      rows.push([plains[i]!.slice(start, end), printed]);
+    }
+  });
+  return `${box(rows, "cyan", out, env, "", inner)}\n`;
 }
 
 /** Return the final namespace segment of `nodeId`, which marks a boundary node at any depth. */
@@ -298,6 +378,8 @@ export class ProgressReporter {
   readonly #verbose: boolean;
   readonly #env: Env;
   readonly #running = new Set<string>();
+  // Warning lines raised while paused, printed on `resume` or `stop`.
+  readonly #held: string[] = [];
   #paused = false;
   #frame = 0;
   // Spinner lines on screen, which the next draw or finished line erases.
@@ -353,22 +435,43 @@ export class ProgressReporter {
     this.#sync();
   }
 
+  /**
+   * Print `warning: <message>` on its own line above the spinners; while paused it is held until
+   * `resume` or `stop`, so it can't land inside the prompt that has the terminal.
+   */
+  warn(message: string): void {
+    const line = paint(`warning: ${message}`, "yellow", this.#out, this.#env);
+    if (this.#paused) {
+      this.#held.push(line);
+      return;
+    }
+    this.#print(line);
+    this.#sync();
+  }
+
   /** Stop drawing spinners, erasing them, while a prompt has the terminal. */
   pause(): void {
     this.#paused = true;
     this.#sync();
   }
 
-  /** Draw the spinners again after `pause`. */
+  /** Draw the spinners again after `pause`, after the warning lines held meanwhile. */
   resume(): void {
     this.#paused = false;
+    this.#flushHeld();
     this.#sync();
   }
 
-  /** End the display: forget the running nodes and erase their spinners. */
+  /** End the display: print held warnings, forget the running nodes and erase their spinners. */
   stop(): void {
+    this.#flushHeld();
     this.#running.clear();
     this.#sync();
+  }
+
+  /** Print the warning lines held while paused. */
+  #flushHeld(): void {
+    for (const line of this.#held.splice(0)) this.#print(line);
   }
 
   #write(text: string): void {
@@ -1069,7 +1172,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * files are read, a bad config printed and exiting 1; just before the run, `openMcpServers` selects
  * the servers the flow needs, each unneeded server that failed to start a `warning:` line on
  * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
- * progress go to stderr; the log path always does. On a TTY stdin, each input not supplied is
+ * progress go to stderr; the log path always does. A warning raised during the run prints as a
+ * `warning:` line on stderr, above the spinners. On a TTY stdin, each input not supplied is
  * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
  * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
  * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
@@ -1138,7 +1242,10 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
   };
   controller.signal.addEventListener("abort", closePrompt, { once: true });
   try {
-    return await startRun(flowPath, options, io, { terminal, controller, reporter, started });
+    const body = () => startRun(flowPath, options, io, { terminal, controller, reporter, started });
+    // The spinner owns the cursor's line, so a warning raised during the run prints through the
+    // reporter, above it; under `--quiet` there is none and `main`'s handler prints it.
+    return await (reporter === null ? body() : withWarnings((message) => reporter.warn(message), body));
   } finally {
     controller.signal.removeEventListener("abort", closePrompt);
     terminal.close();

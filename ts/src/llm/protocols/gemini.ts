@@ -32,6 +32,7 @@ import { kindForStatus, ProviderError } from "../errors.ts";
 import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, ToolCallDelta, UsageReport } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
+import { warn } from "../../platform.ts";
 import {
   copyJson,
   isPlainObject,
@@ -149,9 +150,9 @@ export class Gemini implements SseProtocol {
    *
    * Every system message's non-empty text parts, wherever the message is, join
    * `systemInstruction.parts` in order. A user message is a `user` content of its non-empty text
-   * parts; one with none is not sent, with a warning through `process.emitWarning` (once per
-   * instance). Each run of tool messages is one `user` content of a `functionResponse` per
-   * result, with the result's call id and name; only a user or model content that is sent ends
+   * parts; one with none is not sent, with a warning through `warn` (once per instance). Each
+   * run of tool messages is one `user` content of a `functionResponse` per result, with the
+   * result's call id and name; only a user or model content that is sent ends
    * the run, so a system message or a skipped message in between does not. Its `response` is the
    * result's text read as JSON when that is a plain object, else `{output: <the value>}`, or
    * `{output: <the text>}` when the text is not plain JSON. `isError` is not sent. An assistant
@@ -466,7 +467,7 @@ export class Gemini implements SseProtocol {
   #warnEmptyUser(): void {
     if (this.#emptyUserWarned) return;
     this.#emptyUserWarned = true;
-    process.emitWarning(EMPTY_USER);
+    warn(EMPTY_USER);
   }
 }
 

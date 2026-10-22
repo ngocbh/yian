@@ -70,12 +70,13 @@
  * masking calls. A wrong-kind descriptor is a CODE descriptor, not an arbitrary object. Descriptor
  * equality leaves out `childLabel`, as Python's `compare=False` does. The monkeypatching rows spy
  * with `spyOn`: on `CodeDescriptor.prototype.build` (the producer's builds) and on the
- * `inferInlineBindingType` export (the MAP item proof); the row patching `read_source_flow_inputs`
- * gives `assemble` its `list` input with no element as a resolved parameter instead. The
- * partial-LOOP row's `defs:` body is a hand-built child whose `note` producer has no contract, so
- * the LOOP's output is a partial record, as the def's expression output makes it. The
- * nullable-scalar row's `value` param only feeds its run half, so the load half is one row. The basic LOOP row compares the output contract's type (the contract
- * carries the body's origins).
+ * `inferInlineBindingType` export (the MAP item proof; a module export can be spied on only on Bun,
+ * so that row runs on Bun only); the row patching `read_source_flow_inputs` gives `assemble` its
+ * `list` input with no element as a resolved parameter instead. The partial-LOOP row's `defs:` body
+ * is a hand-built child whose `note` producer has no contract, so the LOOP's output is a partial
+ * record, as the def's expression output makes it. The nullable-scalar row's `value` param only
+ * feeds its run half, so the load half is one row. The basic LOOP row compares the output
+ * contract's type (the contract carries the body's origins).
  *
  * Pinned at the end (`parsedNodes`):
  * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,loop,map}`, whose

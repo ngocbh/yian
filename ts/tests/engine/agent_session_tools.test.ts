@@ -35,8 +35,8 @@
  * propagates; `interruptTurn` calls a turn's optional `interrupt`, and a failing one is a
  * `CapabilityFault`; a stop the turn throws after publishing wins over a representation error (a
  * spied `String.prototype.isWellFormed` throws it as `fromHost` checks the result's text), which
- * gets no observation note; a `CapabilityFault` with a stop
- * pending is recorded `failed` and thrown, without the stop check; a skip under an already aborted
+ * gets no observation note; a `CapabilityFault` with a stop pending is recorded `failed` and
+ * thrown, without the stop check; a skip under an already aborted
  * signal throws the stop, not a `CapabilityFault`, and records nothing, since a session turn
  * checks the stop before publishing a request. The history projection: a call without its result
  * gets a context-only error result with each of the three repair texts (effect `completed`,

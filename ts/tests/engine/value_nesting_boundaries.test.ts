@@ -87,7 +87,8 @@
  * input binds a value at the limit succeeds, and a LOOP carrying one fails `contract.output` at its
  * body's end (the body's output record adds a level), not `contract.growth`. They check that a
  * growth seed's two containers don't count toward the value's nesting (MAP: list, then record;
- * LOOP: pair, then record).
+ * LOOP: pair, then record). Also pinned to Python's result: a CODE result over the limit meets the
+ * node's post-asserts before the commit refuses it (the worker copies it back first).
  *
  * Covered by the harvested run cases (the same flows and results):
  * `run-core/engine_value_nesting_boundaries__an_untyped_output_at_the_limit_flows_out_whole`,
@@ -871,6 +872,13 @@ output: \${deep.output}
 
 test("an untyped output over the limit fails", async () => {
   expectTooDeep(await run(codeFlow(listBody(101))), "deep");
+});
+
+test("a CODE result over the limit meets its post-asserts before the commit refuses it", async () => {
+  const text = codeFlow(listBody(101)).replace("    code: |", '    asserts:\n      - "output == null"\n    code: |');
+  const result = await run(text);
+  expect(result.status).toBe("failed");
+  expect([result.failure!.code, result.failure!.nodeId]).toEqual(["assertion.failed", "deep"]);
 });
 
 test("a map result list at the limit succeeds", async () => {

@@ -14,8 +14,8 @@
  *
  * Changed: CODE bodies are TS.
  *
- * Not ported (not T3-19 rows), decided by already-ported modules (the manifest and fingerprint, the
- * tags reader, inline calls): `test_a_node_env_literal_under_a_credential_name_loads` (4),
+ * Not ported (no load validator decides them; already-ported modules do: the manifest and
+ * fingerprint, the tags reader, inline calls): `test_a_node_env_literal_under_a_credential_name_loads` (4),
  * `test_a_flow_env_literal_under_a_credential_name_loads`, the compact-flow param of
  * `test_a_def_env_literal_under_a_credential_name_loads`
  * `test_an_input_default_under_a_credential_name_loads` (2),

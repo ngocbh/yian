@@ -7,7 +7,8 @@
  * when that key is set, so importing it for its helpers runs nothing. For each job the worker
  * installs the caller's defaults, builds the body or imports the reference (a module is imported
  * once per thread and cached there), calls it with the frozen `inputs` proxy, takes the result in
- * by host intake, and posts one `CodeReply` carrying the job's id. It forwards each
+ * by host intake, and posts one `CodeReply` carrying the job's id (a result too deep for the copy
+ * is refused as an output, by the commit's nesting check). It forwards each
  * `console.log/info/warn/error/debug` call as one formatted text on the same port, so the main
  * thread logs them in order. A late timer throw or unhandled rejection while a job runs replies
  * as a throw of that job's body (it may come from an earlier body on this thread); one while the
@@ -264,14 +265,29 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
     // Intake runs here, not after the copy: the clone would turn a class instance or an accessor
     // into a plain record and refuse a function with its own error.
     value = fromHost(result === proxy ? record : result, "output");
-    // The clone back to the main thread recurses, so a value too deep for it must be refused
-    // here, by the same check the commit applies (a CODE node commits its own output).
-    rejectDeepNesting(value, "output");
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     return { ok: false, as: "output", message: error.message, path: [...error.path] };
   }
   return { ok: true, value: packFiles(value) };
+}
+
+/**
+ * The `"output"` reply for a result the clone overflowed on, refused by the nesting check the
+ * commit applies (a CODE node commits its own output), or `null` when that isn't why the post
+ * failed. The check waits for a failed post, so a deep result the clone carries still meets the
+ * node's post-asserts before the commit refuses it, as on the main thread.
+ */
+function tooDeepReply(made: CodeReply | undefined, error: unknown): CodeReply | null {
+  if (made?.ok !== true || !(error instanceof RangeError)) return null;
+  try {
+    rejectDeepNesting(unpackFiles(made.value), "output");
+  } catch (refused) {
+    if (refused instanceof TypeCheckError) {
+      return { ok: false, as: "output", message: refused.message, path: [...refused.path] };
+    }
+  }
+  return null;
 }
 
 const port = parentPort;
@@ -281,10 +297,13 @@ if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
   // refuses); the main thread must still hear back.
   const reply = (id: number, make: () => CodeReply, late?: true): void => {
+    let made: CodeReply | undefined;
     try {
-      port.postMessage({ ...make(), id, late } satisfies CodeMessage);
+      made = make();
+      port.postMessage({ ...made, id, late } satisfies CodeMessage);
     } catch (error) {
-      port.postMessage({ ok: false, as: "plain", thrown: thrownOf(error), id, late } satisfies CodeMessage);
+      const refused = tooDeepReply(made, error) ?? { ok: false, as: "plain", thrown: thrownOf(error) };
+      port.postMessage({ ...refused, id, late } satisfies CodeMessage);
     }
   };
   const lateError = (error: unknown): void => {

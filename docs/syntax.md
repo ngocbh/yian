@@ -2721,7 +2721,9 @@ process run with `execSync`, a blocking read) ends when that call returns. A bus
 doesn't block the host's event loop: signals and timers still run. A thread runs one call
 at a time and is reused when idle. Up to `availableParallelism()` idle threads stay for
 the life of the process, and an idle thread never keeps the process alive. Inputs and the
-result are copied between threads; the checks above are unchanged. A call may land on a
+result are copied between threads; the checks above are unchanged, except that a result too
+deep for the copy (thousands of levels) fails `contract.output` by the nesting limit before its
+post-asserts run. A call may land on a
 new thread or on one an earlier call used, so module state and globals may or may not
 persist between calls (don't rely on either), and a referenced module's top-level code may
 run more than once in a run, once per thread. The host's own globals and modules aren't

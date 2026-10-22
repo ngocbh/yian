@@ -9,7 +9,8 @@
  * model `test_skip_model.py`'s, and the memory helpers `test_value_nesting_boundaries.py`'s; the
  * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`), and the inline CODE bodies
  * read the same in JS but for `_list_body`'s loop (decision 11). An AGENT's model is a
- * `ScriptedModel` given as `models`, where Python patches `model_from_config`. Ints read as
+ * `ScriptedModel` (on Azure, a `chatModelFromConfig` model) given as `models`, where Python
+ * patches `model_from_config`. Ints read as
  * `bigint`s (decision 4a). Every run sees only the test's credential store in its environment.
  *
  * Ported: every row but those below. Changed: the "with less stack" rows and
@@ -17,17 +18,15 @@
  * entry's maximum on the stack as it is: JS has no recursion limit to lower (Python's
  * `_with_less_stack` and `_stack_headroom`), and the maxima are measured for Node's and a Bun
  * Worker's stacks (`docs/defaults.md`). A refused load is a `LoadError` and a refused type a
- * `TypeCheckError`, as in Python.
+ * `TypeCheckError`, as in Python. In
+ * `test_agent_output_nesting_maximum_runs_with_less_stack_on_azure`, a fake `send` streams the
+ * reply where Python uses `httpx.MockTransport`; every model call streams (decision 31).
  *
  * Already ported: `test_value_nesting_follows_the_variable`, in `value_nesting.test.ts`'s `value
  * nesting follows the variable`.
  *
  * Covered by `run-agent/engine_limit_overrides__a_run_input_over_the_set_value_limit_is_refused`:
  * `test_a_run_input_over_the_set_value_limit_is_refused`.
- *
- * Not ported: `test_agent_output_nesting_maximum_runs_with_less_stack_on_azure` (both rows): it
- * proves LangChain's `gpt-4` structured-output branch (a tool call, after its open-schema check)
- * over `httpx.MockTransport`; TS has no LangChain, and the prompted row runs the same schema.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -40,7 +39,9 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { SkipModel } from "../../src/compose/validate/skips.ts";
 import { ENTRIES, withEnv } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
 import { buildMemories } from "../../src/memory_host.ts";
+import type { Send } from "../../src/platform.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/index.ts";
 import { parseType } from "../../src/typesys/types.ts";
@@ -255,7 +256,7 @@ output: \${deep.output}
 
   const result = await runFlow(flow, {}, { env, memory, learnable: true });
   expect(result.status, result.failure?.message).toBe("succeeded");
-  const outcome = await withEnv(env, () => result.backward("good"));
+  const outcome = await result.backward("good");
 
   expect(outcome.status).toBe("succeeded");
   expect(outcome.learning!.status).toBe("succeeded");
@@ -395,13 +396,75 @@ for (const numWorkers of [0, 2]) {
     // This model has no native structured output, so the reply is prompted for.
     const [text, reply] = deepAgentFlow(levels, "provider: openai\nmodel: no-structured-sentinel");
     // A union root is wrapped in a `value` field.
-    const model = new ScriptedModel([textReply(jsonText({ value: reply }))]);
+    const model = new ScriptedModel([textReply(jsonText({ value: reply }))], {
+      provider: "openai",
+      model: "no-structured-sentinel",
+    });
 
     const flow = await loadConformanceFlow(text, { env });
     const result = await runFlow(flow, { x: "hi" }, { env, numWorkers, models: serving(model, env) });
 
     expect(result.status, result.failure?.message).toBe("succeeded");
     expect(result.output).toEqual(reply);
+    expect(model.requests).toHaveLength(1);
+    expect(model.requests[0]!.outputFormat).toBeNull();
+  });
+}
+
+/** One Chat Completions stream `data:` event per chunk, then `[DONE]`. */
+const chatStream = (chunks: Record<string, unknown>[]) =>
+  chunks.map((data) => `data: ${JSON.stringify(data)}\n\n`).join("") + "data: [DONE]\n\n";
+
+/** A Chat Completions stream chunk carrying `delta` in its one choice. */
+const chatChunk = (delta: Record<string, unknown>, finishReason: string | null = null) => ({
+  id: "c",
+  object: "chat.completion.chunk",
+  created: 0,
+  model: "m",
+  choices: [{ index: 0, delta, finish_reason: finishReason }],
+});
+
+/**
+ * A `send` that records each Chat Completions request body and answers with a call to its first
+ * tool with `args`: Python's `_ToolCallServer`.
+ */
+function toolCallServer(args: unknown): { bodies: Record<string, unknown>[]; send: Send } {
+  const bodies: Record<string, unknown>[] = [];
+  const send: Send = async (_input, init) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    bodies.push(body);
+    const tools = body["tools"] as { function: { name: string } }[];
+    const call = { index: 0, id: "call_1", type: "function", function: { name: tools[0]!.function.name, arguments: jsonText(args) } };
+    const text = chatStream([chatChunk({ role: "assistant", tool_calls: [call] }), chatChunk({}, "tool_calls")]);
+    return new Response(text, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  return { bodies, send };
+}
+
+for (const numWorkers of [0, 2]) {
+  test(`agent output nesting maximum runs with less stack on azure: ${numWorkers}`, async () => {
+    const levels = maximum("MAX_AGENT_OUTPUT_NESTING");
+    const env = hostEnv(dir, {
+      YIAN_MAX_AGENT_OUTPUT_NESTING: String(levels),
+      AZURE_OPENAI_API_KEY: "k",
+      OPENAI_API_VERSION: "2025-03-01-preview",
+    });
+    // A `gpt-4` deployment sends structured output as a forced tool call, after the open-schema
+    // check walks the schema; a `gpt-4o` one would send a strict `json_schema` instead.
+    const [text, reply] = deepAgentFlow(levels, "provider: azure\nmodel: gpt-4\nbase_url: https://x.openai.azure.com/");
+    const server = toolCallServer({ value: reply });
+
+    const flow = await loadConformanceFlow(text, { env });
+    const result = await runFlow(flow, { x: "hi" }, {
+      env,
+      numWorkers,
+      models: { env, createModel: (config) => chatModelFromConfig(config, { env, send: server.send }) },
+    });
+
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toEqual(reply);
+    expect(server.bodies).toHaveLength(1);
+    expect(server.bodies[0]).toHaveProperty("tools");
   });
 }
 

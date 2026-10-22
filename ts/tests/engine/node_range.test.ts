@@ -13,9 +13,9 @@
  * `test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them` has similar rows on
  * another flow.
  *
- * Changed: the retired field names are camelCase (`fieldRanges`, not `field_ranges`), as in
- * `flow_identity.test.ts`, and the manifest refuses them with a `RangeError` where Python raises
- * `ValueError`.
+ * Changed: the retired node properties are camelCase (`fieldRanges`, not `field_ranges`), the TS
+ * API spelling (decision 12), as in `flow_identity.test.ts`, and the manifest refuses them with a
+ * `RangeError` where Python raises `ValueError`.
  *
  * Not ported: `test_node_has_no_compose_range_metadata`, which guards against Python-era range
  * fields TS nodes never had (listed in `start_node.test.ts` too).

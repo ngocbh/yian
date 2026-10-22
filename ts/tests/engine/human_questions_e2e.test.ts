@@ -148,6 +148,9 @@ test("adaptive questions block and return answer", async () => {
   });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
+  // The composer takes the native structured path, where Python's `_ComposeChat` refuses plain text.
+  expect(model.requests).toHaveLength(1);
+  expect(model.requests[0]!.outputFormat).not.toBeNull();
   const questions = questionsOf(requests[0]!);
   expect(questions.map((q) => q.header)).toEqual(["DB"]);
   expect(questions[0]!.question).toBe("Which database?");

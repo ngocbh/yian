@@ -83,6 +83,12 @@
  * the maximum); its resume runs in `hostEnv`; the old log's `defaults` is `{}`, since TS's
  * `run_started` requires the field (Python drops it).
  *
+ * TS-only, next to the CALL row and pinned to Python's results for the same flows: a MAP whose
+ * input binds a value at the limit succeeds, and a LOOP carrying one fails `contract.output` at its
+ * body's end (the body's output record adds a level), not `contract.growth`. They check that a
+ * growth seed's two containers don't count toward the value's nesting (MAP: list, then record;
+ * LOOP: pair, then record).
+ *
  * Covered by the harvested run cases (the same flows and results):
  * `run-core/engine_value_nesting_boundaries__an_untyped_output_at_the_limit_flows_out_whole`,
  * `run-core/engine_value_nesting_boundaries__a_map_result_list_over_the_limit_fails`
@@ -987,6 +993,65 @@ output: \${k.output}
 test("a call bound to a value at the limit succeeds", async () => {
   const result = await run(callFlow("${input.x}", "object"), { x: nestRecord(100) });
   expect([result.status, result.output]).toEqual(["succeeded", 1n]);
+});
+
+test("a MAP whose input binds a value at the limit succeeds", async () => {
+  // The growth seed's list and record don't count toward the value's nesting.
+  const text = `
+id: nesting
+name: nesting
+input:
+  x: !object
+nodes:
+  m:
+    kind: map
+    over: \${[1]}
+    input:
+      y: !object \${input.x}
+    nodes:
+      work:
+        kind: code
+        code: |
+          return 1
+    output: \${work.output}
+output: \${m.output}
+`;
+  const result = await run(text, { x: nestRecord(100) });
+  expect([result.status, result.output]).toEqual(["succeeded", [1n]]);
+});
+
+test("a LOOP carrying a value at the limit fails its body's end, not on growth", async () => {
+  // The seed's pair and record don't count; the body's output record around the value does.
+  const text = `
+id: nesting
+name: nesting
+input:
+  x: !object
+defs:
+  keep:
+    input:
+      y: !object
+      done: !bool
+    nodes: {}
+    output:
+      y: \${input.y}
+      done: true
+nodes:
+  loop:
+    kind: loop
+    call: keep
+    input:
+      y: \${input.x}
+      done: false
+    while: not done
+    max: 3
+output: \${loop.output.done}
+`;
+  const result = await run(text, { x: nestRecord(100) });
+  expect(result.status).toBe("failed");
+  const failure = result.failure!;
+  expect([failure.code, failure.nodeId]).toEqual(["contract.output", "loop#0/__end__"]);
+  expect(failure.message).toStartWith(`output at y${".a".repeat(99)}: value nests deeper than 100 levels`);
 });
 
 test("a call bound over the limit fails the call, not its START", async () => {

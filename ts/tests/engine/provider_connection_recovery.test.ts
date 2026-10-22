@@ -12,9 +12,9 @@
  *
  * Changed: Python's patched `connection_snapshot` (Ollama) and `AuthStore.credentials` (host key),
  * which fail the test when read, are a store file holding `not json` for the resume, which fails
- * any read of it (`breakStore` shows a run that reads it fails). An environment connection's
- * client takes no key argument in Python and reads the variable itself; here its request sends the
- * variable's key.
+ * any read of it (`breakStore` shows a fresh run of the row's flow reads it and fails). An
+ * environment connection's client takes no key argument in Python and reads the variable itself;
+ * here its request sends the variable's key.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -89,11 +89,11 @@ async function interrupt(flow: ComposedFlow, path: string, options: RunFlowOptio
   expect((error as Error).message).toContain("host stopped");
 }
 
-/** Make the store at `auth` fail every read, and expect a run that reads it to fail. */
-async function breakStore(env: Env, auth: string): Promise<void> {
+/** Make the store at `auth` fail every read, and expect a fresh run of `flow` to read it and fail. */
+async function breakStore(env: Env, auth: string, flow: ComposedFlow): Promise<void> {
   writeFileSync(auth, "not json", { mode: 0o600 });
   const models = recording(env, answers("ok"));
-  const error = await rejected(runFlow(await flowOf(env, "anthropic", "claude-x"), {}, { models, env }));
+  const error = await rejected(runFlow(flow, {}, { models, env }));
   expect((error as Error).message).toContain("Credential storage is malformed");
 }
 
@@ -158,7 +158,7 @@ test("ollama resume never reads the snapshot", async () => {
   await interrupt(flow, path, { env });
   expect("_connection" in recorded(path)).toBe(false);
 
-  await breakStore(env, auth);
+  await breakStore(env, auth, flow);
   const models = recording(env, answers("ok"));
   const result = await resumeFlow(flow, { log: path, models, env });
 
@@ -174,7 +174,7 @@ test("host key resume and backward", async () => {
   expect("_connection" in recorded(path)).toBe(false);
   expect(readFileSync(path, "utf8")).not.toContain("host-key");
 
-  await breakStore(env, auth);
+  await breakStore(env, auth, flow);
   const models = recording(env, answers("ok", NO_FEEDBACK));
   const result = await resumeFlow(flow, { log: path, apiKey: "host-key", models, env });
   expect(result.status, result.failure?.message).toBe("succeeded");

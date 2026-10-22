@@ -9,11 +9,10 @@
  * environment is the file's (`hostEnv`) plus the variables a row sets.
  *
  * Changed: refused configs and settings are `RangeError`s (`ValidationError` is one) and refused
- * flow files `LoadError`s (Python's `ValueError`s); a host stopping a run from `onEvent` makes the
- * run reject with its error. TS has no `SecretStr`: header values reach the model config and
- * `popHostCredentials`' result as plain text, the result keeping them in private fields that
- * neither `inspect` nor JSON shows, so the `SecretStr` instance checks become those scans, and a
- * frozen `HostConnection` refuses an assignment with a `TypeError` (Python's
+ * flow files `LoadError`s (Python's `ValueError`s). TS has no `SecretStr`: header values reach the
+ * model config and `popHostCredentials`' result as plain text, the result keeping them in private
+ * fields that neither `inspect` nor JSON shows, so the `SecretStr` instance checks become those
+ * scans, and a frozen `HostConnection` refuses an assignment with a `TypeError` (Python's
  * `FrozenInstanceError`). The backward rows' `repr` checks of Python's `_backward_handle` have no
  * counterpart: the TS handle is a module-private entry no value exposes; the results holding it
  * are scanned instead. `test_a_python_built_flow_layer_cannot_set_a_connection_setting` sets the

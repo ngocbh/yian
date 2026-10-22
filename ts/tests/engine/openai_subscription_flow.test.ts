@@ -18,9 +18,8 @@
  * naming its error; the `incomplete` row's `response.incomplete` is a whole reply saying it did not
  * finish, not a transport failure, so its one attempt fails the call. Both fail the run with
  * `provider.unavailable` before the tool runs; the backoff waits run on a virtual scheduler with
- * fixed jitter. The tool is
- * a `FunctionTool` passed to the run (Python's `TOOL_REGISTRY` entry). Python's patched
- * `subprocess.Popen` has no counterpart: no TS OpenAI route starts a process.
+ * fixed jitter. The tool is a `FunctionTool` passed to the run (Python's `TOOL_REGISTRY` entry).
+ * Python's patched `subprocess.Popen` has no counterpart: no TS OpenAI route starts a process.
  */
 
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";

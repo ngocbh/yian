@@ -10,28 +10,38 @@
  * `test_isinstance_in_wait_until_is_a_located_load_error`,
  * `test_isinstance_in_map_over_is_a_located_load_error`,
  * `test_isinstance_in_an_agent_prompt_is_a_located_load_error` and
- * `test_isinstance_in_a_human_input_question_is_a_located_load_error`; and the load halves (the
- * type tables) of `test_isinstance_in_a_node_input`,
+ * `test_isinstance_in_a_human_input_question_is_a_located_load_error`; and, each as a load row
+ * (the type tables) then a run row (`loadConformanceFlow` and `runFlow`, every parameter row),
+ * `test_isinstance_in_a_node_input`,
  * `test_isinstance_in_a_searched_case_is_first_true_wins`, `test_isinstance_in_a_node_assert`,
- * `test_isinstance_in_flow_asserts_fills_start_and_end`, `test_isinstance_in_a_flow_output`,
- * `test_isinstance_in_a_loop_while_runs_several_iterations`,
+ * `test_isinstance_in_flow_asserts_fills_start_and_end`, followed by
+ * `test_a_failing_flow_input_assert_fails_at_start`, `test_isinstance_in_a_flow_output`,
+ * `test_isinstance_in_a_loop_while_runs_several_iterations`, followed by
+ * `test_a_run_that_used_isinstance_replays` (`resumeFlow` over the finished log, then over the log
+ * cut after the second iteration),
  * `test_isinstance_in_defs_and_nested_inline_children`,
  * `test_isinstance_in_a_map_per_item_input`, `test_isinstance_in_a_call_directive_argument`,
  * `test_isinstance_in_a_loop_seed_and_until` and `test_isinstance_in_a_case_on`; and
  * `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error` and
  * `test_isinstance_in_a_loop_nodes_asserts_is_a_load_error` (the node-assert check); and, loaded
- * with `loadFlow`, `test_a_parent_cannot_use_a_childs_typedef` and the load half of
- * `test_a_uses_child_resolves_names_against_its_own_typedefs`.
+ * with `loadFlow`, `test_a_parent_cannot_use_a_childs_typedef` and
+ * `test_a_uses_child_resolves_names_against_its_own_typedefs` (a load row, then a run row).
+ *
+ * Changed: CODE bodies are JS, getting ints as `number`s (decision 45), and ints read back as
+ * `bigint`s (decision 4a). The harvested `run-core/compose_isinstance_load__isinstance_in_a_node_input`
+ * and `..._isinstance_in_a_searched_case_first_true_wins` hold one parameter row each, and a case
+ * doesn't pin the type tables, so both tests are ported whole.
  *
  * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
  * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
  * `isinstanceMembers` test is ported with the narrowing tests).
- *
- * Later (T4-8 follow-up): the run halves of the type-table rows above,
- * `test_a_failing_flow_input_assert_fails_at_start` and `test_a_run_that_used_isinstance_replays`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -51,16 +61,23 @@ import { ExpressionError } from "../../src/expr/index.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   loadErrorAsync,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-isinstance-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -312,8 +329,8 @@ const LOOP_FLOW =
           n: \${input.n}
           status: \${input.status}
         code: |
-          n = inputs["n"] + 1
-          return {"n": n, "status": "done" if n >= 4 else "running"}
+          const n = inputs["n"] + 1;
+          return {"n": n, "status": n >= 4 ? "done" : "running"};
         output:
           n: int
           status: str
@@ -469,36 +486,117 @@ const ON_FLOW = flow(`  route:
 output: \${b.output | o.output}
 `);
 
-describe("type tables (load halves)", () => {
-  test("test_isinstance_in_a_node_input", () => {
+const A_BUY = { action: "buy", qty: 3n };
+const A_SELL = { action: "sell", price: 1.5 };
+
+/** Load and run `text` on `inputs`. */
+const run = async (text: string, inputs: Record<string, unknown>) =>
+  runFlow(await loadConformanceFlow(text), inputs, { env });
+
+/** Run `text` on `inputs` and return its output, expecting it succeeded. */
+async function ok(text: string, inputs: Record<string, unknown>): Promise<unknown> {
+  const result = await run(text, inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+describe("type tables and runs", () => {
+  test("isinstance in a node input (loads)", () => {
     const nodes = loadedNodes(INPUT_FLOW);
     expectTypes(nodes.get("check"), { Buy: BUY, object: OBJECT });
     expectTypes(nodes.get("d"), {});
   });
 
-  test("test_isinstance_in_a_searched_case_is_first_true_wins", () => {
+  test.each<[string, object, boolean[]]>([
+    ["a buy", A_BUY, [true, true]],
+    ["a sell", A_SELL, [false, true]],
+  ])("isinstance in a node input (runs): %s", async (_name, order, expected) => {
+    expect(await ok(INPUT_FLOW, { order })).toStrictEqual(expected);
+  });
+
+  test("isinstance in a searched case is first true wins (loads)", () => {
     expectTypes(loadedNodes(CASE_FLOW).get("route"), { Buy: BUY, Order: ORDER });
   });
 
-  test("test_isinstance_in_a_node_assert", () => {
+  test.each<[string, object, string]>([
+    ["a buy", A_BUY, "buy"],
+    ["a sell", A_SELL, "order"],
+  ])("isinstance in a searched case is first true wins (runs): %s", async (_name, order, expected) => {
+    expect(await ok(CASE_FLOW, { order })).toBe(expected);
+  });
+
+  test("isinstance in a node assert (loads)", () => {
     expectTypes(loadedNodes(NODE_ASSERT_FLOW).get("step"), { Buy: BUY, Order: ORDER });
   });
 
-  test("test_isinstance_in_flow_asserts_fills_start_and_end", () => {
+  test.each<[string, object, "succeeded" | "failed"]>([
+    ["a buy", A_BUY, "succeeded"],
+    ["a sell", A_SELL, "failed"],
+  ])("isinstance in a node assert (runs): %s", async (_name, order, status) => {
+    const result = await run(NODE_ASSERT_FLOW, { order });
+
+    expect(result.status, result.failure?.message).toBe(status);
+    if (status === "failed") expect(result.failure!.code).toBe("assertion.failed");
+  });
+
+  test("isinstance in flow asserts fills start and end (loads)", () => {
     const nodes = loadedNodes(FLOW_ASSERT_FLOW);
     expectTypes(nodes.get(START_ID), { Order: ORDER });
     expectTypes(nodes.get(END_ID), { Buy: BUY });
   });
 
-  test("test_isinstance_in_a_flow_output", () => {
+  test("isinstance in flow asserts fills start and end (runs)", async () => {
+    expect((await run(FLOW_ASSERT_FLOW, { order: A_BUY })).status).toBe("succeeded");
+
+    const failed = await run(FLOW_ASSERT_FLOW, { order: A_SELL });
+    expect(failed.status).toBe("failed");
+    expect(failed.failure!.code).toBe("assertion.failed");
+  });
+
+  test("a failing flow input assert fails at start", async () => {
+    const failed = await run(FLOW_ASSERT_FLOW, { order: { action: "hold" } });
+
+    expect(failed.status).toBe("failed");
+    expect(failed.failure!.nodeId).toBe(START_ID);
+  });
+
+  test("isinstance in a flow output (loads)", () => {
     expectTypes(loadedNodes(FLOW_OUTPUT_FLOW).get(END_ID), { Buy: BUY });
   });
 
-  test("test_isinstance_in_a_loop_while_runs_several_iterations", () => {
+  test.each<[string, object, boolean]>([
+    ["a buy", A_BUY, true],
+    ["a sell", A_SELL, false],
+  ])("isinstance in a flow output (runs): %s", async (_name, order, isBuy) => {
+    expect(await ok(FLOW_OUTPUT_FLOW, { order })).toStrictEqual({ order, is_buy: isBuy });
+  });
+
+  test("isinstance in a loop while runs several iterations (loads)", () => {
     expectTypes(loadedNodes(LOOP_FLOW).get("loop"), { Running: RUNNING });
   });
 
-  test("test_isinstance_in_defs_and_nested_inline_children", () => {
+  test("isinstance in a loop while runs several iterations (runs)", async () => {
+    expect(await ok(LOOP_FLOW, {})).toStrictEqual({ n: 4n, status: "done" });
+  });
+
+  test("a run that used isinstance replays", async () => {
+    const log = join(dir, "replay.jsonl");
+    const first = await runFlow(await loadConformanceFlow(LOOP_FLOW), {}, { env, log });
+    expect(first.status, first.failure?.message).toBe("succeeded");
+    const replayed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { env, log });
+    expect(replayed.status, replayed.failure?.message).toBe("succeeded");
+    expect(replayed.output).toStrictEqual(first.output);
+
+    // Cut after the second iteration, so resume replays two iterations and runs two live.
+    const kept = cutLogAfter(log, "loop#1/__end__");
+    expect(kept).toContain("loop~1");
+    expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
+    const resumed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { env, log });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toStrictEqual(first.output);
+  });
+
+  test("isinstance in defs and nested inline children (loads)", () => {
     const nodes = loadedNodes(CHILD_FLOWS);
     expectTypes(childNodes(nodes.get("named")).get("inner"), { Sell: SELL });
     const outer = childNodes(nodes.get("inline")).get("outer");
@@ -506,11 +604,22 @@ describe("type tables (load halves)", () => {
     expectTypes(nodes.get("inline"), {});
   });
 
-  test("test_isinstance_in_a_map_per_item_input", () => {
+  test.each<[string, object, Record<string, boolean>]>([
+    ["a buy", A_BUY, { sell: false, buy: true }],
+    ["a sell", A_SELL, { sell: true, buy: false }],
+  ])("isinstance in defs and nested inline children (runs): %s", async (_name, order, expected) => {
+    expect(await ok(CHILD_FLOWS, { order })).toStrictEqual(expected);
+  });
+
+  test("isinstance in a map per item input (loads)", () => {
     expectTypes(loadedNodes(MAP_FLOW).get("each"), { Buy: BUY });
   });
 
-  test("test_isinstance_in_a_call_directive_argument", () => {
+  test("isinstance in a map per item input (runs)", async () => {
+    expect(await ok(MAP_FLOW, { orders: [A_BUY, A_SELL, A_BUY] })).toStrictEqual([true, false, true]);
+  });
+
+  test("isinstance in a call directive argument (loads)", () => {
     const nodes = loadedNodes(CALL_ARG_FLOW);
     const synths = [...nodes].filter(([nodeId]) => nodeId.startsWith("__call")).map(([, node]) => node);
     expect(synths).toHaveLength(1);
@@ -518,14 +627,49 @@ describe("type tables (load halves)", () => {
     expectTypes(nodes.get("c"), {});
   });
 
-  test("test_isinstance_in_a_loop_seed_and_until", () => {
+  test.each<[string, object, boolean]>([
+    ["a buy", A_BUY, true],
+    ["a sell", A_SELL, false],
+  ])("isinstance in a call directive argument (runs): %s", async (_name, order, expected) => {
+    expect(await ok(CALL_ARG_FLOW, { order })).toBe(expected);
+  });
+
+  test("isinstance in a loop seed and until (loads)", () => {
     expectTypes(loadedNodes(LOOP_SEED_FLOW).get("loop"), { Buy: BUY, bool: BOOL });
   });
 
-  test("test_isinstance_in_a_case_on", () => {
+  test.each<[string, object, boolean]>([
+    ["a buy", A_BUY, true],
+    ["a sell", A_SELL, false],
+  ])("isinstance in a loop seed and until (runs): %s", async (_name, order, buy) => {
+    expect(await ok(LOOP_SEED_FLOW, { order })).toStrictEqual({ n: 3n, buy });
+  });
+
+  test("isinstance in a case on (loads)", () => {
     expectTypes(loadedNodes(ON_FLOW).get("route"), { Buy: BUY, bool: BOOL });
   });
+
+  test("isinstance in a case on (runs)", async () => {
+    // The bool `on:` value matches `when: true`, so a buy routes to `b`; the run evaluates the
+    // `on:` binding with the table.
+    const loaded = await loadConformanceFlow(ON_FLOW);
+    expect(await runFlow(loaded, { order: A_BUY }, { env })).toMatchObject({ status: "succeeded", output: "buy" });
+
+    loaded.compiled.nodes.get("route")!.types = new Map();
+    const failed = await runFlow(loaded, { order: A_BUY }, { env });
+    expect(failed.status).toBe("failed");
+    expect(failed.failure!.nodeId).toBe("route");
+  });
 });
+
+/** Cut the log at `log` after `nodeId`'s `node_succeeded`; return the node ids of the records kept. */
+function cutLogAfter(log: string, nodeId: string): (string | undefined)[] {
+  const lines = readFileSync(log, "utf8").split(/(?<=\n)/);
+  const records = lines.map((line) => JSON.parse(line));
+  const end = records.findIndex((record) => record.kind === "node_succeeded" && record.payload.node_id === nodeId);
+  writeFileSync(log, lines.slice(0, end + 1).join(""));
+  return records.slice(0, end + 1).map((record) => record.payload.node_id);
+}
 
 // ---------- an inline body ----------
 
@@ -599,11 +743,20 @@ async function usesResolver(): Promise<(flowId: string) => ComposedFlow> {
   };
 }
 
-test("a uses child resolves names against its own typedefs (load half)", async () => {
+test("a uses child resolves names against its own typedefs (loads)", async () => {
   const flow = await loadFlow(USES_PARENT, { childResolver: await usesResolver() });
 
   const ticket = childNodes(flow.compiled.nodes.get("run")).get("check")!.types.get("Ticket")!;
   expect(typeEquals(ticket.fields!.get("id")!, typeFor("int", new Map()))).toBe(true);
+});
+
+test("a uses child resolves names against its own typedefs (runs)", async () => {
+  const flow = await loadConformanceFlow(USES_PARENT, { childResolver: await usesResolver() });
+
+  const result = await runFlow(flow, { value: { kind: "ticket", id: 7n } }, { env });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe(true);
 });
 
 test("a parent cannot use a child's typedef", async () => {

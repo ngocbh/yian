@@ -22,7 +22,7 @@
  * `test_a_mistyped_literal_under_a_credential_name_gets_the_ordinary_error`,
  * `test_a_nested_binding_loads`, `test_fingerprint_is_stable_and_tracks_the_literal`,
  * `test_an_object_entry_with_an_empty_key_is_rejected`,
- * `test_an_empty_key_outside_a_written_out_record_loads` (the load only),
+ * `test_an_empty_key_outside_a_written_out_record_loads` (a load row, then a run row),
  * `test_a_flow_call_inside_a_span_keeps_its_error`,
  * `test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader`,
  * `test_a_span_record_rejects_an_unknown_field`, `test_a_nested_untagged_mapping_keeps_its_fields`,
@@ -54,10 +54,14 @@
  * reader, the build-cache reader, the typed-binding check and the reference validator decide
  * (`tags.test.ts` pins the ones `readTaggedValue` decides).
  *
- * Later (T4-8 follow-up): the run of `test_an_empty_key_outside_a_written_out_record_loads`.
+ * Changed: the run of `test_an_empty_key_outside_a_written_out_record_loads` reads its ints back as
+ * `bigint`s (decision 4a).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -73,17 +77,24 @@ import {
   ValueContract,
   type ValueTemplate,
 } from "../../src/nodes/contracts.ts";
+import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
   handChild,
+  loadConformanceFlow,
   loadError,
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -539,12 +550,22 @@ test.each([
   expect(errorLine(error)).toBe(lineOf(text, needle));
 });
 
-test.each(['  r: !Optional(object) {"": 1}\n', '  r: !list(object) [{"": 1}]\n', '  r: !object {a: !object {"": 1}}\n'])(
-  "an empty key outside a written-out record loads: %j",
-  (entry) => {
-    load(recordFlow(entry, "${r.output}"));
-  },
-);
+const EMPTY_KEY_OUTSIDE: [string, unknown][] = [
+  ['  r: !Optional(object) {"": 1}\n', { "": 1n }],
+  ['  r: !list(object) [{"": 1}]\n', [{ "": 1n }]],
+  ['  r: !object {a: !object {"": 1}}\n', { a: { "": 1n } }],
+];
+
+test.each(EMPTY_KEY_OUTSIDE)("an empty key outside a written-out record loads: %j", (entry) => {
+  load(recordFlow(entry, "${r.output}"));
+});
+
+test.each(EMPTY_KEY_OUTSIDE)("an empty key outside a written-out record loads (runs): %j", async (entry, value) => {
+  const result = await runFlow(await loadConformanceFlow(recordFlow(entry, "${r.output}")), { n: 3n }, { env });
+
+  expect(result.failure).toBeNull();
+  expect(result.output).toStrictEqual(value);
+});
 
 describe("numbers that are not finite", () => {
   test.each<[string, unknown]>([

@@ -25,15 +25,26 @@
  * decides, and the assert checks' `load-core/compose_field_reads__field_on_str_in_a_flow_assert` and
  * `load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field`.
  *
- * Later (T4-8 follow-up): `test_optional_record_field_reads_null_when_the_whole_value_is_null` and
- * `test_case_when_on_a_missing_optional_record_input_is_falsy` (flow runs), with their cases
- * `run-core/compose_field_reads__{optional_record_field_reads_null,
- * case_when_on_a_missing_optional_record_is_falsy}`.
+ * Ported, as a flow run (first, as in Python): `test_case_when_on_a_missing_optional_record_input_is_falsy`,
+ * both runs (its case `run-core/compose_field_reads__case_when_on_a_missing_optional_record_is_falsy`
+ * holds only the first).
+ *
+ * Covered by `run-core/compose_field_reads__optional_record_field_reads_null`:
+ * `test_optional_record_field_reads_null_when_the_whole_value_is_null`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-field-reads-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 /**
  * A flow with one CODE node `step` typed `stepOutput`, plus `rest` (YAML tail); `preamble` holds
@@ -60,6 +71,36 @@ const load = (text: string) => assembleText(text);
 
 /** Return the message of the `LoadError` loading `text` raises. */
 const failure = (text: string) => loadError(() => load(text)).message;
+
+test("case when on a missing optional record input is falsy", async () => {
+  // A `when:` reading a field of an omitted `Optional(Rec)` input takes the else branch.
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n  Rec: {a: str}\n" +
+    "input:\n  s: !str\n  maybe: !Optional(Rec)\n" +
+    "nodes:\n" +
+    "  route:\n" +
+    "    kind: case\n" +
+    "    cases:\n" +
+    "      - when: ${input.maybe.a == 'x'}\n" +
+    "        then: hit\n" +
+    "    else: miss\n" +
+    "  hit:\n" +
+    "    kind: code\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "    output: str\n" +
+    "    code: return 'hit'\n" +
+    "  miss:\n" +
+    "    kind: code\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "    output: str\n" +
+    "    code: return 'miss'\n" +
+    "output: ${hit.output | miss.output}\n";
+  const loaded = await loadConformanceFlow(text);
+
+  expect((await runFlow(loaded, { s: "x" }, { env })).output).toBe("miss");
+  expect((await runFlow(loaded, { s: "x", maybe: { a: "x" } }, { env })).output).toBe("hit");
+});
 
 test.each([
   ["str", "str"],

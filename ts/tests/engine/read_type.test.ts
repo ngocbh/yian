@@ -14,8 +14,9 @@
  * `call_types` and `typed_bindings` (the open-range typed-binding case is pinned with its
  * message in `typed_bindings_check.test.ts`, the call one in `call_binding_types.test.ts`) and
  * `case_exhaustive`'s, whose open-range case is also pinned whole here, assembled (its Python test,
- * `tests/compose/test_open_range_flows.py`, has no TS mirror). And one `ok` case whose union
- * typedef reads and whose `input:` declarations then read through `readSourceFlowInputs`.
+ * `tests/compose/test_open_range_flows.py`, is mirrored in `compose/open_range_flows.test.ts`).
+ * And one `ok` case whose union typedef reads and whose `input:` declarations then read through
+ * `readSourceFlowInputs`.
  *
  * Changed: an empty or surrogate field name is refused without a source too, as an unranged
  * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.

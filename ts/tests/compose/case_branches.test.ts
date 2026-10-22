@@ -1,7 +1,7 @@
 /**
  * A CASE routes only: a branch names a node or calls a flow, and a CASE has no `output:`. A port
  * of `tests/compose/test_case_branches.py`, loading each flow with `assembleText` where Python
- * calls `load_flow`.
+ * calls `load_flow`, and running it with `loadConformanceFlow` and `runFlow` where Python runs it.
  *
  * An untagged unquoted word names a node and an unquoted whole-value `call(...)` calls a flow.
  * Every other branch is a value: a tagged value (even a word naming a node), quoted text, `null`
@@ -17,9 +17,11 @@
  * `output:`, tagged or not, is a load error at the `output:` that says to tag the result where it
  * is read.
  *
- * Ported: the load half of every row but the two `test_case_output_over_*_reads_the_taken_branch`
- * rows (Later (T4-8 follow-up), whole). A row that applies the suggested rewrite and runs it checks here that
- * the rewritten flow assembles: `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
+ * Ported: every row. `test_case_output_over_node_branches_reads_the_taken_branch` and
+ * `test_case_output_over_a_value_entry_branch_reads_the_taken_branch` run both branches. A row
+ * that applies the suggested rewrite runs the rewritten flow on the branch it names (Python's
+ * `_taken`), expecting it to succeed with Python's value:
+ * `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_an_else_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_a_suggested_entry_id_skips_ids_already_taken`,
  * `test_the_old_typed_text_is_tagged_with_its_type`, `test_a_lone_reference_is_tagged_with_its_type`,
@@ -37,8 +39,10 @@
  * `test_an_unknown_sentence_gets_no_suggestion_and_an_entry_named_after_the_branch`,
  * `test_an_unknown_yes_gets_the_same_text_entry`,
  * `test_an_unknown_word_entry_id_skips_an_id_already_taken`,
- * `test_unquoted_call_that_is_not_one_directive_is_rejected`, and the load of
- * `test_former_reserved_prefixes_name_authored_nodes`. The error-only rows:
+ * `test_unquoted_call_that_is_not_one_directive_is_rejected`; and
+ * `test_former_reserved_prefixes_name_authored_nodes` is assembled and run (both rows; its case
+ * `run-case/compose_case_branches__a_former_reserved_prefix_names_an_authored_node` holds the
+ * first). The error-only rows:
  * `test_a_value_in_a_later_then_names_its_index`, `test_a_long_mapping_is_cut_and_written_as_a_block`,
  * `test_a_value_that_contains_itself_is_rejected`, `test_a_number_that_is_not_finite_is_rejected`,
  * `test_a_mapping_with_an_empty_key_is_rejected`, `test_a_quoted_call_holding_a_span_is_its_own_error`,
@@ -47,33 +51,41 @@
  * `test_a_mapping_value_branch_gets_the_branch_error_under_any_key`,
  * `test_a_case_output_is_rejected_at_its_line`.
  *
- * Changed: an unquoted date is text (rule `dates`). So `then: 2026-01-02` is a word that names no
- * node and gets the text entry `route_then_0: !str 2026-01-02` (Python: the value entry
- * `!date "2026-01-02"`); a date in a mapping or list is shown plain and typed as text
+ * Changed: the `reply` node runs the TS fixture `./fixtures/compose_codefns.ts:echo`. Ints read
+ * back as `bigint`s (decision 4a), and the whole number in `!list(float) [1, 2.5]` stays an int
+ * (decision 38). An unquoted date is text (rule `dates`). So `then: 2026-01-02` is a word that
+ * names no node and gets the text entry `route_then_0: !str 2026-01-02` (Python: the value entry
+ * `!date "2026-01-02"`), whose run gives the same text; a date in a mapping or list is shown plain
+ * and typed as text
  * (`!object {a: 2026-01-02}`, `!list(str) [2026-01-02]`, `!list(Any) [1, 2024-01-01]`; Python
  * quotes it and types the list `list(date)`); and quoted date text in a branch is shown plain,
  * since plain YAML reads it back unchanged (`!date 2026-01-02` for the tagged `!date
  * "2026-01-02"`, `!list(Any) [1, 2024-01-01]` for `[1, "2024-01-01"]`).
  * `test_a_number_that_is_not_finite_is_rejected`: infinity is a float value (rule `infinity`), so
  * `.inf`, `-.inf`, `!float .inf`, `{a: .inf}` and `[1.5, -.inf]` are value branches with the usual
- * rewrite, and the YAML reader refuses `.nan` at the scalar before any branch is read.
+ * rewrite (each rewritten flow assembled, with no Python run to mirror), and the YAML reader
+ * refuses `.nan` at the scalar before any branch is read.
  * A float in a flow-style branch value is spelled positionally (`10000000000000000.0`), where
  * Python's `repr` uses an exponent from 1e16 and below 1e-4; no Python row pins one.
  *
  * TS-only: a cut value counts code points, so an astral character at the cut stays whole; and the
  * harvested `load-case/compose_case_branches__*` cases.
- *
- * Later (T4-8 follow-up): the run of every rewritten flow above (Python's `_taken`),
- * `test_case_output_over_node_branches_reads_the_taken_branch`,
- * `test_case_output_over_a_value_entry_branch_reads_the_taken_branch`, and the run of
- * `test_former_reserved_prefixes_name_authored_nodes`.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { forget } from "../../src/defaults.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-case-branches-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -119,7 +131,7 @@ function flow(
     caseBody +
     "  reply:\n" +
     "    kind: code\n" +
-    "    code: tests.engine._compose_codefns:echo\n" +
+    "    code: ./fixtures/compose_codefns.ts:echo\n" +
     "    input:\n" +
     "      topic: replied\n" +
     "    output: str\n" +
@@ -165,6 +177,13 @@ function assembles(text: string): void {
   assembleText(text);
 }
 
+/** Load and run `text` and return the flow's output, expecting it succeeded; `cmd: a` takes the `then:`. */
+async function taken(text: string, cmd = "a", inputs: Record<string, unknown> = {}): Promise<unknown> {
+  const result = await runFlow(await loadConformanceFlow(text), { cmd, ...inputs }, { env });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
 /** Return the message for a value branch of `route`. */
 function valueBranch(label: string, entry: string, shown: string, note = ""): string {
   return (
@@ -176,59 +195,80 @@ function valueBranch(label: string, entry: string, shown: string, note = ""): st
 
 // ---------- node and call branches ----------
 
-test.each(["__value_0", "__case_x"])("former reserved prefixes name authored nodes: %s", (nodeId) => {
+test("case output over node branches reads the taken branch", async () => {
+  const text = flow(on("other"), {
+    extraNodes: "  other:\n" + "    kind: code\n" + "    code: |\n" + "      return 'other'\n" + "    output: str\n",
+  });
+  const loaded = await loadConformanceFlow(text);
+
+  expect((await runFlow(loaded, { cmd: "a" }, { env })).output).toBe("other");
+  expect((await runFlow(loaded, { cmd: "b" }, { env })).output).toBe("replied");
+});
+
+test("case output over a value entry branch reads the taken branch", async () => {
+  const text = flow(on("verdict"), { extraNodes: '  verdict: !date "2026-01-02"\n' });
+  const loaded = await loadConformanceFlow(text);
+
+  expect((await runFlow(loaded, { cmd: "a" }, { env })).output).toBe("2026-01-02");
+  expect((await runFlow(loaded, { cmd: "b" }, { env })).output).toBe("replied");
+});
+
+test.each(["__value_0", "__case_x"])("former reserved prefixes name authored nodes: %s", async (nodeId) => {
   const text = flow(on(nodeId), {
     extraNodes: `  ${nodeId}:\n` + "    kind: code\n" + "    code: |\n" + "      return 'own'\n" + "    output: str\n",
   });
 
   assembles(text);
+  expect(await taken(text)).toBe("own");
 });
 
 // ---------- value branches ----------
 
-test.each([
-  ['"approve"', "!str approve", 'then: "approve"'],
-  ["'approve'", "!str approve", "then: 'approve'"],
-  ['"reply"', "!str reply", 'then: "reply"'],
-  ['"it\'s: here"', '!str "it\'s: here"', "then: \"it's"],
-  ['"[x"', '!str "[x"', 'then: "[x"'],
-  ["|\n          two\n          lines", '!str "two\\nlines\\n"', "then: |"],
-  [">\n          one\n          line", '!str "one line\\n"', "then: >"],
-  ["3", "!int 3", "then: 3"],
-  ["1e3", "!float 1e3", "then: 1e3"],
-  ["true", "!bool true", "then: true"],
-  ["null", "!Optional(str) null", "then: null"],
+test.each<[string, string, string, unknown]>([
+  ['"approve"', "!str approve", 'then: "approve"', "approve"],
+  ["'approve'", "!str approve", "then: 'approve'", "approve"],
+  ['"reply"', "!str reply", 'then: "reply"', "reply"],
+  ['"it\'s: here"', '!str "it\'s: here"', "then: \"it's", "it's: here"],
+  ['"[x"', '!str "[x"', 'then: "[x"', "[x"],
+  ["|\n          two\n          lines", '!str "two\\nlines\\n"', "then: |", "two\nlines\n"],
+  [">\n          one\n          line", '!str "one line\\n"', "then: >", "one line\n"],
+  ["3", "!int 3", "then: 3", 3n],
+  ["1e3", "!float 1e3", "then: 1e3", 1000],
+  ["true", "!bool true", "then: true", true],
+  ["null", "!Optional(str) null", "then: null", null],
   [
     "\n          reply: ${input.cmd}\n          exited: true",
     '!object {reply: "${input.cmd}", exited: true}',
     "reply: ${input.cmd}",
+    { reply: "a", exited: true },
   ],
-  ["{a: 1, b: [2.5]}", "!object {a: 1, b: [2.5]}", "then: {a: 1"],
+  ["{a: 1, b: [2.5]}", "!object {a: 1, b: [2.5]}", "then: {a: 1", { a: 1n, b: [2.5] }],
   // Changed: the unquoted date is text, shown plain.
-  ["{a: 2026-01-02}", "!object {a: 2026-01-02}", "then: {a: 2026"],
-  ['[{"": x}]', '!list(object) [{"": x}]', 'then: [{"": x}]'],
-  ['[a, "${input.cmd}"]', '!list(str) [a, "${input.cmd}"]', "then: [a"],
+  ["{a: 2026-01-02}", "!object {a: 2026-01-02}", "then: {a: 2026", { a: "2026-01-02" }],
+  ['[{"": x}]', '!list(object) [{"": x}]', 'then: [{"": x}]', [{ "": "x" }]],
+  ['[a, "${input.cmd}"]', '!list(str) [a, "${input.cmd}"]', "then: [a", ["a", "a"]],
   // Changed: the unquoted date is text, so the list is a `list(str)`.
-  ["[2026-01-02]", "!list(str) [2026-01-02]", "then: [2026"],
-  ["[[1, 2], [3]]", "!list(list(int)) [[1, 2], [3]]", "then: [[1"],
-  ["[null, 1]", "!list(Optional(int)) [null, 1]", "then: [null"],
-  ["[[1], [null]]", "!list(list(Optional(int))) [[1], [null]]", "then: [[1]"],
-  ["[[], [1]]", "!list(list(int)) [[], [1]]", "then: [[]"],
-  ["[1, 2.5]", "!list(float) [1, 2.5]", "then: [1, 2.5]"],
-  ["[{a: 1}, {b: 2}]", "!list(object) [{a: 1}, {b: 2}]", "then: [{a"],
-  ["hi ${input.cmd}", "!str hi ${input.cmd}", "then: hi"],
-  ["${input.cmd}", "!str ${input.cmd}", "then: ${input.cmd}"],
-  ['"call(take"', '!str "call(take"', 'then: "call(take"'],
-])("a then value shows its value entry and the entry loads: %j", (then, shown, needle) => {
+  ["[2026-01-02]", "!list(str) [2026-01-02]", "then: [2026", ["2026-01-02"]],
+  ["[[1, 2], [3]]", "!list(list(int)) [[1, 2], [3]]", "then: [[1", [[1n, 2n], [3n]]],
+  ["[null, 1]", "!list(Optional(int)) [null, 1]", "then: [null", [null, 1n]],
+  ["[[1], [null]]", "!list(list(Optional(int))) [[1], [null]]", "then: [[1]", [[1n], [null]]],
+  ["[[], [1]]", "!list(list(int)) [[], [1]]", "then: [[]", [[], [1n]]],
+  // Changed: the whole number stays an int in the float list (decision 38).
+  ["[1, 2.5]", "!list(float) [1, 2.5]", "then: [1, 2.5]", [1n, 2.5]],
+  ["[{a: 1}, {b: 2}]", "!list(object) [{a: 1}, {b: 2}]", "then: [{a", [{ a: 1n }, { b: 2n }]],
+  ["hi ${input.cmd}", "!str hi ${input.cmd}", "then: hi", "hi a"],
+  ["${input.cmd}", "!str ${input.cmd}", "then: ${input.cmd}", "a"],
+  ['"call(take"', '!str "call(take"', 'then: "call(take"', "call(take"],
+])("a then value shows its value entry and the entry loads: %j", async (then, shown, needle, value) => {
   const text = flow(on(then));
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
 
   expect(errorLine(error)).toBe(lineOf(text, needle));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toStrictEqual(value);
 });
 
-test("an unquoted date then is a word that names no node, and its text entry loads", () => {
+test("an unquoted date then is a word that names no node, and its text entry loads", async () => {
   // Changed: Python reads the date as a date value and shows `!date "2026-01-02"`.
   const text = flow(on("2026-01-02"));
 
@@ -239,21 +279,21 @@ test("an unquoted date then is a word that names no node, and its text entry loa
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "then: 2026-01-02"));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toBe("2026-01-02");
 });
 
-test.each([
-  ['"declined"', "!str declined", 'else: "declined"'],
-  ["null", "!Optional(str) null", "else: null"],
-  ["", "!Optional(str) null", "else:"],
-  ["1.5", "!float 1.5", "else: 1.5"],
-])("an else value shows its value entry and the entry loads: %j", (else_, shown, needle) => {
+test.each<[string, string, string, unknown]>([
+  ['"declined"', "!str declined", 'else: "declined"', "declined"],
+  ["null", "!Optional(str) null", "else: null", null],
+  ["", "!Optional(str) null", "else:", null],
+  ["1.5", "!float 1.5", "else: 1.5", 1.5],
+])("an else value shows its value entry and the entry loads: %j", async (else_, shown, needle, value) => {
   const text = flow(on("reply", else_));
 
   const error = loadErrorWith(text, valueBranch("else", "route_else", shown));
 
   expect(errorLine(error)).toBe(lineOf(text, needle));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error), "b")).toStrictEqual(value);
 });
 
 test("a value in a later then names its index", () => {
@@ -305,57 +345,60 @@ test("a cut value keeps an astral character at the cut whole", () => {
   expect(errorLine(error)).toBe(lineOf(text, "then: "));
 });
 
-test("a suggested entry id skips ids already taken", () => {
-  const taken = "  route_then_0: !str one\n" + "  route_then_0_2: !str two\n";
-  const text = flow(on('"approve"'), { extraNodes: taken });
+test("a suggested entry id skips ids already taken", async () => {
+  const takenIds = "  route_then_0: !str one\n" + "  route_then_0_2: !str two\n";
+  const text = flow(on('"approve"'), { extraNodes: takenIds });
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0_3", "!str approve"));
 
   expect(errorLine(error)).toBe(lineOf(text, 'then: "approve"'));
-  assembles(rewritten(error, { extraNodes: taken }));
+  expect(await taken(rewritten(error, { extraNodes: takenIds }))).toBe("approve");
 });
 
-test("the old typed text is tagged with its type", () => {
+test("the old typed text is tagged with its type", async () => {
   const text = flow(on("int = ${input.n}"), { inputs: INPUTS_N });
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", "!int ${input.n}"));
 
   expect(errorLine(error)).toBe(lineOf(text, "then: int ="));
-  assembles(rewritten(error, { inputs: INPUTS_N }));
+  expect(await taken(rewritten(error, { inputs: INPUTS_N }), "a", { n: 3n })).toBe(3n);
 });
 
 test.each([
-  ["${input.n}", "!int ${input.n}"],
-  ["${count.output}", "!int ${count.output}"],
-])("a lone reference is tagged with its type: %s", (then, shown) => {
+  ["${input.n}", "!int ${input.n}", 3n],
+  ["${count.output}", "!int ${count.output}", 7n],
+])("a lone reference is tagged with its type: %s", async (then, shown, value) => {
   const count = "  count: !int 7\n";
   const text = flow(on(then), { inputs: INPUTS_N, extraNodes: count });
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
 
   expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
-  assembles(rewritten(error, { inputs: INPUTS_N, extraNodes: count }));
+  expect(await taken(rewritten(error, { inputs: INPUTS_N, extraNodes: count }), "a", { n: 3n })).toBe(value);
 });
 
-test.each([
-  ["${input.n}", "Optional(int)", "!Optional(int) ${input.n}"],
-  ["${input.cmd}", "int", "!str ${input.cmd}"],
-  ["${input.n}", "str", "!int ${input.n}"],
-  ["${count.output}", "str", "!int ${count.output}"],
-])("a lone reference takes the former output type only when it fits: %s under %s", (then, output, shown) => {
-  const count = "  count: !int 7\n";
-  const text = flow(on(then, "reply", { output: `    output: ${output}\n` }), {
-    inputs: INPUTS_N,
-    extraNodes: count,
-  });
+test.each<[string, string, string, unknown]>([
+  ["${input.n}", "Optional(int)", "!Optional(int) ${input.n}", 3n],
+  ["${input.cmd}", "int", "!str ${input.cmd}", "a"],
+  ["${input.n}", "str", "!int ${input.n}", 3n],
+  ["${count.output}", "str", "!int ${count.output}", 7n],
+])(
+  "a lone reference takes the former output type only when it fits: %s under %s",
+  async (then, output, shown, value) => {
+    const count = "  count: !int 7\n";
+    const text = flow(on(then, "reply", { output: `    output: ${output}\n` }), {
+      inputs: INPUTS_N,
+      extraNodes: count,
+    });
 
-  const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
+    const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
 
-  expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
-  assembles(rewritten(error, { inputs: INPUTS_N, extraNodes: count }));
-});
+    expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
+    expect(await taken(rewritten(error, { inputs: INPUTS_N, extraNodes: count }), "a", { n: 3n })).toBe(value);
+  },
+);
 
-test("a lone span of unknown type asks for its type", () => {
+test("a lone span of unknown type asks for its type", async () => {
   const text = flow(on("${input.n + 1}"), { inputs: INPUTS_N });
 
   const error = loadErrorWith(
@@ -364,37 +407,37 @@ test("a lone span of unknown type asks for its type", () => {
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "then: ${input.n + 1}"));
-  assembles(rewritten(error, { inputs: INPUTS_N, typeText: "int" }));
+  expect(await taken(rewritten(error, { inputs: INPUTS_N, typeText: "int" }), "a", { n: 3n })).toBe(4n);
 });
 
-test.each([
-  ["[1, a]", "!list(Any) [1, a]"],
-  ["[[1], [a]]", "!list(Any) [[1], [a]]"],
-  ["[{a: 1}, 2]", "!list(Any) [{a: 1}, 2]"],
-  ["[null, 1, a]", "!list(Optional(Any)) [null, 1, a]"],
+test.each<[string, string, unknown]>([
+  ["[1, a]", "!list(Any) [1, a]", [1n, "a"]],
+  ["[[1], [a]]", "!list(Any) [[1], [a]]", [[1n], ["a"]]],
+  ["[{a: 1}, 2]", "!list(Any) [{a: 1}, 2]", [{ a: 1n }, 2n]],
+  ["[null, 1, a]", "!list(Optional(Any)) [null, 1, a]", [null, 1n, "a"]],
   // Changed: plain YAML reads the date back as the same text, so it is shown unquoted.
-  ['[1, "2024-01-01"]', "!list(Any) [1, 2024-01-01]"],
-])("a list of mixed items is tagged list of Any: %s", (then, shown) => {
+  ['[1, "2024-01-01"]', "!list(Any) [1, 2024-01-01]", [1n, "2024-01-01"]],
+])("a list of mixed items is tagged list of Any: %s", async (then, shown, value) => {
   const text = flow(on(then));
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
 
   expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toStrictEqual(value);
 });
 
-test.each(["[1, 2024-01-01]", "[{a: 2024-01-01}, 2]"])(
-  "a list of mixed items with a date is shown with the date as written: %s",
-  (then) => {
-    // Changed: the unquoted date is text, so it reads back plain (Python quotes it).
-    const text = flow(on(then));
+test.each<[string, unknown]>([
+  ["[1, 2024-01-01]", [1n, "2024-01-01"]],
+  ["[{a: 2024-01-01}, 2]", [{ a: "2024-01-01" }, 2n]],
+])("a list of mixed items with a date is shown with the date as written: %s", async (then, value) => {
+  // Changed: the unquoted date is text, so it reads back plain (Python quotes it).
+  const text = flow(on(then));
 
-    const error = loadErrorWith(text, valueBranch("then", "route_then_0", `!list(Any) ${then}`));
+  const error = loadErrorWith(text, valueBranch("then", "route_then_0", `!list(Any) ${then}`));
 
-    expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
-    assembles(rewritten(error));
-  },
-);
+  expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
+  expect(await taken(rewritten(error))).toStrictEqual(value);
+});
 
 test.each(["&R [*R]", "&R [1, *R]", "&R {a: *R}"])("a value that contains itself is rejected: %s", (then) => {
   const text = flow(on(then));
@@ -429,18 +472,18 @@ test("a NaN branch is refused by the YAML reader at the scalar", () => {
   expect(errorLine(error)).toBe(lineOf(text, "then: .nan"));
 });
 
-test.each([
-  ["!int 3", "!int 3"],
-  ["!float 1e3", "!float 1e3"],
-  ["!str approve", "!str approve"],
+test.each<[string, string, unknown]>([
+  ["!int 3", "!int 3", 3n],
+  ["!float 1e3", "!float 1e3", 1000],
+  ["!str approve", "!str approve", "approve"],
   // Changed: plain YAML reads `2026-01-02` back as the same text, so it is shown unquoted.
-  ['!date "2026-01-02"', "!date 2026-01-02"],
-  ["!int ${input.n}", "!int ${input.n}"],
-  ["!Optional(int) null", "!Optional(int) null"],
-  ["!Buy {side: buy}", "!Buy {side: buy}"],
-  ["!list(int)\n          - 1\n          - 2", "!list(int) [1, 2]"],
-  ["!str reply", "!str reply"],
-])("a tagged value keeps its tag: %j", (then, shown) => {
+  ['!date "2026-01-02"', "!date 2026-01-02", "2026-01-02"],
+  ["!int ${input.n}", "!int ${input.n}", 3n],
+  ["!Optional(int) null", "!Optional(int) null", null],
+  ["!Buy {side: buy}", "!Buy {side: buy}", { side: "buy" }],
+  ["!list(int)\n          - 1\n          - 2", "!list(int) [1, 2]", [1n, 2n]],
+  ["!str reply", "!str reply", "reply"],
+])("a tagged value keeps its tag: %j", async (then, shown, value) => {
   const head = "typedefs:\n  Buy:\n    side: str\n";
   // The branch's own tag wins over the former `output:` type, and a tagged word that names a node
   // is text, as in a value entry.
@@ -449,20 +492,20 @@ test.each([
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
 
   expect(errorLine(error)).toBe(lineOf(text, `then: ${then.split("\n")[0]}`));
-  assembles(rewritten(error, { head, inputs: INPUTS_N }));
+  expect(await taken(rewritten(error, { head, inputs: INPUTS_N }), "a", { n: 3n })).toStrictEqual(value);
 });
 
-test("a value branch is tagged with the former output type", () => {
+test("a value branch is tagged with the former output type", async () => {
   const text = flow(on("3", "reply", { output: "    output: str\n" }));
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", '!str "3"'));
 
   // The value branch is reported before the CASE's `output:`.
   expect(errorLine(error)).toBe(lineOf(text, "then: 3"));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toBe("3");
 });
 
-test("a value branch is spelled to fit the former output type", () => {
+test("a value branch is spelled to fit the former output type", async () => {
   const text = flow(on('"yes"', "reply", { output: "    output: bool\n" }));
 
   const error = loadErrorWith(
@@ -471,26 +514,29 @@ test("a value branch is spelled to fit the former output type", () => {
   );
 
   expect(errorLine(error)).toBe(lineOf(text, 'then: "yes"'));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toBe(true);
 });
 
-test.each([
-  ['"3"', "int", '!str "3"'],
-  ['"v"', "int", "!str v"],
-  ["null", "str", "!Optional(str) null"],
-  ["{a: 1}", "Reply", "!object {a: 1}"],
-  ['"approve"', "Strr", "!str approve"],
-])("a value that does not fit the former output type guesses its tag: %s under %s", (then, output, shown) => {
-  const head = "typedefs:\n  Reply:\n    reply: str\n";
-  const text = flow(on(then, "reply", { output: `    output: ${output}\n` }), { head });
+test.each<[string, string, string, unknown]>([
+  ['"3"', "int", '!str "3"', "3"],
+  ['"v"', "int", "!str v", "v"],
+  ["null", "str", "!Optional(str) null", null],
+  ["{a: 1}", "Reply", "!object {a: 1}", { a: 1n }],
+  ['"approve"', "Strr", "!str approve", "approve"],
+])(
+  "a value that does not fit the former output type guesses its tag: %s under %s",
+  async (then, output, shown, value) => {
+    const head = "typedefs:\n  Reply:\n    reply: str\n";
+    const text = flow(on(then, "reply", { output: `    output: ${output}\n` }), { head });
 
-  const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
+    const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
 
-  expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
-  assembles(rewritten(error, { head }));
-});
+    expect(errorLine(error)).toBe(lineOf(text, `then: ${then}`));
+    expect(await taken(rewritten(error, { head }))).toStrictEqual(value);
+  },
+);
 
-test("a value branch is tagged with the former output typedef", () => {
+test("a value branch is tagged with the former output typedef", async () => {
   const head = "typedefs:\n  Reply:\n    reply: str\n    exited: bool\n";
   const text = flow(on("\n          reply: ok\n          exited: true", "reply", { output: "    output: Reply\n" }), {
     head,
@@ -499,16 +545,16 @@ test("a value branch is tagged with the former output typedef", () => {
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", "!Reply {reply: ok, exited: true}"));
 
   expect(errorLine(error)).toBe(lineOf(text, "reply: ok"));
-  assembles(rewritten(error, { head }));
+  expect(await taken(rewritten(error, { head }))).toStrictEqual({ reply: "ok", exited: true });
 });
 
-test("a value branch under an unspellable output guesses its tag", () => {
+test("a value branch under an unspellable output guesses its tag", async () => {
   const text = flow(on('"approve"', "reply", { output: "    output: Union(int, str)\n" }));
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", "!str approve"));
 
   expect(errorLine(error)).toBe(lineOf(text, 'then: "approve"'));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toBe("approve");
 });
 
 test.each([
@@ -585,7 +631,7 @@ test.each(
 
 // ---------- unquoted words that name no node ----------
 
-test("an unknown then word suggests the nearest node and its text entry", () => {
+test("an unknown then word suggests the nearest node and its text entry", async () => {
   const text = flow(on("replyy"));
 
   const error = loadErrorWith(
@@ -595,10 +641,10 @@ test("an unknown then word suggests the nearest node and its text entry", () => 
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "then: replyy"));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toBe("replyy");
 });
 
-test("an unknown else word suggests the nearest node and its text entry", () => {
+test("an unknown else word suggests the nearest node and its text entry", async () => {
   const text = flow(on("reply", "replyy"));
 
   const error = loadErrorWith(
@@ -608,10 +654,10 @@ test("an unknown else word suggests the nearest node and its text entry", () => 
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "else: replyy"));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error), "b")).toBe("replyy");
 });
 
-test("an unknown sentence gets no suggestion and an entry named after the branch", () => {
+test("an unknown sentence gets no suggestion and an entry named after the branch", async () => {
   const text = flow(on("The user declined"));
 
   const error = loadErrorWith(
@@ -621,10 +667,10 @@ test("an unknown sentence gets no suggestion and an entry named after the branch
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "then: The user declined"));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error))).toBe("The user declined");
 });
 
-test.each(["", "    output: bool\n"])("an unknown yes gets the same text entry: %j", (output) => {
+test.each(["", "    output: bool\n"])("an unknown yes gets the same text entry: %j", async (output) => {
   const text = flow(on("reply", "yes", { output }));
 
   const error = loadErrorWith(
@@ -634,12 +680,12 @@ test.each(["", "    output: bool\n"])("an unknown yes gets the same text entry: 
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "else: yes"));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error), "b")).toBe("yes");
 });
 
-test("an unknown word entry id skips an id already taken", () => {
-  const taken = "  nope_text: !str taken\n";
-  const text = flow(on("nope"), { extraNodes: taken });
+test("an unknown word entry id skips an id already taken", async () => {
+  const takenIds = "  nope_text: !str taken\n";
+  const text = flow(on("nope"), { extraNodes: takenIds });
 
   const error = loadErrorWith(
     text,
@@ -648,7 +694,7 @@ test("an unknown word entry id skips an id already taken", () => {
   );
 
   expect(errorLine(error)).toBe(lineOf(text, "then: nope"));
-  assembles(rewritten(error, { extraNodes: taken }));
+  expect(await taken(rewritten(error, { extraNodes: takenIds }))).toBe("nope");
 });
 
 test.each([
@@ -660,6 +706,8 @@ test.each([
       "value. For the text, add a value entry and name it: " +
       '`route_then_0: !str "call(child, x=1) | x"`',
     "then: call(",
+    "a",
+    "call(child, x=1) | x",
   ],
   [
     "reply",
@@ -669,14 +717,16 @@ test.each([
       "value. For the text, add a value entry and name it: " +
       '`route_else: !str "call(child, x=1) | y"`',
     "else: call(",
+    "b",
+    "call(child, x=1) | y",
   ],
-])("unquoted call that is not one directive is rejected: %s / %s", (then, else_, message, needle) => {
+])("unquoted call that is not one directive is rejected: %s / %s", async (then, else_, message, needle, cmd, value) => {
   const text = flow(on(then, else_));
 
   const error = loadErrorWith(text, message);
 
   expect(errorLine(error)).toBe(lineOf(text, needle));
-  assembles(rewritten(error));
+  expect(await taken(rewritten(error), cmd)).toBe(value);
 });
 
 // ---------- a CASE `output:` ----------

@@ -93,20 +93,32 @@
  * `'biy'` / `did you mean 'buy'?`), and the cycle's nodes and the uncovered tags as JSON text,
  * `["b","c"]` and `["hold","sell"]` (Python `['b', 'c']` and `['hold', 'sell']`).
  *
- * Later (T4-8 follow-up): `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` and
- * `test_a_partly_shared_union_branch_runs` (runs).
+ * Ported through `loadConformanceFlow` and `runFlow`: `test_a_searched_when_with_a_tag_check_and_a_member_read_runs`
+ * (both runs; the case `run-core/compose_union_narrowing__a_searched_when_with_a_tag_check_and_a_member_read`
+ * runs only the `sell` one) and `test_a_partly_shared_union_branch_runs`, the producer's CODE body
+ * in JS (decision 11).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { forget } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-union-narrowing-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -874,6 +886,34 @@ test("an on inside a partly shared union branch covers the shared tags", () => {
   );
 });
 
+test("a partly shared union branch runs", async () => {
+  const text =
+    "id: p\nname: p\n" +
+    TYPEDEFS +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  d:\n" +
+    "    kind: code\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "    output: Decision\n" +
+    "    code: |\n" +
+    "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n" +
+    searched(["isinstance(d.output, Rest)", "t"]) +
+    "  t:\n" +
+    "    kind: code\n" +
+    "    input:\n      n: ${d.output.note}\n" +
+    "    output: str\n" +
+    "    code: return inputs['n']\n" +
+    code("e") +
+    "output: ${route.output}\n";
+
+  const result = await runFlow(await loadConformanceFlow(text), { s: "x" }, { env });
+
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("n");
+});
+
 test("a partly shared union branch passes the shared members to a call", () => {
   const branch = searched(["isinstance(d.output, Rest)", "call(place_rest, order=${d.output})"]);
   load(flow(branch, code("e")));
@@ -1038,6 +1078,36 @@ test("a when read past a check the checks before it decide is checked under them
     "reference ${d.output.limit} reads field 'limit', which Sell doesn't have; d.output is " +
       "Sell here, by the checks before this read",
   );
+});
+
+test("a searched when with a tag check and a member read runs", async () => {
+  const text =
+    "id: p\nname: p\n" +
+    TYPEDEFS +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  d:\n" +
+    "    kind: code\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "    output: Decision\n" +
+    "    code: |\n" +
+    "      if (inputs['s'] === 'buy')\n" +
+    "          return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}\n" +
+    "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n" +
+    searched(["\"d.output.action == 'buy' and d.output.limit > 5\"", "t"]) +
+    "  t:\n    kind: code\n    output: str\n    code: return 'branch'\n" +
+    "  e:\n    kind: code\n    output: str\n    code: return 'else'\n" +
+    "output: ${route.output}\n";
+  const loaded = await loadConformanceFlow(text);
+
+  let result = await runFlow(loaded, { s: "buy" }, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("branch");
+  result = await runFlow(loaded, { s: "sell" }, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("else");
 });
 
 test("overlapping checks narrow each branch by its own check", () => {

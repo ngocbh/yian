@@ -36,13 +36,17 @@
  * inf as text) for a `float` input get no hint; the
  * harvested `load-map-call/compose_call_binding_types__*` cases, pinned at the end
  * (`…__date_literal_into_a_str_input` is `ok`, rule `dates`); and, as "Pinned harvested cases
- * (TS-only placement)", the case this check decides whose Python file has no TS mirror:
+ * (TS-only placement)", the case this check decides that its Python file's mirror,
+ * `open_range_flows.test.ts`, lists as Covered:
  * `types/compose_open_range_flows__call_with_a_wider_open_range_source`.
  * `load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none` is pinned in
  * `union_narrowing.test.ts`, its Python file's mirror.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
@@ -51,6 +55,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembledWith,
   assembleText,
@@ -62,6 +67,10 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-call-binding-types-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -343,7 +352,7 @@ test.each<[string, string, string | null, unknown]>([
   ["int", "${item:-3}", "[null, 1]", ["3", "1"]],
   ["int", "${input.n | 3}", null, "3"],
 ])("bindings that fit load and run: %s from %s over %p", async (type, binding, over, output) => {
-  const result = await runFlow(await loadConformanceFlow(flow(type, binding, over)), INPUTS);
+  const result = await runFlow(await loadConformanceFlow(flow(type, binding, over)), INPUTS, { env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toEqual(output);
@@ -382,7 +391,7 @@ test("text from an unproven source is not converted at the child start (loads)",
 });
 
 test("text from an unproven source is not converted at the child start", async () => {
-  const result = await runFlow(await loadConformanceFlow(OPAQUE_TEXT), {});
+  const result = await runFlow(await loadConformanceFlow(OPAQUE_TEXT), {}, { env });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("contract.input");
@@ -434,7 +443,7 @@ test("text supplied to the top-level flow is still converted (loads)", () => {
 });
 
 test("text supplied to the top-level flow is still converted", async () => {
-  const result = await runFlow(await loadConformanceFlow(TOP_LEVEL), { n: " 3 ", f: "2.5", b: "yes" });
+  const result = await runFlow(await loadConformanceFlow(TOP_LEVEL), { n: " 3 ", f: "2.5", b: "yes" }, { env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("[3,2.5,true]");

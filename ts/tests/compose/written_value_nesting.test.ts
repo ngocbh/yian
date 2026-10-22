@@ -7,7 +7,7 @@
  * loads; one past it fails at load, located, and a 1000-link alias chain fails the same way (under
  * a raised `YIAN_MAX_YAML_NODES`: at the default, the chain's anchors exceed the node limit first).
  *
- * Ported through `assembleText`: `test_binding_at_the_limit_passes_the_nesting_check` (load only),
+ * Ported through `assembleText`: `test_binding_at_the_limit_passes_the_nesting_check` (its load half),
  * `test_binding_past_the_limit_is_a_located_load_error`,
  * `test_binding_over_a_1000_link_alias_chain_is_a_located_load_error`,
  * `test_issue_repro_alias_chain_is_a_located_load_error`,
@@ -19,26 +19,36 @@
  * `test_binding_in_an_inline_map_body_over_a_1000_link_alias_chain_is_located`, each with its
  * `def-default` row (the `defs:` entry loaded through the scope); and the harvested
  * cases `yaml/compose_written_value_nesting__binding_past_the_limit` and
- * `__flow_output_past_the_limit`, pinned at the end.
+ * `__flow_output_past_the_limit`, pinned at the end. Ported through `loadConformanceFlow` and
+ * `runFlow`, each in a row after its load row: the run half of
+ * `test_binding_at_the_limit_passes_the_nesting_check` (the sites Python runs) and of
+ * `test_flow_output_at_the_limit_loads_and_runs`.
  *
  * Changed: Python also asserts no `RecursionError` in the error's chain; here a stack overflow
  * would be a `RangeError`, not the `LoadError` the rows expect, so `loadError` fails on it. The
  * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
- *
- * Later (T4-8 follow-up): the run half of `test_binding_at_the_limit_passes_the_nesting_check` and
- * `test_flow_output_at_the_limit_loads_and_runs`.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-written-value-nesting-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 
@@ -182,6 +192,8 @@ interface BindingSite {
   where: string;
   /** The start of the located line. */
   line: string;
+  /** Whether the flow at the limit runs. */
+  runs: boolean;
 }
 
 const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
@@ -191,6 +203,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: listAlias,
     where: "node 'use' input 'topic' at ",
     line: "      topic:",
+    runs: true,
   },
   "tagged-input": {
     flow: taggedInputFlow,
@@ -198,6 +211,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "node 'use' input 'topic' at ",
     line: "      topic:",
+    runs: true,
   },
   "loop-seed": {
     flow: loopFlow,
@@ -205,6 +219,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "node 'l' input 's' at ",
     line: "      s: {",
+    runs: false,
   },
   // 100 levels in `over:` means items nesting 99.
   "map-over": {
@@ -213,6 +228,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordListAlias,
     where: "node 'm' field 'over' at ",
     line: "    over:",
+    runs: true,
   },
   // A list `until:` isn't a date: at the limit it is a type error at load, and past the limit the
   // nesting error comes first.
@@ -222,6 +238,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: listAlias,
     where: "node 'w' field 'until' at ",
     line: "    until:",
+    runs: false,
   },
   "value-entry": {
     flow: valueEntryFlow,
@@ -229,6 +246,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "value entry 'v' at ",
     line: "  v:",
+    runs: true,
   },
   // A default is checked as the binding it fills.
   "flow-default": {
@@ -237,6 +255,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "input 'topic' default at ",
     line: "  topic:",
+    runs: true,
   },
   "def-default": {
     flow: defDefaultFlow,
@@ -244,6 +263,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "defs entry 'child': input 'topic' default at ",
     line: "      topic: !object",
+    runs: true,
   },
   "compact-default": {
     flow: compactDefaultFlow,
@@ -251,6 +271,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "input 'topic' default at ",
     line: "  topic:",
+    runs: true,
   },
   "agent-variable": {
     flow: agentVariableFlow,
@@ -258,6 +279,7 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     alias: recordAlias,
     where: "variable 't' default at ",
     line: "      t:",
+    runs: false,
   },
 };
 
@@ -285,6 +307,19 @@ describe("node bindings", () => {
         return;
       }
       assembleText(flow(header, value));
+    },
+  );
+
+  test.each(formRows(SITE_NAMES.filter((site) => BINDING_SITES[site]!.runs)))(
+    "at the limit passes the nesting check and runs: %s (%s)",
+    async (site, _id, aliased) => {
+      const { flow, text, alias } = BINDING_SITES[site]!;
+      const [header, value] = (aliased ? alias : text)(MAX_VALUE_NESTING);
+
+      const result = await runFlow(await loadConformanceFlow(flow(header, value)), {}, { env });
+
+      expect(result.failure).toBeNull();
+      expect(result.status).toBe("succeeded");
     },
   );
 
@@ -420,6 +455,15 @@ describe("flow outputs", () => {
     const { flow, text, alias, limit } = OUTPUT_SITES[site]!;
 
     assembleText(flow(...(aliased ? alias : text)(limit)));
+  });
+
+  test.each(OUTPUT_ROWS)("at the limit loads and runs: %s (%s)", async (site, _id, aliased) => {
+    const { flow, text, alias, limit } = OUTPUT_SITES[site]!;
+
+    const result = await runFlow(await loadConformanceFlow(flow(...(aliased ? alias : text)(limit))), {}, { env });
+
+    expect(result.failure).toBeNull();
+    expect(result.status).toBe("succeeded");
   });
 
   test.each(OUTPUT_ROWS)("past the limit is a located load error: %s (%s)", (site, _id, aliased) => {

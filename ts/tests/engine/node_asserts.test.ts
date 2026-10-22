@@ -25,24 +25,45 @@
  * assert's text holding a lone surrogate is a located load error in the aggregate (Python yian
  * loads it); the TS-only row pins the message.
  *
- * Later (T4-8 follow-up): `test_pre_assert_passes_and_runs`, `test_pre_assert_violated_fails_before_body`,
- * `test_post_assert_violated_fails`, `test_post_assert_on_nonscalar_output_fails_cleanly`,
- * `test_post_assert_record_field_passes`, `test_skipped_branch_target_asserts_do_not_fire`,
- * `test_absent_input_pre_assert_fails_cleanly`, `test_def_internal_node_assert_via_call`,
- * `test_def_internal_node_assert_via_map`,
- * `test_python_built_unparseable_assert_fails_before_the_run_starts` and
- * `test_python_built_unparseable_assert_fails_before_resume_appends` (runs).
+ * Ported through `loadFlow` and `runFlow` (and `resumeFlow`): `test_pre_assert_passes_and_runs`,
+ * `test_post_assert_violated_fails`, `test_def_internal_node_assert_via_call`,
+ * `test_def_internal_node_assert_via_map` and the two `test_python_built_unparseable_assert_*`
+ * rows, each failing run checked for `assertion.failed` where Python checks the status. The
+ * before-the-run row sets the loaded node's `preAsserts` in code, as Python does. Changed: the
+ * resume row stops its first run with an aborted `signal` once node `a` starts (Python's CODE
+ * function raises), then sets the bad assert and writes the changed flow's fingerprint into the
+ * log's `RunStarted` (`stoppedRunLog`), where Python stubs the run's condition check during the
+ * first run.
+ *
+ * Covered by `run-leaves` cases running the same flows on the same inputs:
+ * `test_pre_assert_violated_fails_before_body`
+ * (`engine_node_asserts__a_false_pre_assert_fails_before_the_body`),
+ * `test_post_assert_on_nonscalar_output_fails_cleanly`
+ * (`engine_node_asserts__a_post_assert_ordering_a_record_fails_cleanly`, which fails
+ * `condition.evaluate` in TS: ordering a record is a type error, where Python's comparison raises
+ * and the assert counts as false), `test_post_assert_record_field_passes`
+ * (`engine_node_asserts__a_post_assert_on_a_record_field_passes`),
+ * `test_skipped_branch_target_asserts_do_not_fire`
+ * (`engine_node_asserts__a_skipped_node_assert_does_not_fire`) and
+ * `test_absent_input_pre_assert_fails_cleanly`
+ * (`engine_node_asserts__a_pre_assert_over_a_null_input_fails_cleanly`).
  *
  * TS-only: the harvested `load-leaves/engine_node_asserts__*` cases, pinned at the end.
  */
 
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { POOL_HEADS, validateNodeAsserts } from "../../src/compose/validate/asserts.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
+import { ExpressionError } from "../../src/expr/expressions.ts";
 import { Node, NodeKind } from "../../src/nodes/base.ts";
 import {
   Assertion,
@@ -51,6 +72,7 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -60,6 +82,7 @@ import {
   loadErrorAsync,
   runCase,
 } from "../compose/declarations.ts";
+import { expectFailsBeforeTheRun, rejection, stoppedRunLog } from "./run_state_fixtures.ts";
 
 const DOUBLE = "./fixtures/compose_codefns.ts:double";
 
@@ -359,6 +382,141 @@ test("a node assert holding a lone surrogate is a located load error", () => {
   );
   const line = text.split("\n").findIndex((row) => row.includes("uD800")) + 1;
   expect(error.diagnostic.frames[0]!.range!.startLine).toBe(line);
+});
+
+// ---------- per-node enforcement, through runFlow ----------
+
+/** Load `text` (its CODE references resolved) and run it on `inputs`. */
+const run = async (text: string, inputs: Readonly<Record<string, unknown>>) =>
+  runFlow(await loadConformanceFlow(text), inputs);
+
+test("a pre-assert passes and runs", async () => {
+  const result = await run(flow(["n >= 0"]), { v: 5 });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe(10n);
+});
+
+test("a violated post-assert fails", async () => {
+  // double(-1) = -2
+  const result = await run(flow(["output >= 0"]), { v: -1 });
+  expect(result.status).toBe("failed");
+  expect(result.failure?.code).toBe("assertion.failed");
+  expect(result.failure?.message).toContain("post-assert");
+});
+
+const CHECKED_DEF = `
+defs:
+  checked:
+    input:
+      n: !int
+    nodes:
+      y:
+        kind: code
+        code: ${DOUBLE}
+        input:
+          n: \${input.n}
+        output: int
+        asserts:
+          - "output >= 0"
+    output: \${y.output}
+`;
+
+test("a def-internal node assert runs through a call", async () => {
+  const loaded = await loadConformanceFlow(`
+id: dr
+name: dr
+input:
+  v: !int
+${CHECKED_DEF}
+nodes:
+  call_it:
+    kind: call
+    call: checked
+    input:
+      n: \${input.v}
+output: \${call_it.output}
+`);
+  // y = 10 holds `output >= 0`; y = -2 fails the def-internal post-assert.
+  expect((await runFlow(loaded, { v: 5 })).status).toBe("succeeded");
+  const bad = await runFlow(loaded, { v: -1 });
+  expect(bad.status).toBe("failed");
+  expect(bad.failure?.code).toBe("assertion.failed");
+});
+
+test("a def-internal node assert runs through a map", async () => {
+  const loaded = await loadConformanceFlow(`
+id: dm
+name: dm
+input:
+  vs: !list(int)
+${CHECKED_DEF}
+nodes:
+  m:
+    kind: map
+    call: checked
+    over: \${input.vs}
+    input:
+      n: \${item}
+output: \${m.output}
+`);
+  expect((await runFlow(loaded, { vs: [1, 2, 3] })).status).toBe("succeeded");
+  // The element -1 gives y = -2, which fails.
+  const bad = await runFlow(loaded, { vs: [1, -1, 3] });
+  expect(bad.status).toBe("failed");
+  expect(bad.failure?.code).toBe("assertion.failed");
+});
+
+const TWO_NODES = `
+id: two
+name: two
+input:
+  v: !int
+nodes:
+  a:
+    kind: code
+    code: ${DOUBLE}
+    input:
+      n: \${input.v}
+    output: int
+  b:
+    kind: code
+    code: ${DOUBLE}
+    input:
+      n: \${a.output}
+    output: int
+output: \${b.output}
+`;
+
+/** Give the loaded node `b` of `flow` an unparseable pre-assert. */
+const breakAssert = (flow: ComposedFlow) => {
+  flow.compiled.nodes.get("b")!.preAsserts = [new Assertion("${n} >= 0", "n non-negative")];
+};
+
+test("a code-built unparseable assert fails before the run starts", async () => {
+  // A downstream node's bad assert throws before any node runs or any record is written.
+  const flow = await loadConformanceFlow(TWO_NODES);
+  breakAssert(flow);
+  await expectFailsBeforeTheRun(
+    flow,
+    { v: 1 },
+    /^node 'b' pre-assert 'n non-negative' \(`\$\{n\} >= 0`\) is not a valid boolean expression: .*write `n >= 0`/s,
+  );
+});
+
+test("a code-built unparseable assert fails before resume appends", async () => {
+  const flow = await loadConformanceFlow(TWO_NODES);
+  const dir = mkdtempSync(join(tmpdir(), "node-asserts-"));
+  try {
+    const path = join(dir, "run.jsonl");
+    const lines = await stoppedRunLog(flow, { v: 1 }, path, "a", () => breakAssert(flow));
+
+    const error = await rejection(resumeFlow(flow, { log: path }));
+    expect(error).toBeInstanceOf(ExpressionError);
+    expect((error as Error).message).toMatch(/^node 'b' pre-assert 'n non-negative'/);
+    expect(readFileSync(path, "utf8")).toBe(lines);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------- the pool heads ----------

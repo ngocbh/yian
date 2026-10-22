@@ -104,7 +104,7 @@ import {
   runCase,
 } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection } from "./run_state_fixtures.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 afterEach(() => forget());
 
@@ -462,7 +462,7 @@ test("e23: an unknown tool fails at run start", async () => {
   try {
     const path = join(dir, "run.jsonl");
     const flow = await loadFlow(caseText("run-core/seed_e23_unknown_tool").text);
-    const error = await rejection(runFlow(flow, { topic: "X" }, { log: path, tools: {}, env: hostEnv(dir) }));
+    const error = await rejected(runFlow(flow, { topic: "X" }, { log: path, tools: {}, env: hostEnv(dir) }));
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toBe(
       "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools; known tools: []",

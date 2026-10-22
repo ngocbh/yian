@@ -29,7 +29,7 @@ import { resumeFlow, runFlow } from "../../src/run.ts";
 import { decodeRecord, encodeRecord } from "../../src/runtime/log.ts";
 import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, serving, textReply } from "./run_state_fixtures.ts";
+import { rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-retired-llm-keys-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -163,7 +163,7 @@ const VLLM = { provider: "vllm", model: "served-model" };
 
 test.each(Object.keys(RETIRED))("a retired key in the run layer fails before the log %s", async (key) => {
   const log = join(dir, `run-layer-${key}.jsonl`);
-  const error = await rejection(
+  const error = await rejected(
     runFlow(await loadFlow(FLOW), {}, { log, llmConfig: { ...VLLM, [key]: RETIRED[key]![0] }, env: hostEnv(dir) }),
   );
   expect(error).toBeInstanceOf(RangeError);
@@ -188,7 +188,7 @@ test("resuming a record with a set retired key fails before appending", async ()
   const stopBeforeModel = (event: RunEvent) => {
     if (event instanceof NodeStarted && event.nodeId === "agent") throw stop;
   };
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(await loadFlow(FLOW), {}, {
       log,
       onEvent: stopBeforeModel,
@@ -201,7 +201,7 @@ test("resuming a record with a set retired key fails before appending", async ()
   recordTemperature(log);
   const before = readFileSync(log);
 
-  const error = await rejection(resumeFlow(await loadFlow(FLOW), { log, env }));
+  const error = await rejected(resumeFlow(await loadFlow(FLOW), { log, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   const message = (error as RangeError).message;

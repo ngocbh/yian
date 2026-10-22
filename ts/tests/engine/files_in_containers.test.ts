@@ -108,7 +108,7 @@ import {
 } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { engine, rejection } from "./run_state_fixtures.ts";
+import { engine, rejected } from "./run_state_fixtures.ts";
 
 const REGISTRY = readTypedefs({
   Rec: { f: "file", n: "int" },
@@ -1542,7 +1542,7 @@ async function interruptedRun(name: string, text: string, learnable: boolean): P
     host.abort(interruption);
     throw interruption;
   };
-  const caught = await rejection(runText(text, {}, { log: path, learnable, signal: host.signal, tools: { ask_user: interrupt } }));
+  const caught = await rejected(runText(text, {}, { log: path, learnable, signal: host.signal, tools: { ask_user: interrupt } }));
   expect(caught).toBe(interruption);
   return path;
 }

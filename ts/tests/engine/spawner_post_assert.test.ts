@@ -42,7 +42,7 @@ import { Assertion } from "../../src/nodes/contracts.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { childResolver, rejected, rejection } from "./run_state_fixtures.ts";
+import { childResolver, rejected } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-spawner-post-assert-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -210,7 +210,7 @@ test("spawner post assert fires after log recovery", async () => {
     host.abort(interruption);
     throw interruption;
   };
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(await loadBlocking(), { v: 1 }, { log: path, signal: host.signal, tools: { ask_user: interrupt }, env: hostEnv(dir) }),
   );
   expect(caught).toBe(interruption);

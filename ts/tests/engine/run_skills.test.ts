@@ -33,7 +33,7 @@ import { NodeStartedRecord, NodeSucceededRecord, readRunLog } from "../../src/ru
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { rejection, textReply } from "./run_state_fixtures.ts";
+import { rejected, textReply } from "./run_state_fixtures.ts";
 import { CrashAt, crashes, effectsOf, resumeWith, runWith, SESSION_CONFIG } from "./session_fakes.ts";
 
 /** A reply calling `load_skill` with `args` as call `id`. */
@@ -148,12 +148,12 @@ test("load_skill runs through a session conversation", async () => {
 test("a missing skill is rejected before any record", async () => {
   const model = new ScriptedModel([], SESSION_CONFIG);
   const skills = new Map([["code-review", new Skill({ name: "code-review", description: "d", instructions: "" })]]);
-  const error = await rejection(runWith(await loadFlow(FLOW), { change: "x" }, null, model, { log, skills }));
+  const error = await rejected(runWith(await loadFlow(FLOW), { change: "x" }, null, model, { log, skills }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toBe(`AGENT node 'review' grants skills not supplied to this run: ["release-notes"]`);
   expect(existsSync(log)).toBe(false);
 
-  const nested = await rejection(runWith(await loadFlow(NESTED), {}, null, model, { skills: new Map() }));
+  const nested = await rejected(runWith(await loadFlow(NESTED), {}, null, model, { skills: new Map() }));
   expect(nested).toBeInstanceOf(RangeError);
   expect((nested as Error).message).toContain("'outer/inner' grants skills not supplied");
 });
@@ -164,7 +164,7 @@ test.each([
   ["nested", NESTED],
 ])("a granting flow needs a skills mapping: %s", async (_label, text) => {
   const inputs = text === NESTED ? {} : { change: "x" };
-  const error = await rejection(runWith(await loadFlow(text), inputs, null, new ScriptedModel([], SESSION_CONFIG), { log }));
+  const error = await rejected(runWith(await loadFlow(text), inputs, null, new ScriptedModel([], SESSION_CONFIG), { log }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("grants skills, but no skills= mapping was passed");
   expect(existsSync(log)).toBe(false);
@@ -185,7 +185,7 @@ test("a resume of a skills: all flow needs the mapping", async () => {
   );
   const before = readFileSync(log);
 
-  const refused = await rejection(resumeWith(await loadFlow(ALL_FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
+  const refused = await rejected(resumeWith(await loadFlow(ALL_FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
   expect(refused).toBeInstanceOf(RangeError);
   expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);
@@ -198,7 +198,7 @@ test("a resume of a skills: all flow needs the mapping", async () => {
 
 test("the skills mapping must be keyed by skill name", async () => {
   const skills = new Map([["alias", new Skill({ name: "code-review", description: "d", instructions: "" })]]);
-  const error = await rejection(
+  const error = await rejected(
     runWith(await loadFlow(FLOW), { change: "x" }, null, new ScriptedModel([], SESSION_CONFIG), { skills }),
   );
   expect(error).toBeInstanceOf(TypeError);
@@ -226,7 +226,7 @@ test("end to end: listing, load, escape and resume", async () => {
   expect(lastResult(first, 2)).toBe("1. Tests pass.\n");
 
   const before = readFileSync(log);
-  const refused = await rejection(resumeWith(await loadFlow(FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
+  const refused = await rejected(resumeWith(await loadFlow(FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
   expect(refused).toBeInstanceOf(RangeError);
   expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);

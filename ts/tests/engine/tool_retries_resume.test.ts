@@ -77,7 +77,7 @@ import { TransientToolError } from "../../src/tools/errors.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { barrier, Crash, crashAfter, rejection, startedRun } from "./run_state_fixtures.ts";
+import { barrier, Crash, crashAfter, rejected, startedRun } from "./run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets: the
 // engine rows and the replays read the process's values.
@@ -471,7 +471,7 @@ test("two tools retrying at once in a pooled map resume with their own steps", a
     return append.call(this, record);
   };
   try {
-    const error = await rejection(
+    const error = await rejected(
       runFlow(flow, {}, { log: path, runId: "r1", tools: { x }, numWorkers: 4, ...host(scheduler) }),
     );
     expect(error).toBe(crash);
@@ -702,7 +702,7 @@ for (const [name, fixture, source] of [
     });
     const { scheduler } = clock();
 
-    const error = await rejection(resumeFlow(await loadFlow(source), { log: path, tools: { place }, ...host(scheduler) }));
+    const error = await rejected(resumeFlow(await loadFlow(source), { log: path, tools: { place }, ...host(scheduler) }));
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toBe(

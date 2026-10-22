@@ -39,7 +39,7 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { McpConnectError, type McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { Crash, rejection } from "./run_state_fixtures.ts";
+import { Crash, rejected } from "./run_state_fixtures.ts";
 
 const SLOW = 30_000;
 const markers: string[] = [];
@@ -118,7 +118,7 @@ async function crashedRun(log: string): Promise<ToolContext> {
     },
   });
   try {
-    const error = await rejection(run(await loadFlow(WHOAMI_FLOW), {}, { log, tools: { whoami }, runId: "run-5c2e" }));
+    const error = await rejected(run(await loadFlow(WHOAMI_FLOW), {}, { log, tools: { whoami }, runId: "run-5c2e" }));
     expect(error).toBe(crash);
   } finally {
     JsonlRunLog.prototype.append = append;
@@ -179,7 +179,7 @@ test(
     const before = [readFileSync(log), statSync(log, { bigint: true }).mtimeNs];
     const [server, marker] = fake();
 
-    const error = await rejection(
+    const error = await rejected(
       resume(flow, { log, tools: { fake: server, g: [(text: string) => text] as never } }),
     );
 
@@ -202,7 +202,7 @@ test(
     await crashedRun(log);
     const bad = mcpServer({ command: "/nonexistent/x" });
 
-    expect(await rejection(resume(flow, { log, tools: { fake: bad } }))).toBeInstanceOf(McpConnectError);
+    expect(await rejected(resume(flow, { log, tools: { fake: bad } }))).toBeInstanceOf(McpConnectError);
 
     expect(bad.isOpen).toBe(false);
     const [server] = fake();
@@ -221,7 +221,7 @@ test(
     await crashedRun(log);
     const [server, marker] = fake();
 
-    const error = await rejection(resume(flow, { log, tools: { fake: server }, skills: new Map([["x", {}]]) as never }));
+    const error = await rejected(resume(flow, { log, tools: { fake: server }, skills: new Map([["x", {}]]) as never }));
 
     expect(error).toBeInstanceOf(TypeError);
     expect((error as Error).message).toContain("skills");
@@ -243,11 +243,11 @@ test(
       if (event instanceof RunStarted) throw stop;
     };
     expect(
-      await rejection(run(flow, {}, { log, memory: new Map([["test", new FakeMemory()]]), onEvent: stopAfterStart })),
+      await rejected(run(flow, {}, { log, memory: new Map([["test", new FakeMemory()]]), onEvent: stopAfterStart })),
     ).toBe(stop);
     const [server, marker] = fake();
 
-    const error = await rejection(resume(flow, { log, tools: { fake: server } }));
+    const error = await rejected(resume(flow, { log, tools: { fake: server } }));
 
     expect(error).toBeInstanceOf(MemorySetupError);
     expect((error as Error).message).toBe("resuming this run requires its enabled memory mapping");
@@ -268,7 +268,7 @@ test(
     const stop = new AbortController();
     stop.abort(new Error("stopped"));
 
-    expect(await rejection(resume(flow, { log, tools: { a, b }, signal: stop.signal }))).toBe(stop.signal.reason);
+    expect(await rejected(resume(flow, { log, tools: { a, b }, signal: stop.signal }))).toBe(stop.signal.reason);
 
     expect(existsSync(markerA) || existsSync(markerB)).toBe(false);
     await expectClosed(a);

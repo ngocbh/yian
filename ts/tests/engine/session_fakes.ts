@@ -41,7 +41,9 @@ import { type ResumeFlowOptions, resumeFlow, type RunFlowOptions, type RunResult
 import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import type { Type } from "../../src/typesys/values.ts";
-import { Crash, engine, graph, rejection, serving } from "./run_state_fixtures.ts";
+import { Crash, engine, graph, rejected, serving } from "./run_state_fixtures.ts";
+
+export { rejected };
 
 // Cloned snapshots and nested test values are edited freely.
 export type Mutable = any;
@@ -183,16 +185,6 @@ export function settle<T>(promise: Promise<T>): Settled<T> {
 /** Wait one macrotask, so every pending promise reaction has run. */
 export function macrotask(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 10));
-}
-
-/** The value `promise` rejects with; a fulfilment fails the test. */
-export function rejected(promise: Promise<unknown>): Promise<unknown> {
-  return promise.then(
-    () => {
-      throw new Error("expected a rejection");
-    },
-    (error: unknown) => error,
-  );
 }
 
 /**
@@ -387,7 +379,7 @@ export async function crashes(model: CrashAt, run: () => Promise<unknown>): Prom
     return append.call(this, record);
   };
   try {
-    expect(await rejection(run())).toBe(crash);
+    expect(await rejected(run())).toBe(crash);
   } finally {
     JsonlRunLog.prototype.append = append;
   }

@@ -1304,16 +1304,6 @@ export function barrier(parties: number): () => Promise<void> {
   };
 }
 
-/** The error `promise` rejects with; fails the test when it resolves. */
-export async function rejection(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected the promise to reject");
-}
-
 /**
  * Expect running `flow` on `inputs` with a log to throw an `ExpressionError` matching `message`
  * before the run starts: no log file is written.
@@ -1326,7 +1316,7 @@ export async function expectFailsBeforeTheRun(
   const dir = mkdtempSync(join(tmpdir(), "before-the-run-"));
   try {
     const path = join(dir, "run.jsonl");
-    const error = await rejection(runFlow(flow, inputs, { log: path }));
+    const error = await rejected(runFlow(flow, inputs, { log: path }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(message);
     expect(existsSync(path)).toBe(false);
@@ -1356,7 +1346,7 @@ export async function stoppedRunLog(
   const onEvent = (event: unknown) => {
     if (event instanceof NodeStarted && event.nodeId === nodeId) host.abort(stop);
   };
-  expect(await rejection(runFlow(flow, inputs, { log: path, signal: host.signal, onEvent }))).toBe(stop);
+  expect(await rejected(runFlow(flow, inputs, { log: path, signal: host.signal, onEvent }))).toBe(stop);
   edit();
   writeFileSync(path, readFileSync(path, "utf8").replace(recorded, flowFingerprint(flow.compiled)));
   return readFileSync(path, "utf8");
@@ -1390,7 +1380,7 @@ export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise
     return append.call(this, record);
   };
   try {
-    expect(await rejection(fn())).toBe(crash);
+    expect(await rejected(fn())).toBe(crash);
   } finally {
     JsonlRunLog.prototype.append = append;
   }

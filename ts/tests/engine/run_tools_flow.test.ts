@@ -51,7 +51,7 @@ import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { barrier, rejection, textReply } from "./run_state_fixtures.ts";
+import { barrier, rejected, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-tools-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -169,7 +169,7 @@ test("a tools mapping hides the global registry", async () => {
   const flow = await loadFlow(GLOBAL_TOOL_FLOW);
 
   expect((await runFlow(flow, {}, { env: hostEnv(dir) })).output).toBe("global");
-  const error = await rejection(runFlow(flow, {}, { env: hostEnv(dir), tools: {} }));
+  const error = await rejected(runFlow(flow, {}, { env: hostEnv(dir), tools: {} }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain(
     "names tool 'run_flow_global_probe', which isn't in this run's tools; known tools: []",
@@ -205,7 +205,7 @@ test("resumeFlow asks through the handler passed to resume", async () => {
     throw stop;
   };
 
-  const error = await rejection(
+  const error = await rejected(
     runFlow(flow, {}, {
       log: path,
       env: hostEnv(dir),
@@ -259,7 +259,7 @@ for (const [name, tools, message] of [
   test(`bad tools fail before the log is created: ${name}`, async () => {
     const path = freshLog();
 
-    const error = await rejection(run(GREETING_FLOW, {}, { log: path, tools: tools as never }));
+    const error = await rejected(run(GREETING_FLOW, {}, { log: path, tools: tools as never }));
 
     expect(error).toEqual(new TypeError(message));
     expect(existsSync(path)).toBe(false);
@@ -371,7 +371,7 @@ for (const [name, tools, message] of [
   test(`bad groups fail at run start: ${name}`, async () => {
     const path = freshLog();
 
-    const error = await rejection(run(GROUPS_FLOW, {}, { log: path, tools, models: chats }));
+    const error = await rejected(run(GROUPS_FLOW, {}, { log: path, tools, models: chats }));
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toContain(message);
@@ -389,12 +389,12 @@ test("resume uses the group contents passed to resume", async () => {
     throw stop;
   };
 
-  const error = await rejection(
+  const error = await rejected(
     runFlow(flow, {}, { log: path, env: hostEnv(dir), signal: host.signal, models: chats, tools: groups([textTool("old", interrupt)]) }),
   );
   expect(error).toBe(stop);
 
-  const refused = await rejection(
+  const refused = await rejected(
     resumeFlow(flow, { log: path, env: hostEnv(dir), models: chats, tools: { workspace: [], company: [] } }),
   );
   expect(refused).toBeInstanceOf(RangeError);
@@ -460,7 +460,7 @@ for (const [name, source, nodePath] of [
   test(`a missing group in a child flow fails at run start: ${name}`, async () => {
     const path = freshLog();
 
-    const error = await rejection(run(source, {}, { log: path, tools: {}, models: chats }));
+    const error = await rejected(run(source, {}, { log: path, tools: {}, models: chats }));
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toContain(`AGENT node '${nodePath}' grants unknown tool or group 'toolbox'`);
@@ -491,7 +491,7 @@ for (const [name, tools, message] of [
   test(`an unresolvable plain grant fails at run start: ${name}`, async () => {
     const path = freshLog();
 
-    const error = await rejection(run(PLAIN_GRANT_FLOW, {}, { log: path, tools, models: chats }));
+    const error = await rejected(run(PLAIN_GRANT_FLOW, {}, { log: path, tools, models: chats }));
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toContain(message);

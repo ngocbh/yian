@@ -42,7 +42,7 @@ import type { MapNode } from "../../src/nodes/map/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
-import { expectFailsBeforeTheRun, rejection, stoppedRunLog } from "./run_state_fixtures.ts";
+import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "./run_state_fixtures.ts";
 
 const UPPER = "expression function 'upper' takes (s): too many positional arguments";
 
@@ -457,7 +457,7 @@ test("a code-built binding mis-calling a builtin fails before resume appends", a
       rewire(flow.compiled, "b", "n", "${render_as_json(a.output, 1, 2)}"),
     );
 
-    const error = await rejection(resumeFlow(flow, { log: path }));
+    const error = await rejected(resumeFlow(flow, { log: path }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(
       /^node 'b' input 'n': expression function 'render_as_json' takes \(value, indent=2\): too many positional arguments$/,

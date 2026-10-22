@@ -93,7 +93,7 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, rejection, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
+import { crashAfter, rejected, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -1096,7 +1096,7 @@ test("inspectRun: a RunStopped covers its in-flight nodes", async () => {
       throw ctx.signal.reason;
     },
   });
-  expect(await rejection(run(flow, {}, { log: path, numWorkers: 0, signal: host.signal, tools: { work } }))).toBe(stop);
+  expect(await rejected(run(flow, {}, { log: path, numWorkers: 0, signal: host.signal, tools: { work } }))).toBe(stop);
 
   expect(inspectBoth(path, flow)).toEqual({ status: "stopped", inFlight: ["work"], interruptedAttempts: new Map() });
   const resumed = await resume(flow, { log: path, tools: { work } });

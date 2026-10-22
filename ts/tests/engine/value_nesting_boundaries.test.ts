@@ -119,8 +119,8 @@ import { Type, TypeCheckError, type Value, ValueKind, VariablePool } from "../..
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { drive, rejection, serving } from "./run_state_fixtures.ts";
-import { backwardReply, effectsOf, NO_ENV, rejected, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
+import { drive, rejected, serving } from "./run_state_fixtures.ts";
+import { backwardReply, effectsOf, NO_ENV, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -921,7 +921,7 @@ test.each([101, 1500])("a run input over the limit is rejected before the run st
   // a run input record from going further.
   const text = "id: nesting\nname: nesting\ninput:\n  x: !object\nnodes: {}\noutput: ${input.x}\n";
   const log = join(dir, `input-${levels}.jsonl`);
-  const error = await rejection(run(text, { x: nestRecord(levels) }, { log }));
+  const error = await rejected(run(text, { x: nestRecord(levels) }, { log }));
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as TypeCheckError).message).toStartWith("input 'x' at a.a");
   expect((error as TypeCheckError).message).toContain("deeper than 100 levels");

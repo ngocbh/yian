@@ -77,7 +77,7 @@ import { resumeFlow, runFlow } from "../../src/run.ts";
 import { NodeExpandedRecord, readRunLog } from "../../src/runtime/log.ts";
 import { RunState, replayRecords } from "../../src/runtime/state.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, serving, textReply } from "./run_state_fixtures.ts";
+import { rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 import {
   decodeRecord,
@@ -294,7 +294,7 @@ test("resume with a different value fails", async () => {
   await interruptedRun(path, envWith(AT_5000));
   const before = readFileSync(path);
 
-  const error = await rejection(
+  const error = await rejected(
     resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "6000" }) }),
   );
 
@@ -308,7 +308,7 @@ test("resume without the variable fails", async () => {
   const path = freshLog();
   await interruptedRun(path, envWith(AT_5000));
 
-  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
+  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("set YIAN_MAX_TOTAL_NODES=5000");
@@ -318,7 +318,7 @@ test("resume of a default run with a variable set fails", async () => {
   const path = freshLog();
   await interruptedRun(path);
 
-  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith(AT_5000) }));
+  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith(AT_5000) }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("unset YIAN_MAX_TOTAL_NODES");
@@ -341,7 +341,7 @@ test("an old log resumes as all defaults: a stripped log is refused (Changed)", 
   writeFileSync(stripped, lines.join(""));
   const before = readFileSync(stripped);
 
-  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: stripped, env: envWith() }));
+  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: stripped, env: envWith() }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain('invalid run_started payload fields; missing=["defaults"]');
@@ -363,7 +363,7 @@ test("a mismatch is reported before the fingerprint", async () => {
   expect(flowFingerprint(defaultRetries.compiled)).not.toBe(flowFingerprint(zeroRetries.compiled));
 
   // Resuming a finished run is enough: the check runs before anything else in replay.
-  const error = await rejection(resumeFlow(defaultRetries, { log: path, env: envWith() }));
+  const error = await rejected(resumeFlow(defaultRetries, { log: path, env: envWith() }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("YIAN_AGENT_RETRIES");
@@ -377,7 +377,7 @@ test("an unknown recorded name fails", async () => {
     payload.defaults = { MAX_NOT_A_THING: 1n };
   });
 
-  const error = await rejection(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
+  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("YIAN_MAX_NOT_A_THING");
@@ -409,14 +409,14 @@ test("a bad variable fails before load", async () => {
   const flow = await loadFlow(TWO_STEPS);
   await withProcessVariable("YIAN_MAX_TOTAL_NODES", "abc", async () => {
     forget();
-    const error = await rejection(loadFlow(TWO_STEPS));
+    const error = await rejected(loadFlow(TWO_STEPS));
     expect(error).toBeInstanceOf(DefaultsError);
     expect((error as Error).message).toContain("YIAN_MAX_TOTAL_NODES");
   });
   forget();
 
   const path = freshLog();
-  const error = await rejection(runFlow(flow, {}, { log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "abc" }) }));
+  const error = await rejected(runFlow(flow, {}, { log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "abc" }) }));
   expect(error).toBeInstanceOf(DefaultsError);
   expect((error as Error).message).toContain("YIAN_MAX_TOTAL_NODES");
   expect(existsSync(path)).toBe(false);

@@ -40,7 +40,7 @@ import { NodeState } from "../../src/runtime/common.ts";
 import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
 import { loadErrorAsync } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { callRedirectFlow, rejection, routeInFlight } from "./run_state_fixtures.ts";
+import { callRedirectFlow, rejected, routeInFlight } from "./run_state_fixtures.ts";
 
 const runDir = mkdtempSync(join(tmpdir(), "yian-case-else-runs-"));
 afterAll(() => rmSync(runDir, { recursive: true, force: true }));
@@ -223,7 +223,7 @@ test("a log routed to the old default handle does not resume", async () => {
     lines[routed] = JSON.stringify(records[routed]);
     writeFileSync(path, `${lines.join("\n")}\n`);
 
-    const caught = await rejection(resumeFlow(await loadFlow(ELSE_LESS_FLOW), { log: path, env }));
+    const caught = await rejected(resumeFlow(await loadFlow(ELSE_LESS_FLOW), { log: path, env }));
     expect((caught as Error).constructor).toBe(RangeError);
     expect((caught as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'gate'");
   } finally {

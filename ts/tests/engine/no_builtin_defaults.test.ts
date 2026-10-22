@@ -31,7 +31,7 @@ import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { connectionSnapshot, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
-import { rejection, textReply } from "./run_state_fixtures.ts";
+import { rejected, textReply } from "./run_state_fixtures.ts";
 
 const FIXES = ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"];
 
@@ -118,7 +118,7 @@ const forbidden = {
 /** The `RangeError` a run of `loaded` on `inputs` rejects with, with no model built. */
 async function startError(loaded: ComposedFlow, inputs: Record<string, unknown> = {}): Promise<RangeError> {
   const log = join(home, "r.jsonl");
-  const error = await rejection(runFlow(loaded, inputs, { log, env, models: forbidden }));
+  const error = await rejected(runFlow(loaded, inputs, { log, env, models: forbidden }));
   expect(error).toBeInstanceOf(RangeError);
   expect(existsSync(log)).toBe(false);
   return error as RangeError;

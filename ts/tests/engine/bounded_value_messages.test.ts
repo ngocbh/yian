@@ -22,16 +22,18 @@
  * `dict_of_deep_list`). Changed: `test_list_hiding_a_deep_list_stores_what_its_iteration_yields`
  * and `test_list_yielding_a_deep_list_fails_the_output_contract` return an `Array` subclass with
  * its own iterator, which fails `contract.output` as "`<Name>` is not a yian value": host value
- * intake reads only plain arrays and records and runs no host iterator (design 3.2.1).
+ * intake reads only plain arrays and records and runs no host iterator (design 3.2.1). Changed
+ * the same way: `test_output_holding_a_big_set_shows_a_cut_repr` and
+ * `test_deep_frozenset_output_is_not_a_json_value` return a `Set`, which fails `contract.output`
+ * as "Set is not a yian value", not Python's cut rendering or "is not a JSON value" (design 3.2.1
+ * host intake reads no `Set`).
  *
- * Not ported, runs: `test_output_holding_a_big_set_shows_a_cut_repr` and
- * `test_deep_frozenset_output_is_not_a_json_value` (no sets in TS; a `Set` is refused by name like
- * any class instance), `test_too_deep_value_under_a_non_text_key_shows_a_bounded_message` (a
+ * Not ported, runs: `test_too_deep_value_under_a_non_text_key_shows_a_bounded_message` (a
  * JavaScript record key is always text) and the `deep_tuple` rows of `test_deep_output_is_located`
  * (no tuples; an array is the only list).
  *
  * Not ported: the long-int placeholders (`<int with N digits>`; an int is a `bigint` with no
- * digit limit), the set rendering (no sets in TS) and `_sort_repr` (Python-only: it orders
+ * digit limit), the set rendering (no set is a yian value) and `_sort_repr` (Python-only: it orders
  * names whose cut renderings are equal, which TS sorts uncut).
  */
 
@@ -261,10 +263,12 @@ const NEST =
 /** The CODE bodies Python's `tests/engine/_bounded_codefns.py` functions stand for. */
 const FNS: Record<string, string> = {
   long_str_keys: `${NEST} return {s: nest(200, (v) => ({["k".repeat(10000)]: v}))};`,
+  big_set: "const s = new Set(); for (let i = 0; i < 200000; i++) s.add(i); return {s};",
   many_unknown_fields: "const v = {}; for (let i = 0; i < 200000; i++) v[`key${i}`] = i; v.a = 1; return v;",
   wrong_long_field: `return {["f".repeat(250)]: "not an int", g: 1};`,
   deep_list: `${NEST} return nest(200000, (v) => [v]);`,
   dict_of_deep_list: `${NEST} return {s: nest(200000, (v) => [v])};`,
+  deep_frozenset: `${NEST} return nest(200000, (v) => new Set([v]));`,
   hidden_deep_list:
     `${NEST} class HidingList extends Array { *[Symbol.iterator]() {} }` +
     " const s = new HidingList(); s.push(nest(200000, (v) => [v])); return {s};",
@@ -293,6 +297,13 @@ async function failureOf(fn: string, output: string | null = null): Promise<Fail
   expect(result.failure?.code).toBe("contract.output");
   return result.failure!;
 }
+
+// Host value intake reads no `Set` (design 3.2.1), so no cut rendering of one is shown.
+test.each([null, "Any"])("an output holding a big set is not a yian value: %p", async (output) => {
+  const failure = await failureOf("big_set", output);
+  expect(failure.nodeId).toBe("b");
+  expect(failure.message).toBe("output at s: Set is not a yian value");
+});
 
 test.each([null, "Any", "{s: Any}"])("a too-deep value under long keys shows a bounded path: %p", async (output) => {
   const failure = await failureOf("long_str_keys", output);
@@ -329,6 +340,14 @@ test.each(["deep_list", "dict_of_deep_list"].flatMap((fn) => [null, "Any"].map((
     expect(failure.message).not.toContain("canonical data nesting");
   },
 );
+
+test.each([null, "Any", "list(Any)"])("a deep set output is not a yian value: %p", async (output) => {
+  // Refused as a `Set` before its nesting is walked (design 3.2.1).
+  const failure = await failureOf("deep_frozenset", output);
+  expect(failure.nodeId).toBe("b");
+  expect(failure.message).toBe("output: Set is not a yian value");
+  expect(failure.message).not.toContain("canonical data nesting");
+});
 
 test.each([
   ["hiding", "hidden_deep_list", "HidingList"],

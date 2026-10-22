@@ -339,10 +339,13 @@ function listen(
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  const close = () => {
+  const close = async () => {
     const closed = new Promise<void>((resolve) => listener.close(() => resolve()));
     for (const socket of sockets) socket.destroy();
-    return closed;
+    await closed;
+    // A turn of the event loop lets an in-process client see its connections close: Node's
+    // `fetch` would otherwise send the next request on one, which then fails with ECONNRESET.
+    await new Promise((resolve) => setImmediate(resolve));
   };
   return new Promise((resolve, reject) => {
     listener.once("error", reject);

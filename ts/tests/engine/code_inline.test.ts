@@ -53,13 +53,14 @@
  * with the worker's exit code, and the next call still works; a late timer throw rejects as a
  * `CodeError`; the worker uses the caller's `withEnv` values (a refused result's path is cut to a
  * small shown-value cap); two serial calls reuse one thread (a global set by the first is seen by
- * the second); a call after an aborted call still works; an input the clone refuses rejects,
- * leaves no abort listener on the signal, and the next call works; a late error from an earlier
- * body while its worker is idle prints a console error line and doesn't fail the next call;
- * aborting the signal stops a body that never yields, rejecting with its reason within 5 s; an
- * already-aborted signal rejects before a worker starts; a process whose spinning body was stopped
- * exits on its own, on Bun and, with `YIAN_TEST_NODE`, built on Node; and in a pooled run a busy
- * CODE node doesn't block a sibling.
+ * the second); a worker shares the host's live environment both ways (a host change after its
+ * thread started reaches a body, and a body's change reaches the host); a call after an aborted
+ * call still works; an input the clone refuses rejects, leaves no abort listener on the signal,
+ * and the next call works; a late error from an earlier body while its worker is idle prints a
+ * console error line and doesn't fail the next call; aborting the signal stops a body that never
+ * yields, rejecting with its reason within 5 s; an already-aborted signal rejects before a worker
+ * starts; a process whose spinning body was stopped exits on its own, on Bun and, with
+ * `YIAN_TEST_NODE`, built on Node; and in a pooled run a busy CODE node doesn't block a sibling.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
@@ -665,6 +666,21 @@ test("two serial calls reuse one thread", async () => {
   // An earlier row may have run this body on the popped thread, so only the step is fixed.
   const first = (await run(body)) as bigint;
   expect(await run(body)).toBe(first + 1n);
+});
+
+test("a worker shares the host's live environment both ways", async () => {
+  try {
+    // A call first, so the next one lands on a thread that started before the host's change.
+    expect(await run("return 1")).toBe(1n);
+    process.env.YIAN_TEST_D47_ENV = "later";
+    expect(await run("return process.env.YIAN_TEST_D47_ENV ?? null")).toBe("later");
+
+    expect(await run('process.env.YIAN_TEST_D47_FROM_BODY = "body"\nreturn 1')).toBe(1n);
+    expect(process.env.YIAN_TEST_D47_FROM_BODY).toBe("body");
+  } finally {
+    delete process.env.YIAN_TEST_D47_ENV;
+    delete process.env.YIAN_TEST_D47_FROM_BODY;
+  }
 });
 
 test("a call after an aborted call still works", async () => {

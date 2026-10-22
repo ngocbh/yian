@@ -43,8 +43,9 @@
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
  * there is no injection vector into the code itself, and running it is the same capability
  * reference mode already has. A worker thread is not a sandbox: the code shares this process's
- * privileges, file system and environment. Loading a flow from an untrusted or agent-generated
- * source runs that source's code when the flow runs.
+ * privileges, file system and live environment variables (a body's change reaches this thread,
+ * and this thread's later change reaches the body). Loading a flow from an untrusted or
+ * agent-generated source runs that source's code when the flow runs.
  *
  * Knows about:   nodes/base, nodes/contracts, nodes/code/worker, diagnostics, typesys, defaults,
  *                platform and `node:*`.
@@ -54,7 +55,7 @@
 import { statSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
-import { Worker } from "node:worker_threads";
+import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
@@ -312,8 +313,9 @@ function retire(entry: CodeWorker): Call | null {
 
 /** Start a worker whose listeners route to its current call for its whole life. */
 function startWorker(): CodeWorker {
-  const entry: CodeWorker = { worker: new Worker(WORKER_URL, { workerData: { yianCodeWorker: true } }), call: null };
-  const { worker } = entry;
+  // `SHARE_ENV`: a body reads and writes the host's live environment, as it did in-process.
+  const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianCodeWorker: true } });
+  const entry: CodeWorker = { worker, call: null };
   const failed = (error: unknown): void => {
     retire(entry)?.reject(new Error(`CODE worker failed: ${markerMessage(error)}`, { cause: error }));
   };

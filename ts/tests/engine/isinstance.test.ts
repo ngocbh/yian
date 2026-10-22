@@ -34,7 +34,6 @@ import { expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-
 import {
   conditionRefs,
   ExpressionError,
@@ -532,8 +531,9 @@ test("loop while uses the type table across iterations", async () => {
 /** Keep `log` up to `nodeId`'s success record; return the kept records' node ids. */
 function cutLogAfter(log: string, nodeId: string): (string | undefined)[] {
   const lines = readFileSync(log, "utf8").split(/(?<=\n)/);
-  const records = lines.map((line) => JSON.parse(line));
+  const records = lines.map((line) => JSON.parse(line) as { kind: string; payload: { node_id?: string } });
   const end = records.findIndex((record) => record.kind === "node_succeeded" && record.payload.node_id === nodeId);
+  expect(end).not.toBe(-1);
   writeFileSync(log, lines.slice(0, end + 1).join(""));
   return records.slice(0, end + 1).map((record) => record.payload.node_id);
 }

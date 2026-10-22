@@ -9,11 +9,16 @@
  * the Python seed file names as their labels) and
  * `test_any_input_from_the_command_line_reaches_the_flow_as_text`. Python's `_Loaded` is an
  * object with a `diagnose` method, and `replace(loaded, origin_resolver=None)` a `ComposedFlow`
- * over the same compiled flow without a resolver. The AGENT seeds e07 and e08 run with the cases'
- * `llmConfig` and an API key, since a TS run resolves its agents' models at its start.
+ * over the same compiled flow without a resolver. The AGENT seeds e07 and e08 run with
+ * `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL` in their env, standing in for the suite-wide default
+ * model Python's `tests/conftest.py` sets (`hostEnv` drops the shell's).
  *
  * Changed: the captured traceback under `engineTrace` is the box titled `traceback` (Python's
  * `python traceback`), holding the thrown error's stack.
+ * `test_parse_structured_input_does_not_hide_validator_faults`: the fault comes from a malformed
+ * type (a `list(int)` whose element bounds are reversed, so `buildValueAs` throws a plain
+ * `RangeError`) rather than a patched validator; it must escape as that `RangeError`, not as a
+ * `StructuredInputError` (itself a `RangeError`).
  *
  * Already ported:
  * - In `../cli/run.test.ts`: `test_flow_banner_name_and_description`,
@@ -73,9 +78,10 @@
  *   `test_optional_any_prompt_offers_set_null`.
  *
  * Not ported:
- * - `test_parse_structured_input_does_not_hide_validator_faults` and
- *   `test_structured_prompt_does_not_turn_plain_value_error_into_a_verdict`: they monkeypatch a
- *   module function the prompt imports; an ES module binding has no such seam.
+ * - `test_structured_prompt_does_not_turn_plain_value_error_into_a_verdict`: it monkeypatches a
+ *   module function the prompt imports, and an ES module binding has no such seam; the malformed
+ *   type that stands in for the parse row throws earlier here, in `inputLabel`'s
+ *   `canonicalTypeLabel`, before the editor's validator runs.
  * - `test_nullable_open_repeated_palettes_use_fresh_choices` and
  *   `test_prompt_controls_are_fresh_for_each_widget`: questionary `Choice` object identity; TS
  *   draws its choices and shares no widget objects (the palette flows themselves are scenarios).
@@ -89,7 +95,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseKv, renderRunError } from "../../src/cli/run.ts";
-import { Terminal } from "../../src/cli/terminal.ts";
+import { Terminal, parseStructuredInput } from "../../src/cli/terminal.ts";
 import type { Writer } from "../../src/cli/utils.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -110,11 +116,8 @@ const libBoom = caseText("run-map-call/seed_e25_external_raise", { file: "lib_bo
 writeFileSync(join(dir, "lib_boom.yaml"), libBoom);
 linkConformanceFixtures(dir);
 
-/** The run start the AGENT seeds need: a provider, a model and its key. */
-const AGENT_RUN = {
-  llmConfig: { provider: "openai", model: "gpt-5.5" },
-  env: hostEnv(dir, { OPENAI_API_KEY: "sk-cli-prompt" }),
-};
+/** The env the AGENT seeds run under: the default model Python's conftest sets for every test. */
+const AGENT_ENV = hostEnv(dir, { YIAN_DEFAULT_PROVIDER: "openai", YIAN_DEFAULT_MODEL: "gpt-5.5" });
 
 /** Load conformance case `id`'s flow labelled `label`, with this file's directory on the search path. */
 function loadSeed(id: string, label: string, runEnv = env): Promise<ComposedFlow> {
@@ -128,6 +131,27 @@ async function rendered(result: RunResult, flow: ComposedFlow, engineTrace = fal
   await renderRunError(result, flow, engineTrace, out, env);
   return chunks.join("");
 }
+
+test("parse structured input does not hide validator faults", () => {
+  // `new Type` doesn't validate its bounds, so the fault surfaces in `buildValueAs`.
+  const malformed = new Type({
+    kind: ValueKind.LIST_INTEGER,
+    element: new Type({ kind: ValueKind.INTEGER, bounds: [5n, 1n] }),
+  });
+
+  let captured: unknown;
+  try {
+    parseStructuredInput("[3]", malformed, "x");
+  } catch (error) {
+    captured = error;
+  }
+
+  // A plain RangeError, not the StructuredInputError (a RangeError subclass) a verdict would be.
+  expect(captured).toBeInstanceOf(RangeError);
+  expect((captured as RangeError).constructor).toBe(RangeError);
+  expect((captured as RangeError).name).toBe("RangeError");
+  expect((captured as RangeError).message).toBe("type bounds must be ordered from minimum to maximum");
+});
 
 test("parse kv keeps structured looking values as strings", () => {
   const parsed = parseKv(["items=[1, 2]", 'profile={"count": 2}']);
@@ -187,8 +211,8 @@ test("run error uses loaded canonical diagnosis", async () => {
 
 test("run error boxes failing node", async () => {
   // e07 omits `as_of`, so the canonical failure trace points at the failing `:?` binding.
-  const loaded = await loadSeed("run-core/seed_e07_required_missing", "e07-required-missing.yaml", AGENT_RUN.env);
-  const result = await runFlow(loaded, { topic: "X" }, AGENT_RUN);
+  const loaded = await loadSeed("run-core/seed_e07_required_missing", "e07-required-missing.yaml", AGENT_ENV);
+  const result = await runFlow(loaded, { topic: "X" }, { env: AGENT_ENV });
   expect(result.status).toBe("failed");
   const out = await rendered(result, loaded);
   expect(out).toContain("e07-required-missing.yaml:23"); // the as_of binding, not the node header
@@ -228,8 +252,8 @@ test("run error boxes code wrong type output", async () => {
 
 test("run error boxes flow input line", async () => {
   // e08's `window` can't coerce to int, so its origin selects the declaration.
-  const loaded = await loadSeed("run-core/seed_e08_input_type_mismatch", "e08-input-type-mismatch.yaml", AGENT_RUN.env);
-  const result = await runFlow(loaded, { topic: "X", window: "soon" }, AGENT_RUN);
+  const loaded = await loadSeed("run-core/seed_e08_input_type_mismatch", "e08-input-type-mismatch.yaml", AGENT_ENV);
+  const result = await runFlow(loaded, { topic: "X", window: "soon" }, { env: AGENT_ENV });
   expect(result.status).toBe("failed");
   const out = await rendered(result, loaded);
   expect(out).toContain("e08-input-type-mismatch.yaml:20"); // the `window: int` declaration line

@@ -16,10 +16,11 @@
  * - `test_diagnose_frame_control_exception_propagates`: Python's `KeyboardInterrupt` isn't an
  *   ordinary exception; JS has no process-control exceptions, so every throw is one the
  *   presentation fallback catches.
- * - `test_inline_composite_failure_resolves_catalog_frames` and
- *   `test_external_composite_failure_resolves_each_document`: they assert the failure's traceback
- *   names the flow file, and a TS CODE body's stack frames are named `yian-code:<node id>`, not
- *   after the file: Later (bug #985).
+ *
+ * Later (bug #985): `test_inline_composite_failure_resolves_catalog_frames` and
+ * `test_external_composite_failure_resolves_each_document`. They assert the failure's traceback
+ * names the flow file, and a TS CODE body's stack frames are named `yian-code:<node id>`, not
+ * after the file.
  */
 
 import { afterAll, expect, test } from "bun:test";

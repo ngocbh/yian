@@ -14,7 +14,10 @@
  * blocks; a class field value; a parameter default, including inside a destructured parameter;
  * and, as the TS forms of a keyword default, a destructuring default in a declaration
  * (`const { timeoutMs = 30_000 } = options`) and a numeric constant right of `??` or `||`.
- * `len(...)` comparisons become `.length` comparisons.
+ * `len(...)` comparisons become `.length` comparisons. The scanner assumes class members and
+ * statements end in `;` (nothing in `ts/src` relies on automatic semicolon insertion). It is not a
+ * real parser because the `typescript` 7 package has no stable JS AST API and no other parser is
+ * a dependency.
  */
 
 import { expect, test } from "bun:test";

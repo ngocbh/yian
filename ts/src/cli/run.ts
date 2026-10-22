@@ -1172,7 +1172,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * files are read, a bad config printed and exiting 1; just before the run, `openMcpServers` selects
  * the servers the flow needs, each unneeded server that failed to start a `warning:` line on
  * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
- * progress go to stderr; the log path always does. On a TTY stdin, each input not supplied is
+ * progress go to stderr; the log path always does. A warning raised during the run prints as a
+ * `warning:` line on stderr, above the spinners. On a TTY stdin, each input not supplied is
  * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
  * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
  * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is

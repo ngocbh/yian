@@ -699,9 +699,12 @@ checks the invariants, plus the output and node outcomes when the case has no `h
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
 case, with its backward records), pinned byte for byte. Before
-the comparison, every `traceback` value and the seeded clock values (`initial_pool.system`'s
-`now` and `today`) are replaced by `"<masked>"`, and each line is written again with the log's own
-encoder, which gives back the line as written. Bun and Node write the same bytes. A golden log goes
+the comparison, every `traceback` value, each record's time (`at`) and the seeded clock values
+(`initial_pool.system`'s `now` and `today`) are replaced by `"<masked>"`, since the times come from
+the virtual clock, which starts at the real time; each line is then written again with the log's
+own encoder, which gives back the line as written. When the TS log format changes, regenerate the
+golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
+change. Bun and Node write the same bytes. A golden log goes
 with a serial case that sets `run.run_id`, makes no random ids (no AGENT or memory), and holds no
 file paths; the error texts in it are a stub's or the runner's own (the stop's `conformance stop`).
 `--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`,

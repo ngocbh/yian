@@ -659,7 +659,8 @@ export class HistoricalLogCursor implements RunLog {
     }
     const expected = this.#envelopeJsons[sequence]!;
     const envelope = decodeRecord(expected);
-    const candidate = encodeRecord(new RecordEnvelope(envelope.schema, this.runId, sequence, record));
+    // The historical time is kept: replay compares records, not when they were appended.
+    const candidate = encodeRecord(new RecordEnvelope(envelope.schema, this.runId, sequence, record, envelope.at));
     if (candidate !== expected) throw new RangeError("prepared transition does not match the historical run record");
     this.#consumed.push(envelope);
     return envelope;
@@ -2159,12 +2160,15 @@ export function requireUnchangedRecord(prepared: PreparedTransition, envelopeJso
     throw new RangeError("prepared coordinates changed after validation");
   }
   const current = encodeRecord(
-    new RecordEnvelope(frozen.schema, prepared.expectedRunId, prepared.expectedSequence, prepared.record),
+    new RecordEnvelope(frozen.schema, prepared.expectedRunId, prepared.expectedSequence, prepared.record, frozen.at),
   );
   if (current !== envelopeJson) throw new RangeError("prepared record changed after validation");
 }
 
-/** Append the canonical record and reject any protocol-breaking result. */
+/**
+ * Append the canonical record and reject any protocol-breaking result. The log stamps the record
+ * with its time, which the plan's text doesn't hold, so the compare leaves it out.
+ */
 function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
   const envelope: unknown = log.append(prepared.record);
   // The record compare is the envelope text compare: the coordinates already match, and the
@@ -2173,8 +2177,11 @@ function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
     !isExactly(envelope, RecordEnvelope) ||
     envelope.runId !== prepared.expectedRunId ||
     envelope.seq !== prepared.expectedSequence ||
+    envelope.schema !== SCHEMA_VERSION ||
+    envelope.at === null ||
     log.nextSequence !== prepared.expectedSequence + 1 ||
-    encodeRecord(envelope) !== prepared._plan.envelopeJson
+    encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, envelope.record)) !==
+      prepared._plan.envelopeJson
   ) {
     throw new RangeError("run-log append result does not match prepared transition");
   }

@@ -65,10 +65,12 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { type RunInspection, type RunResult, runFlow } from "../../src/run.ts";
 import {
   decodePool,
+  decodeRecord,
   encodePool,
+  encodeRecord,
   JsonlRunLog,
   MemoryRunLog,
-  type RecordEnvelope,
+  RecordEnvelope,
   type RunLog,
   type RunRecord,
   RunStartedRecord,
@@ -95,6 +97,15 @@ import { loadConformanceFlow } from "../compose/declarations.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";
+/** The time every fixture log stamps its records with, and the clock that reads it. */
+export const FIXED_AT = "2026-10-20T14:02:11.123Z";
+export const FIXED_CLOCK = (): number => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
+
+/** The run-log line `line` without its time: the text the engine prepares and traces a record as. */
+export function untimed(line: string): string {
+  const { schema, runId, seq, record } = decodeRecord(line);
+  return encodeRecord(new RecordEnvelope(schema, runId, seq, record));
+}
 /** The flow fingerprint the run-state tests record. */
 export const FINGERPRINT = "a".repeat(64);
 
@@ -591,7 +602,7 @@ export function learnableStarted(
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
   initialPool.addSystem("run_id", RUN_ID);
-  const log = new MemoryRunLog(RUN_ID);
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
   const prepared = prepareRunStarted(state, {
     runId: RUN_ID,
     flowFingerprint: FINGERPRINT,
@@ -653,7 +664,7 @@ export function engine(
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
   initialPool.addSystem("run_id", runId);
-  const log = new MemoryRunLog(runId);
+  const log = new MemoryRunLog(runId, { clock: FIXED_CLOCK });
   const prepared = prepareRunStarted(state, {
     runId,
     flowFingerprint: FINGERPRINT,
@@ -867,7 +878,7 @@ export function initializedAndStarted(
   initialPool.set(flow.startId, { items: ["seed"] });
   initialPool.addSystem("run_id", RUN_ID);
   const state = new RunState(flow);
-  const log = new MemoryRunLog(RUN_ID);
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
   commitPrepared(
     log,
     state,
@@ -980,7 +991,7 @@ function newState(node: Node, options: TraceNodeOptions): { state: RunState; log
     snapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, { epoch: 4n }));
     recordedStacks = options.stacks ?? (node.memoryScope === null ? [] : stacks(node.memoryScope));
   }
-  const log = new MemoryRunLog(RUN_ID);
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
   commitPrepared(
     log,
     state,
@@ -1056,7 +1067,7 @@ export function replayOutcomeLog(
   const started = records[0];
   if (!(started instanceof RunStartedRecord)) throw new Error("the log must start with RunStarted");
   const state = new RunState(flow);
-  const log = new MemoryRunLog(RUN_ID);
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
   const observers = [
     commitPrepared(
       log,
@@ -1104,7 +1115,7 @@ export function initializedSpawner(flow: CompiledFlow = parentFlow()): { state: 
   initialPool.set(flow.startId, {});
   initialPool.addSystem("run_id", RUN_ID);
   const state = new RunState(flow);
-  const log = new MemoryRunLog(RUN_ID);
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
   commitPrepared(
     log,
     state,
@@ -1251,7 +1262,7 @@ export function parentWithSpawner(child: CompiledFlow): CompiledFlow {
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */
 export class FailingLog extends MemoryRunLog {
   constructor(runId: string, prior: Iterable<RecordEnvelope> = []) {
-    super(runId);
+    super(runId, { clock: FIXED_CLOCK });
     for (const envelope of prior) super.append(envelope.record);
   }
 

@@ -50,9 +50,11 @@
  * container, a count that isn't a positive integer by node id, or a stop sequence that isn't an
  * integer in `[1, nextSequence)`.
  *
+ * TS-only, for record times: an append result without a time breaks the append protocol.
+ *
  * Not ported:
  * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema
- *   parameter, since schema 10 is the only one.
+ *   parameter, since schema 11 is the only one.
  * - TS types: the `1.0` row of the worker-count test (`1.0` is `1`), and the `ready-container`,
  *   `in-flight-container`, `node-state-container` (dict subclass) and `node-disposition-type`
  *   (`NodeState.UNKNOWN` is the text `"unknown"`) rows of the stale-mutation test.
@@ -90,6 +92,8 @@ import { TraceDelta } from "../../src/runtime/trace.ts";
 import {
   FailingLog,
   FINGERPRINT,
+  FIXED_AT,
+  FIXED_CLOCK,
   flow,
   initializedAndStarted,
   pool,
@@ -328,11 +332,11 @@ test("RunStarted preparation is immutable and commit restores the complete state
   ((data.startWiringOverride["metadata"] as Record<string, unknown>)["labels"] as string[]).push("mutated");
   (data.effectiveLlmByStaticPath["agent"]!["options"] as Record<string, unknown>)["temperature"] = 1.0;
 
-  const log = new MemoryRunLog(RUN_ID);
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
   const observers = commitPrepared(log, state, prepared);
 
   expect(observers).toEqual([new RunStarted()]);
-  expect(log.records()).toEqual([new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 0, prepared.record)]);
+  expect(log.records()).toEqual([new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 0, prepared.record, FIXED_AT)]);
   expect(state.runId).toBe(RUN_ID);
   expect(state.flowFingerprint).toBe(FINGERPRINT);
   expect(state.nextSequence).toBe(1);
@@ -592,6 +596,25 @@ test.each([
   expect(stateSnapshot(state)).toEqual(before);
 });
 
+/** A memory log that retains the record but returns it without the time it stamped. */
+class UntimedReturnLog extends MemoryRunLog {
+  override append(record: RunRecord): RecordEnvelope {
+    const retained = super.append(record);
+    return new RecordEnvelope(retained.schema, retained.runId, retained.seq, retained.record);
+  }
+}
+
+test("commitPrepared rejects an append result without a time, since a log stamps every record", () => {
+  const owned = flow();
+  const state = new RunState(owned);
+  const prepared = prepareRunStarted(state, startData(owned));
+  const before = stateSnapshot(state);
+
+  expectError(() => commitPrepared(new UntimedReturnLog(RUN_ID), state, prepared), RangeError, APPEND_MISMATCH);
+
+  expect(stateSnapshot(state)).toEqual(before);
+});
+
 /** A memory log that retains the right record but breaks the append-return protocol. */
 class RetainingMismatchedLog extends MemoryRunLog {
   override append(record: RunRecord): RecordEnvelope {
@@ -605,14 +628,14 @@ test("a mismatched append return leaves the advanced log as recovery authority",
   const state = new RunState(owned);
   const prepared = prepareRunStarted(state, startData(owned));
   const before = stateSnapshot(state);
-  const log = new RetainingMismatchedLog(RUN_ID);
+  const log = new RetainingMismatchedLog(RUN_ID, { clock: FIXED_CLOCK });
 
   expectError(() => commitPrepared(log, state, prepared), RangeError, APPEND_MISMATCH);
 
   expect(stateSnapshot(state)).toEqual(before);
   expect(log.nextSequence).toBe(1);
   const retained = log.records();
-  expect(retained).toEqual([new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 0, prepared.record)]);
+  expect(retained).toEqual([new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 0, prepared.record, FIXED_AT)]);
   expect(retained[0]!.record).toBeInstanceOf(RunStartedRecord);
 });
 

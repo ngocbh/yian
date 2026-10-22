@@ -26,7 +26,7 @@
  *   the sleep `evalNode` asks the scheduler for, whose clock reads 12:00:04 then 12:00:07 and
  *   moves past each sleep, which returns at once.
  * - `test_recorded_nested_growth_resumes_with_exact_memory_and_trace`: the prefix is the first 25
- *   lines of a live learnable TS run (schema 10 is the only TS schema) whose memory keys are served
+ *   lines of a live learnable TS run (schema 11 is the only TS schema) whose memory keys are served
  *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
  *
  * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
@@ -83,7 +83,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { reducerSnapshot, startedRun } from "./run_state_fixtures.ts";
+import { reducerSnapshot, startedRun, untimed } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";
@@ -738,7 +738,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       expect(
         new Set(historical.filter((item) => item.record instanceof NodeExpandedRecord).map((item) => item.nodeId)),
       ).toEqual(new Set(["outer", "outer/mapped", "outer/repeated"]));
-      for (const occurrence of historical) expect(occurrence.recordJson).toBe(lines[occurrence.outcomeSeq]!);
+      for (const occurrence of historical) expect(occurrence.recordJson).toBe(untimed(lines[occurrence.outcomeSeq]!));
 
       const complete = readFileSync(path, "utf8");
       const inspected = await resumeFlow(flow, {

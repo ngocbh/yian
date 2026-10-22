@@ -2,9 +2,10 @@
  * Closed run-record vocabulary and canonical JSON codecs.
  *
  * The dispatcher is the sole producer of these durable records. Records contain only transition
- * data; their enclosing `RecordEnvelope` owns run identity, schema version and sequence. This
- * module deliberately knows nothing about the scheduler or reducer, so the same validated
- * carriers can back memory and JSONL logs without creating an authority cycle.
+ * data; their enclosing `RecordEnvelope` owns run identity, schema version, sequence and the time
+ * the log appended the record. This module deliberately knows nothing about the scheduler or
+ * reducer, so the same validated carriers can back memory and JSONL logs without creating an
+ * authority cycle.
  *
  * Knows about:   diagnostics, expr/lineage, memory/contracts, nodes/base, nodes/contracts,
  *                platform, runtime/contracts, typesys.
@@ -81,7 +82,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
+
+/** Older TS schemas, which this version names instead of reporting as unknown. */
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -1004,14 +1008,64 @@ export class RunLogChangedError extends RangeError {
 /** The message for schema 9, which only Python yian reads. */
 const PYTHON_SCHEMA_MESSAGE = "run log schema 9 was written by Python yian; resume it with Python yian";
 
+/** The error for a retired TS schema, in Python's wording for its retired schemas. */
+function retiredSchema(schema: number): RunLogSchemaError {
+  return new RunLogSchemaError(`run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`, schema);
+}
+
+/** A record time's form: `Date.prototype.toISOString`'s, UTC with milliseconds and a four-digit year. */
+const RECORD_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
+
+/**
+ * Return epoch milliseconds `ms`, a log clock's reading, as a record time such as
+ * `2026-10-20T14:02:11.123Z`; a fraction of a millisecond is dropped.
+ *
+ * @throws RangeError when `ms` isn't a finite number or falls outside the years 0000 to 9999.
+ */
+function formatRecordTime(ms: unknown): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) {
+    throw new RangeError(`run-log clock must return finite epoch milliseconds, got ${valueRepr(ms)}`);
+  }
+  const date = new Date(ms);
+  const text = Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  if (!RECORD_TIME.test(text)) throw new RangeError(`run-log clock time ${ms} is outside the years 0000 to 9999`);
+  return text;
+}
+
+/**
+ * Check a record time: a UTC RFC 3339 time with milliseconds, written as `formatRecordTime` writes
+ * it, so the line stays canonical.
+ *
+ * @throws TypeError when `at` isn't a string.
+ * @throws RangeError when it isn't such a time.
+ */
+function requireRecordTime(at: unknown): string {
+  if (typeof at !== "string") throw new TypeError("run-record envelope at must be a string");
+  const parts = RECORD_TIME.exec(at)?.slice(1).map(Number);
+  // Built field by field (`Date.parse` differs between engines); an out-of-range field rolls
+  // over, so the time doesn't write back as `at`.
+  const date = new Date(0);
+  if (parts !== undefined) {
+    const [year, month, day, hours, minutes, seconds, ms] = parts as [number, number, number, number, number, number, number];
+    date.setUTCFullYear(year, month - 1, day);
+    date.setUTCHours(hours, minutes, seconds, ms);
+  }
+  if (parts === undefined || date.toISOString() !== at) {
+    throw new RangeError(`run-record envelope at must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${reprText(at)}`);
+  }
+  return at;
+}
+
 /**
  * Check an envelope's schema version.
  *
- * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9.
+ * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9 and
+ *   a retired TS schema (10) as retired.
  */
 function requireSchema(schema: unknown): void {
   if (schema === 9) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
   if (schema === SCHEMA_VERSION) return;
+  if (typeof schema === "number" && RETIRED_SCHEMAS.has(schema)) throw retiredSchema(schema);
   // `valueRepr` prints a bigint like a number, so `10n` would read as the supported schema.
   const shown = typeof schema === "bigint" ? `${schema}n` : valueRepr(schema);
   const number = Number.isSafeInteger(schema) ? (schema as number) : null;
@@ -1021,11 +1075,13 @@ function requireSchema(schema: unknown): void {
 /**
  * Check a decoded envelope's `schema` member.
  *
- * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9.
+ * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9
+ *   and a retired TS schema (10) as retired.
  */
 function requireWireSchema(schema: unknown): void {
   if (schema === BigInt(SCHEMA_VERSION)) return;
   if (schema === 9n) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
+  if (typeof schema === "bigint" && RETIRED_SCHEMAS.has(Number(schema))) throw retiredSchema(Number(schema));
   // Only an int token (a `bigint`) names a schema; a float token reads as a number, shown as the
   // log writes floats (`10.0`), so it doesn't read as a supported schema.
   const shown = typeof schema === "number" ? logJson(schema) : valueRepr(schema);
@@ -1045,9 +1101,10 @@ function kindForRecord(record: unknown): string {
 }
 
 /**
- * Bind one validated run record to its schema, run id and zero-based sequence. Frozen.
+ * Bind one validated run record to its schema, run id, zero-based sequence and append time. Frozen.
  *
  * The envelope holds the frozen record; its `kind` is the record's stable snake_case wire name.
+ * `at` is metadata: replay, the reducer and recovery compare records without it.
  */
 export class RecordEnvelope {
   /** The run-record schema version, `SCHEMA_VERSION`. */
@@ -1058,6 +1115,13 @@ export class RecordEnvelope {
   readonly seq: number;
   /** The record. */
   readonly record: RunRecord;
+  /**
+   * When the log appended the record: a UTC RFC 3339 time with milliseconds, such as
+   * `2026-10-20T14:02:11.123Z`, read from the log's clock. Every envelope a log holds or a reader
+   * returns has one; `null` only on an envelope no log has appended yet, such as one the engine
+   * prepares. Times aren't guaranteed to increase, since the clock can move; `seq` is the order.
+   */
+  readonly at: string | null;
 
   /**
    * The schema is checked first, so a Python log's schema is named whatever its other fields
@@ -1065,10 +1129,12 @@ export class RecordEnvelope {
    *
    * @throws RunLogSchemaError when the schema isn't `SCHEMA_VERSION`.
    * @throws RangeError when the run id is empty or holds a
-   *   lone surrogate, or `seq` isn't a non-negative safe integer.
-   * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`.
+   *   lone surrogate, `seq` isn't a non-negative safe integer, or `at` isn't a UTC time in
+   *   `formatRecordTime`'s form.
+   * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`, or `at` is neither a
+   *   string nor `null`.
    */
-  constructor(schema: number, runId: string, seq: number, record: RunRecord) {
+  constructor(schema: number, runId: string, seq: number, record: RunRecord, at: string | null = null) {
     requireSchema(schema);
     if (typeof runId !== "string" || !runId) {
       throw new RangeError("run-record envelope run_id must be a non-empty string");
@@ -1082,6 +1148,7 @@ export class RecordEnvelope {
     this.runId = runId;
     this.seq = seq;
     this.record = record;
+    this.at = at === null ? null : requireRecordTime(at);
     Object.freeze(this);
   }
 
@@ -1098,7 +1165,9 @@ export class RecordEnvelope {
 
 /**
  * Encode one envelope as its canonical run-log line: compact JSON, keys in code-unit order, no
- * trailing newline (a JSONL log adds it). The frozen record is trusted as constructed.
+ * trailing newline (a JSONL log adds it). The frozen record is trusted as constructed. An
+ * envelope without a time encodes without `at`: that text is a prepared transition's, not a
+ * run-log line.
  *
  * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`.
  */
@@ -1108,6 +1177,7 @@ export function encodeRecord(envelope: RecordEnvelope): string {
     schema: BigInt(envelope.schema),
     run_id: envelope.runId,
     seq: BigInt(envelope.seq),
+    ...(envelope.at === null ? {} : { at: envelope.at }),
     kind: envelope.kind,
     payload: payloadForRecord(envelope.record),
   });
@@ -1115,36 +1185,54 @@ export function encodeRecord(envelope: RecordEnvelope): string {
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
+/** A run-log line's members. */
+const ENVELOPE_FIELDS = ["schema", "run_id", "seq", "at", "kind", "payload"];
+/** A prepared transition's members: a line's without `at`. */
+const PREPARED_FIELDS = ["schema", "run_id", "seq", "kind", "payload"];
+
 /**
  * Decode one run-log line into a validated envelope.
  *
  * `data` is one complete JSON object, as text or UTF-8 bytes, without a trailing newline. The
  * envelope's `schema` is checked before anything else, so a Python log is named whatever else
- * the line holds; the record is built through its constructor, so its checks apply.
+ * the line holds; the record is built through its constructor, so its checks apply. A line
+ * without `at` (the text of an envelope no log has appended, which the engine prepares) reads
+ * with `at: null`; the log readers refuse it.
  *
  * @throws RunLogSchemaError when the schema isn't `SCHEMA_VERSION`.
  * @throws RangeError when the line isn't JSON yian reads (`invalid run-record JSON`, with the
  *   reader's error as `cause`), the kind is unknown, an object has missing or extra fields, a
- *   string is empty, or a counter isn't a safe integer.
+ *   string is empty, a counter isn't a safe integer, or `at` isn't a UTC time in the form a log
+ *   writes.
  * @throws TypeError when `data` is neither text nor bytes, or a field has the wrong JSON type.
  * @throws JSONDecodeError, the reader's error unchanged, when a route's embedded `value_json`
  *   isn't JSON yian reads.
  */
 export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
-  const { runId, seq, kind, payload } = decodeWire(data);
-  return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload));
+  return decodeLine(data, false);
+}
+
+/**
+ * Decode one line as `decodeRecord` does; with `requireAt`, as a log reader does, refusing a line
+ * without `at`.
+ *
+ * @throws as `decodeRecord`.
+ */
+function decodeLine(data: string | Uint8Array, requireAt: boolean): RecordEnvelope {
+  const { runId, seq, at, kind, payload } = decodeWire(data, requireAt);
+  return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload), at);
 }
 
 /** A run-log line's envelope members, checked; the payload is unchecked. */
-type WireEnvelope = { runId: string; seq: number; kind: string; payload: JsonObject };
+type WireEnvelope = { runId: string; seq: number; at: string | null; kind: string; payload: JsonObject };
 
 /**
  * Decode one run-log line's envelope without building its record: `decodeRecord`'s checks on
- * everything but the payload's contents.
+ * everything but the payload's contents. `requireAt` false reads a missing `at` as `null`.
  *
  * @throws RunLogSchemaError, RangeError, TypeError as `decodeRecord` does for the envelope.
  */
-function decodeWire(data: string | Uint8Array): WireEnvelope {
+function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope {
   let text: string;
   if (typeof data === "string") {
     text = data;
@@ -1167,15 +1255,17 @@ function decodeWire(data: string | Uint8Array): WireEnvelope {
   }
   const envelope = wireObject(raw, "run-record envelope");
   if (Object.hasOwn(envelope, "schema")) requireWireSchema(envelope["schema"]);
-  requireFields(envelope, ["schema", "run_id", "seq", "kind", "payload"], "run-record envelope");
+  const timed = requireAt || Object.hasOwn(envelope, "at");
+  requireFields(envelope, timed ? ENVELOPE_FIELDS : PREPARED_FIELDS, "run-record envelope");
   const runId = wireName(envelope["run_id"], "run-record envelope run_id");
   const seq = wireInt(envelope["seq"], "run-record envelope seq");
+  const at = timed ? requireRecordTime(envelope["at"]) : null;
   const kind = wireText(envelope["kind"], "run-record envelope kind");
   if (!WIRE_KINDS.has(kind)) {
     throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
-  return { runId, seq, kind, payload };
+  return { runId, seq, at, kind, payload };
 }
 
 /**
@@ -1218,12 +1308,35 @@ export interface RunLog {
   [Symbol.iterator](): Iterator<RecordEnvelope>;
   /** Return the validated envelopes in sequence order, as a fresh frozen array. */
   records(): readonly RecordEnvelope[];
-  /** Validate `record`, append it under `nextSequence`, and return its retained envelope. */
+  /**
+   * Validate `record`, append it under `nextSequence` with the time the log's clock reads, and
+   * return its retained envelope.
+   */
   append(record: RunRecord): RecordEnvelope;
   /** Release owned resources; repeated calls do nothing. */
   close(): void;
   /** Close the log. */
   [Symbol.dispose](): void;
+}
+
+/** How a run log stamps its records. */
+export interface RunLogOptions {
+  /**
+   * The clock each append reads its record's `at` from, in epoch milliseconds; `Date.now` by
+   * default. Tests and the run boundary inject theirs.
+   */
+  clock?: (() => number) | null;
+}
+
+/**
+ * Return `options.clock`, or `Date.now` without one.
+ *
+ * @throws TypeError when the clock isn't a function.
+ */
+function logClock(options: RunLogOptions): () => number {
+  const clock = options.clock ?? Date.now;
+  if (typeof clock !== "function") throw new TypeError("run log clock must be a function or null");
+  return clock;
 }
 
 /**
@@ -1237,39 +1350,45 @@ export class MemoryRunLog implements RunLog {
   readonly runId: string;
   /** Always `null`: this log has no durable file. */
   readonly path = null;
+  readonly #clock: () => number;
   #records: RecordEnvelope[] = [];
   #closed = false;
 
   /**
    * Create an empty, zero-based log for one run id.
    *
+   * @param options.clock The clock appends read their times from (default `Date.now`).
    * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate.
+   * @throws TypeError when the clock isn't a function.
    */
-  constructor(runId: string) {
+  constructor(runId: string, options: RunLogOptions = {}) {
     this.runId = validatedRunId(runId);
+    this.#clock = logClock(options);
   }
 
   /**
    * Reopen a detached canonical prefix without renumbering its records; the next append gets
    * the sequence after the last record.
    *
-   * @throws RangeError when `records` isn't a non-empty array, or its envelopes don't share one
-   *   run id with contiguous sequences from 0.
-   * @throws TypeError when an item isn't exactly a `RecordEnvelope`.
+   * @param options.clock The clock later appends read their times from (default `Date.now`).
+   * @throws RangeError when `records` isn't a non-empty array, an envelope has no `at`, or the
+   *   envelopes don't share one run id with contiguous sequences from 0.
+   * @throws TypeError when an item isn't exactly a `RecordEnvelope`, or the clock isn't a function.
    */
-  static fromRecords(records: readonly RecordEnvelope[]): MemoryRunLog {
+  static fromRecords(records: readonly RecordEnvelope[], options: RunLogOptions = {}): MemoryRunLog {
     if (!Array.isArray(records) || records.length === 0) {
       throw new RangeError("reopening requires a nonempty record array");
     }
     if (!records.every((envelope) => isExactly(envelope, RecordEnvelope))) {
       throw new TypeError("reopening requires exact RecordEnvelope values");
     }
-    const canonical = records.map((envelope) => decodeRecord(encodeRecord(envelope)));
+    // Every record a log holds was stamped when a log appended it.
+    const canonical = records.map((envelope) => decodeLine(encodeRecord(envelope), true));
     const runId = canonical[0]!.runId;
     if (canonical.some((envelope, sequence) => envelope.runId !== runId || envelope.seq !== sequence)) {
       throw new RangeError("reopened prefix must have one run and contiguous sequences");
     }
-    const log = new MemoryRunLog(runId);
+    const log = new MemoryRunLog(runId, options);
     log.#records = canonical;
     return log;
   }
@@ -1289,14 +1408,16 @@ export class MemoryRunLog implements RunLog {
   }
 
   /**
-   * Append `record` under `nextSequence` and return its retained envelope.
+   * Append `record` under `nextSequence`, stamped with the clock's time, and return its retained
+   * envelope.
    *
    * @throws Error when the log is closed.
-   * @throws RangeError, TypeError the envelope's and the codec's errors; the log is unchanged.
+   * @throws RangeError, TypeError the envelope's and the codec's errors, and a clock reading that
+   *   isn't a time (`formatRecordTime`); the log is unchanged.
    */
   append(record: RunRecord): RecordEnvelope {
     if (this.#closed) throw new Error("run log is closed");
-    const [, retained] = canonicalEnvelope(record, this.runId, this.nextSequence);
+    const [, retained] = canonicalEnvelope(record, this.runId, this.nextSequence, this.#clock);
     this.#records.push(retained);
     return retained;
   }
@@ -1326,6 +1447,7 @@ export class JsonlRunLog implements RunLog {
   readonly path: string;
   readonly #fd: number;
   readonly #lock: FileLock;
+  readonly #clock: () => number;
   readonly #records: RecordEnvelope[];
   #prefixSize: number;
   #closed = false;
@@ -1341,6 +1463,7 @@ export class JsonlRunLog implements RunLog {
     runId: string,
     fd: number,
     lock: FileLock,
+    clock: () => number,
     records: RecordEnvelope[],
     prefixSize: number,
   ) {
@@ -1348,6 +1471,7 @@ export class JsonlRunLog implements RunLog {
     this.runId = runId;
     this.#fd = fd;
     this.#lock = lock;
+    this.#clock = clock;
     this.#records = records;
     this.#prefixSize = prefixSize;
   }
@@ -1356,14 +1480,17 @@ export class JsonlRunLog implements RunLog {
    * Create a new owner-only (0600) log at `path` and lock it. An existing path is never replaced.
    * A failure after the file is created closes it and releases the lock; the empty file stays.
    *
+   * @param options.clock The clock appends read their times from (default `Date.now`).
    * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate; nothing
    *   is created then.
+   * @throws TypeError when the clock isn't a function; nothing is created then.
    * @throws Error `run log <path> is locked by another writer (is the run still active?)`, with
    *   the busy `FileLockError` as `cause`.
    * @throws the `fs` error (`code` `EEXIST` for an existing path) and other `lockFile` errors.
    */
-  static create(path: string, runId: string): JsonlRunLog {
+  static create(path: string, runId: string, options: RunLogOptions = {}): JsonlRunLog {
     const canonicalRunId = validatedRunId(runId);
+    const clock = logClock(options);
     const { O_CREAT, O_EXCL, O_RDWR } = fs.constants;
     const fd = fs.openSync(path, O_RDWR | O_CREAT | O_EXCL, 0o600);
     let lock: FileLock | undefined;
@@ -1371,7 +1498,7 @@ export class JsonlRunLog implements RunLog {
       // The open's mode is masked by the umask.
       fs.fchmodSync(fd, 0o600);
       lock = lockRunLog(path, fd);
-      return new JsonlRunLog(path, canonicalRunId, fd, lock, [], 0);
+      return new JsonlRunLog(path, canonicalRunId, fd, lock, clock, [], 0);
     } catch (error) {
       releaseAfterFailure(fd, lock);
       throw error;
@@ -1386,15 +1513,19 @@ export class JsonlRunLog implements RunLog {
    * decode as a non-empty log, so a rejected file is left unchanged. Any failure closes the file
    * and releases the lock.
    *
+   * @param options.clock The clock appends read their times from (default `Date.now`). The
+   *   records read keep the times they were written with.
    * @throws RangeError when the file holds no complete line (`cannot resume an empty run log:
    *   <path>`) or a complete line isn't a valid record, or the records don't share one run id with
    *   contiguous sequences from 0 (the message names `path`, the line and its seq).
+   * @throws TypeError when the clock isn't a function; the file isn't opened then.
    * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
    *   when `path` stops naming the opened file before the lock is taken.
    * @throws the `fs` error (`code` `ENOENT` for a missing log, which creates no lock file) and
    *   other `lockFile` errors.
    */
-  static resume(path: string): JsonlRunLog {
+  static resume(path: string, options: RunLogOptions = {}): JsonlRunLog {
+    const clock = logClock(options);
     const fd = fs.openSync(path, fs.constants.O_RDWR);
     let lock: FileLock | undefined;
     try {
@@ -1407,7 +1538,7 @@ export class JsonlRunLog implements RunLog {
         fs.ftruncateSync(fd, completeEnd);
         fs.fsyncSync(fd);
       }
-      return new JsonlRunLog(path, records[0]!.runId, fd, lock, records, completeEnd);
+      return new JsonlRunLog(path, records[0]!.runId, fd, lock, clock, records, completeEnd);
     } catch (error) {
       releaseAfterFailure(fd, lock);
       throw error;
@@ -1438,8 +1569,8 @@ export class JsonlRunLog implements RunLog {
    * @throws Error `run log is closed`; `run log <path> refuses appends after a failed append`,
    *   with the failed append's error as `cause`; `short run-log write: wrote K of N bytes` when
    *   a write makes no progress.
-   * @throws RangeError, TypeError the envelope's and the codec's errors, before anything is
-   *   written; they don't poison the log.
+   * @throws RangeError, TypeError the envelope's and the codec's errors, and a clock reading that
+   *   isn't a time (`formatRecordTime`), before anything is written; they don't poison the log.
    * @throws the `fs` error of a failed write or sync, or, when the rollback fails too,
    *   `AggregateError` `run log <path> append failed and its rollback also failed` holding that
    *   error and the rollback's errors.
@@ -1449,7 +1580,7 @@ export class JsonlRunLog implements RunLog {
     if (this.#failure !== null) {
       throw new Error(`run log ${this.path} refuses appends after a failed append`, { cause: this.#failure.error });
     }
-    const [line, retained] = canonicalEnvelope(record, this.runId, this.nextSequence);
+    const [line, retained] = canonicalEnvelope(record, this.runId, this.nextSequence, this.#clock);
     const bytes = UTF8_ENCODER.encode(`${line}\n`);
     try {
       for (let written = 0; written < bytes.length; ) {
@@ -1517,6 +1648,11 @@ export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
   readonly end: number;
   /** The run id the envelope names. */
   readonly runId: string;
+  /**
+   * When the log appended the record, as `RecordEnvelope.at`: a UTC RFC 3339 time with
+   * milliseconds. Times aren't guaranteed to increase; `seq` is the order.
+   */
+  readonly at: string;
   /** The record's wire kind, such as `node_started`. */
   readonly kind: string;
   /**
@@ -1575,7 +1711,7 @@ export interface IterRunRecordsOptions {
  * @param options.payloads Whether to build and validate each record.
  * @param options.runId The run id of the record that ends at `afterOffset`.
  * @param options.afterSeq The seq of the record that ends at `afterOffset`.
- * @returns A generator of `{ seq, offset, end, runId, kind, nodeId, envelope }`.
+ * @returns A generator of `{ seq, offset, end, runId, at, kind, nodeId, envelope }`.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION` (schema 9 is Python
  *   yian's); the message names the line.
  * @throws RunLogChangedError when the file is shorter than where the reader got to (`afterOffset`
@@ -1676,9 +1812,10 @@ export function* iterRunRecords(
         let nodeId: string | null;
         let envelope: RecordEnvelope | null = null;
         try {
-          wire = decodeWire(line);
+          wire = decodeWire(line, true);
           if (payloads && (wanted === null || wanted.has(wire.kind))) {
-            envelope = new RecordEnvelope(SCHEMA_VERSION, wire.runId, wire.seq, recordFromPayload(wire.kind, wire.payload));
+            const record = recordFromPayload(wire.kind, wire.payload);
+            envelope = new RecordEnvelope(SCHEMA_VERSION, wire.runId, wire.seq, record, wire.at);
           }
           nodeId = wireNodeId(wire.kind, wire.payload);
         } catch (error) {
@@ -1701,7 +1838,7 @@ export function* iterRunRecords(
         }
         expected = wire.seq + 1;
         if (wanted !== null && !wanted.has(wire.kind)) continue;
-        yield { seq: wire.seq, offset, end: lineStart, runId, kind: wire.kind, nodeId, envelope };
+        yield { seq: wire.seq, offset, end: lineStart, runId, at: wire.at!, kind: wire.kind, nodeId, envelope };
       }
       if (start < data.length) parts.push(data.subarray(start));
     }
@@ -2994,7 +3131,7 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
     const where = `run log ${path} line ${sequence + 1} (seq ${sequence})`;
     let envelope: RecordEnvelope;
     try {
-      envelope = decodeRecord(data.subarray(start, end));
+      envelope = decodeLine(data.subarray(start, end), true);
     } catch (error) {
       throw locatedError(where, error);
     }
@@ -3052,13 +3189,20 @@ function lockRunLog(path: string, fd: number): FileLock {
 }
 
 /**
- * Return a record's canonical line under `runId` and `seq`, and the envelope decoded from it.
- * A log retains the decoded line, so a live run sees exactly what a resumed run reads back.
+ * Return a record's canonical line under `runId` and `seq`, stamped with `clock`'s time, and the
+ * envelope decoded from it. A log retains the decoded line, so a live run sees exactly what a
+ * resumed run reads back.
  *
- * @throws RangeError, TypeError the envelope's and the codec's errors.
+ * @throws RangeError, TypeError the envelope's and the codec's errors, and `formatRecordTime`'s.
  */
-function canonicalEnvelope(record: RunRecord, runId: string, seq: number): [string, RecordEnvelope] {
-  const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, seq, record));
+function canonicalEnvelope(
+  record: RunRecord,
+  runId: string,
+  seq: number,
+  clock: () => number,
+): [string, RecordEnvelope] {
+  const at = formatRecordTime(clock());
+  const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, seq, record, at));
   return [line, decodeRecord(line)];
 }
 

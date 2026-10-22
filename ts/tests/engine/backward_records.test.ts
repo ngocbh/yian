@@ -154,7 +154,7 @@
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
  * Ported, through `run.ts`: `test_historical_backward_prepares_recorded_schema_bytes` (7 rows).
- * Changed: Python reads recorded schema-9 lines; schema 10 is the only TS schema, so a live
+ * Changed: Python reads recorded schema-9 lines; schema 11 is the only TS schema, so a live
  * learnable `runFlow` of the source test's flow (memory `test` served by `FakeMemory`) and its
  * `RunResult.backward` write the lines (the failed rows' commit throws a `MemoryOperationError`);
  * each prefix replays through `replayRunLog` from a `MemoryRunLog`, and the next line is prepared
@@ -245,6 +245,7 @@ import {
   learnableStarted,
   noGrowth,
   RecordingBackwardNode,
+  untimed,
 } from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
@@ -2124,7 +2125,7 @@ test.each([
     const state = replayRunLog(flow, MemoryRunLog.fromRecords(wires.slice(0, -1).map((wire) => decodeRecord(wire))));
     const before = state.backwardState;
     const prepared = prepareRecord(state, decodeRecord(last).record);
-    expect(prepared._plan.envelopeJson).toBe(last);
+    expect(prepared._plan.envelopeJson).toBe(untimed(last));
     expect(state.backwardState).toBe(before);
     const cursor = new HistoricalLogCursor(wires);
     for (const wire of wires.slice(0, -1)) cursor.append(decodeRecord(wire).record);

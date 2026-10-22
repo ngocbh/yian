@@ -37,21 +37,30 @@
  * `isRunLogLocked`; a symlink to a log shares the real log's lock; the reader `readRunLog` (a complete prefix read without the lock, an
  * incomplete tail ignored and left in place, an empty file, a corrupt line named by path, line and
  * seq, a line that isn't UTF-8); the streaming reader `iterRunRecords` (each record's seq, offsets,
- * kind, node and envelope; a log a writer holds; a torn last line skipped, then read from its
+ * time, kind, node and envelope, the time also with `payloads: false`; a log a writer holds; a torn last line skipped, then read from its
  * offset once complete; a log another process appends to, followed from saved offsets without
  * blocking the writer; a log that shrank before, at the end-of-line probe, or while it reads, as
  * `RunLogChangedError`; another run's log renamed over the path, caught by `runId` and `afterSeq`,
  * and their option checks; bad options and a missing file thrown on the first `next()`; offsets
  * that aren't the end of a line; seq checked from the start and after an offset, and the run id; `payloads: false`, and
- * what it still refuses; `kinds`; schemas 9 and 11 as `RunLogSchemaError`; bounded reads that go
+ * what it still refuses; `kinds`; schemas 9, 10 and 12 as `RunLogSchemaError`; bounded reads that go
  * only as far as asked); a failed resume whose descriptor close also fails throws the
  * original error; a write that fails and whose rollback truncate also fails; closing a poisoned
  * log, after which an append throws `run log is closed`; with `YIAN_TEST_NODE` set to a Node
  * binary, the built log on Node through a failed sync, a failed write, a short write and a write
  * whose rollback truncate also fails.
  *
+ * TS-only, record times (schema 11): each log stamps `at` from its clock, as read, even when the
+ * clock moves back, and drops a fraction of a millisecond; the default clock is the wall clock; a
+ * reading that isn't finite or falls outside the years 0000 to 9999 fails the append before any
+ * write, without poisoning the log; a clock that isn't a function is refused before any file is
+ * opened; a reopened log keeps its records' times and stamps new ones from its own clock; the
+ * envelope's and the decoder's time checks, and the first and last times they take; an envelope
+ * without a time encodes without `at`, decodes back with `null`, and every log reader refuses it;
+ * a schema 10 record, from before record times, is retired.
+ *
  * Changed:
- * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 10.
+ * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 11.
  * - `MemoryRunLog._from_records` is `MemoryRunLog.fromRecords`, and Python's "tuple" reads
  *   "array".
  * - `test_memory_log_reopens_a_detached_prefix_at_the_next_sequence`,
@@ -63,10 +72,11 @@
  *   subclass) is a `TypeError`.
  * - `test_retired_schema_record_is_rejected_by_name` and `test_retired_schema_log_is_rejected_on_resume`:
  *   every schema below 10 is Python's, so 7 and 8 read `unsupported run-record schema: N` and 9
- *   names Python yian. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
- * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 11 and the float
- *   token `10.0` (the current schema written as a float); the float row is wire-only, since a JS
- *   `10.0` is the number 10.
+ *   names Python yian; TS's own schema 10, from before record times, is retired as Python names
+ *   its retired schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
+ * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 12 and the float
+ *   token `11.0` (the current schema written as a float); the float row is wire-only, since a JS
+ *   `11.0` is the number 11.
  * - The writer's lock is a SQLite lock on the sibling `<log>.lock`, not a `flock` on the log:
  *   `test_jsonl_resume_locks_before_its_first_read` checks the lock is held when the log is read;
  *   `test_jsonl_lock_contention_names_the_log_and_the_likely_cause` pins a busy `FileLockError` as
@@ -128,6 +138,10 @@ import {
 } from "../../src/runtime/log.ts";
 
 const DIGEST = "d".repeat(64);
+/** A record time, as a log writes one, and a clock that always reads it. */
+const AT = "2026-10-20T14:02:11.123Z";
+const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
+const RETIRED_SCHEMA = "run log schema 10 predates schema 11 and is not supported";
 const PYTHON_SCHEMA = "run log schema 9 was written by Python yian; resume it with Python yian";
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
@@ -151,7 +165,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 function wireLine({ runId = "run", seq = 0, schema = String(SCHEMA_VERSION), nodeId = "work" } = {}): string {
   const payload = JSON.stringify({ node_id: nodeId });
   const id = JSON.stringify(runId);
-  return `{"kind":"node_started","payload":${payload},"run_id":${id},"schema":${schema},"seq":${seq}}`;
+  return `{"at":"${AT}","kind":"node_started","payload":${payload},"run_id":${id},"schema":${schema},"seq":${seq}}`;
 }
 
 /** The record's seed, typed for reading and for the edits a frozen seed refuses. */
@@ -166,7 +180,7 @@ function expectUnlocked(file: string): void {
 
 /** Create a log at `file` holding one `node_started` record for `first`. */
 function baselineLog(file: string): JsonlRunLog {
-  const log = JsonlRunLog.create(file, "run");
+  const log = JsonlRunLog.create(file, "run", { clock: CLOCK });
   log.append(new NodeStartedRecord("first"));
   return log;
 }
@@ -237,8 +251,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 10", () => {
-  expect(SCHEMA_VERSION).toBe(10);
+test("the schema version is 11", () => {
+  expect(SCHEMA_VERSION).toBe(11);
 });
 
 test.each([7, 8])("retired schema %d record is rejected by name", (schema) => {
@@ -252,10 +266,18 @@ test("a schema 9 record names Python yian", () => {
   expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, PYTHON_SCHEMA);
 });
 
+test("a schema 10 record, from before record times, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":10,"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  expect(error.schema).toBe(10);
+  expectError(() => new RecordEnvelope(10, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+});
+
 test.each<[number, string]>([
   [7, "unsupported run-record schema: 7"],
   [8, "unsupported run-record schema: 8"],
   [9, PYTHON_SCHEMA],
+  [10, RETIRED_SCHEMA],
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -270,10 +292,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["11", 11, "11"],
+  ["12", 12, "12"],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["10.0", undefined, "10.0"],
+  ["11.0", undefined, "11.0"],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -317,7 +339,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 10",
+    "run-record kind 'unsupported' is unsupported in schema 11",
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -374,6 +396,147 @@ test("a memory log orders records and retains a canonical copy", () => {
   expectError(() => log.append(new NodeStartedRecord("late")), Error, "run log is closed");
 });
 
+/** A clock that reads each of `times` in turn, in epoch milliseconds. */
+function clockOf(...times: number[]): () => number {
+  return () => times.shift()!;
+}
+
+test.each(["memory", "jsonl"])("a %s log stamps each record with its clock's time, as read", (kind) => {
+  const file = path.join(dir, "run.jsonl");
+  // The second reading is earlier: a clock can move back, and `seq` stays the order. Its fraction
+  // of a millisecond is dropped.
+  const clock = clockOf(Date.UTC(2026, 9, 20, 14, 2, 11, 123), Date.UTC(2026, 9, 20, 14, 2, 10, 0) + 0.75);
+  const log = kind === "memory" ? new MemoryRunLog("run", { clock }) : JsonlRunLog.create(file, "run", { clock });
+  try {
+    const first = log.append(new NodeStartedRecord("work"));
+    const second = log.append(new NodeStartedRecord("next"));
+    expect([first.at, second.at]).toEqual([AT, "2026-10-20T14:02:10.000Z"]);
+    expect([first.seq, second.seq]).toEqual([0, 1]);
+    expect(encodeRecord(first)).toBe(wireLine());
+    expect(log.records().map((envelope) => envelope.at)).toEqual([AT, "2026-10-20T14:02:10.000Z"]);
+  } finally {
+    log.close();
+  }
+  if (kind === "jsonl") {
+    expect(fs.readFileSync(file, "utf8").split("\n")[0]).toBe(wireLine());
+    expect(readRunLog(file).map((envelope) => envelope.at)).toEqual([AT, "2026-10-20T14:02:10.000Z"]);
+  }
+});
+
+test("a log reads the wall clock by default", () => {
+  const log = new MemoryRunLog("run");
+  const before = Date.now();
+  const { at } = log.append(new NodeStartedRecord("work"));
+  const after = Date.now();
+  const ms = new Date(at!).getTime();
+  expect(ms).toBeGreaterThanOrEqual(before);
+  expect(ms).toBeLessThanOrEqual(after);
+});
+
+test.each<[string, unknown, string]>([
+  ["NaN", Number.NaN, "run-log clock must return finite epoch milliseconds, got NaN"],
+  ["infinity", Infinity, "run-log clock must return finite epoch milliseconds, got Infinity"],
+  ["text", "now", 'run-log clock must return finite epoch milliseconds, got "now"'],
+  ["a year past 9999", Date.UTC(10000, 0, 1), "run-log clock time 253402300800000 is outside the years 0000 to 9999"],
+  ["a year before 0000", Date.UTC(-1, 0, 1), "run-log clock time -62198755200000 is outside the years 0000 to 9999"],
+  ["past the Date range", 8.64e15 + 1, "run-log clock time 8640000000000001 is outside the years 0000 to 9999"],
+])("an append whose clock reads %s throws before writing and doesn't poison the log", (_name, reading, message) => {
+  const file = path.join(dir, "run.jsonl");
+  let next: unknown = reading;
+  const clock = () => next as number;
+  using memory = new MemoryRunLog("run", { clock });
+  using jsonl = JsonlRunLog.create(file, "run", { clock });
+  for (const log of [memory, jsonl]) {
+    expectError(() => log.append(new NodeStartedRecord("work")), RangeError, message);
+    expect(log.nextSequence).toBe(0);
+  }
+  expect(fs.readFileSync(file, "utf8")).toBe("");
+  next = CLOCK();
+  for (const log of [memory, jsonl]) expect(log.append(new NodeStartedRecord("work")).at).toBe(AT);
+  expect(fs.readFileSync(file, "utf8")).toBe(`${wireLine()}\n`);
+});
+
+test("a log refuses a clock that isn't a function, before any file is opened", () => {
+  const message = "run log clock must be a function or null";
+  const clock = 0 as never;
+  expectError(() => new MemoryRunLog("run", { clock }), TypeError, message);
+  const file = path.join(dir, "run.jsonl");
+  expectError(() => JsonlRunLog.create(file, "run", { clock }), TypeError, message);
+  expect(fs.existsSync(file)).toBe(false);
+  baselineLog(file).close();
+  expectError(() => JsonlRunLog.resume(file, { clock }), TypeError, message);
+  expectUnlocked(file);
+  expectError(() => MemoryRunLog.fromRecords(readRunLog(file), { clock }), TypeError, message);
+});
+
+test.each(["memory", "jsonl"])("a reopened %s log keeps its records' times and stamps new ones from its own clock", (kind) => {
+  const file = path.join(dir, "run.jsonl");
+  const original = baselineLog(file);
+  original.close();
+  const later = "2026-10-21T09:00:00.000Z";
+  const clock = clockOf(Date.UTC(2026, 9, 21, 9, 0, 0, 0));
+  const log = kind === "memory" ? MemoryRunLog.fromRecords(original.records(), { clock }) : JsonlRunLog.resume(file, { clock });
+  try {
+    log.append(new NodeStartedRecord("second"));
+    expect(log.records().map((envelope) => envelope.at)).toEqual([AT, later]);
+  } finally {
+    log.close();
+  }
+});
+
+test.each<[string, unknown, new (...args: never[]) => Error]>([
+  ["without milliseconds", "2026-10-20T14:02:11Z", RangeError],
+  ["with microseconds", "2026-10-20T14:02:11.123456Z", RangeError],
+  ["with an offset", "2026-10-20T14:02:11.123+00:00", RangeError],
+  ["in lower case", "2026-10-20t14:02:11.123z", RangeError],
+  ["on a day the month lacks", "2026-02-30T14:02:11.123Z", RangeError],
+  ["at hour 24", "2026-10-20T24:00:00.000Z", RangeError],
+  ["with a six-digit year", "+010000-01-01T00:00:00.000Z", RangeError],
+  ["empty", "", RangeError],
+  ["a number", 1760968931123, TypeError],
+])("the envelope refuses a time %s", (_name, at, cls) => {
+  const message =
+    cls === TypeError
+      ? "run-record envelope at must be a string"
+      : `run-record envelope at must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${JSON.stringify(at).replaceAll('"', "'")}`;
+  expectError(() => new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work"), at as string), cls, message);
+  const line = wireLine().replace(`"at":"${AT}"`, `"at":${JSON.stringify(at)}`);
+  expectError(() => decodeRecord(line), cls, message);
+});
+
+test("the envelope takes the first and last times of the years 0000 to 9999", () => {
+  for (const at of ["0000-01-01T00:00:00.000Z", "9999-12-31T23:59:59.999Z"]) {
+    const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work"), at);
+    expect(decodeRecord(encodeRecord(envelope)).at).toBe(at);
+  }
+  const first = new Date("0000-01-01T00:00:00.000Z").getTime();
+  const log = new MemoryRunLog("run", { clock: clockOf(first, first - 1) });
+  expect(log.append(new NodeStartedRecord("work")).at).toBe("0000-01-01T00:00:00.000Z");
+  expectError(
+    () => log.append(new NodeStartedRecord("next")),
+    RangeError,
+    `run-log clock time ${first - 1} is outside the years 0000 to 9999`,
+  );
+});
+
+test("an envelope no log appended has no time and encodes without one, which every log reader refuses", () => {
+  const prepared = new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("work"));
+  expect(prepared.at).toBeNull();
+  const line = encodeRecord(prepared);
+  expect(line).toBe(wireLine().replace(`"at":"${AT}",`, ""));
+  expect(decodeRecord(line).at).toBeNull();
+
+  const missing = 'invalid run-record envelope fields; missing=["at"], extra=[]';
+  expectError(() => MemoryRunLog.fromRecords([prepared]), RangeError, missing);
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${line}\n`);
+  const where = `run log ${file} line 1 (seq 0): ${missing}`;
+  expectError(() => JsonlRunLog.resume(file), RangeError, where);
+  expectError(() => readRunLog(file), RangeError, where);
+  expectError(() => [...iterRunRecords(file, { payloads: false })], RangeError, where);
+  expectUnlocked(file);
+});
+
 test("a memory log reopens a detached prefix at the next sequence", () => {
   const original = new MemoryRunLog("retained");
   original.append(new NodeExpandedRecord("each", { items: [{ value: 1n }] }, [], DIGEST));
@@ -401,15 +564,15 @@ test("a memory log reopens a detached prefix at the next sequence", () => {
 
 test.each<[string, (records: RecordEnvelope[]) => RecordEnvelope[], string]>([
   ["empty", () => [], "reopening requires a nonempty record array"],
-  ["gap", () => [new RecordEnvelope(SCHEMA_VERSION, "run", 1, new NodeStartedRecord("first"))], NOT_CONTIGUOUS],
+  ["gap", () => [new RecordEnvelope(SCHEMA_VERSION, "run", 1, new NodeStartedRecord("first"), AT)], NOT_CONTIGUOUS],
   ["duplicate", (records) => [...records, ...records], NOT_CONTIGUOUS],
   [
     "foreign",
-    (records) => [...records, new RecordEnvelope(SCHEMA_VERSION, "other", 1, new NodeStartedRecord("second"))],
+    (records) => [...records, new RecordEnvelope(SCHEMA_VERSION, "other", 1, new NodeStartedRecord("second"), AT)],
     NOT_CONTIGUOUS,
   ],
 ])("memory log reopening rejects invalid prefix coordinates: %s", (_name, change, message) => {
-  const records = change([new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("first"))]);
+  const records = change([new RecordEnvelope(SCHEMA_VERSION, "run", 0, new NodeStartedRecord("first"), AT)]);
   expectError(() => MemoryRunLog.fromRecords(records), RangeError, message);
 });
 
@@ -543,7 +706,7 @@ test("readRunLog reads a line that isn't UTF-8 as invalid record JSON", () => {
 
 /** Return a wire line of `kind` with `payload` (JSON text), without its newline. */
 function kindLine(kind: string, payload: string, { seq = 0, runId = "run", schema = String(SCHEMA_VERSION) } = {}): string {
-  return `{"kind":"${kind}","payload":${payload},"run_id":${JSON.stringify(runId)},"schema":${schema},"seq":${seq}}`;
+  return `{"at":"${AT}","kind":"${kind}","payload":${payload},"run_id":${JSON.stringify(runId)},"schema":${schema},"seq":${seq}}`;
 }
 
 /** Return the byte length of `text` in UTF-8. */
@@ -551,18 +714,20 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
-test("iterRunRecords yields each record's seq, offsets, kind, node and envelope", () => {
+test("iterRunRecords yields each record's seq, offsets, time, kind, node and envelope", () => {
   const file = path.join(dir, "run.jsonl");
   const lines = [wireLine(), wireLine({ seq: 1, nodeId: "next" })];
   fs.writeFileSync(file, `${lines.join("\n")}\n`);
 
   const entries = [...iterRunRecords(file)];
   const first = byteLength(lines[0]!) + 1;
-  expect(entries.map(({ seq, offset, end, runId, kind, nodeId }) => ({ seq, offset, end, runId, kind, nodeId }))).toEqual([
-    { seq: 0, offset: 0, end: first, runId: "run", kind: "node_started", nodeId: "work" },
-    { seq: 1, offset: first, end: first + byteLength(lines[1]!) + 1, runId: "run", kind: "node_started", nodeId: "next" },
+  const fields = entries.map(({ seq, offset, end, runId, at, kind, nodeId }) => ({ seq, offset, end, runId, at, kind, nodeId }));
+  expect(fields).toEqual([
+    { seq: 0, offset: 0, end: first, runId: "run", at: AT, kind: "node_started", nodeId: "work" },
+    { seq: 1, offset: first, end: first + byteLength(lines[1]!) + 1, runId: "run", at: AT, kind: "node_started", nodeId: "next" },
   ]);
   expect(entries.map((entry) => entry.envelope)).toEqual(lines.map((line) => decodeRecord(line)));
+  expect(entries.map((entry) => entry.envelope.at)).toEqual([AT, AT]);
   expect(fs.existsSync(`${file}.lock`)).toBe(false);
 });
 
@@ -796,6 +961,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
   fs.writeFileSync(file, `${lines.join("\n")}\n`);
 
   const entries = [...iterRunRecords(file, { payloads: false })];
+  expect(entries.every((entry) => entry.at === AT)).toBe(true);
   expect(entries.map(({ seq, kind, nodeId, envelope }) => ({ seq, kind, nodeId, envelope }))).toEqual([
     { seq: 0, kind: "node_started", nodeId: "work", envelope: null },
     { seq: 1, kind: "node_failed", nodeId: "boom", envelope: null },
@@ -813,7 +979,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 10"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 11"],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -853,7 +1019,8 @@ test("iterRunRecords yields only the kinds asked for, still checking every line'
 
 test.each<[string, string, number]>([
   ["9", PYTHON_SCHEMA, 9],
-  ["11", "unsupported run-record schema: 11", 11],
+  ["10", RETIRED_SCHEMA, 10],
+  ["12", "unsupported run-record schema: 12", 12],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1082,7 +1249,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 10",
+    "run-record kind 'xnode_started' is unsupported in schema 11",
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],
@@ -1266,7 +1433,7 @@ test("a failed resume whose descriptor close also fails throws the original erro
 
 test("jsonl append uses one complete write and one fsync", () => {
   const file = path.join(dir, "run.jsonl");
-  const log = JsonlRunLog.create(file, "run");
+  const log = JsonlRunLog.create(file, "run", { clock: CLOCK });
   const writes: string[] = [];
   let fsyncs = 0;
   const writeSpy = spyOnLog("writeSync", file, (real, args) => {
@@ -1605,7 +1772,7 @@ describe.skipIf(!NODE)("the built jsonl log on Node", () => {
         const appendSecond = (log) => caught(() => log.append(new NodeStartedRecord("second")));
         const baseline = (name) => {
           const file = join(tmp, name + ".jsonl");
-          const log = JsonlRunLog.create(file, "run");
+          const log = JsonlRunLog.create(file, "run", { clock: () => ${CLOCK()} });
           log.append(new NodeStartedRecord("first"));
           return { file, log, prefix: readFileSync(file) };
         };

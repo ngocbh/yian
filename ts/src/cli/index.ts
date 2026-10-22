@@ -15,11 +15,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream, realpathSync, writeSync } from "node:fs";
+import { createWriteStream, writeSync } from "node:fs";
 import { constants } from "node:os";
-import { fileURLToPath } from "node:url";
 
 import { DefaultsError, read } from "../defaults.ts";
+import { compiled } from "../platform.ts";
 import {
   type CliIo,
   type CommandSpec,
@@ -430,24 +430,22 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
   }
 }
 
-/** Return whether this file is the process's entry script. */
-function isEntry(): boolean {
-  // Node 22 has no `import.meta.main`; under `bun test`, `argv[1]` is the test file.
-  const entry = process.argv[1];
-  if (entry === undefined) return false;
-  try {
-    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    // `argv[1]` names no file.
-    return false;
-  }
-}
-
 /**
  * The internal first argument the entry re-runs itself with for `run --json`: the child it marks
  * writes the document on fd 3. Users never pass it, and `main` never sees it.
  */
 const JSON_CHILD = "--yian-json-child";
+
+/**
+ * Return the arguments the entry re-runs itself with to run `args` as the `run --json` child. A
+ * `compiled` binary is its own runtime and script: its `argv[1]` is a file inside it and its
+ * `execArgv` only `BUN_OPTIONS`, which the inherited environment passes on, so it gets the marker
+ * and `args` only.
+ */
+export function childCommand(args: readonly string[], compiled: boolean): string[] {
+  if (compiled) return [JSON_CHILD, ...args];
+  return [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
+}
 
 /** Whether `args` is a `run` command with `--json` before any `--`. */
 function isRunJson(args: readonly string[]): boolean {
@@ -459,11 +457,11 @@ function isRunJson(args: readonly string[]): boolean {
  * Run `args` in a child of this runtime marked `JSON_CHILD`, whose fd 1 is this process's fd 2 (as
  * Python's `os.dup2(2, 1)`), copy its fd 3 to stdout, and exit as it did.
  *
- * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2, a signal no terminal sends, so a
- * group Ctrl-C (which the child gets too) and the forwarded stop are one stop; the second kills
- * the child and exits 130. A child that died by SIGUSR2, before its listener was on, exits 130.
- * When the child can't start, or stdout fails other than by a closed pipe (once the child has
- * ended), it prints the error and exits 1.
+ * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2 (except on Windows), a signal no
+ * terminal sends, so a group Ctrl-C (which the child gets too) and the forwarded stop are one
+ * stop; the second kills the child and exits 130. A child that died by SIGUSR2, before its
+ * listener was on, exits 130. When the child can't start, or stdout fails other than by a closed
+ * pipe (once the child has ended), it prints the error and exits 1.
  */
 async function runJsonParent(args: readonly string[]): Promise<never> {
   const io = processIo();
@@ -472,7 +470,9 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
   const onStop = () => {
     stops += 1;
     if (stops === 1) {
-      child.kill("SIGUSR2");
+      // Windows has no SIGUSR2 (`kill` throws `ERR_UNKNOWN_SIGNAL`); there the console's Ctrl-C
+      // reaches the child itself, which takes SIGINT, and a second stop still kills it.
+      if (process.platform !== "win32") child.kill("SIGUSR2");
       return;
     }
     // A run whose synchronous tool blocks its loop never takes the forwarded stop.
@@ -482,9 +482,7 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   // On before the spawn, so a stop during it isn't the default action; it reaches the child after.
   for (const name of signals) process.on(name, onStop);
-  // A `bun build --compile` binary has a `$bunfs` argv[1] and an empty execArgv: a release build
-  // must build this command line itself.
-  const command = [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
+  const command = childCommand(args, compiled);
   const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe"] });
   child.on("error", (error) => {
     // Once started, only a failed `kill` errors, and the run goes on.
@@ -530,7 +528,9 @@ async function runJsonChild(args: readonly string[]): Promise<number> {
   return code;
 }
 
-if (isEntry()) {
+// True for the script Bun or Node (22.18 and later) runs and for a compiled binary's entry; false
+// under a test runner, whose entry is the test file.
+if (import.meta.main) {
   const args = process.argv.slice(2);
   // The explicit exits end a run whose tool left a timer, as Python's process exit does.
   if (args[0] === JSON_CHILD) process.exit(await runJsonChild(args.slice(1)));

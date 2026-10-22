@@ -16,8 +16,9 @@
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
 // `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
 // `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`); the entry's
-// `run --json` child and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
-// stuck in a CODE body; `status`, TS-only, on logs these runs write. From
+// `run --json` child, its command line in a binary and as a script (`childCommand`) and its
+// forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run stuck in a CODE body;
+// `status`, TS-only, on logs these runs write. From
 // tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -39,7 +40,7 @@ import {
   skillsCheck,
   stopOnSignals,
 } from "../../src/cli/run.ts";
-import { main } from "../../src/cli/index.ts";
+import { childCommand, main } from "../../src/cli/index.ts";
 import {
   abortOnSignal,
   type CliIo,
@@ -53,6 +54,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
+import { compiled } from "../../src/platform.ts";
 import { NO_ENV } from "../engine/session_fakes.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
@@ -1350,6 +1352,23 @@ function spawnEntry(args: string[]) {
   });
   return { child, streams, closed };
 }
+
+describe("childCommand", () => {
+  test("a binary re-runs itself with the marker; a script passes its runtime flags and its path", () => {
+    const args = ["run", "flow.yaml", "--json"];
+    expect(childCommand(args, true)).toEqual(["--yian-json-child", ...args]);
+    expect(childCommand(args, false)).toEqual([
+      ...process.execArgv,
+      process.argv[1]!,
+      "--yian-json-child",
+      ...args,
+    ]);
+  });
+
+  test("outside a binary, compiled is false", () => {
+    expect(compiled).toBe(false);
+  });
+});
 
 describe("the entry's run --json", () => {
   test("stdout holds only the large document; the flow's stdout writes go to stderr", async () => {

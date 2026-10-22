@@ -80,9 +80,11 @@ test("code parse matches descriptor and records body range", () => {
 
 test("code build returns code node and retains compose ranges", () => {
   const desc = CodeDescriptor.parse("verdict", readerFor(FLOW, "verdict"));
-  const result = desc.build(reading());
+  const result = desc.build(new BuildContext({ registry: new Map(), sourceFile: "flow.yaml" }));
 
   expect(result.node).toBeInstanceOf(CodeNode);
+  // The label a failing body's stack frames are named after.
+  expect((result.node as CodeNode).sourceFile).toBe("flow.yaml");
   expect(result.node.outputContract).not.toBeNull();
   expect(result.nodeRange).toBe(desc.range);
   expect(result.wiring).toEqual(new Map([["rating", "${input.rating}"]]));

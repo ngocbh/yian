@@ -2716,6 +2716,13 @@ a Python-style `module:function` value such as `pkg.mod:fn` ("use `./file.ts:fn`
 runs no code. A CODE syntax error is reported after the flow's other load errors, such as
 an invalid `output:` type, because the check runs after the flow is assembled.
 
+Changed (TS yian): in a failure's `traceback`, an inline body's frames name the flow's
+file and a line and column of the body, not of the file: `at helper (flow.yaml:2:18)` is
+line 2 of the body, and the failure's location gives the file line. Python's traceback
+names the file with the line of its `def main(inputs):` wrapper, one more than the body's.
+A reference's frames name its own file. A late error from another node's body (see below)
+keeps that body's `yian-code:<node id>` frames.
+
 Changed (TS yian): a CODE call, a reference or an inline body, runs on a worker thread
 (`worker_threads`), not in-process. This is not the run's `num_workers` (`--num-workers`)
 pool, which caps how many nodes run at once. A stop (Ctrl-C) ends the thread at once, even

@@ -2,8 +2,9 @@
  * A port of `tests/engine/test_failure_diagnosis.py`: `ComposedFlow.diagnose` resolves a semantic
  * failure through the flow's source authority, presentation-only.
  *
- * Ported: every row but those named below, each parametrized row whole. Python's resolver classes
- * are objects with a `resolve` method; its `cast(..., object())` stand-ins are plain objects cast;
+ * Ported: every row but the two named under "Already ported" and "Not ported" below, each
+ * parametrized row whole. Python's resolver classes are objects with a `resolve` method; its
+ * `cast(..., object())` stand-ins are plain objects cast;
  * a frame subclass whose `text` getter throws is a frame given a throwing `text` accessor (a
  * subclass can't shadow the fields the base constructor assigns); a type check (`type(x) is ...`)
  * reads the prototype. The forbidden compiled surface is a `Proxy` that throws on any access, and
@@ -17,10 +18,10 @@
  *   ordinary exception; JS has no process-control exceptions, so every throw is one the
  *   presentation fallback catches.
  *
- * Later (bug #985): `test_inline_composite_failure_resolves_catalog_frames` and
- * `test_external_composite_failure_resolves_each_document`. They assert the failure's traceback
- * names the flow file, and a TS CODE body's stack frames are named `yian-code:<node id>`, not
- * after the file.
+ * Ported (adapted): `test_inline_composite_failure_resolves_catalog_frames` and
+ * `test_external_composite_failure_resolves_each_document`, with the CODE bodies in TypeScript
+ * (`throw new Error("boom")`); a failing body's stack names the flow's file, as Python's traceback
+ * does.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -40,6 +41,7 @@ import {
   type OriginResolver,
   SourceRange,
 } from "../../src/diagnostics.ts";
+import { runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-failure-diagnosis-"));
@@ -317,4 +319,133 @@ output: \${work.output}
     new DiagnosticFrame({ label: "<flow>", text: source, range: new SourceRange(4, 3, 4, 7) }),
   ]);
   expect(diagnostic.notes).toEqual([]);
+});
+
+const INLINE_FAILURES: Readonly<Record<string, string>> = {
+  map: `id: inline-map-failure
+name: inline_map_failure
+nodes:
+  outer:
+    kind: map
+    over: [item]
+    input:
+      value: \${item}
+    nodes:
+      fail:
+        kind: code
+        code: |
+          throw new Error("boom")
+          return inputs["value"]
+        input:
+          value: \${input.value}
+        output: str
+    output: \${fail.output}
+output: \${outer.output}
+`,
+  loop: `id: inline-loop-failure
+name: inline_loop_failure
+nodes:
+  outer:
+    kind: loop
+    times: 1
+    input:
+      n: 0
+    nodes:
+      fail:
+        kind: code
+        code: |
+          throw new Error("boom")
+          return { n: inputs["n"] }
+        input:
+          n: \${input.n}
+        output:
+          n: int
+    output: \${fail.output}
+output: \${outer.output}
+`,
+};
+
+test.each(["map", "loop"])("inline composite failure resolves catalog frames (%s)", async (kind) => {
+  const label = `inline-${kind}.yaml`;
+  const loaded = await loadFlow(INLINE_FAILURES[kind]!, { sourceLabel: label, env });
+
+  const result = await runFlow(loaded, {}, { env });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure).not.toBeNull();
+  expect(result.failure!.traceback).not.toBeNull();
+  expect(result.failure!.traceback).toContain(label);
+  const diagnostic = loaded.diagnose(result.failure!);
+  expect(diagnostic.frames).toHaveLength(2);
+  expect(diagnostic.frames.map((frame) => frame.label)).toEqual([label, label]);
+  expect(diagnostic.frames[0]!.text).toContain("outer:");
+  expect(diagnostic.frames[1]!.text).toContain('throw new Error("boom")');
+});
+
+const EXTERNAL_FAILING_CHILD = `id: failing-child
+name: failing_child
+input:
+  n: !int
+nodes:
+  fail:
+    kind: code
+    code: |
+      throw new Error("boom")
+      return { n: inputs["n"] }
+    input:
+      n: \${input.n}
+    output:
+      n: int
+output: \${fail.output}
+`;
+
+const EXTERNAL_PARENTS: Readonly<Record<string, string>> = {
+  map: `id: external-map-failure
+name: external_map_failure
+uses:
+  child: failing-child
+nodes:
+  outer:
+    kind: map
+    call: child
+    over: [0]
+    input:
+      n: \${item}
+output: \${outer.output}
+`,
+  loop: `id: external-loop-failure
+name: external_loop_failure
+uses:
+  child: failing-child
+nodes:
+  outer:
+    kind: loop
+    call: child
+    times: 1
+    input:
+      n: 0
+output: \${outer.output}
+`,
+};
+
+test.each(["map", "loop"])("external composite failure resolves each document (%s)", async (kind) => {
+  const child = await loadFlow(EXTERNAL_FAILING_CHILD, { sourceLabel: "child.yaml", env });
+  const parentLabel = `external-${kind}.yaml`;
+  const loaded = await loadFlow(EXTERNAL_PARENTS[kind]!, {
+    childResolver: () => child,
+    sourceLabel: parentLabel,
+    env,
+  });
+
+  const result = await runFlow(loaded, {}, { env });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure).not.toBeNull();
+  expect(result.failure!.traceback).not.toBeNull();
+  expect(result.failure!.traceback).toContain("child.yaml");
+  const diagnostic = loaded.diagnose(result.failure!);
+  expect(diagnostic.frames).toHaveLength(2);
+  expect(diagnostic.frames.map((frame) => frame.label)).toEqual([parentLabel, "child.yaml"]);
+  expect(diagnostic.frames[0]!.text).toBe(EXTERNAL_PARENTS[kind]!);
+  expect(diagnostic.frames[1]!.text).toBe(EXTERNAL_FAILING_CHILD);
 });

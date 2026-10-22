@@ -10,8 +10,8 @@
  * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`), and the inline CODE bodies
  * read the same in JS but for `_list_body`'s loop (decision 11). An AGENT's model is a
  * `ScriptedModel` (on Azure, a `chatModelFromConfig` model) given as `models`, where Python
- * patches `model_from_config`. Ints read as
- * `bigint`s (decision 4a). Every run sees only the test's credential store in its environment.
+ * patches `model_from_config`. Ints read as `bigint`s (decision 4a). Every run sees only the
+ * test's credential store in its environment.
  *
  * Ported: every row but those below. Changed: the "with less stack" rows and
  * `test_agent_output_nesting_maximum_loads_under_the_deepest_import_chain` load and run at each
@@ -252,7 +252,7 @@ nodes:
 output: \${deep.output}
 `;
   const flow = await loadFlow(text, { env });
-  await using memory = await buildMemories(flow);
+  await using memory = await buildMemories(flow, { env });
 
   const result = await runFlow(flow, {}, { env, memory, learnable: true });
   expect(result.status, result.failure?.message).toBe("succeeded");

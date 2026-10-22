@@ -574,6 +574,7 @@ async function adaptive(nodes: string, go: boolean, other = false, fail = false)
       },
     },
   });
+  for (const request of model.requests) expect(request.outputFormat).not.toBeNull();
   return { flow: loaded, result, calls: model.requests.length, asked };
 }
 

@@ -39,8 +39,10 @@
  * seq, a line that isn't UTF-8); the streaming reader `iterRunRecords` (each record's seq, offsets,
  * kind, node and envelope; a log a writer holds; a torn last line skipped, then read from its
  * offset once complete; a log another process appends to, followed from saved offsets without
- * blocking the writer; a log that shrank before or while it reads; offsets that aren't the end of
- * a line; seq checked from the start and after an offset, and the run id; `payloads: false`, and
+ * blocking the writer; a log that shrank before, at the end-of-line probe, or while it reads, as
+ * `RunLogChangedError`; another run's log renamed over the path, caught by `runId` and `afterSeq`,
+ * and their option checks; bad options and a missing file thrown on the first `next()`; offsets
+ * that aren't the end of a line; seq checked from the start and after an offset, and the run id; `payloads: false`, and
  * what it still refuses; `kinds`; schemas 9 and 11 as `RunLogSchemaError`; bounded reads that go
  * only as far as asked); a failed resume whose descriptor close also fails throws the
  * original error; a write that fails and whose rollback truncate also fails; closing a poisoned
@@ -119,6 +121,7 @@ import {
   NodeStartedRecord,
   readRunLog,
   RecordEnvelope,
+  RunLogChangedError,
   RunLogSchemaError,
   type RunStoppedRecord,
   SCHEMA_VERSION,
@@ -639,7 +642,100 @@ test("iterRunRecords refuses an offset past the end of a log that shrank", () =>
   fs.truncateSync(file, byteLength(first) + 1);
 
   const message = `run log ${file} shrank to ${byteLength(first) + 1} bytes under its reader at byte ${end}; it was truncated or replaced`;
-  expectError(() => [...iterRunRecords(file, { afterOffset: end })], RangeError, message);
+  const error = expectError(() => [...iterRunRecords(file, { afterOffset: end })], RunLogChangedError, message);
+  expect(error.name).toBe("RunLogChangedError");
+  expect(error).toBeInstanceOf(RangeError);
+});
+
+test("iterRunRecords says a log shrank when it shrinks before the end-of-line probe", () => {
+  const file = path.join(dir, "run.jsonl");
+  const first = wireLine();
+  fs.writeFileSync(file, `${first}\n${wireLine({ seq: 1 })}\n`);
+  const end = byteLength(first) + 1;
+  const realFstat = fs.fstatSync;
+  let cut = false;
+  // The size check sees the whole file; the probe after it finds the file cut to nothing.
+  const fstatSpy = spyOn(fs, "fstatSync").mockImplementation(((...args: any[]) => {
+    const stats = Reflect.apply(realFstat, fs, args) as fs.Stats;
+    if (!cut) fs.truncateSync(file, 0);
+    cut = true;
+    return stats;
+  }) as typeof fs.fstatSync);
+  try {
+    const message = `run log ${file} shrank to 0 bytes under its reader at byte ${end}; it was truncated or replaced`;
+    expectError(() => [...iterRunRecords(file, { afterOffset: end })], RunLogChangedError, message);
+  } finally {
+    fstatSpy.mockRestore();
+  }
+});
+
+test("iterRunRecords refuses another run's log renamed over the path when given the run id and seq read before", () => {
+  const file = path.join(dir, "run.jsonl");
+  const lines = (runId: string) => [0, 1, 2].map((seq) => wireLine({ runId, seq, nodeId: `n${seq}` }));
+  fs.writeFileSync(file, `${lines("run-a").slice(0, 2).join("\n")}\n`);
+  const last = [...iterRunRecords(file)].at(-1)!;
+  const saved = { afterOffset: last.end, runId: last.runId, afterSeq: last.seq };
+  expect(saved).toEqual({ afterOffset: last.end, runId: "run-a", afterSeq: 1 });
+
+  // Another run's log, line for line the same length, replaces the file.
+  const other = path.join(dir, "other.jsonl");
+  fs.writeFileSync(other, `${lines("run-b").join("\n")}\n`);
+  fs.renameSync(other, file);
+  // Without the run id and seq, the offset alone reads on into the other run.
+  expect([...iterRunRecords(file, { afterOffset: saved.afterOffset })].map((entry) => entry.runId)).toEqual(["run-b"]);
+  const changed = `run log ${file} doesn't continue the records read before byte ${saved.afterOffset}`;
+  expectError(
+    () => [...iterRunRecords(file, saved)],
+    RunLogChangedError,
+    `${changed}: expected seq 2 of run 'run-a', found seq 2 of run 'run-b'; it was truncated or replaced`,
+  );
+
+  // The same run, continued, reads on.
+  fs.writeFileSync(file, `${lines("run-a").join("\n")}\n`);
+  expect([...iterRunRecords(file, saved)].map((entry) => entry.nodeId)).toEqual(["n2"]);
+  expectError(
+    () => [...iterRunRecords(file, { ...saved, afterSeq: 0 })],
+    RunLogChangedError,
+    `${changed}: expected seq 1 of run 'run-a', found seq 2 of run 'run-a'; it was truncated or replaced`,
+  );
+  expectError(
+    () => [...iterRunRecords(file, { afterOffset: saved.afterOffset, runId: "run-b" })],
+    RunLogChangedError,
+    `${changed}: expected run 'run-b', found seq 2 of run 'run-a'; it was truncated or replaced`,
+  );
+
+  // A line end that moved is a change too, not a bad offset.
+  const shifted = [wireLine({ runId: "run-a", nodeId: "n0x" }), wireLine({ runId: "run-a", seq: 1, nodeId: "n1" })];
+  fs.writeFileSync(file, `${shifted.join("\n")}\n`);
+  expectError(
+    () => [...iterRunRecords(file, saved)],
+    RunLogChangedError,
+    `${changed}: it isn't the end of a line; it was truncated or replaced`,
+  );
+});
+
+test.each<[string, Record<string, unknown>, string]>([
+  ["afterSeq without an offset", { afterSeq: 0 }, "runId and afterSeq describe the record before afterOffset, so they need one"],
+  ["runId without an offset", { runId: "run" }, "runId and afterSeq describe the record before afterOffset, so they need one"],
+  ["a negative afterSeq", { afterOffset: 1, afterSeq: -1 }, "afterSeq must be a non-negative integer, got -1"],
+  ["an empty runId", { afterOffset: 1, runId: "" }, "runId must be a non-empty string, got ''"],
+])("iterRunRecords refuses %s", (_name, options, message) => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n`);
+  expectError(() => [...iterRunRecords(file, options)], RangeError, message);
+});
+
+test("iterRunRecords throws a bad option or a missing file on the first next(), not at the call", () => {
+  const reader = iterRunRecords(path.join(dir, "missing.jsonl"), { afterOffset: -1 });
+  expectError(() => reader.next(), RangeError, "afterOffset must be a non-negative integer, got -1");
+  const missing = iterRunRecords(path.join(dir, "missing.jsonl"));
+  let caught: NodeJS.ErrnoException | undefined;
+  try {
+    missing.next();
+  } catch (error) {
+    caught = error as NodeJS.ErrnoException;
+  }
+  expect(caught?.code).toBe("ENOENT");
 });
 
 test("iterRunRecords detects a log that shrinks while it reads", () => {
@@ -653,7 +749,7 @@ test("iterRunRecords detects a log that shrinks while it reads", () => {
   const second = reader.next().value!;
   expect(second.seq).toBe(1);
   const message = `run log ${file} shrank to 0 bytes under its reader at byte ${second.end}; it was truncated or replaced`;
-  expectError(() => reader.next(), RangeError, message);
+  expectError(() => reader.next(), RunLogChangedError, message);
 });
 
 test.each<[string, number, string]>([

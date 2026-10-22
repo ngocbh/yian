@@ -12,8 +12,9 @@
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `resumeFlow` and
  * `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering`
  * (`nodes/base.ts`). For hosts that show runs it also exports `inspectRun`, which reads where a run
- * log stands, `staticNodes`, which names each node of a flow, and re-exports the lock-free reader
- * `iterRunRecords` and `RunLogSchemaError` (`runtime/log.ts`).
+ * log stands, and `staticNodes`, which names each node of a flow, and re-exports `staticPathOf`
+ * (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
+ * `RunLogSchemaError` (`runtime/log.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -107,6 +108,7 @@ import {
   isRunLogLocked,
   iterRunRecords,
   JsonlRunLog,
+  RunLogChangedError,
   MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -151,9 +153,11 @@ import {
 } from "./typesys/values.ts";
 
 export type { Steering } from "./nodes/base.ts";
+export { staticPathOf } from "./nodes/ids.ts";
 export {
   type IterRunRecordsOptions,
   iterRunRecords,
+  RunLogChangedError,
   type RunLogEntry,
   RunLogSchemaError,
 } from "./runtime/log.ts";
@@ -1230,7 +1234,8 @@ export interface RunInspection {
  * still run that node. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
  * is exact; pass the flow when you have it. The lock is probed before and after the records are
  * read, so a writer that holds it at either probe makes the run `running`. Without `flow`, the
- * records are streamed (`iterRunRecords`), so memory is bounded by the largest record.
+ * records are streamed (`iterRunRecords`), so memory is bounded by the largest record. When a
+ * writer holding the lock rolls back a failed append under the read, the log is read once more.
  *
  * @param log The JSONL run log's path.
  * @param options.flow The loaded flow the run was started with, for an exact status.
@@ -1241,6 +1246,7 @@ export interface RunInspection {
  *   fingerprint, learnable flag and last seq, and a failed run's failure.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
  * @throws RunLogSchemaError when a record's schema isn't one this version reads.
+ * @throws RunLogChangedError when the log shrank while it was read and no writer holds it.
  * @throws RangeError when a complete line isn't a valid record, the first record isn't
  *   `RunStarted`, the log holds no record and no writer, or, with `flow`, the replay refuses the
  *   log (`replayRunLog`).
@@ -1255,8 +1261,20 @@ export function inspectRun(
   const lockedBefore = isRunLogLocked(log);
   const flow = options.flow ?? null;
   // The replay needs every record at once; reading without it streams them.
-  const envelopes = flow === null ? null : readRunLog(log);
-  const scan = scanRunRecords(envelopes ?? streamedEnvelopes(log));
+  const read = () => {
+    const envelopes = flow === null ? null : readRunLog(log);
+    return { envelopes, scan: scanRunRecords(envelopes ?? streamedEnvelopes(log)) };
+  };
+  let records: ReturnType<typeof read>;
+  try {
+    records = read();
+  } catch (error) {
+    if (!(error instanceof RunLogChangedError && (lockedBefore || isRunLogLocked(log)))) throw error;
+    // The writer rolled back a failed append under the read; that poisons it, so it appends and
+    // cuts nothing more, and a second read sees its final prefix.
+    records = read();
+  }
+  const { envelopes, scan } = records;
   // A writer that took or released the lock while the records were read is caught by one probe.
   const running = isRunLogLocked(log) || lockedBefore;
   if (scan.started === null && !running) throw new RangeError(`cannot inspect an empty run log: ${log}`);
@@ -1616,26 +1634,32 @@ export function skillGrants(flow: Flow): [string, readonly string[] | "all"][] {
  *
  * A path joins node ids with `/`: `call/write` is node `write` of the child flow that node `call`
  * runs. These are the paths `RunStarted` keys its effective model map by, and a run log's node
- * ids for nodes the graph holds from the start (a growth's nodes get ids of their own), so a host
- * reads each logged node's kind as `node.kind`. The nodes are the flow's own: read them, don't
+ * ids for nodes the graph holds from the start, so a host reads each logged node's kind as
+ * `node.kind`. The nodes are the flow's own: read them, don't
  * change them.
  *
  * Kind-blind: child flows come from `Node.originChildren()`, so the run boundary imports no node
  * class.
  *
+ * A node a run grows has an id of its own (`each#1/write` for MAP element 1, `node~2` for a LOOP's
+ * third iteration); `staticPathOf` maps it onto the path here.
+ *
  * @param flow A loaded flow, or its compiled graph.
- * @param path The path of the node whose child flow `flow` is; `[]` (the default) for the root.
  * @returns `[path, node]` pairs in the flow's node order, each node followed by its child flows'.
  */
-export function staticNodes(flow: ComposedFlow | Flow, path: readonly string[] = []): [string, Node][] {
-  const graph = flow instanceof ComposedFlow ? flow.compiled : flow;
+export function staticNodes(flow: ComposedFlow | Flow): [string, Node][] {
   const found: [string, Node][] = [];
+  collectStaticNodes(flow instanceof ComposedFlow ? flow.compiled : flow, [], found);
+  return found;
+}
+
+/** Append each node of `graph` under `path`, then its child flows', to `found`. */
+function collectStaticNodes(graph: Flow, path: readonly string[], found: [string, Node][]): void {
   for (const [nodeId, node] of graph.nodes) {
     const nodePath = [...path, nodeId];
     found.push([nodePath.join("/"), node]);
-    for (const child of node.originChildren()) found.push(...staticNodes(child as Flow, nodePath));
+    for (const child of node.originChildren()) collectStaticNodes(child as Flow, nodePath, found);
   }
-  return found;
 }
 
 /**

@@ -61,11 +61,14 @@
  * checks the recorded `YIAN_*` values against the given `env` (the records alone don't); the run
  * id, schema, fingerprint, learnable flag and last seq; a failed run's failure (a node's, and an
  * unreachable END's); a running log with no record; a log that doesn't start with `RunStarted`,
- * and one of schema 9. `staticNodes` of a flow with CALL and MAP children, and the paths a run's
- * effective model map uses.
+ * and one of schema 9; a locked log a writer's rollback shrinks under the read reads `running`.
+ * `staticNodes` of a flow with CALL and MAP children, and the paths a run's effective model map
+ * uses; `staticPathOf` on MAP, LOOP and nested ids, and every node id of a MAP run and a LOOP run
+ * mapped onto a `staticNodes` path.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -84,6 +87,7 @@ import type { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import {
   inspectRun,
+  iterRunRecords,
   type ResumeFlowOptions,
   RunResult,
   type RunInspection,
@@ -92,6 +96,7 @@ import {
   type RunFlowOptions,
   RunLogSchemaError,
   staticNodes,
+  staticPathOf,
 } from "../../src/run.ts";
 import {
   JsonlRunLog,
@@ -1384,4 +1389,92 @@ test("staticNodes lists the paths a run's effective model map uses", async () =>
   expect(effective.length).toBeGreaterThan(0);
   const kinds = new Map(staticNodes(flow).map(([nodePath, node]) => [nodePath, node.kind]));
   expect(effective.map((nodePath) => kinds.get(nodePath))).toEqual(effective.map(() => "agent"));
+});
+
+const LOOP_FLOW = `
+id: looping
+name: looping
+defs:
+  step:
+    input:
+      n: !int
+      exited: !bool
+    nodes:
+      bump:
+        kind: code
+        code: ./compose_codefns.ts:loop_bump
+        input:
+          n: \${input.n}
+          exited: \${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: \${bump.output}
+nodes:
+  node:
+    kind: loop
+    call: step
+    input:
+      n: 0
+      exited: false
+    while: n < 3
+    max: 5
+output: \${node.output}
+`;
+
+test("staticPathOf drops each segment's MAP element and LOOP iteration suffix", () => {
+  expect(staticPathOf("each#1/echo")).toBe("each/echo");
+  expect(staticPathOf("node#0/bump")).toBe("node/bump");
+  expect(staticPathOf("node~2")).toBe("node");
+  expect(staticPathOf("outer#3/inner#0/leaf")).toBe("outer/inner/leaf");
+  expect(staticPathOf("call/write")).toBe("call/write");
+});
+
+test("staticPathOf maps every node id of a MAP run and a LOOP run onto a staticNodes path", async () => {
+  const mapped = await load(NESTED_FLOW);
+  const mapLog = join(dir, "map.jsonl");
+  expect((await run(mapped, { topics: ["dogs", "cats"] }, { log: mapLog, models: scripted([]) })).status).toBe("succeeded");
+  const looped = await load(LOOP_FLOW);
+  const loopLog = join(dir, "loop.jsonl");
+  expect((await run(looped, {}, { log: loopLog })).status).toBe("succeeded");
+
+  for (const [flow, log, grown] of [
+    [mapped, mapLog, "each#1/write"],
+    [looped, loopLog, "node~2"],
+  ] as const) {
+    const ids = new Set([...iterRunRecords(log, { payloads: false })].flatMap((entry) => entry.nodeId ?? []));
+    expect(ids.has(grown)).toBe(true);
+    const paths = new Set(staticNodes(flow).map(([nodePath]) => nodePath));
+    expect([...ids].filter((nodeId) => !paths.has(staticPathOf(nodeId)))).toEqual([]);
+  }
+});
+
+test("inspectRun reads a locked log as running when a writer's rollback shrinks it under the read", async () => {
+  const path = join(dir, "rollback.jsonl");
+  await crashedWork(path);
+  const text = readFileSync(path, "utf8");
+  const kept = Buffer.byteLength(text);
+  // A fifth record, a second start of `work`, which the writer is about to roll back.
+  writeFileSync(path, `${text}${text.split("\n").at(-2)!.replace('"seq":3', '"seq":4')}\n`);
+  const held = JsonlRunLog.resume(path);
+  const realRead = fs.readSync;
+  let cut = false;
+  // The first read sees the appended line; the writer then rolls it back.
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: any[]) => {
+    const count = Reflect.apply(realRead, fs, args) as number;
+    if (!cut && count > kept) {
+      cut = true;
+      fs.truncateSync(path, kept);
+    }
+    return count;
+  }) as typeof fs.readSync);
+  try {
+    const inspection = inspectRun(path);
+    expect(cut).toBe(true);
+    expect(progressOf(inspection)).toEqual({ status: "running", inFlight: ["work"], interruptedAttempts: new Map() });
+    expect(inspection.lastSeq).toBe(3);
+  } finally {
+    readSpy.mockRestore();
+    held.close();
+  }
 });

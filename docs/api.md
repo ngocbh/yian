@@ -2636,11 +2636,13 @@ reading records. The first five are `null` only for a running log with no record
 `flow`, the records are streamed with `iterRunRecords`, so memory is bounded by the largest
 record. An empty log with no writer raises `RangeError`, as does a log whose first record isn't
 `RunStarted`; a missing one raises the `fs` error with `code` `ENOENT`, and a schema this version
-doesn't read a `RunLogSchemaError`.
+doesn't read a `RunLogSchemaError`. When a writer holding the lock rolls back a failed append under
+the read, the log is read once more and reads as `running` (a failed append poisons the writer,
+so it cuts nothing more); with no writer, the shrink raises `RunLogChangedError`.
 
 ### Following a run log with `iterRunRecords`
 
-Changed (TS yian): `iterRunRecords(log, { afterOffset, kinds, payloads })` (from `yian/run`)
+Changed (TS yian): `iterRunRecords(log, { afterOffset, runId, afterSeq, kinds, payloads })` (from `yian/run`)
 streams the records of a run log another process may still be writing. It never takes the log's
 lock or writes the file, so the writer is never blocked. It yields one entry per record:
 
@@ -2655,25 +2657,36 @@ lock or writes the file, so the writer is never blocked. It yields one entry per
 | `envelope` | the validated `RecordEnvelope`, or `null` with `payloads: false` |
 
 ```ts
-let offset = 0; // the end of the last record read, saved between calls
-for (const entry of iterRunRecords(log, { afterOffset: offset, payloads: false })) {
+// Saved between calls: the last record read, or null to read from the start.
+let last: { end: number; runId: string; seq: number } | null = null;
+const after = last === null ? {} : { afterOffset: last.end, runId: last.runId, afterSeq: last.seq };
+for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
   show(entry.seq, entry.kind, entry.nodeId);
-  offset = entry.end;
+  last = { end: entry.end, runId: entry.runId, seq: entry.seq };
 }
-// Later, the same loop from `offset` reads only what was appended since.
+// Later, the same loop from `last` reads only what was appended since. On a
+// RunLogChangedError, set `last` to null and read the log again from the start.
 ```
 
-- It reads the file in 64 KiB chunks, so memory is bounded by the largest line, and it opens the
-  file when the first entry is asked for and closes it when the iteration ends.
+- It reads the file in 64 KiB chunks, so memory is bounded by the largest line. It is a generator:
+  it opens the file, and throws a bad option or a missing file (`ENOENT`), when the first entry is
+  asked for, not at the call, and closes the file when the iteration ends.
 - It stops at the end of the file. An unterminated last line, which the writer may still be
   finishing, isn't yielded; a later call from the last entry's `end` reads it once it's complete.
 - `afterOffset` (default 0) must be the end of a line. From the start, each record's `seq` must be
-  its line's index; after an offset, the first record read sets the count. Every record must name
-  the first one's run id.
+  its line's index; after an offset, `afterSeq + 1` (or, without it, the first record read) sets
+  the count. Every record must name the first one's run id. Hosts save `{ end, runId, seq }` of
+  the last entry and pass them as `afterOffset`, `runId` and `afterSeq`; the two describe the
+  record that ends at `afterOffset`, so they need one.
 - A file shorter than where the reader got to (`afterOffset`, or the end of the last line read)
-  raises `RangeError` "run log PATH shrank to N bytes under its reader at byte M; it was truncated
-  or replaced". A record yielded while a writer runs can still be rolled back by that writer's
-  failed append; the next call then raises this error.
+  raises `RunLogChangedError` (a `RangeError`) "run log PATH shrank to N bytes under its reader at
+  byte M; it was truncated or replaced". With `runId` or `afterSeq`, an offset that no longer ends
+  a line, or a first record that isn't seq `afterSeq + 1` of run `runId`, raises it too ("run log
+  PATH doesn't continue the records read before byte M: ..."). Read the log again from 0 then.
+- A record yielded while a writer runs can still be rolled back by that writer's failed append.
+  The next call raises `RunLogChangedError` if the file hasn't since grown past the offset;
+  otherwise the offset may no longer be a line end, or may fall among other records, which only
+  `runId` and `afterSeq` catch. Another run's log renamed over the path is caught the same way.
 - `payloads: false` checks each line's envelope (schema, run id, seq, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
@@ -2690,6 +2703,12 @@ children. A path joins node ids with `/`: `call/write` is node `write` of the ch
 ids a log holds for every node the graph has from the start (a growth's nodes get ids of their
 own), so a host reads the kind of a logged node as `node.kind`. The nodes are the flow's own; read
 them, don't change them.
+
+A node a run grows has an id of its own: MAP element `i` of node `each` runs its child's nodes as
+`each#i/...`, and LOOP `node` runs iteration `k`'s body as `node#k/...` and its driver as `node~k`.
+`staticPathOf(nodeId)` (from `yian/run`) maps such an id onto its `staticNodes` path by dropping
+each `/` segment's `#<i>` and `~<k>` suffixes: `each#1/echo` is `each/echo`, `node~2` is `node`.
+Authored node ids are identifiers, so neither suffix is ever part of one.
 
 ## Defaults and limits
 

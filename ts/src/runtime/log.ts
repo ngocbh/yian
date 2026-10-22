@@ -991,6 +991,16 @@ export class RunLogSchemaError extends RangeError {
   }
 }
 
+/**
+ * A run log no longer holds what an earlier read of it saw: it is shorter than where the reader
+ * got to, or the records after a saved offset don't continue the ones read before it. The file
+ * was truncated (a writer rolls back a failed append) or replaced; read it again from the start.
+ * A `RangeError`.
+ */
+export class RunLogChangedError extends RangeError {
+  override name = "RunLogChangedError";
+}
+
 /** The message for schema 9, which only Python yian reads. */
 const PYTHON_SCHEMA_MESSAGE = "run log schema 9 was written by Python yian; resume it with Python yian";
 
@@ -1486,9 +1496,9 @@ export class JsonlRunLog implements RunLog {
  * without a complete line gives no records.
  *
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`.
- * @throws RangeError when a complete line isn't a valid record, the records don't share one run
- *   id with contiguous sequences from 0, or the file shrank while it was read; the message names
- *   `path`, the line and its seq.
+ * @throws RunLogChangedError when the file shrank while it was read.
+ * @throws RangeError when a complete line isn't a valid record, or the records don't share one
+ *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
  */
 export function readRunLog(path: string): RecordEnvelope[] {
   return Array.from(iterRunRecords(path), (entry) => entry.envelope);
@@ -1532,6 +1542,10 @@ export interface IterRunRecordsOptions {
    * `envelope: null`; `true` (the default) builds each record.
    */
   payloads?: boolean;
+  /** The run id of the record that ends at `afterOffset`, which the next record must name. */
+  runId?: string | null;
+  /** The seq of the record that ends at `afterOffset`; the next record must be `afterSeq + 1`. */
+  afterSeq?: number | null;
 }
 
 /**
@@ -1540,26 +1554,37 @@ export interface IterRunRecordsOptions {
  *
  * The file is read in chunks of 64 KiB, so memory is bounded by the largest line. Reading stops
  * at the end of the file; an unterminated last line, which a writer may still be finishing, is
- * not yielded, and a later call with the last entry's `end` as `afterOffset` reads on from it.
- * A record yielded while a writer runs may later be rolled back by that writer's failed append;
- * the next call then finds the file shorter than its offset and throws.
+ * not yielded, and a later call reads on from the last entry: a host saves its `end`, `runId`
+ * and `seq` and passes them as `afterOffset`, `runId` and `afterSeq`.
  *
- * From the start, each record's seq must be its line's index; after an offset, the first record
- * read sets the count. Every record must name the first one's run id. A record of an unwanted
- * kind is checked as with `payloads: false`, and not yielded. The file is opened when the first
- * entry is asked for and closed when the iteration ends.
+ * A record yielded while a writer runs may later be rolled back by that writer's failed append.
+ * The next call throws `RunLogChangedError` if the file hasn't since grown past the offset;
+ * otherwise the offset may no longer be a line end, or may fall among other records, and only
+ * `runId` and `afterSeq` catch that: the first record read must name `runId` and have seq
+ * `afterSeq + 1`, and the offset must still end a line. On `RunLogChangedError`, read from 0.
+ *
+ * From the start, each record's seq must be its line's index; after an offset, `afterSeq` (or,
+ * without it, the first record read) sets the count. Every record must name the first one's run
+ * id. A record of an unwanted kind is checked as with `payloads: false`, and not yielded. This is
+ * a generator: the file is opened, and bad options and a missing file are thrown, when the first
+ * entry is asked for, and the file is closed when the iteration ends.
  *
  * @param path The JSONL run log's path.
  * @param options.afterOffset The byte offset to start at.
  * @param options.kinds The wire kinds to yield; every kind by default.
  * @param options.payloads Whether to build and validate each record.
+ * @param options.runId The run id of the record that ends at `afterOffset`.
+ * @param options.afterSeq The seq of the record that ends at `afterOffset`.
  * @returns A generator of `{ seq, offset, end, runId, kind, nodeId, envelope }`.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION` (schema 9 is Python
  *   yian's); the message names the line.
- * @throws RangeError when `afterOffset` isn't a non-negative integer or isn't the end of a line,
- *   `kinds` names a kind no record has, the file is shorter than where the reader got to (it was
- *   truncated or replaced), or a complete line isn't a valid record, breaks the seq count or
- *   names another run id; the message names `path` and the line (or, after an offset, the byte).
+ * @throws RunLogChangedError when the file is shorter than where the reader got to (`afterOffset`
+ *   or the end of the last line read), or, given `runId` or `afterSeq`, the offset no longer ends
+ *   a line or the first record read doesn't continue the saved one.
+ * @throws RangeError when `afterOffset`, `afterSeq` or `runId` isn't valid, `runId` or `afterSeq`
+ *   is given without an `afterOffset`, `afterOffset` isn't the end of a line, `kinds` names a kind
+ *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
+ *   run id; the message names `path` and the line (or, after an offset, the byte).
  * @throws Error (code `ENOENT`) when `path` doesn't exist, and the `fs` error of a failed read.
  */
 export function iterRunRecords(
@@ -1578,9 +1603,20 @@ export function* iterRunRecords(
   path: string,
   options: IterRunRecordsOptions = {},
 ): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined> {
-  const { afterOffset = 0, kinds = null, payloads = true } = options;
+  const { afterOffset = 0, kinds = null, payloads = true, runId: afterRunId = null, afterSeq = null } = options;
   if (!Number.isSafeInteger(afterOffset) || afterOffset < 0) {
     throw new RangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
+  }
+  if (afterSeq !== null && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
+    throw new RangeError(`afterSeq must be a non-negative integer, got ${valueRepr(afterSeq)}`);
+  }
+  if (afterRunId !== null && (typeof afterRunId !== "string" || afterRunId === "")) {
+    const shown = typeof afterRunId === "string" ? reprText(afterRunId) : valueRepr(afterRunId);
+    throw new RangeError(`runId must be a non-empty string, got ${shown}`);
+  }
+  const continuing = afterRunId !== null || afterSeq !== null;
+  if (continuing && afterOffset === 0) {
+    throw new RangeError("runId and afterSeq describe the record before afterOffset, so they need one");
   }
   const wanted = kinds === null ? null : new Set(kinds);
   const unknown = wanted === null ? [] : [...wanted].filter((kind) => !WIRE_KINDS.has(kind));
@@ -1590,25 +1626,35 @@ export function* iterRunRecords(
   const fd = fs.openSync(path, "r");
   try {
     const shrank = (size: number, at: number) =>
-      new RangeError(`run log ${path} shrank to ${size} bytes under its reader at byte ${at}; it was truncated or replaced`);
+      new RunLogChangedError(`run log ${path} shrank to ${size} bytes under its reader at byte ${at}; it was truncated or replaced`);
+    const discontinued = (reason: string) =>
+      new RunLogChangedError(
+        `run log ${path} doesn't continue the records read before byte ${afterOffset}: ${reason}; it was truncated or replaced`,
+      );
     const size = fs.fstatSync(fd).size;
     if (afterOffset > size) throw shrank(size, afterOffset);
     if (afterOffset > 0) {
       const before = new Uint8Array(1);
-      fs.readSync(fd, before, 0, 1, afterOffset - 1);
-      if (before[0] !== 0x0a) throw new RangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
+      if (fs.readSync(fd, before, 0, 1, afterOffset - 1) === 0) throw shrank(fs.fstatSync(fd).size, afterOffset);
+      if (before[0] !== 0x0a) {
+        if (continuing) throw discontinued("it isn't the end of a line");
+        throw new RangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
+      }
     }
     // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it.
     let lineStart = afterOffset;
     let position = afterOffset;
     let parts: Uint8Array[] = [];
-    let expected: number | null = afterOffset === 0 ? 0 : null;
-    let runId: string | null = null;
+    let expected: number | null = afterOffset === 0 ? 0 : afterSeq === null ? null : afterSeq + 1;
+    let runId: string | null = afterRunId;
+    // Whether the next record is the first after a saved offset, which must continue it.
+    let checkContinues = continuing;
     for (;;) {
       const chunk = new Uint8Array(READ_CHUNK_BYTES);
       const count = fs.readSync(fd, chunk, 0, READ_CHUNK_BYTES, position);
       if (count === 0) {
-        // A writer only ever cuts an incomplete tail, which is past `lineStart`.
+        // A writer cuts an incomplete tail, or a complete line whose append failed
+        // (`rollbackAppend`); a cut below `lineStart` took a line this reader already yielded.
         const now = fs.fstatSync(fd).size;
         if (now < lineStart) throw shrank(now, lineStart);
         return;
@@ -1637,6 +1683,14 @@ export function* iterRunRecords(
           nodeId = wireNodeId(wire.kind, wire.payload);
         } catch (error) {
           throw locatedError(where, error);
+        }
+        if (checkContinues) {
+          checkContinues = false;
+          if ((afterSeq !== null && wire.seq !== expected) || (afterRunId !== null && wire.runId !== afterRunId)) {
+            const saved = [afterSeq === null ? null : `seq ${expected}`, afterRunId === null ? null : `run ${reprText(afterRunId)}`];
+            const found = `seq ${wire.seq} of run ${reprText(wire.runId)}`;
+            throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
+          }
         }
         if (expected !== null && wire.seq !== expected) {
           throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${wire.seq}`);

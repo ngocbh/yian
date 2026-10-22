@@ -12,3 +12,15 @@ export function ns(callsite: string, childId: string): string {
 export function mapCallsite(spawnerId: string, i: number): string {
   return `${spawnerId}#${i}`;
 }
+
+/**
+ * Return the static path a run's node id stands for: the id with each `/` segment's MAP element
+ * (`#<i>`) and LOOP iteration (`~<k>`) suffixes dropped, so `each#1/echo` is `each/echo` and
+ * `node~2` is `node`. Authored ids are identifiers, so neither suffix is ever part of one.
+ */
+export function staticPathOf(nodeId: string): string {
+  return nodeId
+    .split("/")
+    .map((segment) => segment.replace(/(?:[#~]\d+)+$/, ""))
+    .join("/");
+}

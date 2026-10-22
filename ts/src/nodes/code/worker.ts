@@ -36,6 +36,7 @@ import {
   isList,
   isRecord,
   jsTypeName,
+  rejectDeepNesting,
   setField,
   toHost,
   TypeCheckError,
@@ -263,6 +264,9 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
     // Intake runs here, not after the copy: the clone would turn a class instance or an accessor
     // into a plain record and refuse a function with its own error.
     value = fromHost(result === proxy ? record : result, "output");
+    // The clone back to the main thread recurses, so a value too deep for it must be refused
+    // here, by the same check the commit applies (a CODE node commits its own output).
+    rejectDeepNesting(value, "output");
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     return { ok: false, as: "output", message: error.message, path: [...error.path] };

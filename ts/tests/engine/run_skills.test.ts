@@ -25,48 +25,16 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { loadSkills } from "../../src/compose/skills.ts";
-import type { EventStream } from "../../src/llm/events.ts";
-import { Message, type Request, Response, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
-import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { Message, Response, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
-import { JsonlRunLog, NodeStartedRecord, NodeSucceededRecord, readRunLog, type RunRecord } from "../../src/runtime/log.ts";
+import { NodeStartedRecord, NodeSucceededRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { Crash, rejection, textReply } from "./run_state_fixtures.ts";
-import { effectsOf, resumeWith, runWith, SESSION_CONFIG } from "./session_fakes.ts";
-
-/** A `ScriptedModel` that sets `frozen` as it serves request `at` (1-based); `crashes` reads it. */
-class CrashAt extends ScriptedModel {
-  readonly at: number;
-  frozen = false;
-
-  constructor(replies: ScriptedReply[], at: number) {
-    super(replies, SESSION_CONFIG);
-    this.at = at;
-  }
-
-  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
-    if (this.requests.length === this.at - 1) this.frozen = true;
-    return super.stream(request, options);
-  }
-}
-
-/** Await `run`, which must reject with the `Crash` every durable log throws once `model` froze them. */
-async function crashes(model: CrashAt, run: () => Promise<unknown>): Promise<void> {
-  const crash = new Crash("process lost");
-  const append = JsonlRunLog.prototype.append;
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (model.frozen) throw crash;
-    return append.call(this, record);
-  };
-  try {
-    expect(await rejection(run())).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
-}
+import { rejection, textReply } from "./run_state_fixtures.ts";
+import { CrashAt, crashes, effectsOf, resumeWith, runWith, SESSION_CONFIG } from "./session_fakes.ts";
 
 /** A reply calling `load_skill` with `args` as call `id`. */
 function loadCall(args: JsonObject, id: string): Response {

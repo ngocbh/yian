@@ -29,7 +29,7 @@ binaries that need neither Node nor Bun: `yian-darwin-arm64`, `yian-darwin-x64`,
 (into `ts/bin/`). They bundle the
 MCP SDK, and import a CODE node's referenced file from disk when it runs. `yian --licenses`
 prints yian's notice, Bun's (MIT; it statically links JavaScriptCore, under the LGPL-2) and the
-licenses of the packages the binaries bundle.
+licenses of the packages the binaries bundle. `yian --version` prints the package's version.
 
 ## Provider extras
 

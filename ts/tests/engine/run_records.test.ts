@@ -8,7 +8,7 @@
  * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
  * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows),
  * `test_run_log_protocol_pins_iteration_append_close_and_context_management` (a class assigned
- * to `RunLog`, closed through `using`),
+ * to `RunLog`, closed through `Symbol.dispose`),
  * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
  * values and held arrays too; assignment is a `TypeError`). Python's `ValueError` is a
  * `RangeError` here.

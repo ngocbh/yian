@@ -15,7 +15,7 @@
  * `test_jsonl_resume_leaves_a_rejected_file_unchanged`,
  * `test_jsonl_resume_rejects_an_empty_file_and_releases_lock`,
  * `test_jsonl_close_is_idempotent_keeps_cache_and_releases_lock`,
- * `test_jsonl_context_releases_lock_when_the_body_raises` (`using`),
+ * `test_jsonl_context_releases_lock_when_the_body_raises` (`Symbol.dispose` in a `finally`),
  * `test_jsonl_append_uses_one_complete_write_flush_and_fsync`,
  * `test_jsonl_append_and_cache_are_isolated_from_caller_mutation`,
  * `test_jsonl_never_exposes_its_retained_mutable_payload`, `test_append_rollback_preserves_log`,
@@ -91,8 +91,8 @@
  * - `test_jsonl_create_releases_lock_when_file_adoption_fails`: TS adopts no file object, so the
  *   rows are an `fchmodSync` failure and a lock held before `create`; each closes the descriptor
  *   and leaves the empty file.
- * - Python refuses entering a closed log with `with`; TS `using` has no enter step, so there is
- *   nothing to refuse.
+ * - Python refuses entering a closed log with `with`; TS disposal (`Symbol.dispose`) has no enter
+ *   step, so there is nothing to refuse.
  * - `test_jsonl_append_uses_one_complete_write_flush_and_fsync`: one `writeSync` and one
  *   `fsyncSync`; there is no flush.
  * - A failed append poisons the log: every later append throws `run log <path> refuses appends

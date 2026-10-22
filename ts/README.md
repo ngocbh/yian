@@ -452,7 +452,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   never `bigint`.
 - A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
 - `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
-  `decodeRecord`, schema 10), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
+  `decodeRecord`, schema 11), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
   `encodePool`, `decodePool`), and the payload helpers later runtime modules share
   (`routePayload`, `routeFromPayload`, `executionScopePayload`, `evidencePayload`). Records and
   envelopes are frozen: a record's JSON values are deep-frozen canonical copies made once by its
@@ -467,6 +467,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   new 0600 file and `JsonlRunLog.resume(path)` reopens one, validating its complete prefix before
   it truncates an incomplete tail. Both logs keep the canonical round trip of every record, and
   `close()` refuses later appends but keeps the records readable.
+- Each append stamps the envelope's `at` (UTC, milliseconds, `toISOString` form) from the log's
+  `clock` option (epoch ms, default `Date.now`); `runFlow`, `resumeFlow` and a result's
+  `backward` pass their `scheduler`'s clock, so tests and conformance get virtual times. An
+  envelope the engine prepares has `at: null` and encodes without it; the engine's prepare,
+  append and replay checks compare records without `at`, and every log reader refuses a line
+  without it. Times aren't ordered; `seq` is. Schema 10 (before `at`) is retired, not migrated.
 - Changed: a `JsonlRunLog` holds a SQLite exclusive lock (`lockFile` in `platform.ts`) on
   `<path>.lock` until `close()`, where Python flocks the log itself. The kernel frees the lock when
   the process dies, and the lock file is never deleted. A busy lock throws `run log <path> is
@@ -479,7 +485,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   record refused before any write doesn't poison the log.
 - For inspection, `iterRunRecords(path, { afterOffset, runId, afterSeq, kinds, payloads })`
   streams the complete lines without the lock and without changing the file, in 64 KiB reads
-  (memory bounded by the largest line), yielding `{ seq, offset, end, runId, kind, nodeId,
+  (memory bounded by the largest line), yielding `{ seq, offset, end, runId, at, kind, nodeId,
   envelope }`; it stops at an unterminated last line, and with `payloads: false` checks only the
   envelope and node id. A host saves the last entry's `{ end, runId, seq }` and passes them back
   as `afterOffset`, `runId` and `afterSeq`. `RunLogChangedError` (a `RangeError`) says the file is
@@ -612,8 +618,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `FlowEngine` to a result, then closes what it opened. `resumeFlow` locks an existing log,
   replays it on a private copy of the flow and drives the rest (a finished log returns its result
   and appends nothing). `inspectRun` reads a log's status, in-flight nodes, interrupted counts,
-  run id, schema, flow fingerprint, learnable flag, last seq and a failed run's failure without
-  taking its lock; a shrink under the read while a writer holds the lock (a rolled-back append)
+  run id, schema, flow fingerprint, learnable flag, last seq, start time (`startedAt`), a finished
+  run's end time (`endedAt`, its last record's `at`) and a failed run's failure without taking
+  its lock; a shrink under the read while a writer holds the lock (a rolled-back append)
   reads the log once more. `staticNodes(flow)` lists every static node path of a flow and its
   child flows with its node, so a host can name a logged node's kind; `staticPathOf(nodeId)`
   (`nodes/ids.ts`, beside `mapCallsite`) maps a grown node's id onto that path by dropping each

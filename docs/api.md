@@ -2287,13 +2287,38 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 10, and readers accept only schema 10. The schema
+Changed (TS yian): records use schema 11, and readers accept only schema 11. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", and any other schema
-with "unsupported run-record schema: N" (a float token shows as `10.0`); the
-"predates" message for schemas 7 and 8 is gone. Both are a `RunLogSchemaError` (from `yian/run`),
-a `RangeError` whose `schema` holds the schema the line names (`null` when it isn't an
-integer), so a host tells a log it can't read from a damaged one. The vocabulary adds
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 log (TS
+yian's, from before record times) with "run log schema 10 predates schema 11 and is not
+supported", and any other schema with "unsupported run-record schema: N" (a float token
+shows as `11.0`); the "predates" message for schemas 7 and 8 is gone. All are a
+`RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
+line names (`null` when it isn't an integer), so a host tells a log it can't read from a
+damaged one. yian isn't released yet, so there is no migration: finish or drop a schema 10
+run with the yian version that wrote it.
+
+Changed (TS yian): every record carries `at`, when the log appended it: a UTC RFC 3339
+time with milliseconds, such as `"at":"2026-10-20T14:02:11.123Z"` (the form of
+`Date.prototype.toISOString`, years 0000 to 9999), read from the log's clock as it appends.
+`runFlow` and `resumeFlow` stamp from their `scheduler`'s clock (the wall clock by default),
+and `MemoryRunLog` and `JsonlRunLog` take a `clock` option (epoch milliseconds, default
+`Date.now`). `at` is metadata: replay, the reducer, the flow fingerprint and recovery ignore
+it, and a resume keeps the recorded times while its own records carry the resume's times,
+so the gap before `RunResumed` shows. Times within one log aren't guaranteed to increase,
+since the clock can move; `seq` is the order. A node's duration is its outcome record's
+`at` (`NodeSucceeded`, `NodeRouted`, `NodeExpanded` or `NodeFailed`) less its `NodeStarted`
+record's `at`. `RecordEnvelope.at` is `null` only on an envelope no log has appended, such
+as one the engine prepares; `encodeRecord` writes such an envelope without `at`, and
+`decodeRecord` reads that text back with `at: null`, but every log reader (`resumeFlow`,
+`JsonlRunLog.resume`, `MemoryRunLog.fromRecords`, `readRunLog`, `iterRunRecords`) refuses a
+line without `at`. A clock reading that isn't a finite time in those years fails the append
+with a `RangeError` before anything is written, without poisoning the log. Python yian's
+schema 9 records hold no time.
+
+Temporal stamps every history event with an `eventTime`, LangGraph every checkpoint with a
+`ts`, and Codex and Claude Code each session record with a `timestamp` of the same form; yian's
+`at` follows them. The vocabulary adds
 `RunStoppedRecord`: `reason` is `signal` when the host's abort signal fired or
 `callback` when a host callback threw or rejected, `message` is the reason's text, and
 `node_ids` lists the nodes in flight. It is not a terminal record. Every payload field
@@ -2606,6 +2631,10 @@ count of the nodes it covered (a node never interrupted resumes with `interrupte
 decides how many interruptions to tolerate. `RunResult.interruptedAttempts` and `inspectRun` hold
 the same counts.
 
+Changed (TS yian): a resume keeps the recorded times and stamps its own records, from its
+`RunResumed` on, from its `scheduler`'s clock; replay ignores `at`, so a log replays the same
+whatever times it holds (see [Authoritative run logs](#authoritative-run-logs)).
+
 Changed (TS yian): the log also holds `RunStoppedRecord` (see [Authoritative run
 logs](#authoritative-run-logs)): when the host's signal aborts a run or a resume, or a host
 callback throws or rejects, the engine lets the nodes in flight wind down and appends one record
@@ -2632,7 +2661,9 @@ The result also holds `runId`, `schema`, `flowFingerprint` and `learnable` from 
 `RunStarted`, `lastSeq`, the seq of its last complete record, and `failure`, the `Failure` that
 ended a `failed` run (a node's failure, or the `graph.terminal_unreachable` failure of a route that
 proved END unreachable; `null` for any other status), so a host can list and label runs without
-reading records. The first five are `null` only for a running log with no record yet. Without
+reading records. It also holds `startedAt`, the `at` of `RunStarted`, and `endedAt`, the `at` of the
+log's last record for a `succeeded` or `failed` run (`null` for any other status; a later backward
+attempt's records move it). The first five and `startedAt` are `null` only for a running log with no record yet. Without
 `flow`, the records are streamed with `iterRunRecords`, so memory is bounded by the largest
 record. An empty log with no writer raises `RangeError`, as does a log whose first record isn't
 `RunStarted`; a missing one raises the `fs` error with `code` `ENOENT`, and a schema this version
@@ -2652,6 +2683,7 @@ lock or writes the file, so the writer is never blocked. It yields one entry per
 | `offset` | the byte offset where its line starts |
 | `end` | the byte offset just past its newline: pass it as `afterOffset` to read on from there |
 | `runId` | the run id the record names |
+| `at` | when the log appended it, as `RecordEnvelope.at`, such as `2026-10-20T14:02:11.123Z` (also with `payloads: false`) |
 | `kind` | its wire kind, such as `node_started` |
 | `nodeId` | the node it is about (a node's start, step, success or route, a growth's spawner, a failure's node), or `null` |
 | `envelope` | the validated `RecordEnvelope`, or `null` with `payloads: false` |
@@ -2687,10 +2719,10 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
   The next call raises `RunLogChangedError` if the file hasn't since grown past the offset;
   otherwise the offset may no longer be a line end, or may fall among other records, which only
   `runId` and `afterSeq` catch. Another run's log renamed over the path is caught the same way.
-- `payloads: false` checks each line's envelope (schema, run id, seq, kind) and node id without
+- `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 10); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 11); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

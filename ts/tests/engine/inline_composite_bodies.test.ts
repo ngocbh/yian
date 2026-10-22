@@ -168,6 +168,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
+import { runtime } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import {
@@ -1836,7 +1837,9 @@ output: \${each.output}
   },
 );
 
-test("an inline MAP proves its item type lazily, once", () => {
+// Spies on a module export, which only Bun allows (Node's ESM namespaces are frozen); the proof
+// path calls the function directly, with no object or option to observe it through.
+test.skipIf(runtime !== "bun")("an inline MAP proves its item type lazily, once", () => {
   const infer = spyOn(inlineInputs, "inferInlineBindingType");
   const overRequests = () =>
     infer.mock.calls

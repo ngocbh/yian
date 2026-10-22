@@ -382,7 +382,8 @@ appended and applied before `record` returns in both modes, and stream chunks an
 go from the node straight to `onStream`/`onEvent` rather than through the dispatcher. On a `RunFailed` the dispatcher
 aborts the run signal, publishes the failure, then waits for every running worker and discards
 what they produce; any other error aborts the run signal, waits for every worker, and ends the
-run with the first error.
+run with the first error. A CODE body runs on a separate worker thread
+(see [`code`](syntax.md#code--tool--the-other-leaves)).
 
 Changed (TS yian): a run stops through an `AbortController` tree. `FlowEngine` takes the host's
 `signal`; each node gets its own child signal as `caps.signal`, linked to the run signal by one

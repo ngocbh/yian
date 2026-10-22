@@ -1034,9 +1034,12 @@ test("a resume with an aborted signal rejects before the lock is taken", async (
 /** The `ts/` directory: children run from it, so Bun never looks for packages to install. */
 const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
-// Each CODE body waits for `globalThis.yianSweepDelayMs`, which only the child sets: a killed
-// child's node is still running at the kill, and the test process's runs don't wait.
-const SLOW = "await new Promise((resolve) => setTimeout(resolve, globalThis.yianSweepDelayMs ?? 0));";
+// Each CODE body waits for `YIAN_TEST_SWEEP_DELAY_MS`, which only the child sets: a killed
+// child's node is still running at the kill, and the test process's runs don't wait. A body runs
+// on a worker thread with its own globals, so the delay crosses in the environment, which CODE
+// workers share with the host.
+const SLOW =
+  "await new Promise((resolve) => setTimeout(resolve, Number(process.env.YIAN_TEST_SWEEP_DELAY_MS ?? 0)));";
 
 const SWEEP_FLOWS: Record<string, { text: string; inputs: Record<string, unknown>; slow: string[] }> = {
   linear: {
@@ -1185,7 +1188,7 @@ async function killedRunAfter(
   const script = join(dir, `child-${k}.mjs`);
   writeFileSync(
     script,
-    `globalThis.yianSweepDelayMs = 1000;
+    `process.env.YIAN_TEST_SWEEP_DELAY_MS = "1000";
 const { loadFlow } = await import(${JSON.stringify(pathToFileURL(join(TS_ROOT, "src/compose/loader.ts")).href)});
 const { runFlow } = await import(${JSON.stringify(pathToFileURL(join(TS_ROOT, "src/run.ts")).href)});
 const auth = ${JSON.stringify(join(dir, "auth.json"))};

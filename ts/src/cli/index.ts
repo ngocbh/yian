@@ -474,7 +474,7 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
       child.kill("SIGUSR2");
       return;
     }
-    // A run whose synchronous body blocks its loop never takes the forwarded stop.
+    // A run whose synchronous tool blocks its loop never takes the forwarded stop.
     child.kill("SIGKILL");
     process.exit(130);
   };
@@ -531,7 +531,7 @@ async function runJsonChild(args: readonly string[]): Promise<number> {
 
 if (isEntry()) {
   const args = process.argv.slice(2);
-  // The explicit exits end a run whose CODE body left a timer, as Python's process exit does.
+  // The explicit exits end a run whose tool left a timer, as Python's process exit does.
   if (args[0] === JSON_CHILD) process.exit(await runJsonChild(args.slice(1)));
   if (isRunJson(args)) await runJsonParent(args);
   const io = processIo();

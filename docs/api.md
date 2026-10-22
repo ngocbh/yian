@@ -1569,9 +1569,9 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
 Changed (TS yian): the inbox is push-based. In place of `interrupted(node_id)`,
 `interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that
 node. `drain(nodeId)` returns the queued messages or a promise of them, and the node
-awaits it between its effects. Nothing runs on a worker thread, so the inbox needs no
-lock. The `Steering` interface lives in `nodes/base.ts`; the run entry point will
-re-export it once it is ported.
+awaits it between its effects. Only the main thread reads the inbox (CODE bodies run on
+worker threads but never see it), so it needs no lock. The `Steering` interface lives in
+`nodes/base.ts`; the run entry point will re-export it once it is ported.
 
 Also changed (TS yian): every model call streams, so the interrupt is read before each later
 text chunk of every chat call, and a host without `onStream` can cut a reply too; a reply
@@ -2508,7 +2508,10 @@ yian's own manifest, so it differs from Python yian's for the same flow; a
 reference-mode CODE node contributes its `./file.ts:fn` text, a tagged value
 entry contributes the built-in identity operation, and the directory the flow
 was loaded from isn't covered. A flow's CODE runs when the flow runs, never when it
-is loaded or checked (`yian check`); run only flows you trust.
+is loaded or checked (`yian check`); run only flows you trust. It runs on worker threads
+of the host's process with the host's privileges, not in a sandbox, and a thread imports
+a referenced file when it first calls it, so an edited file may apply to later calls (on
+a new thread) even within one run.
 
 If the original run enabled memory and forward execution is unfinished,
 recovery requires backends under the same memory keys. Each session

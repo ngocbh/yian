@@ -6,10 +6,10 @@
  *
  * - a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn` (`./helpers.ts:fn`,
  *   `../lib/x.mjs:run`) is **reference mode**: the named export, resolved against the flow's base
- *   directory, is called **in-process** with the node's inputs.
+ *   directory, is called **in a worker thread** with the node's inputs.
  * - any other text is **inline mode**: a body that reads the node's `inputs` and returns a value,
- *   run **in-process** with the same one-record calling convention, so a body promotes to a
- *   reference by moving it into a file.
+ *   run **in a worker thread** with the same one-record calling convention, so a body promotes to
+ *   a reference by moving it into a file.
  * - a `{builtin: "identity", field: <input name>}` object is **built-in mode**: the node returns
  *   that input unchanged, with no module to load. A tagged value entry in `nodes:` lowers to this
  *   form rather than to code text.
@@ -19,41 +19,70 @@
  * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
  * `module:function` value, and requires a reference's file to exist, running no code.
  *
- * A reference's module is imported when the node runs (`import()` caches it) and its named export
- * must be a function. An inline body is stripped of its types and built as a strict async function
- * of `inputs` each time the node runs. Both are called the same way: `inputs` is a frozen host copy
- * of the record (ints as `number`s, big ones as `bigint`s) behind a proxy that throws on an
- * undeclared name. What the code throws (a reference's module while it loads included) rejects as
- * a `CodeError` reading `<name>: <message>`; an inline body's is located at the authored line of
- * its first body frame when it has one, a reference's at the whole `code:` value. A result of
- * `undefined` fails; a result goes through host intake, and a value intake refuses fails
- * `contract.output`. The built-in identity returns its field as bound.
+ * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
+ * per thread. Idle workers are reused (at most `availableParallelism()` wait), and an idle worker
+ * never keeps the process alive; module state and globals may persist between calls that land on
+ * the same thread, but nothing guarantees it. A referenced module is imported once per thread and
+ * cached there, so an edited file takes effect in a new process or a new thread. An inline body is
+ * stripped of its types and built as a strict async function of `inputs`. Both are called the
+ * same way: `inputs` is a frozen host copy of the record (ints as `number`s, big ones as
+ * `bigint`s, files as `FileRef`s) behind a proxy that throws on an undeclared name; the reference's
+ * named export must be a function. What the code throws (a reference's module while it loads
+ * included, and a late timer throw or unhandled rejection while it runs) rejects as a `CodeError`
+ * reading `<name>: <message>`; an inline body's is located at the authored line of its first body
+ * frame when it has one, a reference's at the whole `code:` value. A result of `undefined` fails;
+ * a result goes through host intake in the worker, and a value intake refuses fails
+ * `contract.output`. A worker that exits before the body returns rejects with its exit code: a
+ * `process.exit`, or a body awaiting a promise nothing can resolve when no earlier body on its
+ * thread left work running (a `setInterval`, say); otherwise that body waits until it is stopped.
+ * A body shouldn't leave work running after it returns: a late error from it fails the call its
+ * thread runs then, or is printed as a console error line when the thread is idle, and the thread
+ * is retired. The worker forwards the code's `console` calls to this thread's `console`. The
+ * built-in identity returns its field as bound, with no worker.
  *
  * Inline source is author-written and static (it lives in the version-controlled flow file), so
- * there is no injection vector into the code itself, and running it in-process is the same
- * capability reference mode already has. Loading a flow from an untrusted or agent-generated
- * source runs that source's code when the flow runs.
+ * there is no injection vector into the code itself, and running it is the same capability
+ * reference mode already has. A worker thread is not a sandbox: the code shares this process's
+ * privileges, file system and live environment variables (a body's change reaches this thread,
+ * and this thread's later change reaches the body). Loading a flow from an untrusted or
+ * agent-generated source runs that source's code when the flow runs.
  *
- * Knows about:   nodes/base, nodes/contracts, diagnostics, typesys, platform and `node:*`.
+ * Knows about:   nodes/base, nodes/contracts, nodes/code/worker, diagnostics, typesys, defaults,
+ *                platform and `node:*`.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { statSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { SHARE_ENV, Worker } from "node:worker_threads";
 
+import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
-import { stripTypes } from "../../platform.ts";
+import { TypeStripError } from "../../platform.ts";
 import {
   fromHost,
   isRecord,
   jsTypeName,
   toHost,
+  TypeCheckError,
   type Value,
   writeAsText,
 } from "../../typesys/values.ts";
-import { HostOutputError, hostOutput, markerMessage, Node, NodeKind, Output } from "../base.ts";
+import { HostOutputError, hostOutput, markerMessage, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
+import {
+  AsyncFunction,
+  type CodeJob,
+  type CodeMessage,
+  type CodeReply,
+  compileBody,
+  packFiles,
+  splitReference,
+  type ThrownError,
+  undeclaredInput,
+  unpackFiles,
+} from "./worker.ts";
 
 // A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export
 // name. Anchoring plus a whitespace-free path keep multi-token bodies out.
@@ -148,12 +177,6 @@ export function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknow
   }
 }
 
-/** An inline body or a referenced function: a function of the `inputs` record. */
-type CodeBody = (inputs: Readonly<Record<string, unknown>>) => unknown;
-
-// The constructor isn't a global; every async function's `constructor` is it.
-const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => CodeBody;
-
 /** The number of lines the runtime's function constructor puts before a body; measured once. */
 let headerLines: number | null = null;
 
@@ -164,46 +187,6 @@ function headerLineCount(): number {
     headerLines = text.slice(0, text.indexOf("/*yian*/")).split("\n").length - 1;
   }
   return headerLines;
-}
-
-/**
- * Strip an inline body's types and build it as a strict async function of `inputs`.
- *
- * The `sourceURL` comment names the body's stack frames `yian-code:<nodeId>:<line>:<column>`, and
- * the strict prologue shares the first line, so frame lines stay body lines plus the header.
- *
- * @throws TypeStripError when the body doesn't parse or strip.
- * @throws SyntaxError when the constructor refuses the stripped body.
- */
-async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
-  const js = await stripTypes(body);
-  return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
-}
-
-/** Split a `./file.ts:fn` reference into its path and its export name. */
-function splitReference(reference: string): { path: string; name: string } {
-  const colon = reference.lastIndexOf(":");
-  return { path: reference.slice(0, colon), name: reference.slice(colon + 1) };
-}
-
-/**
- * Import a `./file.ts:fn` reference's module, resolved against `baseDir` (the current directory
- * when `null`), and return its export `fn`.
- *
- * @throws CodeError when the module throws while it loads (or can't be imported).
- * @throws TypeError when the module has no function export by that name.
- */
-async function importReference(reference: string, baseDir: string | null): Promise<CodeBody> {
-  const { path, name } = splitReference(reference);
-  let module: Record<string, unknown>;
-  try {
-    module = await import(pathToFileURL(resolve(baseDir ?? process.cwd(), path)).href);
-  } catch (error) {
-    throw new CodeError(error);
-  }
-  const fn = module[name];
-  if (typeof fn !== "function") throw new TypeError(`${reprText(path)} exports no function ${reprText(name)}`);
-  return fn as CodeBody;
 }
 
 /** Return the 1-based body line of the first `yian-code:<nodeId>` frame in `error`'s stack, else `null`. */
@@ -220,28 +203,6 @@ function bodyLine(error: unknown, nodeId: string): number | null {
   return null;
 }
 
-/** Return the error a CODE body throws when it reads an input the node doesn't declare. */
-function undeclaredInput(name: string): ReferenceError {
-  return new ReferenceError(`CODE input ${reprText(name)} is not declared`);
-}
-
-/**
- * Return `record` behind a proxy that throws on a string key the record doesn't hold.
- *
- * The keys the runtime itself probes pass: inherited `Object.prototype` members, `then` (promise
- * resolution), `toJSON` (`JSON.stringify`) and symbols.
- */
-function inputsProxy(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return new Proxy(record, {
-    get(target, key, receiver) {
-      if (typeof key === "symbol" || key in target || key === "then" || key === "toJSON") {
-        return Reflect.get(target, key, receiver);
-      }
-      throw undeclaredInput(key);
-    },
-  });
-}
-
 /**
  * A value CODE's own code threw, wrapped so the failure reads `<name>: <message>`.
  *
@@ -250,7 +211,10 @@ function inputsProxy(record: Readonly<Record<string, unknown>>): Readonly<Record
  */
 export class CodeError extends Error {
   override name = "CodeError";
-  /** The exact value the code threw. */
+  /**
+   * A copy of what the code threw, rebuilt from the worker's reply: an `Error` (`rebuildError`), a
+   * yian value, or the thrown value's text.
+   */
   readonly original: unknown;
 
   /** Wrap `original`, also kept as the `cause`. */
@@ -271,14 +235,179 @@ function codeErrorMessage(original: unknown): string {
   }
 }
 
+// `bun build --compile` bundles the worker at `nodes/code/worker.js` beside the bundle's entry,
+// whose URL this module then has.
+const WORKER_URL = import.meta.url.endsWith(".ts")
+  ? new URL("./worker.ts", import.meta.url)
+  : import.meta.url.endsWith("/node.js")
+    ? new URL("./worker.js", import.meta.url)
+    : new URL("./nodes/code/worker.js", import.meta.url);
+
+/** The standard error classes a worker's error is rebuilt as, by name. */
+const ERROR_CLASSES: Readonly<Record<string, ErrorConstructor>> = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError,
+};
+
 /**
- * Run deterministic code: a file reference or an inline body, both in-process, or a built-in.
+ * Rebuild an error a worker sent: a `TypeStripError` with its line and column, a standard class
+ * by name, else an `Error` carrying the name. The worker's stack is kept, so its body frames
+ * still map to authored lines.
+ */
+function rebuildError(fields: ThrownError): Error {
+  let error: Error;
+  if (fields.name === "TypeStripError" && fields.line !== undefined && fields.column !== undefined) {
+    error = new TypeStripError(fields.message, fields.line, fields.column);
+  } else if (Object.hasOwn(ERROR_CLASSES, fields.name)) {
+    error = new ERROR_CLASSES[fields.name]!(fields.message);
+  } else {
+    error = new Error(fields.message);
+    error.name = fields.name;
+  }
+  if (fields.stack !== undefined) error.stack = fields.stack;
+  return error;
+}
+
+/** Return the error a failed reply rejects with. */
+function replyError(reply: Exclude<CodeReply, { ok: true }>): Error {
+  if (reply.as === "output") {
+    const cause = new TypeCheckError(reply.message, { path: reply.path });
+    return new HostOutputError(reply.message, { path: reply.path, cause });
+  }
+  const { thrown } = reply;
+  const original =
+    thrown.kind === "error" ? rebuildError(thrown) : thrown.kind === "value" ? unpackFiles(thrown.value) : thrown.text;
+  return reply.as === "plain" && original instanceof Error ? original : new CodeError(original);
+}
+
+/** A call running on a worker: its job id and how it settles. */
+interface Call {
+  readonly id: number;
+  readonly resolve: (reply: CodeReply) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+/** A started worker and the call it runs; `call` is `null` while it is idle or out of service. */
+interface CodeWorker {
+  readonly worker: Worker;
+  call: Call | null;
+}
+
+/** At most this many idle workers wait for a call. */
+const POOL_SIZE = availableParallelism();
+
+/** The idle workers, the most recently used last. */
+const idle: CodeWorker[] = [];
+
+/** The last job id handed out. */
+let lastJobId = 0;
+
+/** Take `entry` out of the idle pool, if it is there. */
+function leavePool(entry: CodeWorker): void {
+  const at = idle.indexOf(entry);
+  if (at !== -1) idle.splice(at, 1);
+}
+
+/** Take `entry` out of service: out of the pool, its call (returned) detached, the thread stopped. */
+function retire(entry: CodeWorker): Call | null {
+  const call = entry.call;
+  entry.call = null;
+  leavePool(entry);
+  void entry.worker.terminate();
+  return call;
+}
+
+/** Start a worker whose listeners route to its current call for its whole life. */
+function startWorker(): CodeWorker {
+  // `SHARE_ENV`: a body reads and writes the host's live environment, as it did in-process.
+  const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianCodeWorker: true } });
+  const entry: CodeWorker = { worker, call: null };
+  const failed = (error: unknown): void => {
+    retire(entry)?.reject(new Error(`CODE worker failed: ${markerMessage(error)}`, { cause: error }));
+  };
+  worker.on("message", (message: CodeMessage) => {
+    if ("console" in message) {
+      console[message.console](message.text);
+      // A late error leaves the thread suspect (`bun test` kills it); an idle one stops now.
+      if (message.late === true && entry.call === null) retire(entry);
+      return;
+    }
+    const call = entry.call;
+    if (call === null || message.id !== call.id) return;
+    entry.call = null;
+    if (message.late === true || idle.length >= POOL_SIZE) {
+      void worker.terminate();
+    } else {
+      // An idle worker never keeps this process alive.
+      worker.unref();
+      idle.push(entry);
+    }
+    call.resolve(message);
+  });
+  worker.on("exit", (code: number) => {
+    leavePool(entry);
+    const call = entry.call;
+    entry.call = null;
+    call?.reject(new Error(`CODE worker exited with code ${code} before the body returned`));
+  });
+  worker.on("error", failed);
+  worker.on("messageerror", failed);
+  return entry;
+}
+
+/**
+ * Run `job` on an idle worker, or a new one, and return its reply.
+ *
+ * @throws The signal's reason when `signal` aborts first; the worker is terminated before this
+ *   rejects.
+ * @throws Error when the worker exits before it replies, or fails to start.
+ * @throws The clone's error when `job` can't be sent; the worker is retired.
+ */
+function runInWorker(job: CodeJob, signal: AbortSignal | undefined): Promise<CodeReply> {
+  return new Promise((resolve, reject) => {
+    const entry = idle.pop() ?? startWorker();
+    const call: Call = {
+      id: ++lastJobId,
+      resolve: (reply) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(reply);
+      },
+      reject: (error) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    };
+    const onAbort = (): void => {
+      if (entry.call !== call) return;
+      entry.call = null;
+      const settle = () => call.reject(signal!.reason);
+      entry.worker.terminate().then(settle, settle);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    entry.call = call;
+    entry.worker.ref();
+    try {
+      entry.worker.postMessage({ ...job, id: call.id });
+    } catch (error) {
+      // A job the clone refuses (a function input from a direct caller) never reaches the worker.
+      retire(entry)?.reject(error);
+    }
+  });
+}
+
+/**
+ * Run deterministic code: a file reference or an inline body, both in a worker thread, or a built-in.
  *
  * The one `code:` field is classified by shape at construction, and the mode is stored: text with
  * `classifyCodeSource`, a built-in form as `"builtin"`. A tagged value entry lowers to the built-in
  * identity form. The node never touches the pool: its body returns `new Output(value)`. A
- * reference's function and an inline body run in-process with one calling convention (an inline
- * body built afresh on each run), and a built-in reads the bound record directly.
+ * reference's function and an inline body run on a worker thread (an idle one reused), with one
+ * calling convention, and a built-in reads the bound record directly.
  */
 export class CodeNode extends Node {
   readonly kind = NodeKind.CODE;
@@ -408,36 +537,46 @@ export class CodeNode extends Node {
    * Run the code on the bound input record and return its one value.
    *
    * The built-in identity returns the record's field as bound. A reference's function or an
-   * inline body gets `inputs`, a frozen host copy (ints as `number`s, big ones as `bigint`s)
-   * behind a proxy that throws on an undeclared name; what it throws rejects as a `CodeError`, and
-   * its result goes through host intake (a top-level `return inputs` returns the record).
+   * inline body runs on a worker thread and gets `inputs`, a frozen host copy (ints as
+   * `number`s, big ones as `bigint`s) behind a proxy that throws on an undeclared name; what it
+   * throws rejects as a `CodeError`, its `console` calls go to this thread's `console`, and its
+   * result goes through host intake (a top-level `return inputs` returns the record). The worker
+   * runs with the caller's `current()` values and goes back to the idle pool after its reply.
    *
+   * @param caps.signal Aborting it terminates the worker, then rejects with its reason. A body
+   *   blocked in a synchronous system call (`execSync`, a blocking read) ends when that call
+   *   returns; the rejection waits for it, so a stop never settles while a command it ran still runs.
    * @throws ReferenceError when the built-in's field isn't in the record.
+   * @throws The signal's reason when `caps.signal` is aborted before or while the code runs.
    * @throws CodeError when a reference's module throws while it loads.
    * @throws TypeError when a reference's module has no function export by that name.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
-   * @throws CodeError when the body or the referenced function throws.
-   * @throws Error when the code returns `undefined`.
+   * @throws CodeError when the body or the referenced function throws, also later from a timer
+   *   or an unhandled rejection.
+   * @throws Error when the code returns `undefined`, or the worker exits before it replies (a
+   *   `process.exit`, a body awaiting a promise nothing can resolve) or fails to start.
    * @throws HostOutputError when host intake refuses the result (`contract.output`).
    */
-  override async forward(inputs: Record<string, unknown>): Promise<Output> {
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps = {}): Promise<Output> {
     const code = this.code;
     if (typeof code !== "string") {
       if (!Object.hasOwn(inputs, code.field)) throw undeclaredInput(code.field);
       return new Output(inputs[code.field]);
     }
-    const body =
-      this.mode === "reference" ? await importReference(code, this.baseDir) : await compileBody(this.id, code);
-    const record = Object.freeze(toHost(inputs as Value) as Record<string, unknown>);
-    const proxy = inputsProxy(record);
-    let result: unknown;
-    try {
-      result = await body(proxy);
-    } catch (error) {
-      throw new CodeError(error);
-    }
-    if (result === undefined) throw new Error("CODE body returned no value; return null for no value");
-    return new Output(hostOutput(result === proxy ? record : result));
+    caps.signal?.throwIfAborted();
+    const reply = await runInWorker(
+      {
+        nodeId: this.id,
+        mode: this.mode as "reference" | "inline",
+        code,
+        baseDir: this.baseDir,
+        inputs: packFiles(toHost(inputs as Value)),
+        defaults: current(),
+      },
+      caps.signal,
+    );
+    if (!reply.ok) throw replyError(reply);
+    return new Output(hostOutput(unpackFiles(reply.value)));
   }
 }

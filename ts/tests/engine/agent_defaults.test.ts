@@ -5,35 +5,32 @@
  * Ported: `test_the_manifest_holds_two_retries_by_default` and
  * `test_the_manifest_holds_the_agent_retries_default` (through `loadFlow` of `_STRUCTURED`).
  *
- * Ported at node level, through `evalNode` (`drive`) with a `ScriptedModel` from `models`, where
- * Python loads `_STRUCTURED` or `_LOOPING` and runs it (`runFlow`, T4-8):
- * `test_agent_retries_default_of_zero_fails_on_the_first_bad_reply`,
+ * Ported, each flow loaded and run (`loadFlow`, then `runWith`: `runFlow` with a `ScriptedModel`
+ * served by `models`): `test_agent_retries_default_of_zero_fails_on_the_first_bad_reply`,
  * `test_authored_retries_win_over_the_default`,
  * `test_agent_max_tool_iterations_default_caps_the_loop` and
- * `test_authored_max_tool_iterations_wins_over_the_default` (the authored bound set as the node's
- * `env`, the `lookup` tool in the run's `ToolSet`).
+ * `test_authored_max_tool_iterations_wins_over_the_default` (the `lookup` tool in the run's
+ * `tools`).
  *
- * Changed: `YIAN_AGENT_RETRIES=0` and `YIAN_AGENT_MAX_TOOL_ITERATIONS=1` are set with `reload`,
- * which Python's `set_defaults` fixture does. The exhausted bad reply fails with code
- * `agent.output_invalid` (Python: `node.execute`).
+ * Changed: Python's `set_defaults` fixture sets `YIAN_AGENT_RETRIES=0` or
+ * `YIAN_AGENT_MAX_TOOL_ITERATIONS=1`; the manifest rows set it with `reload`, the run rows give it
+ * as the `env` of `loadFlow` and `runFlow`. The exhausted bad reply fails with code
+ * `agent.output_invalid` (Python: `node.execute`; decision 36's failure codes).
  */
 
 import { afterEach, expect, test } from "bun:test";
 
 import { flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { forget, reload } from "../../src/defaults.ts";
+import { type Env, forget, reload } from "../../src/defaults.ts";
 import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { Output } from "../../src/nodes/base.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
-import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import type { RunFlowOptions, RunResult } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, serving, textReply } from "./run_state_fixtures.ts";
+import { textReply } from "./run_state_fixtures.ts";
+import { runWith } from "./session_fakes.ts";
 
 afterEach(() => {
   forget();
@@ -74,42 +71,54 @@ test("the manifest holds the agent retries default", async () => {
   expect(new AgentNode("n", { retries: 3 }).retries).toBe(3);
 });
 
-// The sentinel model, as `STRUCTURED`'s `llm_config`.
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+/** An environment setting only `name` to `value`, as Python's `set_defaults` does. */
+function setting(name: string, value: string): Env {
+  return (each) => (each === name ? value : undefined);
+}
 
-/**
- * Evaluate an AGENT with output `{score: float}` and `retries` (the default when omitted) over a
- * model replying a bad score, then a good one; return the outcome and the model.
- */
-async function badThenGood(retries?: number) {
-  const replies = ['{"score": "bad"}', '{"score": 1.5}'].map(textReply);
-  const model = new ScriptedModel(replies, PROMPTED);
-  const node = new AgentNode("agent", { prompt: "q", llmConfig: PROMPTED, retries });
-  node.outputContract = new ValueContract(
-    new Type({
-      kind: ValueKind.OBJECT,
-      fields: new Map([["score", Type.scalar(ValueKind.NUMBER)]]),
-      required: new Set(["score"]),
-    }),
-  );
-  const outcome = await drive(node, { models: serving(model) });
-  return { outcome, model };
+/** Load `text` and run it on `{question: "q"}` with `model`, in `env`; the other options go to `runFlow`. */
+async function run(text: string, model: ScriptedModel, env: Env, options: RunFlowOptions = {}): Promise<RunResult> {
+  return runWith(await loadFlow(text, { env }), { question: "q" }, null, model, { env, ...options });
+}
+
+/** A model replying a bad score, then a good one. */
+function badThenGood(): ScriptedModel {
+  return new ScriptedModel(['{"score": "bad"}', '{"score": 1.5}'].map(textReply), {
+    provider: "vllm",
+    model: "no-structured-sentinel",
+  });
 }
 
 test("the agent retries default of zero fails on the first bad reply", async () => {
-  reload((name) => (name === "YIAN_AGENT_RETRIES" ? "0" : undefined));
-  const { outcome, model } = await badThenGood();
-  expect(outcome).toBeInstanceOf(EvaluationFailure);
-  expect((outcome as EvaluationFailure).failure.code).toBe("agent.output_invalid");
+  const model = badThenGood();
+  const result = await run(STRUCTURED, model, setting("YIAN_AGENT_RETRIES", "0"));
+  expect([result.status, result.failure?.code]).toEqual(["failed", "agent.output_invalid"]);
   expect(model.requests).toHaveLength(1);
 });
 
 test("authored retries win over the default", async () => {
-  reload((name) => (name === "YIAN_AGENT_RETRIES" ? "0" : undefined));
-  const { outcome, model } = await badThenGood(1);
-  expect(outcome).toEqual(new Output({ score: 1.5 }));
+  const model = badThenGood();
+  const text = STRUCTURED.replace("    output:", "    retries: 1\n    output:");
+  const result = await run(text, model, setting("YIAN_AGENT_RETRIES", "0"));
+  expect(result.output).toEqual({ score: 1.5 });
   expect(model.requests).toHaveLength(2);
 });
+
+const LOOPING = `id: looping
+name: looping
+llm_config: {provider: openai, model: test-model}
+input:
+  question: !str
+nodes:
+  agent:
+    kind: agent
+    tools: [lookup]
+    prompt: \${question}
+    input:
+      question: \${input.question}
+    output: str
+output: \${agent.output}
+`;
 
 /** A reply calling `lookup` with no arguments as call `id`. */
 function lookupCall(id: string): Response {
@@ -117,40 +126,29 @@ function lookupCall(id: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
 }
 
-const CONFIG = { provider: "openai", model: "test-model" };
-
-/**
- * Evaluate an AGENT with `env` granted `lookup` (which answers `ok`) over `replies`; return the
- * outcome and the model.
- */
-async function looping(replies: Response[], env: Record<string, unknown> = {}) {
-  const model = new ScriptedModel(replies, CONFIG);
-  const node = new AgentNode("agent", { prompt: "q", llmConfig: CONFIG, tools: ["lookup"] });
-  node.env = env;
+/** Run `text` over `replies` with `lookup` (which answers `ok`) and `YIAN_AGENT_MAX_TOOL_ITERATIONS=1`. */
+async function looping(text: string, replies: Response[]) {
+  const model = new ScriptedModel(replies, { provider: "openai", model: "test-model" });
   const lookup = new FunctionTool({
     name: "lookup",
     description: "Look it up.",
     parametersJsonSchema: { type: "object", properties: {} },
     execute: () => "ok",
   });
-  const outcome = await drive(node, { models: serving(model), tools: new ToolSet({ lookup }) });
-  return { outcome, model };
+  const result = await run(text, model, setting("YIAN_AGENT_MAX_TOOL_ITERATIONS", "1"), { tools: { lookup } });
+  return { result, model };
 }
 
 test("the agent max_tool_iterations default caps the loop", async () => {
-  reload((name) => (name === "YIAN_AGENT_MAX_TOOL_ITERATIONS" ? "1" : undefined));
-  const { outcome, model } = await looping([0, 1, 2, 3, 4].map((i) => lookupCall(String(i))));
-  expect(outcome).toBeInstanceOf(EvaluationFailure);
-  const { failure } = outcome as EvaluationFailure;
-  expect(failure.code).toBe("agent.max_tool_iterations");
-  expect(failure.message).toContain("tool-iteration cap (1)");
+  const { result, model } = await looping(LOOPING, [0, 1, 2, 3, 4].map((i) => lookupCall(String(i))));
+  expect([result.status, result.failure?.code]).toEqual(["failed", "agent.max_tool_iterations"]);
+  expect(result.failure?.message).toContain("tool-iteration cap (1)");
   expect(model.requests).toHaveLength(1);
 });
 
 test("the authored max_tool_iterations wins over the default", async () => {
-  reload((name) => (name === "YIAN_AGENT_MAX_TOOL_ITERATIONS" ? "1" : undefined));
-  const replies = [lookupCall("0"), lookupCall("1"), textReply("done")];
-  const { outcome, model } = await looping(replies, { max_tool_iterations: 3n });
-  expect(outcome).toEqual(new Output("done"));
+  const text = LOOPING.replace("    tools:", "    env: {max_tool_iterations: 3}\n    tools:");
+  const { result, model } = await looping(text, [lookupCall("0"), lookupCall("1"), textReply("done")]);
+  expect(result.output).toBe("done");
   expect(model.requests).toHaveLength(3);
 });

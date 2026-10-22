@@ -29,7 +29,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, textReply } from "./run_state_fixtures.ts";
+import { rejected, textReply } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 let dir: string;
@@ -230,7 +230,7 @@ test("test_log_resume_restores_into_a_private_graph", async () => {
     throw interruption;
   };
 
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(source, {}, { log: path, env: hostEnv(dir), signal: host.signal, tools: { ask_user: interrupt } }),
   );
   expect(caught).toBe(interruption);

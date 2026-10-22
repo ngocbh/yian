@@ -61,7 +61,7 @@ import { type RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, serving, startedIds, textReply } from "./run_state_fixtures.ts";
+import { rejected, serving, startedIds, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nonfinite-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -276,7 +276,7 @@ for (const learnable of [false, true]) {
 
 /** The `LoadError` loading `source` rejects with. */
 async function loadError(source: string): Promise<LoadError> {
-  const error = await rejection(loadFlow(source));
+  const error = await rejected(loadFlow(source));
   expect(error).toBeInstanceOf(LoadError);
   return error as LoadError;
 }
@@ -445,7 +445,7 @@ output: \${writer.output}
 test("a NaN run input is rejected before the run starts", async () => {
   const log = join(dir, "nan.jsonl");
 
-  const error = await rejection(run(inputFlow("float"), { x: NaN }, { log }));
+  const error = await rejected(run(inputFlow("float"), { x: NaN }, { log }));
 
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toBe("input 'x': NaN is not a yian value");

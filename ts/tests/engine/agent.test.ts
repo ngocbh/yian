@@ -41,7 +41,7 @@
  * `OutputInvalidError` coded `agent.output_invalid` (Python: a `ValidationError`,
  * `node.execute`). `test_rate_limit_stays_node_execute`: a marked rate limit is
  * `provider.rate_limit` (with `modelRetries: 0`). `test_provider_auth_failure_message_is_scrubbed`
- * runs the node with the key in its `llmConfig` rather than `run_flow` (T4-8).
+ * runs the flow through `runWith` (`runFlow` with the model served by `models`).
  *
  * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
@@ -90,6 +90,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, current, type Env, forget, install } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallStarted, RunSucceeded, TokenUsage, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
@@ -160,6 +161,7 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, noGrowth, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { runWith } from "./session_fakes.ts";
 
 test("textOf returns a string as it is", () => {
   expect(textOf("hello\nworld")).toBe("hello\nworld");
@@ -835,11 +837,15 @@ describe("forward", () => {
 
   test("a provider auth failure message is scrubbed", async () => {
     const key = "sk-sentinel-401-zqxw";
-    const config = { provider: "vllm", model: "m", api_key: key };
-    const model = new ScriptedModel([new ProviderError("auth", `Incorrect API key: ${key}`, { status: 401 })], config);
-    const failure = failureOf(await evaluate(agent(config), model));
-    expect(failure.code).toBe("provider.auth");
-    expect(failure.message).toBe("Incorrect API key: [REDACTED]");
+    const flow = await loadFlow("id: keyed\nname: keyed\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: ${agent.output}\n");
+    const refused = new ProviderError("auth", `Incorrect API key: ${key}`, { status: 401 });
+    const model = new ScriptedModel([refused], { provider: "vllm", model: "m" });
+    const llmConfig = { provider: "vllm", model: "m", api_key: key };
+    const authEnv: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(HOME, "auth.json") : undefined);
+    const result = await runWith(flow, {}, null, model, { llmConfig, env: authEnv });
+    expect(result.status).toBe("failed");
+    expect(result.failure?.code).toBe("provider.auth");
+    expect(result.failure?.message).toBe("Incorrect API key: [REDACTED]");
   });
 
   test("a reply calling a tool at a cap of one model turn is agent.max_tool_iterations", async () => {

@@ -16,25 +16,36 @@
  * `test_routing_only_case_over_a_literal_input_missing_a_tag_is_a_load_error`,
  * `test_inner_case_of_a_value_producing_case_must_be_exhaustive`,
  * `test_case_read_inside_text_must_be_exhaustive`,
- * `test_narrowed_read_case_missing_its_reachable_tag_is_rejected`, and the load halves of
- * `test_read_case_over_a_literal_node_output_listing_every_tag_runs`,
+ * `test_narrowed_read_case_missing_its_reachable_tag_is_rejected`; and through `loadFlow` and
+ * `runFlow`, `test_read_case_over_a_literal_node_output_listing_every_tag_runs`,
  * `test_read_case_over_a_literal_input_listing_every_tag_runs`,
  * `test_routing_only_case_over_a_str_without_else_still_skips_on_no_match`,
  * `test_narrowed_read_case_counts_only_the_tags_that_reach_it` and
- * `test_unquoted_yes_routes_to_a_node_named_yes` (each flow assembles).
+ * `test_unquoted_yes_routes_to_a_node_named_yes`.
  *
- * Changed: the flows assemble (`assembleText`), where Python loads them. An uncovered tag list is
- * written in the text form, `["b"]` (Python `['b']`).
- *
- * Later (T4-8 follow-up): the run halves of the five rows whose load half is ported.
+ * Changed: the load-error flows assemble (`assembleText`), where Python loads them. An uncovered
+ * tag list is written in the text form, `["b"]` (Python `['b']`). The CODE bodies are JavaScript
+ * and the CODE references TS's (`./fixtures/compose_codefns.ts:echo`).
  *
  * The harvested cases are pinned at the end.
  */
 
 import { expect, test } from "bun:test";
 
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { NodeSkipped } from "../../src/events.ts";
+import { type RunResult, runFlow } from "../../src/run.ts";
+import {
+  assembled,
+  assembleText,
+  type CaseRow,
+  loadConformanceFlow,
+  loadError,
+  runCase,
+} from "../compose/declarations.ts";
+import { startedIds } from "./run_state_fixtures.ts";
 
 /** Return the 1-based number of the first line of `text` holding `needle`. */
 function lineOf(text: string, needle: string): number {
@@ -50,6 +61,17 @@ function errorLine(error: LoadError): number {
 function exhaustive(caseId: string): string {
   return `case node '${caseId}' produces a value, so it must be exhaustive: add an \`else:\``;
 }
+
+/** Run the loaded `flow` on `inputs`, returning its output; the run must succeed. */
+async function outputOf(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>): Promise<unknown> {
+  const result = await runFlow(flow, inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+/** Return the ids of the nodes a run skipped. */
+const skippedIds = (result: RunResult) =>
+  result.events.filter((event) => event instanceof NodeSkipped).map((event) => (event as NodeSkipped).nodeId);
 
 /** Return a flow with a `gate` case (indented body), CODE nodes `pa` and `pb`, and `output`. */
 function gateFlow(
@@ -94,8 +116,11 @@ const PICK =
   "  pick:\n    kind: code\n    input:\n      x: ${input.x}\n" +
   '    code: |\n      return inputs["x"]\n    output: Literal(a, b)\n';
 
-test("read case over a Literal node output listing every tag: assembles", () => {
-  assembleText(gateFlow("    on: ${pick.output}\n" + routes("a", "b"), { extraNodes: PICK }));
+test("read case over a Literal node output listing every tag runs", async () => {
+  const loaded = await loadFlow(gateFlow("    on: ${pick.output}\n" + routes("a", "b"), { extraNodes: PICK }));
+
+  expect(await outputOf(loaded, { x: "a" })).toBe("A");
+  expect(await outputOf(loaded, { x: "b" })).toBe("B");
 });
 
 test("read case over a Literal node output missing a tag is rejected", () => {
@@ -107,10 +132,13 @@ test("read case over a Literal node output missing a tag is rejected", () => {
   expect(errorLine(error)).toBe(lineOf(text, "  gate:"));
 });
 
-test("read case over a Literal input listing every tag: assembles", () => {
-  assembleText(
+test("read case over a Literal input listing every tag runs", async () => {
+  const loaded = await loadFlow(
     gateFlow("    on: ${input.choice}\n" + routes("a", "b"), { typedefs: CHOICE, inputs: "  choice: !Choice\n" }),
   );
+
+  expect(await outputOf(loaded, { choice: "a" })).toBe("A");
+  expect(await outputOf(loaded, { choice: "b" })).toBe("B");
 });
 
 test("read case over a Literal input missing a tag is rejected", () => {
@@ -128,8 +156,17 @@ test("read case over an Optional Literal input is rejected", () => {
   expect(loadError(() => assembleText(text)).message).toBe(`${exhaustive("gate")} (\${input.choice} may be null)`);
 });
 
-test("routing-only case over a str without else: assembles", () => {
-  assembleText(gateFlow("    on: ${input.x}\n" + routes("a", "b"), { output: "${pa.output | pb.output:-'none'}" }));
+test("routing-only case over a str without else still skips on no match", async () => {
+  const loaded = await loadFlow(
+    gateFlow("    on: ${input.x}\n" + routes("a", "b"), { output: "${pa.output | pb.output:-'none'}" }),
+  );
+
+  expect(await outputOf(loaded, { x: "a" })).toBe("A");
+  const result = await runFlow(loaded, { x: "c" });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("none");
+  expect(new Set(skippedIds(result))).toEqual(new Set(["pa", "pb"]));
+  expect(new Set(startedIds(result))).toEqual(new Set(["__start__", "gate", "__end__"]));
 });
 
 test("routing-only case over a Literal input missing a tag is a load error", () => {
@@ -176,8 +213,8 @@ function narrowedFlow(innerTag: string): string {
     "input:\n  kind: !str\n" +
     "nodes:\n" +
     "  d:\n    kind: code\n    input:\n      kind: ${input.kind}\n    code: |\n" +
-    '      if inputs["kind"] == "buy":\n          return {"action": "buy", "qty": 3}\n' +
-    '      return {"action": "sell", "price": 1.5}\n' +
+    '      if (inputs["kind"] === "buy")\n        return {action: "buy", qty: 3}\n' +
+    '      return {action: "sell", price: 1.5}\n' +
     "    output: Union(Buy, Sell)\n" +
     "  route:\n    kind: case\n    on: ${d.output.action}\n    cases:\n" +
     "      - when: buy\n        then: inner\n    else: sold\n" +
@@ -189,8 +226,11 @@ function narrowedFlow(innerTag: string): string {
   );
 }
 
-test("narrowed read case counting only the tags that reach it: assembles", () => {
-  assembleText(narrowedFlow("buy"));
+test("narrowed read case counts only the tags that reach it", async () => {
+  const loaded = await loadFlow(narrowedFlow("buy"));
+
+  expect(await outputOf(loaded, { kind: "buy" })).toBe("bought 3");
+  expect(await outputOf(loaded, { kind: "sell" })).toBe("sold");
 });
 
 test("narrowed read case missing its reachable tag is rejected", () => {
@@ -202,17 +242,22 @@ test("narrowed read case missing its reachable tag is rejected", () => {
   expect(errorLine(error)).toBe(lineOf(text, "  inner:"));
 });
 
-test("unquoted yes names a node named yes: assembles", () => {
-  assembleText(
+test("unquoted yes routes to a node named yes", async () => {
+  const loaded = await loadConformanceFlow(
     "id: f\nname: f\ninput:\n  cmd: !str\nnodes:\n" +
       "  route:\n    kind: case\n    on: ${input.cmd}\n    cases:\n" +
       "      - when: a\n        then: reply\n    else: yes\n" +
-      "  reply:\n    kind: code\n    code: tests.engine._compose_codefns:echo\n" +
+      "  reply:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
       "    input:\n      topic: replied\n    output: str\n" +
-      "  yes:\n    kind: code\n    code: tests.engine._compose_codefns:echo\n" +
+      "  yes:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
       "    input:\n      topic: agreed\n    output: str\n" +
       "output: ${route.output}\n",
   );
+
+  const result = await runFlow(loaded, { cmd: "b" });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(startedIds(result)).toContain("yes");
+  expect(startedIds(result)).not.toContain("reply");
 });
 
 // ---------- harvested conformance cases ----------

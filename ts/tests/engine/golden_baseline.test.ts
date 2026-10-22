@@ -18,8 +18,9 @@
  * `research-one` is a hand-built child shaped like its def, where Python resolves the sibling
  * file on the search path.
  *
- * Later (T4-8 follow-up): `MAP_OVER_NOT_LIST_FMT`, the MAP `over`-not-a-list message the engine's bind seam
- * raises.
+ * Pinned in `eval_node.test.ts`: `MAP_OVER_NOT_LIST_FMT`, the MAP `over`-not-a-list message, which
+ * Python defines here for `test_eval_node.py`; the "map over not a list message is byte
+ * identical" rows there pin the whole message where Python formats this constant.
  */
 
 import { expect, test } from "bun:test";

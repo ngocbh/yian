@@ -64,15 +64,21 @@
  * Dropped: `test_unquoted_datetime_when_is_a_load_error` (TS YAML reads an unquoted datetime as
  * text, so it matches that text).
  *
- * Later (T4-8 follow-up): `test_int_on_matches_int_when`, `test_negative_int_when`,
- * `test_float_on_matches_numerically`, `test_bool_on_matches_bool_when`,
+ * Ported through `loadFlow` and `runFlow`, the run rows: `test_int_on_matches_int_when`,
+ * `test_negative_int_when`, `test_float_on_matches_numerically`, `test_bool_on_matches_bool_when`,
  * `test_quoted_when_is_text`, `test_no_else_int_on_routes_at_runtime`,
  * `test_bool_never_equals_a_number_on_an_untyped_on`, `test_date_when_is_iso_text`,
  * `test_untyped_on_compares_exactly`, `test_date_when_on_a_date_input`,
  * `test_unquoted_1e3_when_is_a_float`, `test_bool_value_case_with_true_and_false_needs_no_else`,
  * `test_routing_only_bool_join_is_exhaustive`,
- * `test_literal_value_case_listing_every_tag_needs_no_else`,
- * `test_unquoted_date_when_narrows_a_date_shaped_union_tag`.
+ * `test_literal_value_case_listing_every_tag_needs_no_else` and
+ * `test_unquoted_date_when_narrows_a_date_shaped_union_tag`. Changed: the CODE bodies are
+ * JavaScript; a flow's int output is a `bigint` (`2n`, `5n`). The `floats` half of
+ * `test_bool_never_equals_a_number_on_an_untyped_on` reads `on: ${src.output / 2}` over a `src`
+ * returning the int 2, where Python's `src` returns `1.0`: a whole host number reads as an int
+ * (decisions 9A and 45), and `/` always gives a float (decision 7), so the int `when: 1` still
+ * meets the float 1.0 and matches numerically. The float inputs `2.0`, `3.0` and `1000.0` are
+ * ints in a `float` slot (decision 38) and match numerically as Python's floats do.
  *
  * Ported through `loadFlow`: `test_routing_only_call_child_literal_input_missing_a_tag`, which
  * composes a `defs:` entry; its harvested case is pinned at the end with `full` (the definition
@@ -91,6 +97,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { duplicateWhenMessage } from "../../src/compose/validate/case_exhaustive.ts";
 import { evaluateWhenRecord } from "../../src/expr/expressions.ts";
 import type { CaseNode } from "../../src/nodes/case/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import {
@@ -148,7 +155,7 @@ function flow(
   const {
     onType = "int",
     else_ = "other",
-    srcCode = 'return True if inputs["p"] == "t" else 1',
+    srcCode = 'return inputs["p"] == "t" ? true : 1',
     srcOutput = null,
   } = options;
   const targets = [...new Set(whens.map(([, then]) => then))];
@@ -171,6 +178,94 @@ function flow(
   text += targets.map(branch).join("");
   return `${text}output: \${${targets.map((name) => `${name}.output`).join(" | ")}}\n`;
 }
+
+/** Load and run `text` on `inputs`; return the flow output, expecting success. */
+async function route(text: string, inputs: Readonly<Record<string, unknown>>): Promise<unknown> {
+  const result = await runFlow(await loadFlow(text), inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+test("int on matches int when", async () => {
+  const text = flow([
+    ["1", "one"],
+    ["2", "two"],
+  ]);
+
+  expect(await route(text, { n: 1 })).toBe("one");
+  expect(await route(text, { n: 2 })).toBe("two");
+  expect(await route(text, { n: 3 })).toBe("other");
+});
+
+test("negative int when", async () => {
+  const text = flow([["-1", "one"]]);
+
+  expect(await route(text, { n: -1 })).toBe("one");
+  expect(await route(text, { n: 1 })).toBe("other");
+});
+
+test("float on matches numerically", async () => {
+  const text = flow(
+    [
+      ["1.5", "one"],
+      ["2", "two"],
+    ],
+    { onType: "float" },
+  );
+
+  expect(await route(text, { n: 1.5 })).toBe("one");
+  expect(await route(text, { n: 2.0 })).toBe("two");
+  expect(await route(text, { n: 3.0 })).toBe("other");
+});
+
+test("bool on matches bool when", async () => {
+  const text = flow(
+    [
+      ["true", "one"],
+      ["false", "two"],
+    ],
+    { onType: "bool" },
+  );
+
+  expect(await route(text, { n: true })).toBe("one");
+  expect(await route(text, { n: false })).toBe("two");
+});
+
+test("quoted when is text", async () => {
+  expect(await route(flow([['"1"', "one"]], { onType: "str" }), { n: "1" })).toBe("one");
+});
+
+test("no else int on routes at runtime", async () => {
+  const text = flow(
+    [
+      ["1", "one"],
+      ["2", "two"],
+    ],
+    { else_: null },
+  );
+
+  expect(await route(text, { n: 1 })).toBe("one");
+  expect(await route(text, { n: 2 })).toBe("two");
+});
+
+test("bool never equals a number on an untyped on", async () => {
+  const text = flow(
+    [
+      ["1", "one"],
+      ["true", "two"],
+    ],
+    { onType: null },
+  );
+  // `/` always gives a float (decision 7), so `on:` reads the float 1.0.
+  const floats = flow([["1", "one"]], { onType: null, srcCode: "return 2", srcOutput: "int" }).replace(
+    "on: ${src.output}",
+    "on: ${src.output / 2}",
+  );
+
+  expect(await route(text, { pick: "t" })).toBe("two");
+  expect(await route(text, { pick: "x" })).toBe("one");
+  expect(await route(floats, { pick: "x" })).toBe("one");
+});
 
 /** Return the `when:` conditions of the built `route` of flow `text`, assembled. */
 function loweredWhens(text: string): (string | null)[] {
@@ -208,6 +303,12 @@ test.each([1e20, 1.5e-7, -2.5, -0, 5e-324])("large and small floats lower exactl
 
   expect(evaluateWhenRecord(condition, { __on: value }, TYPES)).toBe(true);
   if (value * 2 !== value) expect(evaluateWhenRecord(condition, { __on: value * 2 }, TYPES)).toBe(false);
+});
+
+test("date when is ISO text", async () => {
+  const text = flow([["2026-01-02", "one"]], { onType: null, srcCode: 'return "2026-01-02"' });
+
+  expect(await route(text, { pick: "x" })).toBe("one");
 });
 
 test.each<[bigint | number, string]>([
@@ -278,6 +379,14 @@ test("an unquoted datetime when lowers to its text", () => {
   expect(loweredWhens(flow([["2026-01-02T10:00:00Z", "one"]], { onType: "str" }))).toEqual([
     '__on == "2026-01-02T10:00:00Z"',
   ]);
+});
+
+test("untyped on compares exactly", async () => {
+  const unquoted = flow([["1", "one"]], { onType: null, srcCode: 'return "1"' });
+  const quoted = flow([['"1"', "one"]], { onType: null, srcCode: 'return "1"' });
+
+  expect(await route(unquoted, { pick: "x" })).toBe("other");
+  expect(await route(quoted, { pick: "x" })).toBe("one");
 });
 
 test("onMatchKey", () => {
@@ -470,6 +579,19 @@ test("optional on type checks the non-null part", () => {
   expect(whenError(text, '"1"')).toContain("`Optional(int)`");
 });
 
+test("date when on a date input", async () => {
+  const text = flow(
+    [
+      ["2026-01-02", "one"],
+      ['"2026-01-03"', "two"],
+    ],
+    { onType: "date" },
+  );
+
+  expect(await route(text, { n: "2026-01-02" })).toBe("one");
+  expect(await route(text, { n: "2026-01-03" })).toBe("two");
+});
+
 test("bool when on str quote fix keeps spelling", () => {
   const title = flow([["True", "one"]], { onType: "str" });
   const lower = flow([["true", "one"]], { onType: "str" });
@@ -484,6 +606,10 @@ test("integral float when on int", () => {
   expect(whenError(text, "1.0")).toBe(
     "case node 'route': `when: 1.0` is a float but `on: ${input.n}` is `int`; write it as an int: `when: 1`",
   );
+});
+
+test("unquoted 1e3 when is a float", async () => {
+  expect(await route(flow([["1e3", "one"]], { onType: "float" }), { n: 1000.0 })).toBe("one");
 });
 
 test("no drop-quotes hint for text YAML reads as text", () => {
@@ -752,6 +878,19 @@ function valueFlow(whens: readonly (readonly [string, string])[], onType: string
   return `${text}output: \${route.output}\n`;
 }
 
+test("bool value case with true and false needs no else", async () => {
+  const text = valueFlow(
+    [
+      ["true", "yes"],
+      ["false", "no"],
+    ],
+    "bool",
+  );
+
+  expect(await route(text, { n: true })).toBe("yes");
+  expect(await route(text, { n: false })).toBe("no");
+});
+
 test("bool value case missing false is not exhaustive", () => {
   const error = loadError(() => assembleText(valueFlow([["true", "yes"]], "bool")));
 
@@ -774,6 +913,56 @@ test("int value case reason names Literal or bool", () => {
   const error = loadError(() => assembleText(valueFlow([["1", "one"]], "int")));
 
   expect(error.message).toBe(notExhaustive("on: ${input.n} is int, not a Literal or bool"));
+});
+
+test("routing-only bool join is exhaustive", async () => {
+  const text =
+    "id: f\nname: f\ninput:\n  n: !bool\nnodes:\n" +
+    "  route:\n    kind: case\n    on: ${input.n}\n    cases:\n" +
+    "      - when: true\n        then: one\n" +
+    "      - when: false\n        then: two\n" +
+    "  one:\n    kind: code\n    code: |\n      return 1\n    output: int\n" +
+    "  two:\n    kind: code\n    code: |\n      return 2\n    output: int\n" +
+    "output: ${(one.output | two.output) + 1}\n";
+
+  expect(await route(text, { n: true })).toBe(2n);
+  expect(await route(text, { n: false })).toBe(3n);
+});
+
+test("Literal value case listing every tag needs no else", async () => {
+  const text = valueFlow(
+    [
+      ["a", "A"],
+      ["b", "B"],
+    ],
+    "Literal(a, b)",
+  );
+
+  expect(await route(text, { n: "a" })).toBe("A");
+  expect(await route(text, { n: "b" })).toBe("B");
+});
+
+test("unquoted date when narrows a date-shaped union tag", async () => {
+  const text =
+    "id: f\nname: f\n" +
+    "typedefs:\n" +
+    "  A: {d: 'Literal(\"2026-01-02\")', x: int}\n" +
+    "  B: {d: 'Literal(other)', y: int}\n" +
+    "  U: Union(A, B)\n" +
+    "input:\n  pick: !str\nnodes:\n" +
+    "  p:\n    kind: code\n    input:\n      s: ${input.pick}\n    output: U\n" +
+    "    code: |\n" +
+    '      return inputs["s"] == "a" ? {"d": "2026-01-02", "x": 5} : {"d": "other", "y": 1}\n' +
+    "  route:\n    kind: case\n    on: ${p.output.d}\n    cases:\n" +
+    "      - when: 2026-01-02\n        then: a\n" +
+    "    else: e\n" +
+    "  a:\n    kind: code\n    input:\n      x: ${p.output.x}\n" +
+    '    code: |\n      return inputs["x"]\n    output: int\n' +
+    "  e:\n    kind: code\n    code: |\n      return 0\n    output: int\n" +
+    "output: ${a.output | e.output}\n";
+
+  expect(await route(text, { pick: "a" })).toBe(5n);
+  expect(await route(text, { pick: "b" })).toBe(0n);
 });
 
 // ---------- routing-only enum coverage ----------

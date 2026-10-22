@@ -1,10 +1,10 @@
 /**
  * A flow output that reads a node CASE routing may skip gets the explicit null default, so it
  * returns null when that node is skipped, and arithmetic on such a value is a load error: a port
- * of the load rows of `tests/engine/test_skipped_flow_outputs.py`, assembling each flow with
- * `assembleText` where Python calls `load_flow`.
+ * of `tests/engine/test_skipped_flow_outputs.py`, assembling each load-only flow with
+ * `assembleText` where Python calls `load_flow`, and loading each run with `loadFlow`.
  *
- * Ported, the compiled output sources (Python's `_sources`), whose `_run` half is Later (T4-8 follow-up):
+ * Ported, the compiled output sources (Python's `_sources`) and the runs (`_run`):
  * `test_record_output_of_a_skipped_branch_is_null`,
  * `test_coalesce_over_a_routing_only_case_is_null`, `test_value_mode_output_is_null`,
  * `test_dotted_output_is_null`, `test_ref_default_group_over_a_routing_only_case_is_null`,
@@ -16,9 +16,22 @@
  * `test_root_node_output_is_unchanged`, `test_reader_of_an_exhaustive_join_is_unchanged`,
  * `test_literal_output_is_unchanged`, `test_embedded_template_is_unchanged`,
  * `test_comparison_is_unchanged`, `test_on_over_a_nullable_literal_may_match_nothing` (2),
- * `test_on_over_a_literal_input` (3) and `test_map_body_routing_on_a_literal_item_is_not_rewritten`
- * (the inline MAP body's outputs). Also `test_rewritten_output_fingerprints_as_the_explicit_null_default`
- * (`flowFingerprint`).
+ * `test_on_over_a_literal_input` (3), `test_defs_child_returns_null_to_its_caller` and
+ * `test_map_body_routing_on_a_literal_item_is_not_rewritten` (the inline MAP body's outputs).
+ * Also `test_rewritten_output_fingerprints_as_the_explicit_null_default` (`flowFingerprint`).
+ *
+ * Ported, the run-only rows: `test_nested_case_target_is_null_when_either_case_skips_it`,
+ * `test_depends_on_a_skipped_target_is_null`, `test_then_call_target_is_null`,
+ * `test_call_node_target_is_null`, `test_loop_node_target_is_null`, `test_map_node_target_is_null`,
+ * `test_typed_output_over_a_skipped_branch_fails_at_runtime`,
+ * `test_optional_typed_output_over_a_skipped_branch_is_null`,
+ * `test_typed_argument_narrows_a_skipped_child_output_at_runtime`,
+ * `test_inline_loop_sets_a_skipped_field_to_null`,
+ * `test_inline_loop_over_a_typed_str_seed_rejects_the_null_next_iteration`,
+ * `test_inline_loop_over_an_optional_seed_carries_the_null` (2),
+ * `test_named_loop_body_sets_a_skipped_field_to_null`,
+ * `test_map_inline_body_returns_null_per_skipped_element`, `test_replay_returns_the_same_null`
+ * (with `resumeFlow`) and `test_child_routing_on_a_literal_input_passes_to_a_str_input`.
  *
  * Ported, the load-time rows (all errors but the comparison, which loads):
  * `test_inline_loop_over_an_untyped_seed_asks_for_its_type` (the loop
@@ -33,8 +46,8 @@
  * `test_hint_replaces_a_null_default`, `test_arithmetic_in_a_searched_when_under_a_default_is_a_load_error`,
  * `test_arithmetic_on_a_null_default_in_a_searched_when_is_a_load_error`,
  * `test_arithmetic_in_a_map_over_names_map_over`, `test_arithmetic_in_a_wait_until_names_wait_until`
- * and `test_arithmetic_in_a_default_is_checked_as_if_it_always_runs`. Ported, the load halves
- * (they assemble, with no skipped-arithmetic error) of `test_arithmetic_in_a_node_that_co_skips_loads`,
+ * and `test_arithmetic_in_a_default_is_checked_as_if_it_always_runs`. Ported, loaded and run:
+ * `test_arithmetic_in_a_node_that_co_skips_loads`,
  * `test_arithmetic_in_a_node_routed_by_a_case_on_the_value_loads`,
  * `test_arithmetic_on_a_node_that_depends_on_a_case_loads`, `test_arithmetic_on_a_defaulted_value_loads`,
  * `test_arithmetic_on_an_exhaustive_join_loads`, `test_arithmetic_on_an_input_loads`,
@@ -46,42 +59,36 @@
  *
  * The harvested `load-case/engine_skipped_flow_outputs__*` cases are pinned at the end.
  *
- * Changed: CODE bodies are TS; load doesn't run them. The literal output `5` reads as `5n`. The
- * fingerprint row's second half stubs `null_skipped_outputs` in Python's pipeline module to
- * fingerprint the flow without the rewrite; a test can't stub a function another ES module
- * imports, so it puts the authored output source back on a fresh assembly by hand (END's edge
- * keeps the optional stance the rewrite gave it, so only the output source differs). The error
- * rows pin the whole message where Python checks fragments.
+ * Changed: CODE bodies are TS, and ints reach them as numbers; a flow's int output is a `bigint`,
+ * so the literal output `5` reads as `5n`. In `test_replay_returns_the_same_null` each CODE body
+ * appends its node id to a file, where Python patches the code functions its references name to
+ * record it. The fingerprint row's second half stubs `null_skipped_outputs` in Python's pipeline
+ * module to fingerprint the flow without the rewrite; a test can't stub a function another ES
+ * module imports, so it puts the authored output source back on a fresh assembly by hand (END's
+ * edge keeps the optional stance the rewrite gave it, so only the output source differs). The
+ * error rows pin the whole message where Python checks fragments.
  *
  * Ported, reading a `defs:` child's own output contract (through `assembleText`, whose callable
  * scope builds the def): `test_call_output_of_a_skipped_branch_is_optional`,
  * `test_call_output_of_a_coalesce_over_a_routing_only_case_is_optional`,
- * `test_call_output_of_a_dotted_skipped_read_is_optional`,
- * `test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error`; and the `_sources` half of
- * `test_defs_child_returns_null_to_its_caller`.
- *
- * Later (T4-8 follow-up), through `run_flow`: `test_nested_case_target_is_null_when_either_case_skips_it`,
- * `test_depends_on_a_skipped_target_is_null`, `test_then_call_target_is_null`,
- * `test_call_node_target_is_null`, `test_loop_node_target_is_null`, `test_map_node_target_is_null`,
- * `test_defs_child_returns_null_to_its_caller`, `test_typed_output_over_a_skipped_branch_fails_at_runtime`,
- * `test_optional_typed_output_over_a_skipped_branch_is_null`,
- * `test_typed_argument_narrows_a_skipped_child_output_at_runtime`,
- * `test_inline_loop_sets_a_skipped_field_to_null`,
- * `test_inline_loop_over_a_typed_str_seed_rejects_the_null_next_iteration`,
- * `test_inline_loop_over_an_optional_seed_carries_the_null`,
- * `test_named_loop_body_sets_a_skipped_field_to_null`,
- * `test_map_inline_body_returns_null_per_skipped_element`, `test_replay_returns_the_same_null`,
- * `test_child_routing_on_a_literal_input_passes_to_a_str_input`, and the run halves of the rows
- * above.
+ * `test_call_output_of_a_dotted_skipped_read_is_optional` and
+ * `test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error`.
  */
+
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { type CompiledFlow, FlowOutput } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import type { FailureCode } from "../../src/diagnostics.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
+import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -123,97 +130,250 @@ const R2 =
   code("b", '"B"');
 const R2_INPUTS = "approve: !bool\n  other: !bool";
 
+/** Load `text` with `loadFlow` and run it on `inputs`. */
+async function runText(text: string, inputs: Readonly<Record<string, unknown>>): Promise<RunResult> {
+  return runFlow(await loadFlow(text), inputs);
+}
+
+/** Load and run `text`, returning the output; the run must succeed. */
+async function run(text: string, inputs: Readonly<Record<string, unknown>>): Promise<unknown> {
+  const result = await runText(text, inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
+/** Expect the run of `text` on `inputs` to fail with `code`. */
+async function runFails(text: string, inputs: Readonly<Record<string, unknown>>, code: FailureCode): Promise<void> {
+  const result = await runText(text, inputs);
+  expect(result.status).toBe("failed");
+  expect(result.failure?.code).toBe(code);
+}
+
 /** Return the assembled flow's output sources in declaration order. */
 function sources(text: string): unknown[] {
   return assembleText(text).flow.compiled.outputs.map((output) => output.binding.source);
 }
 
-test("a record output of a skipped branch is null", () => {
-  expect(sources(flow(R1, "\n  order: ${order.output}"))).toEqual(["${order.output:-null}"]);
+test("a record output of a skipped branch is null", async () => {
+  // The skipped branch target gives null; the taken one gives its value.
+  const text = flow(R1, "\n  order: ${order.output}");
+  expect(sources(text)).toEqual(["${order.output:-null}"]);
+  expect(await run(text, { approve: false })).toEqual({ order: null });
+  expect(await run(text, { approve: true })).toEqual({ order: "filled" });
 });
 
-test("a coalesce over a routing-only case is null", () => {
+test("a coalesce over a routing-only case is null", async () => {
   const text = flow(R2, "\n  v: ${a.output | b.output}", { inputs: R2_INPUTS });
   expect(sources(text)).toEqual(["${(a.output | b.output) :- null}"]);
+  expect(await run(text, { approve: false, other: false })).toEqual({ v: null });
+  expect(await run(text, { approve: true, other: false })).toEqual({ v: "A" });
+  expect(await run(text, { approve: false, other: true })).toEqual({ v: "B" });
 });
 
-test("a value-mode output is null", () => {
-  expect(sources(flow(R1, " ${order.output}"))).toEqual(["${order.output:-null}"]);
+test("a nested case target is null when either case skips it", async () => {
+  // A target of an inner CASE gives null when the inner or the outer CASE skips it.
+  const nodes =
+    gate("inner", "rejected", "outer") +
+    gate("order", "hold", "inner", "inner") +
+    code("order", '"filled"') +
+    code("hold", '"held"') +
+    code("rejected", '"no"');
+  const text = flow(nodes, "\n  order: ${order.output}", { inputs: "approve: !bool\n  inner: !bool" });
+  expect(await run(text, { approve: true, inner: false })).toEqual({ order: null });
+  expect(await run(text, { approve: false, inner: true })).toEqual({ order: null });
+  expect(await run(text, { approve: true, inner: true })).toEqual({ order: "filled" });
 });
 
-test("a dotted output is null", () => {
+test("a value-mode output is null", async () => {
+  const text = flow(R1, " ${order.output}");
+  expect(sources(text)).toEqual(["${order.output:-null}"]);
+  expect(await run(text, { approve: false })).toBeNull();
+});
+
+test("a dotted output is null", async () => {
   const nodes = gate("order", "rejected") + code("order", '{"status": "filled"}', "\n      status: str") + code("rejected", '"no"');
-  expect(sources(flow(nodes, "\n  s: ${order.output.status}"))).toEqual(["${order.output.status:-null}"]);
+  const text = flow(nodes, "\n  s: ${order.output.status}");
+  expect(sources(text)).toEqual(["${order.output.status:-null}"]);
+  expect(await run(text, { approve: false })).toEqual({ s: null });
+  expect(await run(text, { approve: true })).toEqual({ s: "filled" });
 });
 
-test("a ref default group over a routing-only case is null", () => {
+test("a ref default group over a routing-only case is null", async () => {
   const text = flow(R2, "\n  v: ${a.output :- b.output}", { inputs: R2_INPUTS });
   expect(sources(text)).toEqual(["${(a.output :- b.output) :- null}"]);
+  expect(await run(text, { approve: false, other: false })).toEqual({ v: null });
+  expect(await run(text, { approve: true, other: false })).toEqual({ v: "A" });
 });
 
-test("depends_on a case runs on every branch", () => {
+test("depends_on a skipped target is null", async () => {
+  // A node with `depends_on` a skipped branch target is skipped too, and gives null.
+  const text = flow(R1 + code("after", '"after"', "str", "    depends_on: [order]\n"), "\n  a: ${after.output}");
+  expect(await run(text, { approve: false })).toEqual({ a: null });
+  expect(await run(text, { approve: true })).toEqual({ a: "after" });
+});
+
+test("depends_on a case runs on every branch", async () => {
   // `depends_on` a CASE runs whichever branch the CASE takes, so its output needs no null.
   const nodes = R1 + code("after", '"after"', "str", "    depends_on: [gate]\n");
-  expect(sources(flow(nodes, "\n  a: ${after.output}"))).toEqual(["${after.output}"]);
+  const text = flow(nodes, "\n  a: ${after.output}");
+  expect(sources(text)).toEqual(["${after.output}"]);
+  expect(await run(text, { approve: true })).toEqual({ a: "after" });
+  expect(await run(text, { approve: false })).toEqual({ a: "after" });
+});
+
+const TAKE = `defs:
+  take:
+    input:
+      stance: !str
+    nodes:
+      x:
+        kind: code
+        output: str
+        input:
+          stance: \${input.stance}
+        code: |
+          return inputs["stance"]
+    output: \${x.output}
+`;
+
+test("a then: call target is null", async () => {
+  // Reading `${inner.output}` makes `inner` produce a value, so it must be exhaustive; the skip
+  // comes from the routing-only `outer`, which may match nothing.
+  const nodes = gate("inner", null, "outer") + gate('call(take, stance="pro")', 'call(take, stance="con")', "inner", "inner");
+  const text = flow(nodes, "\n  v: ${inner.output}", { inputs: "approve: !bool\n  inner: !bool", defs: TAKE });
+  expect(await run(text, { approve: false, inner: true })).toEqual({ v: null });
+  expect(await run(text, { approve: true, inner: true })).toEqual({ v: "pro" });
+  expect(await run(text, { approve: true, inner: false })).toEqual({ v: "con" });
+});
+
+test("a call node target is null", async () => {
+  // A `kind: call` node behind a CASE gives null when skipped.
+  const nodes =
+    gate("c", "rejected") +
+    '  c:\n    kind: call\n    call: take\n    input:\n      stance: "pro"\n' +
+    code("rejected", '"no"');
+  const text = flow(nodes, "\n  v: ${c.output}", { defs: TAKE });
+  expect(await run(text, { approve: false })).toEqual({ v: null });
+  expect(await run(text, { approve: true })).toEqual({ v: "pro" });
+});
+
+const BUMP = `defs:
+  bump:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: \${step.output}
+`;
+
+test("a loop node target is null", async () => {
+  // A `kind: loop` node behind a CASE gives null when skipped.
+  const nodes =
+    gate("lp", "rejected") +
+    "  lp:\n    kind: loop\n    call: bump\n    input:\n      n: 0\n    while: n < 2\n    max: 5\n" +
+    code("rejected", '"no"');
+  const text = flow(nodes, "\n  v: ${lp.output}", { defs: BUMP });
+  expect(await run(text, { approve: false })).toEqual({ v: null });
+  expect(await run(text, { approve: true })).toEqual({ v: { n: 2n } });
+});
+
+test("a map node target is null", async () => {
+  // A `kind: map` node behind a CASE gives null when skipped.
+  const nodes =
+    gate("m", "rejected") +
+    "  m:\n    kind: map\n    call: take\n    over: ${input.xs}\n    input:\n      stance: ${item}\n" +
+    code("rejected", '"no"');
+  const text = flow(nodes, "\n  v: ${m.output}", { inputs: "approve: !bool\n  xs: !list(str)", defs: TAKE });
+  expect(await run(text, { approve: false, xs: ["p"] })).toEqual({ v: null });
+  expect(await run(text, { approve: true, xs: ["p"] })).toEqual({ v: ["p"] });
 });
 
 // then: pro / else: caut (always takes a branch)
 const JOIN = gate("pro", "caut") + code("pro", '"pro"') + code("caut", '"caut"');
 
-test("a coalesce over an exhaustive case is unchanged", () => {
-  expect(sources(flow(JOIN, "\n  v: ${pro.output | caut.output}"))).toEqual(["${pro.output | caut.output}"]);
+test("a coalesce over an exhaustive case is unchanged", async () => {
+  const text = flow(JOIN, "\n  v: ${pro.output | caut.output}");
+  expect(sources(text)).toEqual(["${pro.output | caut.output}"]);
+  expect(await run(text, { approve: true })).toEqual({ v: "pro" });
+  expect(await run(text, { approve: false })).toEqual({ v: "caut" });
 });
 
-test("the case output of an exhaustive case is unchanged", () => {
-  expect(sources(flow(JOIN, "\n  v: ${gate.output}"))).toEqual(["${pro.output | caut.output}"]);
+test("the case output of an exhaustive case is unchanged", async () => {
+  const text = flow(JOIN, "\n  v: ${gate.output}");
+  expect(sources(text)).toEqual(["${pro.output | caut.output}"]);
+  expect(await run(text, { approve: false })).toEqual({ v: "caut" });
 });
 
 // A CASE routing to a value entry: then: pro (`!str pro`) / else: caut (always takes a branch)
 const ENTRY_JOIN = gate("pro", "caut", "route") + "  pro: !str pro\n" + code("caut", '"caut"');
 
-test("a case output over a value entry branch is unchanged", () => {
-  expect(sources(flow(ENTRY_JOIN, "\n  v: ${route.output}"))).toEqual(["${pro.output | caut.output}"]);
+test("a case output over a value entry branch is unchanged", async () => {
+  const text = flow(ENTRY_JOIN, "\n  v: ${route.output}");
+  expect(sources(text)).toEqual(["${pro.output | caut.output}"]);
+  expect(await run(text, { approve: true })).toEqual({ v: "pro" });
+  expect(await run(text, { approve: false })).toEqual({ v: "caut" });
 });
 
-test("a case output over an inner case is unchanged", () => {
+test("a case output over an inner case is unchanged", async () => {
   // An exhaustive CASE whose branch is an exhaustive CASE keeps a plain coalesce.
   const nodes = gate("route", "hold", "gate", "other") + ENTRY_JOIN + code("hold", '"held"');
   const text = flow(nodes, "\n  v: ${gate.output}", { inputs: R2_INPUTS });
   expect(sources(text)).toEqual(["${pro.output | caut.output | hold.output}"]);
+  expect(await run(text, { approve: false, other: true })).toEqual({ v: "caut" });
+  expect(await run(text, { approve: true, other: false })).toEqual({ v: "held" });
 });
 
-test("a case output over an inner case and a value entry is unchanged", () => {
+test("a case output over an inner case and a value entry is unchanged", async () => {
   const nodes = gate("route", "held", "gate", "other") + "  held: !str held\n" + ENTRY_JOIN;
   const text = flow(nodes, "\n  v: ${gate.output}", { inputs: R2_INPUTS });
   expect(sources(text)).toEqual(["${pro.output | caut.output | held.output}"]);
+  expect(await run(text, { approve: true, other: true })).toEqual({ v: "pro" });
+  expect(await run(text, { approve: true, other: false })).toEqual({ v: "held" });
 });
 
-test("a root node output is unchanged", () => {
-  expect(sources(flow(R1 + code("root", '"r"'), "\n  r: ${root.output}"))).toEqual(["${root.output}"]);
+test("a root node output is unchanged", async () => {
+  const text = flow(R1 + code("root", '"r"'), "\n  r: ${root.output}");
+  expect(sources(text)).toEqual(["${root.output}"]);
+  expect(await run(text, { approve: false })).toEqual({ r: "r" });
 });
 
-test("a reader of an exhaustive join is unchanged", () => {
+test("a reader of an exhaustive join is unchanged", async () => {
   // A node that reads an exhaustive join always runs.
   const extra = "    input:\n      v: ${pro.output | caut.output}\n";
-  expect(sources(flow(JOIN + code("j", 'inputs["v"]', "str", extra), "\n  j: ${j.output}"))).toEqual(["${j.output}"]);
+  const text = flow(JOIN + code("j", 'inputs["v"]', "str", extra), "\n  j: ${j.output}");
+  expect(sources(text)).toEqual(["${j.output}"]);
+  expect(await run(text, { approve: false })).toEqual({ j: "caut" });
 });
 
-test("a literal output is unchanged", () => {
-  expect(sources(flow(R1, "\n  k: 5"))).toEqual([5n]);
+test("a literal output is unchanged", async () => {
+  const text = flow(R1, "\n  k: 5");
+  expect(sources(text)).toEqual([5n]);
+  expect(await run(text, { approve: false })).toEqual({ k: 5n });
 });
 
-test("an embedded template is unchanged", () => {
+test("an embedded template is unchanged", async () => {
   // Embedded text renders a skipped reference as an empty string, as before.
   const text = flow(R1, "\n  t: '${order.output} and ${rejected.output}'");
   expect(sources(text)).toEqual(["${order.output} and ${rejected.output}"]);
+  expect(await run(text, { approve: false })).toEqual({ t: " and no" });
 });
 
-test("a comparison is unchanged", () => {
+test("a comparison is unchanged", async () => {
   // A comparison over a skipped reference is false, as before.
-  expect(sources(flow(R1, '\n  c: ${order.output == "filled"}'))).toEqual(['${order.output == "filled"}']);
+  const text = flow(R1, '\n  c: ${order.output == "filled"}');
+  expect(sources(text)).toEqual(['${order.output == "filled"}']);
+  expect(await run(text, { approve: false })).toEqual({ c: false });
+  expect(await run(text, { approve: true })).toEqual({ c: true });
 });
 
-test("a defs child returns null to its caller", () => {
+test("a defs child returns null to its caller", async () => {
   // A `defs:` child whose output reads a node behind its own CASE returns null; the parent's
   // output reads the CALL as is.
   const defs =
@@ -224,7 +384,10 @@ test("a defs child returns null to its caller", () => {
     '        code: |\n          return "filled"\n' +
     "    output: ${order.output}\n";
   const nodes = "  c:\n    kind: call\n    call: child\n    input:\n      approve: ${input.approve}\n";
-  expect(sources(flow(nodes, " ${c.output}", { defs }))).toEqual(["${c.output}"]);
+  const text = flow(nodes, " ${c.output}", { defs });
+  expect(sources(text)).toEqual(["${c.output}"]);
+  expect(await run(text, { approve: false })).toBeNull();
+  expect(await run(text, { approve: true })).toBe("filled");
 });
 
 /** Return a `defs:` block with one child `name` taking `inputs` (one per line) over `nodes`. */
@@ -270,10 +433,23 @@ test("a CALL output of a coalesce over a routing-only case is optional", () => {
 test("a CALL output of a dotted skipped read is optional", () => {
   // A field read `${order.output.status}` of a CASE target is Optional of its type.
   const nodes =
-    gate("order", "rejected") + code("order", '{"status": 1n}', "\n      status: int") + code("rejected", '"no"');
+    gate("order", "rejected") + code("order", '{"status": 1}', "\n      status: int") + code("rejected", '"no"');
   const field = callFieldType(nodes, "\n  s: ${order.output.status}", "s");
   expect(field.kind).toBe(ValueKind.INTEGER);
   expect(field.nullable).toBe(true);
+});
+
+test("a typed output over a skipped branch fails at runtime", async () => {
+  // `order: !str ${order.output}` loads; a skip fails the declared type at runtime.
+  const text = flow(R1, "\n  order: !str ${order.output}");
+  expect(await run(text, { approve: true })).toEqual({ order: "filled" });
+  await runFails(text, { approve: false }, "binding.type");
+});
+
+test("an optional typed output over a skipped branch is null", async () => {
+  const text = flow(R1, "\n  order: !Optional(str) ${order.output}");
+  expect(await run(text, { approve: false })).toEqual({ order: null });
+  expect(await run(text, { approve: true })).toEqual({ order: "filled" });
 });
 
 const USE_STR = `  use:
@@ -290,16 +466,31 @@ const USE_STR = `  use:
     output: \${x.output}
 `;
 
+/** Return a parent passing `c1`'s skipped output to a `str` input of another child. */
+function passOn(binding: string): string {
+  const defs = childDefs(R1, "\n  order: ${order.output}") + USE_STR;
+  const nodes = `${CALL_C1}  c2:\n    kind: call\n    call: use\n    input:\n      ${binding}\n`;
+  return flow(nodes, " ${c2.output}", { defs });
+}
+
 test("passing a skipped child output to a str input is a load error", () => {
   // An untyped argument passing an `Optional(str)` child output to `str` is rejected.
-  const defs = childDefs(R1, "\n  order: ${order.output}") + USE_STR;
-  const nodes = `${CALL_C1}  c2:\n    kind: call\n    call: use\n    input:\n      s: \${c1.output.order}\n`;
-  expect(loadError(() => assembleText(flow(nodes, " ${c2.output}", { defs }))).message).toBe(
+  expect(loadError(() => assembleText(passOn("s: ${c1.output.order}"))).message).toBe(
     "call node 'c2': binding 's' — child expects 'str', source is 'Optional(str)'",
   );
 });
 
-test.each(["null", '"a"'])("an on over a nullable Literal may match nothing (cls returns %s)", (value) => {
+test("a typed argument narrows a skipped child output at runtime", async () => {
+  // `s: !str ${c1.output.order}` loads; a skip fails the declared type at runtime.
+  const text = passOn("s: !str ${c1.output.order}");
+  expect(await run(text, { approve: true })).toBe("filled");
+  await runFails(text, { approve: false }, "binding.type");
+});
+
+test.each([
+  ["null", null],
+  ['"a"', "A"],
+])("an on over a nullable Literal may match nothing (cls returns %s)", async (value, expected) => {
   // A null `on:` value matches no tag, so the targets' join may be skipped.
   const nodes =
     code("cls", value, "Optional(Literal(a, b))") +
@@ -307,7 +498,9 @@ test.each(["null", '"a"'])("an on over a nullable Literal may match nothing (cls
     "      - when: a\n        then: na\n      - when: b\n        then: nb\n" +
     code("na", '"A"') +
     code("nb", '"B"');
-  expect(sources(flow(nodes, "\n  v: ${na.output | nb.output}"))).toEqual(["${(na.output | nb.output) :- null}"]);
+  const text = flow(nodes, "\n  v: ${na.output | nb.output}");
+  expect(sources(text)).toEqual(["${(na.output | nb.output) :- null}"]);
+  expect(await run(text, { approve: true })).toEqual({ v: expected });
 });
 
 // A LOOP body that makes a note only when `flip` holds (a CASE with no `else:`).
@@ -327,7 +520,7 @@ const FLIP_BODY = `      gate:
           n: \${input.n}
         output: int
         code: |
-          return inputs["n"] + 1n
+          return inputs["n"] + 1
 `;
 
 /** Return `text` with each non-empty line indented by `prefix`. */
@@ -353,6 +546,79 @@ test("an inline loop over an untyped seed asks for its type", () => {
     "loop node 'repeat': the body returns 'note' as Optional(str), but the carried field is typed str from its " +
       'seed; declare the seed\'s type: `note: !Optional(str) "start"`',
   );
+});
+
+test("an inline loop sets a skipped field to null", async () => {
+  // A skipped body field sets the carried field to null, not its previous value.
+  expect(await run(inlineLoop('!str "start"', 1), { flip: false })).toEqual({ n: 1n, note: null, flip: false });
+});
+
+test("an inline loop over a typed str seed rejects the null next iteration", async () => {
+  // Over a typed `str` seed, the null fails the next iteration's parameter check.
+  await runFails(inlineLoop('!str "start"', 2), { flip: false }, "contract.input");
+});
+
+test.each([
+  [false, null],
+  [true, "made"],
+])("an inline loop over an optional seed carries the null (flip %p)", async (flip, note) => {
+  // Over an `Optional(str)` seed the null is carried; a taken branch gives its value.
+  expect(await run(inlineLoop('!Optional(str) "start"', 2), { flip })).toEqual({ n: 2n, note, flip });
+});
+
+test("a named loop body sets a skipped field to null", async () => {
+  // A `defs:` LOOP body returning a skipped node's output carries null.
+  const defs =
+    "defs:\n  body:\n    input:\n      n: !int\n      note: !Optional(str)\n      flip: !bool\n    nodes:\n" +
+    FLIP_BODY +
+    "    output:\n      n: ${bump.output}\n      note: ${mk.output}\n";
+  const nodes =
+    "  repeat:\n    kind: loop\n    call: body\n    times: 2\n    input:\n" +
+    '      n: 0\n      note: "start"\n      flip: ${input.flip}\n';
+  const text = flow(nodes, " ${repeat.output}", { inputs: "flip: !bool", defs });
+  expect(await run(text, { flip: false })).toEqual({ n: 2n, note: null, flip: false });
+});
+
+test("a map inline body returns null per skipped element", async () => {
+  // A MAP over an inline body gives null for each element whose branch was skipped.
+  const nodes =
+    "  each:\n    kind: map\n    over: [true, false]\n    input:\n      flag: ${item}\n    nodes:\n" +
+    "      gate:\n        kind: case\n        cases:\n" +
+    "          - when: ${input.flag}\n            then: mk\n" +
+    "      mk:\n        kind: code\n        output: str\n" +
+    '        code: |\n          return "made"\n' +
+    "    output: ${mk.output}\n";
+  expect(await run(flow(nodes, " ${each.output}"), { approve: true })).toEqual(["made", null]);
+});
+
+test("a replay returns the same null", async () => {
+  // Resuming a finished run that returned a skipped null replays it without running code. Each
+  // CODE body appends its node id to `seen`, as Python's patched code functions record it.
+  const dir = mkdtempSync(join(tmpdir(), "yian-skipped-replay-"));
+  try {
+    const seen = join(dir, "seen.txt");
+    writeFileSync(seen, "");
+    const body = (node: string, value: string) =>
+      `((await import("node:fs")).appendFileSync(${JSON.stringify(seen)}, "${node}\\n"), "${value}")`;
+    const text = flow(
+      gate("order", "rejected") + code("order", body("order", "filled")) + code("rejected", body("rejected", "no")),
+      "\n  order: ${order.output}",
+    );
+    const log = join(dir, "r.jsonl");
+
+    const first = await runFlow(await loadFlow(text), { approve: false }, { log });
+    expect(first.status, first.failure?.message).toBe("succeeded");
+    expect(first.output).toEqual({ order: null });
+    expect(readFileSync(seen, "utf8")).toBe("rejected\n");
+
+    writeFileSync(seen, "");
+    const resumed = await resumeFlow(await loadFlow(text), { log });
+    expect(resumed.status).toBe(first.status);
+    expect(resumed.output).toEqual(first.output);
+    expect(readFileSync(seen, "utf8")).toBe("");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // then: order / else: rejected, where `order` returns `{qty: int}`
@@ -430,39 +696,47 @@ test("arithmetic on a coalesce of routing-only targets is a load error", () => {
     "  gate:\n    kind: case\n    cases:\n" +
     "      - when: ${input.approve}\n        then: a\n" +
     "      - when: ${input.other}\n        then: b\n" +
-    code("a", "1n", "int") +
-    code("b", "2n", "int");
+    code("a", "1", "int") +
+    code("b", "2", "int");
   const text = flow(nodes, "\n  v: ${(a.output | b.output) + 1}", { inputs: R2_INPUTS });
   expect(loadError(() => assembleText(text)).message).toBe(
     `output 'v': ${arithmetic("${(a.output | b.output) + 1}", "(a.output | b.output)", "nodes 'a' and 'b' are")}`,
   );
 });
 
-test("arithmetic in a node that co-skips loads", () => {
+test("arithmetic in a node that co-skips loads", async () => {
   // A node that also reads `${order.output}` plainly is skipped with it.
   const extra = "    input:\n      q: ${order.output.qty * 2}\n      o: ${order.output}\n";
-  assembleText(flow(QTY + code("use", 'inputs["q"]', "int", extra), "\n  u: ${use.output}"));
+  const text = flow(QTY + code("use", 'inputs["q"]', "int", extra), "\n  u: ${use.output}");
+  expect(await run(text, { approve: true })).toEqual({ u: 4n });
+  expect(await run(text, { approve: false })).toEqual({ u: null });
 });
 
-test("arithmetic in a node routed by a case on the value loads", () => {
+test("arithmetic in a node routed by a case on the value loads", async () => {
   // A node behind a CASE whose `when:` reads `order` never runs when `order` is skipped.
   const nodes =
     QTY +
     "  check:\n    kind: case\n    cases:\n" +
     "      - when: ${order.output.qty > 1}\n        then: use\n" +
     code("use", 'inputs["q"]', "int", "    input:\n      q: ${order.output.qty * 2}\n");
-  assembleText(flow(nodes, "\n  u: ${use.output}"));
+  const text = flow(nodes, "\n  u: ${use.output}");
+  expect(await run(text, { approve: true })).toEqual({ u: 4n });
+  expect(await run(text, { approve: false })).toEqual({ u: null });
 });
 
-test("arithmetic on a node that depends on a case loads", () => {
+test("arithmetic on a node that depends on a case loads", async () => {
   // A node with `depends_on` a CASE runs on every branch, so its output is never null.
-  const note = code("note", "1n", "int", "    depends_on: [gate]\n");
-  assembleText(flow(QTY + note, "\n  q: ${order.output.qty :- (note.output + 1)}"));
+  const note = code("note", "1", "int", "    depends_on: [gate]\n");
+  const text = flow(QTY + note, "\n  q: ${order.output.qty :- (note.output + 1)}");
+  expect(await run(text, { approve: true })).toEqual({ q: 2n });
+  expect(await run(text, { approve: false })).toEqual({ q: 2n });
 });
 
-test("arithmetic on a defaulted value loads", () => {
+test("arithmetic on a defaulted value loads", async () => {
   // `(order.output.qty :- 0) + 1` gives an explicit default.
-  assembleText(flow(QTY, "\n  q: ${(order.output.qty :- 0) + 1}"));
+  const text = flow(QTY, "\n  q: ${(order.output.qty :- 0) + 1}");
+  expect(await run(text, { approve: false })).toEqual({ q: 1n });
+  expect(await run(text, { approve: true })).toEqual({ q: 3n });
 });
 
 test("a comparison on a skipped output loads", () => {
@@ -470,21 +744,25 @@ test("a comparison on a skipped output loads", () => {
   assembleText(flow(QTY, "\n  c: ${order.output.qty > 1}"));
 });
 
-test("arithmetic on an exhaustive join loads", () => {
+test("arithmetic on an exhaustive join loads", async () => {
   // `(pro.output | caut.output) + 1` over then/else is never null from a skip.
-  const nodes = gate("pro", "caut") + code("pro", "1n", "int") + code("caut", "2n", "int");
-  assembleText(flow(nodes, "\n  v: ${(pro.output | caut.output) + 1}"));
+  const nodes = gate("pro", "caut") + code("pro", "1", "int") + code("caut", "2", "int");
+  const text = flow(nodes, "\n  v: ${(pro.output | caut.output) + 1}");
+  expect(await run(text, { approve: true })).toEqual({ v: 2n });
+  expect(await run(text, { approve: false })).toEqual({ v: 3n });
 });
 
-test("arithmetic on an input loads", () => {
+test("arithmetic on an input loads", async () => {
   // A flow input is never skipped.
-  assembleText(flow(QTY, "\n  v: ${input.x + 1}", { inputs: "approve: !bool\n  x: !int" }));
+  const text = flow(QTY, "\n  v: ${input.x + 1}", { inputs: "approve: !bool\n  x: !int" });
+  expect(await run(text, { approve: false, x: 1 })).toEqual({ v: 2n });
 });
 
-test("arithmetic on a node that cannot be skipped loads", () => {
-  // Arithmetic over a root node in a flow with a CASE loads as before.
-  const nodes = QTY + code("root", "5n", "int");
-  assembleText(flow(nodes, "\n  v: ${root.output * 2 + 1}\n  w: ${-root.output}"));
+test("arithmetic on a node that cannot be skipped runs", async () => {
+  // Arithmetic over a root node in a flow with a CASE loads and runs as before.
+  const nodes = QTY + code("root", "5", "int");
+  const text = flow(nodes, "\n  v: ${root.output * 2 + 1}\n  w: ${-root.output}");
+  expect(await run(text, { approve: false })).toEqual({ v: 11n, w: -5n });
 });
 
 test("the rewritten output fingerprints as the explicit null default", () => {
@@ -545,14 +823,18 @@ test("arithmetic on a null default in a searched when: is a load error", () => {
   );
 });
 
-test("arithmetic on a defaulted value in a searched when: loads", () => {
+test("arithmetic on a defaulted value in a searched when: loads", async () => {
   // `(a.output.n :- 0) + 1` in a searched `when:` gives the default.
-  assembleText(searchedGate("(a.output.n :- 0) + 1 > 1"));
+  const text = searchedGate("(a.output.n :- 0) + 1 > 1");
+  expect(await run(text, { approve: true })).toEqual({ v: "hot" });
+  expect(await run(text, { approve: false })).toEqual({ v: "cold" });
 });
 
-test("plain arithmetic in a searched when: loads", () => {
+test("plain arithmetic in a searched when: loads", async () => {
   // A plain read skips `gate2` with `a`, so its arithmetic never sees a skipped null.
-  assembleText(searchedGate("a.output.n + 1 > 1"));
+  const text = searchedGate("a.output.n + 1 > 1");
+  expect(await run(text, { approve: true })).toEqual({ v: "hot" });
+  expect(await run(text, { approve: false })).toEqual({ v: null });
 });
 
 const UNION_FLOW = `id: f
@@ -574,7 +856,7 @@ nodes:
     kind: code
     output: Decision
     code: |
-      return {"action": "sell", "qty": 9n}
+      return {"action": "sell", "qty": 9}
   rejected:
     kind: code
     output: str
@@ -600,10 +882,11 @@ output:
   v: \${hot.output | cold.output}
 `;
 
-test("an isinstance guard in a searched when: over a skippable union loads", () => {
+test("an isinstance guard in a searched when: over a skippable union routes", async () => {
   // The plain `isinstance(d.output, Buy)` read skips `gate2` with `d`, so the arithmetic never sees
   // a skipped null.
-  assembleText(UNION_FLOW);
+  expect(await run(UNION_FLOW, { approve: true })).toEqual({ v: "cold" });
+  expect(await run(UNION_FLOW, { approve: false })).toEqual({ v: null });
 });
 
 const CHILD =
@@ -614,7 +897,7 @@ const CHILD =
 // then: order / else: rejected, where `order` returns a list field and a str field
 const ITEMS =
   gate("order", "rejected") +
-  code("order", '{"items": [1n], "s": "2020"}', "\n      items: list(int)\n      s: str") +
+  code("order", '{"items": [1], "s": "2020"}', "\n      items: list(int)\n      s: str") +
   code("rejected", '"no"');
 
 test("arithmetic in a map over: names map over", () => {
@@ -642,7 +925,7 @@ test("arithmetic in a wait until: names wait until", () => {
 
 test("arithmetic in a default is checked as if it always runs", () => {
   // `a.output :- (b.output + 1)` is rejected though `b` runs whenever `a` is skipped.
-  const nodes = gate("a", "b") + code("a", "1n", "int") + code("b", "2n", "int");
+  const nodes = gate("a", "b") + code("a", "1", "int") + code("b", "2", "int");
   expect(loadError(() => assembleText(flow(nodes, "\n  v: ${a.output :- (b.output + 1)}"))).message).toBe(
     `output 'v': ${arithmetic("${a.output :- (b.output + 1)}", "b.output", "node 'b' is")}`,
   );
@@ -666,33 +949,51 @@ test.each([
   ["x y", "k: !K", "${a.output | b.output}", "${a.output | b.output}"],
   ["x", "k: !str", "${a.output}", "${a.output:-null}"],
   ["x y", "k: !Optional(K)", "${a.output | b.output}", "${(a.output | b.output) :- null}"],
-])("an on over a Literal input (tags %s, %s)", (tags, inputs, source, expected) => {
+])("an on over a Literal input (tags %s, %s)", async (tags, inputs, source, expected) => {
   // A fully listed non-nullable Literal input always takes a branch; a `str` or nullable input
   // may not, so its join defaults to null.
   const text = flow(onInput(tags), `\n  v: ${source}`, { inputs, typedefs: K });
   expect(sources(text)).toEqual([expected]);
+  expect(await run(text, { k: "x" })).toEqual({ v: 1n });
 });
 
-test("arithmetic on a join over a Literal input loads", () => {
+test("arithmetic on a join over a Literal input loads", async () => {
   // The join of a fully listed Literal input is never null from a skip.
-  assembleText(flow(onInput(), "\n  v: ${(a.output | b.output) + 1}", { inputs: "k: !K", typedefs: K }));
+  const text = flow(onInput(), "\n  v: ${(a.output | b.output) + 1}", { inputs: "k: !K", typedefs: K });
+  expect(await run(text, { k: "y" })).toEqual({ v: 3n });
 });
 
-test("a map body routing on a Literal item is not rewritten", () => {
+test("a child routing on a Literal input passes to a str input", async () => {
+  // A child whose output is `${sw.output}` over a Literal input returns `str` to its parent.
+  const nodes =
+    "  sw:\n    kind: case\n    on: ${input.k}\n    cases:\n" +
+    "      - when: x\n        then: a\n      - when: y\n        then: b\n" +
+    code("a", '"A"') +
+    code("b", '"B"');
+  const defs = childDefs(nodes, " ${sw.output}", "child", "k: !K") + USE_STR;
+  const calls =
+    "  c1:\n    kind: call\n    call: child\n    input:\n      k: y\n" +
+    "  c2:\n    kind: call\n    call: use\n    input:\n      s: ${c1.output}\n";
+  expect(await run(flow(calls, " ${c2.output}", { defs, typedefs: K }), { approve: true })).toBe("B");
+});
+
+test("a map body routing on a Literal item is not rewritten", async () => {
   // A MAP body routing on a Literal element always takes a branch, so its join stays.
   const body = onInput()
     .split("\n")
     .map((line) => (line === "" ? line : `    ${line}`))
     .join("\n");
-  const text = flow(
-    "  each:\n    kind: map\n    over: ${input.ks}\n    input:\n      k: ${item}\n" +
-      `    nodes:\n${body}    output: \${a.output | b.output}\n`,
-    " ${each.output}",
-    { inputs: "ks: !list(K)", typedefs: K },
-  );
-  const each = assembleText(text).flow.compiled.nodes.get("each") as MapNode;
-  const child = each.child as CompiledFlow;
+  const each = (output: string) =>
+    flow(
+      "  each:\n    kind: map\n    over: ${input.ks}\n    input:\n      k: ${item}\n" +
+        `    nodes:\n${body}    output: ${output}\n`,
+      " ${each.output}",
+      { inputs: "ks: !list(K)", typedefs: K },
+    );
+  const node = assembleText(each("${a.output | b.output}")).flow.compiled.nodes.get("each") as MapNode;
+  const child = node.child as CompiledFlow;
   expect(child.outputs.map((output) => output.binding.source)).toEqual(["${a.output | b.output}"]);
+  expect(await run(each("${(a.output | b.output) + 1}"), { ks: ["x", "y"] })).toEqual([2n, 3n]);
 });
 
 // ---------- harvested conformance cases ----------

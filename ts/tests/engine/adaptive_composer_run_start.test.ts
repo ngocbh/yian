@@ -29,7 +29,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { checkRecordedLlmFields, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection } from "./run_state_fixtures.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 
@@ -112,7 +112,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 /** The message of the `RangeError` running `text` on `inputs` rejects with. */
 async function runStartError(text: string, inputs: Record<string, unknown>): Promise<string> {
-  const error = await rejection(runFlow(await loadFlow(text), inputs, { env: hostEnv(dir) }));
+  const error = await rejected(runFlow(await loadFlow(text), inputs, { env: hostEnv(dir) }));
   expect(error).toBeInstanceOf(RangeError);
   return (error as RangeError).message;
 }

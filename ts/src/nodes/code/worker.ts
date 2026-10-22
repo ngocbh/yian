@@ -7,7 +7,8 @@
  * when that key is set, so importing it for its helpers runs nothing. For each job the worker
  * installs the caller's defaults, builds the body or imports the reference (a module is imported
  * once per thread and cached there), calls it with the frozen `inputs` proxy, takes the result in
- * by host intake, and posts one `CodeReply` carrying the job's id. It forwards each
+ * by host intake, and posts one `CodeReply` carrying the job's id (a result too deep for the copy
+ * is refused as an output, by the commit's nesting check). It forwards each
  * `console.log/info/warn/error/debug` call as one formatted text on the same port, so the main
  * thread logs them in order. A late timer throw or unhandled rejection while a job runs replies
  * as a throw of that job's body (it may come from an earlier body on this thread); one while the
@@ -27,7 +28,7 @@ import { pathToFileURL } from "node:url";
 import { format } from "node:util";
 import { parentPort, workerData } from "node:worker_threads";
 
-import { type Defaults, install } from "../../defaults.ts";
+import { current, type Defaults, install } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
 import { stripTypes, TypeStripError } from "../../platform.ts";
 import {
@@ -36,6 +37,7 @@ import {
   isList,
   isRecord,
   jsTypeName,
+  rejectDeepNesting,
   setField,
   toHost,
   TypeCheckError,
@@ -239,6 +241,22 @@ async function importReference(reference: string, baseDir: string | null): Promi
   return fn as CodeBody;
 }
 
+// Copying a result back recurses on both threads: measured, Node's main thread reads about
+// 2,100 levels and Bun about 40,000. A deeper result is refused here, by the commit's own check;
+// a shallower one over the limit is copied and still meets the node's post-asserts first.
+const COPY_DEPTH = 1000;
+
+/** Whether `value` nests deeper than the copy back to the main thread can carry. */
+function tooDeepToCopy(value: Value): boolean {
+  try {
+    rejectDeepNesting(value, "output", { enclosingLevels: current().maxValueNesting - COPY_DEPTH });
+    return false;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return true;
+    throw error;
+  }
+}
+
 /**
  * Run `job` and return its reply.
  *
@@ -263,6 +281,7 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
     // Intake runs here, not after the copy: the clone would turn a class instance or an accessor
     // into a plain record and refuse a function with its own error.
     value = fromHost(result === proxy ? record : result, "output");
+    if (tooDeepToCopy(value)) rejectDeepNesting(value, "output");
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     return { ok: false, as: "output", message: error.message, path: [...error.path] };
@@ -273,7 +292,7 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
 const port = parentPort;
 if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true && port !== null) {
   /** The id of the job running now, else `null`. */
-  let current: number | null = null;
+  let running: number | null = null;
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
   // refuses); the main thread must still hear back.
   const reply = (id: number, make: () => CodeReply, late?: true): void => {
@@ -284,8 +303,8 @@ if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true
     }
   };
   const lateError = (error: unknown): void => {
-    if (current !== null) {
-      reply(current, () => ({ ok: false, as: "code", thrown: thrownOf(error) }), true);
+    if (running !== null) {
+      reply(running, () => ({ ok: false, as: "code", thrown: thrownOf(error) }), true);
       return;
     }
     const text = error instanceof Error ? `${error.name}: ${error.message}` : format(error);
@@ -306,14 +325,14 @@ if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true
     };
   }
   port.on("message", (job: CodeJob & { id: number }) => {
-    current = job.id;
+    running = job.id;
     // A listened port keeps the thread alive; while a job runs only the body's own work should.
     port.unref();
     install(job.defaults);
     const done = (make: () => CodeReply): void => {
       reply(job.id, make);
-      if (current === job.id) {
-        current = null;
+      if (running === job.id) {
+        running = null;
         port.ref();
       }
     };

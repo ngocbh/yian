@@ -29,7 +29,7 @@ import { RunFailed } from "../../src/events.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { childResolver, rejection } from "./run_state_fixtures.ts";
+import { childResolver, rejected } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-call-postasserts-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -179,7 +179,7 @@ async function driveDurable(name: string, asserts: string, answer: string) {
     host.abort(interruption);
     throw interruption;
   };
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(
       await loadBlocking(asserts),
       { action: "deploy" },

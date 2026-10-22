@@ -83,6 +83,15 @@
  * the maximum); its resume runs in `hostEnv`; the old log's `defaults` is `{}`, since TS's
  * `run_started` requires the field (Python drops it).
  *
+ * TS-only, next to the CALL row and pinned to Python's results for the same flows: a MAP whose
+ * input binds a value at the limit succeeds, and a LOOP carrying one fails `contract.output` at its
+ * body's end (the body's output record adds a level), not `contract.growth`. They check that a
+ * growth seed's two containers don't count toward the value's nesting (MAP: list, then record;
+ * LOOP: pair, then record). Also pinned to Python's result: a CODE result over the limit meets the
+ * node's post-asserts before the commit refuses it (the worker copies it back first). Changed: a
+ * result too deep to copy back from the worker (over 1,000 levels) fails `contract.output` there,
+ * with the commit's message and trace, before its post-asserts (Python checks them first).
+ *
  * Covered by the harvested run cases (the same flows and results):
  * `run-core/engine_value_nesting_boundaries__an_untyped_output_at_the_limit_flows_out_whole`,
  * `run-core/engine_value_nesting_boundaries__a_map_result_list_over_the_limit_fails`
@@ -119,8 +128,8 @@ import { Type, TypeCheckError, type Value, ValueKind, VariablePool } from "../..
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { drive, rejection, serving } from "./run_state_fixtures.ts";
-import { backwardReply, effectsOf, NO_ENV, rejected, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
+import { drive, rejected, serving } from "./run_state_fixtures.ts";
+import { backwardReply, effectsOf, NO_ENV, reply, runSessionFlow, sessionFlow } from "./session_fakes.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -867,6 +876,33 @@ test("an untyped output over the limit fails", async () => {
   expectTooDeep(await run(codeFlow(listBody(101))), "deep");
 });
 
+/** `codeFlow` of `body` with the post-assert `output == null`, which a list result fails. */
+const assertedFlow = (body: string) =>
+  codeFlow(body).replace("    code: |", '    asserts:\n      - "output == null"\n    code: |');
+
+test("a CODE result over the limit meets its post-asserts before the commit refuses it", async () => {
+  const result = await run(assertedFlow(listBody(101)));
+  expect(result.status).toBe("failed");
+  expect([result.failure!.code, result.failure!.nodeId]).toEqual(["assertion.failed", "deep"]);
+});
+
+test("a CODE result too deep to copy back fails its output before its post-asserts", async () => {
+  const deep = await run(assertedFlow(listBody(10_000)));
+  expectTooDeep(deep, "deep");
+  // The worker's refusal reads as the commit's: same message and trace, the trace located at the
+  // output field the too-deep value sits in.
+  const field = { outputLine: "    output: {s: Any}" };
+  const wrapped = (levels: number) => listBody(levels).replace("return v", "return { s: v }");
+  const deepField = await run(codeFlow(wrapped(10_000), field));
+  const committed = await run(codeFlow(wrapped(150), field));
+  expectTooDeep(deepField, "deep");
+  expectTooDeep(committed, "deep");
+  expect([deepField.failure!.message, deepField.failure!.trace]).toEqual([
+    committed.failure!.message,
+    committed.failure!.trace,
+  ]);
+});
+
 test("a map result list at the limit succeeds", async () => {
   const text = `
 id: nesting
@@ -921,7 +957,7 @@ test.each([101, 1500])("a run input over the limit is rejected before the run st
   // a run input record from going further.
   const text = "id: nesting\nname: nesting\ninput:\n  x: !object\nnodes: {}\noutput: ${input.x}\n";
   const log = join(dir, `input-${levels}.jsonl`);
-  const error = await rejection(run(text, { x: nestRecord(levels) }, { log }));
+  const error = await rejected(run(text, { x: nestRecord(levels) }, { log }));
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as TypeCheckError).message).toStartWith("input 'x' at a.a");
   expect((error as TypeCheckError).message).toContain("deeper than 100 levels");
@@ -987,6 +1023,65 @@ output: \${k.output}
 test("a call bound to a value at the limit succeeds", async () => {
   const result = await run(callFlow("${input.x}", "object"), { x: nestRecord(100) });
   expect([result.status, result.output]).toEqual(["succeeded", 1n]);
+});
+
+test("a MAP whose input binds a value at the limit succeeds", async () => {
+  // The growth seed's list and record don't count toward the value's nesting.
+  const text = `
+id: nesting
+name: nesting
+input:
+  x: !object
+nodes:
+  m:
+    kind: map
+    over: \${[1]}
+    input:
+      y: !object \${input.x}
+    nodes:
+      work:
+        kind: code
+        code: |
+          return 1
+    output: \${work.output}
+output: \${m.output}
+`;
+  const result = await run(text, { x: nestRecord(100) });
+  expect([result.status, result.output]).toEqual(["succeeded", [1n]]);
+});
+
+test("a LOOP carrying a value at the limit fails its body's end, not on growth", async () => {
+  // The seed's pair and record don't count; the body's output record around the value does.
+  const text = `
+id: nesting
+name: nesting
+input:
+  x: !object
+defs:
+  keep:
+    input:
+      y: !object
+      done: !bool
+    nodes: {}
+    output:
+      y: \${input.y}
+      done: true
+nodes:
+  loop:
+    kind: loop
+    call: keep
+    input:
+      y: \${input.x}
+      done: false
+    while: not done
+    max: 3
+output: \${loop.output.done}
+`;
+  const result = await run(text, { x: nestRecord(100) });
+  expect(result.status).toBe("failed");
+  const failure = result.failure!;
+  expect([failure.code, failure.nodeId]).toEqual(["contract.output", "loop#0/__end__"]);
+  expect(failure.message).toStartWith(`output at y${".a".repeat(99)}: value nests deeper than 100 levels`);
 });
 
 test("a call bound over the limit fails the call, not its START", async () => {

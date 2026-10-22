@@ -556,7 +556,8 @@ export class CodeNode extends Node {
    *   or an unhandled rejection.
    * @throws Error when the code returns `undefined`, or the worker exits before it replies (a
    *   `process.exit`, a body awaiting a promise nothing can resolve) or fails to start.
-   * @throws HostOutputError when host intake refuses the result (`contract.output`).
+   * @throws HostOutputError when host intake refuses the result, or the result nests too deep to
+   *   copy back from the worker (`contract.output`).
    */
   override async forward(inputs: Record<string, unknown>, caps: NodeCaps = {}): Promise<Output> {
     const code = this.code;

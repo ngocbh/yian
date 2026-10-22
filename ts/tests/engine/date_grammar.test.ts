@@ -10,7 +10,9 @@
  * `test_scalar_matches_uses_the_grammar` checks the private `_scalar_matches` through
  * `buildValueAs`.
  *
- * Later: the load rows (with the loader).
+ * Covered by the `load-types` case
+ * `engine_date_grammar__flow_default_outside_the_grammar_fails_at_load`, which loads the same flow
+ * and pins the message and its location: `test_flow_default_outside_the_grammar_fails_at_load`.
  */
 
 import { describe, expect, test } from "bun:test";

@@ -3,8 +3,8 @@
  * `tests/engine/_session_fakes.py`, plus the promise helpers, the hand-built `runAgent` context
  * and the one-AGENT session flow run through `FlowEngine` that the session tests share, and the
  * `runFlow` and `resumeFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`,
- * `resumeWith`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`, `backwardReply`,
- * `memorySections`, `recording`).
+ * `resumeWith`, `CrashAt`, `crashes`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`,
+ * `backwardReply`, `memorySections`, `recording`).
  */
 
 import { expect } from "bun:test";
@@ -38,9 +38,12 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { MemoryContextOpener } from "../../src/runtime/eval_node.ts";
 import { type ResumeFlowOptions, resumeFlow, type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
+import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import type { Type } from "../../src/typesys/values.ts";
-import { engine, graph, serving } from "./run_state_fixtures.ts";
+import { Crash, engine, graph, rejected, serving } from "./run_state_fixtures.ts";
+
+export { rejected };
 
 // Cloned snapshots and nested test values are edited freely.
 export type Mutable = any;
@@ -182,16 +185,6 @@ export function settle<T>(promise: Promise<T>): Settled<T> {
 /** Wait one macrotask, so every pending promise reaction has run. */
 export function macrotask(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 10));
-}
-
-/** The value `promise` rejects with; a fulfilment fails the test. */
-export function rejected(promise: Promise<unknown>): Promise<unknown> {
-  return promise.then(
-    () => {
-      throw new Error("expected a rejection");
-    },
-    (error: unknown) => error,
-  );
 }
 
 /**
@@ -353,6 +346,43 @@ export function resumeWith(
 ): Promise<RunResult> {
   const registry = memory instanceof SessionMemory ? new Map([["session", memory]]) : memory;
   return resumeFlow(flow, { log, memory: registry, models: serving(model), env: NO_ENV, ...options });
+}
+
+/**
+ * A `ScriptedModel` that sets `frozen` as it serves request `at` (1-based); `crashes` reads it.
+ * Its config is `SESSION_CONFIG` unless `config` is given.
+ */
+export class CrashAt extends ScriptedModel {
+  readonly at: number;
+  frozen = false;
+
+  constructor(replies: ScriptedReply[], at: number, config: { provider?: string; model?: string } = SESSION_CONFIG) {
+    super(replies, config);
+    this.at = at;
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (this.requests.length === this.at - 1) this.frozen = true;
+    return super.stream(request, options);
+  }
+}
+
+/**
+ * Await `run`, which must reject with the `Crash` every durable log throws once `model` froze
+ * them: a process lost while serving request `at`, so no record of its outcome reaches the log.
+ */
+export async function crashes(model: CrashAt, run: () => Promise<unknown>): Promise<void> {
+  const crash = new Crash("process lost");
+  const append = JsonlRunLog.prototype.append;
+  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
+    if (model.frozen) throw crash;
+    return append.call(this, record);
+  };
+  try {
+    expect(await rejected(run())).toBe(crash);
+  } finally {
+    JsonlRunLog.prototype.append = append;
+  }
 }
 
 /**

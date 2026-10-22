@@ -132,7 +132,7 @@ import { TransientToolError } from "../../src/tools/errors.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, rejection, requiredEndFlow, startedRun, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, rejected, requiredEndFlow, startedRun, textReply } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
@@ -709,7 +709,7 @@ test("test_run_started_append_failure_prevents_execution_observation_and_closes"
 
   const [error, calls] = await codeCalls(() =>
     withCreatedLog(fake, path, () =>
-      rejection(run(flow, {}, { log: path, runId: RUN_ID, onEvent: (e) => seen.push(e) })),
+      rejected(run(flow, {}, { log: path, runId: RUN_ID, onEvent: (e) => seen.push(e) })),
     ),
   );
 
@@ -733,7 +733,7 @@ test("test_outcome_append_failure_leaves_started_work_recoverable_and_closes", a
 
   const [error, calls] = await codeCalls(() =>
     withCreatedLog(fake, path, () =>
-      rejection(run(flow, {}, { log: path, runId: RUN_ID, onEvent: (e) => seen.push(e) })),
+      rejected(run(flow, {}, { log: path, runId: RUN_ID, onEvent: (e) => seen.push(e) })),
     ),
   );
 
@@ -758,7 +758,7 @@ test("test_resume_callback_exception_closes_and_unlocks_nonterminal_log", async 
   };
   const flow = await load(ACTION_FLOW);
 
-  const [error, calls] = await codeCalls(() => rejection(resume(flow, { log: path, onEvent: reject })));
+  const [error, calls] = await codeCalls(() => rejected(resume(flow, { log: path, onEvent: reject })));
 
   expect(error).toBe(expected);
   expect(calls).toBe(0);
@@ -805,7 +805,7 @@ test("test_resume_hook_failure_leaves_the_log_unchanged", async () => {
   const before = readFileSync(path);
   const expected = new Error("no key");
 
-  const error = await rejection(
+  const error = await rejected(
     resume(await load(AGENT_FLOW), {
       log: path,
       models: scripted([]),
@@ -850,7 +850,7 @@ test("test_callback_exception_drains_waiter_reraises_exactly_and_unlocks", async
     if (event instanceof NodeSucceeded && event.nodeId === "trigger") throw expected;
   };
 
-  const error = await rejection(
+  const error = await rejected(
     run(await load(CALLBACK_DRAIN_FLOW), {}, {
       log: path,
       runId: RUN_ID,
@@ -892,7 +892,7 @@ test("test_callback_exception_drains_real_blocked_human_interaction_and_unlocks"
     if (event instanceof NodeSucceeded && event.nodeId === "trigger") throw expected;
   };
 
-  const error = await rejection(
+  const error = await rejected(
     run(await load(HUMAN_DRAIN_FLOW), {}, {
       log: path,
       runId: RUN_ID,
@@ -931,7 +931,7 @@ test("test_host_interruption_drains_then_durable_resume_retries_to_terminal", as
   });
   const flow = await load(HOST_DRAIN_FLOW);
 
-  const error = await rejection(
+  const error = await rejected(
     run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 2, signal: host.signal, scheduler, tools: { interrupter } }),
   );
 
@@ -1021,7 +1021,7 @@ test("a resume with an aborted signal rejects before the lock is taken", async (
   // Held, so a resume that took the lock would fail as busy instead.
   const held = JsonlRunLog.resume(path);
   try {
-    const error = await rejection(resume(await load(ACTION_FLOW), { log: path, signal: stop.signal }));
+    const error = await rejected(resume(await load(ACTION_FLOW), { log: path, signal: stop.signal }));
     expect(error).toBe(stop.signal.reason);
   } finally {
     held.close();

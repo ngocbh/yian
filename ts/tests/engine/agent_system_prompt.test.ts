@@ -56,7 +56,7 @@ import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, nodeFlow, rejection, serving, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, nodeFlow, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-system-prompt-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -310,7 +310,7 @@ test("resume refuses a flow whose system prompt changed", async () => {
     runFlow(await chatFlow(), INPUTS, { log: path, ...served(scripted("draft", "lost")) }),
   );
 
-  const error = await rejection(resumeFlow(await chatFlow("You are ${name}."), { log: path, ...served(scripted()) }));
+  const error = await rejected(resumeFlow(await chatFlow("You are ${name}."), { log: path, ...served(scripted()) }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("flow fingerprint mismatch");
 });

@@ -841,8 +841,8 @@ describe("forward", () => {
     const refused = new ProviderError("auth", `Incorrect API key: ${key}`, { status: 401 });
     const model = new ScriptedModel([refused], { provider: "vllm", model: "m" });
     const llmConfig = { provider: "vllm", model: "m", api_key: key };
-    const authFile: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(HOME, "auth.json") : undefined);
-    const result = await runWith(flow, {}, null, model, { llmConfig, env: authFile });
+    const authEnv: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(HOME, "auth.json") : undefined);
+    const result = await runWith(flow, {}, null, model, { llmConfig, env: authEnv });
     expect(result.status).toBe("failed");
     expect(result.failure?.code).toBe("provider.auth");
     expect(result.failure?.message).toBe("Incorrect API key: [REDACTED]");

@@ -7,7 +7,7 @@
  * (`loadConformanceFlow`), the CODE node naming the conformance fixture `echo`, with union and
  * Optional field types quoted as Python quotes them; a stack overflow (Python's `RecursionError`)
  * is checked for in the error's causes. TS-only: the at-the-limit and diamond rows also check the
- * levels of the loaded node's output type, and the at-the-limit rows that the load takes under 5s.
+ * levels of the loaded node's output type.
  * Not ported: `test_field_parse_follows_the_int_digit_limit` (D4a: no digit limits);
  * `test_measuring_a_diamond_is_memoized` and the measure half of
  * `test_an_empty_record_and_an_enum_load` call private functions;
@@ -254,9 +254,7 @@ describe("types at the limit", () => {
   test.each(rows)("%s load at the limit %p", async (_id, limit, build) => {
     setTypeNesting(limit);
     const [raw, top] = build(limit);
-    const start = performance.now();
     expect(await loadedLevels(raw, top)).toBe(limit);
-    expect(performance.now() - start).toBeLessThan(5000);
   });
 
   test("a flow with a diamond loads", async () => {

@@ -15,7 +15,7 @@
  * Changed: Python's `set_defaults` fixture sets `YIAN_AGENT_RETRIES=0` or
  * `YIAN_AGENT_MAX_TOOL_ITERATIONS=1`; the manifest rows set it with `reload`, the run rows give it
  * as the `env` of `loadFlow` and `runFlow`. The exhausted bad reply fails with code
- * `agent.output_invalid` (Python: `node.execute`).
+ * `agent.output_invalid` (Python: `node.execute`; decision 36's failure codes).
  */
 
 import { afterEach, expect, test } from "bun:test";

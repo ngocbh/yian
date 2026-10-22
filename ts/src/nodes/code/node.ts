@@ -30,11 +30,13 @@
  * named export must be a function. What the code throws (a reference's module while it loads
  * included, and a late timer throw or unhandled rejection while it runs) rejects as a `CodeError`
  * reading `<name>: <message>`; an inline body's is located at the authored line of its first body
- * frame when it has one, a reference's at the whole `code:` value. A result of `undefined` fails;
- * a result goes through host intake in the worker, and a value intake refuses fails
- * `contract.output`. A worker that exits before the body returns rejects with its exit code: a
- * `process.exit`, or a body awaiting a promise nothing can resolve when no earlier body on its
- * thread left work running (a `setInterval`, say); otherwise that body waits until it is stopped.
+ * frame when it has one, a reference's at the whole `code:` value. Its stack names an inline
+ * body's frames after the node's `sourceFile` (the flow's file label) and the body's own line. A
+ * result of `undefined` fails; a result goes through host intake in the worker, and a value intake
+ * refuses fails `contract.output`. A worker that exits before the body returns rejects with its
+ * exit code: a `process.exit`, or a body awaiting a promise nothing can resolve when no earlier
+ * body on its thread left work running (a `setInterval`, say); otherwise that body waits until it
+ * is stopped.
  * A body shouldn't leave work running after it returns: a late error from it fails the call its
  * thread runs then, or is printed as a console error line when the thread is idle, and the thread
  * is retired. The worker forwards the code's `console` calls to this thread's `console`. The
@@ -79,6 +81,7 @@ import {
   compileBody,
   packFiles,
   splitReference,
+  STRICT_PROLOGUE,
   type ThrownError,
   undeclaredInput,
   unpackFiles,
@@ -204,10 +207,29 @@ function bodyLine(error: unknown, nodeId: string): number | null {
 }
 
 /**
+ * Return `stack` with each `yian-code:<nodeId>:<line>:<column>` location renamed
+ * `<sourceFile>:<body line>:<body column>`: the line less the constructor's header, and a
+ * first-line column less the strict prologue sharing that line. A message line holding that text
+ * is renamed too.
+ */
+function labelBodyFrames(stack: string, nodeId: string, sourceFile: string): string {
+  const marker = `yian-code:${nodeId}:`;
+  const [head, ...rest] = stack.split(marker);
+  return rest.reduce((text, part) => {
+    const match = /^(\d+):(\d+)/.exec(part);
+    const line = match === null ? 0 : Number(match[1]) - headerLineCount();
+    if (line < 1) return text + marker + part;
+    const column = Number(match![2]) - (line === 1 ? STRICT_PROLOGUE.length : 0);
+    return `${text}${sourceFile}:${line}:${column}${part.slice(match![0].length)}`;
+  }, head!);
+}
+
+/**
  * A value CODE's own code threw, wrapped so the failure reads `<name>: <message>`.
  *
  * A non-`Error` reads as its text form when it is a yian value, else as `String(value)`. The
- * stack is the thrown error's, so a failure's traceback shows the code's own frames.
+ * stack is the thrown error's, so a failure's traceback shows the code's own frames (`forward`
+ * renames an inline body's after the node's `sourceFile`).
  */
 export class CodeError extends Error {
   override name = "CodeError";
@@ -418,6 +440,8 @@ export class CodeNode extends Node {
   code: string | BuiltinCode;
   /** The directory a reference resolves against; `null` when not known. Not fingerprinted. */
   baseDir: string | null;
+  /** The flow's file label an inline body's stack frames are named after. Not fingerprinted. */
+  sourceFile: string;
   /** The authored identity of the whole `code:` scalar. Diagnostic-only. */
   codeOrigin: OriginRef | null;
   /** The authored identities of the exact constructed body lines, in order. Diagnostic-only. */
@@ -432,6 +456,8 @@ export class CodeNode extends Node {
    * @param options.code The `code:` field: a `./file.ts:fn` reference, an inline body, or a
    *   `{builtin: "identity", field}` form. The node keeps a frozen copy of a built-in form.
    * @param options.baseDir The directory a reference resolves against.
+   * @param options.sourceFile The flow's file label a failing inline body's stack frames are named
+   *   after (default `"<inline-code>"`).
    * @param options.codeOrigin The authored identity of the whole `code:` scalar.
    * @param options.codeLineOrigins The authored identities of the exact constructed body lines in
    *   order; empty when line-level provenance is unavailable. The node keeps a frozen copy.
@@ -446,16 +472,25 @@ export class CodeNode extends Node {
     options: {
       code: string | BuiltinCode;
       baseDir?: string | null;
+      sourceFile?: string;
       codeOrigin?: OriginRef | null;
       codeLineOrigins?: readonly OriginRef[];
       title?: string | null;
     },
   ) {
-    const { code, baseDir = null, codeOrigin = null, codeLineOrigins = [], title = null } = options;
+    const {
+      code,
+      baseDir = null,
+      sourceFile = "<inline-code>",
+      codeOrigin = null,
+      codeLineOrigins = [],
+      title = null,
+    } = options;
     super(nodeId, { title });
     this.code = validateCode(code);
     validateCodeOrigins(codeOrigin, codeLineOrigins);
     this.baseDir = baseDir;
+    this.sourceFile = sourceFile;
     this.codeOrigin = codeOrigin;
     this.codeLineOrigins = Object.freeze([...codeLineOrigins]);
     this.mode = typeof this.code === "string" ? classifyCodeSource(this.code) : "builtin";
@@ -539,7 +574,8 @@ export class CodeNode extends Node {
    * The built-in identity returns the record's field as bound. A reference's function or an
    * inline body runs on a worker thread and gets `inputs`, a frozen host copy (ints as
    * `number`s, big ones as `bigint`s) behind a proxy that throws on an undeclared name; what it
-   * throws rejects as a `CodeError`, its `console` calls go to this thread's `console`, and its
+   * throws rejects as a `CodeError` (an inline body's frames in its stack named after
+   * `sourceFile` and the body line), its `console` calls go to this thread's `console`, and its
    * result goes through host intake (a top-level `return inputs` returns the record). The worker
    * runs with the caller's `current()` values and goes back to the idle pool after its reply.
    *
@@ -577,7 +613,14 @@ export class CodeNode extends Node {
       },
       caps.signal,
     );
-    if (!reply.ok) throw replyError(reply);
+    if (!reply.ok) {
+      const error = replyError(reply);
+      // The failure's traceback shows this stack; `original` keeps the raw frames `bodyLine` reads.
+      if (error instanceof CodeError && typeof error.stack === "string") {
+        error.stack = labelBodyFrames(error.stack, this.id, this.sourceFile);
+      }
+      throw error;
+    }
     return new Output(hostOutput(unpackFiles(reply.value)));
   }
 }

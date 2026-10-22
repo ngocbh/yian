@@ -95,18 +95,22 @@ export type CodeMessage = ({ console: ConsoleMethod; text: string } | (CodeReply
   late?: true;
 };
 
+/** The prologue an inline body is built with, on its first line, so line numbers hold. */
+export const STRICT_PROLOGUE = '"use strict"; ';
+
 /**
  * Strip an inline body's types and build it as a strict async function of `inputs`.
  *
  * The `sourceURL` comment names the body's stack frames `yian-code:<nodeId>:<line>:<column>`, and
- * the strict prologue shares the first line, so frame lines stay body lines plus the header.
+ * the strict prologue shares the first line, so frame lines stay body lines plus the header (and a
+ * first-line column is shifted by the prologue's length).
  *
  * @throws TypeStripError when the body doesn't parse or strip.
  * @throws SyntaxError when the constructor refuses the stripped body.
  */
 export async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
   const js = await stripTypes(body);
-  return new AsyncFunction("inputs", '"use strict"; ' + js + "\n//# sourceURL=yian-code:" + nodeId);
+  return new AsyncFunction("inputs", STRICT_PROLOGUE + js + "\n//# sourceURL=yian-code:" + nodeId);
 }
 
 /** Split a `./file.ts:fn` reference into its path and its export name. */

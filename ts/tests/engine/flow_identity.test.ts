@@ -627,11 +627,12 @@ test("different CODE texts and built-in fields fingerprint differently", () => {
   expect(codeFingerprint("./h.ts:fn")).not.toBe(codeFingerprint("return 1"));
 });
 
-test("CODE mode, base directory and origins keep the fingerprint", () => {
+test("CODE mode, base directory, source file and origins keep the fingerprint", () => {
   const baseline = codeFingerprint("./h.ts:fn");
 
   expect(codeFingerprint("./h.ts:fn", { mode: "inline" })).toBe(baseline);
   expect(codeFingerprint("./h.ts:fn", { baseDir: "/flows" })).toBe(baseline);
+  expect(codeFingerprint("./h.ts:fn", { sourceFile: "flow.yaml" })).toBe(baseline);
   expect(codeFingerprint("./h.ts:fn", { codeOrigin: new OriginRef("code") })).toBe(baseline);
   expect(codeFingerprint("./h.ts:fn", { codeLineOrigins: [new OriginRef("code/line/0")] })).toBe(baseline);
 });

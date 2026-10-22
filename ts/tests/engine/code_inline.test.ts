@@ -35,7 +35,10 @@
  * input rejects, `in`, `JSON.stringify`, `return inputs`, strict assignment); a body returning
  * `undefined` rejects; a thrown string's and a thrown record's text; a thrown string falls back to
  * the whole code origin; a body error's code is `node.execute`; a built-in's origin is the node's;
- * the built-in identity runs on the bound record; the runtime's function header is 2 lines; through
+ * the built-in identity runs on the bound record; the runtime's function header is 2 lines; a
+ * failing body's stack names its frames after the node's `sourceFile` (`<inline-code>` by
+ * default) and the body's own line and column, its raw copy keeps them, and the throwing line is
+ * still located; a reference's frames name its own file; through
  * the evaluator and the engine, a success commits its int, a throwing body fails `node.execute`
  * with `Error: boom` and `causeType` `CodeError` at the line origin, a no-value body fails at the
  * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin; a
@@ -108,10 +111,11 @@ async function failureOrigin(node: CodeNode, inputs: Record<string, unknown> = {
   return node.exceptionOrigin(await rejected(node.run(inputs)));
 }
 
-/** A CODE node `n` with `code`, a whole-code origin and one origin per body line. */
-function locatedNode(code: string): CodeNode {
+/** A CODE node `n` with `code`, a whole-code origin, one origin per body line and `sourceFile`. */
+function locatedNode(code: string, sourceFile?: string): CodeNode {
   return new CodeNode("n", {
     code,
+    sourceFile,
     codeOrigin: new OriginRef("code"),
     codeLineOrigins: code.split("\n").map((_, index) => new OriginRef(`line:${index}`)),
   });
@@ -217,6 +221,38 @@ for (const [name, code, expectedLine] of [
   });
 }
 
+// --- a failing body's stack names its source file --- //
+
+const HELPER_BODY = 'function helper() {\n  throw new Error("boom")\n}\nhelper()\nreturn 0';
+
+test("a body error's stack names the source file and the authored line", async () => {
+  const error = (await rejected(
+    new CodeNode("n", { code: HELPER_BODY, sourceFile: "flows/my flow.yaml" }).run({}),
+  )) as CodeError;
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect(error.stack).toContain("(flows/my flow.yaml:2:");
+  expect(error.stack).toContain("(flows/my flow.yaml:4:");
+  expect(error.stack).not.toContain("yian-code:");
+  // The copy of what the body threw keeps the runtime's own frames.
+  expect((error.original as Error).stack).toContain("yian-code:n:4:");
+});
+
+test("a body's frames default to <inline-code>, a first-line column counted from the body", async () => {
+  const error = (await failure('throw new Error("boom")')) as CodeError;
+
+  const frame = /<inline-code>:1:(\d+)/.exec(error.stack ?? "");
+  expect(frame).not.toBeNull();
+  // Within the 23-character line, not shifted by the strict prologue sharing it.
+  expect(Number(frame![1])).toBeLessThanOrEqual(23);
+});
+
+test("a renamed stack still locates the throwing line", async () => {
+  const node = locatedNode(HELPER_BODY, "flow.yaml");
+
+  expect(await failureOrigin(node)).toBe(node.codeLineOrigins[1]!);
+});
+
 test("inline non-owned failure uses the whole code origin", () => {
   const node = locatedNode("return 0");
 
@@ -286,6 +322,17 @@ test("reference failure uses code then node fallback", async () => {
   expect(await failureOrigin(reference)).toBe(codeOrigin);
   expect(await failureOrigin(withoutCodeOrigin)).toBe(withoutCodeOrigin.origin);
   expect(await failureOrigin(sourceFree)).toBeNull();
+});
+
+test("a reference's frames name its own file", async () => {
+  const error = (await rejected(
+    new CodeNode("r", { code: "./compose_codefns.ts:boom", baseDir: FIXTURES, sourceFile: "flow.yaml" }).run({}),
+  )) as CodeError;
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect(error.stack).toContain("compose_codefns.ts:");
+  expect(error.stack).not.toContain("yian-code:");
+  expect(error.stack).not.toContain("flow.yaml");
 });
 
 test("a reference returning an int commits an int", async () => {

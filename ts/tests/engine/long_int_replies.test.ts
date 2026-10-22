@@ -48,7 +48,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, serving } from "./run_state_fixtures.ts";
+import { rejected, serving } from "./run_state_fixtures.ts";
 import { PLAIN_FLOW } from "./session_fakes.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-replies-"));
@@ -282,7 +282,7 @@ function backward(reply: string) {
 test("a long int in a backward reply fails the backward located", async () => {
   const reply = `{"input_feedback": {}, "self_feedback": ["ok", ${D}], "variable_feedback": {}}`;
 
-  const error = await rejection(backward(reply));
+  const error = await rejected(backward(reply));
 
   expect(error).toBeInstanceOf(TypeError);
   expect((error as TypeError).message).toBe("self_feedback messages must be strings");
@@ -307,7 +307,7 @@ test.each([99, 100])("a backward reply measures nesting from its feedback messag
 });
 
 test("a backward feedback message past the limit still fails", async () => {
-  const error = await rejection(backwardReply(nestedMessage(102)));
+  const error = await rejected(backwardReply(nestedMessage(102)));
 
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as TypeCheckError).message).toStartWith("backward response at input_feedback.topic[0]");
@@ -333,7 +333,7 @@ test.each([
   const result = await runFlow(await loadFlow(CODE_FLOW, { env }), {}, { env, learnable: true });
   expect(result.status).toBe("succeeded");
 
-  const error = await rejection(result.backward(feedback));
+  const error = await rejected(result.backward(feedback));
 
   expect(error).toBeInstanceOf(TypeError);
   expect((error as TypeError).message).toBe(`${where} must be a string, object, list, or None`);
@@ -344,7 +344,7 @@ test.each([
 test("nan feedback still raises a type error", async () => {
   const result = await runFlow(await loadFlow(CODE_FLOW, { env }), {}, { env, learnable: true });
 
-  const error = await rejection(result.backward({ note: Number.NaN }));
+  const error = await rejected(result.backward({ note: Number.NaN }));
 
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as TypeCheckError).message).toBe("feedback at note: NaN is not a yian value");

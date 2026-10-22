@@ -47,7 +47,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeSkipped, NodeStarted } from "../../src/events.ts";
 import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection } from "./run_state_fixtures.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -438,7 +438,7 @@ test("a resumed run routes to a value entry and replays it", async () => {
     throw interruption;
   };
 
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(await loadFlow(GATE_FLOW, { env }), { t: "bye" }, { env, log: path, signal: host.signal, tools: { ask_user: interrupt } }),
   );
   expect(caught).toBe(interruption);

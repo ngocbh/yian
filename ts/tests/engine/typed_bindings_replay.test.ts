@@ -30,7 +30,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, startedIds } from "./run_state_fixtures.ts";
+import { rejected, startedIds } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-replay-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -125,7 +125,7 @@ async function interruptThenResume(answer: unknown): Promise<RunResult> {
     throw interruption;
   };
 
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(await loadFlow(GATE_FLOW, { env }), {}, { env, log: path, signal: host.signal, tools: { ask_user: interrupt } }),
   );
   expect(caught).toBe(interruption);
@@ -155,7 +155,7 @@ test("resume rejects a changed declared binding type", async () => {
   const changed = TYPED_FLOW.replace("qty: !int ${p.output}", "qty: !float ${p.output}");
   expect(changed).not.toBe(TYPED_FLOW);
 
-  const error = await rejection(resumeFlow(await loadFlow(changed, { env }), { log: path, env }));
+  const error = await rejected(resumeFlow(await loadFlow(changed, { env }), { log: path, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("flow fingerprint mismatch");
@@ -194,7 +194,7 @@ output:
   expect(edited).toBe(1);
   writeFileSync(path, lines.join("\n") + "\n");
 
-  const error = await rejection(resumeFlow(await loadFlow(flow, { env }), { log: path, env }));
+  const error = await rejected(resumeFlow(await loadFlow(flow, { env }), { log: path, env }));
 
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toContain("does not match declared type int");

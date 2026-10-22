@@ -31,7 +31,7 @@ import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { decodeRecord } from "../../src/runtime/log.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection } from "./run_state_fixtures.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-any-replay-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -232,7 +232,7 @@ test("a node after resume reads replayed any values unchanged", async () => {
     throw interruption;
   };
 
-  const caught = await rejection(
+  const caught = await rejected(
     runFlow(await loadFlow(ANY_FLOW, { env }), INPUT, { env, log: path, signal: host.signal, tools: { ask_user: interrupt } }),
   );
   expect(caught).toBe(interruption);

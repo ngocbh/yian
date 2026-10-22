@@ -36,7 +36,7 @@ import { parseType } from "../../src/typesys/types.ts";
 import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection, thrownBy } from "./run_state_fixtures.ts";
+import { rejected, thrownBy } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-literals-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -77,7 +77,7 @@ test.each<[string, string, Value]>([
 });
 
 test("a long int literal is a located load error (input-default-long-form)", async () => {
-  const error = await rejection(
+  const error = await rejected(
     loadConformanceFlow(flow("${input.n}", `input:\n  n:\n    type: int\n    default: ${D}\n`), { env }),
   );
 
@@ -107,7 +107,7 @@ test.each([
 });
 
 test("a long range end is a load error (float)", async () => {
-  const error = await rejection(loadConformanceFlow(flow("hi", `input:\n  n: !float(0..${D})\n`), { env }));
+  const error = await rejected(loadConformanceFlow(flow("hi", `input:\n  n: !float(0..${D})\n`), { env }));
 
   expect(error).toBeInstanceOf(LoadError);
   expect((error as LoadError).message).toBe(

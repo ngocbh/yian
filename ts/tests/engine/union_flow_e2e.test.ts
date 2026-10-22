@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejection } from "./run_state_fixtures.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-union-flow-e2e-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -275,7 +275,7 @@ test.each([
   lines[end] = JSON.stringify(record);
   writeFileSync(log, lines.join("\n") + "\n");
 
-  const error = await rejection(resumeFlow(await flow(), { log, env }));
+  const error = await rejected(resumeFlow(await flow(), { log, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain(message);

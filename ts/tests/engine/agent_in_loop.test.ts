@@ -190,7 +190,7 @@ test("tool calling agent in loop retries whole node after process loss", async (
 
   // Terminal replay builds no model and leaves the log as it is.
   const unexpected = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (): never => {
       throw new Error("terminal replay must not build a model");
     },

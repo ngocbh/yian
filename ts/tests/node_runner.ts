@@ -5,6 +5,10 @@
  * Load it before the preload: `node --import ./tests/node_runner.ts --import ./tests/conftest.ts
  * --test ...`. It registers a resolve hook mapping `bun:test` to this module and exports what the
  * suite imports from `bun:test`. Anything else is missing, so a test importing it fails to load.
+ *
+ * Differences from Bun a test may meet: Node runs a `describe` body when it is defined, not after
+ * the module has loaded, so a body can't read a `const` declared below it; a skipped `describe`
+ * counts as one skipped suite, not as its tests; `jest.useFakeTimers()` fakes `setInterval` only.
  */
 
 import { registerHooks } from "node:module";

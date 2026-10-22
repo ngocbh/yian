@@ -64,7 +64,7 @@ import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { captureBindings } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { NO_ENV, rejected } from "./run_state_fixtures.ts";
 
 /** A backward context over the node's declared inputs and captured layout. */
 function contextFor(node: Node, inputs: Record<string, unknown>, output: unknown): BackwardContext {
@@ -497,7 +497,7 @@ test("an agent capture keeps the variable inventory separate from the delivered 
   const evaluated = await evalNode(node, null, new VariablePool(), {
     wiringOverride: { topic: "reefs" },
     captureBindings: true,
-    models: { env: () => undefined, createModel: () => model },
+    models: { env: NO_ENV, createModel: () => model },
   });
 
   expect((evaluated.outcome as Output).value).toBe("reefs: Summarize clearly");

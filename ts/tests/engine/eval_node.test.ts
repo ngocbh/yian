@@ -433,7 +433,7 @@ test("a reserved binding failure of a node that doesn't read its steps stays a n
 
 /** A model access whose builder is never called. */
 const MODELS: ModelAccess = {
-  env: () => undefined,
+  env: NO_ENV,
   createModel: () => {
     throw new Error("unused");
   },
@@ -476,7 +476,7 @@ describe("evalNode checks its arguments", () => {
     ],
     [
       "models",
-      { models: { env: () => undefined } },
+      { models: { env: NO_ENV } },
       new TypeError("models must provide env(name) and createModel(config, options), or be null"),
     ],
   ] as const) {

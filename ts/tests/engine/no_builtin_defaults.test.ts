@@ -31,7 +31,7 @@ import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { connectionSnapshot, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
-import { rejected, textReply } from "./run_state_fixtures.ts";
+import { NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
 const FIXES = ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"];
 
@@ -109,7 +109,7 @@ test("python api resolve model config without model", () => {
 
 /** A model builder that fails the test: no model may be built when the run can't start. */
 const forbidden = {
-  env: () => undefined,
+  env: NO_ENV,
   createModel: (): never => {
     throw new Error("no model may be built when the run cannot start");
   },

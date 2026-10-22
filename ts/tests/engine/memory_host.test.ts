@@ -118,6 +118,7 @@ import { RunStarted } from "../../src/events.ts";
 import { resumeFlow, runFlow, type RunFlowOptions } from "../../src/run.ts";
 
 import { FakeMemory, type FakeSession } from "./memory_fakes.ts";
+import { NO_ENV } from "./run_state_fixtures.ts";
 
 let tmp: string;
 
@@ -513,7 +514,7 @@ test("env reaches reflective and profile memory and defaults to processEnv", asy
 function recording(model = new ScriptedModel([])) {
   const options: Parameters<ModelAccess["createModel"]>[1][] = [];
   const access: ModelAccess = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (_config, given) => {
       options.push(given);
       return model;
@@ -579,7 +580,7 @@ test("each learner retry reaches onEvent, with and without models", async () => 
   }
   // Without `onEvent` a retry publishes nothing; without `models` a learner builds its default
   // model, here an ollama route, which needs no key.
-  const quiet = await buildMemories(flow, { env: () => undefined });
+  const quiet = await buildMemories(flow, { env: NO_ENV });
   try {
     for (const key of ["lessons", "about"]) {
       expect(field(quiet.get(key), "onRetry")).toBeUndefined();

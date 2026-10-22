@@ -212,7 +212,7 @@ export function agentContext(
     toolset: null,
     baseSystemPrompt: DEFAULT_SYSTEM,
     skills: [],
-    models: { env: () => undefined, createModel: () => model },
+    models: { env: NO_ENV, createModel: () => model },
     sent: () => [],
     ...overrides,
   };

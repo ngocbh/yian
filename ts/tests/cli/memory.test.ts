@@ -114,6 +114,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { NO_ENV } from "../engine/run_state_fixtures.ts";
 
 /** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
 const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
@@ -791,7 +792,7 @@ describe("yian run", () => {
       stderr: { write: async (text) => void out.push(text) },
       stdin: new PassThrough(),
       stderrStream: new PassThrough(),
-      env: () => undefined,
+      env: NO_ENV,
     };
     expect(await main(["run", "--help"], io)).toBe(0);
     const text = plain(out.join(""));

@@ -6,7 +6,12 @@
  * At load it clears `XDG_CONFIG_HOME`, every defaults variable, `YIAN_DEFAULT_PROVIDER` and
  * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on) and keeps that
  * environment as the baseline. Before each test, `process.env` is put back to the baseline, with
- * `YIAN_AUTH_FILE` at a fresh temp dir's `auth.json` (not created) and `HOME` at its `home/`.
+ * `YIAN_AUTH_FILE` at a fresh temp dir's `auth.json` (not created) and `HOME` at its `home/`, and
+ * the cached defaults are dropped, so the next `current()` reads the built-in ones.
+ *
+ * Changed: Python sets `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL` for every test; TS clears them
+ * (no TS test relied on a suite-wide default model). Python points `HOME` at a fresh directory for
+ * CLI tests only; TS does it for every test.
  *
  * Node also loads `--import` preloads in each worker thread, such as a CODE body's, which shares
  * the test's environment; there this module does nothing, since a reset would change the
@@ -22,7 +27,7 @@ import { isMainThread } from "node:worker_threads";
 
 import { beforeEach } from "bun:test";
 
-import { ENTRIES } from "../src/defaults.ts";
+import { ENTRIES, forget } from "../src/defaults.ts";
 
 const CLEARED = [
   "XDG_CONFIG_HOME",
@@ -35,7 +40,7 @@ const BASELINE: Readonly<Record<string, string | undefined>> = { ...process.env 
 
 const tempDirs: string[] = [];
 
-/** Put `process.env` back to the baseline, with a fresh empty auth store and home. */
+/** Put `process.env` back to the baseline, with a fresh empty auth store and home, and drop the cached defaults. */
 function isolate(): void {
   for (const name of Object.keys(process.env)) {
     if (!Object.hasOwn(BASELINE, name)) delete process.env[name];
@@ -46,6 +51,7 @@ function isolate(): void {
   fs.mkdirSync(join(dir, "home"));
   process.env.YIAN_AUTH_FILE = join(dir, "auth.json");
   process.env.HOME = join(dir, "home");
+  forget();
 }
 
 // Removed once at exit rather than after each test: Bun and Node order a file's `afterEach`

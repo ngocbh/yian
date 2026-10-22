@@ -78,7 +78,7 @@ import {
   SteeringCapability,
 } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { drive, FailNode, FuncNode, nodeFlow, rejected, StreamNode } from "./run_state_fixtures.ts";
+import { drive, FailNode, FuncNode, NO_ENV, nodeFlow, rejected, StreamNode } from "./run_state_fixtures.ts";
 
 /** Return one configured result from its body. */
 class ResultNode extends Node {
@@ -278,7 +278,7 @@ describe("render capture", () => {
     const reply = () =>
       new Response({ message: new Message({ role: "assistant", parts: [new TextPart("hello")] }), finishReason: "stop" });
     const model = new ScriptedModel([reply(), reply()], config);
-    const models = { env: () => undefined, createModel: () => model };
+    const models = { env: NO_ENV, createModel: () => model };
     const error = await rejected(
       evalNode(node, null, new VariablePool(), { captureBindings: true, effectiveLlmByStaticPath: {}, models }),
     );

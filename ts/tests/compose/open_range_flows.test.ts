@@ -48,6 +48,7 @@ import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
+import { NO_ENV } from "../engine/run_state_fixtures.ts";
 import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-open-range-flows-"));
@@ -346,7 +347,7 @@ function replying(reply: Record<string, unknown>): RunFlowOptions {
     provider: "openai",
     model: "gpt-4o",
   });
-  return { models: { env: () => undefined, createModel: () => model } };
+  return { models: { env: NO_ENV, createModel: () => model } };
 }
 
 test("agent reply below an open range fails structured output", async () => {

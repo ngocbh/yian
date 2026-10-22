@@ -51,7 +51,7 @@ import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { barrier, rejected, textReply } from "./run_state_fixtures.ts";
+import { barrier, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-tools-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -315,7 +315,7 @@ function firstToolChat(): ChatModel {
 }
 
 /** A fresh `firstToolChat` per AGENT call. */
-const chats: ModelAccess = { env: () => undefined, createModel: () => firstToolChat() };
+const chats: ModelAccess = { env: NO_ENV, createModel: () => firstToolChat() };
 
 /** A tool `name` taking `text`; by default it returns `name:text`. */
 const textTool = (name: string, action?: (text: string) => unknown): FunctionTool =>

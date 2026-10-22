@@ -117,7 +117,16 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, progressOf, rejected, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
+import {
+  crashAfter,
+  NO_ENV,
+  progressOf,
+  rejected,
+  requiredEndFlow,
+  startedRun,
+  textReply,
+  thrownBy,
+} from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -470,7 +479,7 @@ test("an aborted signal rejects with its reason before the log exists", async ()
 test.each([
   [{ scheduler: { now: () => 0 } }, "scheduler must be a Scheduler or null"],
   [{ random: 0.5 }, "random must be a function or null"],
-  [{ models: { env: () => undefined } }, "models must provide env(name) and createModel(config, options), or be null"],
+  [{ models: { env: NO_ENV } }, "models must provide env(name) and createModel(config, options), or be null"],
 ])("a bad test option is refused before the log exists (%#)", async (option, message) => {
   const path = join(dir, "run.jsonl");
   const flow = await load(PLAN_FLOW);
@@ -890,7 +899,7 @@ function scripted(built: Record<string, unknown>[], env: Env = hostEnv(dir)): Mo
 
 /** A model access whose every build fails the test. */
 const forbidden: ModelAccess = {
-  env: () => undefined,
+  env: NO_ENV,
   createModel: () => {
     throw new Error("no model may be built when the run cannot start");
   },

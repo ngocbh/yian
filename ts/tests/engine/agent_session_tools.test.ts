@@ -324,7 +324,7 @@ test("a stop the turn throws after publishing wins over a representation error",
     expect(error).toBe(stop);
     expect(view.effects[0]!.status).toBe("completed");
     expect(view.items).toHaveLength(0);
-    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.results).toContainEqual({ type: "throw", value: representation });
   } finally {
     spy.mockRestore();
   }

@@ -58,6 +58,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { request, withHarness, withTurn } from "./session_fakes.ts";
+import { NO_ENV } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -88,7 +89,7 @@ function context(model: ChatModel, overrides: Partial<AgentRunContext> = {}): Ag
     baseSystemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: {
-      env: () => undefined,
+      env: NO_ENV,
       createModel: () => {
         ctx.built++;
         return model;
@@ -301,7 +302,7 @@ test("ctx.sent() returns the built RouteModel's route credentials", async () => 
   const ctx = context(model, {
     signal: stop.signal,
     models: {
-      env: () => undefined,
+      env: NO_ENV,
       createModel: () => {
         stop.abort(new Error("stopped"));
         return model;

@@ -83,7 +83,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { reducerSnapshot, startedRun, untimed } from "./run_state_fixtures.ts";
+import { NO_ENV, reducerSnapshot, startedRun, untimed } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";
@@ -502,7 +502,7 @@ const NO_EFFECTS = {
     },
   }),
   models: {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: () => {
       throw new Error("effect work ran after only its durable NodeStarted");
     },

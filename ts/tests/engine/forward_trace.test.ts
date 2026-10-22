@@ -4356,7 +4356,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
   const rendered: string[] = [];
   let replaying = false;
   const models: ModelAccess = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (config) => {
       if (replaying) throw new Error("replay tried to invoke a model");
       return {

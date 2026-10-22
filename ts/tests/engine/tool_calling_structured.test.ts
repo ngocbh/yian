@@ -32,6 +32,7 @@ import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { NO_ENV } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -65,7 +66,7 @@ async function run(
     baseSystemPrompt: DEFAULT_SYSTEM,
     skills: [],
     emitEvent: (event) => void events.push(event),
-    models: { env: () => undefined, createModel: () => model },
+    models: { env: NO_ENV, createModel: () => model },
     sent: () => [],
   };
   const value = (await runAgent(ctx)).value;

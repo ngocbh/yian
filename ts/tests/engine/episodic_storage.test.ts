@@ -618,7 +618,7 @@ test("invalid last mutation never reaches storage", async () => {
 });
 
 /** The `ts/` directory. */
-const ROOT = path.resolve(import.meta.dir, "../..");
+const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/episodic.js");
 
 /**

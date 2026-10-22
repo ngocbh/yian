@@ -941,7 +941,7 @@ test("onRetry sees the retried error scrubbed of the call's credentials", async 
 });
 
 /** The `ts/` directory. */
-const ROOT = join(import.meta.dir, "../..");
+const ROOT = join(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/memory/profile.js");
 
 /** This process's environment without `YIAN_*` keys, so a child reads no ambient yian settings. */

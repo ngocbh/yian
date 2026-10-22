@@ -849,6 +849,37 @@ describe("redirectDetail", () => {
   });
 });
 
+/** The `ts/` directory: Bun children run from it, so Bun never looks for packages to install. */
+const ROOT = path.resolve(import.meta.dirname, "../..");
+const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
+const BUILT = path.join(ROOT, "dist/src/platform.js");
+const BUILT_URL = pathToFileURL(BUILT).href;
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node cases skipped.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+/** Spawned tests wait on real processes, well past the default timeout. */
+const SPAWNED_MS = 20_000;
+
 describe("safeFetch", () => {
   let servers: http.Server[] = [];
 
@@ -1040,34 +1071,6 @@ describe("safeFetch", () => {
   });
 });
 
-/** The `ts/` directory: Bun children run from it, so Bun never looks for packages to install. */
-const ROOT = path.resolve(import.meta.dir, "../..");
-const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
-const BUILT = path.join(ROOT, "dist/src/platform.js");
-const BUILT_URL = pathToFileURL(BUILT).href;
-
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node cases skipped.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
-
 const BWRAP =
   process.platform === "linux" && spawnSync("bwrap", ["--ro-bind", "/", "/", "true"]).status === 0;
 
@@ -1199,9 +1202,6 @@ async function kill(holder: Holder): Promise<void> {
   holder.child.kill("SIGKILL");
   await holder.closed;
 }
-
-/** Spawned tests wait on real processes, well past the default timeout. */
-const SPAWNED_MS = 20_000;
 
 describe("the lock across processes", () => {
   test(

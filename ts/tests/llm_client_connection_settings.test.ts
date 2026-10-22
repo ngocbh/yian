@@ -189,7 +189,7 @@ async function assertHeaderValueStaysOut(provider: string): Promise<void> {
   const model = await build({ ...HEADER_CONFIGS[provider], headers: { "X-Gateway": GATEWAY } });
   expect(JSON.stringify(model.route.headers)).not.toContain(GATEWAY);
   // A full inspect: the default depth would stop before the auth object's fields.
-  expect(Bun.inspect(model)).not.toContain(GATEWAY);
+  expect(inspect(model)).not.toContain(GATEWAY);
   expect(inspect(model, { depth: Infinity })).not.toContain(GATEWAY);
   expect(model.route.auth.credentials()).toContain(GATEWAY);
 }

@@ -421,7 +421,7 @@ describe("inspect", () => {
       await auth.headers();
       const secrets = auth.credentials();
       expect(secrets.length).toBeGreaterThan(0);
-      const shown = [Bun.inspect(auth), inspect(auth, { depth: Infinity })];
+      const shown = [inspect(auth), inspect(auth, { depth: Infinity })];
       for (const text of shown) for (const secret of secrets) expect(text).not.toContain(secret);
     });
   }

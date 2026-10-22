@@ -134,7 +134,7 @@ function systemError(syscall: string): Error {
 }
 
 /** The `ts/` directory. */
-const ROOT = path.resolve(import.meta.dir, "../..");
+const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/storage/sqlite.js");
 
 /** A runtime that runs a module script: its command line before the script, and the storage module the script imports. */

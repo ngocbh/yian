@@ -22,7 +22,7 @@ import type { AskUserHandler } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { SCENARIOS } from "./terminal_both_runtimes.ts";
 
-const BUILT = join(import.meta.dir, "..", "..", "dist", "tests", "cli", "terminal_both_runtimes.js");
+const BUILT = join(import.meta.dirname, "..", "..", "dist", "tests", "cli", "terminal_both_runtimes.js");
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that

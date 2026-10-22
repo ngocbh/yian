@@ -132,7 +132,8 @@ for (const policy of POLICIES) {
 
   test(`snapshot identity survives a real process restart: ${policy}`, async () => {
     const file = path.join(dir, "private-memory.sqlite");
-    const module = (name: string) => JSON.stringify(pathToFileURL(path.join(import.meta.dir, "../../src", name)).href);
+    const module = (name: string) =>
+      JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../../src", name)).href);
     const script = `
 const { EpisodicMemory } = await import(${module("memory/episodic.ts")});
 const { ReflectiveMemory } = await import(${module("memory/reflective.ts")});

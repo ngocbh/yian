@@ -35,7 +35,7 @@ import { parseJson } from "../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
 import { NO_ENV } from "./engine/session_fakes.ts";
 
-const PLATFORM_URL = pathToFileURL(join(import.meta.dir, "..", "src", "platform.ts")).href;
+const PLATFORM_URL = pathToFileURL(join(import.meta.dirname, "..", "src", "platform.ts")).href;
 
 /** Return the error `run` throws, failing the test if it throws none. */
 function thrown(run: () => unknown): Error {
@@ -2841,7 +2841,7 @@ describe("browser callback listener", () => {
   });
 });
 
-const BUILT = join(import.meta.dir, "..", "dist", "tests", "auth_both_runtimes.js");
+const BUILT = join(import.meta.dirname, "..", "dist", "tests", "auth_both_runtimes.js");
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set

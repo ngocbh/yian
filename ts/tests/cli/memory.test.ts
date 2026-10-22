@@ -92,6 +92,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 
 import { main } from "../../src/cli/index.ts";
 import { buildCliMemories, MemoryOptionError, parseMemoryStorage } from "../../src/cli/memory.ts";
@@ -392,7 +393,7 @@ describe.each(["episodic", "reflective", "session"] as const)("CLI builds %s mem
 });
 
 /** The `ts/` directory. */
-const ROOT = join(import.meta.dir, "../..");
+const ROOT = join(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/cli/memory.js");
 
 /** This process's environment without `YIAN_*` keys, so a child reads no ambient yian settings. */
@@ -705,7 +706,7 @@ describe("yian run", () => {
         try {
           const session = await registry.get(key)!.openRun();
           try {
-            expect(Bun.inspect(session.snapshot)).not.toContain(path);
+            expect(inspect(session.snapshot)).not.toContain(path);
           } finally {
             await session.close();
           }

@@ -1247,7 +1247,7 @@ test("learning is propose only and rejects a stale generation", async () => {
 
 test("reflective memory implements protocol and imports only lower layers", () => {
   expect(isMemory(newMemory())).toBe(true);
-  const source = readFileSync(join(import.meta.dir, "../../src/memory/reflective.ts"), "utf8");
+  const source = readFileSync(join(import.meta.dirname, "../../src/memory/reflective.ts"), "utf8");
   const specifiers = [...source.matchAll(/\bfrom\s+"([^"]+)"|\bimport\s*\(?\s*"([^"]+)"/g)].map(
     (match) => (match[1] ?? match[2])!,
   );

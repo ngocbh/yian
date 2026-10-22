@@ -1502,7 +1502,7 @@ describe("Standard Schema libraries", () => {
 });
 
 /** The `ts/` directory. */
-const ROOT = resolve(import.meta.dir, "../..");
+const ROOT = resolve(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/tools/index.js");
 
 /**

@@ -129,8 +129,8 @@ test("test_terminal_cli_resume_does_not_acquire_the_memory_store", async () => {
 
 /** A script running `yian run` whose model call ends the process with exit code 42. */
 const DYING_CHILD = `
-import { main } from ${JSON.stringify(join(import.meta.dir, "../../src/cli/index.ts"))};
-import { processIo } from ${JSON.stringify(join(import.meta.dir, "../../src/cli/utils.ts"))};
+import { main } from ${JSON.stringify(join(import.meta.dirname, "../../src/cli/index.ts"))};
+import { processIo } from ${JSON.stringify(join(import.meta.dirname, "../../src/cli/utils.ts"))};
 globalThis.fetch = async () => process.exit(42);
 process.exitCode = await main(process.argv.slice(2), processIo());
 `;

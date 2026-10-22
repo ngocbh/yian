@@ -51,6 +51,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { isDeepStrictEqual } from "node:util";
 
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { evalExpr, ExpressionError, ResolveMode } from "../../src/expr/expressions.ts";
@@ -467,7 +468,7 @@ describe("accepted projected value stops at a bounded ancestor", () => {
       const stop = routed.stopped[0]!;
       expect(stop.feedback).toEqual(feedback);
       expect(
-        stop.context.some((d) => d.role === "projection" && Bun.deepEquals(d.operand, selectedPath)),
+        stop.context.some((d) => d.role === "projection" && isDeepStrictEqual(d.operand, selectedPath)),
       ).toBe(true);
       expect(stop.context.at(-1)!.snapshot).toEqual(opaque.snapshot);
     } else {
@@ -490,8 +491,8 @@ test("projected partial container uses recorded operation positions", () => {
   expect(routed.contributions).toEqual([]);
   expect(routed.stopped.map((stop) => stop.feedback)).toEqual([[null, feedback]]);
   const context = routed.stopped[0]!.context;
-  expect(context.some((d) => d.role === "projection" && Bun.deepEquals(d.operand, [1]))).toBe(true);
-  expect(context.some((d) => d.positions.some((p) => Bun.deepEquals(p, [1])))).toBe(true);
+  expect(context.some((d) => d.role === "projection" && isDeepStrictEqual(d.operand, [1]))).toBe(true);
+  expect(context.some((d) => d.positions.some((p) => isDeepStrictEqual(p, [1])))).toBe(true);
   expect(() =>
     routeFeedback(route.project([2]), feedback, () => null, { recordedValue: { uri: "file:///tmp/x" } }),
   ).toThrow("list index 2 is out of range");
@@ -521,7 +522,7 @@ describe("bounded projected lists compose before opaque stopping", () => {
     expect(routed.contributions).toEqual([]);
     expect(routed.stopped.map((stop) => stop.feedback)).toEqual([feedback]);
     expect(
-      routed.stopped[0]!.context.some((d) => d.role === "projection" && Bun.deepEquals(d.operand, path)),
+      routed.stopped[0]!.context.some((d) => d.role === "projection" && isDeepStrictEqual(d.operand, path)),
     ).toBe(true);
     expect(routed.stopped[0]!.context.at(-1)!.snapshot).toEqual(opaque.snapshot);
     expect(calls).toHaveLength(1);

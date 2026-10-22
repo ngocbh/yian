@@ -3444,20 +3444,8 @@ async function runJson(case_: Case): Promise<void> {
   });
 }
 
-/** Return whether this file is the process's entry script. */
-function isEntry(): boolean {
-  // Node 22 has no `import.meta.main`; under `bun test`, `argv[1]` is the test file.
-  const entry = process.argv[1];
-  if (entry === undefined) return false;
-  try {
-    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    // `argv[1]` names no file.
-    return false;
-  }
-}
-
-if (isEntry()) {
+// True when Bun or Node (22.18 and later) runs this file; false under a test runner.
+if (import.meta.main) {
   // Not `process.exit()`, which can cut off piped stdout on Node.
   process.exitCode = await main(process.argv.slice(2));
 }

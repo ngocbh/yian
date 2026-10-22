@@ -1,8 +1,8 @@
 /**
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
- * on Node and Bun: runtime detection, a SQLite wrapper over `bun:sqlite` or
- * `node:sqlite`, loaded lazily for the runtime in use, an exclusive file lock
- * built on it, the scheduler that clocks and timed waits go through, the
+ * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
+ * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
+ * an exclusive file lock built on it, the scheduler that clocks and timed waits go through, the
  * TypeScript stripper for CODE bodies, loaded lazily too, and `safeFetch`, the one way out
  * to the network: no redirects, yian's User-Agent, and a warning when TLS checks are off.
  */
@@ -17,6 +17,12 @@ import { processEnv } from "./defaults.ts";
 
 /** The JavaScript runtime yian is running on, detected once at load. */
 export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "node";
+
+/**
+ * Whether this process is a standalone binary built by `bun build --compile`, whose
+ * `process.argv[1]` names a file inside the binary rather than a script to re-run.
+ */
+export const compiled: boolean = runtime === "bun" && Bun.isStandaloneExecutable === true;
 
 /**
  * A value bound to a positional `?` parameter. A `number` passing

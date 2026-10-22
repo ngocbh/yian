@@ -3,10 +3,25 @@
   "version": "0.0.0",
   "description": "yian in TypeScript: readable YAML agent flows that people and LLMs compose, inspect and refine.",
   "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/ngocbh/yian.git", "directory": "ts" },
+  "homepage": "https://github.com/ngocbh/yian/tree/main/ts#readme",
+  "bugs": "https://github.com/ngocbh/yian/issues",
   "type": "module",
   "engines": { "node": ">=22.18", "bun": ">=1.4" },
+  "bin": { "yian": "dist/src/cli/index.js" },
+  "exports": {
+    ".": { "bun": "./src/index.ts", "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
+    "./run": { "bun": "./src/run.ts", "types": "./dist/src/run.d.ts", "default": "./dist/src/run.js" },
+    "./tools": { "bun": "./src/tools/index.ts", "types": "./dist/src/tools/index.d.ts", "default": "./dist/src/tools/index.js" },
+    "./skills": { "bun": "./src/compose/skills.ts", "types": "./dist/src/compose/skills.d.ts", "default": "./dist/src/compose/skills.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/src", "src", "LICENSE", "NOTICE", "README.md"],
+  "publishConfig": { "access": "public" },
   "scripts": {
+    "prepack": "cp ../LICENSE LICENSE && bun run build",
     "build": "rm -rf dist && tsc && find dist -name '*.test.*' -delete",
+    "build:bin": "for t in ${YIAN_BIN_TARGETS:-darwin-arm64 darwin-x64 linux-x64 linux-arm64}; do bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-$t ./src/cli/index.ts ./src/nodes/code/worker.ts --outfile bin/yian-$t || exit 1; done",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./tests",
     "test:node": "node --import ./tests/node_runner.ts --import ./tests/conftest.ts --test --test-concurrency=1 --test-timeout=60000 \"tests/**/*.test.ts\""

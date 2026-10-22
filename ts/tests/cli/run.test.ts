@@ -13,12 +13,13 @@
 // for the prompts). Changed: an unknown name is quoted as `"topik"`; the CODE bodies are
 // TS's, and a non-string output prints in yian's text form, not Python's repr. Added here: the
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
-// `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
-// `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
-// `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`); the entry's
-// `run --json` child and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
-// stuck in a CODE body; `status`, TS-only, on logs these runs write. From
-// tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
+// `skillsCheck`, and `main`'s command table: the defaults check, usage errors, `--licenses` and the
+// routing to `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json`
+// documents, its `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`);
+// the entry's `run --json` child, its command line in a binary and as a script (`childCommand`)
+// and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run stuck in a CODE
+// body; `status`, TS-only, on logs these runs write. From tests/cli/test_run_log_options.py, the
+// run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
@@ -39,7 +40,8 @@ import {
   skillsCheck,
   stopOnSignals,
 } from "../../src/cli/run.ts";
-import { main } from "../../src/cli/index.ts";
+import { childCommand, main } from "../../src/cli/index.ts";
+import { LICENSES } from "../../src/cli/licenses.ts";
 import {
   abortOnSignal,
   type CliIo,
@@ -53,6 +55,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
+import { compiled } from "../../src/platform.ts";
 import { NO_ENV } from "../engine/session_fakes.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
@@ -434,6 +437,16 @@ describe("main", () => {
     ({ io, stdout, stderr } = testIo());
     expect(await main(["models", "--provider", "openai", "--timeout", "soon"], io)).toBe(2);
     expect(stderr()).toContain("Error: Invalid value for '--timeout': 'soon' is not a valid float.\n");
+  });
+
+  test("--licenses prints LICENSES and exits 0; the root help lists it", async () => {
+    let { io, stdout, stderr } = testIo();
+    expect(await main(["--licenses"], io)).toBe(0);
+    expect(stdout()).toBe(LICENSES);
+    expect(stderr()).toBe("");
+    ({ io, stdout } = testIo());
+    expect(await main(["--help"], io)).toBe(0);
+    expect(stdout()).toMatch(/^ {2}--licenses +\S/m);
   });
 
   test("a command's --help prints its help and exits 0", async () => {
@@ -1350,6 +1363,23 @@ function spawnEntry(args: string[]) {
   });
   return { child, streams, closed };
 }
+
+describe("childCommand", () => {
+  test("a binary re-runs itself with the marker; a script passes its runtime flags and its path", () => {
+    const args = ["run", "flow.yaml", "--json"];
+    expect(childCommand(args, true)).toEqual(["--yian-json-child", ...args]);
+    expect(childCommand(args, false)).toEqual([
+      ...process.execArgv,
+      process.argv[1]!,
+      "--yian-json-child",
+      ...args,
+    ]);
+  });
+
+  test("outside a binary, compiled is false", () => {
+    expect(compiled).toBe(false);
+  });
+});
 
 describe("the entry's run --json", () => {
   test("stdout holds only the large document; the flow's stdout writes go to stderr", async () => {

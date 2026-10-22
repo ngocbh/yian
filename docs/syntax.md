@@ -2708,7 +2708,10 @@ throwing line when the runtime reports it, else at the `code:` value (a referenc
 is, and so is a thrown non-`Error`, a native error thrown after an `await` on Bun, or a
 throw deep in a library's stack). A referenced module is imported once per thread and
 cached there (see below), so an edited file takes effect in a new process or on a new
-thread. Loading checks an inline body's syntax and that a reference's file exists, refuses
+thread. It is imported by the runtime's own module rules: on Node, the nearest `package.json`
+decides whether a `.ts` or `.js` file is an ES module, so a helper that uses `import` needs
+`"type": "module"` there (or the `.mjs` extension; `npm init` writes `"type": "commonjs"`); Bun
+and the single-file binaries load either form. Loading checks an inline body's syntax and that a reference's file exists, refuses
 a Python-style `module:function` value such as `pkg.mod:fn` ("use `./file.ts:fn`"), and
 runs no code. A CODE syntax error is reported after the flow's other load errors, such as
 an invalid `output:` type, because the check runs after the flow is assembled.

@@ -1,8 +1,13 @@
 /**
  * `Union(...)` of records in the type grammar and in `typedefs:`, a port of
- * `tests/engine/test_union_typedefs.py`. Later: the flow loading tests
- * (`test_load_flow_locates_bad_union_at_its_typedef`, `test_load_flow_accepts_union_typedef`),
- * which need the loader.
+ * `tests/engine/test_union_typedefs.py`.
+ *
+ * Covered by the `types` cases of the same names loading the same flows (the CODE node naming the
+ * conformance fixture), the bad union's message and typedef-key location pinned:
+ * `test_load_flow_locates_bad_union_at_its_typedef`
+ * (`engine_union_typedefs__load_flow_locates_bad_union_at_its_typedef`) and
+ * `test_load_flow_accepts_union_typedef`
+ * (`engine_union_typedefs__load_flow_accepts_union_typedef`).
  */
 
 import { describe, expect, test } from "bun:test";

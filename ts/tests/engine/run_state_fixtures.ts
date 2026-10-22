@@ -8,7 +8,7 @@
  * more run-state test files use lives here.
  */
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1333,6 +1333,33 @@ export async function expectFailsBeforeTheRun(
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Leave at `path` the log of an unfinished run of `flow` changed by `edit`, as a run logged before
+ * the pre-run checks existed would: run `flow` on `inputs`, stopped by an aborted `signal` once
+ * `nodeId` starts, apply `edit` to the loaded flow, and write the changed flow's fingerprint into
+ * the log's `RunStarted` (replay checks it by plain equality; the log has no hash chain).
+ *
+ * @returns The log's text.
+ */
+export async function stoppedRunLog(
+  flow: ComposedFlow,
+  inputs: Readonly<Record<string, unknown>>,
+  path: string,
+  nodeId: string,
+  edit: () => void,
+): Promise<string> {
+  const recorded = flowFingerprint(flow.compiled);
+  const host = new AbortController();
+  const stop = new Error("host stop");
+  const onEvent = (event: unknown) => {
+    if (event instanceof NodeStarted && event.nodeId === nodeId) host.abort(stop);
+  };
+  expect(await rejection(runFlow(flow, inputs, { log: path, signal: host.signal, onEvent }))).toBe(stop);
+  edit();
+  writeFileSync(path, readFileSync(path, "utf8").replace(recorded, flowFingerprint(flow.compiled)));
+  return readFileSync(path, "utf8");
 }
 
 /** The error `fn` throws; fails the test when it returns. */

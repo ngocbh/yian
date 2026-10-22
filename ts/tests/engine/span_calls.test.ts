@@ -24,17 +24,15 @@
  * plain equality and the log has no hash chain. The CODE bodies are inline JavaScript.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
-import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { Flow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { NodeStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
@@ -44,7 +42,7 @@ import type { MapNode } from "../../src/nodes/map/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
-import { expectFailsBeforeTheRun, rejection } from "./run_state_fixtures.ts";
+import { expectFailsBeforeTheRun, rejection, stoppedRunLog } from "./run_state_fixtures.ts";
 
 const UPPER = "expression function 'upper' takes (s): too many positional arguments";
 
@@ -452,20 +450,12 @@ output: \${b.output}
 
 test("a code-built binding mis-calling a builtin fails before resume appends", async () => {
   const flow = await loadFlow(TWO_NODES);
-  const recorded = flowFingerprint(flow.compiled);
   const dir = mkdtempSync(join(tmpdir(), "span-calls-"));
   try {
     const path = join(dir, "run.jsonl");
-    // The run stops once node `a` has started, leaving it unfinished.
-    const host = new AbortController();
-    const stop = new Error("host stop");
-    const onEvent = (event: unknown) => {
-      if (event instanceof NodeStarted && event.nodeId === "a") host.abort(stop);
-    };
-    expect(await rejection(runFlow(flow, { v: 1 }, { log: path, signal: host.signal, onEvent }))).toBe(stop);
-    rewire(flow.compiled, "b", "n", "${render_as_json(a.output, 1, 2)}");
-    writeFileSync(path, readFileSync(path, "utf8").replace(recorded, flowFingerprint(flow.compiled)));
-    const lines = readFileSync(path, "utf8");
+    const lines = await stoppedRunLog(flow, { v: 1 }, path, "a", () =>
+      rewire(flow.compiled, "b", "n", "${render_as_json(a.output, 1, 2)}"),
+    );
 
     const error = await rejection(resumeFlow(flow, { log: path }));
     expect(error).toBeInstanceOf(ExpressionError);

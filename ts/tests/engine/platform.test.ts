@@ -100,8 +100,12 @@ afterEach(async () => {
 });
 
 describe("runtime", () => {
-  test("is bun under bun test", () => {
+  test.if(process.versions.bun !== undefined)("is bun under bun test", () => {
     expect(runtime).toBe("bun");
+  });
+
+  test.if(process.versions.bun === undefined)("is node under the Node runner", () => {
+    expect(runtime).toBe("node");
   });
 });
 

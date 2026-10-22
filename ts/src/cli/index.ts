@@ -335,13 +335,18 @@ const GROUPS: Readonly<Record<string, string>> = {
 };
 
 const APP_HELP = "Yian - The Agent Composer. Run agent flows from the command line.";
+const HELP_HELP = "Show this message and exit.";
+const LICENSES_HELP = "Show the licenses of yian and of the software its binaries bundle, and exit.";
 
 /** Return the `Usage:` line of the root (`group` undefined) or of `group`. */
 function groupUsage(group?: string): string {
   return `Usage: yian ${group === undefined ? "" : `${group} `}[OPTIONS] COMMAND [ARGS]...`;
 }
 
-/** Return the help text of the root (`group` undefined) or of `group`: usage, summary, commands. */
+/**
+ * Return the help text of the root (`group` undefined) or of `group`: usage, summary, options and
+ * commands.
+ */
 function groupHelp(group?: string): string {
   const prefix = group === undefined ? "" : `${group} `;
   const rows = new Map<string, string>();
@@ -353,27 +358,34 @@ function groupHelp(group?: string): string {
   const width = Math.max(...[...rows.keys()].map((word) => word.length));
   const commands = [...rows].map(([word, summary]) => `  ${word.padEnd(width)}  ${summary}`).join("\n");
   const summary = group === undefined ? APP_HELP : GROUPS[group];
-  return (
-    `${groupUsage(group)}\n\n  ${summary}\n\n` +
-    `Options:\n  --help  Show this message and exit.\n\nCommands:\n${commands}\n`
-  );
+  // Only the root takes `--licenses`.
+  const options =
+    group === undefined ? `  --licenses  ${LICENSES_HELP}\n  --help      ${HELP_HELP}` : `  --help  ${HELP_HELP}`;
+  return `${groupUsage(group)}\n\n  ${summary}\n\nOptions:\n${options}\n\nCommands:\n${commands}\n`;
 }
 
 /**
  * Run the `yian` command line `argv` (the arguments after `yian`) and return its exit code.
  *
- * No arguments print the root help and return 2, `--help` prints it and returns 0. The command
- * name is resolved first (an unknown one is a usage error, 2), then the `YIAN_<NAME>` defaults are
- * checked (a bad value is reported on stderr, and as a `defaults.invalid` document when `argv`
- * holds `--json`, 1). A group without its command prints the group's help and returns 2. A command
- * line its spec refuses, or a `UsageError` from the handler, prints the usage and the error and
- * returns 2; any other error prints its stack and returns 1.
+ * No arguments print the root help and return 2, `--help` prints it and returns 0, and
+ * `--licenses` prints `LICENSES` and returns 0. The command name is resolved first (an unknown one
+ * is a usage error, 2), then the `YIAN_<NAME>` defaults are checked (a bad value is reported on
+ * stderr, and as a `defaults.invalid` document when `argv` holds `--json`, 1). A group without its
+ * command prints the group's help and returns 2. A command line its spec refuses, or a
+ * `UsageError` from the handler, prints the usage and the error and returns 2; any other error
+ * prints its stack and returns 1.
  */
 export async function main(argv: readonly string[], io: CliIo = processIo()): Promise<number> {
   const [first, ...rest] = argv;
   if (first === undefined || first === "--help") {
     await io.stdout.write(groupHelp());
     return first === undefined ? 2 : 0;
+  }
+  if (first === "--licenses") {
+    // Imported here only: the text is long, and no other command needs it.
+    const { LICENSES } = await import("./licenses.ts");
+    await io.stdout.write(LICENSES);
+    return 0;
   }
   const fail = async (group: string | undefined, message: string) => {
     const name = group === undefined ? "yian" : `yian ${group}`;

@@ -3,6 +3,13 @@ Copyright 2026 Ngoc Bui
 
 yian is licensed under the Apache License 2.0; see the repository's LICENSE file.
 
+Bundled in the binaries
+=======================
+
+The standalone yian binaries also bundle the Bun runtime and yian's npm
+dependencies: amaro (with swc), yaml, and the MCP SDK with the packages it
+depends on. `yian --licenses` prints this notice followed by their licenses.
+
 Third-party code
 ================
 

@@ -13,13 +13,13 @@
 // for the prompts). Changed: an unknown name is quoted as `"topik"`; the CODE bodies are
 // TS's, and a non-string output prints in yian's text form, not Python's repr. Added here: the
 // other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
-// `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
-// `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
-// `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`); the entry's
-// `run --json` child, its command line in a binary and as a script (`childCommand`) and its
-// forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run stuck in a CODE body;
-// `status`, TS-only, on logs these runs write. From
-// tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
+// `skillsCheck`, and `main`'s command table: the defaults check, usage errors, `--licenses` and the
+// routing to `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json`
+// documents, its `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`);
+// the entry's `run --json` child, its command line in a binary and as a script (`childCommand`)
+// and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run stuck in a CODE
+// body; `status`, TS-only, on logs these runs write. From tests/cli/test_run_log_options.py, the
+// run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
@@ -41,6 +41,7 @@ import {
   stopOnSignals,
 } from "../../src/cli/run.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
+import { LICENSES } from "../../src/cli/licenses.ts";
 import {
   abortOnSignal,
   type CliIo,
@@ -436,6 +437,16 @@ describe("main", () => {
     ({ io, stdout, stderr } = testIo());
     expect(await main(["models", "--provider", "openai", "--timeout", "soon"], io)).toBe(2);
     expect(stderr()).toContain("Error: Invalid value for '--timeout': 'soon' is not a valid float.\n");
+  });
+
+  test("--licenses prints LICENSES and exits 0; the root help lists it", async () => {
+    let { io, stdout, stderr } = testIo();
+    expect(await main(["--licenses"], io)).toBe(0);
+    expect(stdout()).toBe(LICENSES);
+    expect(stderr()).toBe("");
+    ({ io, stdout } = testIo());
+    expect(await main(["--help"], io)).toBe(0);
+    expect(stdout()).toMatch(/^ {2}--licenses +\S/m);
   });
 
   test("a command's --help prints its help and exits 0", async () => {

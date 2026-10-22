@@ -52,9 +52,13 @@
  * `test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply`); a stored call's result
  * pairing reads `isError` where Python reads the status.
  *
- * Later: `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
+ * Ported through `loadFlow`, `runFlow` and `resumeFlow` (`runWith`, `resumeWith`), Python's
+ * `_flow` loaded (`steerFlow`): `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
  * `test_resume_reuses_a_finished_steered_node_without_calling_the_inbox` and
- * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer` (T4-8, the run boundary and resume).
+ * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer`. Changed: the boundary wants
+ * `interruptSignal` and `drain`, so its message names both (Python: "steering must provide
+ * drain"); a crash is a frozen log (`CrashAt`, `crashes`) where Python's model raises
+ * `_SimulatedCrash`, so no record of the crashed request's outcome reaches the log either way.
  *
  * Not ported: `test_inbox_satisfies_the_public_protocol` (it checks the test's inbox against a
  * `typing.Protocol`; TS checks `Steering` statically).
@@ -74,6 +78,10 @@
  * ends the loop with `""` and no retry attempt, leaving no sleep pending.
  * Interrupts around concurrent tool groups are in `agent_tool_groups.test.ts`.
  */
+
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
@@ -120,7 +128,16 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, rejected, serving } from "./run_state_fixtures.ts";
-import { effectsOf, runSessionFlow, storedReplies, view } from "./session_fakes.ts";
+import {
+  CrashAt,
+  crashes,
+  effectsOf,
+  resumeWith,
+  runSessionFlow,
+  runWith,
+  storedReplies,
+  view,
+} from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -209,6 +226,28 @@ function chatFlow(
     { wiring: { chat: {}, after: { draft: "${chat.output}" } }, outputs: [new FlowOutput("output", "${after.output}")] },
   );
 }
+
+/**
+ * Python's `_flow`, loaded: one `chat` agent granted `tools`, output `${chat.output}`; with
+ * `memory`, it owns AGENT memory `session`; with `after`, a summarizing agent reads it.
+ */
+function steerFlow(options: { tools?: readonly string[]; memory?: boolean; after?: boolean } = {}): string {
+  const { tools = [], memory = false, after = false } = options;
+  return (
+    "id: steer\nname: steer\nllm_config: {provider: anthropic, model: claude-test}\nnodes:\n" +
+    "  chat:\n    kind: agent\n    steerable: true\n" +
+    (memory ? "    long_term_memory: session\n" : "") +
+    `    tools: [${tools.join(", ")}]\n    prompt: Help the user.\n    output: str\n` +
+    (after
+      ? '  after:\n    kind: agent\n    input: {draft: "${chat.output}"}\n    prompt: "summarize: ${draft}"\n' +
+        "    output: str\noutput: ${after.output}\n"
+      : "output: ${chat.output}\n")
+  );
+}
+
+let dir: string;
+beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "agent-steering-"))));
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 /**
  * Run `flow` with `model` and `options`, `memory` backing `chat`'s AGENT memory `session` when
@@ -319,6 +358,16 @@ test("python built steerable agent with structured output fails before the model
   const evaluated = drive(node, { steering: new Inbox({}, ["chat"]), models: serving(model) });
   await expect(evaluated).rejects.toThrow("AGENT node 'chat': steerable needs `str` output");
   expect(model.requests).toEqual([]);
+});
+
+test.each([
+  ["an object", {}],
+  ["drain only", { drain: () => [] }],
+])("the run boundary rejects an object without the inbox methods: %s", async (_name, bad) => {
+  const log = join(dir, "run.jsonl");
+  const error = await rejected(runFlow(await loadFlow(steerFlow()), {}, { steering: bad as never, log }));
+  expect(error).toEqual(new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null"));
+  expect(existsSync(log)).toBe(false);
 });
 
 // --- steer messages ----------------------------------------------------------- //
@@ -708,6 +757,44 @@ test("an interrupted agent in a loop lets the loop continue", async () => {
   expect(result.output).toBe("s|partial|turn2");
   // Each LOOP occurrence has its own node id, so the interrupt stayed with the first.
   expect(new Set(steering.calls.map(([, nodeId]) => nodeId)).size).toBe(2);
+});
+
+// --- resume ----------------------------------------------------------------- //
+
+test("resume reuses a finished steered node without calling the inbox", async () => {
+  const log = join(dir, "run.jsonl");
+  const flow = await loadFlow(steerFlow({ after: true }));
+  const first = new CrashAt([reply("chat done"), reply("never recorded")], 2, CONFIG);
+  await crashes(first, () => runWith(flow, {}, null, first, { steering: new Inbox({ chat: ["use dataset B"] }), log }));
+  expect(shown(first.requests[0]!.messages).at(-1)).toEqual(["user", "use dataset B"]);
+
+  const model = new ScriptedModel([reply("summary")], CONFIG);
+  const steering = new Inbox({ chat: ["new steer"] }, ["chat"]);
+  const resumed = await resumeWith(flow, log, null, model, { steering });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("summary");
+  expect(shown(model.requests[0]!.messages).at(-1)).toEqual(["user", "summarize: chat done"]);
+  expect(steering.calls).toEqual([]);
+});
+
+test("a retry after a mid-node kill sees the recorded steer", async () => {
+  const log = join(dir, "run.jsonl");
+  const memory = new SessionMemory();
+  const steering = new Inbox();
+  const lookup = lookupTool(() => {
+    steering.queued.set("chat", ["use dataset B"]);
+    return "found";
+  });
+  const flow = await loadFlow(steerFlow({ tools: ["lookup"], memory: true }));
+  const first = new CrashAt([reply("", ["lookup", { topic: "a" }, "call-1"]), reply("never recorded")], 2, CONFIG);
+  await crashes(first, () => runWith(flow, {}, memory, first, { steering, tools: { lookup }, log }));
+  expect(steering.queued).toEqual(new Map());
+
+  const retry = new ScriptedModel([reply("done")], CONFIG);
+  const resumed = await resumeWith(flow, log, memory, retry, { steering: new Inbox(), tools: { lookup } });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("done");
+  expect(shown(retry.requests[0]!.messages).map(([, text]) => text)).toContain("use dataset B");
 });
 
 test("a too-deep tool call fails the node even with the interrupt set", async () => {

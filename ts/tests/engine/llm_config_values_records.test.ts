@@ -153,11 +153,23 @@ output: \${chat.output}
   expect(records(log).filter((record) => record.kind === "node_step")).toEqual([]);
 });
 
+/**
+ * The record count through `nodeId`'s step in an uncut run of `text` (models answering `texts`,
+ * under `runEnv`): a log cut there has run the agent's model call and recorded nothing after it.
+ */
+async function throughStep(text: string, nodeId: string, texts: string[], runEnv: Env = env): Promise<number> {
+  const log = fresh("uncut.jsonl");
+  expect((await run(text, { log, env: runEnv, models: fakeModel(texts, runEnv).models })).status).toBe("succeeded");
+  const at = records(log).findIndex((record) => record.kind === "node_step" && record.payload["node_id"] === nodeId);
+  expect(at).toBeGreaterThan(-1);
+  return at + 1;
+}
+
 /** Run `PICKED` to a fresh log until the host dies in `chat`'s model call; return the log. */
 async function crashedInChat(): Promise<string> {
   const log = fresh("run.jsonl");
-  // Record 6 is chat's step, written before its model call.
-  await crashAfter(7, () => run(PICKED, { log }));
+  const cut = await throughStep(PICKED, "chat", ["ok"]);
+  await crashAfter(cut, () => run(PICKED, { log }));
   expect(steps(log)).toHaveLength(1);
   return log;
 }
@@ -250,7 +262,9 @@ async function cliResume(text: string, log: string, runEnv: Env) {
 test("resume checks the provider an in flight call time agent recorded", async () => {
   const runEnv = hostEnv(dir, { ...CONFTEST, ANTHROPIC_API_KEY: "sk-ant-run" });
   const log = fresh("run.jsonl");
-  await crashAfter(7, () => run(TWO_CALL_TIME, { log, env: runEnv, models: fakeModel(["ok"], runEnv).models }));
+  const cut = await throughStep(TWO_CALL_TIME, "chat", ["ok", "ok"], runEnv);
+  await crashAfter(cut, () => run(TWO_CALL_TIME, { log, env: runEnv, models: fakeModel(["ok"], runEnv).models }));
+  expect(steps(log)).toHaveLength(1);
   const [effective, callTimeHost] = await resumeChecks(log, TWO_CALL_TIME, { env: runEnv });
   expect(callTimeHost).toBeNull();
   expect(effective["chat"]["provider"]).toBe("anthropic");
@@ -260,7 +274,7 @@ test("resume checks the provider an in flight call time agent recorded", async (
   const before = readFileSync(log, "utf8");
   const { code, output } = await cliResume(TWO_CALL_TIME, log, env);
   expect(code, output).toBe(1);
-  expect(output).toContain("ANTHROPIC_API_KEY");
+  expect(output).toContain("$ANTHROPIC_API_KEY is not set; set it and resume again");
   expect(readFileSync(log, "utf8")).toBe(before);
 });
 
@@ -441,6 +455,7 @@ test("backward never routes feedback to the model value producer", async () => {
   const producer = Object.getPrototypeOf(flow.compiled.nodes.get("pick")!) as Node;
   const reached: string[] = [];
   const original = producer.backward;
+  const own = Object.hasOwn(producer, "backward");
   producer.backward = function (this: Node, ...args: Parameters<Node["backward"]>) {
     reached.push(this.id);
     return original.apply(this, args);
@@ -457,7 +472,9 @@ test("backward never routes feedback to the model value producer", async () => {
     expect(outcome.status).toBe("failed");
     expect(reached).toEqual([]);
   } finally {
-    producer.backward = original;
+    // The producer may inherit `backward`; leave no own copy behind.
+    if (own) producer.backward = original;
+    else delete (producer as Partial<Node>).backward;
   }
 });
 
@@ -524,8 +541,8 @@ output: \${b.output}
 /** Run `DEFS_CALL_TIME` until the host dies in the model call of `b`'s agent; return the log. */
 async function crashedInSecondCall(): Promise<string> {
   const log = fresh("run.jsonl");
-  // Record 17 is `b/chat`'s step, written before its model call.
-  await crashAfter(18, () => run(DEFS_CALL_TIME, { log, models: fakeModel(["ok", "ok"]).models }));
+  const cut = await throughStep(DEFS_CALL_TIME, "b/chat", ["ok", "ok"]);
+  await crashAfter(cut, () => run(DEFS_CALL_TIME, { log, models: fakeModel(["ok", "ok"]).models }));
   return log;
 }
 

@@ -12,9 +12,11 @@
  *
  * Changed: run-start errors are `RangeError`s (a `LayerFieldError` for a field's) where Python
  * raises `ValueError`; ints have no digit limit (decisions 4a, 23), so in the uncoercible-input row
- * the 5000-digit `window` is accepted and the bad `llm_config` is the reported error; names and
+ * the 5000-digit `window` is accepted (a run with a good `llm_config` takes it whole) and the bad
+ * `llm_config` is the reported error; names and
  * null are written in the text form (`"nope"`, `["bogus"]`, `null`; decisions 7, 43); the golden
- * `run_started` record is TS's (schema 10, with `defaults` and `call_time_llm`).
+ * `run_started` record is TS's (schema 10, with `defaults` and `call_time_llm`; TS starts its own
+ * versioned logs, decisions 8, 16).
  *
  * Covered by `run-agent/engine_llm_config_values_run_start__a_bad_run_config_beats_a_missing_input`:
  * `test_a_missing_required_input_does_not_preempt_a_bad_llm_config`;
@@ -106,7 +108,7 @@ function records(path: string): { kind: string; payload: Record<string, any> }[]
 }
 
 /** The error `promise` rejects with, of class `kind`. */
-async function raised(promise: Promise<unknown>, kind: typeof RangeError | typeof TypeError): Promise<Error> {
+async function raised(promise: Promise<unknown>, kind: typeof RangeError): Promise<Error> {
   const error = await rejected(promise);
   expect(error).toBeInstanceOf(kind);
   return error as Error;
@@ -121,10 +123,17 @@ test("an unknown input is reported before a bad llm config", async () => {
 
 test("an uncoercible input is reported before a bad llm config", async () => {
   const log = fresh("run.jsonl");
-  // A 5000-digit text is an int, so the bad llm_config is what's reported.
+  // The name is Python's: there the 5000-digit text breaks its int limit. Here it is an int, so
+  // the bad llm_config is what's reported, and with a good one the run takes the whole value.
   const error = await raised(run(FLOW, { topic: "a", window: "1".repeat(5000) }, { log, llmConfig: BAD_LLM }), RangeError);
   expect(error.message).toMatch(BAD_LLM_ERROR);
   expect(existsSync(log)).toBe(false);
+
+  const { model, models } = fakeModel();
+  const result = await run(FLOW, { topic: "a", window: "1".repeat(5000) }, { log: fresh("run.jsonl"), models, llmConfig: GOOD_LLM });
+  expect(result.status).toBe("succeeded");
+  expect(result.input["window"]).toBe(BigInt("1".repeat(5000)));
+  expect(model.requests).toHaveLength(1);
 });
 
 test("a bad llm config alone is reported as before", async () => {

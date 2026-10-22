@@ -9,7 +9,7 @@
  *
  * Changed: the run-start error is a `RangeError` where Python raises `ValueError`; a run with no
  * call-time agent writes `call_time_llm: null` in its `run_started` record, where Python leaves
- * the key out.
+ * the key out (TS starts its own versioned logs, decisions 8, 16).
  *
  * `engine_adaptive_composer_llm_values__a_composer_call_time_error_names_the_gate` and
  * `__an_error_in_a_call_names_the_callsite` don't cover their tests: neither pins that no model

@@ -463,13 +463,14 @@ At the start of every run (unless `--quiet`), `yian` prints a boxed banner to
 right file:
 
 ```console
-╭──────────────────────────────────────────────────────────╮
-│ Running flow: debate  (version: v2)                        │
+╭───────────────────────────────────────────────────────────────╮
+│ Running flow: debate  (version: v2)                           │
 │ Description: Frame a question, argue both sides, then decide. │
-╰──────────────────────────────────────────────────────────╯
+╰───────────────────────────────────────────────────────────────╯
 ```
 
-A flow with no `name`/`description`/`version` prints no banner.
+The box is never wider than the terminal (80 columns off a terminal), and the text wraps
+inside it. A flow with no `name`/`description`/`version` prints no banner.
 
 ### The interactive prompt
 
@@ -597,6 +598,10 @@ does not cancel the surrounding conversation.
 Changed (TS yian): the output is not rendered as Markdown. A string prints as is, and any other
 output in the text form (`true`, `[1,"a"]`, `{"k":"v"}`). Colour is used only on a terminal, and
 never when `NO_COLOR` is set to a non-empty value.
+
+Changed (TS yian): any warning yian raises during a command prints as a `warning: <message>` line
+on stderr, above the progress spinners. Python printed the warnings module's
+`path:line: UserWarning: ...` lines.
 
 ## Concurrency (`--num-workers`)
 

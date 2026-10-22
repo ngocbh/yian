@@ -314,6 +314,8 @@ type BackwardHandleFields = {
   /** The run's environment: the replay checks the recorded `YIAN_*` values against it. */
   readonly env: Env;
   readonly models: ModelAccess;
+  /** The run's clock, which the backward records' times are read from. */
+  readonly clock: () => number;
 };
 
 // The fields are declared once, in `BackwardHandleFields`, and merged into the class.
@@ -351,7 +353,11 @@ class BackwardHandle {
     }
     // The call comes after the run's scope ended, so the replay's `checkRecorded` needs its own.
     return withEnv(this.env, async () => {
-      const authority = this.path === null ? MemoryRunLog.fromRecords(this.records) : JsonlRunLog.resume(this.path);
+      const logOptions = { clock: this.clock };
+      const authority =
+        this.path === null
+          ? MemoryRunLog.fromRecords(this.records, logOptions)
+          : JsonlRunLog.resume(this.path, logOptions);
       let state: RunState | null = null;
       let replaySequence: number | null = null;
       let primary: { error: unknown } | null = null;
@@ -911,9 +917,14 @@ async function startRun(
 
     // Taken once, so a later directory change can't move the log.
     const locator = log === null ? null : resolve(log);
+    // The log stamps its records from the run's clock, as the system clock is seeded from it.
+    const clock = () => scheduler.now();
     // Preparation precedes durable-file creation, so invalid initialization cannot leave an empty
     // path behind.
-    authority = locator === null ? new MemoryRunLog(canonicalRunId) : JsonlRunLog.create(locator, canonicalRunId);
+    authority =
+      locator === null
+        ? new MemoryRunLog(canonicalRunId, { clock })
+        : JsonlRunLog.create(locator, canonicalRunId, { clock });
     const observers = commitPrepared(authority, state, preparedStart);
     const runtime = memoryRuntime;
     // Built before publishing so a callback's rejected promise can stop it.
@@ -942,6 +953,7 @@ async function startRun(
       headers,
       env,
       models,
+      clock,
     });
     return resultFromState(state, log, events, handle);
   } catch (error) {
@@ -1088,7 +1100,9 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
     checkTestOptions(options);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
-    const authority = JsonlRunLog.resume(locator);
+    const scheduler = options.scheduler ?? realScheduler;
+    const clock = () => scheduler.now();
+    const authority = JsonlRunLog.resume(locator, { clock });
     let memoryRuntime: MemoryRuntime | null = null;
     let runServers: McpServer[] = [];
     let primary: { error: unknown } | null = null;
@@ -1111,6 +1125,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
           headers,
           env,
           models,
+          clock,
         });
       if (state.result !== null) return resultFromState(state, log, [], retain());
       // The checks that need no tools come before any server starts.
@@ -1169,7 +1184,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
         steering,
         models,
         signal,
-        scheduler: options.scheduler ?? realScheduler,
+        scheduler,
         random: options.random ?? null,
       });
       const events: RunEvent[] = [];
@@ -1206,7 +1221,7 @@ export interface RunInspection {
    * resume would retry as interrupted.
    */
   readonly interruptedAttempts: ReadonlyMap<string, number>;
-  /** The run's id; `null` only for a running log with no record yet, as are the next four. */
+  /** The run's id; `null` only for a running log with no record yet, as are the next five. */
   readonly runId: string | null;
   /** The run-record schema the log is written in, `SCHEMA_VERSION`. */
   readonly schema: number | null;
@@ -1216,6 +1231,17 @@ export interface RunInspection {
   readonly learnable: boolean | null;
   /** The seq of the log's last complete record. */
   readonly lastSeq: number | null;
+  /**
+   * When the run started: the time of its `RunStarted` record, a UTC RFC 3339 time with
+   * milliseconds such as `2026-10-20T14:02:11.123Z`.
+   */
+  readonly startedAt: string | null;
+  /**
+   * When a `succeeded` or `failed` run ended: the time of the log's last record (a backward
+   * attempt's records come after the run's outcome, so they move it); `null` for any other
+   * status. Times come from the writer's clock, so they aren't guaranteed to increase.
+   */
+  readonly endedAt: string | null;
   /**
    * The failure that ended a `failed` run: the node's failure, or the `graph.terminal_unreachable`
    * failure of a route that proved END unreachable; `null` for any other status.
@@ -1243,7 +1269,8 @@ export interface RunInspection {
  *   recorded ones against, as `resumeFlow`'s `env`; without one, the values already in effect.
  *   Reading without `flow` doesn't use it.
  * @returns The status, the nodes in flight, the interrupted counts, the run's id, schema, flow
- *   fingerprint, learnable flag and last seq, and a failed run's failure.
+ *   fingerprint, learnable flag, last seq, start time and (once finished) end time, and a failed
+ *   run's failure.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
  * @throws RunLogSchemaError when a record's schema isn't one this version reads.
  * @throws RunLogChangedError when the log shrank while it was read and no writer holds it.
@@ -1301,6 +1328,8 @@ export function inspectRun(
     flowFingerprint: started === null ? null : (started.record as RunStartedRecord).flowFingerprint,
     learnable: started === null ? null : (started.record as RunStartedRecord).learnable,
     lastSeq: scan.lastSeq,
+    startedAt: started?.at ?? null,
+    endedAt: status === "succeeded" || status === "failed" ? scan.lastAt : null,
     failure: status === "failed" ? source.failure : null,
   };
 }
@@ -1795,6 +1824,8 @@ type RecordScan = {
   started: RecordEnvelope | null;
   /** The last record's seq, or `null` for a log with no record. */
   lastSeq: number | null;
+  /** The last record's time, or `null` for a log with no record. */
+  lastAt: string | null;
 };
 
 /**
@@ -1813,8 +1844,10 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   let unreachable: Failure | null = null;
   let started: RecordEnvelope | null = null;
   let lastSeq: number | null = null;
+  let lastAt: string | null = null;
   for (const envelope of envelopes) {
     const { seq, record } = envelope;
+    lastAt = envelope.at;
     if (seq === 0) {
       if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
       started = envelope;
@@ -1847,7 +1880,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   const failure = nodeFailure ?? (starts.size === 0 ? unreachable : null);
   if (failure !== null) finished = "failed";
   else if (starts.size === 0 && endSucceeded) finished = "succeeded";
-  return { starts, interrupted, lastStop, finished, failure, started, lastSeq };
+  return { starts, interrupted, lastStop, finished, failure, started, lastSeq, lastAt };
 }
 
 /**
@@ -1868,6 +1901,7 @@ function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]):
     failure: state.result instanceof RunFailed ? state.result.failure : null,
     started: envelopes[0] ?? null,
     lastSeq: envelopes.at(-1)?.seq ?? null,
+    lastAt: envelopes.at(-1)?.at ?? null,
   };
 }
 
@@ -2030,7 +2064,7 @@ function retainedHandle(
   state: RunState,
   log: RunLog,
   memory: ReadonlyMap<string, Memory> | null,
-  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models"> & { locator: string | null },
+  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models" | "clock"> & { locator: string | null },
 ): BackwardHandle | null {
   if (program === null) return null;
   return new BackwardHandle({
@@ -2044,6 +2078,7 @@ function retainedHandle(
     headers: options.headers,
     env: options.env,
     models: options.models,
+    clock: options.clock,
   });
 }
 

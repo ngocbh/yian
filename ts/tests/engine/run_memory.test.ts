@@ -457,7 +457,7 @@ for (const tampered of ["stacks", "table"] as const) {
       const edited = new MemorySpec(spec!.key, spec!.type, { recall_limit: 1n }, spec!.owners, false);
       changed = new RunStartedRecord({ ...record, memories: [edited] });
     }
-    lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed));
+    lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed, envelope.at));
     writeFileSync(path, lines.join("\n") + "\n");
     const error = await rejected(resumeFlow(await loadFlow(FLOW), { log: path, memory }));
     expect(error).toBeInstanceOf(RangeError);
@@ -503,7 +503,7 @@ for (const tamper of ["emptied", "dropped"] as const) {
         ? recorded.map((stack) => new MemoryStack(stack.locator, []))
         : recorded.filter((stack) => stack.locator.join("/") !== "work");
     const changed = new RunStartedRecord({ ...record, memoryStacks: stacks });
-    lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed));
+    lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed, envelope.at));
     writeFileSync(path, lines.join("\n") + "\n");
 
     const error = await rejected(result.backward("Review."));

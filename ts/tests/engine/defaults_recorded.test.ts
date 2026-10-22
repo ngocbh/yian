@@ -19,7 +19,7 @@
  * from records, since TS has no `_RECORDED_ROUTE` golden fixture.
  *
  * Changed (TS yian):
- * - The log half of `test_default_run_log_is_unchanged`: schema 10 always writes `defaults`, so
+ * - The log half of `test_default_run_log_is_unchanged`: schema 11 always writes `defaults`, so
  *   an all-default run writes `"defaults":{}` and reads it back as `{}` (Python omits the field
  *   for byte compatibility within schema 9).
  * - `test_decode_rejects_a_bad_recorded_value`: each row with its class and message; the string,
@@ -48,7 +48,7 @@
  * `test_replay_takes_a_recorded_node_budget_from_the_record`.
  *
  * Changed: the stripped-log half of `test_old_log_resumes_as_all_defaults`. Schema 10 requires
- * `defaults` in `run_started` and TS reads only schema 10, so the decoder refuses a record without
+ * `defaults` in `run_started` and TS reads only schema 11, so the decoder refuses a record without
  * it (`invalid run_started payload fields; missing=["defaults"]`) where Python reads an absent
  * field as all defaults; the row pins that refusal, which leaves the log unchanged.
  */

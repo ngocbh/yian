@@ -55,7 +55,8 @@
  * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env` and bounds its
  * feedback by that `env`'s nesting limit (51 levels under a limit of 50 is a `TypeCheckError` that
  * appends nothing); a resume in another `env` is refused. `result.backward`'s `onEvent` receives an
- * AGENT backward model call's retry as one `ModelCallRetried` with consumer `backward`.
+ * AGENT backward model call's retry as one `ModelCallRetried` with consumer `backward`. A memory
+ * and a durable log stamp a later `result.backward`'s records from the run's clock.
  *
  * Covered by a case: `test_backward_without_memory_is_explicit_and_repeatable[durable]`
  * (`backward/run_backward__backward_without_memory_is_repeatable`, whose runner writes a log),
@@ -89,6 +90,7 @@ import {
   resumeFlow,
   runFlow,
 } from "../../src/run.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import { memoryCommitId } from "../../src/runtime/learning.ts";
@@ -100,6 +102,7 @@ import {
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
   MemoryRunLog,
+  readRunLog,
   type RecordEnvelope,
   type RunRecord,
 } from "../../src/runtime/log.ts";
@@ -184,6 +187,32 @@ async function patched<T>(
 function hasBackwardStarted(log: { records(): readonly RecordEnvelope[] }, original: Function): boolean {
   return (original.call(log) as readonly RecordEnvelope[]).some((envelope) => envelope.record instanceof BackwardStartedRecord);
 }
+
+test.each(["memory", "durable"])("a %s log stamps backward records from the run's clock", async (kind) => {
+  const log = kind === "durable" ? join(dir, "run.jsonl") : null;
+  const scheduler = virtualScheduler(Date.UTC(2026, 9, 20, 14, 0));
+  const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true, log, scheduler });
+  const append = MemoryRunLog.prototype.append;
+  const times: (string | null)[] = [];
+  MemoryRunLog.prototype.append = function (this: MemoryRunLog, record: RunRecord) {
+    const envelope = append.call(this, record);
+    times.push(envelope.at);
+    return envelope;
+  };
+  try {
+    expect((await result.backward("Too long.")).status).toBe("succeeded");
+  } finally {
+    MemoryRunLog.prototype.append = append;
+  }
+  const backward =
+    log === null
+      ? times
+      : readRunLog(log)
+          .filter((envelope) => envelope.kind.startsWith("backward_"))
+          .map((envelope) => envelope.at);
+  expect(backward.length).toBeGreaterThan(0);
+  expect(new Set(backward)).toEqual(new Set(["2026-10-20T14:00:00.000Z"]));
+});
 
 test("test_backward_without_memory_is_explicit_and_repeatable[memory]", async () => {
   const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true });

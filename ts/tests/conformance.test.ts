@@ -1389,6 +1389,7 @@ describe("main", () => {
     expect(lines).toHaveLength(9);
     expect(lines[0]).toContain('"now":{"kind":"datetime","value":"<masked>"}');
     expect(lines[0]).toContain('"today":{"kind":"date","value":"<masked>"}');
+    expect(lines.every((line) => line.startsWith('{"at":"<masked>",'))).toBe(true);
     const pinned = { "a/two.yaml": TWO_NODES, "a/two.log.jsonl": golden };
     expect(await run([], pinned, {}, kinds)).toEqual({
       code: 0,

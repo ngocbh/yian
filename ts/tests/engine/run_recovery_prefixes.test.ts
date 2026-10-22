@@ -12,7 +12,7 @@
  * Changed:
  * - `test_replay_requires_pristine_state`: the log is a live run of the fixtures' `flow()`.
  * - `test_historical_cursor_matches_each_envelopes_schema`: the cursor holds live TS log lines,
- *   not Python's recorded schema-9 bytes, since schema 10 is the only TS schema. It also pins the
+ *   not Python's recorded schema-9 bytes, since schema 11 is the only TS schema. It also pins the
  *   append past the prefix and the consumed envelopes `records()` and the iterator return.
  * - `test_replay_every_prefix_matches_live_state_and_uses_commit_path`: ESM bindings can't be
  *   patched, so the count of `commit_prepared` calls is not checked; the snapshots, the read-only
@@ -20,7 +20,7 @@
  * - `test_replay_applies_logged_llm_map_before_rebuilding_growth`: replay takes no environment, so
  *   the "never reads a default" half (Python patches `connection_snapshot`) has nothing to patch.
  * - `test_recorded_public_resume_keeps_completed_code_and_wire[6]`: the prefix is the first 6
- *   lines of a live TS run's log (schema 10 is the only TS schema), and an accepted CODE rerun is
+ *   lines of a live TS run's log (schema 11 is the only TS schema), and an accepted CODE rerun is
  *   caught by spying on `CodeNode.prototype.forward`; a resume in an environment whose
  *   `YIAN_DEFAULT_PROVIDER` and credential-store reads fail stands for the patched
  *   `connection_snapshot`.

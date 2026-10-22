@@ -2611,9 +2611,10 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
 }
 
 /**
- * Return the run log text `text` as a golden log holds it: each line with every `traceback` value
- * and the seeded clock values (`initial_pool.system`'s `now` and `today`) replaced by `<masked>`,
- * written again with the log's own encoder.
+ * Return the run log text `text` as a golden log holds it: each line with every `traceback` value,
+ * its time (`at`) and the seeded clock values (`initial_pool.system`'s `now` and `today`) replaced
+ * by `<masked>`, written again with the log's own encoder. The times and the seeded values come
+ * from the case's virtual clock, which starts at the real time.
  */
 function masked(text: string): string {
   const lines = text.split("\n").filter((line) => line !== "");
@@ -2633,6 +2634,7 @@ function masked(text: string): string {
         throw new CaseFailure(`run log record ${seq} doesn't encode back to its line`);
       }
       mask(record);
+      record["at"] = "<masked>";
       if (record["kind"] === "run_started") {
         const system = ((record["payload"] as Case)["initial_pool"] as Case)["system"] as Case;
         for (const name of ["now", "today"]) (system[name] as Case)["value"] = "<masked>";
@@ -2736,6 +2738,8 @@ async function checkInvariants(
     flowFingerprint: started.flowFingerprint,
     learnable: started.learnable,
     lastSeq: envelopes.length - 1,
+    startedAt: first.at,
+    endedAt: finished === null ? null : envelopes.at(-1)!.at,
     failure: terminal instanceof RunFailed ? failureForm(terminal.failure, flow) : null,
   };
   const form = (inspection: RunInspection) => ({
@@ -2754,7 +2758,9 @@ async function checkInvariants(
     state.acceptedStarts.size === 0 &&
     state.ready.length > 0 &&
     (endSucceeded || state.terminalUnreachableFailure !== null);
-  const allowed = corner ? { ...blind, status: expected.status, failure: expected.failure } : blind;
+  const allowed = corner
+    ? { ...blind, status: expected.status, endedAt: expected.endedAt, failure: expected.failure }
+    : blind;
   compare(`inspectRun without the flow${at}`, allowed, expected);
   if (finished === null) return;
   if (result !== null) {

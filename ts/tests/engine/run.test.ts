@@ -59,9 +59,12 @@
  * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
  * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
  * checks the recorded `YIAN_*` values against the given `env` (the records alone don't); the run
- * id, schema, fingerprint, learnable flag and last seq; a failed run's failure (a node's, and an
- * unreachable END's); a running log with no record; a log that doesn't start with `RunStarted`,
- * and one of schema 9; a locked log a writer's rollback shrinks under the read reads `running`.
+ * id, schema, fingerprint, learnable flag, last seq and start and end times; a failed run's failure
+ * (a node's, and an unreachable END's); a running log with no record; a log that doesn't start
+ * with `RunStarted`, and one of schema 9 or 10; a locked log a writer's rollback shrinks under the
+ * read reads `running`; on a virtual clock, a run's start and end times and a node's duration (its
+ * outcome's time less its start's), and a crashed run with no end time that a resume on a later
+ * clock finishes, keeping the recorded times and stamping its own records with the resume's.
  * `staticNodes` of a flow with CALL and MAP children, and the paths a run's effective model map
  * uses; `staticPathOf` on MAP, LOOP and nested ids, and every node id of a MAP run and a LOOP run
  * mapped onto a `staticNodes` path.
@@ -98,8 +101,11 @@ import {
   staticNodes,
   staticPathOf,
 } from "../../src/run.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 import {
   JsonlRunLog,
+  NodeStartedRecord,
+  NodeSucceededRecord,
   readRunLog,
   type RunStartedRecord,
   RunStoppedRecord,
@@ -1260,6 +1266,7 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
   const path = join(dir, "learnable.jsonl");
   const plan = await load(PLAN_FLOW);
   const result = await run(plan, { topic: "ACME" }, { log: path, learnable: true });
+  const records = readRunLog(path);
   expect(inspectWithAndWithout(path, plan)).toEqual({
     status: "succeeded",
     inFlight: [],
@@ -1268,7 +1275,9 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
     schema: SCHEMA_VERSION,
     flowFingerprint: flowFingerprint(plan.compiled),
     learnable: true,
-    lastSeq: readRunLog(path).length - 1,
+    lastSeq: records.length - 1,
+    startedAt: records[0]!.at,
+    endedAt: records.at(-1)!.at,
     failure: null,
   });
 
@@ -1309,6 +1318,8 @@ test("inspectRun reads a running log with no record yet as running with nothing 
     flowFingerprint: null,
     learnable: null,
     lastSeq: null,
+    startedAt: null,
+    endedAt: null,
     failure: null,
   });
 });
@@ -1316,14 +1327,67 @@ test("inspectRun reads a running log with no record yet as running with nothing 
 test("inspectRun refuses a log that doesn't start with RunStarted, and a schema it can't read", () => {
   const path = join(dir, "headless.jsonl");
   const line = (schema: number) =>
-    `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":${schema},"seq":0}\n`;
+    `{"at":"2026-10-20T14:02:11.123Z","kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":${schema},"seq":0}\n`;
   writeFileSync(path, line(SCHEMA_VERSION));
   expect(() => inspectRun(path)).toThrow(new RangeError("the first run log record must be RunStarted"));
 
-  writeFileSync(path, line(9));
-  const error = thrownBy(() => inspectRun(path));
-  expect(error).toBeInstanceOf(RunLogSchemaError);
-  expect((error as RunLogSchemaError).schema).toBe(9);
+  for (const schema of [9, 10]) {
+    writeFileSync(path, line(schema));
+    const error = thrownBy(() => inspectRun(path));
+    expect(error).toBeInstanceOf(RunLogSchemaError);
+    expect((error as RunLogSchemaError).schema).toBe(schema);
+  }
+});
+
+const TIMED_FLOW = `
+id: inspect-timed
+name: inspect_timed
+nodes:
+  settle:
+    kind: wait
+    until: "2026-10-20T14:05:00+00:00"
+output: \${settle.output}
+`;
+
+/** Epoch milliseconds of 2026-10-20 at `hours`:`minutes` UTC. */
+function octoberTwentieth(hours: number, minutes: number): number {
+  return Date.UTC(2026, 9, 20, hours, minutes);
+}
+
+test("inspectRun reads when a run started and ended, and a node's outcome less its start is its duration", async () => {
+  const path = join(dir, "timed.jsonl");
+  const flow = await load(TIMED_FLOW);
+  await run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) });
+
+  const inspection = inspectWithAndWithout(path, flow);
+  expect(inspection.status).toBe("succeeded");
+  expect(inspection.startedAt).toBe("2026-10-20T14:00:00.000Z");
+  expect(inspection.endedAt).toBe("2026-10-20T14:05:00.000Z");
+  const records = readRunLog(path);
+  const timeOf = (cls: typeof NodeStartedRecord | typeof NodeSucceededRecord) =>
+    new Date(records.find((envelope) => envelope.record instanceof cls && envelope.record.nodeId === "settle")!.at!).getTime();
+  expect(timeOf(NodeSucceededRecord) - timeOf(NodeStartedRecord)).toBe(5 * 60_000);
+});
+
+test("a resume keeps the recorded times and stamps its own records from its clock; an unfinished run has no end", async () => {
+  const path = join(dir, "resumed.jsonl");
+  const flow = await load(WORK_FLOW);
+  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) }));
+  const crashed = inspectRun(path);
+  expect([crashed.status, crashed.startedAt, crashed.endedAt]).toEqual(["interrupted", "2026-10-20T14:00:00.000Z", null]);
+  const before = readRunLog(path);
+
+  const result = await resume(flow, { log: path, scheduler: virtualScheduler(octoberTwentieth(16, 30)) });
+  expect(result.output).toBe("done");
+  const records = readRunLog(path);
+  expect(records.slice(0, before.length)).toEqual(before);
+  expect(new Set(records.slice(before.length).map((envelope) => envelope.at))).toEqual(new Set(["2026-10-20T16:30:00.000Z"]));
+  const resumed = inspectWithAndWithout(path, flow);
+  expect([resumed.status, resumed.startedAt, resumed.endedAt]).toEqual([
+    "succeeded",
+    "2026-10-20T14:00:00.000Z",
+    "2026-10-20T16:30:00.000Z",
+  ]);
 });
 
 // ---- staticNodes ----

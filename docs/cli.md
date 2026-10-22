@@ -23,6 +23,11 @@ With `--json`, these commands, `yian auth --remove`, and `yian run` write one JS
 document on stdout, and device sign-in writes JSON lines; see
 [Machine-readable output](#machine-readable-output).
 
+Changed (TS yian): `yian --licenses` prints yian's notice, Bun's, and the licenses of the
+packages the single-file binaries bundle, and exits 0 (see [Installation](installation.md)). A
+binary, like the Python CLI, doesn't read a `.env` file in the working directory, and it ignores a
+`bunfig.toml` there too.
+
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
 
@@ -919,7 +924,9 @@ else: prompts, key checks, and exit codes are the same as without it.
 
 Changed (TS yian): `--json` runs the flow in a child process whose stdout is the parent's
 stderr, so raw writes to fd 1 go to stderr. A stop signal sent to the parent is forwarded to the
-child; a second one kills the child and exits 130.
+child (as SIGUSR2); a second one kills the child and exits 130. On Windows (npm install only,
+untested), the parent forwards nothing: the console's Ctrl-C reaches the child itself, and a
+second stop still kills the child.
 
 ### Run status
 

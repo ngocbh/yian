@@ -14,6 +14,22 @@ The distribution, import name, and CLI command are all `yian`.
 yian --help
 ```
 
+Changed (TS yian): TS yian is the npm package `@ngocbh/yian`, whose CLI command is also
+`yian`. It needs Node 22.18 or later, or Bun 1.4 or later:
+
+```console
+npm install @ngocbh/yian
+npx @ngocbh/yian --help
+```
+
+Under Bun, the package's entry points resolve to its TypeScript sources. The MCP SDK is an
+optional peer dependency (see [MCP servers](api.md#mcp-servers)). There are also single-file
+binaries that need neither Node nor Bun: `yian-darwin-arm64`, `yian-darwin-x64`,
+`yian-linux-x64` and `yian-linux-arm64`, built with `bun run build:bin` in `ts/`. They bundle the
+MCP SDK, and import a CODE node's referenced file from disk when it runs. `yian --licenses`
+prints yian's notice, Bun's (MIT; it statically links JavaScriptCore, under the LGPL-2) and the
+licenses of the packages the binaries bundle.
+
 ## Provider extras
 
 The core (engine + `yian` CLI) installs with **no LLM SDK**. Each provider is an

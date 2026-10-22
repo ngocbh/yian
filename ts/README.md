@@ -752,7 +752,9 @@ Node 22, and so does every unit test; a change keeps both green.
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
   by shape into `mode` and compiles or imports nothing. Each call runs on a worker thread
   (`src/nodes/code/worker.ts`), reused when idle, that the node terminates when `caps.signal`
-  aborts.
+  aborts. A failing inline body's `CodeError` stack names its frames after the node's
+  `sourceFile` (the load's source label, from `BuildContext.sourceFile`; `<inline-code>` by
+  default) and the body's own line; `original` keeps the runtime's `yian-code:<id>` frames.
 - A host that bundles yian (esbuild, webpack, `bun build`) must ship the worker as its own entry
   at `nodes/code/worker.js` relative to the bundle file, else every CODE call fails
   `CODE worker failed: Cannot find module ...`. `bun build --compile` takes
@@ -1116,10 +1118,10 @@ Node 22, and so does every unit test; a change keeps both green.
 - A node's or flow's fields are its own enumerable keys; a field the manifest doesn't know throws.
   `kind` is emitted; trait fields are ignored: the kind fixes them.
 - A CODE node contributes `{"inline": body}`, `{"ref": "./x.ts:fn"}` or
-  `{"builtin": "identity", "field": "x"}`; `baseDir`, `mode` and its origins aren't identity. An
-  AGENT contributes its authored fields (`own_llm_config`, not `llmConfig`); `llmConfig`,
-  `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime` and `hostCredentials` aren't
-  identity.
+  `{"builtin": "identity", "field": "x"}`; `baseDir`, `sourceFile`, `mode` and its origins aren't
+  identity. An AGENT contributes its authored fields (`own_llm_config`, not `llmConfig`);
+  `llmConfig`, `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime` and
+  `hostCredentials` aren't identity.
 - In `typesCompatible` and `typeRelation`, an open numeric end is `null`.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, output contracts
   with `sameOutputContract`, and arrays with `sameItems` (`src/nodes/contracts.ts`).

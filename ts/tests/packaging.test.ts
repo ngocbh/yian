@@ -12,9 +12,19 @@
 // flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a cwd `.env` and `bunfig.toml`
 // it must ignore.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -305,7 +315,7 @@ describe("LICENSES", () => {
 const BINARY = ((): string | undefined => {
   const binary = process.env.YIAN_TEST_BINARY;
   if (!binary) return undefined;
-  if (!isAbsolute(binary) || !existsSync(binary)) {
+  if (!isAbsolute(binary) || !existsSync(binary) || !statSync(binary).isFile()) {
     throw new Error(`YIAN_TEST_BINARY=${binary} is not an absolute path to a file`);
   }
   return binary;
@@ -358,9 +368,15 @@ nodes:
 output: \${call.output}
 `;
 
+/** The temp dirs the current test made, removed after it. */
+const workdirs: string[] = [];
+/** The process groups the current test started, killed after it. */
+const groups: number[] = [];
+
 /** A fresh private temp dir holding an empty `home/` and the `files` given, by name. */
 function workdir(files: Record<string, string> = {}): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "yian-binary-")));
+  workdirs.push(dir);
   mkdirSync(join(dir, "home"));
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
   return dir;
@@ -380,12 +396,23 @@ interface BinaryResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  /** Whether the spawn hit `SPAWN_LIMIT` and its process group was killed. */
+  timedOut: boolean;
+}
+
+/** Kill process group `pid` with SIGKILL, if any process of it is left. */
+function killGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
 }
 
 /**
  * Run the binary with `args` in `dir`, with only `PATH`, a `HOME` and an auth file in `dir`, and
- * `env`, in its environment. With `interrupt`, send it one SIGINT once a line `ready` appears on
- * stdout or stderr.
+ * `env`, in its environment, as the leader of a new process group. With `interrupt`, send it one
+ * SIGINT once a line `ready` appears on stdout or stderr. On `SPAWN_LIMIT`, kill the group.
  */
 function runBinary(
   dir: string,
@@ -401,18 +428,29 @@ function runBinary(
         YIAN_AUTH_FILE: join(dir, "auth.json"),
         ...options.env,
       },
+      // Its own group, so a timeout or the test's cleanup also ends what it started: the `run
+      // --json` child and MCP servers hold the output pipes, and outlive a killed binary.
+      detached: true,
     });
+    if (child.pid !== undefined) groups.push(child.pid);
     let stdout = "";
     let stderr = "";
     let interrupted = false;
-    const timer = setTimeout(() => child.kill("SIGKILL"), SPAWN_LIMIT);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid !== undefined) killGroup(child.pid);
+    }, SPAWN_LIMIT);
     const seen = () => {
-      if (options.interrupt && !interrupted && /^ready$/m.test(stdout + stderr)) {
+      if (options.interrupt && !interrupted && /^ready\r?\n/m.test(stdout + stderr)) {
         interrupted = true;
         // The binary's own process only: a run must forward the stop to whatever it started.
         child.kill("SIGINT");
       }
     };
+    // Decoded across chunks, so a multi-byte character split between two reads stays whole.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
       seen();
@@ -427,14 +465,15 @@ function runBinary(
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ code, signal, stdout, stderr });
+      resolve({ code, signal, stdout, stderr, timedOut });
     });
   });
 }
 
 /** The result's code, signal and output, for a failed assertion's message. */
 function context(result: BinaryResult): string {
-  return `code: ${result.code}, signal: ${result.signal}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`;
+  const limit = result.timedOut ? ` (killed after ${SPAWN_LIMIT} ms)` : "";
+  return `code: ${result.code}, signal: ${result.signal}${limit}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`;
 }
 
 /** The last non-empty line of `text`. */
@@ -443,6 +482,12 @@ function lastLine(text: string): string {
 }
 
 describe.skipIf(!BINARY)("the compiled binary", () => {
+  afterEach(() => {
+    // Groups first, so nothing still writes into a dir being removed.
+    for (const pid of groups.splice(0)) killGroup(pid);
+    for (const dir of workdirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
   test(
     "--licenses prints LICENSES",
     async () => {

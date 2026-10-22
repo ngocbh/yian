@@ -20,10 +20,12 @@
  * int). NaN feedback is refused by host intake first, with a `TypeCheckError` (a `RangeError`),
  * where Python's carrier check raises a `TypeError`.
  *
- * Not ported: `test_a_prompted_long_int_fails_the_same_whatever_pythons_limit`, the
- * `python_limit=0` rows of `test_a_tool_returning_a_long_int_fails_naming_the_tool` (Python's
- * `sys.set_int_max_str_digits`), `test_a_parser_digit_limit_error_reads_as_yians_in_correction_and_failure`
- * and `test_a_node_raising_pythons_digit_limit_error_fails_with_yians_message` (Python's
+ * Not ported: the `python_limit=0` and `python_limit=6000` rows of
+ * `test_a_prompted_long_int_fails_the_same_whatever_pythons_limit` and the `python_limit=0` rows
+ * of `test_a_tool_returning_a_long_int_fails_naming_the_tool` (Python's
+ * `sys.set_int_max_str_digits`),
+ * `test_a_parser_digit_limit_error_reads_as_yians_in_correction_and_failure` and
+ * `test_a_node_raising_pythons_digit_limit_error_fails_with_yians_message` (Python's
  * digit-limit error text, which nothing in TS raises).
  */
 
@@ -147,6 +149,10 @@ test("a long int in a prompted reply retries to a good value", async () => {
 
   expect(await generate(model, RECORD)).toEqual({ n: BigInt(D) });
   expect(model.requests).toHaveLength(1);
+});
+
+test("a prompted long int fails the same whatever pythons limit (None)", async () => {
+  expect(await generate(texts(`{"n": ${D}}`), RECORD, 0)).toEqual({ n: BigInt(D) });
 });
 
 test("a long int prompted record reply fails the run at the field", async () => {

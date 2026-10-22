@@ -9,9 +9,8 @@
  * `bigint` sequence is refused; `deep: false` skips a bad child and a bad snapshot's own fields
  * but still refuses a source inside the snapshot; `{"$float":"inf"}`, a 5000-digit int and a
  * literal nested 10,000 levels deep are valid `value_json` (the reader has no digit limit and
- * isn't recursive). A malformed `value_json` throws the reader's `JSONDecodeError`. The 5000-digit
- * row is also `tests/engine/test_long_int_old_logs.py::test_route_value_json_with_a_long_int_is_rejected`,
- * accepted since TS ints have no digit limit (decisions 4a, 23); that file's other rows are in
+ * isn't recursive). A malformed `value_json` throws the reader's `JSONDecodeError`. The long-int
+ * rows of `tests/engine/test_long_int_old_logs.py`, including its route `value_json` row, are in
  * `long_int_old_logs.test.ts`.
  *
  * Changed: reads return the frozen copy the constructor made, not a fresh copy per read, so the

@@ -4,18 +4,18 @@
  * route's `value_json` text. Each log is written by a run here and then edited, as in Python.
  *
  * Ported: `test_resume_fails_clearly_and_leaves_the_log`, `test_replay_read_fails_clearly`,
- * `test_decode_record_fails_clearly` and `test_cli_resume_fails_clearly`, each over the three logs.
+ * `test_decode_record_fails_clearly` and `test_cli_resume_fails_clearly`, each over the three logs,
+ * and `test_route_value_json_with_a_long_int_is_rejected`.
  *
  * Changed: ints are `bigint`s with no digit limit (decisions 4a, 23), so each log reads whole
  * where Python refuses it with its old-log message. `resumeFlow` returns the finished run's
  * recorded result and leaves the log unchanged; `JsonlRunLog.resume`, the reader replay and the
  * CLI use, and `decodeRecord` read the edited record with the whole int (the route keeps it as
  * its `value_json` text); `yian run --resume` exits 0, prints the recorded output and leaves the
- * log unchanged. The CODE body is JS.
+ * log unchanged. The CODE body is JS. A route literal whose `value_json` holds a long int is
+ * valid, where Python refuses it with its old-log message.
  *
- * Already ported: `test_route_value_json_with_a_long_int_is_rejected` in `route_chain_costs.test.ts`
- * (`validateRoute accepts a literal holding a 5000-digit int`), and
- * `test_invalid_record_json_keeps_its_message` in `run_records.test.ts`.
+ * Already ported: `test_invalid_record_json_keeps_its_message` in `run_records.test.ts`.
  *
  * Not ported: `test_decode_record_fails_clearly_whatever_pythons_limit` (Python's
  * `sys.set_int_max_str_digits`).
@@ -30,7 +30,9 @@ import { PassThrough } from "node:stream";
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { ValueRoute } from "../../src/expr/lineage.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
+import { validateRoute } from "../../src/runtime/contracts.ts";
 import {
   decodeRecord,
   JsonlRunLog,
@@ -38,6 +40,7 @@ import {
   type RunRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
+import type { Value } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-old-logs-"));
@@ -98,7 +101,7 @@ output: \${c.output}
 interface OldLog {
   flow: string;
   path: string;
-  output: unknown;
+  output: Value;
   read: (record: RunRecord) => unknown;
 }
 
@@ -166,7 +169,7 @@ test.each(OLD_LOGS)("resume fails clearly and leaves the log (%s)", async (_id, 
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
-  expect(result.output).toBe(output as never);
+  expect(result.output).toBe(output);
   expect(readFileSync(path)).toEqual(before);
 });
 
@@ -208,4 +211,8 @@ test.each(OLD_LOGS)("cli resume fails clearly (%s)", async (_id, makeLog) => {
   expect(code).toBe(0);
   expect(out.join("")).toBe(`${String(output)}\n`);
   expect(readFileSync(path)).toEqual(before);
+});
+
+test("route value json with a long int is rejected", () => {
+  validateRoute(new ValueRoute("literal", { valueJson: `[1, ${D}]` }));
 });

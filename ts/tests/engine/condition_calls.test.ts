@@ -28,10 +28,6 @@
  * `__unknown_function_in_a_loop_while` (the type-table pass raises them).
  */
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -61,6 +57,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
+import { expectFailsBeforeTheRun } from "./run_state_fixtures.ts";
 
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
@@ -355,42 +352,25 @@ test("a condition calling a builtin correctly loads and runs", async () => {
   expect(await outputOf(flow, { v: 2 })).toBe("hot");
 });
 
-/**
- * Expect running `flow` with a log to throw an `ExpressionError` matching `message` before the
- * run starts: no log file is written.
- */
-async function expectFailsBeforeTheRun(flow: ComposedFlow, message: RegExp): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "condition-calls-"));
-  try {
-    const path = join(dir, "run.jsonl");
-    const error = await runFlow(flow, { v: 1 }, { log: path }).then(
-      () => null,
-      (caught: unknown) => caught,
-    );
-    expect(error).toBeInstanceOf(ExpressionError);
-    expect((error as Error).message).toMatch(message);
-    expect(existsSync(path)).toBe(false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 test("a code-built assert calling an unknown function fails before the run", async () => {
   const flow = await loadConformanceFlow(NODE_ASSERT.replace("<cond>", "n > 0"));
   flow.compiled.nodes.get("x")!.preAsserts = [new Assertion("nosuchfn(n) > 0", "nosuchfn(n) > 0")];
 
   await expectFailsBeforeTheRun(
     flow,
+    { v: 1 },
     /^node 'x' pre-assert 'nosuchfn\(n\) > 0' is not a valid boolean expression: unknown expression function 'nosuchfn'$/,
   );
 });
 
 test("a code-built case when with the wrong arguments fails before the run", async () => {
   const flow = await loadFlow(CASE.replace("<cond>", "input.v > 0"));
-  (flow.compiled.nodes.get("gate") as CaseNode).cases = [new Case("hot", { when: "upper(__r0, 1) == 'A'" })];
+  const gate = flow.compiled.nodes.get("gate") as CaseNode;
+  gate.cases = [new Case("hot", { when: "upper(__r0, 1) == 'A'", origin: gate.cases[0]!.origin })];
 
   await expectFailsBeforeTheRun(
     flow,
+    { v: 1 },
     /^node 'gate' case 'hot' `when:` .* is not a valid boolean expression: expression function 'upper' takes \(s\)/,
   );
 });

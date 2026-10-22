@@ -12,35 +12,39 @@
  * Pinned at the end: the harvested `load-map-call/engine_span_calls__*` cases the reference
  * validator decides and `well_called_builtins_in_a_map_load`, which loads.
  *
- * Ported through `loadFlow` and `runFlow`: the `test_python_built_*` rows but the resume one, and
+ * Ported through `loadFlow` and `runFlow`: the `test_python_built_*` rows and
  * `test_a_well_called_python_built_binding_still_runs`. Each sets a binding, a node's type table,
  * an agent prompt or a question of the loaded flow in code, as Python sets it on the compiled
  * flow; a wiring change replaces the node's wiring map rather than mutating it, as `Flow` asks.
  *
- * Not ported: `test_python_built_binding_mis_calling_a_builtin_fails_before_resume_appends`. Its
- * first run writes a log for a flow holding the mis-called binding by stubbing the run's private
- * template check and a CODE function; a test can't stub a function another ES module calls, and
- * setting the binding after the run changes the flow fingerprint, so the resume would fail on
- * the fingerprint instead.
+ * Changed: `test_python_built_binding_mis_calling_a_builtin_fails_before_resume_appends` stops its
+ * first run with an aborted `signal` once node `a` starts (Python's CODE function raises), then
+ * sets the bad binding and writes the edited flow's fingerprint into the log's `RunStarted`, where
+ * Python stubs the run's template check during the first run; replay checks the fingerprint by
+ * plain equality and the log has no hash chain. The CODE bodies are inline JavaScript.
  */
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
+import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { Flow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { NodeStarted } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { HumanInputNode } from "../../src/nodes/human_input/node.ts";
-import { runFlow } from "../../src/run.ts";
+import type { MapNode } from "../../src/nodes/map/node.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
+import { expectFailsBeforeTheRun, rejection } from "./run_state_fixtures.ts";
 
 const UPPER = "expression function 'upper' takes (s): too many positional arguments";
 
@@ -321,81 +325,62 @@ function rewire(flow: Flow, nodeId: string, key: string, source: unknown): void 
   flow.wiring.set(nodeId, new Map([...flow.wiring.get(nodeId)!, [key, new Binding(source)]]));
 }
 
-/**
- * Expect running `flow` on `inputs` with a log to throw an `ExpressionError` matching `message`
- * before the run starts: no log file is written.
- */
-async function runRaises(
-  flow: ComposedFlow,
-  message: string,
-  inputs: Readonly<Record<string, unknown>> = { v: "a" },
-): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "span-calls-"));
-  try {
-    const path = join(dir, "run.jsonl");
-    const error = await runFlow(flow, inputs, { log: path }).then(
-      () => null,
-      (caught: unknown) => caught,
-    );
-    expect(error).toBeInstanceOf(ExpressionError);
-    expect((error as Error).message).toMatch(new RegExp(message));
-    expect(existsSync(path)).toBe(false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 /** The static child flow of the loaded node `nodeId` (a CALL or MAP). */
-const childOf = (flow: ComposedFlow, nodeId: string) => (flow.compiled.nodes.get(nodeId) as CallNode).child as Flow;
+const childOf = (flow: ComposedFlow, nodeId: string) =>
+  (flow.compiled.nodes.get(nodeId) as CallNode | MapNode).child as Flow;
 
 test("a code-built binding mis-calling a builtin fails before the run", async () => {
   const flow = await loadFlow(fill(CODE, GOOD_CODE));
   rewire(flow.compiled, "x", "n", "${upper(input.v, 1)}");
-  await runRaises(flow, `^node 'x' input 'n': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'x' input 'n': ${UPPER_RUN}`));
 });
 
 test("a code-built flow output mis-calling a builtin fails before the run", async () => {
   const flow = await loadFlow(fill(CODE, GOOD_CODE));
   rewire(flow.compiled, "__end__", "result", "${upper(x.output, 1)}");
-  await runRaises(flow, `^flow output: ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^flow output: ${UPPER_RUN}`));
 });
 
 test("a code-built record flow output names the field", async () => {
   const flow = await loadFlow(fill(CODE, { ...GOOD_CODE, out: "{a: '${x.output}'}" }));
   rewire(flow.compiled, "__end__", "a", "${upper(x.output, 1)}");
-  await runRaises(flow, `^flow output 'a': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^flow output 'a': ${UPPER_RUN}`));
 });
 
 test("a code-built child flow output names its owner", async () => {
   const flow = await loadFlow(fill(BODY_FLOW, { inner: "${input.w}", w: "${input.v}" }));
   rewire(childOf(flow, "c"), "__end__", "result", "${upper(s.output, 1)}");
-  await runRaises(flow, `^node 'c' flow output: ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'c' flow output: ${UPPER_RUN}`));
 });
 
 test("a code-built child binding names its static path", async () => {
   const flow = await loadFlow(fill(BODY_FLOW, { inner: "${input.w}", w: "${input.v}" }));
   rewire(childOf(flow, "c"), "s", "n", "${upper(input.w, 1)}");
-  await runRaises(flow, `^node 'c/s' input 'n': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'c/s' input 'n': ${UPPER_RUN}`));
 });
 
 test("a code-built inline call argument names the argument", async () => {
   const flow = await loadFlow(fill(CALL_KWARG, { w: "${input.v}" }));
   rewire(flow.compiled, "__call_0", "w", "${upper(input.v, 1)}");
-  await runRaises(flow, `^node 'x' input 'n' call\\(body\\) argument 'w': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(
+    flow,
+    { v: "a" },
+    new RegExp(`^node 'x' input 'n' call\\(body\\) argument 'w': ${UPPER_RUN}`),
+  );
 });
 
 test("code-built reserved and synthetic keys use their site labels", async () => {
   const caseFlow = await loadFlow(fill(CASE_ON, { on: "${input.v}" }));
   rewire(caseFlow.compiled, "g", "__on", "${upper(input.v, 1)}");
-  await runRaises(caseFlow, `^node 'g' on: ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(caseFlow, { v: "a" }, new RegExp(`^node 'g' on: ${UPPER_RUN}`));
 
   const mapped = await loadFlow(fill(MAP, { over: "${[input.v]}", item: "${item}" }));
   rewire(mapped.compiled, "m", "item", "${upper(item, 1)}");
-  await runRaises(mapped, `^node 'm' map input 'item': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(mapped, { v: "a" }, new RegExp(`^node 'm' map input 'item': ${UPPER_RUN}`));
 
   const waiting = await loadFlow(fill(WAIT, { until: "${input.d}" }));
   rewire(waiting.compiled, "w", "until", "${upper(input.d, 1)}");
-  await runRaises(waiting, `^node 'w' wait until: ${UPPER_RUN}`, { d: "2026-01-01" });
+  await expectFailsBeforeTheRun(waiting, { d: "2026-01-01" }, new RegExp(`^node 'w' wait until: ${UPPER_RUN}`));
 });
 
 test("a code-built reserved key constructor is checked without a type table", async () => {
@@ -404,44 +389,93 @@ test("a code-built reserved key constructor is checked without a type table", as
   const node = flow.compiled.nodes.get("m")!;
   node.types = new Map([...node.types, ["Buy", Type.scalar(ValueKind.STRING)]]);
   rewire(flow.compiled, "m", "over", "${[Buy(input.v)]}");
-  await runRaises(flow, "^node 'm' map over: unknown expression function 'Buy'$");
+  await expectFailsBeforeTheRun(flow, { v: "a" }, /^node 'm' map over: unknown expression function 'Buy'$/);
 });
 
 test("a code-built map child binding names its static path", async () => {
   const flow = await loadFlow(fill(MAP, { over: "${[input.v]}", item: "${item}" }));
   rewire(childOf(flow, "m"), "s", "n", "${upper(input.item, 1)}");
-  await runRaises(flow, `^node 'm/s' input 'n': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'm/s' input 'n': ${UPPER_RUN}`));
 });
 
 test("a code-built agent prompt mis-calling a builtin fails before the run", async () => {
   const flow = await loadFlow(fill(AGENT, { prompt: "Say ${t}", system: "S" }));
   (flow.compiled.nodes.get("a") as AgentNode).prompt = "Say ${upper(t, 1)}";
-  await runRaises(flow, `^node 'a' prompt: ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'a' prompt: ${UPPER_RUN}`));
 });
 
 test("a code-built question text mis-calling a builtin fails before the run", async () => {
   const flow = await loadFlow(fill(HUMAN, GOOD_HUMAN));
   const node = flow.compiled.nodes.get("ask") as HumanInputNode;
   node.questions = [{ ...(node.questions![0] as object), question: "${upper(t, 1)}" }];
-  await runRaises(flow, `^node 'ask' questions\\[0\\]\\.question: ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'ask' questions\\[0\\]\\.question: ${UPPER_RUN}`));
 });
 
 test("a code-built binding calling an unknown function fails before the run", async () => {
   const flow = await loadFlow(fill(CODE, GOOD_CODE));
   rewire(flow.compiled, "x", "n", "${nosuchfn(input.v)}");
-  await runRaises(flow, "^node 'x' input 'n': unknown expression function 'nosuchfn'$");
+  await expectFailsBeforeTheRun(flow, { v: "a" }, /^node 'x' input 'n': unknown expression function 'nosuchfn'$/);
 });
 
 test("a code-built nested binding mis-calling a builtin fails before the run", async () => {
   const flow = await loadFlow(fill(CODE, GOOD_CODE));
   rewire(flow.compiled, "x", "n", new ValueTemplate({ a: ["${upper(input.v, 1)}"] }));
-  await runRaises(flow, `^node 'x' input 'n': ${UPPER_RUN}`);
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'x' input 'n': ${UPPER_RUN}`));
 });
 
 test("a well-called code-built binding still runs", async () => {
   const flow = await loadFlow(fill(CODE, GOOD_CODE));
   rewire(flow.compiled, "x", "n", "${upper(input.v)}");
   expect((await runFlow(flow, { v: "a" })).output).toBe("A");
+});
+
+const TWO_NODES = `
+id: f
+name: f
+input:
+  v: !int
+nodes:
+  a:
+    kind: code
+    code: "return inputs['n'] * 2"
+    input:
+      n: \${input.v}
+    output: int
+  b:
+    kind: code
+    code: "return inputs['n'] * 2"
+    input:
+      n: \${a.output}
+    output: int
+output: \${b.output}
+`;
+
+test("a code-built binding mis-calling a builtin fails before resume appends", async () => {
+  const flow = await loadFlow(TWO_NODES);
+  const recorded = flowFingerprint(flow.compiled);
+  const dir = mkdtempSync(join(tmpdir(), "span-calls-"));
+  try {
+    const path = join(dir, "run.jsonl");
+    // The run stops once node `a` has started, leaving it unfinished.
+    const host = new AbortController();
+    const stop = new Error("host stop");
+    const onEvent = (event: unknown) => {
+      if (event instanceof NodeStarted && event.nodeId === "a") host.abort(stop);
+    };
+    expect(await rejection(runFlow(flow, { v: 1 }, { log: path, signal: host.signal, onEvent }))).toBe(stop);
+    rewire(flow.compiled, "b", "n", "${render_as_json(a.output, 1, 2)}");
+    writeFileSync(path, readFileSync(path, "utf8").replace(recorded, flowFingerprint(flow.compiled)));
+    const lines = readFileSync(path, "utf8");
+
+    const error = await rejection(resumeFlow(flow, { log: path }));
+    expect(error).toBeInstanceOf(ExpressionError);
+    expect((error as Error).message).toMatch(
+      /^node 'b' input 'n': expression function 'render_as_json' takes \(value, indent=2\): too many positional arguments$/,
+    );
+    expect(readFileSync(path, "utf8")).toBe(lines);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------- harvested conformance cases ----------

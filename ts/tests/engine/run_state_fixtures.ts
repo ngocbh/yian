@@ -8,6 +8,10 @@
  * more run-state test files use lives here.
  */
 
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { expect } from "bun:test";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
@@ -22,6 +26,7 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { ChildResolver } from "../../src/compose/loader.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
+import { ExpressionError } from "../../src/expr/expressions.ts";
 import { type FeedbackValue, ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import {
@@ -56,7 +61,7 @@ import { NodeStarted, type RunEvent, StreamChunk } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import type { RunResult } from "../../src/run.ts";
+import { type RunResult, runFlow } from "../../src/run.ts";
 import {
   decodePool,
   encodePool,
@@ -1307,6 +1312,27 @@ export async function rejection(promise: Promise<unknown>): Promise<unknown> {
     return error;
   }
   throw new Error("expected the promise to reject");
+}
+
+/**
+ * Expect running `flow` on `inputs` with a log to throw an `ExpressionError` matching `message`
+ * before the run starts: no log file is written.
+ */
+export async function expectFailsBeforeTheRun(
+  flow: ComposedFlow,
+  inputs: Readonly<Record<string, unknown>>,
+  message: RegExp,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "before-the-run-"));
+  try {
+    const path = join(dir, "run.jsonl");
+    const error = await rejection(runFlow(flow, inputs, { log: path }));
+    expect(error).toBeInstanceOf(ExpressionError);
+    expect((error as Error).message).toMatch(message);
+    expect(existsSync(path)).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** The error `fn` throws; fails the test when it returns. */

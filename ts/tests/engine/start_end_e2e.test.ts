@@ -7,7 +7,11 @@
  *
  * Ported: `test_exactly_one_start_and_one_end_per_flow`,
  * `test_no_retired_node_kinds_in_compiled_ir` and `test_representative_seed_loads_with_structure`,
- * each over the seven seeds. Changed: the seeds come from the conformance cases
+ * each over the seven seeds; `test_nodekind_has_no_retired_members` and
+ * `test_retired_node_modules_are_gone`. Changed: `NodeKind` is a const object of strings, so
+ * `hasattr` is the `in` operator; a Python node module is the kind directory's `node.ts`, imported
+ * with a dynamic `import()`, and a missing module's specifier is computed, because a literal one
+ * fails the typecheck. Changed: the seeds come from the conformance cases
  * `load-core/seed_00_hello_agent`, `load-agent/seed_03_research_one`, `load-map-call/seed_04_call`,
  * `load-map-call/seed_05_call_map`, `load-agent/seed_14_agent_tools`,
  * `load-leaves/seed_17_effects_human_wait` and `load-core/seed_18_research_pipeline`, loaded with
@@ -23,17 +27,17 @@
  * `f0 goldens hold`, the HUMAN_INPUT-then-WAIT run and the three output arities in
  * `golden_run_results.test.ts`.
  *
- * Not ported: `test_nodekind_has_no_retired_members`, `test_retired_node_modules_are_gone`,
- * `test_engine_source_has_no_live_reference_to_retired_constructs` and
- * `test_grep_clean_guard_actually_bites`: guards (and the AST scan behind them) against Python's
- * retired `RefNode`, OUTPUT_RESOLVER and COLLECTOR constructs and their modules, which TS never had.
+ * Not ported: `test_engine_source_has_no_live_reference_to_retired_constructs` and
+ * `test_grep_clean_guard_actually_bites`: the first scans the Python sources for the Python
+ * identifiers `RefNode`, `OutputResolverNode`, `CollectorNode`, `NodeKind.REF`, `terminal_output`,
+ * `_emit_terminal` and `_terminal_coskip`, which no TS source ever defined; the second only tests
+ * that scan's Python AST helper.
  */
 
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
@@ -80,7 +84,14 @@ test.each(REPRESENTATIVE)("exactly one start and one end per flow: %s", async (s
   expect([compiled.startId, compiled.endId]).toEqual([START_ID, END_ID]);
 });
 
-// --- no retired constructs in the compiled IR --- //
+// --- no retired constructs in the compiled IR and the API --- //
+
+test("nodekind has no retired members", () => {
+  for (const attr of ["REF", "OUTPUT_RESOLVER", "COLLECTOR"]) expect(attr in NodeKind).toBe(false);
+  // CALL and MAP are the two composition kinds.
+  expect(NodeKind.CALL).toBe("call");
+  expect(NodeKind.MAP).toBe("map");
+});
 
 test.each(REPRESENTATIVE)("no retired node kinds in compiled ir: %s", async (seed) => {
   const compiled = (await loadSeed(seed)).compiled;
@@ -98,6 +109,15 @@ test.each(REPRESENTATIVE)("no retired node kinds in compiled ir: %s", async (see
     if (boundary.has(edge.from)) expect(compiled.nodes.get(edge.from)!.kind).toBe(NodeKind.START);
     if (boundary.has(edge.to)) expect(compiled.nodes.get(edge.to)!.kind).toBe(NodeKind.END);
   }
+});
+
+test("retired node modules are gone", async () => {
+  for (const kind of ["ref", "output_resolver", "collector"]) {
+    const retired = `../../src/nodes/${kind}/` + "node.ts";
+    await expect(import(retired)).rejects.toMatchObject({ code: "ERR_MODULE_NOT_FOUND" });
+  }
+  // MAP is re-split back into its own kind directory.
+  await import("../../src/nodes/map/node.ts");
 });
 
 // --- the representative seeds load with a runnable entry --- //

@@ -6,13 +6,16 @@
  * they change neither the flow manifest nor any record of the run, and a resume rebuilds the same
  * terminal result from the authored flow.
  *
- * Ported: `test_render_only_node_metadata_does_not_ride_run_log`. The CODE reference is TS's
+ * Ported: `test_manifest_rejects_retired_node_range_fields`, each of its four rows, and
+ * `test_render_only_node_metadata_does_not_ride_run_log`. The CODE reference is TS's
  * (`./fixtures/seeds.ts:confirm_action`). The log is searched for both the TS property names
- * (`wiringLabels`) and Python's (`wiring_labels`).
+ * (`wiringLabels`) and Python's (`wiring_labels`). `flow_identity.test.ts`'s
+ * `test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them` has similar rows on
+ * another flow.
  *
- * Already ported: the rows of `test_manifest_rejects_retired_node_range_fields`, as the
- * `range`, `fieldRanges`, `preAssertRanges` and `postAssertRanges` rows of
- * `flow_identity.test.ts`'s `test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them`.
+ * Changed: the retired field names are camelCase (`fieldRanges`, not `field_ranges`), as in
+ * `flow_identity.test.ts`, and the manifest refuses them with a `RangeError` where Python raises
+ * `ValueError`.
  *
  * Not ported: `test_node_has_no_compose_range_metadata`, which guards against Python-era range
  * fields TS nodes never had (listed in `start_node.test.ts` too).
@@ -52,6 +55,14 @@ nodes:
     code: ./fixtures/seeds.ts:confirm_action
 output: \${done.output}
 `;
+
+test.each(REMOVED_FIELDS)("manifest rejects retired node range fields: %s", async (field) => {
+  // A dynamic legacy field cannot silently disappear from program identity.
+  const loaded = await loadConformanceFlow(RANGE_FLOW, { env });
+  Object.assign(loaded.compiled.nodes.get("done")!, { [field]: {} });
+  expect(() => flowManifest(loaded.compiled)).toThrow(RangeError);
+  expect(() => flowManifest(loaded.compiled)).toThrow(field);
+});
 
 test("render only node metadata does not ride run log", async () => {
   // Recovery rebuilds topology from the supplied authored flow, so synthetic labels are neither

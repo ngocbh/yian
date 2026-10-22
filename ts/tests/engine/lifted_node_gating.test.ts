@@ -17,8 +17,8 @@
  * named by the run's `llmConfig`; the composer's calls are the model's requests, and a model with
  * no reply left fails any call, where Python's fake chat raises. The CODE bodies are Python's where
  * they read the same in JS (decision 11); `d`'s conditional and `audit`'s `len` are written in JS.
- * The CASE edges' `source_handle`,
- * `input_group` and `from_` are `sourceHandle`, `inputGroup` and `from`.
+ * The compiled edges' `source_handle`, `input_group` and `from_` are `sourceHandle`, `inputGroup`
+ * and `from`.
  *
  * Changed: `meet` is an inline CODE body that awaits a short timer, where Python's waits on a
  * barrier shared with the other `meet`; CODE bodies run in worker threads (decision 47), so
@@ -190,9 +190,13 @@ function neverRan(result: RunResult, nodeId: string): boolean {
   return !startedIds(result).includes(nodeId) && skipped.includes(nodeId);
 }
 
-/** The position of the first `kind` event for `nodeId`. */
+/** The position of the first `kind` event for `nodeId`; fails the test when there is none. */
 function index(result: RunResult, kind: abstract new (...args: never[]) => RunEvent, nodeId: string): number {
-  return result.events.findIndex((event) => event instanceof kind && (event as { nodeId?: string }).nodeId === nodeId);
+  const i = result.events.findIndex(
+    (event) => event instanceof kind && (event as { nodeId?: string }).nodeId === nodeId,
+  );
+  expect(i, `${kind.name} for ${nodeId}`).toBeGreaterThanOrEqual(0);
+  return i;
 }
 
 /** Whether `then` started after `first` succeeded. */

@@ -8,10 +8,6 @@
  * JSONL log; an AGENT backward prompt is its request's user message read as JSON.
  *
  * Changed:
- * - `test_public_map_preserves_equal_item_positions_after_reversed_completion`: the first MAP
- *   item's model call waits until `onEvent` sees the second item's end, where Python holds the
- *   first item's CODE gate through a patched `CodeNode.forward` (a CODE body runs in a worker
- *   thread, decision 47).
  * - `test_concat_repeat_and_opaque_routes_cross_public_call_without_reevaluation`: list repetition
  *   is a type error (decision 7), so `input.values * 2` becomes two more concatenated copies. The
  *   opaque builtin is registered with `registerTemplateFn` and put back after the test.
@@ -34,11 +30,13 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeSucceeded } from "../../src/events.ts";
 import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
-import { type ChatModel, EventStream } from "../../src/llm/events.ts";
-import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
-import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import type { ChatModel } from "../../src/llm/events.ts";
+import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryMutation, type LearnContext } from "../../src/memory/contracts.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
+import { BackwardResult } from "../../src/nodes/base.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { legacyConnectionConfig } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { replayRunLog, type ResumeFlowOptions, resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
@@ -69,7 +67,7 @@ let files = 0;
 /** A fresh path in the file's temp dir. */
 const fresh = (name: string) => join(dir, `${files++}-${name}`);
 
-type Pick = (config: Readonly<Record<string, unknown>>, nodeId: string) => ChatModel;
+type Pick = (config: Readonly<Record<string, unknown>>) => ChatModel;
 
 /** A pick for a run that must build no model. */
 const NO_MODEL: Pick = () => {
@@ -77,17 +75,17 @@ const NO_MODEL: Pick = () => {
 };
 
 /**
- * Model access over the file's env: each build records its config and serves `pick(config, nodeId)`;
- * a test reassigns `pick` where Python re-patches `model_from_config`.
+ * Model access over the file's env: each build records its config and serves `pick(config)`; a
+ * test reassigns `pick` where Python re-patches `model_from_config`.
  */
 function models(pick: Pick = NO_MODEL): ModelAccess & { pick: Pick; configs: Readonly<Record<string, unknown>>[] } {
   const access = {
     pick,
     configs: [] as Readonly<Record<string, unknown>>[],
     env,
-    createModel: (config: Readonly<Record<string, unknown>>, options: { nodeId: string }) => {
+    createModel: (config: Readonly<Record<string, unknown>>) => {
       access.configs.push(config);
-      return access.pick(config, options.nodeId);
+      return access.pick(config);
     },
   };
   return access;
@@ -189,7 +187,7 @@ output: \${outer.output}
   const selected = { rows: [null, ["Revise b.", null]] };
   const outcome = await result.backward({ payload: selected, local: "Keep the default." });
   expect(outcome.status).toBe("succeeded");
-  expect(outcome.feedback!.inputFeedback).toEqual({ payload: [selected] });
+  expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { payload: [selected] } }));
   const all = envelopes(path);
   const starts = new Map(
     all.flatMap((envelope) =>
@@ -209,26 +207,6 @@ output: \${outer.output}
   expect(result.output).toEqual({ payload, local: "child default" });
   expect(access.configs).toEqual([]);
 });
-
-/** A `ScriptedModel` whose calls answer only once `ready` resolves. */
-class WaitingModel extends ScriptedModel {
-  readonly ready: Promise<void>;
-
-  constructor(replies: ScriptedReply[], ready: Promise<void>) {
-    super(replies);
-    this.ready = ready;
-  }
-
-  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
-    const inner = super.stream(request, options);
-    const ready = this.ready;
-    async function* events() {
-      await ready;
-      yield* inner;
-    }
-    return new EventStream(events(), () => inner.close());
-  }
-}
 
 describe("public map preserves equal item positions after reversed completion", () => {
   for (const feedback of ["Review every item.", [null, ""]] as const) {
@@ -268,23 +246,33 @@ output: \${each.output}
       const observe = (event: unknown) => {
         if (event instanceof NodeSucceeded && event.nodeId === "each#1/__end__") secondDone();
       };
-      // Python holds the first item's CODE gate; the first item's model call waits instead, since
-      // a CODE body runs in a worker thread and can't see the test's events.
       const forwardChats: ScriptedModel[] = [];
-      const access = models((_config, nodeId) => {
-        const replies = [textReply("same")];
-        const chat = nodeId === "each#0/answer" ? new WaitingModel(replies, ready) : new ScriptedModel(replies);
+      const access = models(() => {
+        const chat = new ScriptedModel([textReply("same")]);
         forwardChats.push(chat);
         return chat;
       });
       const path = fresh("map.jsonl");
-      const result = await run(flow, { values: ["same", "same"] }, {
-        log: path,
-        learnable: true,
-        numWorkers: 4,
-        onEvent: observe,
-        models: access,
-      });
+      const original = CodeNode.prototype.forward;
+      // The gate is held in the node's main-thread `forward`; only the CODE body runs in a worker.
+      CodeNode.prototype.forward = async function (this: CodeNode, inputs, caps) {
+        const occurrences = this.executionScope!.occurrencePath;
+        expect(occurrences).toHaveLength(1);
+        if (occurrences[0]!.index === 0) await ready;
+        return original.call(this, inputs, caps);
+      };
+      let result;
+      try {
+        result = await run(flow, { values: ["same", "same"] }, {
+          log: path,
+          learnable: true,
+          numWorkers: 4,
+          onEvent: observe,
+          models: access,
+        });
+      } finally {
+        CodeNode.prototype.forward = original;
+      }
       expect(result.status).toBe("succeeded");
       expect(result.output).toEqual(["same", "same"]);
       expect(forwardChats).toHaveLength(2);
@@ -312,9 +300,13 @@ output: \${each.output}
       const outcome = await result.backward(feedback);
       const expectedIndices = typeof feedback === "string" ? [0, 1] : [1];
       expect(outcome.status).toBe("succeeded");
-      expect(outcome.feedback!.inputFeedback).toEqual({
-        values: expectedIndices.map((index) => [0, 1].map((position) => (position === index ? message : null))),
-      });
+      expect(outcome.feedback).toEqual(
+        new BackwardResult({
+          inputFeedback: {
+            values: expectedIndices.map((index) => [0, 1].map((position) => (position === index ? message : null))),
+          },
+        }),
+      );
       expect(backwardChats).toHaveLength(expectedIndices.length);
       const agentRecords = new Map(
         succeeded
@@ -514,13 +506,17 @@ output:
   };
   const outcome = await inspected.backward("Review every iteration.");
   expect(outcome.status).toBe("succeeded");
-  expect(outcome.feedback!.inputFeedback).toEqual({
-    n: ["Refine n."],
-    values: [
-      ["Refine n.", null],
-      [null, "Refine n."],
-    ],
-  });
+  expect(outcome.feedback).toEqual(
+    new BackwardResult({
+      inputFeedback: {
+        n: ["Refine n."],
+        values: [
+          ["Refine n.", null],
+          [null, "Refine n."],
+        ],
+      },
+    }),
+  );
   expect(backwardChats).toHaveLength(acceptedAgents.size);
   const seen: number[] = [];
   for (const [config, chat] of backwardChats) {
@@ -608,7 +604,9 @@ output: \${outer.output}
     expect(calls).toEqual([["same"]]);
     const outcome = await result.backward(["first", "second", "third", "literal feedback", "opaque feedback"]);
     expect(outcome.status).toBe("succeeded");
-    expect(outcome.feedback!.inputFeedback).toEqual({ values: [["first"], ["second"], ["third"]] });
+    expect(outcome.feedback).toEqual(
+      new BackwardResult({ inputFeedback: { values: [["first"], ["second"], ["third"]] } }),
+    );
     expect(backend.learnContexts).toHaveLength(1);
     const stopped = feedbackEntries(backend.learnContexts[0]!).filter((entry) => entry["channel"] === "stopped");
     expect(stopped.map((entry) => entry["value"])).toEqual([["opaque feedback"]]);
@@ -730,7 +728,7 @@ output: \${invoke.output | unused.output}
       ]);
       access.pick = () => backwardChat;
       const outcome = await result.backward("Review answer.");
-      expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["Refine topic."] });
+      expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["Refine topic."] } }));
       expect(backwardChat.requests).toHaveLength(1);
       expect(backwardChat.requests[0]!.tools).toEqual([]);
       const records = envelopes(path).map((item) => item.record);
@@ -843,7 +841,7 @@ output: \${input.text}
       const winner = await second.backward("B feedback");
       expect(winner.status).toBe("succeeded");
       expect(winner.learning!.status).toBe("succeeded");
-      expect(winner.feedback!.inputFeedback).toEqual({ text: ["B feedback"] });
+      expect(winner.feedback).toEqual(new BackwardResult({ inputFeedback: { text: ["B feedback"] } }));
       const requests = envelopes(secondPath)
         .map((item) => item.record)
         .filter((record) => record instanceof MemoryCommitRequestedRecord);
@@ -866,7 +864,7 @@ output: \${input.text}
       expect(stale.status).toBe("failed");
       expect(stale.failure!.stage).toBe("learn");
       expect(stale.failure!.code).toBe("reflective.stale_generation");
-      expect(stale.feedback!.inputFeedback).toEqual({ text: ["A feedback"] });
+      expect(stale.feedback).toEqual(new BackwardResult({ inputFeedback: { text: ["A feedback"] } }));
       expect(stale.learning!.status).toBe("failed");
       expect(stale.learning!.policies.map((policy) => policy.status)).toEqual(["unrequested"]);
       const records = envelopes(firstPath).map((item) => item.record);

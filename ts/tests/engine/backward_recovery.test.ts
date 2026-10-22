@@ -22,10 +22,12 @@
  *   so a spy on `LearnContext.fromFrozen` refuses START's context with a `RangeError` on its first
  *   call in each attempt, where Python lowers the bound to 10 levels under the 21-level payload.
  * - `test_reverse_cancellation_retains_started_only_and_resume_recomputes_the_entire_pass`: one
- *   row. An AGENT backward error is attributed to its node (`backward.execute`) and JS has one
- *   cancellation error, so the interruption is the process lost while the second reverse call
- *   fails (`CrashAt` and `crashes`: no later record is accepted), where Python's two rows raise
- *   `asyncio.CancelledError` and `concurrent.futures.CancelledError` from that call.
+ *   row. Python's two rows differ only in the error the second reverse call raises
+ *   (`asyncio.CancelledError`, `concurrent.futures.CancelledError`), and both propagate out of
+ *   `backward` unchanged. Here `computeBackward` records any handler error as `backward.execute`
+ *   and `RunResult.backward` takes no signal, so no error a model throws leaves the call; the
+ *   interruption is the process lost while the second reverse call fails (`CrashAt` and
+ *   `crashes`: no later record is accepted).
  * - `test_public_append_rejection_keeps_exact_authority_and_retries_after_every_phase`: the
  *   rejection is an `Error` (Python's `OSError`), and the partial write is `fs.writeSync` writing
  *   half the line before it throws (Python's `_FileProxy`).
@@ -47,6 +49,7 @@ import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { LearnContext, MemoryMutation, MemoryOperationError } from "../../src/memory/contracts.ts";
+import { BackwardResult } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { type ResumeFlowOptions, resumeFlow, type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import {
@@ -498,7 +501,7 @@ describe("real agent failure discards partial reverse results and retries every 
         access.pick = () => retry;
         const completed = await inspected.backward("Second review.");
         expect(completed.status).toBe("succeeded");
-        expect(completed.feedback!.inputFeedback).toEqual({ topic: ["fresh topic"] });
+        expect(completed.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["fresh topic"] } }));
         expect(retry.requests).toHaveLength(2);
         expect(reverse.requests).toHaveLength(2);
         expect(forwardChat.requests).toHaveLength(2);
@@ -559,7 +562,7 @@ describe("terminal resume inspects actual public attempt prefixes without reopen
       expect(outcome.status).toBe("failed");
       expect(outcome.failure!.code).toBe("backward.interrupted");
       expect(outcome.feedback).toEqual(completed.feedback);
-      expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["topic review"] });
+      expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["topic review"] } }));
       expect(outcome.learning!.status).toBe("incomplete");
       expect(outcome.learning!.policies).toHaveLength(1);
       const policy = outcome.learning!.policies[0]!;
@@ -607,7 +610,7 @@ describe("late learning failure keeps completed feedback but retry rebuilds ever
       expect(outcome.status).toBe("failed");
       expect(outcome.failure!.stage).toBe("learn");
       expect(outcome.failure!.code).toBe(failureKind === "learner" ? "declined" : "memory.invalid_result");
-      expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["old topic"] });
+      expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["old topic"] } }));
       expect(outcome.learning!.status).toBe("failed");
       expect(outcome.learning!.policies[0]!.status).toBe("unrequested");
       const accepted = records(path).slice(count);
@@ -640,7 +643,7 @@ describe("late learning failure keeps completed feedback but retry rebuilds ever
       access.pick = () => retry;
       const completed = await inspected.backward("Second review.");
       expect(completed.status).toBe("succeeded");
-      expect(completed.feedback!.inputFeedback).toEqual({ topic: ["fresh topic"] });
+      expect(completed.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["fresh topic"] } }));
       expect(retry.requests).toHaveLength(2);
       expect(reverse.requests).toHaveLength(2);
       expect(forwardChat.requests).toHaveLength(2);
@@ -714,7 +717,7 @@ output: \${input.payload}
   expect(first.failure!.message).toBe(
     "memory learn context could not be constructed for node '__start__': context too deep",
   );
-  expect(first.feedback!.inputFeedback).toEqual({ payload: ["First review."] });
+  expect(first.feedback).toEqual(new BackwardResult({ inputFeedback: { payload: ["First review."] } }));
   expect(first.learning!.status).toBe("failed");
   expect(first.learning!.policies[0]!.status).toBe("unrequested");
   expect(readFileSync(path, "utf8").startsWith(before)).toBe(true);
@@ -728,7 +731,7 @@ output: \${input.payload}
   expect(backend.openSnapshots).toHaveLength(2);
   const second = await withFailingFirstContext(() => inspected.backward("Second review."));
   expect(second.failure).toEqual(first.failure);
-  expect(second.feedback!.inputFeedback).toEqual({ payload: ["Second review."] });
+  expect(second.feedback).toEqual(new BackwardResult({ inputFeedback: { payload: ["Second review."] } }));
   expect(backend.learnContexts).toEqual([]);
   expect(backend.commitCalls).toEqual([]);
   const all = records(path);
@@ -787,7 +790,9 @@ test("reverse cancellation retains started only and resume recomputes the entire
     feedbackReply({ input_feedback: { topic: ["fresh topic"] } }),
   ]);
   access.pick = () => retry;
-  expect((await inspected.backward("Second review.")).feedback!.inputFeedback).toEqual({ topic: ["fresh topic"] });
+  expect((await inspected.backward("Second review.")).feedback).toEqual(
+    new BackwardResult({ inputFeedback: { topic: ["fresh topic"] } }),
+  );
   const accepted = records(path).slice(count);
   expect(accepted.slice(0, 3).map((record) => record.constructor)).toEqual([
     BackwardStartedRecord,
@@ -914,7 +919,7 @@ describe("public append rejection keeps exact authority and retries after every 
       } else {
         expect(outcome!.failure!.code).toBe("backward.interrupted");
         if (phase === "ready") expect(outcome!.feedback).toBeNull();
-        else expect(outcome!.feedback!.inputFeedback).toEqual({ topic: ["old topic"] });
+        else expect(outcome!.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["old topic"] } }));
         expect(outcome!.learning!.status).toBe(phase === "failed_finished" ? "failed" : "incomplete");
         const disposition = ({
           ready: "unrequested",
@@ -945,7 +950,7 @@ describe("public append rejection keeps exact authority and retries after every 
       access.pick = () => retry;
       const completed = await inspected.backward("Second review.");
       expect(completed.status).toBe("succeeded");
-      expect(completed.feedback!.inputFeedback).toEqual({ topic: ["fresh topic"] });
+      expect(completed.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["fresh topic"] } }));
       expect(retry.requests).toHaveLength(2);
       expect(reverse.requests).toHaveLength(expectedCallbacks);
       expect(forwardChat.requests).toHaveLength(2);
@@ -1016,7 +1021,7 @@ test("three memory failure preserves ordered dispositions and admits a public re
   expect(outcome.failure!.stage).toBe("commit");
   expect(outcome.failure!.code).toBe("backward.interrupted");
   expect(outcome.failure!.memory).toBe("B");
-  expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["topic review"] });
+  expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["topic review"] } }));
   expect(outcome.learning!.status).toBe("failed");
   expect(outcome.learning!.policies.map((policy) => [policy.memory, policy.status])).toEqual([
     ["A", "succeeded"],

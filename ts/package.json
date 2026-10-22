@@ -5,7 +5,18 @@
   "license": "Apache-2.0",
   "type": "module",
   "engines": { "node": ">=22.18", "bun": ">=1.4" },
+  "bin": { "yian": "./dist/src/cli/index.js" },
+  "exports": {
+    ".": { "bun": "./src/index.ts", "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
+    "./run": { "bun": "./src/run.ts", "types": "./dist/src/run.d.ts", "default": "./dist/src/run.js" },
+    "./tools": { "bun": "./src/tools/index.ts", "types": "./dist/src/tools/index.d.ts", "default": "./dist/src/tools/index.js" },
+    "./skills": { "bun": "./src/compose/skills.ts", "types": "./dist/src/compose/skills.d.ts", "default": "./dist/src/compose/skills.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/src", "src", "LICENSE", "NOTICE", "README.md"],
+  "publishConfig": { "access": "public" },
   "scripts": {
+    "prepack": "cp ../LICENSE LICENSE && bun run build",
     "build": "rm -rf dist && tsc && find dist -name '*.test.*' -delete",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./tests",

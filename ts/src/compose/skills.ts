@@ -28,6 +28,10 @@ import {
 import { isRecord, type ValueRecord } from "../typesys/index.ts";
 import { parseYamlLiteral, SourceSyntaxError } from "./source/index.ts";
 
+// The `yian/skills` entry point is this module, so it carries the skill types too, as Python's
+// `yian.skills` does.
+export { Skill, SkillError } from "../skills/catalog.ts";
+
 /**
  * Read one skill directory.
  *

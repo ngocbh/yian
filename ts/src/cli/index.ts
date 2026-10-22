@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * The `yian` command line: the command table and `main`, which routes the arguments to a command.
  *

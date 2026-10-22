@@ -13,9 +13,9 @@
  * Changed: run-start errors are `RangeError`s (a `LayerFieldError` for a field's) where Python
  * raises `ValueError`; ints have no digit limit (decisions 4a, 23), so in the uncoercible-input row
  * the 5000-digit `window` is accepted (a run with a good `llm_config` takes it whole) and the bad
- * `llm_config` is the reported error; names and
- * null are written in the text form (`"nope"`, `["bogus"]`, `null`; decisions 7, 43); the golden
- * `run_started` record is TS's (schema 10, with `defaults` and `call_time_llm`; TS starts its own
+ * `llm_config` is the reported error; names and null are written in the text form (`"nope"`,
+ * `["bogus"]`, `null`; decisions 7, 43); the golden `run_started` record is TS's (schema 11, with
+ * `defaults`, `call_time_llm` and a wall-clock `at`, masked like `now`; TS starts its own
  * versioned logs, decisions 8, 16).
  *
  * Covered by `run-agent/engine_llm_config_values_run_start__a_bad_run_config_beats_a_missing_input`:
@@ -194,8 +194,9 @@ const GOLDEN_RUN_STARTED = {
     start_wiring_override: { topic: "${input.topic}" },
   },
   run_id: "golden",
-  schema: 10,
+  schema: 11,
   seq: 0,
+  at: "<at>",
 };
 
 test("a run with a default input records and returns as before", async () => {
@@ -213,6 +214,8 @@ test("a run with a default input records and returns as before", async () => {
   expect(system["today"]["kind"]).toBe("date");
   system["now"] = "<now>";
   system["today"] = "<today>";
+  expect(Number.isNaN(Date.parse(started["at"]))).toBe(false);
+  started["at"] = "<at>";
   expect(started).toEqual(GOLDEN_RUN_STARTED);
 });
 

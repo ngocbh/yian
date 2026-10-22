@@ -2716,21 +2716,26 @@ an invalid `output:` type, because the check runs after the flow is assembled.
 Changed (TS yian): a CODE call, a reference or an inline body, runs on a worker thread
 (`worker_threads`), not in-process. This is not the run's `num_workers` (`--num-workers`)
 pool, which caps how many nodes run at once. A stop (Ctrl-C) ends the thread at once, even
-a body that never yields, and a busy body doesn't block the host's event loop: signals and
-timers still run. A thread runs one call at a time and is reused when idle, and an idle
-thread never keeps the process alive. Inputs and the result are copied between threads;
-the checks above are unchanged. A call may land on a new thread or on one an earlier call
-used, so module state and globals may or may not persist between calls (don't rely on
-either), and a referenced module's top-level code may run more than once in a run, once
-per thread. The host's own globals and modules aren't visible. `console` output reaches
-the host's console as text, in order, before the node finishes; `console.dir` and direct
-`process.stdout` or `process.stderr` writes don't go through it, so they may arrive out of
-order or be lost. A body that calls `process.exit`, or awaits a promise nothing can
-resolve while nothing else is pending on its thread, fails with
-`CODE worker exited with code N before the body returned`; with work pending, such as an
-earlier body's timer, it waits until stopped. Finish work a body starts, such as a timer,
-before returning: a later error from it fails the call its thread runs then, or prints
-`CODE error after its body returned: ...` when the thread is idle. `process.chdir` throws.
+a body that never yields (a JS loop); one blocked in a synchronous system call (a child
+process run with `execSync`, a blocking read) ends when that call returns. A busy body
+doesn't block the host's event loop: signals and timers still run. A thread runs one call
+at a time and is reused when idle. Up to `availableParallelism()` idle threads stay for
+the life of the process, and an idle thread never keeps the process alive. Inputs and the
+result are copied between threads; the checks above are unchanged. A call may land on a
+new thread or on one an earlier call used, so module state and globals may or may not
+persist between calls (don't rely on either), and a referenced module's top-level code may
+run more than once in a run, once per thread. The host's own globals and modules aren't
+visible. `console` output reaches the host's console as text, in order, before the node
+finishes; `console.dir` and direct `process.stdout` or `process.stderr` writes don't go
+through it, so they may arrive out of order or be lost. A body that calls `process.exit`,
+or awaits a promise nothing can resolve while nothing else is pending on its thread, fails
+with `CODE worker exited with code N before the body returned`; with work pending, such as
+an earlier body's timer, it waits until stopped. Finish work a body starts, such as a
+timer, before returning: a later error from it fails the call its thread runs then, or
+prints `CODE error after its body returned: ...` when the thread is idle. A thrown error
+arrives as a copy: its name, message and stack (a custom class becomes an `Error` with
+that name; other fields such as `code` or `cause` aren't kept). A body can't read the
+host's stdin, and signal handlers it installs don't fire. `process.chdir` throws.
 `process.env` is the host's live environment, shared both ways as in-process. The thread
 is not a sandbox: it shares the host's process, privileges and file system.
 

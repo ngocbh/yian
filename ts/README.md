@@ -312,6 +312,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   by shape into `mode` and compiles or imports nothing. Each call runs on a worker thread
   (`src/nodes/code/worker.ts`), reused when idle, that the node terminates when `caps.signal`
   aborts.
+- A host that bundles yian (esbuild, webpack, `bun build`) must ship the worker as its own entry
+  at `nodes/code/worker.js` beside the bundle, else every CODE call fails
+  `CODE worker failed: Cannot find module ...`. `bun build --compile` takes
+  `./src/nodes/code/worker.ts` as a second entry, with both entries under `src/`.
 - `code` may also be `{builtin: "identity", field}` (`mode: "builtin"`), the form a tagged value
   entry lowers to.
 - WAIT's `until` takes a date or datetime string only: dates are text in TS yian.

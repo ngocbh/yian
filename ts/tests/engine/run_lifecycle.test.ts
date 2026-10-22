@@ -1036,8 +1036,8 @@ const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 // Each CODE body waits for `YIAN_TEST_SWEEP_DELAY_MS`, which only the child sets: a killed
 // child's node is still running at the kill, and the test process's runs don't wait. A body runs
-// on a worker thread with its own globals, so the delay crosses in the environment, which a worker
-// copies when it starts.
+// on a worker thread with its own globals, so the delay crosses in the environment, which CODE
+// workers share with the host.
 const SLOW =
   "await new Promise((resolve) => setTimeout(resolve, Number(process.env.YIAN_TEST_SWEEP_DELAY_MS ?? 0)));";
 

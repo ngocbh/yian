@@ -60,7 +60,15 @@ import { SHARE_ENV, Worker } from "node:worker_threads";
 import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
 import { TypeStripError } from "../../platform.ts";
-import { fromHost, isRecord, jsTypeName, toHost, type Value, writeAsText } from "../../typesys/values.ts";
+import {
+  fromHost,
+  isRecord,
+  jsTypeName,
+  toHost,
+  TypeCheckError,
+  type Value,
+  writeAsText,
+} from "../../typesys/values.ts";
 import { HostOutputError, hostOutput, markerMessage, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 import {
@@ -267,7 +275,10 @@ function rebuildError(fields: ThrownError): Error {
 
 /** Return the error a failed reply rejects with. */
 function replyError(reply: Exclude<CodeReply, { ok: true }>): Error {
-  if (reply.as === "output") return new HostOutputError(reply.message, { path: reply.path });
+  if (reply.as === "output") {
+    const cause = new TypeCheckError(reply.message, { path: reply.path });
+    return new HostOutputError(reply.message, { path: reply.path, cause });
+  }
   const { thrown } = reply;
   const original =
     thrown.kind === "error" ? rebuildError(thrown) : thrown.kind === "value" ? unpackFiles(thrown.value) : thrown.text;
@@ -532,7 +543,9 @@ export class CodeNode extends Node {
    * result goes through host intake (a top-level `return inputs` returns the record). The worker
    * runs with the caller's `current()` values and goes back to the idle pool after its reply.
    *
-   * @param caps.signal Aborting it rejects with its reason and terminates the worker.
+   * @param caps.signal Aborting it terminates the worker, then rejects with its reason. A body
+   *   blocked in a synchronous system call (`execSync`, a blocking read) ends when that call
+   *   returns; the rejection waits for it, so a stop never settles while a command it ran still runs.
    * @throws ReferenceError when the built-in's field isn't in the record.
    * @throws The signal's reason when `caps.signal` is aborted before or while the code runs.
    * @throws CodeError when a reference's module throws while it loads.

@@ -74,10 +74,11 @@
  * `test_literal_value_case_listing_every_tag_needs_no_else` and
  * `test_unquoted_date_when_narrows_a_date_shaped_union_tag`. Changed: the CODE bodies are
  * JavaScript; a flow's int output is a `bigint` (`2n`, `5n`). The `floats` half of
- * `test_bool_never_equals_a_number_on_an_untyped_on` returns `1.0`, which reaches the case as
- * the int 1 (a whole host number reads as an int, decisions 9A and 45), so it repeats the int
- * match; the float inputs `2.0`, `3.0` and `1000.0` are ints in a `float` slot (decision 38) and
- * match numerically as Python's floats do.
+ * `test_bool_never_equals_a_number_on_an_untyped_on` reads `on: ${src.output / 2}` over a `src`
+ * returning the int 2, where Python's `src` returns `1.0`: a whole host number reads as an int
+ * (decisions 9A and 45), and `/` always gives a float (decision 7), so the int `when: 1` still
+ * meets the float 1.0 and matches numerically. The float inputs `2.0`, `3.0` and `1000.0` are
+ * ints in a `float` slot (decision 38) and match numerically as Python's floats do.
  *
  * Ported through `loadFlow`: `test_routing_only_call_child_literal_input_missing_a_tag`, which
  * composes a `defs:` entry; its harvested case is pinned at the end with `full` (the definition
@@ -255,7 +256,11 @@ test("bool never equals a number on an untyped on", async () => {
     ],
     { onType: null },
   );
-  const floats = flow([["1", "one"]], { onType: null, srcCode: "return 1.0" });
+  // `/` always gives a float (decision 7), so `on:` reads the float 1.0.
+  const floats = flow([["1", "one"]], { onType: null, srcCode: "return 2", srcOutput: "int" }).replace(
+    "on: ${src.output}",
+    "on: ${src.output / 2}",
+  );
 
   expect(await route(text, { pick: "t" })).toBe("two");
   expect(await route(text, { pick: "x" })).toBe("one");

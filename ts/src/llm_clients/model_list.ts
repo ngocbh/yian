@@ -26,6 +26,9 @@ const OLLAMA_BASE_URL = "http://localhost:11434";
 // The largest page Anthropic and Google serve, so most listings take one request.
 const PAGE_SIZE = "1000";
 
+/** Seconds a listing may take when the caller gives no `timeout`. */
+export const MODEL_LIST_TIMEOUT_SECONDS = 8;
+
 /**
  * A model listing failed.
  *
@@ -89,7 +92,7 @@ export async function listModels(
   provider: unknown,
   options: ListModelsOptions = {},
 ): Promise<readonly string[] | null> {
-  const { apiKey, baseUrl, timeout = 8, organization, project, signal, scheduler = realScheduler } = options;
+  const { apiKey, baseUrl, timeout = MODEL_LIST_TIMEOUT_SECONDS, organization, project, signal, scheduler = realScheduler } = options;
   const name = typeof provider === "string" ? provider.toLowerCase() : "";
   if (name === "azure") return null;
   let base: unknown;

@@ -1350,7 +1350,7 @@ async function startRun(
           log,
           runId,
           llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-          numWorkers: options.numWorkers ?? 8,
+          numWorkers: options.numWorkers,
           onEvent,
           memory,
           tools,

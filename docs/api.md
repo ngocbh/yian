@@ -2376,17 +2376,17 @@ anything is written and doesn't poison the log. A damaged record in a log being 
 raises a `RangeError` naming the path, the 1-based line and the seq.
 
 Each record is fsynced before it counts, in Python yian and in TS yian on Node and Bun, so a
-durable run pays one sync per record. yian uses the plain `fsync` on every runtime, as Python
-does: the records are safe if yian crashes or is killed, but on a power loss the last step or two
-may be lost, and a resume redoes them. Changed (TS yian): Node on macOS has no plain `fsync`
-(libuv's `fsync` and `fdatasync` are both `fcntl(F_FULLFSYNC)`, which also flushes the drive's
-cache), so it is stricter and slower there: a sync costs about 80 times what Bun's `fsyncSync`
-costs (a plain `fsync`, which leaves the data in the drive's cache; Python's `os.fsync` is the
-same plain call, not measured here). On an Apple M4 Pro MacBook Pro (Mac16,8, APFS), measured
-2026-10, Node 22 and 26 pay 3.7 to 4.2 ms per record: a 10,000-item
-MAP (with `YIAN_MAX_TOTAL_NODES` raised past its default of 10,000) writes 60,011 records and
-spends about 250 s in sync, 254 s in all against 4 s with a memory log, serial or with 8
-workers. Bun pays about 52 µs per record, so the same MAP spends about 3 s in sync.
+durable run pays one sync per record. yian calls the runtime's plain `fsync` and never asks for
+`F_FULLFSYNC`, as Python does: the records are safe if yian crashes or is killed, but on a power
+loss the last step or two may be lost, and a resume redoes them. Changed (TS yian): on macOS,
+Node's `fsyncSync` and `fdatasyncSync` are themselves `fcntl(F_FULLFSYNC)` (libuv's choice),
+which also flushes the drive's cache, so Node is stricter and slower there than Bun, whose
+`fsyncSync` is the plain `fsync` (Python's `os.fsync` is the same plain call, not measured here).
+On an Apple M4 Pro MacBook Pro (Mac16,8, APFS), measured 2026-10: a 10,000-item MAP (with
+`YIAN_MAX_TOTAL_NODES` raised past its default of 10,000) writes 60,011 records; Node 22 pays
+about 4.2 ms per record and spends about 250 s in sync, 254 s in all against 4 s with a memory
+log, serial or with 8 workers, while Bun pays about 52 µs per record, about 3 s in sync. A bare
+100-byte append plus sync costs 3.7 to 3.9 ms on Node 22 and 26 and 28 to 35 µs on Bun.
 
 !!! warning "Run logs may contain sensitive data"
     Canonical records retain caller inputs, node outputs (including human, tool,

@@ -7,16 +7,25 @@
 // `yian.tools` and `yian.skills`; and `LICENSES`, the text `yian --licenses` prints, against
 // `NOTICE`, Bun's license and the license files of the packages the binaries bundle. With
 // `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's license from
-// the file `YIAN_BUN_LICENSE` names, or else from the current `LICENSES`.
+// the file `YIAN_BUN_LICENSE` names, or else from the current `LICENSES`. With `YIAN_TEST_BINARY`
+// set to a binary `bun run build:bin` made, the file also runs that binary: `--licenses`, CODE
+// flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a cwd `.env` and `bunfig.toml`
+// it must ignore.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { LICENSES } from "../src/cli/licenses.ts";
 import type { MarkdownStore } from "../src/index.ts";
+import { AuthStore } from "../src/llm_clients/auth/index.ts";
 import type { Steering } from "../src/run.ts";
+import { stdioOptions } from "./engine/mcp_helpers.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const PACKAGE = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -286,4 +295,284 @@ describe("LICENSES", () => {
     // Node runs the check too, with no Bun version to compare.
     if (process.versions.bun !== undefined) expect(version).toBe(process.versions.bun);
   });
+});
+
+/**
+ * The compiled binary named by `YIAN_TEST_BINARY`, or `undefined` when it's unset. A set value
+ * that isn't an absolute path to a file fails the whole file, so a typo can't pass as a run with
+ * the binary checks skipped.
+ */
+const BINARY = ((): string | undefined => {
+  const binary = process.env.YIAN_TEST_BINARY;
+  if (!binary) return undefined;
+  if (!isAbsolute(binary) || !existsSync(binary)) {
+    throw new Error(`YIAN_TEST_BINARY=${binary} is not an absolute path to a file`);
+  }
+  return binary;
+})();
+
+/** How long one spawn of the binary may take before it is killed, so a hang can't stall the run. */
+const SPAWN_LIMIT = 60_000;
+/** Each binary test's limit, above `SPAWN_LIMIT` so the spawn's own failure reports first. */
+const BINARY_TEST_LIMIT = 90_000;
+
+const CODE_FLOW = `id: compiled
+name: compiled
+input:
+  n: !int
+nodes:
+  double:
+    kind: code
+    input: {n: "\${input.n}"}
+    output: int
+    code: |
+      const two: number = 2
+      return inputs.n * two
+  triple:
+    kind: code
+    input: {n: "\${double.output}"}
+    output: int
+    code: ./helpers.ts:triple
+output: \${triple.output}
+`;
+
+const BLOCKED_FLOW = `id: blocked
+name: blocked
+nodes:
+  spin:
+    kind: code
+    output: int
+    code: |
+      console.log("ready")
+      while (true) {}
+output: \${spin.output}
+`;
+
+const TOOL_FLOW = `id: mcp_tool
+name: mcp_tool
+nodes:
+  call:
+    kind: tool
+    tool_id: echo
+    input: {text: "hi"}
+output: \${call.output}
+`;
+
+/** A fresh private temp dir holding an empty `home/` and the `files` given, by name. */
+function workdir(files: Record<string, string> = {}): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "yian-binary-")));
+  mkdirSync(join(dir, "home"));
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+  return dir;
+}
+
+/** The CODE flow and the helper module it references, which imports a sibling module. */
+const CODE_FILES = {
+  "flow.yaml": CODE_FLOW,
+  "helpers.ts":
+    'import { three } from "./lib.ts";\n\n' +
+    "export function triple(inputs: { n: number }): number {\n  return inputs.n * three;\n}\n",
+  "lib.ts": "export const three: number = 3;\n",
+};
+
+interface BinaryResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run the binary with `args` in `dir`, with only `PATH`, a `HOME` and an auth file in `dir`, and
+ * `env`, in its environment. With `interrupt`, send it one SIGINT once a line `ready` appears on
+ * stdout or stderr.
+ */
+function runBinary(
+  dir: string,
+  args: string[],
+  options: { env?: Record<string, string>; interrupt?: boolean } = {},
+): Promise<BinaryResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(BINARY!, args, {
+      cwd: dir,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: join(dir, "home"),
+        YIAN_AUTH_FILE: join(dir, "auth.json"),
+        ...options.env,
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    let interrupted = false;
+    const timer = setTimeout(() => child.kill("SIGKILL"), SPAWN_LIMIT);
+    const seen = () => {
+      if (options.interrupt && !interrupted && /^ready$/m.test(stdout + stderr)) {
+        interrupted = true;
+        // The binary's own process only: a run must forward the stop to whatever it started.
+        child.kill("SIGINT");
+      }
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      seen();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      seen();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+}
+
+/** The result's code, signal and output, for a failed assertion's message. */
+function context(result: BinaryResult): string {
+  return `code: ${result.code}, signal: ${result.signal}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`;
+}
+
+/** The last non-empty line of `text`. */
+function lastLine(text: string): string {
+  return text.trim().split("\n").at(-1)!;
+}
+
+describe.skipIf(!BINARY)("the compiled binary", () => {
+  test(
+    "--licenses prints LICENSES",
+    async () => {
+      const result = await runBinary(workdir(), ["--licenses"]);
+      expect(result.code, context(result)).toBe(0);
+      expect(result.stdout).toBe(LICENSES);
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "runs an inline CODE node and a reference whose module imports a sibling",
+    async () => {
+      const result = await runBinary(workdir(CODE_FILES), ["run", "flow.yaml", "-w", "0", "--input", "n=2"]);
+      expect(result.code, context(result)).toBe(0);
+      expect(lastLine(result.stdout)).toBe("12");
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "one SIGINT stops a blocked CODE body with exit 130",
+    async () => {
+      const dir = workdir({ "blocked.yaml": BLOCKED_FLOW });
+      const result = await runBinary(dir, ["run", "blocked.yaml", "-w", "0"], { interrupt: true });
+      expect(result.code, context(result)).toBe(130);
+      expect(result.stderr).toContain("cancelled by user");
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "run --json prints one yian.cli.v1 document",
+    async () => {
+      const args = ["run", "flow.yaml", "-w", "0", "--input", "n=2", "--json"];
+      const result = await runBinary(workdir(CODE_FILES), args);
+      expect(result.code, context(result)).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ format: "yian.cli.v1", output: 12, status: "succeeded" });
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "run --json on a blocked CODE body stops on one SIGINT with exit 130",
+    async () => {
+      const dir = workdir({ "blocked.yaml": BLOCKED_FLOW });
+      const result = await runBinary(dir, ["run", "blocked.yaml", "-w", "0", "--json"], { interrupt: true });
+      expect(result.code, context(result)).toBe(130);
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "auth saves an ollama login after listing the stub server's models",
+    async () => {
+      const requests: string[] = [];
+      const server = createServer((request, response) => {
+        requests.push(`${request.method} ${request.url}`);
+        if (request.url === "/api/tags") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ models: [{ name: "m" }] }));
+        } else {
+          response.writeHead(404);
+          response.end();
+        }
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      const dir = workdir();
+      const file = join(dir, "a.json");
+      let result: BinaryResult;
+      try {
+        result = await runBinary(dir, ["auth", "ollama", "--model", "m", "--auth-file", file], {
+          env: { OLLAMA_BASE_URL: `http://127.0.0.1:${port}` },
+        });
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+      expect(result.code, context(result)).toBe(0);
+      expect(result.stdout).toContain("Saved ollama login (none) with model m\n");
+      expect(requests).toEqual(["GET /api/tags"]);
+      const selected = new AuthStore(file).selection("ollama")!;
+      expect([selected.method, selected.model]).toEqual(["none", "m"]);
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "ignores a .env and a bunfig.toml in the cwd",
+    async () => {
+      const dir = workdir({
+        ...CODE_FILES,
+        ".env": "YIAN_MAX_VALUE_NESTING=nope\n",
+        "bunfig.toml": 'preload = ["./preload.ts"]\n',
+        "preload.ts":
+          'import { writeFileSync } from "node:fs";\n\nwriteFileSync(`${import.meta.dir}/marker`, "loaded");\n',
+      });
+      const result = await runBinary(dir, ["run", "flow.yaml", "-w", "0", "--input", "n=2"]);
+      expect(result.code, context(result)).toBe(0);
+      expect(lastLine(result.stdout)).toBe("12");
+      expect(existsSync(join(dir, "marker"))).toBe(false);
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "checks every example",
+    async () => {
+      const examples = join(ROOT, "..", "examples");
+      const flows = readdirSync(examples)
+        .filter((name) => name.endsWith(".yaml"))
+        .map((name) => join(examples, name));
+      expect(flows.length).toBeGreaterThan(0);
+      const result = await runBinary(workdir(), ["check", ...flows]);
+      expect(result.code, context(result)).toBe(0);
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "a TOOL node calls an MCP server from --mcp-config",
+    async () => {
+      const dir = workdir({ "flow.yaml": TOOL_FLOW });
+      const config = join(dir, "mcp.json");
+      // The fake server runs on the runtime running this test, the same way the MCP CLI tests start it.
+      writeFileSync(config, JSON.stringify({ mcpServers: { fake: stdioOptions() } }));
+      const result = await runBinary(dir, ["run", "flow.yaml", "-w", "0", "--mcp-config", config]);
+      expect(result.code, context(result)).toBe(0);
+      expect(lastLine(result.stdout)).toBe("hi");
+    },
+    BINARY_TEST_LIMIT,
+  );
 });

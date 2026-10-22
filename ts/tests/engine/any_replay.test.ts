@@ -166,7 +166,10 @@ function committed(path: string): Record<string, { kind: string; value: unknown 
   const values: Record<string, { kind: string; value: unknown }> = {};
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line === "") continue;
-    const record = decodeRecord(line) as unknown as { kind: string; payload: Record<string, any> };
+    const record = decodeRecord(line) as unknown as {
+      kind: string;
+      payload: { node_id: string; value: { kind: string; value: unknown } };
+    };
     if (record.kind === "node_succeeded" && ANY_NODES.includes(record.payload.node_id)) {
       values[record.payload.node_id] = record.payload.value;
     }

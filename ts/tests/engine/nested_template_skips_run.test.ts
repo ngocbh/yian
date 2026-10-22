@@ -69,7 +69,7 @@ async function run(text: string, approve: boolean): Promise<RunResult> {
 
 /** Return the ids of the nodes the run skipped. */
 const skipped = (result: RunResult) =>
-  new Set(result.events.filter((event) => event instanceof NodeSkipped).map((event) => (event as NodeSkipped).nodeId));
+  new Set(result.events.flatMap((event) => (event instanceof NodeSkipped ? [event.nodeId] : [])));
 
 test("nested whole value read of a skipped node skips the reader", async () => {
   const text = flow(code("c", "{a: '${order.output}', b: 1}"), "\n  c: ${c.output}\n  r: ${rejected.output}");

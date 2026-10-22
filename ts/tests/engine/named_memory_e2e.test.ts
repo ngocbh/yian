@@ -6,15 +6,24 @@
  * Changed: the model is a `ChatModel` from `models` (Python patches `model_from_config`); the runs'
  * environment is empty, so no `HOME` is set aside.
  *
- * Later (T7-1 PR 2, the CLI): `test_cli_memory_root_persists_session_across_processes` and
- * `test_cli_memory_storage_override_places_one_key`.
+ * Ported through the CLI, each `yian run` a `main` call (`cli`), as
+ * `tests/cli/memory_persistence.test.ts` runs it: `test_cli_memory_root_persists_session_across_processes`
+ * and `test_cli_memory_storage_override_places_one_key`. Changed: each command builds and closes
+ * its own memory registry in this process, so only the storage files carry the session from one
+ * to the next (Python runs a child process per command); the model is a fake `fetch` answering as
+ * xAI's chat endpoint (`cliFetch`), so the flows' `llm_config` names xAI, its key in the command's
+ * env, where Python patches `model_from_config`; the printed output is its text form, compact JSON
+ * (design 3.2.3), not Python's `repr`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
+import { main } from "../../src/cli/index.ts";
+import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import type { Message } from "../../src/llm/messages.ts";
@@ -128,4 +137,112 @@ test("the API's named memories persist and stack", async () => {
   expect(output.answer).toBe("users=2 memories=notes");
   // summarize: outer root memory first, then its own file's scoped memory.
   expect(output.summary).toBe("users=1 memories=notes,lib.notes");
+});
+
+/** The flows the CLI runs: each AGENT on xAI's chat route, which `cliFetch` answers. */
+function writeFlows(dir: string): string {
+  const xai = (text: string) =>
+    text.replaceAll("{provider: openai, model: fake-model}", "{provider: xai, model: grok-4.3}");
+  writeFileSync(join(dir, "notes-lib.yaml"), xai(LIB_FLOW));
+  const flow = join(dir, "flow.yaml");
+  writeFileSync(flow, xai(ROOT_FLOW));
+  return flow;
+}
+
+/** A chat-completions stream replying `text`. */
+function chatStream(text: string): string {
+  return (
+    [
+      { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ]
+      .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+      .join("") + "data: [DONE]\n\n"
+  );
+}
+
+/** The text of a chat message's `content`, a string or a list of text parts. */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  return (content as { text?: string }[]).map((part) => part.text ?? "").join("");
+}
+
+/** Python's `_Model` behind the CLI: a fake `fetch` answering what the model saw, as `describeSeen`. */
+async function cliFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const body = (await new Request(input as string, init).json()) as { messages: { role: string; content: unknown }[] };
+  const texts = (role: string) => body.messages.filter((m) => m.role === role).map((m) => contentText(m.content));
+  const users = texts("user").filter((text) => !text.startsWith(STATUS_PREFIX));
+  const system = texts("system")[0] ?? "";
+  const keys: string[] = [];
+  if (system.includes("Memory context (canonical JSON")) {
+    const payload = JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { memory: string }[] };
+    for (const section of payload.sections) if (!keys.includes(section.memory)) keys.push(section.memory);
+  }
+  return new Response(chatStream(`users=${users.length} memories=${keys.join(",")}`), {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+/** Run `yian run argv` with `cliFetch` as the model; return its code and output. */
+async function cli(argv: readonly string[]) {
+  const out: string[] = [];
+  const err: string[] = [];
+  mkdirSync(join(tmp, "home"), { recursive: true });
+  const vars: Record<string, string> = { HOME: join(tmp, "home"), XAI_API_KEY: "test-xai-key" };
+  const io: CliIo = {
+    stdout: { write: async (text) => void out.push(text) },
+    stderr: { write: async (text) => void err.push(text) },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined),
+  };
+  const send = globalThis.fetch;
+  globalThis.fetch = cliFetch as typeof fetch;
+  try {
+    const code = await main(["run", ...argv], io);
+    return { code, stdout: out.join(""), stderr: err.join("") };
+  } finally {
+    globalThis.fetch = send;
+  }
+}
+
+/** The exact line `yian run` prints for this flow's output. */
+function resultLine(answerUsers: number): string {
+  // The CLI never runs backward, so no episodic memory has anything to recall.
+  return `{"answer":"users=${answerUsers} memories=","summary":"users=1 memories="}`;
+}
+
+test("the CLI's memory root persists the session across processes", async () => {
+  const flow = writeFlows(tmp);
+  const root = join(tmp, "mem");
+  const outputs: string[][] = [];
+  for (const [index, question] of ["first", "second"].entries()) {
+    const log = join(tmp, `run-${index}.jsonl`);
+    const result = await cli([flow, "--quiet", "--input", `question=${question}`, "--memory-root", root, "--log", log]);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    outputs.push(result.stdout.split("\n"));
+  }
+  expect(outputs[0]).toContain(resultLine(1));
+  expect(outputs[1]).toContain(resultLine(2)); // session history came from chat.sqlite
+  const base = join(root, "e2e-memory");
+  expect(existsSync(join(base, "chat.sqlite"))).toBe(true);
+  expect(existsSync(join(base, "notes.sqlite"))).toBe(true);
+  expect(existsSync(join(base, "lib", "notes.sqlite"))).toBe(true);
+});
+
+test("the CLI's memory storage override places one key", async () => {
+  const flow = writeFlows(tmp);
+  const root = join(tmp, "mem");
+  const chat = join(tmp, "chat.sqlite");
+  let stdout = "";
+  for (const index of [0, 1]) {
+    const log = join(tmp, `run-${index}.jsonl`);
+    const argv = [flow, "--quiet", "--input", "question=hi", "--memory-root", root, "--memory-storage", `chat=${chat}`];
+    const result = await cli([...argv, "--log", log]);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    stdout = result.stdout;
+  }
+  expect(stdout.split("\n")).toContain(resultLine(2));
+  expect(existsSync(chat)).toBe(true);
+  expect(existsSync(join(root, "e2e-memory", "chat.sqlite"))).toBe(false);
 });

@@ -21,9 +21,14 @@
  * returns it whole; `valueRepr` shows its digits cut at the shown-value cap where Python shows
  * `<int with 5000 digits>`; a run takes it as an `int` or `list(int)` input (and as `int` text)
  * and outputs it whole, writing its log. A long int for a `str` input fails the run at START's
- * input check (`contract.input`), where Python refuses it before the run starts. Int text digits
- * are ASCII, so Arabic-Indic zeros stay text where Python reads them; text that is not an int
- * stays text for the contract to reject, where Python raises `ValueError`.
+ * input check (`contract.input`), where Python refuses it before the run starts. Int text is read
+ * by the TS text rules (decision 40), whose digits are ASCII (decision 35, Q17, read as reaching
+ * input text; listed for the owner), so Arabic-Indic zeros stay text where Python's `int()` reads
+ * them.
+ *
+ * Ported through `coerceParam`, Python's `coerce_param` around `parse_int_text`: text that is not
+ * an int stays text for the contract to reject, as `coerce_param` returns it (`parse_int_text`
+ * itself raises `ValueError`).
  *
  * Already ported: `test_reject_nonfinite_still_reports_nan` in `nonfinite_values.test.ts` (`still
  * reports NaN`) and `test_value_repr_of_a_small_int` in `bounded_value_messages.test.ts`.

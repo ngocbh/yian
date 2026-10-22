@@ -2,19 +2,19 @@
  * CASE `when:` words that YAML 1.1 read as booleans are text under YAML 1.2 rules, a port of
  * `tests/engine/test_case_yaml12_words.py`.
  *
- * Ported: `test_when_yes_on_a_bool_is_a_load_error`, and the load half of
- * `test_yes_and_no_cover_a_literal_input_without_else`.
- *
- * Changed: the flows assemble (`assembleText`), where Python loads them.
- *
- * Later (T4-8 follow-up): the run half of `test_yes_and_no_cover_a_literal_input_without_else`.
+ * Ported: `test_when_yes_on_a_bool_is_a_load_error`, assembling the flow (`assembleText`) where
+ * Python loads it; through `loadFlow` and `runFlow`,
+ * `test_yes_and_no_cover_a_literal_input_without_else`. Changed: the CODE references are TS's
+ * (`./fixtures/compose_codefns.ts:echo`).
  *
  * The harvested case is pinned at the end.
  */
 
 import { expect, test } from "bun:test";
 
-import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
+import { runFlow } from "../../src/run.ts";
+import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "../compose/declarations.ts";
+import { startedIds } from "./run_state_fixtures.ts";
 
 /** Return a flow whose `route` case matches `input.cmd` and routes to echo nodes. */
 function flow(cmdType: string, caseTail: string): string {
@@ -24,16 +24,26 @@ function flow(cmdType: string, caseTail: string): string {
     "nodes:\n  route:\n    kind: case\n    on: ${input.cmd}\n    cases:\n" +
     "      - when: yes\n        then: agree\n" +
     caseTail +
-    "  agree:\n    kind: code\n    code: tests.engine._compose_codefns:echo\n" +
+    "  agree:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
     "    input:\n      topic: agreed\n    output: str\n" +
-    "  refuse:\n    kind: code\n    code: tests.engine._compose_codefns:echo\n" +
+    "  refuse:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
     "    input:\n      topic: refused\n    output: str\n" +
     "output: ${agree.output | refuse.output}\n"
   );
 }
 
-test("yes and no cover a literal input without else: assembles", () => {
-  assembleText(flow("Cmd", "      - when: no\n        then: refuse\n"));
+test("yes and no cover a literal input without else", async () => {
+  const loaded = await loadConformanceFlow(flow("Cmd", "      - when: no\n        then: refuse\n"));
+
+  const agreed = await runFlow(loaded, { cmd: "yes" });
+  const refused = await runFlow(loaded, { cmd: "no" });
+
+  expect(agreed.status, agreed.failure?.message).toBe("succeeded");
+  expect(startedIds(agreed)).toContain("agree");
+  expect(startedIds(agreed)).not.toContain("refuse");
+  expect(refused.status, refused.failure?.message).toBe("succeeded");
+  expect(startedIds(refused)).toContain("refuse");
+  expect(startedIds(refused)).not.toContain("agree");
 });
 
 test("when yes on a bool is a load error", () => {

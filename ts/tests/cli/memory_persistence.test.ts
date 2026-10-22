@@ -17,15 +17,13 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
 
-import { main } from "../../src/cli/index.ts";
-import type { CliIo } from "../../src/cli/utils.ts";
 import { SessionMemory } from "../../src/memory/session.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { type ChatText, runCli } from "../engine/session_fakes.ts";
 
 const FLOW = `id: cli-session-restart
 name: cli_session_restart
@@ -48,63 +46,23 @@ let tmp: string;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "yian-cli-persistence-"));
-  mkdirSync(join(tmp, "home"));
 });
 
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-/** A chat-completions stream replying `text`. */
-function reply(text: string): string {
-  return (
-    [
-      { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
-      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
-    ]
-      .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
-      .join("") + "data: [DONE]\n\n"
-  );
-}
-
-/** The text of a chat message's `content`, a string or a list of text parts. */
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  return (content as { text?: string }[]).map((part) => part.text ?? "").join("");
-}
-
 /** Answer with the number of user messages the model saw, history status messages aside. */
-async function fakeFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-  const request = new Request(input as string, init);
-  const body = (await request.json()) as { messages: { role: string; content: unknown }[] };
-  const users = body.messages.filter((message) => message.role === "user").map((m) => contentText(m.content));
+function countSeen(messages: readonly ChatText[]): string {
+  const users = messages.filter((message) => message.role === "user").map((message) => message.text);
   const count = users.filter((text) => !text.startsWith(STATUS_PREFIX)).length;
   const unknown = users.some((text) => text.includes("completion unknown"));
-  return new Response(reply(`Seen user messages: ${count}; Unknown history: ${unknown}`), {
-    headers: { "content-type": "text/event-stream" },
-  });
+  return `Seen user messages: ${count}; Unknown history: ${unknown}`;
 }
 
 /** Run `yian run argv` with the fake model; return its code and output. */
-async function invoke(argv: readonly string[]) {
-  const out: string[] = [];
-  const err: string[] = [];
-  const vars: Record<string, string> = { HOME: join(tmp, "home"), XAI_API_KEY: "test-xai-key" };
-  const io: CliIo = {
-    stdout: { write: async (text) => void out.push(text) },
-    stderr: { write: async (text) => void err.push(text) },
-    stdin: new PassThrough(),
-    stderrStream: new PassThrough(),
-    env: (name) => (Object.hasOwn(vars, name) ? vars[name] : undefined),
-  };
-  const send = globalThis.fetch;
-  globalThis.fetch = fakeFetch as typeof fetch;
-  try {
-    const code = await main(["run", ...argv], io);
-    return { code, stdout: out.join(""), stderr: err.join("") };
-  } finally {
-    globalThis.fetch = send;
-  }
+function invoke(argv: readonly string[]) {
+  return runCli(argv, countSeen);
 }
 
 const DURABLE_ROW = "test_session_history_across_cli_processes_is_explicitly_durable (durable %p)";
@@ -190,7 +148,8 @@ test("test_cli_resume_after_process_death_reuses_saved_history_and_repeats_reque
     cwd: tmp,
     encoding: "utf8",
     timeout: 30_000,
-    env: { PATH: process.env["PATH"] ?? "", HOME: join(tmp, "home"), XAI_API_KEY: "test-xai-key" },
+    // The preload's home, which `invoke`'s runs use too.
+    env: { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", XAI_API_KEY: "test-xai-key" },
   });
   expect(crashed.status, crashed.stdout + crashed.stderr).toBe(42);
   const prefix = readFileSync(log);

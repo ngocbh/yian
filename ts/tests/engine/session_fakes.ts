@@ -4,10 +4,15 @@
  * and the one-AGENT session flow run through `FlowEngine` that the session tests share, and the
  * `runFlow` and `resumeFlow` helpers of the run-level memory tests (`PLAIN_FLOW`, `runWith`,
  * `resumeWith`, `CrashAt`, `crashes`, `StopAfterFirstReply`, `NO_ENV`, `sentTexts`, `reply`,
- * `backwardReply`, `memorySections`, `recording`).
+ * `backwardReply`, `memorySections`, `recording`), and the in-process `yian run` over a fake chat
+ * endpoint that the CLI memory tests share (`runCli`).
  */
 
 import { expect } from "bun:test";
+import { PassThrough } from "node:stream";
+
+import { main } from "../../src/cli/index.ts";
+import type { CliIo } from "../../src/cli/utils.ts";
 
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -43,7 +48,7 @@ import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import type { Type } from "../../src/typesys/values.ts";
 import { Crash, engine, graph, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
 
-export { rejected };
+export { NO_ENV, rejected };
 
 // Cloned snapshots and nested test values are edited freely.
 export type Mutable = any;
@@ -315,8 +320,6 @@ nodes:
 output: \${agent.output}
 `;
 
-export { NO_ENV } from "./run_state_fixtures.ts";
-
 /**
  * `runFlow` of `flow` with `inputs`, `memory` backing memory `session` (or each memory key of a
  * `Map`), `model` serving every AGENT, in `NO_ENV`; the other options go to `runFlow`.
@@ -449,4 +452,66 @@ export function recording(
       return pick(config);
     },
   };
+}
+
+/** A chat-completions stream replying `text`. */
+function chatStream(text: string): string {
+  return (
+    [
+      { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ]
+      .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+      .join("") + "data: [DONE]\n\n"
+  );
+}
+
+/** The text of a chat message's `content`, a string or a list of text parts. */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  return (content as { text?: string }[]).map((part) => part.text ?? "").join("");
+}
+
+/** One message of a chat request the fake endpoint received: its role and its content's text. */
+export interface ChatText {
+  role: string;
+  text: string;
+}
+
+/**
+ * Run `yian run argv` through `main` in this process, `fetch` answering each chat request as a
+ * chat-completions stream of `answer(messages)`. The env holds xAI's key, so the flows name xAI's
+ * route; every other name is `NO_ENV`'s.
+ *
+ * @returns The command's exit code and its output.
+ */
+export async function runCli(
+  argv: readonly string[],
+  answer: (messages: readonly ChatText[]) => string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: CliIo = {
+    stdout: { write: async (text) => void out.push(text) },
+    stderr: { write: async (text) => void err.push(text) },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name)),
+  };
+  // The fetch `Request` and `Response`: this module's own names are the LLM message types.
+  const fakeFetch = async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const request = new globalThis.Request(input as string, init);
+    const body = (await request.json()) as { messages: { role: string; content: unknown }[] };
+    const messages = body.messages.map((message) => ({ role: message.role, text: contentText(message.content) }));
+    const stream = chatStream(answer(messages));
+    return new globalThis.Response(stream, { headers: { "content-type": "text/event-stream" } });
+  };
+  const send = globalThis.fetch;
+  globalThis.fetch = fakeFetch as typeof fetch;
+  try {
+    const code = await main(["run", ...argv], io);
+    return { code, stdout: out.join(""), stderr: err.join("") };
+  } finally {
+    globalThis.fetch = send;
+  }
 }

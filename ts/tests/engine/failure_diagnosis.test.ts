@@ -19,7 +19,7 @@
  * - `test_inline_composite_failure_resolves_catalog_frames` and
  *   `test_external_composite_failure_resolves_each_document`: they assert the failure's traceback
  *   names the flow file, and a TS CODE body's stack frames are named `yian-code:<node id>`, not
- *   after the file; open.
+ *   after the file: Later (bug #985).
  */
 
 import { afterAll, expect, test } from "bun:test";

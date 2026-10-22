@@ -19,7 +19,7 @@ import { createWriteStream, writeSync } from "node:fs";
 import { constants } from "node:os";
 
 import { DefaultsError, read } from "../defaults.ts";
-import { compiled } from "../platform.ts";
+import { compiled, VERSION } from "../platform.ts";
 import {
   type CliIo,
   type CommandSpec,
@@ -337,6 +337,7 @@ const GROUPS: Readonly<Record<string, string>> = {
 const APP_HELP = "Yian - The Agent Composer. Run agent flows from the command line.";
 const HELP_HELP = "Show this message and exit.";
 const LICENSES_HELP = "Show the licenses of yian and of what its binaries bundle, and exit.";
+const VERSION_HELP = "Show the version and exit.";
 
 /** Return the `Usage:` line of the root (`group` undefined) or of `group`. */
 function groupUsage(group?: string): string {
@@ -358,9 +359,11 @@ function groupHelp(group?: string): string {
   const width = Math.max(...[...rows.keys()].map((word) => word.length));
   const commands = [...rows].map(([word, summary]) => `  ${word.padEnd(width)}  ${summary}`).join("\n");
   const summary = group === undefined ? APP_HELP : GROUPS[group];
-  // Only the root takes `--licenses`.
+  // Only the root takes `--licenses` and `--version`.
   const options =
-    group === undefined ? `  --licenses  ${LICENSES_HELP}\n  --help      ${HELP_HELP}` : `  --help  ${HELP_HELP}`;
+    group === undefined
+      ? `  --licenses  ${LICENSES_HELP}\n  --version   ${VERSION_HELP}\n  --help      ${HELP_HELP}`
+      : `  --help  ${HELP_HELP}`;
   return `${groupUsage(group)}\n\n  ${summary}\n\nOptions:\n${options}\n\nCommands:\n${commands}\n`;
 }
 
@@ -368,18 +371,22 @@ function groupHelp(group?: string): string {
  * Run the `yian` command line `argv` (the arguments after `yian`) and return its exit code.
  *
  * No arguments print the root help and return 2, `--help` prints it and returns 0, and
- * `--licenses` prints `LICENSES` and returns 0. The command name is resolved first (an unknown one
- * is a usage error, 2), then the `YIAN_<NAME>` defaults are checked (a bad value is reported on
- * stderr, and as a `defaults.invalid` document when `argv` holds `--json`, 1). A group without its
- * command prints the group's help and returns 2. A command line its spec refuses, or a
- * `UsageError` from the handler, prints the usage and the error and returns 2; any other error
- * prints its stack and returns 1.
+ * `--licenses` prints `LICENSES` and `--version` the version, each returning 0. The command name is
+ * resolved first (an unknown one is a usage error, 2), then the `YIAN_<NAME>` defaults are checked
+ * (a bad value is reported on stderr, and as a `defaults.invalid` document when `argv` holds
+ * `--json`, 1). A group without its command prints the group's help and returns 2. A command line
+ * its spec refuses, or a `UsageError` from the handler, prints the usage and the error and returns
+ * 2; any other error prints its stack and returns 1.
  */
 export async function main(argv: readonly string[], io: CliIo = processIo()): Promise<number> {
   const [first, ...rest] = argv;
   if (first === undefined || first === "--help") {
     await io.stdout.write(groupHelp());
     return first === undefined ? 2 : 0;
+  }
+  if (first === "--version") {
+    await io.stdout.write(`${VERSION}\n`);
+    return 0;
   }
   if (first === "--licenses") {
     // Imported here only: the text is long, and no other command needs it.

@@ -33,15 +33,16 @@
  * resume row stops its first run with an aborted `signal` once node `a` starts (Python's CODE
  * function raises), then sets the bad assert and writes the changed flow's fingerprint into the
  * log's `RunStarted` (`stoppedRunLog`), where Python stubs the run's condition check during the
- * first run.
+ * first run. Changed: `test_post_assert_on_nonscalar_output_fails_cleanly` is the `run-leaves`
+ * case `engine_node_asserts__a_post_assert_ordering_a_record_fails_cleanly`, which fails
+ * `condition.evaluate`, where Python only checks the run fails: ordering a record is a type error,
+ * and an assert that fails to evaluate fails `condition.evaluate` (decision 36, the failure-code
+ * rule).
  *
  * Covered by `run-leaves` cases running the same flows on the same inputs:
  * `test_pre_assert_violated_fails_before_body`
  * (`engine_node_asserts__a_false_pre_assert_fails_before_the_body`),
- * `test_post_assert_on_nonscalar_output_fails_cleanly`
- * (`engine_node_asserts__a_post_assert_ordering_a_record_fails_cleanly`, which fails
- * `condition.evaluate` in TS: ordering a record is a type error, where Python's comparison raises
- * and the assert counts as false), `test_post_assert_record_field_passes`
+ * `test_post_assert_record_field_passes`
  * (`engine_node_asserts__a_post_assert_on_a_record_field_passes`),
  * `test_skipped_branch_target_asserts_do_not_fire`
  * (`engine_node_asserts__a_skipped_node_assert_does_not_fire`) and
@@ -82,7 +83,7 @@ import {
   loadErrorAsync,
   runCase,
 } from "../compose/declarations.ts";
-import { expectFailsBeforeTheRun, rejection, stoppedRunLog } from "./run_state_fixtures.ts";
+import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "./run_state_fixtures.ts";
 
 const DOUBLE = "./fixtures/compose_codefns.ts:double";
 
@@ -510,7 +511,7 @@ test("a code-built unparseable assert fails before resume appends", async () => 
     const path = join(dir, "run.jsonl");
     const lines = await stoppedRunLog(flow, { v: 1 }, path, "a", () => breakAssert(flow));
 
-    const error = await rejection(resumeFlow(flow, { log: path }));
+    const error = await rejected(resumeFlow(flow, { log: path }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(/^node 'b' pre-assert 'n non-negative'/);
     expect(readFileSync(path, "utf8")).toBe(lines);

@@ -24,8 +24,8 @@ The first release isn't published yet; until then, `npm pack` in `ts/` makes the
   condition); elsewhere to the built JavaScript in `dist/src/`, with its `.d.ts` types.
 - The MCP SDK is an optional peer dependency, loaded only when a server opens.
 - Single-file binaries need neither Node nor Bun: `yian-darwin-arm64`, `yian-darwin-x64`,
-  `yian-linux-x64` and `yian-linux-arm64`. None is published yet; build them from a clone with `bun
-  run build:bin` in `ts/` (into `ts/bin/`). They bundle the MCP SDK and don't load a `.env` or
+  `yian-linux-x64` and `yian-linux-arm64`. None is published yet; build them from a clone with
+  `bun run build:bin` in `ts/` (into `ts/bin/`). They bundle the MCP SDK and don't load a `.env` or
   `bunfig.toml` from the working directory.
 - `yian --licenses` prints yian's notice, Bun's, and the licenses of the packages the binaries
   bundle.
@@ -276,9 +276,9 @@ returns the result or a Promise of it. `ctx` is a `ToolContext<T>`: `callId`, `a
 context][docs/api.md#tool-context] and [Typed tools][docs/api.md#typed-tools].
 
 A tool controls retries and what the model reads with its errors ([TOOL
-retries][docs/api.md#tool-retries]): `new PermanentToolError(message)` stops retries, `new
-TransientToolError(message, { retryAfter: 5 })` asks for a retry after that many seconds, and `new
-ReportedToolError(message, { permanent })` is read by the calling AGENT's model as the call's
+retries][docs/api.md#tool-retries]): `new PermanentToolError(message)` stops retries,
+`new TransientToolError(message, { retryAfter: 5 })` asks for a retry after that many seconds, and
+`new ReportedToolError(message, { permanent })` is read by the calling AGENT's model as the call's
 result. `toolErrorKinds(error)` returns the `ToolErrorKind`s (`"permanent"`, `"transient"`,
 `"reported"`, `"check"`) an error's `TOOL_ERROR` brand holds, and the `is*ToolError` guards read the
 same brand; `ToolCheckError` is thrown when one of yian's own checks of a call fails. A TOOL node
@@ -298,9 +298,9 @@ The tools a run sees: without `tools`, the process registry; with `tools`, exact
   reads; `set.invoke(toolId, args, options)` and `set.invokeTrusted(toolId, args, options)` validate
   first. `InvokeOptions` holds `node`, `callId`, `attempt` and `signal`.
 - A `ToolEntry` is a `FunctionTool`, an array of them (a [tool group][docs/api.md#tool-groups]), an
-  `McpServer` (a group of its tools), or, under the key `ask_user`, an `AskUserHandler` `(request,
-  ctx) => answer` ([Blocking human interaction][docs/api.md#blocking-human-interaction]). A flow
-  that uses registered tools and asks passes `{ ...registeredTools(), ask_user: handler }`.
+  `McpServer` (a group of its tools), or, under the key `ask_user`, an `AskUserHandler`
+  `(request, ctx) => answer` ([Blocking human interaction][docs/api.md#blocking-human-interaction]).
+  A flow that uses registered tools and asks passes `{ ...registeredTools(), ask_user: handler }`.
 
 ### MCP servers
 
@@ -309,10 +309,10 @@ mcpServer({ command, args?, env?, cwd?, timeout?, connectTimeout?, label?, concu
 mcpServer({ url, headers?, timeout?, connectTimeout?, label?, concurrencySafe? }): McpServer
 ```
 
-The server starts only when opened: `await server.open({ signal })`, then `server.tools`, and `await
-server.close()` (or `await using`). An unopened server passed in `tools` is opened for that run and
-closed when it ends. Timeouts are in seconds. Errors are `McpError` subclasses (`isMcpError` checks
-the brand): `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`,
+The server starts only when opened: `await server.open({ signal })`, then `server.tools`, and
+`await server.close()` (or `await using`). An unopened server passed in `tools` is opened for that
+run and closed when it ends. Timeouts are in seconds. Errors are `McpError` subclasses (`isMcpError`
+checks the brand): `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`,
 `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`. Requires the optional
 peer `@modelcontextprotocol/client`. See [MCP servers][docs/api.md#mcp-servers].
 
@@ -326,19 +326,19 @@ for custom types, `(config) => backend`, possibly async. `env`, `models` and `on
 reflective and profile learners (`onEvent` gets their `ModelCallRetried` and `ReplayDegraded`).
 
 A `MemoryRegistry` is a read-only `Map` of memory key to backend, with `types` (the declared type of
-each key) and `close()`; pass it as `runFlow`'s `memory`, and close it when done (`await using
-registry = await buildMemories(flow)`). See [Building memories with
+each key) and `close()`; pass it as `runFlow`'s `memory`, and close it when done
+(`await using registry = await buildMemories(flow)`). See [Building memories with
 `build_memories`][docs/api.md#building-memories-with-build_memories]. A host memory is any object
 with `openRun({ snapshot })` and `reset()`; its methods may return promises.
 
 Storage, for hosts that build memories themselves ([Optional durable
 memory][docs/api.md#optional-durable-memory]): `new SQLiteStorage(path, backend, { createParent })`
 is a single-owner SQLite state file, and `checkStoragePath(path)` returns the absolute path it would
-use or throws. A `MarkdownStore` (profile memory's document) has `read(version?)`, returning `[text,
-version]` (or a promise of it), and `write(text, { baseVersion, provenance })`, returning the new
-version (or a promise of it); `new FileMarkdownStore(path, { createParent })` and `new
-InMemoryMarkdownStore(text)` implement it, a stale `baseVersion` throws `MarkdownVersionMismatch`,
-and `markdownVersion(text)` is the `"sha256:<hex>"` version of a text.
+use or throws. A `MarkdownStore` (profile memory's document) has `read(version?)`, returning
+`[text, version]` (or a promise of it), and `write(text, { baseVersion, provenance })`, returning
+the new version (or a promise of it); `new FileMarkdownStore(path, { createParent })` and
+`new InMemoryMarkdownStore(text)` implement it, a stale `baseVersion` throws
+`MarkdownVersionMismatch`, and `markdownVersion(text)` is the `"sha256:<hex>"` version of a text.
 
 ## Skills
 
@@ -350,10 +350,10 @@ await runFlow(flow, inputs, { skills });
 ```
 
 `loadSkills(roots, { skipInvalid, warn })` returns a `Map<string, Skill>` sorted by name, an earlier
-root winning a name; `loadSkillDir(directory)` reads one skill; `defaultSkillRoots({ cwd, home, env
-})` lists the Claude Code and Codex roots, highest precedence first. `new Skill({ name, description,
-instructions, directory })` builds one in code; a bad skill throws `SkillError`. See
-[Skills][docs/api.md#skills].
+root winning a name; `loadSkillDir(directory)` reads one skill;
+`defaultSkillRoots({ cwd, home, env })` lists the Claude Code and Codex roots, highest precedence
+first. `new Skill({ name, description, instructions, directory })` builds one in code; a bad skill
+throws `SkillError`. See [Skills][docs/api.md#skills].
 
 ## Steering
 
@@ -385,9 +385,9 @@ yian](#differences-from-python-yian). Each function's TSDoc lists what it throws
 `evaluateWhen(expression, pool, types?)` evaluates a boolean `when:`/assert expression against a
 `VariablePool`, the run's typed value store ([Types →
 `VariablePool`][docs/typing.md#variablepool--the-runs-typed-value-store]), and throws
-`ExpressionError` for a bad expression. `registerTemplateFn(name, { params: [{ name, default? }],
-call(...args) })` adds or replaces a function `${...}` expressions can call; each `default` goes
-through host intake.
+`ExpressionError` for a bad expression.
+`registerTemplateFn(name, { params: [{ name, default? }], call(...args) })` adds or replaces a
+function `${...}` expressions can call; each `default` goes through host intake.
 
 ## `env`, `signal` and `scheduler`
 
@@ -407,8 +407,8 @@ through host intake.
 
 ## CLI
 
-The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md]; `yian
---help` lists its commands.
+The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
+`yian --help` lists its commands.
 
 [conformance/schema/events.schema.json]: https://github.com/ngocbh/yian/blob/main/conformance/schema/events.schema.json
 [docs/api.md]: https://github.com/ngocbh/yian/blob/main/docs/api.md

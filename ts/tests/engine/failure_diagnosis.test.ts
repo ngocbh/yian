@@ -2,8 +2,9 @@
  * A port of `tests/engine/test_failure_diagnosis.py`: `ComposedFlow.diagnose` resolves a semantic
  * failure through the flow's source authority, presentation-only.
  *
- * Ported: every row but those named below, each parametrized row whole. Python's resolver classes
- * are objects with a `resolve` method; its `cast(..., object())` stand-ins are plain objects cast;
+ * Ported: every row but the two named under "Already ported" and "Not ported" below, each
+ * parametrized row whole. Python's resolver classes are objects with a `resolve` method; its
+ * `cast(..., object())` stand-ins are plain objects cast;
  * a frame subclass whose `text` getter throws is a frame given a throwing `text` accessor (a
  * subclass can't shadow the fields the base constructor assigns); a type check (`type(x) is ...`)
  * reads the prototype. The forbidden compiled surface is a `Proxy` that throws on any access, and

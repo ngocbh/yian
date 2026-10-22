@@ -37,8 +37,8 @@
  * the whole code origin; a body error's code is `node.execute`; a built-in's origin is the node's;
  * the built-in identity runs on the bound record; the runtime's function header is 2 lines; a
  * failing body's stack names its frames after the node's `sourceFile` (`<inline-code>` by
- * default) and the body's own line and column, its raw copy keeps them, and the throwing line is
- * still located; a reference's frames name its own file; through
+ * default) and the body's own line and column (marker text that isn't a body location stays),
+ * its raw copy keeps them, and the throwing line is still located; a reference's frames name its own file; through
  * the evaluator and the engine, a success commits its int, a throwing body fails `node.execute`
  * with `Error: boom` and `causeType` `CodeError` at the line origin, a no-value body fails at the
  * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin; a
@@ -243,8 +243,15 @@ test("a body's frames default to <inline-code>, a first-line column counted from
 
   const frame = /<inline-code>:1:(\d+)/.exec(error.stack ?? "");
   expect(frame).not.toBeNull();
-  // Within the 23-character line, not shifted by the strict prologue sharing it.
-  expect(Number(frame![1])).toBeLessThanOrEqual(23);
+  // Not shifted by the strict prologue sharing the line: Bun reports 16 and Node 7, 30 and 21
+  // uncorrected.
+  expect(Number(frame![1])).toBeLessThanOrEqual(16);
+});
+
+test("marker text that isn't a body location is left as it is", async () => {
+  const error = (await failure('throw new Error("yian-code:n:3:4 x")')) as CodeError;
+
+  expect(error.stack).toContain("Error: yian-code:n:3:4 x");
 });
 
 test("a renamed stack still locates the throwing line", async () => {

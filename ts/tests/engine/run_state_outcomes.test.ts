@@ -116,9 +116,10 @@
  * TS-only: NaN in a typed and in an opaque field of a partial-record output each give a
  * `NodeDataError` whose `original` is the value layer's `TypeCheckError` at the field; `Infinity`
  * in both is accepted (D34); a long int in a declared and in an opaque field of a partial-record
- * output is accepted (the flip of `test_long_int_boundaries.py::
- * test_a_long_int_in_a_partial_record_output_names_the_limit`, since a `bigint` has no digit
- * limit); a whole float output stays a float; a skipped END input with no group name derives
+ * output is accepted, since a `bigint` has no digit limit (the Python group,
+ * `test_long_int_boundaries.py::test_a_long_int_in_a_partial_record_output_names_the_limit`, is
+ * ported whole in `long_int_boundaries.test.ts`; this file keeps its row); a whole float output
+ * stays a float; a skipped END input with no group name derives
  * `terminal output null skipped`, live and on replay; the successes into an N-leaf join visit
  * incoming edges linearly (2N leaves take about twice the visits of N).
  *

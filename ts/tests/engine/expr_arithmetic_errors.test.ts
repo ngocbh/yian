@@ -6,12 +6,14 @@
  *
  * Changed: `test_a_float_power_overflow_fails_the_run` and
  * `test_an_int_too_large_for_float_division_fails_the_run` succeed: `2.0 ** 5000` and
- * `10 ** 400 / 3` are float infinity, a value (decision 34). `test_an_int_to_float_overflow_fails_the_node_naming_the_binding`
- * succeeds the same way with `input.x * 1.0`; the row then checks that a failing binding is named
- * in the failure's trace with a division by zero (decision 35) on the same binding. These rows
- * check the binding is `Infinity`. `test_an_embedded_int_too_large_for_text_fails_the_run`
- * succeeds: a 5000-digit int renders whole (decisions 4a, 4b), which the row checks. `test_a_missing_format_key_fails_the_run` fails because `%` with text on the
- * left no longer formats (decision 7), where Python fails on the missing key.
+ * `10 ** 400 / 3` are float infinity, a value (decision 34).
+ * `test_an_int_to_float_overflow_fails_the_node_naming_the_binding` succeeds the same way with
+ * `input.x * 1.0`; the row then checks that a failing binding is named in the failure's trace
+ * with a division by zero (decision 35) on the same binding. These rows check the binding is
+ * `Infinity`. `test_an_embedded_int_too_large_for_text_fails_the_run` succeeds: a 5000-digit int
+ * renders whole (decisions 4a, 4b), which the row checks. `test_a_missing_format_key_fails_the_run`
+ * fails because `%` with text on the left no longer formats (decision 7), where Python fails on
+ * the missing key.
  *
  * Covered by `run-core/engine_expr_arithmetic_errors__an_overflow_in_a_flow_assert` (TS expect,
  * decision 34): `test_an_overflow_in_a_flow_assert_fails_the_run`.

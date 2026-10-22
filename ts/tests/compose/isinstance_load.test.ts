@@ -41,7 +41,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -64,6 +64,7 @@ import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -73,6 +74,10 @@ import {
   loadErrorAsync,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-isinstance-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);
@@ -485,7 +490,8 @@ const A_BUY = { action: "buy", qty: 3n };
 const A_SELL = { action: "sell", price: 1.5 };
 
 /** Load and run `text` on `inputs`. */
-const run = async (text: string, inputs: Record<string, unknown>) => runFlow(await loadConformanceFlow(text), inputs);
+const run = async (text: string, inputs: Record<string, unknown>) =>
+  runFlow(await loadConformanceFlow(text), inputs, { env });
 
 /** Run `text` on `inputs` and return its output, expecting it succeeded. */
 async function ok(text: string, inputs: Record<string, unknown>): Promise<unknown> {
@@ -574,25 +580,20 @@ describe("type tables and runs", () => {
   });
 
   test("a run that used isinstance replays", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "yian-isinstance-replay-"));
-    try {
-      const log = join(dir, "run.jsonl");
-      const first = await runFlow(await loadConformanceFlow(LOOP_FLOW), {}, { log });
-      expect(first.status, first.failure?.message).toBe("succeeded");
-      const replayed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { log });
-      expect(replayed.status, replayed.failure?.message).toBe("succeeded");
-      expect(replayed.output).toStrictEqual(first.output);
+    const log = join(dir, "replay.jsonl");
+    const first = await runFlow(await loadConformanceFlow(LOOP_FLOW), {}, { env, log });
+    expect(first.status, first.failure?.message).toBe("succeeded");
+    const replayed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { env, log });
+    expect(replayed.status, replayed.failure?.message).toBe("succeeded");
+    expect(replayed.output).toStrictEqual(first.output);
 
-      // Cut after the second iteration, so resume replays two iterations and runs two live.
-      const kept = cutLogAfter(log, "loop#1/__end__");
-      expect(kept).toContain("loop~1");
-      expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
-      const resumed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { log });
-      expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-      expect(resumed.output).toStrictEqual(first.output);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    // Cut after the second iteration, so resume replays two iterations and runs two live.
+    const kept = cutLogAfter(log, "loop#1/__end__");
+    expect(kept).toContain("loop~1");
+    expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
+    const resumed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { env, log });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toStrictEqual(first.output);
   });
 
   test("isinstance in defs and nested inline children (loads)", () => {
@@ -652,10 +653,10 @@ describe("type tables and runs", () => {
     // The bool `on:` value matches `when: true`, so a buy routes to `b`; the run evaluates the
     // `on:` binding with the table.
     const loaded = await loadConformanceFlow(ON_FLOW);
-    expect(await runFlow(loaded, { order: A_BUY })).toMatchObject({ status: "succeeded", output: "buy" });
+    expect(await runFlow(loaded, { order: A_BUY }, { env })).toMatchObject({ status: "succeeded", output: "buy" });
 
     loaded.compiled.nodes.get("route")!.types = new Map();
-    const failed = await runFlow(loaded, { order: A_BUY });
+    const failed = await runFlow(loaded, { order: A_BUY }, { env });
     expect(failed.status).toBe("failed");
     expect(failed.failure!.nodeId).toBe("route");
   });
@@ -752,7 +753,7 @@ test("a uses child resolves names against its own typedefs (loads)", async () =>
 test("a uses child resolves names against its own typedefs (runs)", async () => {
   const flow = await loadConformanceFlow(USES_PARENT, { childResolver: await usesResolver() });
 
-  const result = await runFlow(flow, { value: { kind: "ticket", id: 7n } });
+  const result = await runFlow(flow, { value: { kind: "ticket", id: 7n } }, { env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe(true);

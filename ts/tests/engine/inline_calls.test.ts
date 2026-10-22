@@ -48,12 +48,15 @@
  * nested calls in a node input, a flow output, a flow assert and the `then:`/`else:` targets of a
  * CASE. Origins resolve through the assembly's catalog builder.
  *
- * TS-only: the harvested cases the inline-call desugar raises that come from other Python test
- * files, each named by its case id (from `test_expression_nesting.py`, `test_limit_overrides.py`,
- * `test_constructor_load.py`, `test_any_name_literals.py` and this file), pinned at the end.
+ * TS-only: the harvested cases the inline-call desugar raises, each named by its case id (from
+ * `test_expression_nesting.py`, `test_limit_overrides.py`, `test_constructor_load.py`,
+ * `test_any_name_literals.py` and this file's Python source), pinned at the end.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -79,7 +82,12 @@ import {
   parametersFromYaml,
   runCase,
 } from "../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
 import { childResolver } from "./run_state_fixtures.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-inline-calls-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -122,7 +130,7 @@ async function run(
   inputs: Record<string, unknown>,
   resolver?: ReturnType<typeof childResolver>,
 ) {
-  return runFlow(await loadConformanceFlow(text, resolver ? { childResolver: resolver } : {}), inputs);
+  return runFlow(await loadConformanceFlow(text, resolver ? { childResolver: resolver } : {}), inputs, { env });
 }
 
 /** The `[from, to]` pairs of a compiled flow's edges. */

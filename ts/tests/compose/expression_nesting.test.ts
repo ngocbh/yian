@@ -31,11 +31,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resumeFlow, runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { FakeMemory } from "../engine/memory_fakes.ts";
 import { caseText, loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-expression-nesting-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const TOO_DEEP = "expression nests deeper than 100 levels";
 const CHAIN = 3000;
@@ -152,7 +154,7 @@ test(
     // A match value under `on:` is compared as written, never evaluated.
     const text = routed('    on: ${input.s}\n    cases:\n      - when: "${' + neg(CHAIN) + '}"\n        then: yes\n');
     const flow = await loadConformanceFlow(text);
-    expect((await runFlow(flow, { x: 1, s: "a" })).output).toBe("no");
+    expect((await runFlow(flow, { x: 1, s: "a" }, { env })).output).toBe("no");
   },
   SLOW,
 );
@@ -167,7 +169,7 @@ test(
       "id: f\nname: f\ninput:\n  x: !int\nnodes:\n  use:\n    kind: code\n    input:\n" +
       "      total: ${" + sum(CHAIN) + "}\n    output: int\n" +
       "    code: |\n      return inputs.total\noutput: ${use.output}\n";
-    const result = await runFlow(await loadConformanceFlow(text), { x: 7 });
+    const result = await runFlow(await loadConformanceFlow(text), { x: 7 }, { env });
     expect(result.status).toBe("succeeded");
     expect(result.output).toBe(BigInt(CHAIN * 7));
   },
@@ -181,7 +183,7 @@ test.each([
   "a long sum condition routes (%d)",
   async (x, taken) => {
     const flow = await loadConformanceFlow(searched(sum(CHAIN) + " > 0"));
-    expect((await runFlow(flow, { x, s: "a" })).output).toBe(taken);
+    expect((await runFlow(flow, { x, s: "a" }, { env })).output).toBe(taken);
   },
   SLOW,
 );
@@ -193,7 +195,7 @@ test(
       "id: f\nname: f\ninput:\n  x: !int\nnodes:\n  use:\n    kind: code\n    input:\n" +
       "      total: ${input.x * " + Array(CHAIN).fill("1").join(" * ") + "}\n    output: int\n" +
       "    code: |\n      return inputs.total\noutput: ${use.output}\n";
-    const result = await runFlow(await loadConformanceFlow(text), { x: 5 });
+    const result = await runFlow(await loadConformanceFlow(text), { x: 5 }, { env });
     expect(result.status).toBe("succeeded");
     expect(result.output).toBe(5n);
   },
@@ -223,11 +225,11 @@ test(
     const result = await runFlow(
       flow,
       { values: ["v"] },
-      { log: path, learnable: true, memory: new Map([["test", backend]]) },
+      { env, log: path, learnable: true, memory: new Map([["test", backend]]) },
     );
     expect(result.status).toBe("succeeded");
     expect(result.output).toEqual(Array(LEARNABLE_CHAIN).fill("v"));
-    const replayed = await resumeFlow(flow, { log: path, memory: new Map([["test", backend]]) });
+    const replayed = await resumeFlow(flow, { env, log: path, memory: new Map([["test", backend]]) });
     expect(replayed.status).toBe("succeeded");
     expect(replayed.output).toEqual(result.output);
   },
@@ -241,7 +243,7 @@ test("feedback on a list chain passes back", async () => {
   const result = await runFlow(
     flow,
     { values: ["v"] },
-    { log: join(dir, "short.jsonl"), learnable: true, memory: new Map([["test", backend]]) },
+    { env, log: join(dir, "short.jsonl"), learnable: true, memory: new Map([["test", backend]]) },
   );
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual(Array(24).fill("v"));
@@ -260,7 +262,7 @@ test(
       "id: f\nname: f\ninput:\n  x: !int\n" + SUM_DEF +
       "nodes:\n  top:\n    kind: call\n    call: add\n    input:\n      x: ${input.x}\n" +
       "output: ${top.output}\n";
-    const result = await runFlow(await loadConformanceFlow(text), { x: 2 });
+    const result = await runFlow(await loadConformanceFlow(text), { x: 2 }, { env });
     expect(result.status).toBe("succeeded");
     expect(result.output).toBe(BigInt(CHAIN * 2));
   },
@@ -274,7 +276,7 @@ test(
       "id: f\nname: f\ninput:\n  xs: !list(int)\n" + SUM_DEF +
       "nodes:\n  each:\n    kind: map\n    over: ${input.xs}\n    call: add\n    input:\n      x: ${item}\n" +
       "output: ${each.output}\n";
-    const result = await runFlow(await loadConformanceFlow(text), { xs: [1, 3] });
+    const result = await runFlow(await loadConformanceFlow(text), { xs: [1, 3] }, { env });
     expect(result.status).toBe("succeeded");
     expect(result.output).toEqual([BigInt(CHAIN), BigInt(CHAIN * 3)]);
   },
@@ -308,6 +310,6 @@ test("a condition at the limit runs thirty calls deep", async () => {
     "output: ${top.output}",
   );
   const flow = await loadConformanceFlow(lines.join("\n") + "\n");
-  expect((await runFlow(flow, { s: "a" })).output).toBe("yes");
-  expect((await runFlow(flow, { s: "b" })).output).toBe("no");
+  expect((await runFlow(flow, { s: "a" }, { env })).output).toBe("yes");
+  expect((await runFlow(flow, { s: "b" }, { env })).output).toBe("no");
 });

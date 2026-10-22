@@ -53,7 +53,10 @@
  * reports them there too, but its tests pin them only at binding sites.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -64,6 +67,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -73,6 +77,10 @@ import {
   loadErrorAsync,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-constructor-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 install(BUILTIN);
 beforeEach(() => install(BUILTIN));
@@ -137,7 +145,8 @@ const errorLine = (error: { diagnostic: { frames: readonly { range: { startLine:
   error.diagnostic.frames.at(-1)!.range.startLine;
 
 /** Load and run `text` on `inputs`. */
-const run = async (text: string, inputs: Record<string, unknown>) => runFlow(await loadConformanceFlow(text), inputs);
+const run = async (text: string, inputs: Record<string, unknown>) =>
+  runFlow(await loadConformanceFlow(text), inputs, { env });
 
 /** Run `text` on `inputs` and return its output, expecting it succeeded. */
 async function ok(text: string, inputs: Record<string, unknown>): Promise<unknown> {
@@ -242,9 +251,9 @@ test("a constructor in node and flow asserts (loads)", () => {
 test("a constructor in node and flow asserts (runs)", async () => {
   const loaded = await loadConformanceFlow(ASSERTS_FLOW);
 
-  expect((await runFlow(loaded, { order: A_BUY })).status).toBe("succeeded");
-  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.95 } })).status).toBe("failed");
-  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.05 } })).status).toBe("failed");
+  expect((await runFlow(loaded, { order: A_BUY }, { env })).status).toBe("succeeded");
+  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.95 } }, { env })).status).toBe("failed");
+  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.05 } }, { env })).status).toBe("failed");
 });
 
 test("a constructor in a flow output (loads)", () => {
@@ -467,7 +476,7 @@ test("a uses child resolves constructors against its own typedefs (loads)", asyn
 test("a uses child resolves constructors against its own typedefs (runs)", async () => {
   const loaded = await loadConformanceFlow(USES_PARENT, { childResolver: await usesResolver() });
 
-  const result = await runFlow(loaded, { order: { action: "hold" } });
+  const result = await runFlow(loaded, { order: { action: "hold" } }, { env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toStrictEqual({ action: "hold" });

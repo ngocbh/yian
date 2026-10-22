@@ -84,10 +84,14 @@
  * `prompt_inside_a_def_reads_unknown_field`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -96,6 +100,10 @@ import {
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-field-read-sites-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const PREAMBLE =
   "id: p\nname: p\n" +
@@ -172,7 +180,7 @@ const INPUT_VALUES = { s: "x", r: { a: "x" } };
 
 /** Load and run `text` on `INPUT_VALUES` and `inputs`. */
 const run = async (text: string, inputs: Record<string, unknown> = {}) =>
-  runFlow(await loadConformanceFlow(text), { ...INPUT_VALUES, ...inputs });
+  runFlow(await loadConformanceFlow(text), { ...INPUT_VALUES, ...inputs }, { env });
 
 /** A CODE node typed `output` reading the flow input `s`. */
 function producer(nodeId: string, output: string): string {

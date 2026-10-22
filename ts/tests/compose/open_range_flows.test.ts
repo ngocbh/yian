@@ -29,8 +29,8 @@
  * `typed_bindings_check.test.ts`): `test_tagged_binding_disjoint_from_an_open_range_is_a_load_error`;
  * by `run-core/compose_open_range_flows__record_field_below_an_open_range_fails` (the sum in JS):
  * `test_record_field_below_an_open_range_fails_the_output_contract`; by
- * `types/compose_open_range_flows__call_with_a_wider_open_range_source`:
- * `test_call_with_a_wider_open_range_source_is_a_load_error`; by
+ * `types/compose_open_range_flows__call_with_a_wider_open_range_source` (pinned in
+ * `call_binding_types.test.ts`): `test_call_with_a_wider_open_range_source_is_a_load_error`; by
  * `types/compose_open_range_flows__case_when_outside_an_open_range`:
  * `test_case_when_outside_an_open_range_is_a_load_error`; by
  * `types/compose_open_range_flows__no_ends_in_a_tag`: `test_no_ends_in_a_tag_is_a_load_error`; by
@@ -38,13 +38,21 @@
  * `test_agent_reply_inside_open_ranges_runs`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { Failure } from "../../src/diagnostics.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-open-range-flows-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 /** Load `text`, expecting a load error, and return its message. */
 const loadErrorMessage = async (text: string): Promise<string> =>
@@ -56,7 +64,7 @@ async function failure(
   inputs: Record<string, unknown> = {},
   options: RunFlowOptions = {},
 ): Promise<Failure> {
-  const result = await runFlow(await loadConformanceFlow(text), inputs, options);
+  const result = await runFlow(await loadConformanceFlow(text), inputs, { env, ...options });
   expect(result.status).toBe("failed");
   expect(result.failure).not.toBeNull();
   return result.failure!;
@@ -64,7 +72,7 @@ async function failure(
 
 /** Load and run `text`, expecting success, and return the flow output. */
 async function output(text: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
-  const result = await runFlow(await loadConformanceFlow(text), inputs);
+  const result = await runFlow(await loadConformanceFlow(text), inputs, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   return result.output;

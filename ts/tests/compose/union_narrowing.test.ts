@@ -99,10 +99,14 @@
  * in JS (decision 11).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -111,6 +115,10 @@ import {
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-union-narrowing-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -899,7 +907,7 @@ test("a partly shared union branch runs", async () => {
     code("e") +
     "output: ${route.output}\n";
 
-  const result = await runFlow(await loadConformanceFlow(text), { s: "x" });
+  const result = await runFlow(await loadConformanceFlow(text), { s: "x" }, { env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
@@ -1092,11 +1100,11 @@ test("a searched when with a tag check and a member read runs", async () => {
     "output: ${route.output}\n";
   const loaded = await loadConformanceFlow(text);
 
-  let result = await runFlow(loaded, { s: "buy" });
+  let result = await runFlow(loaded, { s: "buy" }, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("branch");
-  result = await runFlow(loaded, { s: "sell" });
+  result = await runFlow(loaded, { s: "sell" }, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("else");

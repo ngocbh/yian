@@ -10,10 +10,18 @@
  * `test_inline_map_body_reads_an_item_field_named_output`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-item-output-field-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const LEAF = `  leaf:
     input:
@@ -32,7 +40,7 @@ const ROWS = { rows: [{ output: "a" }, { output: "b" }] };
 
 /** Load and run `text` over `ROWS`, expecting success, and return its output. */
 async function run(text: string): Promise<unknown> {
-  const result = await runFlow(await loadFlow(text), ROWS);
+  const result = await runFlow(await loadFlow(text), ROWS, { env });
   expect(result.status).toBe("succeeded");
   return result.output;
 }

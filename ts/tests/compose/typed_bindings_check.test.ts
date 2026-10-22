@@ -47,9 +47,9 @@
  * that pins the nested binding's whole frame; `shownLiteral` rows (compact JSON, ints as digits);
  * `localInputContracts` rows over hand-built maps (Python has no direct test; the reference and
  * assert checks read it); and the harvested cases these checks decide (`runCase`, `assembled`),
- * in the "Pinned harvested cases" block, then those from `test_open_range_flows.py`, `test_nested_template_types.py` and
- * `test_tagged_bindings.py`, which these checks decide, in the "Pinned harvested cases (TS-only
- * placement)" block.
+ * in the "Pinned harvested cases" block, then those from `test_open_range_flows.py`,
+ * `test_nested_template_types.py` and `test_tagged_bindings.py`, which these checks decide, in the
+ * "Pinned harvested cases (TS-only placement)" block.
  *
  * Ported through `loadConformanceFlow` and `runFlow`: `test_unquoted_yes_or_no_literal_for_str_is_text`
  * (2).
@@ -60,7 +60,10 @@
  * `test_optional_into_non_optional_loads_and_fails_at_runtime` (its load half is ported too).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildResult } from "../../src/compose/nodes/base.ts";
@@ -72,6 +75,7 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -80,6 +84,10 @@ import {
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-check-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -256,7 +264,7 @@ test("a disjoint binding nested in a value template names its path", () => {
 // ---------- literals ----------
 
 test.each(["yes", "no"])("unquoted yes or no literal for str is text: %s", async (word) => {
-  const result = await runFlow(await loadConformanceFlow(flow(`!str ${word}`)), {});
+  const result = await runFlow(await loadConformanceFlow(flow(`!str ${word}`)), {}, { env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");

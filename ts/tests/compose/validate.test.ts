@@ -31,13 +31,14 @@
  * (`./fixtures/compose_codefns.ts:pick_pro`).
  *
  * Also ported here: `test_a_case_output_over_a_1000_link_alias_chain_is_rejected_as_a_case_output`
- * from `tests/compose/test_record_type_nesting.py` (whose other rows are in `record_type_nesting.test.ts`). Changed: it raises
- * `maxYamlNodes` (the anchors hit the YAML node limit first at the default), as
- * `written_value_nesting.test.ts` does; its message is pinned (a stack overflow would give another
- * error, so there is no cause-chain check).
+ * from `tests/compose/test_record_type_nesting.py` (whose other rows are in
+ * `record_type_nesting.test.ts`). Changed: it raises `maxYamlNodes` (the anchors hit the YAML node
+ * limit first at the default), as `written_value_nesting.test.ts` does; its message is pinned (a
+ * stack overflow would give another error, so there is no cause-chain check).
  *
- * TS-only: the harvested cases from files with no TS mirror, pinned at the end with `full` (every
- * frame and the notes): `load-core/engine_limit_overrides__written_value_over_the_set_value_limit`
+ * TS-only: harvested cases whose Python file's mirror (`expression_nesting.test.ts`) lists them as
+ * covered, and cases from files with no TS mirror, pinned at the end with `full` (every frame and
+ * the notes): `load-core/engine_limit_overrides__written_value_over_the_set_value_limit`
  * (its `env:` sets the value limit, restored by the `afterEach`), the type-table pass's
  * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, the reference
  * check's `load-core/compose_expression_nesting__too_deep_{call_argument,case_on,human_question,prompt_span}`,
@@ -650,7 +651,7 @@ output: \${calc.output}
   });
 });
 
-// ---------- rows from files with no TS mirror ----------
+// ---------- rows ported here from other Python files ----------
 
 test("a case output over a 1000-link alias chain is rejected as a case output", () => {
   // From tests/compose/test_record_type_nesting.py. A listed chain's anchors cost quadratically
@@ -672,7 +673,7 @@ test("a case output over a 1000-link alias chain is rejected as a case output", 
   );
 });
 
-// ---------- harvested cases from files with no TS mirror ----------
+// ---------- harvested cases from other Python files ----------
 
 test.each<CaseRow>([
   {

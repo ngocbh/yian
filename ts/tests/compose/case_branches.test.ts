@@ -72,12 +72,20 @@
  * harvested `load-case/compose_case_branches__*` cases.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-case-branches-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -171,7 +179,7 @@ function assembles(text: string): void {
 
 /** Load and run `text` and return the flow's output, expecting it succeeded; `cmd: a` takes the `then:`. */
 async function taken(text: string, cmd = "a", inputs: Record<string, unknown> = {}): Promise<unknown> {
-  const result = await runFlow(await loadConformanceFlow(text), { cmd, ...inputs });
+  const result = await runFlow(await loadConformanceFlow(text), { cmd, ...inputs }, { env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   return result.output;
 }
@@ -193,16 +201,16 @@ test("case output over node branches reads the taken branch", async () => {
   });
   const loaded = await loadConformanceFlow(text);
 
-  expect((await runFlow(loaded, { cmd: "a" })).output).toBe("other");
-  expect((await runFlow(loaded, { cmd: "b" })).output).toBe("replied");
+  expect((await runFlow(loaded, { cmd: "a" }, { env })).output).toBe("other");
+  expect((await runFlow(loaded, { cmd: "b" }, { env })).output).toBe("replied");
 });
 
 test("case output over a value entry branch reads the taken branch", async () => {
   const text = flow(on("verdict"), { extraNodes: '  verdict: !date "2026-01-02"\n' });
   const loaded = await loadConformanceFlow(text);
 
-  expect((await runFlow(loaded, { cmd: "a" })).output).toBe("2026-01-02");
-  expect((await runFlow(loaded, { cmd: "b" })).output).toBe("replied");
+  expect((await runFlow(loaded, { cmd: "a" }, { env })).output).toBe("2026-01-02");
+  expect((await runFlow(loaded, { cmd: "b" }, { env })).output).toBe("replied");
 });
 
 test.each(["__value_0", "__case_x"])("former reserved prefixes name authored nodes: %s", async (nodeId) => {

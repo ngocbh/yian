@@ -58,7 +58,10 @@
  * `bigint`s (decision 4a).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -77,6 +80,7 @@ import {
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -87,6 +91,10 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -553,7 +561,7 @@ test.each(EMPTY_KEY_OUTSIDE)("an empty key outside a written-out record loads: %
 });
 
 test.each(EMPTY_KEY_OUTSIDE)("an empty key outside a written-out record loads (runs): %j", async (entry, value) => {
-  const result = await runFlow(await loadConformanceFlow(recordFlow(entry, "${r.output}")), { n: 3n });
+  const result = await runFlow(await loadConformanceFlow(recordFlow(entry, "${r.output}")), { n: 3n }, { env });
 
   expect(result.failure).toBeNull();
   expect(result.output).toStrictEqual(value);

@@ -33,7 +33,10 @@
  * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load`.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { forget } from "../../src/defaults.ts";
@@ -43,7 +46,12 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-downstream-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -90,7 +98,7 @@ const opaque = (value: string) => `  opaque:\n    kind: code\n    code: |\n     
 const load = (text: string) => assembleText(text);
 
 /** Load `text` and run it with no inputs. */
-const run = async (text: string) => runFlow(await loadConformanceFlow(text), {});
+const run = async (text: string) => runFlow(await loadConformanceFlow(text), {}, { env });
 
 // ---------- CALL ----------
 
@@ -274,7 +282,7 @@ output: \${wrap.output}
   expect(param.contract).toStrictEqual(new ValueContract(typeFor("int", new Map())));
   expect(param.required).toBe(true);
 
-  const result = await runFlow(loaded, {});
+  const result = await runFlow(loaded, {}, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe(10n);
@@ -303,7 +311,7 @@ output: \${wrap.output}
 
   expect(bodyInputs(loaded, "wrap").get("items")!.contract!.type).toStrictEqual(typeFor("list(str)", new Map()));
 
-  const result = await runFlow(loaded, {});
+  const result = await runFlow(loaded, {}, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe(0n);
@@ -412,7 +420,7 @@ output: \${each.output}
 
   expect(bodyInputs(loaded, "each").get("t")!.contract!.type).toStrictEqual(typeFor("str", new Map()));
 
-  const result = await runFlow(loaded, {});
+  const result = await runFlow(loaded, {}, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual(["A", "B"]);

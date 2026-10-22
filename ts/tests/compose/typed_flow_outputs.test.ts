@@ -12,7 +12,10 @@
  * `test_plain_output_whose_left_side_is_not_a_type_is_text`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { CompiledFlow, FlowOutput } from "../../src/compile/model.ts";
@@ -23,6 +26,11 @@ import type { EndNode } from "../../src/nodes/end/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-typed-flow-outputs-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const REGISTRY = readTypedefs({ Size: { qty: "int" }, Decision: "Literal(go, stop)" });
 const SIZE = typeFor("Size", REGISTRY);
@@ -178,7 +186,7 @@ nodes:
 output:
   note: a = b
 `;
-  const result = await runFlow(await loadFlow(text), {});
+  const result = await runFlow(await loadFlow(text), {}, { env });
 
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ note: "a = b" });

@@ -30,11 +30,19 @@
  * in `validate.test.ts`.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { RunResult, runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-record-type-nesting-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const MAX_TYPE_NESTING = BUILTIN.maxTypeNesting;
 
@@ -172,7 +180,7 @@ test("records and a deep list field are counted together", async () => {
 // ---------- guards ----------
 
 test("a record at the limit loads and runs", async () => {
-  const result = await runFlow(await loadConformanceFlow(code(...records(MAX_TYPE_NESTING, "str"))), {});
+  const result = await runFlow(await loadConformanceFlow(code(...records(MAX_TYPE_NESTING, "str"))), {}, { env });
 
   expect(result).toBeInstanceOf(RunResult);
 });
@@ -186,7 +194,7 @@ test("types at the limit load", async () => {
 test("a record at the highest configurable limit loads and runs", async () => {
   install({ ...BUILTIN, maxYamlNodes: 10_000_000, maxTypeNesting: 125 });
 
-  const result = await runFlow(await loadConformanceFlow(code(...records(125, "str"))), {});
+  const result = await runFlow(await loadConformanceFlow(code(...records(125, "str"))), {}, { env });
 
   expect(result).toBeInstanceOf(RunResult);
 });

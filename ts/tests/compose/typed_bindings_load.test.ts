@@ -10,7 +10,10 @@
  * TOOL nodes, not this flow's CODE nodes.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
@@ -22,7 +25,12 @@ import type { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { loadConformanceFlow } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const INT = typeFor("int", new Map());
 
@@ -240,7 +248,7 @@ test.each<[string, string, unknown]>([
   ["single-quoted-template", "!str 'n=${input.a}'", "n=1"],
   ["literal-list", '!list(str) ["$${input.a}"]', ["${input.a}"]],
 ])("quoted or bracketed right side is read as yaml first (%s)", async (_id, binding, expected) => {
-  const result = await runFlow(await loadConformanceFlow(valueFlow(binding)), { a: 1 });
+  const result = await runFlow(await loadConformanceFlow(valueFlow(binding)), { a: 1 }, { env });
 
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual(expected);

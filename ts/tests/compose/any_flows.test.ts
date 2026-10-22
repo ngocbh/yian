@@ -74,11 +74,19 @@
  * it, as `tags.test.ts` notes).
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-any-flows-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -111,7 +119,7 @@ const call = (binding: string, nodeId = "c", callee = "child") =>
 
 /** Load and run `text` with `inputs` (default `{s: "x"}`). */
 const run = async (text: string, inputs: Record<string, unknown> = { s: "x" }) =>
-  runFlow(await loadConformanceFlow(text), inputs);
+  runFlow(await loadConformanceFlow(text), inputs, { env });
 
 /** Run `text` and return its output, expecting it succeeded. */
 async function ok(text: string, inputs?: Record<string, unknown>): Promise<unknown> {

@@ -29,10 +29,14 @@
  * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -41,6 +45,10 @@ import {
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-written-value-nesting-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 
@@ -308,7 +316,7 @@ describe("node bindings", () => {
       const { flow, text, alias } = BINDING_SITES[site]!;
       const [header, value] = (aliased ? alias : text)(MAX_VALUE_NESTING);
 
-      const result = await runFlow(await loadConformanceFlow(flow(header, value)), {});
+      const result = await runFlow(await loadConformanceFlow(flow(header, value)), {}, { env });
 
       expect(result.failure).toBeNull();
       expect(result.status).toBe("succeeded");
@@ -452,7 +460,7 @@ describe("flow outputs", () => {
   test.each(OUTPUT_ROWS)("at the limit loads and runs: %s (%s)", async (site, _id, aliased) => {
     const { flow, text, alias, limit } = OUTPUT_SITES[site]!;
 
-    const result = await runFlow(await loadConformanceFlow(flow(...(aliased ? alias : text)(limit))), {});
+    const result = await runFlow(await loadConformanceFlow(flow(...(aliased ? alias : text)(limit))), {}, { env });
 
     expect(result.failure).toBeNull();
     expect(result.status).toBe("succeeded");

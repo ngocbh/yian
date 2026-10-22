@@ -30,7 +30,10 @@
  * `test_wrong_literal_value_under_a_tag_fails_at_load`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
@@ -38,7 +41,12 @@ import type { ValueContract } from "../../src/nodes/contracts.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { canonicalTypeLabel, type Type } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-nested-template-types-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const TYPEDEFS = `typedefs:
   Rec:
@@ -122,7 +130,7 @@ test("tagged template with an optional reference fails at runtime", async () => 
     codeFlow("!Buy {conviction: '${p.output}'}", { pOutput: "Optional(float)" }).replace('return "hi"', "return null"),
   );
 
-  const result = await runFlow(flow, {});
+  const result = await runFlow(flow, {}, { env });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("binding.type");
@@ -343,7 +351,7 @@ test("loop template seed types the carried field", async () => {
 
   const contract = loaded.compiled.nodes.get("repeat")!.outputContract as ValueContract;
   expect(canonicalTypeLabel(contract.type)).toBe('{"meta":{"first":int},"n":int}');
-  const result = await runFlow(loaded, { start: 3 });
+  const result = await runFlow(loaded, { start: 3 }, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ n: 5n, meta: { first: 3n } });
@@ -377,7 +385,7 @@ test("inline loop template seed generates its parameter", async () => {
     "typedefs:\n  State:\n    n: int\n" +
     inlineLoop("{n: '${input.start}'}").replace("STATE_TYPE", "\n          state: State");
 
-  const result = await runFlow(await loadConformanceFlow(text), { start: 1 });
+  const result = await runFlow(await loadConformanceFlow(text), { start: 1 }, { env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
@@ -424,7 +432,7 @@ test("inline call template arg generates its parameter", async () => {
   const loaded = await loadConformanceFlow(inlineCall("{text: '${input.text}', tags: ['a', 'b']}"));
 
   expect(onlyParamLabel(loaded)).toBe('{"tags":list(str),"text":str}');
-  const result = await runFlow(loaded, { text: "hi" });
+  const result = await runFlow(loaded, { text: "hi" }, { env });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ text: "hi", tags: ["a", "b"] });
@@ -467,7 +475,7 @@ test.each([
 test("inline call nested typed container holding only bindings loads", async () => {
   const text = TYPEDEFS + inlineCall("{inner: !Obj {n: !int 3}}");
 
-  const result = await runFlow(await loadConformanceFlow(text), { text: "hi" });
+  const result = await runFlow(await loadConformanceFlow(text), { text: "hi" }, { env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
@@ -501,7 +509,7 @@ output: \${repeat.output}
 `;
 
 test("loop seed differing from the body only in a literal runs", async () => {
-  const result = await runFlow(await loadConformanceFlow(LITERAL_LOOP), { start: 1 });
+  const result = await runFlow(await loadConformanceFlow(LITERAL_LOOP), { start: 1 }, { env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
@@ -516,7 +524,7 @@ const untypedP = (text: string) => text.replace("    output: str\n", "").replace
 test("partial template under a tag is checked at runtime", async () => {
   const flow = await loadConformanceFlow(untypedP(codeFlow("!Rec {a: '${p.output}', n: 1}")));
 
-  const result = await runFlow(flow, {});
+  const result = await runFlow(flow, {}, { env });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("binding.type");
@@ -527,7 +535,7 @@ test("partial template into a child param is checked at runtime", async () => {
     .replace("    output: str\n", "")
     .replace('return "hi"', "return 5");
 
-  const result = await runFlow(await loadConformanceFlow(text), {});
+  const result = await runFlow(await loadConformanceFlow(text), {}, { env });
 
   expect(result.status).toBe("failed");
 });

@@ -31,12 +31,20 @@
  * `inline_calls.test.ts`).
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembleText, loadConformanceFlow, loadError } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-any-name-literals-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 /**
  * Assert two flows that differ only in a literal have different fingerprints and that `literalA`
@@ -121,7 +129,7 @@ test("a value entry under a credential name is identity", async () => {
   const flow = (value: string) => `id: f\nname: f\nnodes:\n  api_key: !str ${value}\noutput: \${api_key.output}\n`;
 
   await assertIdentity(flow("hunter2"), flow("hunter3"), "hunter2");
-  expect((await runFlow(await loadConformanceFlow(flow("hunter2")), {})).output).toBe("hunter2");
+  expect((await runFlow(await loadConformanceFlow(flow("hunter2")), {}, { env })).output).toBe("hunter2");
 });
 
 test("an inline call in a node assert shows the assert under any keyword", () => {

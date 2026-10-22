@@ -40,7 +40,10 @@
  * Changed: the ints of those runs read back as `bigint`s (decision 4a).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -50,6 +53,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -60,6 +64,10 @@ import {
   runCase,
   runTextCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-untyped-output-dates-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -77,7 +85,7 @@ const load = (text: string): ComposedFlow => assembleText(text).flow;
 
 /** Load and run `text`, returning its output and expecting it succeeded. */
 async function ok(text: string): Promise<unknown> {
-  const result = await runFlow(await loadConformanceFlow(text), {});
+  const result = await runFlow(await loadConformanceFlow(text), {}, { env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   return result.output;
 }

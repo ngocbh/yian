@@ -50,7 +50,10 @@
  * validator and the typed-binding check decide, the `child` def built by hand (`assembledWith`).
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { Edge, GrowthRejected } from "../../src/compile/model.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
@@ -63,6 +66,7 @@ import { runFlow } from "../../src/run.ts";
 import { prepareExpanded } from "../../src/runtime/state.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { fileFieldType, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { fragment, initializedSpawner } from "../engine/run_state_fixtures.ts";
 import {
   assembled,
@@ -76,6 +80,10 @@ import {
   parametersFromYaml,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-file-field-reads-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const STR = Type.scalar(ValueKind.STRING);
 const OPTIONAL_STR = new Type({ kind: ValueKind.STRING, nullable: true });
@@ -147,7 +155,7 @@ const load = (text: string, children: ChildFlows = {}) => assembleText(text, "fl
 
 /** Load and run `text` on `inputs` and return its output, expecting it succeeded. */
 async function ok(text: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
-  const result = await runFlow(await loadConformanceFlow(text), inputs);
+  const result = await runFlow(await loadConformanceFlow(text), inputs, { env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   return result.output;
 }

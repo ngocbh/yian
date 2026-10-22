@@ -33,10 +33,18 @@
  * `test_optional_record_field_reads_null_when_the_whole_value_is_null`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-field-reads-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 /**
  * A flow with one CODE node `step` typed `stepOutput`, plus `rest` (YAML tail); `preamble` holds
@@ -90,8 +98,8 @@ test("case when on a missing optional record input is falsy", async () => {
     "output: ${hit.output | miss.output}\n";
   const loaded = await loadConformanceFlow(text);
 
-  expect((await runFlow(loaded, { s: "x" })).output).toBe("miss");
-  expect((await runFlow(loaded, { s: "x", maybe: { a: "x" } })).output).toBe("hit");
+  expect((await runFlow(loaded, { s: "x" }, { env })).output).toBe("miss");
+  expect((await runFlow(loaded, { s: "x", maybe: { a: "x" } }, { env })).output).toBe("hit");
 });
 
 test.each([

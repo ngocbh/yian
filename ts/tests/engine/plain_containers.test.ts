@@ -29,6 +29,16 @@
  * the unhashable-key row (a record key is always a string); and
  * `test_iteration_error_propagates`, since intake runs no host code (it refuses getters and
  * Proxies instead of reading them).
+ *
+ * Not ported from `tests/engine/test_hidden_container_outputs.py` (no TS file): its rows run
+ * Python CODE returning list, tuple and dict subclasses whose iteration differs from their
+ * storage, and sets; TS host intake takes only plain arrays and records and refuses the rest (the
+ * non-plain-object, `Array` subclass and cycle rows here check it):
+ * `test_stored_output_is_what_iteration_yields`,
+ * `test_a_cycle_through_a_subclass_reads_it_once`, `test_a_yielded_nan_is_located`,
+ * `test_a_yielded_set_is_located`, `test_a_yielded_text_key_is_required`,
+ * `test_a_yielded_unhashable_key_is_located` and
+ * `test_ordinary_subclasses_store_like_their_plain_equivalents`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

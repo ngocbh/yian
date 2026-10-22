@@ -352,6 +352,8 @@ function readAuthoredLlmConfig(
  * aliases, root memories and CODE checks are left out.
  *
  * @param diagnostics The case's factory for located load errors.
+ * @param inputParameters The flow's inputs as an earlier pass resolved them, read in place of its
+ *   `input:` section; `null` (the default) reads the section.
  */
 function assembleRoot(
   document: SourceDocument,
@@ -359,6 +361,7 @@ function assembleRoot(
   builder: SourceCatalogBuilder,
   diagnostics: LoadDiagnostics,
   children: ChildFlows = {},
+  inputParameters: readonly Parameter[] | null = null,
 ): ComposedFlow {
   const file = parseFile(document);
   const root = document.root;
@@ -373,8 +376,9 @@ function assembleRoot(
   const childOf = (key: string, flowOnly = false) =>
     (!flowOnly || root.has("nodes")) && root.has(key) ? root.child(key) : null;
   return assemble({
-    inputsSection: file.inputs,
-    inputsCursor: childOf("input"),
+    inputsSection: inputParameters === null ? file.inputs : null,
+    inputParameters,
+    inputsCursor: inputParameters === null ? childOf("input") : null,
     nodesCursor: flowNodesCursor(document, file.nodes),
     outputsSection: file.outputs,
     assertsSection: file.asserts,
@@ -412,11 +416,12 @@ export const assembledWith =
  *
  * @param label The file name diagnostics name (default `flow.yaml`).
  * @param options.children Hand-built child flows the scope resolves by name, as `assembledWith`'s.
+ * @param options.inputParameters The flow's inputs, read in place of its `input:` section.
  */
 export function assembleText(
   text: string,
   label = "flow.yaml",
-  options: { children?: ChildFlows } = {},
+  options: { children?: ChildFlows; inputParameters?: readonly Parameter[] } = {},
 ): { flow: ComposedFlow; builder: SourceCatalogBuilder } {
   const document = parseSourceDocument(text, label);
   const builder = new SourceCatalogBuilder();
@@ -427,6 +432,7 @@ export function assembleText(
       builder,
       LoadDiagnostics.fromDocument(document),
       options.children,
+      options.inputParameters,
     ),
     builder,
   };

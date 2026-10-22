@@ -69,12 +69,12 @@
  * the private `maskInlineBody`, so it spies on `SourceCursor.prototype.projectMapping`, which
  * masking calls. A wrong-kind descriptor is a CODE descriptor, not an arbitrary object. Descriptor
  * equality leaves out `childLabel`, as Python's `compare=False` does. The monkeypatching rows spy
- * with `spyOn`: on `CodeDescriptor.prototype.build` (the producer's builds), on the
- * `inferInlineBindingType` export (the MAP item proof) and on the `readSourceFlowInputs` export (a
- * `list` input with no element). The partial-LOOP row's `defs:` body is a hand-built child whose
- * `note` producer has no contract, so the LOOP's output is a partial record, as the def's
- * expression output makes it. The nullable-scalar row's `value` param only feeds its run half, so
- * the load half is one row. The basic LOOP row compares the output contract's type (the contract
+ * with `spyOn`: on `CodeDescriptor.prototype.build` (the producer's builds) and on the
+ * `inferInlineBindingType` export (the MAP item proof); the row patching `read_source_flow_inputs`
+ * gives `assemble` its `list` input with no element as a resolved parameter instead. The
+ * partial-LOOP row's `defs:` body is a hand-built child whose `note` producer has no contract, so
+ * the LOOP's output is a partial record, as the def's expression output makes it. The
+ * nullable-scalar row's `value` param only feeds its run half, so the load half is one row. The basic LOOP row compares the output contract's type (the contract
  * carries the body's origins).
  *
  * Pinned at the end (`parsedNodes`):
@@ -155,7 +155,6 @@ import {
   inlineFlowId,
 } from "../../src/compose/desugar/inline_bodies.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
-import * as typesHelpers from "../../src/compose/helpers/types.ts";
 import { BuildContext, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
@@ -2013,15 +2012,8 @@ nodes:
     output: \${echo.output}
 output: \${each.output}
 `;
-  const inputs = spyOn(typesHelpers, "readSourceFlowInputs").mockReturnValue([
-    parameter("items", new Type({ kind: ValueKind.LIST_ANY })),
-  ]);
-  let error: LoadError;
-  try {
-    error = loadError(() => assembleText(source));
-  } finally {
-    inputs.mockRestore();
-  }
+  const inputParameters = [parameter("items", new Type({ kind: ValueKind.LIST_ANY }))];
+  const error = loadError(() => assembleText(source, "flow.yaml", { inputParameters }));
 
   expect(error.message).toBe(
     "cannot infer type for inline binding 'each.input.value': list type 'list(Optional(Any))' has no proven " +

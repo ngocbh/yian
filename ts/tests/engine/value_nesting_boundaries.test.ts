@@ -88,7 +88,9 @@
  * body's end (the body's output record adds a level), not `contract.growth`. They check that a
  * growth seed's two containers don't count toward the value's nesting (MAP: list, then record;
  * LOOP: pair, then record). Also pinned to Python's result: a CODE result over the limit meets the
- * node's post-asserts before the commit refuses it (the worker copies it back first).
+ * node's post-asserts before the commit refuses it (the worker copies it back first). Changed: a
+ * result too deep to copy back from the worker (over 1,000 levels) fails `contract.output` there,
+ * with the commit's message and trace, before its post-asserts (Python checks them first).
  *
  * Covered by the harvested run cases (the same flows and results):
  * `run-core/engine_value_nesting_boundaries__an_untyped_output_at_the_limit_flows_out_whole`,
@@ -874,11 +876,23 @@ test("an untyped output over the limit fails", async () => {
   expectTooDeep(await run(codeFlow(listBody(101))), "deep");
 });
 
+/** `codeFlow` of `body` with the post-assert `output == null`, which a list result fails. */
+const assertedFlow = (body: string) =>
+  codeFlow(body).replace("    code: |", '    asserts:\n      - "output == null"\n    code: |');
+
 test("a CODE result over the limit meets its post-asserts before the commit refuses it", async () => {
-  const text = codeFlow(listBody(101)).replace("    code: |", '    asserts:\n      - "output == null"\n    code: |');
-  const result = await run(text);
+  const result = await run(assertedFlow(listBody(101)));
   expect(result.status).toBe("failed");
   expect([result.failure!.code, result.failure!.nodeId]).toEqual(["assertion.failed", "deep"]);
+});
+
+test("a CODE result too deep to copy back fails its output before its post-asserts", async () => {
+  const deep = await run(assertedFlow(listBody(10_000)));
+  expectTooDeep(deep, "deep");
+  // The worker's refusal reads as the commit's: same message and trace.
+  const committed = await run(codeFlow(listBody(150)));
+  expectTooDeep(committed, "deep");
+  expect([deep.failure!.message, deep.failure!.trace]).toEqual([committed.failure!.message, committed.failure!.trace]);
 });
 
 test("a map result list at the limit succeeds", async () => {

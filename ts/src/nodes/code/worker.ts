@@ -28,7 +28,7 @@ import { pathToFileURL } from "node:url";
 import { format } from "node:util";
 import { parentPort, workerData } from "node:worker_threads";
 
-import { type Defaults, install } from "../../defaults.ts";
+import { current, type Defaults, install } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
 import { stripTypes, TypeStripError } from "../../platform.ts";
 import {
@@ -241,6 +241,22 @@ async function importReference(reference: string, baseDir: string | null): Promi
   return fn as CodeBody;
 }
 
+// Copying a result back recurses on both threads: measured, Node's main thread reads about
+// 2,100 levels and Bun about 40,000. A deeper result is refused here, by the commit's own check;
+// a shallower one over the limit is copied and still meets the node's post-asserts first.
+const COPY_DEPTH = 1000;
+
+/** Whether `value` nests deeper than the copy back to the main thread can carry. */
+function tooDeepToCopy(value: Value): boolean {
+  try {
+    rejectDeepNesting(value, "output", { enclosingLevels: current().maxValueNesting - COPY_DEPTH });
+    return false;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return true;
+    throw error;
+  }
+}
+
 /**
  * Run `job` and return its reply.
  *
@@ -265,29 +281,12 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
     // Intake runs here, not after the copy: the clone would turn a class instance or an accessor
     // into a plain record and refuse a function with its own error.
     value = fromHost(result === proxy ? record : result, "output");
+    if (tooDeepToCopy(value)) rejectDeepNesting(value, "output");
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     return { ok: false, as: "output", message: error.message, path: [...error.path] };
   }
   return { ok: true, value: packFiles(value) };
-}
-
-/**
- * The `"output"` reply for a result the clone overflowed on, refused by the nesting check the
- * commit applies (a CODE node commits its own output), or `null` when that isn't why the post
- * failed. The check waits for a failed post, so a deep result the clone carries still meets the
- * node's post-asserts before the commit refuses it, as on the main thread.
- */
-function tooDeepReply(made: CodeReply | undefined, error: unknown): CodeReply | null {
-  if (made?.ok !== true || !(error instanceof RangeError)) return null;
-  try {
-    rejectDeepNesting(unpackFiles(made.value), "output");
-  } catch (refused) {
-    if (refused instanceof TypeCheckError) {
-      return { ok: false, as: "output", message: refused.message, path: [...refused.path] };
-    }
-  }
-  return null;
 }
 
 const port = parentPort;
@@ -297,13 +296,10 @@ if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
   // refuses); the main thread must still hear back.
   const reply = (id: number, make: () => CodeReply, late?: true): void => {
-    let made: CodeReply | undefined;
     try {
-      made = make();
-      port.postMessage({ ...made, id, late } satisfies CodeMessage);
+      port.postMessage({ ...make(), id, late } satisfies CodeMessage);
     } catch (error) {
-      const refused = tooDeepReply(made, error) ?? { ok: false, as: "plain", thrown: thrownOf(error) };
-      port.postMessage({ ...refused, id, late } satisfies CodeMessage);
+      port.postMessage({ ok: false, as: "plain", thrown: thrownOf(error), id, late } satisfies CodeMessage);
     }
   };
   const lateError = (error: unknown): void => {

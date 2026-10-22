@@ -131,7 +131,7 @@ function withMessage<T extends object>(matchers: T, message: string): T {
       // Read first: V8 builds `stack` from `message` when it is first read.
       const { message: original, stack } = error;
       error.message = `${message}\n\n${original}`;
-      error.stack = stack?.replace(original, error.message);
+      error.stack = stack?.replace(original, () => error.message);
     }
     throw error;
   };

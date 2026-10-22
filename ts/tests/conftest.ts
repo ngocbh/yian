@@ -49,7 +49,7 @@ process.on("exit", () => {
 });
 
 // Module-level code and `beforeAll` hooks run before any `beforeEach`. Bun loads the preload once
-// per process, so this covers only the first test file's: a later file's see the previous test's
-// store and home, still temp dirs but not necessarily empty.
+// per process, so this call covers only the first test file; later files start with the previous
+// test's store and home, which are temp dirs but not necessarily empty.
 isolate();
 beforeEach(isolate);

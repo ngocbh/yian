@@ -33,15 +33,32 @@ function options(timeout?: Timeout): nodeTest.TestOptions {
   return ms === undefined ? {} : { timeout: ms };
 }
 
-/** Bun's `.each` title: printf-style `%s %d %i %f %j %o %p %#` and, for an object row, `$key`. */
+/**
+ * Bun's `.each` title: `%s`, `%d`, `%i`, `%f`, `%p` (a string quoted), `%o` and `%j` (JSON), `%#` (the
+ * row's index), `%%` and, for an object row, `$key`. Other values in `%p` and `$key` are shown with
+ * `inspect`, not Bun's pretty-format.
+ */
 function eachTitle(name: string, row: unknown, index: number): string {
   const show = (value: unknown) => (typeof value === "string" ? value : inspect(value));
   const args: unknown[] = Array.isArray(row) ? row : [row];
   let next = 0;
   let title = name.replace(/%[sdifjop#%]/g, (directive) => {
-    if (directive === "%%") return "%";
-    if (directive === "%#") return String(index);
-    return show(args[next++]);
+    switch (directive) {
+      case "%%":
+        return "%";
+      case "%#":
+        return String(index);
+      case "%p": {
+        const value = args[next++];
+        return typeof value === "string" ? JSON.stringify(value) : inspect(value);
+      }
+      case "%o":
+      case "%j":
+        // As on Bun: `undefined` gives an empty string and a bigint throws.
+        return JSON.stringify(args[next++]) ?? "";
+      default:
+        return show(args[next++]);
+    }
   });
   if (row !== null && typeof row === "object" && !Array.isArray(row)) {
     title = title.replace(/\$([A-Za-z_][\w.]*)/g, (_, path: string) =>
@@ -55,7 +72,8 @@ function eachTitle(name: string, row: unknown, index: number): string {
 function chainable(define: Define) {
   const skip = (name: string, _body?: Body) => define(name, () => {}, { skip: true });
   const run = (name: string, body: Body, timeout?: Timeout) => define(name, body as () => unknown, options(timeout));
-  const api = Object.assign(run, {
+  // A new function: `skipIf` and `if` return `run`, which has no `.each` or `.skip`.
+  const api = Object.assign((name: string, body: Body, timeout?: Timeout) => run(name, body, timeout), {
     each:
       (rows: readonly unknown[]) =>
       (name: string, body: Body, timeout?: Timeout) => {
@@ -66,25 +84,23 @@ function chainable(define: Define) {
       },
     skip,
     todo: (name: string, _body?: Body) => define(name, () => {}, { todo: true }),
-    skipIf: (condition: unknown) => (condition ? skip : api),
-    if: (condition: unknown) => (condition ? api : skip),
+    skipIf: (condition: unknown) => (condition ? skip : run),
+    if: (condition: unknown) => (condition ? run : skip),
   });
   return api;
 }
 
-// Bodies and hooks are called with no arguments: Node passes a function that declares
-// parameters a test context and a `done` callback, and waits for `done`.
+// Test bodies and hooks are called with no arguments: Node passes a test context to a function
+// that declares a parameter, and with two it also passes a `done` callback and waits for it.
 export const test = chainable((name, body, settings) => {
   nodeTest.test(name, settings, async () => {
     await body();
   });
 });
 export const it = test;
-export const describe = chainable((name, body, settings) => {
-  nodeTest.describe(name, settings, () => {
-    body();
-  });
-});
+export const describe = chainable(
+  (name, body, settings) => void nodeTest.describe(name, settings, body as nodeTest.SuiteFn),
+);
 
 export const beforeEach = (hook: () => unknown) => nodeTest.beforeEach(async () => void (await hook()));
 export const afterEach = (hook: () => unknown) => nodeTest.afterEach(async () => void (await hook()));
@@ -108,8 +124,42 @@ jestExpect.extend({
   toBeString: bunMatcher("to be a string", (value) => typeof value === "string"),
 });
 
-// Bun's `expect` takes an optional failure message as a second argument, which Jest's rejects.
-export const expect = Object.assign((actual: unknown) => jestExpect(actual), jestExpect);
+/** `matchers` whose failures, thrown or rejected, start with `message` (Bun shows only `message`). */
+function withMessage<T extends object>(matchers: T, message: string): T {
+  const prefixed = (error: unknown): never => {
+    if (error instanceof Error) {
+      // Read first: V8 builds `stack` from `message` when it is first read.
+      const { message: original, stack } = error;
+      error.message = `${message}\n\n${original}`;
+      error.stack = stack?.replace(original, error.message);
+    }
+    throw error;
+  };
+  return new Proxy(matchers, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key);
+      // `not`, `resolves` and `rejects` are matcher objects too.
+      if (typeof value === "object" && value !== null) return withMessage(value, message);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        try {
+          const result: unknown = value.apply(target, args);
+          return result instanceof Promise ? result.catch(prefixed) : result;
+        } catch (error) {
+          return prefixed(error);
+        }
+      };
+    },
+  });
+}
+
+// Bun's `expect` takes an optional failure message as a second argument, which Jest's rejects, so
+// the wrapper adds it.
+export const expect = Object.assign(
+  (actual: unknown, message?: string) =>
+    message === undefined ? jestExpect(actual) : withMessage(jestExpect(actual), message),
+  jestExpect,
+);
 
 const mocker = new ModuleMocker(globalThis);
 export const spyOn = mocker.spyOn.bind(mocker);

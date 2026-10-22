@@ -115,6 +115,9 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
+/** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
+const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
+
 let tmp: string;
 
 beforeEach(() => {
@@ -706,7 +709,7 @@ describe("yian run", () => {
         try {
           const session = await registry.get(key)!.openRun();
           try {
-            expect(inspect(session.snapshot)).not.toContain(path);
+            expect(show(session.snapshot)).not.toContain(path);
           } finally {
             await session.close();
           }

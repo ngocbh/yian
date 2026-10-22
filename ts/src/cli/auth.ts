@@ -32,7 +32,7 @@ import {
 } from "../llm_clients/connection_settings.ts";
 import { callCredentials, ConnectionSnapshot } from "../llm_clients/connection.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
-import { listModels, ModelListError } from "../llm_clients/model_list.ts";
+import { listModels, MODEL_LIST_TIMEOUT_SECONDS, ModelListError } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { redactKeys } from "../llm_clients/redact.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
@@ -1078,7 +1078,7 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
   const authFile = command.options["auth-file"] as string | undefined;
   let provider = command.options["provider"] as string | undefined;
   const baseUrl = command.options["base-url"] as string | undefined;
-  const timeout = (command.options["timeout"] as number | undefined) ?? 8;
+  const timeout = (command.options["timeout"] as number | undefined) ?? MODEL_LIST_TIMEOUT_SECONDS;
   if ((authFile === undefined) === (provider === undefined)) {
     throw new UsageError("Invalid value: Give exactly one of --auth-file and --provider");
   }

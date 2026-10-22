@@ -1571,7 +1571,7 @@ Changed (TS yian): the inbox is push-based. In place of `interrupted(node_id)`,
 node. `drain(nodeId)` returns the queued messages or a promise of them, and the node
 awaits it between its effects. Only the main thread reads the inbox (CODE bodies run on
 worker threads but never see it), so it needs no lock. The `Steering` interface lives in
-`nodes/base.ts`; the run entry point will re-export it once it is ported.
+`nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
 
 Also changed (TS yian): every model call streams, so the interrupt is read before each later
 text chunk of every chat call, and a host without `onStream` can cut a reply too; a reply

@@ -1,19 +1,460 @@
 # yian (TypeScript)
 
-The TypeScript implementation of yian, being ported under #736. It is not usable yet; the
-Python package in `src/yian/` stays the reference until the two reach parity.
+The TypeScript implementation of yian ([ngocbh/yian#736][issue-736]), the npm package `@ngocbh/yian`
+(`yian` is taken on npm). The Python package in `src/yian/` stays until the cut-over. Until then the
+guides in `docs/` describe Python yian, with a "Changed (TS yian):" note wherever TS yian differs.
+This README gives the TypeScript shape of the API: names, option objects and types. For what each
+option does, follow its link to [`docs/api.md`][docs/api.md]; the flow YAML is in
+[`docs/syntax.md`][docs/syntax.md].
 
-- npm name: `@ngocbh/yian` (`yian` is taken on npm).
-- Runtimes: Node >= 22.18 and Bun >= 1.4.
+## Install
 
-## Layout
+TS yian runs on Node >= 22.18 or Bun >= 1.4.
+
+```sh
+npm install @ngocbh/yian                          # or: bun add @ngocbh/yian
+npx yian --help                                   # the CLI of that install
+npx @ngocbh/yian --help                           # the CLI, without an install
+npm install @modelcontextprotocol/client@2.3.1    # only to open MCP servers
+```
+
+The first release isn't published yet; until then, `npm pack` in `ts/` makes the package to install.
+
+- Under Bun, the entry points resolve to the TypeScript sources in `src/` (the `bun` export
+  condition); elsewhere to the built JavaScript in `dist/src/`, with its `.d.ts` types.
+- The MCP SDK is an optional peer dependency, loaded only when a server opens.
+- Single-file binaries need neither Node nor Bun: `yian-darwin-arm64`, `yian-darwin-x64`,
+  `yian-linux-x64` and `yian-linux-arm64`. None is published yet; build them from a clone with
+  `bun run build:bin` in `ts/` (into `ts/bin/`). They bundle the MCP SDK and don't load a `.env` or
+  `bunfig.toml` from the working directory.
+- `yian --licenses` prints yian's notice, Bun's, and the licenses of the packages the binaries
+  bundle.
+
+## Example
+
+A flow with a TOOL node, served by a host tool, and a CODE node; neither calls a model.
+
+```yaml
+# total.yaml
+id: total
+name: total
+input:
+  qty: !int
+  price: !float
+nodes:
+  quote:
+    kind: tool
+    tool_id: quote
+    input:
+      qty: ${input.qty}
+      price: ${input.price}
+  label:
+    kind: code
+    input:
+      total: ${quote.output}
+    output: str
+    code: |
+      return `total: ${inputs.total}`;
+output: ${label.output}
+```
+
+```ts
+import { readFile } from "node:fs/promises";
+
+import { loadFlow, runFlow, tool } from "@ngocbh/yian";
+
+const quote = tool({
+  name: "quote",
+  description: "Price an order.",
+  parameters: {
+    type: "object",
+    properties: { qty: { type: "integer" }, price: { type: "number" } },
+    required: ["qty", "price"],
+  },
+  execute: ({ qty, price }) => (qty as number) * (price as number),
+});
+
+const flow = await loadFlow(await readFile("total.yaml", "utf8"), {
+  searchPaths: ["."],
+  sourceLabel: "total.yaml",
+});
+const result = await runFlow(flow, { qty: 3, price: 2.5 }, {
+  tools: { quote },
+  onEvent: (event) => console.log(event.type),
+});
+console.log(result.status, result.output); // succeeded total: 7.5
+```
+
+## Entry points
+
+Only the names below are the supported surface. The other exports, all on `/run` (`hostInputs`,
+`runStartInputs`, `runStartLlm`, `LlmConfigsCheck`, `checkRecordedLlmFields`, `skillGrants`,
+`replayRunLog`, `replayCompiledRunLog`), are internal: they serve the CLI and yian's own code, and
+may change without notice.
+
+| Import | Names |
+|---|---|
+| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
+| `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
+| `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
+
+`Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `ResumeFlowOptions`, `RunInspection`,
+`RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `ToolEntry`, `AskUserHandler`,
+`AskUserRequest`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`,
+`StandardIssue`, `StandardResult`, `ToolErrorKind` and `MarkdownStore` are types only.
+
+## Differences from Python yian
+
+Each difference is a "Changed (TS yian):" note in `docs/`; these shape every call.
+
+- **camelCase.** Functions, options and fields are camelCase (`load_flow` is `loadFlow`, `run_id` is
+  `runId`, `backward_outcome` is `backwardOutcome`), and keyword arguments become one options
+  object. The JSON forms stay snake_case: an event's `toJSON()`, run logs, CLI documents. Flow
+  values keep their own keys.
+- **Promises.** `loadFlow`, `runFlow`, `resumeFlow`, `result.backward`, `buildMemories`,
+  `invokeTool` and `McpServer`'s `open` and `close` return Promises; their errors are rejections.
+  `inspectRun`, `iterRunRecords`, `loadSkills` and `loadSkillDir` are synchronous.
+- **Numbers.** Ints in yian values are `bigint` and floats are `number`: `result.output`,
+  `result.input` and event payloads hold `3n`, not `3`. Values a host passes in (`inputs`,
+  `llmConfig`, feedback, a tool's result) go through host intake: a whole `number` within ±(2^53−1)
+  becomes an int (`{n: 3}` holds `3n`), any other number a float, and `Infinity` is a float; NaN, a
+  `Date`, a `Map`, an accessor or a Proxy is refused with `TypeCheckError` (see [Types → host
+  intake][docs/typing.md#two-constructors-infer-vs-check]). Tool arguments and CODE inputs arrive
+  the other way: an int within ±(2^53−1) as a `number`, a larger one as a `bigint`.
+- **`signal`.** `runFlow` and `resumeFlow` take an `AbortSignal`; aborting it stops the run, which
+  rejects with the signal's reason. A tool's `ctx.signal` aborts when its call must end early.
+- **Tools.** Every tool is a `FunctionTool`, often built with `tool()` from a raw JSON Schema or a
+  Standard Schema v1 validator (zod 4, ArkType; valibot through `toStandardJsonSchema`). A plain
+  function is not a tool. `execute(args, ctx)` takes the arguments first and may be async.
+- **CODE nodes** are TypeScript or JavaScript, a reference `./file.ts:fn` or an inline body that
+  reads `inputs`, and run on worker threads, so aborting the run (the `signal`, or one Ctrl-C of the
+  CLI) ends even a body that never yields (see [`code` /
+  `tool`][docs/syntax.md#code--tool--the-other-leaves] in the syntax guide). A host that bundles
+  yian (esbuild, webpack, `bun build`) must ship the worker as its own entry at
+  `nodes/code/worker.js` beside the bundle file, or every CODE call fails.
+- **Errors.** Python's `ValueError` is a `RangeError` or `TypeError`, and every yian error sets
+  `error.name` to its class. Some errors a call can throw aren't exported (`TypeCheckError`,
+  `MemorySetupError`, `AuthError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
+  Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
+  from another copy of yian work.
+- **Storage.** Run logs (schema 11) and memory stores (SQLite envelope version 3) are not compatible
+  with Python yian's.
+
+## Loading a flow
+
+```ts
+loadFlow(text: string, options?: {
+  searchPaths?: readonly string[] | null;
+  sourceLabel?: string;            // default "<flow>"
+  baseDir?: string | null;
+  childResolver?: ((path: string, version: string | null) => ComposedFlow | Promise<ComposedFlow>) | null;
+  env?: (name: string) => string | undefined;
+}): Promise<ComposedFlow>
+```
+
+See [`load_flow`][docs/api.md#load_flow]. `baseDir` is the directory a CODE node's `./file.ts:fn`
+reference resolves against (default: the first search path, else the current directory). A malformed
+flow rejects with `LoadError` (a `RangeError`), whose `diagnostic` is a `Diagnostic` located in the
+source.
+
+A `ComposedFlow` holds `compiled` (the `CompiledFlow` graph), `version`, `name`, `description`,
+`originResolver` and `importDepth`; `flow.diagnose(failure)` returns a `Diagnostic` with source
+frames for a run's `Failure` (see [Diagnosing a failed run][docs/api.md#diagnosing-a-failed-run]).
+`FlowValidationError` (a `RangeError`, with `errors`, a `readonly string[]`) reports a failed graph
+check.
+
+## Running a flow
+
+```ts
+runFlow(flow: ComposedFlow, inputs: Record<string, unknown>, options?: RunFlowOptions): Promise<RunResult>
+```
+
+A failed flow resolves with `status: "failed"`; host, callback and log errors reject. See
+[`run_flow`][docs/api.md#run_flow] for the options:
+
+| Option | Type | Default |
+|---|---|---|
+| `log` | a new JSONL path, never overwritten | `null`: a process-local log |
+| `runId` | `string` | minted |
+| `numWorkers` | `number`; `0` runs serially | `8` |
+| `onEvent` | `EventHook`, `(event) => unknown` | `null` |
+| `onStream` | `StreamHook`, `(chunk) => unknown` | `null` |
+| `llmConfig` | record, the outer `llm_config` layer | `null` |
+| `memory` | `Map` of memory key to backend, usually a `MemoryRegistry` | `null` |
+| `learnable` | `boolean`: keep the run for `result.backward` | `false` |
+| `tools` | record of tool id to `ToolEntry`; replaces the registry | `null`: the registered tools |
+| `skills` | `Map<string, Skill>` | `null` |
+| `steering` | `Steering` | `null` |
+| `context` | the host's app object, as `ctx.context` | `undefined` |
+| `signal` | `AbortSignal` | `null` |
+| `env` | `(name: string) => string \| undefined` | `null`: the process environment |
+| `scheduler`, `random`, `models` | for tests (see [`env`, `signal` and `scheduler`](#env-signal-and-scheduler)) | real clock, `Math.random`, real models |
+
+A callback that throws, or returns a promise that rejects, stops the run, which rejects with that
+error.
+
+### `RunResult`
+
+| Field | Type |
+|---|---|
+| `status` | `"succeeded"` or `"failed"` |
+| `output` | the flow's value on success, else `null` |
+| `failure` | `Failure \| null` |
+| `input` | the inputs `RunStarted` kept |
+| `runId` | `string` |
+| `log` | the path as given, or `null` |
+| `events` | this call's post-durable events |
+| `interruptedAttempts` | `ReadonlyMap<string, number>`: attempts a resume retried, by node id |
+| `backwardOutcome`, `learning` | the last observed backward attempt, else `null` |
+
+`await result.backward(feedback, { apiKey, headers, onEvent })` runs one backward attempt over a
+`learnable: true` run and resolves to a `BackwardOutcome` (`status`, `feedback`, `failure`,
+`learning`). See [`RunResult`][docs/api.md#runresult] and [Explicit backward
+feedback][docs/api.md#explicit-backward-feedback].
+
+### Events and stream chunks
+
+`onEvent` receives each observer event after its record is durable, plus the transient in-loop AGENT
+events; `onStream` receives `StreamChunk`s. Every event has a `type` naming its class and camelCase
+fields. The classes aren't exported: narrow on `event.type` (the event type is
+`Parameters<EventHook>[0]`).
+
+- Run: `RunStarted`, `RunResumed`, `RunSucceeded` (`output`), `RunFailed` (`failure`).
+- Node: `NodeStarted`, `NodeSucceeded`, `NodeRouted`, `NodeSkipped`, `NodeFailed`, `NodeExpanded`,
+  `NodeAttemptResumed`.
+- In-loop AGENT, never recorded: `ModelCallStarted`, `ModelCallFinished`, `ToolCallStarted`,
+  `ToolCallFinished`, `ReplayDegraded`.
+- Outside a run: `ModelCallRetried`, and a learner's `ReplayDegraded`, reach `result.backward`'s and
+  `buildMemories`' `onEvent`, never a run's.
+- `StreamChunk`: `nodeId`, `key`, `chunk`, `final`, `exchangeId`, `attempt`.
+
+`event.toJSON()` gives the snake_case form that
+[`conformance/schema/events.schema.json`][conformance/schema/events.schema.json] describes. Flow
+values inside are left as they are (ints as `bigint`, `Infinity`), so `JSON.stringify` needs a
+replacer for them. Meanings: the `on_event` and `on_stream` items of
+[`run_flow`][docs/api.md#run_flow].
+
+## Recovering and inspecting runs
+
+```ts
+resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions): Promise<RunResult>
+inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
+```
+
+`resumeFlow` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
+`onEvent`, `onStream`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
+`scheduler`, `random` and `models`, plus `apiKey` and `headers` for a run started with
+`llmConfig.api_key`. Tools, skills, memory and context aren't recorded: pass the ones the run had.
+See [Durable recovery with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
+
+`inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
+`"failed"`, `"stopped"` or `"interrupted"`), `inFlight`, `interruptedAttempts`, `runId`, `schema`,
+`flowFingerprint`, `learnable`, `lastSeq`, `startedAt`, `endedAt` and `failure`. Pass `flow` for an
+exact status. See [Reading a run log with
+`inspectRun`][docs/api.md#reading-a-run-log-with-inspectrun].
+
+For hosts that show runs: `iterRunRecords(log, { afterOffset, runId, afterSeq, kinds, payloads })`
+streams a log another process may be writing, yielding `RunLogEntry`s and throwing
+`RunLogChangedError` when the file no longer continues what was read ([Following a run
+log][docs/api.md#following-a-run-log-with-iterrunrecords]); `staticNodes(flow)` lists `[path, node]`
+for every node of a flow and its child flows, and `staticPathOf(nodeId)` maps a grown node's id onto
+that path ([Naming a run's nodes][docs/api.md#naming-a-runs-nodes-with-staticnodes]). A log of
+another schema throws `RunLogSchemaError`.
+
+## Tools
+
+```ts
+tool({ name, description, parameters, output?, parametersJsonSchema?, outputJsonSchema?, execute, isConcurrencySafe? }): FunctionTool
+new FunctionTool({ name, description, parametersJsonSchema, execute, isConcurrencySafe?, parametersValidator?, outputJsonSchema?, outputValidator? })
+```
+
+`parameters` and `output` take a raw JSON Schema or a Standard Schema v1 validator; with a validator
+that has no Standard JSON Schema interface, pass its JSON Schema beside it. `execute(args, ctx)`
+returns the result or a Promise of it. `ctx` is a `ToolContext<T>`: `callId`, `attempt`, `toolName`,
+`runId`, `node`, `context` (the run's `context` option) and `signal`. See [Tool
+context][docs/api.md#tool-context] and [Typed tools][docs/api.md#typed-tools].
+
+A tool controls retries and what the model reads with its errors ([TOOL
+retries][docs/api.md#tool-retries]): `new PermanentToolError(message)` stops retries,
+`new TransientToolError(message, { retryAfter: 5 })` asks for a retry after that many seconds, and
+`new ReportedToolError(message, { permanent })` is read by the calling AGENT's model as the call's
+result. `toolErrorKinds(error)` returns the `ToolErrorKind`s (`"permanent"`, `"transient"`,
+`"reported"`, `"check"`) an error's `TOOL_ERROR` brand holds, and the `is*ToolError` guards read the
+same brand; `ToolCheckError` is thrown when one of yian's own checks of a call fails. A TOOL node
+whose retries ran out fails with a `ToolAttemptsFailed` listing every attempt (its `cause` is the
+last attempt's error).
+
+The tools a run sees: without `tools`, the process registry; with `tools`, exactly that record.
+
+- `registerTool(toolId, tool, { descriptionOverride })` registers a `FunctionTool` (its `name` must
+  equal `toolId`) in `TOOL_REGISTRY`; `registeredTools()` returns the registry as a record, and
+  `resolveTools(ids)` looks registered tools up. `invokeTool(toolId, args)` checks and calls a
+  registered tool; `invokeToolTrusted(toolId, args)` checks it against the full schema,
+  host-injected fields included.
+- `new ToolSet(tools, { context })` holds one run's tools (the registry when `tools` is omitted),
+  and `set.forRun(runId, { signal })` binds a copy to a run. `await set.validate(toolId, args)`
+  returns a `CheckedCall` that `set.invoke(call, options)` runs and `set.isConcurrencySafe(call)`
+  reads; `set.invoke(toolId, args, options)` and `set.invokeTrusted(toolId, args, options)` validate
+  first. `InvokeOptions` holds `node`, `callId`, `attempt` and `signal`.
+- A `ToolEntry` is a `FunctionTool`, an array of them (a [tool group][docs/api.md#tool-groups]), an
+  `McpServer` (a group of its tools), or, under the key `ask_user`, an `AskUserHandler`
+  `(request, ctx) => answer` ([Blocking human interaction][docs/api.md#blocking-human-interaction]).
+  A flow that uses registered tools and asks passes `{ ...registeredTools(), ask_user: handler }`.
+
+### MCP servers
+
+```ts
+mcpServer({ command, args?, env?, cwd?, timeout?, connectTimeout?, label?, concurrencySafe? }): McpServer
+mcpServer({ url, headers?, timeout?, connectTimeout?, label?, concurrencySafe? }): McpServer
+```
+
+The server starts only when opened: `await server.open({ signal })`, then `server.tools`, and
+`await server.close()` (or `await using`). An unopened server passed in `tools` is opened for that
+run and closed when it ends. Timeouts are in seconds. Errors are `McpError` subclasses (`isMcpError`
+checks the brand): `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`,
+`McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`. Requires the optional
+peer `@modelcontextprotocol/client`. See [MCP servers][docs/api.md#mcp-servers].
+
+## Memory
+
+`await buildMemories(flow, { root, storage, supplied, factories, env, models, onEvent })` builds one
+backend for each memory key the flow declares and resolves to a `MemoryRegistry`. `root` is the
+directory for per-flow memory files, `storage` a record of a file per built-in key, `supplied` a
+record of ready backends (the registry doesn't close them), and `factories` a record of constructors
+for custom types, `(config) => backend`, possibly async. `env`, `models` and `onEvent` reach the
+reflective and profile learners (`onEvent` gets their `ModelCallRetried` and `ReplayDegraded`).
+
+A `MemoryRegistry` is a read-only `Map` of memory key to backend, with `types` (the declared type of
+each key) and `close()`; pass it as `runFlow`'s `memory`, and close it when done
+(`await using registry = await buildMemories(flow)`). See [Building memories with
+`build_memories`][docs/api.md#building-memories-with-build_memories]. A host memory is any object
+with `openRun({ snapshot })` and `reset()`; its methods may return promises.
+
+Storage, for hosts that build memories themselves ([Optional durable
+memory][docs/api.md#optional-durable-memory]): `new SQLiteStorage(path, backend, { createParent })`
+is a single-owner SQLite state file, and `checkStoragePath(path)` returns the absolute path it would
+use or throws. A `MarkdownStore` (profile memory's document) has `read(version?)`, returning
+`[text, version]` (or a promise of it), and `write(text, { baseVersion, provenance })`, returning
+the new version (or a promise of it); `new FileMarkdownStore(path, { createParent })` and
+`new InMemoryMarkdownStore(text)` implement it, a stale `baseVersion` throws
+`MarkdownVersionMismatch`, and `markdownVersion(text)` is the `"sha256:<hex>"` version of a text.
+
+## Skills
+
+```ts
+import { defaultSkillRoots, loadSkills } from "@ngocbh/yian/skills";
+
+const skills = loadSkills(defaultSkillRoots({ cwd: process.cwd() }));
+await runFlow(flow, inputs, { skills });
+```
+
+`loadSkills(roots, { skipInvalid, warn })` returns a `Map<string, Skill>` sorted by name, an earlier
+root winning a name; `loadSkillDir(directory)` reads one skill;
+`defaultSkillRoots({ cwd, home, env })` lists the Claude Code and Codex roots, highest precedence
+first. `new Skill({ name, description, instructions, directory })` builds one in code; a bad skill
+throws `SkillError`. See [Skills][docs/api.md#skills].
+
+## Steering
+
+`steering` is an object with `interruptSignal(nodeId)`, returning an `AbortSignal` the host aborts
+to interrupt that AGENT node, and `drain(nodeId)`, returning the queued steer messages (or a promise
+of them). It reaches AGENT nodes authored `steerable: true`; pass the same inbox to `resumeFlow`.
+See [Steering][docs/api.md#steering].
+
+## Errors and failure codes
+
+A failed run's `result.failure` is a `Failure`: `code`, `message`, `nodeId`, `trace`, `causeType`
+(for debugging only) and `traceback`, with `toJSON()`. `code` is one of the codes in [Failure
+codes][docs/api.md#failure-codes]; TS yian adds `agent.output_invalid`, `provider.rate_limit`,
+`provider.quota`, `provider.unavailable`, `provider.context_length`, `provider.refused` and
+`condition.evaluate`, which Python reports as `node.execute` (or, for an `asserts:` condition,
+`assertion.failed`). A failed run is terminal; branch on `code`, never on `causeType`.
+
+A `Diagnostic` (from `LoadError.diagnostic` or `flow.diagnose(failure)`) holds `code`, `message`,
+`frames` (each with `label`, `text`, `range` and `note`), `notes`, `nodeId`, `causeType` and
+`traceback`.
+
+Host-side errors reject the call instead: `LoadError`, `FlowValidationError` and `ExpressionError`
+(all `RangeError`s), `TypeError` and `RangeError` for bad options or inputs, the `Mcp*` errors, the
+signal's reason, and the unexported errors named in [Differences from Python
+yian](#differences-from-python-yian). Each function's TSDoc lists what it throws.
+
+## Expressions and values
+
+`evaluateWhen(expression, pool, types?)` evaluates a boolean `when:`/assert expression against a
+`VariablePool`, the run's typed value store ([Types →
+`VariablePool`][docs/typing.md#variablepool--the-runs-typed-value-store]), and throws
+`ExpressionError` for a bad expression.
+`registerTemplateFn(name, { params: [{ name, default? }], call(...args) })` adds or replaces a
+function `${...}` expressions can call; each `default` goes through host intake.
+
+## `env`, `signal` and `scheduler`
+
+- `env` is a function `(name: string) => string | undefined`. `loadFlow`, `runFlow`, `resumeFlow`,
+  `inspectRun`, `buildMemories` and `defaultSkillRoots` read the environment through it instead of
+  `process.env`: connections, credentials, `HOME`, and every `YIAN_*` default and limit. Concurrent
+  calls with different `env`s each keep their own values. A bad `YIAN_*` value rejects with
+  `DefaultsError`; a resume whose recorded values differ, with `DefaultsMismatchError`. See
+  [Defaults and limits][docs/api.md#defaults-and-limits] and [`docs/defaults.md`][docs/defaults.md].
+- `signal` is the host's stop for `runFlow`, `resumeFlow` and `McpServer.open`. An aborted run
+  appends a stop record, lets the nodes in flight wind down and rejects with the signal's reason;
+  `resumeFlow` retries the stopped nodes. An already-aborted signal rejects before anything is
+  created.
+- `scheduler` (`{ now(), sleep(ms, signal) }`), `random` (a draw in [0, 1) for backoff jitter) and
+  `models` (the model builder AGENT nodes use) are for tests and conformance: virtual time, fixed
+  jitter and scripted models. Hosts leave them unset.
+
+## CLI
+
+The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
+`yian --help` lists its commands.
+
+[conformance/schema/events.schema.json]: https://github.com/ngocbh/yian/blob/main/conformance/schema/events.schema.json
+[docs/api.md]: https://github.com/ngocbh/yian/blob/main/docs/api.md
+[docs/api.md#blocking-human-interaction]: https://github.com/ngocbh/yian/blob/main/docs/api.md#blocking-human-interaction
+[docs/api.md#building-memories-with-build_memories]: https://github.com/ngocbh/yian/blob/main/docs/api.md#building-memories-with-build_memories
+[docs/api.md#defaults-and-limits]: https://github.com/ngocbh/yian/blob/main/docs/api.md#defaults-and-limits
+[docs/api.md#diagnosing-a-failed-run]: https://github.com/ngocbh/yian/blob/main/docs/api.md#diagnosing-a-failed-run
+[docs/api.md#durable-recovery-with-resume_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#durable-recovery-with-resume_flow
+[docs/api.md#explicit-backward-feedback]: https://github.com/ngocbh/yian/blob/main/docs/api.md#explicit-backward-feedback
+[docs/api.md#failure-codes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#failure-codes
+[docs/api.md#following-a-run-log-with-iterrunrecords]: https://github.com/ngocbh/yian/blob/main/docs/api.md#following-a-run-log-with-iterrunrecords
+[docs/api.md#load_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#load_flow
+[docs/api.md#mcp-servers]: https://github.com/ngocbh/yian/blob/main/docs/api.md#mcp-servers
+[docs/api.md#naming-a-runs-nodes-with-staticnodes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#naming-a-runs-nodes-with-staticnodes
+[docs/api.md#optional-durable-memory]: https://github.com/ngocbh/yian/blob/main/docs/api.md#optional-durable-memory
+[docs/api.md#reading-a-run-log-with-inspectrun]: https://github.com/ngocbh/yian/blob/main/docs/api.md#reading-a-run-log-with-inspectrun
+[docs/api.md#run_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#run_flow
+[docs/api.md#runresult]: https://github.com/ngocbh/yian/blob/main/docs/api.md#runresult
+[docs/api.md#skills]: https://github.com/ngocbh/yian/blob/main/docs/api.md#skills
+[docs/api.md#steering]: https://github.com/ngocbh/yian/blob/main/docs/api.md#steering
+[docs/api.md#tool-context]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-context
+[docs/api.md#tool-groups]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-groups
+[docs/api.md#tool-retries]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-retries
+[docs/api.md#typed-tools]: https://github.com/ngocbh/yian/blob/main/docs/api.md#typed-tools
+[docs/cli.md]: https://github.com/ngocbh/yian/blob/main/docs/cli.md
+[docs/defaults.md]: https://github.com/ngocbh/yian/blob/main/docs/defaults.md
+[docs/syntax.md]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md
+[docs/syntax.md#code--tool--the-other-leaves]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md#code--tool--the-other-leaves
+[docs/typing.md#two-constructors-infer-vs-check]: https://github.com/ngocbh/yian/blob/main/docs/typing.md#two-constructors-infer-vs-check
+[docs/typing.md#variablepool--the-runs-typed-value-store]: https://github.com/ngocbh/yian/blob/main/docs/typing.md#variablepool--the-runs-typed-value-store
+[issue-736]: https://github.com/ngocbh/yian/issues/736
+
+## Developing
+
+Notes for working on `ts/`. Python yian in `src/yian/` is the reference the port mirrors until
+the cut-over. Parity status on 2026-10-22: the whole shared conformance suite passes on Bun and on
+Node 22, and so does every unit test; a change keeps both green.
+
+### Layout
 
 - `src/<pkg>/<mod>.ts` mirrors `src/yian/<pkg>/<mod>.py`.
 - `tests/<area>/<x>.test.ts` mirrors `tests/<area>/test_<x>.py`.
 - Relative imports use `.ts` specifiers; `tsc` rewrites them to `.js` in `dist/`.
 - No `Bun.*` or `bun:*` outside `src/platform.ts`.
 
-## Conventions
+### Conventions
 
 - Every yian error class sets `override name = "<Class>"`: hosts and the conformance runner
   read `error.name`.
@@ -43,7 +484,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A `float` slot given an int stores kind `int`, and a `list[float]` item may be an int
   (`bigint`): code reading a float slot handles both (#535, `int-in-float`).
 
-## YAML
+### YAML
 
 - In `src/`, only `src/compose/source/` imports `yaml` (tests may import it).
 - It parses with `FLOW_OPTIONS` (YAML 1.2, failsafe schema), so the library resolves no
@@ -60,7 +501,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - `SourceCatalog` turns an opaque origin into a diagnostic frame by replaying the occurrence
   path it kept.
 
-## Compose
+### Compose
 
 - `src/compose/helpers/errors.ts` holds `LoadError`, the one error a load throws. It carries one
   `Diagnostic`, whose code is always `compose.load`, and is frozen.
@@ -106,7 +547,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   module only for its shared helpers (such as `Narrowing` from `narrowing.ts` and `LocalInput` from
   `typed_bindings.ts`).
 
-## Skills
+### Skills
 
 - `src/skills/` is a leaf: it holds `Skill`, the `load_skill` tool and the system-message
   listing, and imports only `defaults`, `diagnostics`, `typesys` and `llm`. Its `index.ts`
@@ -115,7 +556,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   directories and parses their frontmatter with `parseYamlLiteral`.
 - Reads are synchronous. Skill files are read as strict UTF-8, with CRLF and lone CR read as LF.
 
-## Tools
+### Tools
 
 - `src/tools/` imports no engine or front-end layer (`nodes`, `compile`, `compose`, `runtime`,
   `run`, `cli`); `index.ts` is its public face.
@@ -148,7 +589,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - The MCP tests run a fake server (`tests/fixtures/mcp/fake_server.ts`) over stdio and as an
   in-process HTTP server.
 
-## LLM layer
+### LLM layer
 
 - `src/llm/` is a leaf: it imports only `defaults`, `platform` and `typesys/json` (the layer
   ratchet checks this).
@@ -184,7 +625,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   records them with every credential redacted by value, and refuses to save one that still holds
   a credential. Record only when `recordMode(processEnv)` says so (`RECORD=1`, never under `CI`).
 
-## LLM clients
+### LLM clients
 
 - `src/llm_clients/` holds `LLMConfig`, the provider block decoders (one field-spec table per
   API, the key walk, the value pass), the connection-setting checks and the key-variable table.
@@ -235,7 +676,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Validation errors are `ValidationError` with pydantic-shaped `issues` (`loc`, `type`, `msg`);
   for a `value_error`, `error` holds the validator's own text.
 
-## Nodes
+### Nodes
 
 - The carriers in `src/nodes/contracts.ts` (`Binding`, `ValueTemplate`, `Parameter`, the
   contracts) are frozen. To change an origin, rebuild: `mapOrigins` returns a new carrier, and
@@ -336,7 +777,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `yian.message.v1` (Python's is `yian.langchain-message.v1`). TS yian never reads a Python memory
   store.
 
-## Memory
+### Memory
 
 - `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
@@ -438,7 +879,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `__memory__`, consumer `memory:<key>`) and `onEvent` receives their `ModelCallRetried` and
   `ReplayDegraded` events; `await using` closes the registry.
 
-## Runtime
+### Runtime
 
 - `src/runtime/common.ts` holds `NodeState`, the scheduler states runtime modules share.
 - `src/runtime/contracts.ts` holds the forward captures (`BackwardCapture`, `ForwardCapture`) and
@@ -635,7 +1076,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   writes its null checks inline, since it imports only `diagnostics` and `defaults`. A
   `BackwardFailure`'s cause compares by value, never `===`.
 
-## Compile
+### Compile
 
 - `src/compile/model.ts` holds the graph (`Flow`, `CompiledFlow`, `Edge`, `FlowOutput`), the
   growth-metadata check and `copyGraph`; `origins.ts` the origin traversal and rewrites;
@@ -683,7 +1124,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - Compare positions and scopes with `sameExecutionPosition`/`sameExecutionScope`, output contracts
   with `sameOutputContract`, and arrays with `sameItems` (`src/nodes/contracts.ts`).
 
-## CLI
+### CLI
 
 - `src/cli/terminal.ts` holds `Terminal`, the host terminal a run prompts on: `askUser` (the
   run's `ask_user` handler), `askText`, `askChoice`, `promptInputs` (the missing flow inputs) and
@@ -723,7 +1164,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - The conformance runner runs `cli` cases by spawning `src/cli/index.ts` (built: `dist/src/cli/
   index.js`) with a preloaded hook that routes `fetch` to a stub server.
 
-## Commands
+### Commands
 
 Run from `ts/`:
 
@@ -734,13 +1175,24 @@ bun run test                  # or one file: bun test ./tests/engine/layer_direc
 bun run test:node             # the same tests on Node, with the `node` on PATH
 bun run build
 YIAN_TEST_NODE=<node> bun test ./tests/engine/platform.test.ts   # after a build: the Node checks
+bun run build:bin             # the four binaries into bin/; YIAN_BIN_TARGETS="darwin-arm64" for a subset
+YIAN_TEST_BINARY=<absolute path to a binary> bun test tests/packaging.test.ts   # also run that binary
+YIAN_UPDATE_LICENSES=1 bun test tests/packaging.test.ts   # rewrite src/cli/licenses.ts
 ```
 
 `bun test` reads the preload `tests/conftest.ts` from `bunfig.toml`, which applies only when
 `bun test` starts in `ts/`. `test:node` needs Node >= 22.18: it loads `tests/node_runner.ts`, which
 runs the `bun:test` files on `node:test`, then the same preload.
 
-## Conformance
+`tests/packaging.test.ts` checks `src/cli/licenses.ts`, the text `yian --licenses` prints, against
+`NOTICE`, Bun's license, the license files of the packages the binaries bundle (read from
+`node_modules`) and those of the packages copied into their `dist/`. After a dependency change,
+rewrite it with `YIAN_UPDATE_LICENSES=1`. Bun's section and the copied packages' sections are kept
+from the current file unless `YIAN_BUN_LICENSE=<Bun's LICENSE.md>` (run under that Bun) or
+`YIAN_VENDORED_LICENSES=<dir>` (each npm package extracted as `<dir>/<any>/package/`) is set; set
+them when a Bun upgrade or a newly copied package changes those sections.
+
+### Conformance
 
 `tests/conformance.ts` runs the cases in `../conformance/cases/` (see `../conformance/README.md`).
 Run from `ts/`:

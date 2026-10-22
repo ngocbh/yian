@@ -388,6 +388,7 @@ import {
   textReply,
   traceSnapshot,
 } from "./run_state_fixtures.ts";
+import { NO_ENV } from "./session_fakes.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -3539,7 +3540,7 @@ test("a discarded agent worker keeps its render capture out of the accepted trac
       learnable: true,
       numWorkers: 2,
       effectiveLlmByStaticPath: { slow: config },
-      models: { env: () => undefined, createModel: () => blocking },
+      models: { env: NO_ENV, createModel: () => blocking },
     },
   );
 

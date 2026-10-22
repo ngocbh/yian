@@ -94,6 +94,7 @@ import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
+import { NO_ENV } from "./session_fakes.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";
@@ -469,12 +470,12 @@ export function callReply(...calls: [string, JsonObject, string][]): Response {
 }
 
 /**
- * Return a model access over `env` (default: an empty environment) that serves `model`; `built`
+ * Return a model access over `env` (default: `NO_ENV`) that serves `model`; `built`
  * counts the builds and `configs` holds the config given to each build, in order.
  */
 export function serving(
   model: ChatModel,
-  env: Env = () => undefined,
+  env: Env = NO_ENV,
 ): ModelAccess & { built: number; configs: Readonly<Record<string, unknown>>[] } {
   const access = {
     built: 0,

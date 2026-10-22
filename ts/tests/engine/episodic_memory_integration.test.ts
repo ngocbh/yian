@@ -38,7 +38,7 @@ const VARS = new Map([
   ["YIAN_DEFAULT_PROVIDER", "openai"],
   ["YIAN_DEFAULT_MODEL", "test-model"],
 ]);
-const env: Env = (name) => VARS.get(name);
+const env: Env = (name) => (name === "YIAN_AUTH_FILE" ? process.env[name] : VARS.get(name));
 
 /** The memory section texts the system prompt of `model`'s last request shows. */
 function recalled(model: ScriptedModel): string[] {

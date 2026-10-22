@@ -99,7 +99,7 @@ function echo(onCreate: (config: Readonly<Record<string, unknown>>) => void = ()
   const prompts: string[] = [];
   const access: ModelAccess & { prompts: string[] } = {
     prompts,
-    env: (name) => DEFAULT_ENV[name],
+    env: (name) => (name === "YIAN_AUTH_FILE" ? process.env[name] : DEFAULT_ENV[name]),
     createModel: (config): ChatModel => {
       onCreate(config);
       return {

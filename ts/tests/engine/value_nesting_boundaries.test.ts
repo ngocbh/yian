@@ -301,7 +301,7 @@ function runAgent(model: ScriptedModel, output: Type, retries: number, origins?:
   const node = new AgentNode("agent", { prompt: "q", llmConfig, retries });
   node.origin = new OriginRef("node");
   node.outputContract = new ValueContract(output, origins);
-  return drive(node, { models: { env: () => undefined, createModel: () => model } });
+  return drive(node, { models: { env: NO_ENV, createModel: () => model } });
 }
 
 /** The correction the model's second request ends with. */
@@ -386,7 +386,7 @@ function toolRun(model: ScriptedModel, options: { emitEvent?: (event: unknown) =
   const lookup = lookupTool(calls);
   const node = new AgentNode("agent", { prompt: "q", llmConfig: NATIVE, tools: ["lookup"] });
   const outcome = drive(node, {
-    models: { env: () => undefined, createModel: () => model },
+    models: { env: NO_ENV, createModel: () => model },
     tools: new ToolSet({ lookup }),
     emitEvent: options.emitEvent ?? null,
   });

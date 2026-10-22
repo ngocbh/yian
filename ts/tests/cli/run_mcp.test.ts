@@ -44,6 +44,7 @@ import { McpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../engine/mcp_helpers.ts";
+import { NO_ENV } from "../engine/session_fakes.ts";
 
 // Each row starts server processes; the default 5 s is too tight on a loaded machine.
 const SLOW = 60_000;
@@ -393,7 +394,7 @@ test(
       },
     });
     try {
-      const options = { log, tools: { whoami }, runId: "run-5c2e", env: () => undefined };
+      const options = { log, tools: { whoami }, runId: "run-5c2e", env: NO_ENV };
       const crashed = runFlow(await loadFlow(WHOAMI_FLOW), {}, options);
       await expect(crashed).rejects.toBe(crash);
     } finally {
@@ -417,7 +418,12 @@ test(
   async () => {
     const flow = flowFile(AGENT_FLOW);
     const log = join(tmp, "run.jsonl");
-    const vars = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const vars = {
+      XAI_API_KEY: "test-xai-key",
+      YIAN_DEFAULT_PROVIDER: "xai",
+      YIAN_DEFAULT_MODEL: "grok-4.3",
+      YIAN_AUTH_FILE: process.env.YIAN_AUTH_FILE!,
+    };
     const echo = tool({
       name: "echo",
       description: "Return `text`.",

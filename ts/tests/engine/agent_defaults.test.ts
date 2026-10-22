@@ -73,7 +73,7 @@ test("the manifest holds the agent retries default", async () => {
 
 /** An environment setting only `name` to `value`, as Python's `set_defaults` does. */
 function setting(name: string, value: string): Env {
-  return (each) => (each === name ? value : undefined);
+  return (each) => (each === name ? value : each === "YIAN_AUTH_FILE" ? process.env[each] : undefined);
 }
 
 /** Load `text` and run it on `{question: "q"}` with `model`, in `env`; the other options go to `runFlow`. */

@@ -111,6 +111,7 @@ import { drive, rejected, serving } from "./run_state_fixtures.ts";
 import {
   effectsOf,
   NEVER,
+  NO_ENV,
   request,
   runSessionFlow,
   sessionFlow,
@@ -460,7 +461,7 @@ async function evaluate(
   const chunks: StreamChunk[] = [];
   const observed: LiveEvent[] = [];
   const outcome = await drive(node, {
-    models: { env: () => undefined, createModel: () => chat },
+    models: { env: NO_ENV, createModel: () => chat },
     tools,
     emitStream: stream ? (item) => void chunks.push(item) : null,
     emitEvent: events ? (event) => void observed.push(event) : null,
@@ -535,7 +536,7 @@ test("an AGENT's event sink failure escapes the node as the host's error", async
   class HostBroken extends Error {}
   const broken = new HostBroken("host");
   const run = drive(new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG }), {
-    models: { env: () => undefined, createModel: () => model(reply("text")) },
+    models: { env: NO_ENV, createModel: () => model(reply("text")) },
     emitEvent: () => {
       throw broken;
     },
@@ -704,7 +705,7 @@ async function withSteps(
   const steps = options.steps === false ? null : new NodeSteps(1, [], record);
   const { scheduler, sleeps } = recordingScheduler();
   const outcome = await drive(node, {
-    models: { env: () => undefined, createModel: () => chat },
+    models: { env: NO_ENV, createModel: () => chat },
     tools,
     steps,
     scheduler,
@@ -818,7 +819,7 @@ test("a model's replay-degraded reasons reach the host once per reason per invoc
   // Each request signals what its adapter would for the turns it replays.
   const reasons: ReplayDegradedReason[][] = [["other_account"], ["other_account", "other_provider"]];
   const models: ModelAccess = {
-    env: () => undefined,
+    env: NO_ENV,
     createModel: (_config, { onReplayDegraded }) => ({
       provider: chat.provider,
       model: chat.model,

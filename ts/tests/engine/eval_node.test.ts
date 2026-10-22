@@ -671,7 +671,8 @@ describe("the models capability", () => {
   });
 
   test("defaultModelAccess keeps the given env and builds through chatModelFromConfig", async () => {
-    const env = (name: string): string | undefined => (name === "OPENAI_API_KEY" ? "sk-test" : undefined);
+    const env = (name: string): string | undefined =>
+      name === "OPENAI_API_KEY" ? "sk-test" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined;
     const access = defaultModelAccess(env);
     const signal = new AbortController().signal;
 
@@ -684,7 +685,8 @@ describe("the models capability", () => {
   });
 
   test("defaultModelAccess passes onReplayDegraded to chatModelFromConfig", async () => {
-    const env = (name: string): string | undefined => (name === "OPENAI_API_KEY" ? "sk-test" : undefined);
+    const env = (name: string): string | undefined =>
+      name === "OPENAI_API_KEY" ? "sk-test" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined;
     const reasons: string[] = [];
     const onReplayDegraded = (reason: string) => void reasons.push(reason);
     const signal = new AbortController().signal;

@@ -55,7 +55,7 @@ import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_to
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
-import { runSessionFlow, sessionFlow, view, withSessionOpener } from "./session_fakes.ts";
+import { NO_ENV, runSessionFlow, sessionFlow, view, withSessionOpener } from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -80,7 +80,7 @@ function failing(error: unknown, during: () => void, config = CONFIG): ChatModel
 /** Evaluate `node` (by default an AGENT `writer`) over `model` with the other `drive` options. */
 function evaluate(model: ChatModel, options: Parameters<typeof drive>[1] & { node?: AgentNode } = {}) {
   const { node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG }), ...rest } = options;
-  return drive(node, { models: { env: () => undefined, createModel: () => model }, ...rest });
+  return drive(node, { models: { env: NO_ENV, createModel: () => model }, ...rest });
 }
 
 test("a stop during a failing model call stops the node", async () => {
@@ -175,7 +175,7 @@ test("a stop cutting a tool's argument check short is the stop", async () => {
   const run = node.forward(
     {},
     {
-      models: { env: () => undefined, createModel: () => new ScriptedModel([lookupCall()], CONFIG) },
+      models: { env: NO_ENV, createModel: () => new ScriptedModel([lookupCall()], CONFIG) },
       tools: lookupTools((args) => ran.push(args), validator),
       signal: stop.signal,
       emitEvent: (event) => void events.push(event),

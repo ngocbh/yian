@@ -23,6 +23,7 @@ import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
+import { NO_ENV } from "../engine/session_fakes.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
@@ -63,7 +64,7 @@ async function runJson(flow: string, stdin: CliIo["stdin"], overrides: Partial<C
     stderr: err.out,
     stdin,
     stderrStream: new FakeOutput(),
-    env: () => undefined,
+    env: NO_ENV,
     ...overrides,
   };
   const log = join(tmp, `run-${++runs}.jsonl`);
@@ -187,7 +188,7 @@ test("an observer failure wins over the prompt it cancels", async () => {
     return "done";
   };
   const out = sink();
-  const env = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
+  const env = (name: string) => (name === "NO_COLOR" ? "1" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined);
   const io: CliIo = { stdout: out.out, stderr, stdin: input, stderrStream: output, env };
   const code = await withTool("cli_done_at_prompt", execute, () =>
     main(["run", flow, "--log", join(tmp, "run.jsonl")], io),

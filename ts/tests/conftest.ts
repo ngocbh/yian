@@ -1,0 +1,53 @@
+/**
+ * The suite's preload, as Python's `tests/conftest.py` and `tests/cli/conftest.py`: every test
+ * starts from built-in yian defaults, an empty private auth store and an empty home, and from an
+ * environment that an earlier test's changes no longer reach.
+ *
+ * At load it clears `XDG_CONFIG_HOME`, every defaults variable, `YIAN_DEFAULT_PROVIDER` and
+ * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on) and keeps that
+ * environment as the baseline. Before each test, `process.env` is put back to the baseline, with
+ * `YIAN_AUTH_FILE` at a fresh temp dir's `auth.json` (not created) and `HOME` at its `home/`.
+ */
+
+import fs from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import process from "node:process";
+
+import { beforeEach } from "bun:test";
+
+import { ENTRIES } from "../src/defaults.ts";
+
+const CLEARED = [
+  "XDG_CONFIG_HOME",
+  ...ENTRIES.map((each) => each.variable),
+  "YIAN_DEFAULT_PROVIDER",
+  "YIAN_DEFAULT_MODEL",
+];
+for (const name of CLEARED) delete process.env[name];
+const BASELINE: Readonly<Record<string, string | undefined>> = Object.freeze({ ...process.env });
+
+const made: string[] = [];
+
+/** Put `process.env` back to the baseline, with a fresh empty auth store and home. */
+function isolate(): void {
+  for (const name of Object.keys(process.env)) {
+    if (!Object.hasOwn(BASELINE, name)) delete process.env[name];
+  }
+  Object.assign(process.env, BASELINE);
+  const dir = fs.mkdtempSync(join(tmpdir(), "yian-test-"));
+  made.push(dir);
+  fs.mkdirSync(join(dir, "home"));
+  process.env.YIAN_AUTH_FILE = join(dir, "auth.json");
+  process.env.HOME = join(dir, "home");
+}
+
+// Removed once at exit rather than after each test: Bun and Node order a file's `afterEach`
+// hooks differently against the preload's, and a test's own cleanup may still need them.
+process.on("exit", () => {
+  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Module-level code and `beforeAll` hooks run before any `beforeEach`; give them a store and home too.
+isolate();
+beforeEach(isolate);

@@ -315,8 +315,12 @@ nodes:
 output: \${agent.output}
 `;
 
-/** An environment holding nothing, so a run reads no host setting. */
-export const NO_ENV = (): undefined => undefined;
+/**
+ * An environment holding only the test's `YIAN_AUTH_FILE` and `HOME`, read per call, so a run
+ * reads no host setting and its default store and home are the test's.
+ */
+export const NO_ENV = (name: string): string | undefined =>
+  name === "YIAN_AUTH_FILE" || name === "HOME" ? process.env[name] : undefined;
 
 /**
  * `runFlow` of `flow` with `inputs`, `memory` backing memory `session` (or each memory key of a

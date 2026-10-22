@@ -300,7 +300,7 @@ function testIo(env: Record<string, string> = {}) {
     stderr: err.out,
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
-    env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
+    env: (name) => (Object.hasOwn(env, name) ? env[name] : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined),
   };
   return { io, stdout: out.text, stderr: err.text };
 }
@@ -923,7 +923,7 @@ describe("run setup errors", () => {
       stderr,
       stdin: new PassThrough(),
       stderrStream: new PassThrough(),
-      env: (name) => (name === "NO_COLOR" ? "1" : undefined),
+      env: (name) => (name === "NO_COLOR" ? "1" : name === "YIAN_AUTH_FILE" ? process.env[name] : undefined),
     };
     expect(await main(["run", flow, "-q", "--log", join(tmp, "run.jsonl")], io)).toBe(0);
     chunks.length = 0;

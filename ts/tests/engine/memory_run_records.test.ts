@@ -121,6 +121,7 @@ import {
   NodeRoutedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
+  RunLogSchemaError,
   type RunRecord,
   type RunStartedFields,
   RunStartedRecord,
@@ -129,7 +130,7 @@ import {
 import { VariablePool } from "../../src/typesys/index.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 
-type ErrorClass = typeof TypeError | typeof RangeError;
+type ErrorClass = typeof TypeError | typeof RangeError | typeof RunLogSchemaError;
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: ErrorClass, message: string): void {
@@ -909,7 +910,7 @@ test("proposals preserve order and reject duplicate ids", () => {
 test("the wire rejects an old schema", () => {
   const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
   wire.schema = 3n;
-  expectError(() => decodeRecord(logJson(wire)), RangeError, "unsupported run-record schema: 3");
+  expectError(() => decodeRecord(logJson(wire)), RunLogSchemaError, "unsupported run-record schema: 3");
 });
 
 /** A memory-enabled run start with one flow-owned key, `reflective`. */

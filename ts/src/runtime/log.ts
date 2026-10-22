@@ -977,32 +977,50 @@ function validatedIdArray(value: unknown, label: string, requireSorted = false):
 }
 
 /**
+ * A run record names a schema this version can't read. Hosts tell it apart from a damaged log by
+ * its class (`name` `RunLogSchemaError`); a `RangeError`, so code that catches those catches it.
+ */
+export class RunLogSchemaError extends RangeError {
+  override name = "RunLogSchemaError";
+  /** The schema number the record names, or `null` when its schema isn't an integer. */
+  readonly schema: number | null;
+
+  constructor(message: string, schema: number | null, options?: ErrorOptions) {
+    super(message, options);
+    this.schema = schema;
+  }
+}
+
+/** The message for schema 9, which only Python yian reads. */
+const PYTHON_SCHEMA_MESSAGE = "run log schema 9 was written by Python yian; resume it with Python yian";
+
+/**
  * Check an envelope's schema version.
  *
- * @throws RangeError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9.
+ * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9.
  */
 function requireSchema(schema: unknown): void {
-  if (schema === 9) {
-    throw new RangeError("run log schema 9 was written by Python yian; resume it with Python yian");
-  }
+  if (schema === 9) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
   if (schema === SCHEMA_VERSION) return;
   // `valueRepr` prints a bigint like a number, so `10n` would read as the supported schema.
   const shown = typeof schema === "bigint" ? `${schema}n` : valueRepr(schema);
-  throw new RangeError(`unsupported run-record schema: ${shown}`);
+  const number = Number.isSafeInteger(schema) ? (schema as number) : null;
+  throw new RunLogSchemaError(`unsupported run-record schema: ${shown}`, number);
 }
 
 /**
  * Check a decoded envelope's `schema` member.
  *
- * @throws RangeError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9.
+ * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9.
  */
 function requireWireSchema(schema: unknown): void {
   if (schema === BigInt(SCHEMA_VERSION)) return;
-  if (schema === 9n) requireSchema(9);
+  if (schema === 9n) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
   // Only an int token (a `bigint`) names a schema; a float token reads as a number, shown as the
   // log writes floats (`10.0`), so it doesn't read as a supported schema.
   const shown = typeof schema === "number" ? logJson(schema) : valueRepr(schema);
-  throw new RangeError(`unsupported run-record schema: ${shown}`);
+  const number = typeof schema === "bigint" && Number.isSafeInteger(Number(schema)) ? Number(schema) : null;
+  throw new RunLogSchemaError(`unsupported run-record schema: ${shown}`, number);
 }
 
 /**
@@ -1035,7 +1053,8 @@ export class RecordEnvelope {
    * The schema is checked first, so a Python log's schema is named whatever its other fields
    * hold.
    *
-   * @throws RangeError when the schema isn't `SCHEMA_VERSION`, the run id is empty or holds a
+   * @throws RunLogSchemaError when the schema isn't `SCHEMA_VERSION`.
+   * @throws RangeError when the run id is empty or holds a
    *   lone surrogate, or `seq` isn't a non-negative safe integer.
    * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`.
    */
@@ -1093,14 +1112,29 @@ const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
  * envelope's `schema` is checked before anything else, so a Python log is named whatever else
  * the line holds; the record is built through its constructor, so its checks apply.
  *
+ * @throws RunLogSchemaError when the schema isn't `SCHEMA_VERSION`.
  * @throws RangeError when the line isn't JSON yian reads (`invalid run-record JSON`, with the
- *   reader's error as `cause`), the schema isn't `SCHEMA_VERSION`, the kind is unknown, an object
- *   has missing or extra fields, a string is empty, or a counter isn't a safe integer.
+ *   reader's error as `cause`), the kind is unknown, an object has missing or extra fields, a
+ *   string is empty, or a counter isn't a safe integer.
  * @throws TypeError when `data` is neither text nor bytes, or a field has the wrong JSON type.
  * @throws JSONDecodeError, the reader's error unchanged, when a route's embedded `value_json`
  *   isn't JSON yian reads.
  */
 export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
+  const { runId, seq, kind, payload } = decodeWire(data);
+  return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload));
+}
+
+/** A run-log line's envelope members, checked; the payload is unchecked. */
+type WireEnvelope = { runId: string; seq: number; kind: string; payload: JsonObject };
+
+/**
+ * Decode one run-log line's envelope without building its record: `decodeRecord`'s checks on
+ * everything but the payload's contents.
+ *
+ * @throws RunLogSchemaError, RangeError, TypeError as `decodeRecord` does for the envelope.
+ */
+function decodeWire(data: string | Uint8Array): WireEnvelope {
   let text: string;
   if (typeof data === "string") {
     text = data;
@@ -1131,7 +1165,30 @@ export function decodeRecord(data: string | Uint8Array): RecordEnvelope {
     throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
-  return new RecordEnvelope(SCHEMA_VERSION, runId, seq, recordFromPayload(kind, payload));
+  return { runId, seq, kind, payload };
+}
+
+/**
+ * Return the node a record of wire kind `kind` is about: its `node_id`, a growth's `spawner_id`
+ * or a failure's `node_id`; `null` for a record about no one node.
+ *
+ * @throws TypeError, RangeError when that id isn't a non-empty string.
+ */
+function wireNodeId(kind: string, payload: JsonObject): string | null {
+  const label = `${kind} payload`;
+  switch (kind) {
+    case "node_started":
+    case "node_step":
+    case "node_succeeded":
+    case "node_routed":
+      return wireName(payload["node_id"], `${label} node_id`);
+    case "node_expanded":
+      return wireName(payload["spawner_id"], `${label} spawner_id`);
+    case "node_failed":
+      return wireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`);
+    default:
+      return null;
+  }
 }
 
 /**
@@ -1428,12 +1485,190 @@ export class JsonlRunLog implements RunLog {
  * lock and without changing the file. An incomplete last line is ignored; an empty file or one
  * without a complete line gives no records.
  *
- * @throws RangeError when a complete line isn't a valid record, or the records don't share one
- *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
+ * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`.
+ * @throws RangeError when a complete line isn't a valid record, the records don't share one run
+ *   id with contiguous sequences from 0, or the file shrank while it was read; the message names
+ *   `path`, the line and its seq.
  */
 export function readRunLog(path: string): RecordEnvelope[] {
-  const data = fs.readFileSync(path);
-  return decodeCompletePrefix(data.subarray(0, data.lastIndexOf(0x0a) + 1), path);
+  return Array.from(iterRunRecords(path), (entry) => entry.envelope);
+}
+
+/** The bytes `iterRunRecords` asks for in one read. */
+const READ_CHUNK_BYTES = 1 << 16;
+
+/** One record `iterRunRecords` read, and where its line sits in the file. */
+export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
+  /** The record's sequence number. */
+  readonly seq: number;
+  /** The byte offset where the record's line starts. */
+  readonly offset: number;
+  /** The byte offset just past the line's newline; pass it as `afterOffset` to read on from it. */
+  readonly end: number;
+  /** The run id the envelope names. */
+  readonly runId: string;
+  /** The record's wire kind, such as `node_started`. */
+  readonly kind: string;
+  /**
+   * The node the record is about: the `node_id` of a node's start, step, success or route, the
+   * spawner of a growth, the node of a failure; `null` for a run, stop, memory or backward record.
+   */
+  readonly nodeId: string | null;
+  /** The validated envelope; `null` when read with `payloads: false`. */
+  readonly envelope: E;
+}
+
+/** How `iterRunRecords` reads a log. */
+export interface IterRunRecordsOptions {
+  /**
+   * Start at this byte offset, the `end` of a record read before; 0 (the default) reads from the
+   * start. It must be the end of a line.
+   */
+  afterOffset?: number;
+  /** Yield only records of these wire kinds; every line's envelope is still checked. */
+  kinds?: Iterable<string> | null;
+  /**
+   * `false` checks each line's envelope and node id without validating its payload, and yields
+   * `envelope: null`; `true` (the default) builds each record.
+   */
+  payloads?: boolean;
+}
+
+/**
+ * Stream the records of the run log at `path`, without taking the writer's lock and without
+ * changing the file, so a host can read a log another process is writing.
+ *
+ * The file is read in chunks of 64 KiB, so memory is bounded by the largest line. Reading stops
+ * at the end of the file; an unterminated last line, which a writer may still be finishing, is
+ * not yielded, and a later call with the last entry's `end` as `afterOffset` reads on from it.
+ * A record yielded while a writer runs may later be rolled back by that writer's failed append;
+ * the next call then finds the file shorter than its offset and throws.
+ *
+ * From the start, each record's seq must be its line's index; after an offset, the first record
+ * read sets the count. Every record must name the first one's run id. A record of an unwanted
+ * kind is checked as with `payloads: false`, and not yielded. The file is opened when the first
+ * entry is asked for and closed when the iteration ends.
+ *
+ * @param path The JSONL run log's path.
+ * @param options.afterOffset The byte offset to start at.
+ * @param options.kinds The wire kinds to yield; every kind by default.
+ * @param options.payloads Whether to build and validate each record.
+ * @returns A generator of `{ seq, offset, end, runId, kind, nodeId, envelope }`.
+ * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION` (schema 9 is Python
+ *   yian's); the message names the line.
+ * @throws RangeError when `afterOffset` isn't a non-negative integer or isn't the end of a line,
+ *   `kinds` names a kind no record has, the file is shorter than where the reader got to (it was
+ *   truncated or replaced), or a complete line isn't a valid record, breaks the seq count or
+ *   names another run id; the message names `path` and the line (or, after an offset, the byte).
+ * @throws Error (code `ENOENT`) when `path` doesn't exist, and the `fs` error of a failed read.
+ */
+export function iterRunRecords(
+  path: string,
+  options?: IterRunRecordsOptions & { payloads?: true },
+): Generator<RunLogEntry, void, undefined>;
+export function iterRunRecords(
+  path: string,
+  options: IterRunRecordsOptions & { payloads: false },
+): Generator<RunLogEntry<null>, void, undefined>;
+export function iterRunRecords(
+  path: string,
+  options?: IterRunRecordsOptions,
+): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined>;
+export function* iterRunRecords(
+  path: string,
+  options: IterRunRecordsOptions = {},
+): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined> {
+  const { afterOffset = 0, kinds = null, payloads = true } = options;
+  if (!Number.isSafeInteger(afterOffset) || afterOffset < 0) {
+    throw new RangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
+  }
+  const wanted = kinds === null ? null : new Set(kinds);
+  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !WIRE_KINDS.has(kind));
+  if (unknown.length > 0) {
+    throw new RangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
+  }
+  const fd = fs.openSync(path, "r");
+  try {
+    const shrank = (size: number, at: number) =>
+      new RangeError(`run log ${path} shrank to ${size} bytes under its reader at byte ${at}; it was truncated or replaced`);
+    const size = fs.fstatSync(fd).size;
+    if (afterOffset > size) throw shrank(size, afterOffset);
+    if (afterOffset > 0) {
+      const before = new Uint8Array(1);
+      fs.readSync(fd, before, 0, 1, afterOffset - 1);
+      if (before[0] !== 0x0a) throw new RangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
+    }
+    // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it.
+    let lineStart = afterOffset;
+    let position = afterOffset;
+    let parts: Uint8Array[] = [];
+    let expected: number | null = afterOffset === 0 ? 0 : null;
+    let runId: string | null = null;
+    for (;;) {
+      const chunk = new Uint8Array(READ_CHUNK_BYTES);
+      const count = fs.readSync(fd, chunk, 0, READ_CHUNK_BYTES, position);
+      if (count === 0) {
+        // A writer only ever cuts an incomplete tail, which is past `lineStart`.
+        const now = fs.fstatSync(fd).size;
+        if (now < lineStart) throw shrank(now, lineStart);
+        return;
+      }
+      position += count;
+      const data = chunk.subarray(0, count);
+      let start = 0;
+      for (let newline = data.indexOf(0x0a); newline !== -1; newline = data.indexOf(0x0a, start)) {
+        parts.push(data.subarray(start, newline));
+        const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+        parts = [];
+        start = newline + 1;
+        const offset = lineStart;
+        lineStart += line.length + 1;
+        let where = `run log ${path} byte ${offset}`;
+        if (afterOffset === 0) where = `run log ${path} line ${expected! + 1} (seq ${expected})`;
+        else if (expected !== null) where += ` (seq ${expected})`;
+        let wire: WireEnvelope;
+        let nodeId: string | null;
+        let envelope: RecordEnvelope | null = null;
+        try {
+          wire = decodeWire(line);
+          if (payloads && (wanted === null || wanted.has(wire.kind))) {
+            envelope = new RecordEnvelope(SCHEMA_VERSION, wire.runId, wire.seq, recordFromPayload(wire.kind, wire.payload));
+          }
+          nodeId = wireNodeId(wire.kind, wire.payload);
+        } catch (error) {
+          throw locatedError(where, error);
+        }
+        if (expected !== null && wire.seq !== expected) {
+          throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${wire.seq}`);
+        }
+        runId ??= wire.runId;
+        if (wire.runId !== runId) {
+          throw new RangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(wire.runId)}`);
+        }
+        expected = wire.seq + 1;
+        if (wanted !== null && !wanted.has(wire.kind)) continue;
+        yield { seq: wire.seq, offset, end: lineStart, runId, kind: wire.kind, nodeId, envelope };
+      }
+      if (start < data.length) parts.push(data.subarray(start));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Prefix a decoding error with `where`, the line it came from, keeping it as `cause`: a schema
+ * error stays a `RunLogSchemaError`, the rest become `RangeError`s. Any other error is returned
+ * as it is.
+ */
+function locatedError(where: string, error: unknown): unknown {
+  if (error instanceof RunLogSchemaError) {
+    return new RunLogSchemaError(`${where}: ${error.message}`, error.schema, { cause: error });
+  }
+  if (error instanceof JSONDecodeError || error instanceof TypeError || error instanceof RangeError) {
+    return new RangeError(`${where}: ${error.message}`, { cause: error });
+  }
+  return error;
 }
 
 /**
@@ -2707,10 +2942,7 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
     try {
       envelope = decodeRecord(data.subarray(start, end));
     } catch (error) {
-      if (error instanceof JSONDecodeError || error instanceof TypeError || error instanceof RangeError) {
-        throw new RangeError(`${where}: ${error.message}`, { cause: error });
-      }
-      throw error;
+      throw locatedError(where, error);
     }
     if (envelope.seq !== sequence) {
       throw new RangeError(`${where}: run-log sequence mismatch: expected ${sequence}, found ${envelope.seq}`);

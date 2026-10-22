@@ -181,6 +181,7 @@ import {
   RUN_RECORD_TYPES,
   RUN_STOP_REASONS,
   type RunLog,
+  RunLogSchemaError,
   type RunRecord,
   RunResumedRecord,
   type RunStartedFields,
@@ -846,13 +847,13 @@ test.each<[string, unknown, string]>([
   ["true", true, "unsupported run-record schema: true"],
   ["10n", 10n, "unsupported run-record schema: 10n"],
 ])("the envelope refuses schema %s", (_name, schema, message) => {
-  expectError(() => new RecordEnvelope(schema as never, "run", 0, new NodeStartedRecord("work")), RangeError, message);
+  expectError(() => new RecordEnvelope(schema as never, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, message);
 });
 
 test("the envelope checks its schema before any other field", () => {
   expectError(
     () => new RecordEnvelope(9, "", -1, {} as never),
-    RangeError,
+    RunLogSchemaError,
     "run log schema 9 was written by Python yian; resume it with Python yian",
   );
 });
@@ -1351,18 +1352,18 @@ test("decode rejects an extra nested route terminal failure field", () => {
 const NODE_STARTED = '"kind":"node_started","payload":{"node_id":"work"}';
 
 test.each<[string, string, new (...args: never[]) => Error, string]>([
-  ["schema 1", `{"schema":1,"run_id":"run","seq":0,${NODE_STARTED}}`, RangeError, "unsupported run-record schema: 1"],
+  ["schema 1", `{"schema":1,"run_id":"run","seq":0,${NODE_STARTED}}`, RunLogSchemaError, "unsupported run-record schema: 1"],
   [
     "schema true",
     `{"schema":true,"run_id":"run","seq":0,${NODE_STARTED}}`,
-    RangeError,
+    RunLogSchemaError,
     "unsupported run-record schema: true",
   ],
   // A float token reads as a number, never as a schema; it is shown as the log writes floats.
   [
     "schema 10.0",
     `{"schema":10.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
-    RangeError,
+    RunLogSchemaError,
     "unsupported run-record schema: 10.0",
   ],
   [
@@ -1442,7 +1443,7 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
   [
     "a Python schema whatever else the line holds",
     '{"schema":9,"seq":"x","kind":"node_frobbed","extra":1}',
-    RangeError,
+    RunLogSchemaError,
     "run log schema 9 was written by Python yian; resume it with Python yian",
   ],
 ])("decode rejects an invalid envelope: %s", (_name, text, cls, message) => {
@@ -1688,7 +1689,7 @@ test.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("decode rejects old schema %d even with a
     schema === 9
       ? "run log schema 9 was written by Python yian; resume it with Python yian"
       : `unsupported run-record schema: ${schema}`;
-  expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
+  expectError(() => decodeRecord(JSON.stringify(wire)), RunLogSchemaError, message);
 });
 
 test("decode rejects flattened failure aliases", () => {

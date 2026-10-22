@@ -321,6 +321,7 @@ import {
   NodeStartedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
+  RunLogSchemaError,
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
@@ -790,7 +791,7 @@ test("a forward capture round trips invocation names and structural layout", () 
   expect(decoded.schema).toBe(SCHEMA_VERSION);
   const old = wireOf(envelope);
   old.schema = 6n;
-  expectError(() => decodeWire(old), RangeError, "unsupported run-record schema: 6");
+  expectError(() => decodeWire(old), RunLogSchemaError, "unsupported run-record schema: 6");
 });
 
 const CAPTURE_LABEL = "node_succeeded payload forward_capture";
@@ -928,7 +929,7 @@ test("a forward capture round trips without a memory scope", () => {
   expect(decoded.schema).toBe(SCHEMA_VERSION);
   const old = wireOf(envelope);
   old.schema = 6n;
-  expectError(() => decodeWire(old), RangeError, "unsupported run-record schema: 6");
+  expectError(() => decodeWire(old), RunLogSchemaError, "unsupported run-record schema: 6");
 });
 
 test.each<[string, unknown, ErrorClass, string]>([

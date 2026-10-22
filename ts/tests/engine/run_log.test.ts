@@ -36,7 +36,13 @@
  * memory log unchanged; resuming a missing log throws `ENOENT` and creates no lock file;
  * `isRunLogLocked`; a symlink to a log shares the real log's lock; the reader `readRunLog` (a complete prefix read without the lock, an
  * incomplete tail ignored and left in place, an empty file, a corrupt line named by path, line and
- * seq, a line that isn't UTF-8); a failed resume whose descriptor close also fails throws the
+ * seq, a line that isn't UTF-8); the streaming reader `iterRunRecords` (each record's seq, offsets,
+ * kind, node and envelope; a log a writer holds; a torn last line skipped, then read from its
+ * offset once complete; a log another process appends to, followed from saved offsets without
+ * blocking the writer; a log that shrank before or while it reads; offsets that aren't the end of
+ * a line; seq checked from the start and after an offset, and the run id; `payloads: false`, and
+ * what it still refuses; `kinds`; schemas 9 and 11 as `RunLogSchemaError`; bounded reads that go
+ * only as far as asked); a failed resume whose descriptor close also fails throws the
  * original error; a write that fails and whose rollback truncate also fails; closing a poisoned
  * log, after which an append throws `run log is closed`; with `YIAN_TEST_NODE` set to a Node
  * binary, the built log on Node through a failed sync, a failed write, a short write and a write
@@ -55,7 +61,7 @@
  *   subclass) is a `TypeError`.
  * - `test_retired_schema_record_is_rejected_by_name` and `test_retired_schema_log_is_rejected_on_resume`:
  *   every schema below 10 is Python's, so 7 and 8 read `unsupported run-record schema: N` and 9
- *   names Python yian.
+ *   names Python yian. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
  * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 11 and the float
  *   token `10.0` (the current schema written as a float); the float row is wire-only, since a JS
  *   `10.0` is the number 10.
@@ -95,7 +101,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -106,12 +112,15 @@ import {
   decodeRecord,
   encodeRecord,
   isRunLogLocked,
+  iterRunRecords,
   JsonlRunLog,
   MemoryRunLog,
   NodeExpandedRecord,
   NodeStartedRecord,
   readRunLog,
   RecordEnvelope,
+  RunLogSchemaError,
+  type RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 
@@ -231,13 +240,13 @@ test("the schema version is 10", () => {
 
 test.each([7, 8])("retired schema %d record is rejected by name", (schema) => {
   const message = `unsupported run-record schema: ${schema}`;
-  expectError(() => decodeRecord(wireLine({ schema: String(schema) })), RangeError, message);
-  expectError(() => new RecordEnvelope(schema, "run", 0, new NodeStartedRecord("work")), RangeError, message);
+  expectError(() => decodeRecord(wireLine({ schema: String(schema) })), RunLogSchemaError, message);
+  expectError(() => new RecordEnvelope(schema, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, message);
 });
 
 test("a schema 9 record names Python yian", () => {
-  expectError(() => decodeRecord(wireLine({ schema: "9" })), RangeError, PYTHON_SCHEMA);
-  expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RangeError, PYTHON_SCHEMA);
+  expectError(() => decodeRecord(wireLine({ schema: "9" })), RunLogSchemaError, PYTHON_SCHEMA);
+  expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, PYTHON_SCHEMA);
 });
 
 test.each<[number, string]>([
@@ -248,7 +257,8 @@ test.each<[number, string]>([
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
   fs.writeFileSync(file, bytes);
-  expectError(() => JsonlRunLog.resume(file), RangeError, `run log ${file} line 1 (seq 0): ${message}`);
+  const error = expectError(() => JsonlRunLog.resume(file), RunLogSchemaError, `run log ${file} line 1 (seq 0): ${message}`);
+  expect((error as RunLogSchemaError).schema).toBe(schema);
   expect(fs.readFileSync(file, "utf8")).toBe(bytes);
   expectUnlocked(file);
 });
@@ -266,11 +276,11 @@ test.each<[string, unknown, string]>([
   if (value !== undefined) {
     expectError(
       () => new RecordEnvelope(value as number, "run", 0, new NodeStartedRecord("work")),
-      RangeError,
+      RunLogSchemaError,
       message,
     );
   }
-  expectError(() => decodeRecord(wireLine({ schema: token })), RangeError, message);
+  expectError(() => decodeRecord(wireLine({ schema: token })), RunLogSchemaError, message);
 });
 
 test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]>([
@@ -528,6 +538,275 @@ test("readRunLog reads a line that isn't UTF-8 as invalid record JSON", () => {
   expect((error.cause as Error).message).toBe("invalid run-record JSON");
 });
 
+/** Return a wire line of `kind` with `payload` (JSON text), without its newline. */
+function kindLine(kind: string, payload: string, { seq = 0, runId = "run", schema = String(SCHEMA_VERSION) } = {}): string {
+  return `{"kind":"${kind}","payload":${payload},"run_id":${JSON.stringify(runId)},"schema":${schema},"seq":${seq}}`;
+}
+
+/** Return the byte length of `text` in UTF-8. */
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+test("iterRunRecords yields each record's seq, offsets, kind, node and envelope", () => {
+  const file = path.join(dir, "run.jsonl");
+  const lines = [wireLine(), wireLine({ seq: 1, nodeId: "next" })];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+
+  const entries = [...iterRunRecords(file)];
+  const first = byteLength(lines[0]!) + 1;
+  expect(entries.map(({ seq, offset, end, runId, kind, nodeId }) => ({ seq, offset, end, runId, kind, nodeId }))).toEqual([
+    { seq: 0, offset: 0, end: first, runId: "run", kind: "node_started", nodeId: "work" },
+    { seq: 1, offset: first, end: first + byteLength(lines[1]!) + 1, runId: "run", kind: "node_started", nodeId: "next" },
+  ]);
+  expect(entries.map((entry) => entry.envelope)).toEqual(lines.map((line) => decodeRecord(line)));
+  expect(fs.existsSync(`${file}.lock`)).toBe(false);
+});
+
+test("iterRunRecords reads a log a writer holds, without its lock", () => {
+  const file = path.join(dir, "run.jsonl");
+  using log = baselineLog(file);
+  expect(isRunLogLocked(file)).toBe(true);
+  expect(nodeIds([...iterRunRecords(file)].map((entry) => entry.envelope))).toEqual(["first"]);
+  log.append(new NodeStartedRecord("second"));
+  expect(log.nextSequence).toBe(2);
+});
+
+test("iterRunRecords stops at a torn last line and reads it from its offset once it's complete", () => {
+  const file = path.join(dir, "run.jsonl");
+  const second = wireLine({ seq: 1, nodeId: "next" });
+  fs.writeFileSync(file, `${wireLine()}\n${second.slice(0, 20)}`);
+  const before = fs.readFileSync(file);
+
+  const read = [...iterRunRecords(file)];
+  expect(read.map((entry) => entry.seq)).toEqual([0]);
+  expect(fs.readFileSync(file)).toEqual(before);
+
+  fs.appendFileSync(file, `${second.slice(20)}\n`);
+  const after = [...iterRunRecords(file, { afterOffset: read[0]!.end })];
+  expect(after.map(({ seq, offset, nodeId }) => ({ seq, offset, nodeId }))).toEqual([
+    { seq: 1, offset: read[0]!.end, nodeId: "next" },
+  ]);
+  expect([...iterRunRecords(file, { afterOffset: after[0]!.end })]).toEqual([]);
+});
+
+test("iterRunRecords follows a log another process appends to, without blocking it", async () => {
+  const file = path.join(dir, "run.jsonl");
+  const count = 40;
+  const writer = `
+import { JsonlRunLog, NodeStartedRecord } from ${JSON.stringify(LOG_URL)};
+const log = JsonlRunLog.create(${JSON.stringify(file)}, "run");
+for (let i = 0; i < ${count}; i++) {
+  log.append(new NodeStartedRecord("n" + i));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+}
+log.close();
+`;
+  const child = spawn(process.execPath, ["-e", writer], { stdio: ["ignore", "ignore", "pipe"], timeout: 20_000 });
+  let stderr = "";
+  child.stderr!.on("data", (data) => (stderr += data));
+  const exited = new Promise<number | null>((resolve) => child.on("close", (code) => resolve(code)));
+  try {
+    const seen: string[] = [];
+    let offset = 0;
+    let readWhileWriting = 0;
+    const deadline = Date.now() + 15_000;
+    while (seen.length < count && Date.now() < deadline) {
+      if (fs.existsSync(file)) {
+        for (const entry of iterRunRecords(file, { afterOffset: offset })) {
+          seen.push(entry.nodeId!);
+          offset = entry.end;
+          if (child.exitCode === null) readWhileWriting++;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(await exited).toBe(0);
+    expect(stderr).toBe("");
+    expect(seen).toEqual(Array.from({ length: count }, (_, i) => `n${i}`));
+    expect(readWhileWriting).toBeGreaterThan(0);
+    expect(offset).toBe(fs.statSync(file).size);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+}, 30_000);
+
+test("iterRunRecords refuses an offset past the end of a log that shrank", () => {
+  const file = path.join(dir, "run.jsonl");
+  const first = wireLine();
+  fs.writeFileSync(file, `${first}\n${wireLine({ seq: 1 })}\n`);
+  const end = [...iterRunRecords(file)].at(-1)!.end;
+  fs.truncateSync(file, byteLength(first) + 1);
+
+  const message = `run log ${file} shrank to ${byteLength(first) + 1} bytes under its reader at byte ${end}; it was truncated or replaced`;
+  expectError(() => [...iterRunRecords(file, { afterOffset: end })], RangeError, message);
+});
+
+test("iterRunRecords detects a log that shrinks while it reads", () => {
+  const file = path.join(dir, "run.jsonl");
+  const first = wireLine();
+  fs.writeFileSync(file, `${first}\n${wireLine({ seq: 1 })}\n`);
+  const reader = iterRunRecords(file);
+  expect(reader.next().value!.seq).toBe(0);
+  fs.truncateSync(file, 0);
+  // The second line was read before the truncation.
+  const second = reader.next().value!;
+  expect(second.seq).toBe(1);
+  const message = `run log ${file} shrank to 0 bytes under its reader at byte ${second.end}; it was truncated or replaced`;
+  expectError(() => reader.next(), RangeError, message);
+});
+
+test.each<[string, number, string]>([
+  ["inside a line", 5, "afterOffset 5 isn't the end of a line in run log {file}"],
+  ["negative", -1, "afterOffset must be a non-negative integer, got -1"],
+  ["fractional", 1.5, "afterOffset must be a non-negative integer, got 1.5"],
+])("iterRunRecords refuses an offset %s", (_name, afterOffset, message) => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n`);
+  expectError(() => [...iterRunRecords(file, { afterOffset })], RangeError, message.replace("{file}", file));
+});
+
+test("iterRunRecords checks seq against the line from the start, and after an offset from the first record", () => {
+  const file = path.join(dir, "run.jsonl");
+  const lines = [wireLine(), wireLine({ seq: 1 }), wireLine({ seq: 3 })];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  const mismatch = "run-log sequence mismatch: expected 2, found 3";
+  expectError(() => [...iterRunRecords(file)], RangeError, `run log ${file} line 3 (seq 2): ${mismatch}`);
+
+  const offset = byteLength(lines[0]!) + 1;
+  const third = offset + byteLength(lines[1]!) + 1;
+  expectError(
+    () => [...iterRunRecords(file, { afterOffset: offset })],
+    RangeError,
+    `run log ${file} byte ${third} (seq 2): ${mismatch}`,
+  );
+
+  fs.writeFileSync(file, `${lines[0]}\n${wireLine({ seq: 1, runId: "foreign" })}\n`);
+  expectError(
+    () => [...iterRunRecords(file, { payloads: false })],
+    RangeError,
+    `run log ${file} line 2 (seq 1): run-log run_id mismatch: expected 'run', found 'foreign'`,
+  );
+});
+
+test("iterRunRecords with payloads: false reads the envelope and node id without validating payloads", () => {
+  const file = path.join(dir, "run.jsonl");
+  const lines = [
+    kindLine("node_started", '{"node_id":"work","extra":1}'),
+    kindLine("node_failed", '{"failure":{"node_id":"boom"}}', { seq: 1 }),
+    kindLine("node_expanded", '{"spawner_id":"fan"}', { seq: 2 }),
+    kindLine("run_stopped", "{}", { seq: 3 }),
+  ];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+
+  const entries = [...iterRunRecords(file, { payloads: false })];
+  expect(entries.map(({ seq, kind, nodeId, envelope }) => ({ seq, kind, nodeId, envelope }))).toEqual([
+    { seq: 0, kind: "node_started", nodeId: "work", envelope: null },
+    { seq: 1, kind: "node_failed", nodeId: "boom", envelope: null },
+    { seq: 2, kind: "node_expanded", nodeId: "fan", envelope: null },
+    { seq: 3, kind: "run_stopped", nodeId: null, envelope: null },
+  ]);
+  const error = expectError(
+    () => [...iterRunRecords(file)],
+    RangeError,
+    `run log ${file} line 1 (seq 0): invalid node_started payload fields; missing=[], extra=["extra"]`,
+  );
+  expect((error.cause as Error).constructor).toBe(RangeError);
+});
+
+test.each<[string, string, new (...args: never[]) => Error, string]>([
+  ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
+  ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 10"],
+  ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
+])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${line}\n`);
+  const error = expectError(
+    () => [...iterRunRecords(file, { payloads: false })],
+    RangeError,
+    `run log ${file} line 1 (seq 0): ${message}`,
+  );
+  expect((error.cause as Error).constructor).toBe(causeClass);
+});
+
+test("iterRunRecords yields only the kinds asked for, still checking every line's envelope and seq", () => {
+  const file = path.join(dir, "run.jsonl");
+  const lines = [
+    kindLine("node_started", '{"node_id":"work","extra":1}'),
+    kindLine("run_stopped", '{"reason":"signal","message":"stop","node_ids":["work"]}', { seq: 1 }),
+    kindLine("node_started", '{"node_id":"next"}', { seq: 3 }),
+  ];
+  fs.writeFileSync(file, `${lines.slice(0, 2).join("\n")}\n`);
+  const stops = [...iterRunRecords(file, { kinds: ["run_stopped"] })];
+  expect(stops.map((entry) => [entry.seq, entry.kind])).toEqual([[1, "run_stopped"]]);
+  expect((stops[0]!.envelope.record as RunStoppedRecord).nodeIds).toEqual(["work"]);
+
+  fs.appendFileSync(file, `${lines[2]}\n`);
+  expectError(
+    () => [...iterRunRecords(file, { kinds: ["run_stopped"] })],
+    RangeError,
+    `run log ${file} line 3 (seq 2): run-log sequence mismatch: expected 2, found 3`,
+  );
+  expectError(
+    () => [...iterRunRecords(file, { kinds: ["run_stopped", "node_paused"] })],
+    RangeError,
+    `unknown run-record kinds: ["node_paused"]`,
+  );
+});
+
+test.each<[string, string, number]>([
+  ["9", PYTHON_SCHEMA, 9],
+  ["11", "unsupported run-record schema: 11", 11],
+])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine({ schema })}\n`);
+  for (const payloads of [true, false]) {
+    const error = expectError(
+      () => [...iterRunRecords(file, { payloads })],
+      RunLogSchemaError,
+      `run log ${file} line 1 (seq 0): ${message}`,
+    ) as RunLogSchemaError;
+    expect(error.name).toBe("RunLogSchemaError");
+    expect(error.schema).toBe(value);
+    expect(error).toBeInstanceOf(RangeError);
+  }
+});
+
+test("iterRunRecords reads in bounded chunks, and reads only as far as it is asked", () => {
+  const file = path.join(dir, "run.jsonl");
+  const big = "x".repeat(1_000_000);
+  const lines = [
+    wireLine(),
+    kindLine("run_stopped", `{"reason":"signal","message":"${big}","node_ids":[]}`, { seq: 1 }),
+    ...Array.from({ length: 3000 }, (_, i) => wireLine({ seq: i + 2, nodeId: `n${i}` })),
+  ];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  const reads: number[] = [];
+  const realRead = fs.readSync;
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((fd: number, buffer: Uint8Array, ...rest: any[]) => {
+    const count = Reflect.apply(realRead, fs, [fd, buffer, ...rest]) as number;
+    if (isDescriptorOf(fd, file)) reads.push(rest[1] as number);
+    return count;
+  }) as typeof fs.readSync);
+  const wholeFile = spyOn(fs, "readFileSync");
+  try {
+    const reader = iterRunRecords(file);
+    expect(reader.next().value!.seq).toBe(0);
+    expect(reads.length).toBe(1);
+    reader.return(undefined);
+
+    let last = -1;
+    for (const entry of iterRunRecords(file)) last = entry.seq;
+    expect(last).toBe(3001);
+    expect(Math.max(...reads)).toBeLessThanOrEqual(1 << 16);
+    expect(wholeFile).not.toHaveBeenCalled();
+  } finally {
+    readSpy.mockRestore();
+    wholeFile.mockRestore();
+  }
+});
+
 const LOG_URL = new URL("../../src/runtime/log.ts", import.meta.url).href;
 
 /** The message `create` and `resume` throw when another writer holds the log at `file`. */
@@ -726,19 +1005,20 @@ test("jsonl resume of an empty file names the log and releases the lock", () => 
   expectUnlocked(file);
 });
 
-test.each<[string, string, string]>([
-  ["schema 1", `${wireLine({ schema: "1" })}\n`, "line 1 (seq 0): unsupported run-record schema: 1"],
-  ["schema 2", `${wireLine({ schema: "2" })}\n`, "line 1 (seq 0): unsupported run-record schema: 2"],
-  ["sequence", `${wireLine({ seq: 1 })}\n`, "line 1 (seq 0): run-log sequence mismatch: expected 0, found 1"],
+test.each<[string, string, string, new (...args: never[]) => Error]>([
+  ["schema 1", `${wireLine({ schema: "1" })}\n`, "line 1 (seq 0): unsupported run-record schema: 1", RunLogSchemaError],
+  ["schema 2", `${wireLine({ schema: "2" })}\n`, "line 1 (seq 0): unsupported run-record schema: 2", RunLogSchemaError],
+  ["sequence", `${wireLine({ seq: 1 })}\n`, "line 1 (seq 0): run-log sequence mismatch: expected 0, found 1", RangeError],
   [
     "run id",
     `${wireLine({ runId: "first" })}\n${wireLine({ runId: "second", seq: 1, nodeId: "other" })}\n`,
     "line 2 (seq 1): run-log run_id mismatch: expected 'first', found 'second'",
+    RangeError,
   ],
-])("jsonl resume rejects identity mismatches and releases the lock: %s", (_name, contents, where) => {
+])("jsonl resume rejects identity mismatches and releases the lock: %s", (_name, contents, where, cls) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, contents);
-  expectError(() => JsonlRunLog.resume(file), RangeError, `run log ${file} ${where}`);
+  expectError(() => JsonlRunLog.resume(file), cls, `run log ${file} ${where}`);
   expectUnlocked(file);
 });
 
@@ -747,11 +1027,11 @@ test.each<[string, string, string | null]>([
   ["no complete line", '{"a": 1}', null],
   ["retired schema", `${wireLine({ schema: "2" })}\n{"partial":`, "line 1 (seq 0): unsupported run-record schema: 2"],
   ["corrupt line", `${wireLine()}\n{not-json}\n{"partial":`, "line 2 (seq 1): invalid run-record JSON"],
-])("jsonl resume leaves a rejected file unchanged: %s", (_name, contents, where) => {
+])("jsonl resume leaves a rejected file unchanged: %s", (name, contents, where) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, contents);
   const message = where === null ? `cannot resume an empty run log: ${file}` : `run log ${file} ${where}`;
-  expectError(() => JsonlRunLog.resume(file), RangeError, message);
+  expectError(() => JsonlRunLog.resume(file), name === "retired schema" ? RunLogSchemaError : RangeError, message);
   expect(fs.readFileSync(file, "utf8")).toBe(contents);
   expectUnlocked(file);
 });

@@ -265,6 +265,12 @@ test("diagnose reads only failure and resolver", () => {
       has(_target, name) {
         throw new Error(`diagnose inspected forbidden surface ${String(name)}`);
       },
+      getPrototypeOf() {
+        throw new Error("diagnose inspected forbidden surface's prototype");
+      },
+      ownKeys() {
+        throw new Error("diagnose inspected forbidden surface's keys");
+      },
     },
   );
   const parse = SourceDocument.parse;

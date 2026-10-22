@@ -336,7 +336,7 @@ const GROUPS: Readonly<Record<string, string>> = {
 
 const APP_HELP = "Yian - The Agent Composer. Run agent flows from the command line.";
 const HELP_HELP = "Show this message and exit.";
-const LICENSES_HELP = "Show the licenses of yian and of the software its binaries bundle, and exit.";
+const LICENSES_HELP = "Show the licenses of yian and of what its binaries bundle, and exit.";
 
 /** Return the `Usage:` line of the root (`group` undefined) or of `group`. */
 function groupUsage(group?: string): string {
@@ -450,12 +450,12 @@ const JSON_CHILD = "--yian-json-child";
 
 /**
  * Return the arguments the entry re-runs itself with to run `args` as the `run --json` child. A
- * `compiled` binary is its own runtime and script: its `argv[1]` is a file inside it and its
- * `execArgv` only `BUN_OPTIONS`, which the inherited environment passes on, so it gets the marker
- * and `args` only.
+ * compiled binary (`binary`) is its own runtime and script: its `argv[1]` is a file inside it and
+ * its `execArgv` only `BUN_OPTIONS`, which the inherited environment passes on, so it gets the
+ * marker and `args` only.
  */
-export function childCommand(args: readonly string[], compiled: boolean): string[] {
-  if (compiled) return [JSON_CHILD, ...args];
+export function childCommand(args: readonly string[], binary: boolean): string[] {
+  if (binary) return [JSON_CHILD, ...args];
   return [...process.execArgv, process.argv[1]!, JSON_CHILD, ...args];
 }
 

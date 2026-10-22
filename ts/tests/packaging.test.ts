@@ -10,7 +10,7 @@
 // the file `YIAN_BUN_LICENSE` names, or else from the current `LICENSES`.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -175,7 +175,8 @@ function packageJson(dir: string) {
 function resolvePackage(name: string, from: string): string {
   for (let dir = from; ; dir = dirname(dir)) {
     const candidate = join(dir, "node_modules", name);
-    if (existsSync(join(candidate, "package.json"))) return candidate;
+    // Node resolves a package through its symlinks.
+    if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
     if (dirname(dir) === dir) throw new Error(`cannot resolve ${name} from ${from}`);
   }
 }
@@ -225,6 +226,7 @@ function buildLicenses(): string {
   for (const { dir, json } of packages) {
     const file = readdirSync(dir).sort().find((entry) => LICENSE_FILE.test(entry));
     if (file === undefined) throw new Error(`${json.name} has no license file`);
+    if (typeof json.license !== "string") throw new Error(`${json.name} has no license field`);
     text += section(`${json.name}@${json.version} (${json.license})`, readFileSync(join(dir, file), "utf8"));
     // amaro's WebAssembly build of swc carries swc's own license.
     if (json.name === "amaro") {

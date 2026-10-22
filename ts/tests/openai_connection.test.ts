@@ -1,11 +1,12 @@
 /**
  * Mirrors `tests/test_openai_connection.py`. The model calls build with `chatModelFromConfig` and
- * answer from a recording `send` that replies with one Responses stream. Adapted:
- * `test_snapshot_does_not_follow_reconnect` fails at build with 0 requests, since TS reads the
- * pinned login at build too; the structured output test keeps the route half (the strategy table
- * is `llm/structured.test.ts`'s); `test_saved_api_key_and_preflight_ignore_incidental_environment`
- * and `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight
- * goes with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
+ * answer from a recording `send` (`engine/run_state_fixtures.ts`'s) that replies with one Responses
+ * stream. Adapted: `test_snapshot_does_not_follow_reconnect` fails at build with 0 requests, since
+ * TS reads the pinned login at build too; the structured output test keeps the route half (the
+ * strategy table is `llm/structured.test.ts`'s);
+ * `test_saved_api_key_and_preflight_ignore_incidental_environment` and
+ * `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight goes
+ * with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
  * `connectionCredentials` twin. The two cascade tests are ported over `resolveLlmCascade`. The
  * three run tests go through `runFlow` with the test's environment.
  */
@@ -38,6 +39,7 @@ import {
 import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
 import type { Send } from "../src/platform.ts";
 import { runFlow } from "../src/run.ts";
+import { recorder, responsesText, toolReply } from "./engine/run_state_fixtures.ts";
 
 // Each test's environment: a private store in a fresh directory and no default provider, model,
 // OpenAI key or endpoint, as Python's `isolated_auth` leaves it.
@@ -93,46 +95,8 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
   throw new Error("expected a rejection");
 }
 
-/** One request a `recorder` received; `body` is its parsed JSON. */
-interface Sent {
-  url: string;
-  headers: Headers;
-  body: Record<string, unknown>;
-}
-
-/** A `send` that records each request and answers it 200 with the Server-Sent Events `reply`. */
-function recorder(reply: string[]): { requests: Sent[]; send: Send } {
-  const requests: Sent[] = [];
-  const send: Send = async (input, init) => {
-    requests.push({ url: String(input), headers: new Headers(init.headers), body: JSON.parse(String(init.body)) });
-    return new Response(reply.join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
-  };
-  return { requests, send };
-}
-
-/** Server-Sent Events, one per `[event, data]`. */
-function sse(events: [string, Record<string, unknown>][]): string[] {
-  return events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
-}
-
-const MESSAGE = { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] };
 /** A Responses stream that answers "ok". */
-const TEXT_REPLY = sse([
-  ["response.output_item.added", { output_index: 0, item: { ...MESSAGE, content: [] } }],
-  ["response.output_text.delta", { output_index: 0, content_index: 0, item_id: "msg_1", delta: "ok" }],
-  ["response.completed", { response: { id: "resp_1", status: "completed", output: [MESSAGE] } }],
-]);
-
-/** A Responses stream that calls `name` once with `args`. */
-function toolReply(name: string, args: string): string[] {
-  const call = { id: "fc_1", type: "function_call", name, arguments: args, call_id: "call_1", status: "completed" };
-  return sse([
-    ["response.output_item.added", { output_index: 0, item: { ...call, arguments: "", status: "in_progress" } }],
-    ["response.function_call_arguments.delta", { output_index: 0, item_id: "fc_1", delta: args }],
-    ["response.output_item.done", { output_index: 0, item: call }],
-    ["response.completed", { response: { id: "resp_1", status: "completed", output: [call] } }],
-  ]);
-}
+const TEXT_REPLY = responsesText("ok");
 
 const HI = new Request({ messages: [new Message({ role: "user", parts: [new TextPart("hi")] })] });
 

@@ -5,12 +5,15 @@
  * `test_growth_index.py` lend to other files, and the `_resolver` several run tests define).
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
- * more run-state test files use lives here.
+ * more run-state test files use lives here: also the recording `send`, reply streams and secret
+ * scan the provider and host-credential tests share (Python's `_chat_completions`, `_rejecting`,
+ * `_plain` and `_assert_hidden` of `test_run_api_key.py`).
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 
 import { expect } from "bun:test";
 
@@ -52,6 +55,8 @@ import {
   MemorySpec,
   MemoryStack,
 } from "../../src/memory/index.ts";
+import { ProfileMemory } from "../../src/memory/profile.ts";
+import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
@@ -61,7 +66,8 @@ import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/ru
 import { NodeStarted, type RunEvent, StreamChunk } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
-import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { chatModelFromConfig, type ModelAccess } from "../../src/llm_clients/factory.ts";
+import type { Send } from "../../src/platform.ts";
 import { type RunInspection, type RunResult, runFlow } from "../../src/run.ts";
 import {
   decodePool,
@@ -494,6 +500,195 @@ export function serving(
     },
   };
   return access;
+}
+
+// ---- Provider traffic: a recording `send` and the reply streams it answers with ----
+
+/** One request a `recorder` received; `body` is its parsed JSON. */
+export interface Sent {
+  url: string;
+  headers: Headers;
+  body: Record<string, unknown>;
+}
+
+/** What a `recorder` answers a request with: a reply stream's chunks, sent 200, or a whole response. */
+export type Reply = string[] | globalThis.Response;
+
+/** Answers a request given it and the number of requests recorded so far, it included. */
+export type Replier = (sent: Sent, count: number) => Reply;
+
+/** A `send` that records each request and answers it with `reply` (called per request when a function). */
+export function recorder(reply: Reply | Replier): { requests: Sent[]; send: Send } {
+  const requests: Sent[] = [];
+  const send: Send = async (input, init) => {
+    const sent = { url: String(input), headers: new Headers(init.headers), body: JSON.parse(String(init.body)) };
+    requests.push(sent);
+    const answer = typeof reply === "function" ? reply(sent, requests.length) : reply;
+    if (answer instanceof globalThis.Response) return answer;
+    return new globalThis.Response(answer.join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  return { requests, send };
+}
+
+/** Answer the requests with `replies` in order, repeating the last. */
+export function inOrder(...replies: Reply[]): Replier {
+  return (_sent, count) => replies[Math.min(count, replies.length) - 1]!;
+}
+
+/**
+ * Return a model access over `env` whose `createModel` builds through the real
+ * `chatModelFromConfig` with a recording `send` that answers `reply` (see `recorder`): `configs`
+ * holds the config given to each build and `requests` each request sent, in order.
+ */
+export function recording(
+  env: Env,
+  reply: Reply | Replier,
+): ModelAccess & { configs: Readonly<Record<string, unknown>>[]; requests: Sent[]; send: Send } {
+  const { requests, send } = recorder(reply);
+  const configs: Readonly<Record<string, unknown>>[] = [];
+  return {
+    configs,
+    requests,
+    send,
+    env,
+    createModel: (config, { signal, onReplayDegraded }) => {
+      configs.push(config);
+      return chatModelFromConfig(config, { env, send, signal, onReplayDegraded, onWarning: () => {} });
+    },
+  };
+}
+
+/** Server-Sent Events, one per `[event, data]`, each data carrying its event as `type`. */
+export function sse(events: [string, Record<string, unknown>][]): string[] {
+  return events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
+}
+
+/** An OpenAI Responses stream that answers `text`. */
+export function responsesText(text: string): string[] {
+  const message = { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text }] };
+  return sse([
+    ["response.output_item.added", { output_index: 0, item: { ...message, content: [] } }],
+    ["response.output_text.delta", { output_index: 0, content_index: 0, item_id: "msg_1", delta: text }],
+    ["response.completed", { response: { id: "resp_1", status: "completed", output: [message] } }],
+  ]);
+}
+
+/** An OpenAI Responses stream that calls `name` once with `args`. */
+export function toolReply(name: string, args: string): string[] {
+  const call = { id: "fc_1", type: "function_call", name, arguments: args, call_id: "call_1", status: "completed" };
+  return sse([
+    ["response.output_item.added", { output_index: 0, item: { ...call, arguments: "", status: "in_progress" } }],
+    ["response.function_call_arguments.delta", { output_index: 0, item_id: "fc_1", delta: args }],
+    ["response.output_item.done", { output_index: 0, item: call }],
+    ["response.completed", { response: { id: "resp_1", status: "completed", output: [call] } }],
+  ]);
+}
+
+/** A Chat Completions stream (`openai`-compatible providers and `azure`): one `data:` event per choice delta, then `[DONE]`. */
+function chatStream(...deltas: [Record<string, unknown>, string | null][]): string[] {
+  const chunks = deltas.map(([delta, finishReason]) => ({
+    id: "c",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "m",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  }));
+  return [...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`), "data: [DONE]\n\n"];
+}
+
+/** A Chat Completions stream that answers `text`. */
+export function chatText(text: string): string[] {
+  return chatStream([{ role: "assistant", content: text }, null], [{}, "stop"]);
+}
+
+/** A Chat Completions stream that calls `name` once with `args`. */
+export function chatTool(name: string, args: string): string[] {
+  const call = { index: 0, id: "call_1", type: "function", function: { name, arguments: args } };
+  return chatStream([{ role: "assistant", tool_calls: [call] }, null], [{}, "tool_calls"]);
+}
+
+/** An Anthropic Messages stream that answers `text`. */
+export function anthropicText(text: string): string[] {
+  const message = { id: "msg_1", type: "message", role: "assistant", model: "m", content: [], stop_reason: null };
+  return sse([
+    ["message_start", { message: { ...message, usage: { input_tokens: 1, output_tokens: 1 } } }],
+    ["content_block_start", { index: 0, content_block: { type: "text", text: "" } }],
+    ["content_block_delta", { index: 0, delta: { type: "text_delta", text } }],
+    ["content_block_stop", { index: 0 }],
+    ["message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }],
+    ["message_stop", {}],
+  ]);
+}
+
+/** An Ollama chat stream (newline-delimited JSON) that answers `text`. */
+export function ollamaText(text: string): string[] {
+  return [
+    { model: "m", message: { role: "assistant", content: text }, done: false },
+    { model: "m", message: { role: "assistant", content: "" }, done: true, done_reason: "stop" },
+  ].map((line) => `${JSON.stringify(line)}\n`);
+}
+
+/** A 401 that echoes `key` masked, as OpenAI's does. */
+export function keyEcho401(key: string): globalThis.Response {
+  const message = `Incorrect API key provided: ${key.slice(0, 8)}****${key.slice(-4)}.`;
+  return globalThis.Response.json(
+    { error: { message, type: "invalid_request_error", code: "invalid_api_key" } },
+    { status: 401 },
+  );
+}
+
+/** A profile store under `<root>/profile` holding `# Ada`. */
+export async function adaStore(root: string): Promise<FileMarkdownStore> {
+  mkdirSync(join(root, "profile"));
+  const store = new FileMarkdownStore(join(root, "profile", "ada.md"));
+  await store.write("# Ada\n", { baseVersion: (await store.read())[1] });
+  return store;
+}
+
+/** A profile memory over `store` with `llmConfig`, whose learner builds through `models`. */
+export function profileMemory(
+  store: FileMarkdownStore,
+  llmConfig: Record<string, string>,
+  models: ReturnType<typeof recording>,
+): ProfileMemory {
+  return new ProfileMemory(store, {
+    llmConfig,
+    env: models.env,
+    createModel: (config) => models.createModel(config, { nodeId: "__memory__", signal: new AbortController().signal }),
+  });
+}
+
+/** An AGENT backward reply with no feedback. */
+export const NO_FEEDBACK = JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} });
+
+/**
+ * `value` field by field, so a JSON scan sees every value: an object's own enumerable entries (an
+ * error's message and cause too), maps and sets as entry lists, bigints as text, a value already
+ * on the path as `null`.
+ */
+export function plain(value: unknown, seen: ReadonlySet<unknown> = new Set()): unknown {
+  if (typeof value === "bigint") return String(value);
+  if (typeof value === "function" || typeof value === "symbol") return String(value);
+  if (value === null || typeof value !== "object") return value ?? null;
+  if (seen.has(value)) return null;
+  const inner = new Set(seen).add(value);
+  if (value instanceof Map) return [...value].map(([key, item]) => [plain(key, inner), plain(item, inner)]);
+  if (Array.isArray(value) || value instanceof Set) return [...value].map((item) => plain(item, inner));
+  const entries = Object.entries(value);
+  if (value instanceof Error) entries.push(["message", value.message], ["cause", value.cause]);
+  return Object.fromEntries(entries.map(([key, item]) => [key, plain(item, inner)]));
+}
+
+/**
+ * Expect none of `fragments` in the file at `path` (when given) or in any of `values`, each read
+ * as `inspect` shows it and as `plain`'s JSON.
+ */
+export function expectHidden(path: string | null, values: unknown[], fragments: readonly string[]): void {
+  const texts = path === null ? [] : [readFileSync(path, "utf8")];
+  for (const value of values) texts.push(inspect(value, { depth: null }), JSON.stringify(plain(value)));
+  for (const text of texts) {
+    for (const fragment of fragments) expect(text).not.toContain(fragment);
+  }
 }
 
 /** Return the value `promise` rejects with, or fail when it resolves. */

@@ -972,9 +972,10 @@ reported problem; see [Machine-readable output](#machine-readable-output).
 Changed (TS yian): SIGINT, SIGTERM and SIGHUP stop a run as Ctrl-C does (exit `130`) from
 the command's start, including while the flow loads and at the prompts before the run, where
 Python prints `Aborted!` and exits `1`. Once the first signal has been taken, a second one
-kills the process. A synchronous body (a CODE body or a tool) that blocks the event loop
-holds every signal until it returns, so a stop during the last node's body can be lost and
-the run reported as succeeded; under `--json`, a second signal kills the run even then.
+kills the process. A CODE body runs on its own thread, so a stop ends it at once, even a
+body that never yields. A synchronous tool that blocks the event loop still holds every
+signal until it returns, so a stop during the last node's tool call can be lost and the run
+reported as succeeded; under `--json`, a second signal kills the run even then.
 
 `yian auth` exits `1` when it fails or is cancelled, and `2` for a usage error, such as
 `--json` on a form that doesn't take it. Under `--json`, Ctrl-C makes it exit `130`, as

@@ -2687,9 +2687,10 @@ An inline body is TypeScript or JavaScript that reads `inputs`. Any other `code:
 is read as an inline body, so `./helpers.ts` (no `:fn`) is a body, not a reference.
 
 Changed (TS yian): these rules replace the Python-only inline notes below (a body must
-`return`, arbitrary Python, `sys.path` imports, the dotted-token hint); the trust note
-holds for TS and JS code. An inline body runs as a strict async function of `inputs`
-(`return inputs.n * 2`). Its types are stripped, not checked, so use erasable TypeScript
+`return`, arbitrary Python, a runaway body is not killed, `sys.path` imports, the
+dotted-token hint); the trust note holds for TS and JS code. An inline body runs as a
+strict async function of `inputs` (`return inputs.n * 2`).
+Its types are stripped, not checked, so use erasable TypeScript
 only (no `enum`, `namespace`, or parameter properties). A body can't use a static
 `import`; a dynamic `import()` of a package or an absolute path works, and local helpers
 go in a reference. `inputs` holds the declared inputs (its top level frozen), with ints
@@ -2705,12 +2706,29 @@ value`). A thrown error fails with `node.execute` and the message `<name>: <mess
 (`TypeError: ...`), located at the throwing line when the runtime reports it, else at
 the `code:` value (a reference's always is, and so is a thrown non-`Error`, a native
 error thrown after an `await` on Bun, or a throw deep in a library's stack). A
-referenced module is imported when the node first runs and cached for the process, so an
-edited file takes effect in a new process. Loading checks an inline body's syntax and
-that a reference's file exists, refuses a Python-style `module:function` value such as
-`pkg.mod:fn` ("use `./file.ts:fn`"), and runs no code. A CODE syntax error is reported
+referenced module is imported once per thread and cached there (see below), so an edited
+file takes effect in a new process or on a new thread. Loading checks an inline body's
+syntax and that a reference's file exists, refuses a Python-style `module:function`
+value such as `pkg.mod:fn` ("use `./file.ts:fn`"), and runs no code.
+A CODE syntax error is reported
 after the flow's other load errors, such as an invalid `output:` type, because the check
 runs after the flow is assembled.
+
+Changed (TS yian): each CODE call, a reference or an inline body, runs on its own thread (a
+`worker_threads` worker), not in-process. This is not the run's `num_workers` pool, which
+caps how many nodes run at once. A stop (Ctrl-C) ends the thread at once, even a body that
+never yields, and a busy body doesn't hold up other nodes. Idle threads are reused, and an
+idle thread never keeps the process alive. Inputs and the result are copied between
+threads; the checks above are unchanged. A call may land on the same thread as an earlier
+one or on another, so module state and globals may or may not persist between calls: don't
+rely on either. `console.log`, `info`, `warn`, `error` and `debug` reach the host's console
+as text, in order, before the node finishes; other `console` methods and direct
+`process.stdout` writes aren't forwarded. A body that calls `process.exit`, or awaits a
+promise nothing can resolve while nothing else is pending on its thread, fails with `CODE
+worker exited with code N before the body returned`. Work a body leaves running, such as a
+timer, may fail a later call on the same thread, so finish it before returning.
+`process.chdir` throws, and environment changes stay on the body's thread. The thread is
+not a sandbox: it shares the host's process, privileges, file system and environment.
 
 Inline notes:
 

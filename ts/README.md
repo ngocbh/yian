@@ -309,7 +309,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `emitEvent` once per invocation, as the in-loop `ReplayDegraded`.
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,
   resolved against the node's `baseDir`) or an inline TS/JS body. The constructor classifies it
-  by shape into `mode` and compiles or imports nothing.
+  by shape into `mode` and compiles or imports nothing. Each call runs on a reused worker thread
+  (`src/nodes/code/worker.ts`) that the node terminates when `caps.signal` aborts.
 - `code` may also be `{builtin: "identity", field}` (`mode: "builtin"`), the form a tagged value
   entry lowers to.
 - WAIT's `until` takes a date or datetime string only: dates are text in TS yian.

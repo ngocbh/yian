@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { warn as platformWarn } from "../platform.ts";
 import {
   checkSkillName,
   isSystemError,
@@ -72,7 +73,7 @@ export function loadSkillDir(directory: string): Skill {
  *
  * @param roots Skill roots, highest precedence first.
  * @param options `skipInvalid` reports invalid or unreadable skills through `warn` (default
- *   `process.emitWarning`) and skips them instead of throwing.
+ *   yian's `warn`) and skips them instead of throwing.
  * @returns Skills keyed by name, sorted by name.
  * @throws {SkillError} If `skipInvalid` is false and any skill is invalid, unreadable, or
  *   duplicated within one root. The message lists every problem.
@@ -82,7 +83,7 @@ export function loadSkillDir(directory: string): Skill {
  */
 export function loadSkills(
   roots: Iterable<string>,
-  { skipInvalid = false, warn = (message: string) => process.emitWarning(message) }: {
+  { skipInvalid = false, warn = (message: string) => platformWarn(message) }: {
     skipInvalid?: boolean;
     warn?: (message: string) => void;
   } = {},

@@ -7,7 +7,8 @@
  * virtual one for tests; the waiting lock that ports the auth store's `_locked`; and
  * the type stripper for CODE bodies, whose errors keep `nodes/code/node.py`'s authored
  * line positions; and `safeFetch`, which ports `llm/transport.py`'s no-redirect client and
- * User-Agent, against real local servers.
+ * User-Agent, against real local servers; and `warn`/`withWarnings`, which port the stdlib
+ * `warnings.warn` and `warnings.catch_warnings` the CLI collects yian's warnings with.
  * Child processes check the lock across processes, as `log.py`'s `_lock_exclusive`
  * and the storage and auth stores' multiprocess tests do, and, with
  * `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
@@ -46,6 +47,8 @@ import {
   VERSION,
   virtualScheduler,
   waitForLock,
+  warn,
+  withWarnings,
 } from "../../src/platform.ts";
 
 const realSetTimeout = globalThis.setTimeout;
@@ -1206,6 +1209,51 @@ async function kill(holder: Holder): Promise<void> {
   holder.child.kill("SIGKILL");
   await holder.closed;
 }
+
+describe("warn", () => {
+  test("emits a process warning outside withWarnings", () => {
+    const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      warn("m");
+      warn("m", "RuntimeWarning");
+      expect(emit.mock.calls).toEqual([["m"], ["m", "RuntimeWarning"]] as never);
+    } finally {
+      emit.mockRestore();
+    }
+  });
+
+  test("goes to the innermost withWarnings handler, across awaits, until fn returns", async () => {
+    const emit = spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const outer: [string, string | undefined][] = [];
+      const inner: [string, string | undefined][] = [];
+      await withWarnings(
+        (message, type) => void outer.push([message, type]),
+        async () => {
+          warn("a");
+          await Promise.resolve();
+          warn("b", "RuntimeWarning");
+          withWarnings(
+            (message, type) => void inner.push([message, type]),
+            () => warn("c"),
+          );
+          warn("d");
+        },
+      );
+      expect(outer).toEqual([
+        ["a", undefined],
+        ["b", "RuntimeWarning"],
+        ["d", undefined],
+      ]);
+      expect(inner).toEqual([["c", undefined]]);
+      expect(emit).not.toHaveBeenCalled();
+      warn("e");
+      expect(emit.mock.calls).toEqual([["e"]] as never);
+    } finally {
+      emit.mockRestore();
+    }
+  });
+});
 
 describe("the lock across processes", () => {
   test(

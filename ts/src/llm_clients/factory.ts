@@ -33,7 +33,7 @@ import { OllamaChat } from "../llm/protocols/ollama_chat.ts";
 import { OpenAIChat } from "../llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../llm/protocols/openai_responses.ts";
 import { Route } from "../llm/route.ts";
-import type { Scheduler, Send } from "../platform.ts";
+import { type Scheduler, type Send, warn } from "../platform.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost } from "../typesys/values.ts";
 import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "./api_key_env.ts";
@@ -139,13 +139,13 @@ export function accountHash(identity: string): string {
 }
 
 /**
- * Emit `message` through `process.emitWarning` as a `RuntimeWarning` unless `seen` already holds
- * it, then add it to `seen`.
+ * Emit `message` through `warn` as a `RuntimeWarning` unless `seen` already holds it, then add it
+ * to `seen`.
  */
 export function warnOnce(seen: Set<string>, message: string): void {
   if (seen.has(message)) return;
   seen.add(message);
-  process.emitWarning(message, "RuntimeWarning");
+  warn(message, "RuntimeWarning");
 }
 
 // The texts the default `onWarning` has emitted, so each shows once per process.
@@ -521,7 +521,7 @@ async function subscriptionModel(
  * the settings saved with it instead (its header names must equal the recorded ones); an
  * environment key sends none. A model outside the provider's known list gets
  * `onWarning("Model '<model>' is not in the known model list for provider '<p>'. Continuing
- * anyway.")` (default: `process.emitWarning`, once per text per process); the subscription never
+ * anyway.")` (default: `warn`, once per text per process); the subscription never
  * warns. A Chat Completions vendor's or Azure deployment's model that `prefersResponses` goes to
  * the Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
  *

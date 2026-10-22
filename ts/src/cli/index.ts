@@ -19,7 +19,7 @@ import { createWriteStream, writeSync } from "node:fs";
 import { constants } from "node:os";
 
 import { DefaultsError, read } from "../defaults.ts";
-import { compiled, VERSION } from "../platform.ts";
+import { compiled, VERSION, withWarnings } from "../platform.ts";
 import {
   type CliIo,
   type CommandSpec,
@@ -438,7 +438,12 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
       return 0;
     }
     const handler = await load();
-    return await handler(parsed, io);
+    // The CLI is the host, so yian's warnings print as its own lines; a library host keeps
+    // `process.emitWarning`.
+    return await withWarnings(
+      (message) => void io.stderr.write(`warning: ${message}\n`).catch(() => {}),
+      () => handler(parsed, io),
+    );
   } catch (error) {
     if (error instanceof UsageError) {
       await io.stderr.write(usageError(spec, error));

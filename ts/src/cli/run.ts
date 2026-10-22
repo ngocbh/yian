@@ -60,7 +60,7 @@ import { MemoryOperationError } from "../memory/contracts.ts";
 import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError } from "../platform.ts";
+import { FileLockError, withWarnings } from "../platform.ts";
 import {
   hostInputs,
   inspectRun,
@@ -358,6 +358,8 @@ export class ProgressReporter {
   readonly #verbose: boolean;
   readonly #env: Env;
   readonly #running = new Set<string>();
+  // Warning lines raised while paused, printed on `resume` or `stop`.
+  readonly #held: string[] = [];
   #paused = false;
   #frame = 0;
   // Spinner lines on screen, which the next draw or finished line erases.
@@ -413,22 +415,43 @@ export class ProgressReporter {
     this.#sync();
   }
 
+  /**
+   * Print `warning: <message>` on its own line above the spinners; while paused it is held until
+   * `resume` or `stop`, so it can't land inside the prompt that has the terminal.
+   */
+  warn(message: string): void {
+    const line = paint(`warning: ${message}`, "yellow", this.#out, this.#env);
+    if (this.#paused) {
+      this.#held.push(line);
+      return;
+    }
+    this.#print(line);
+    this.#sync();
+  }
+
   /** Stop drawing spinners, erasing them, while a prompt has the terminal. */
   pause(): void {
     this.#paused = true;
     this.#sync();
   }
 
-  /** Draw the spinners again after `pause`. */
+  /** Draw the spinners again after `pause`, after the warning lines held meanwhile. */
   resume(): void {
     this.#paused = false;
+    this.#flushHeld();
     this.#sync();
   }
 
-  /** End the display: forget the running nodes and erase their spinners. */
+  /** End the display: print held warnings, forget the running nodes and erase their spinners. */
   stop(): void {
+    this.#flushHeld();
     this.#running.clear();
     this.#sync();
+  }
+
+  /** Print the warning lines held while paused. */
+  #flushHeld(): void {
+    for (const line of this.#held.splice(0)) this.#print(line);
   }
 
   #write(text: string): void {
@@ -1198,7 +1221,10 @@ export async function run(flowPath: string, options: RunOptions, io: CliIo): Pro
   };
   controller.signal.addEventListener("abort", closePrompt, { once: true });
   try {
-    return await startRun(flowPath, options, io, { terminal, controller, reporter, started });
+    const body = () => startRun(flowPath, options, io, { terminal, controller, reporter, started });
+    // The spinner owns the cursor's line, so a warning raised during the run prints through the
+    // reporter, above it; under `--quiet` there is none and `main`'s handler prints it.
+    return await (reporter === null ? body() : withWarnings((message) => reporter.warn(message), body));
   } finally {
     controller.signal.removeEventListener("abort", closePrompt);
     terminal.close();

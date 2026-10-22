@@ -21,7 +21,7 @@
 // stuck in a CODE body; `status`, TS-only, on logs these runs write. From
 // tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -789,6 +789,38 @@ describe("run outcomes", () => {
     expect(quiet.stderr).not.toContain("Running flow");
     expect(quiet.stderr).not.toContain("✓");
   });
+});
+
+describe("warnings during a run", () => {
+  // `warnOnce` shows each text once per process, so each run names its own unknown model.
+  for (const [label, argv] of [["through progress", []], ["under --quiet", ["-q"]]] as const) {
+    test(`print as warning: lines, ${label}`, async () => {
+      const model = `no-such-model-${Date.now()}-${argv.length}`;
+      const flow = file(
+        "flow.yaml",
+        `id: w\nname: w\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: \${agent.output}\n` +
+          `llm_config: {provider: anthropic, model: ${model}}\n`,
+      );
+      mkdirSync(join(tmp, "home"), { recursive: true });
+      const { io, stderr } = testIo({ HOME: join(tmp, "home"), ANTHROPIC_API_KEY: "sk-ant-test" });
+      const send = globalThis.fetch;
+      globalThis.fetch = (async () => Response.json({ error: { message: "nope" } }, { status: 401 })) as never;
+      const emit = spyOn(process, "emitWarning");
+      try {
+        expect(await main(["run", flow, ...argv], io)).toBe(1);
+        expect(emit).not.toHaveBeenCalled();
+      } finally {
+        emit.mockRestore();
+        globalThis.fetch = send;
+      }
+      const lines = stderr().split("\n");
+      expect(lines).toContain(
+        `warning: Model '${model}' is not in the known model list for provider 'anthropic'. Continuing anyway.`,
+      );
+      expect(stderr()).not.toContain("(node:");
+      expect(stderr()).not.toContain("--trace-warnings");
+    });
+  }
 });
 
 const REQUIRED_INPUTS_FLOW = `id: cli_required_inputs

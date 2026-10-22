@@ -3,11 +3,13 @@
  * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
  * an exclusive file lock built on it, the scheduler that clocks and timed waits go through, the
- * TypeScript stripper for CODE bodies, loaded lazily too, and `safeFetch`, the one way out
- * to the network: no redirects, yian's User-Agent, and a warning when TLS checks are off.
+ * TypeScript stripper for CODE bodies, loaded lazily too, `safeFetch`, the one way out
+ * to the network: no redirects, yian's User-Agent, and a warning when TLS checks are off, and
+ * `warn`, the path every yian warning takes.
  */
 
 import type { Database } from "bun:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -635,6 +637,30 @@ export async function stripTypes(body: string): Promise<string> {
   }
 }
 
+/** What a `withWarnings` handler is given: a warning's text and its type, if any. */
+type WarningHandler = (message: string, type: string | undefined) => void;
+
+const warningHandlers = new AsyncLocalStorage<WarningHandler>();
+
+/**
+ * Raise a yian warning, as Python yian's `warnings.warn`: to the innermost `withWarnings`
+ * handler around this call, else through `process.emitWarning` (with `type` when given).
+ */
+export function warn(message: string, type?: string): void {
+  const handler = warningHandlers.getStore();
+  if (handler !== undefined) handler(message, type);
+  else if (type === undefined) process.emitWarning(message);
+  else process.emitWarning(message, type);
+}
+
+/**
+ * Run `fn`, sending every `warn` raised inside it, across its awaits too, to `handler` instead of
+ * `process.emitWarning`; return what `fn` returns.
+ */
+export function withWarnings<T>(handler: WarningHandler, fn: () => T): T {
+  return warningHandlers.run(handler, fn);
+}
+
 /** The raw sender `safeFetch` calls: the runtime's fetch, a cassette, or a test fake. */
 export type Send = (input: string | URL, init: RequestInit) => Promise<Response>;
 
@@ -706,8 +732,8 @@ let warnedInsecureTls = false;
  * and `User-Agent: USER_AGENT` unless the caller set one. Returns any non-3xx response as
  * is; for a 3xx it cancels the body and throws `RedirectError`, so credential headers never
  * reach a second origin. The first request sent while the process environment has
- * `NODE_TLS_REJECT_UNAUTHORIZED=0` emits `insecureTlsWarning`'s text through
- * `process.emitWarning`, once per process.
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` emits `insecureTlsWarning`'s text through `warn`, once per
+ * process.
  */
 export async function safeFetch(
   input: string | URL,
@@ -739,7 +765,7 @@ export async function safeFetch(
     const warning = insecureTlsWarning(processEnv("NODE_TLS_REJECT_UNAUTHORIZED"));
     if (warning) {
       warnedInsecureTls = true;
-      process.emitWarning(warning);
+      warn(warning);
     }
   }
   const response = await send(input, sent);

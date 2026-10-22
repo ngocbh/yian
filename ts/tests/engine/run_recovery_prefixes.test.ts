@@ -99,6 +99,7 @@ import {
   crashAfter,
   flow,
   fragmentBuilder,
+  progressOf,
   reducerSnapshot,
   routeFlow,
   routeInFlight,
@@ -646,8 +647,8 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
       ["second", 1],
     ]);
     const expected = { status: "interrupted" as const, inFlight: ["first", "second"], interruptedAttempts: counts };
-    expect(inspectRun(path)).toEqual(expected);
-    expect(inspectRun(path, { flow, env })).toEqual(expected);
+    expect(progressOf(inspectRun(path))).toEqual(expected);
+    expect(progressOf(inspectRun(path, { flow, env }))).toEqual(expected);
 
     const seen: RunEvent[] = [];
     const result = await resumeFlow(flow, { log: path, env, onEvent: (event) => seen.push(event) });

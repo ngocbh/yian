@@ -58,7 +58,11 @@
  * reads `succeeded` without the flow and `interrupted` with it; a finished pooled failure has
  * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
  * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
- * checks the recorded `YIAN_*` values against the given `env` (the records alone don't).
+ * checks the recorded `YIAN_*` values against the given `env` (the records alone don't); the run
+ * id, schema, fingerprint, learnable flag and last seq; a failed run's failure (a node's, and an
+ * unreachable END's); a running log with no record; a log that doesn't start with `RunStarted`,
+ * and one of schema 9. `staticNodes` of a flow with CALL and MAP children, and the paths a run's
+ * effective model map uses.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -67,6 +71,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -85,15 +90,23 @@ import {
   resumeFlow,
   runFlow,
   type RunFlowOptions,
+  RunLogSchemaError,
+  staticNodes,
 } from "../../src/run.ts";
-import { JsonlRunLog, readRunLog, type RunStartedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
+import {
+  JsonlRunLog,
+  readRunLog,
+  type RunStartedRecord,
+  RunStoppedRecord,
+  SCHEMA_VERSION,
+} from "../../src/runtime/log.ts";
 import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, rejected, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
+import { crashAfter, progressOf, rejected, requiredEndFlow, startedRun, textReply, thrownBy } from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 
@@ -1037,8 +1050,16 @@ function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
   return resumeFlow(flow, { env: hostEnv(dir), ...options });
 }
 
+/**
+ * `inspectRun` of `path` without and with `flow` (read in `hostEnv(dir)`), which must agree;
+ * returns the progress parts.
+ */
+function inspectBoth(path: string, flow: ComposedFlow) {
+  return progressOf(inspectWithAndWithout(path, flow));
+}
+
 /** `inspectRun` of `path` without and with `flow` (read in `hostEnv(dir)`), which must agree. */
-function inspectBoth(path: string, flow: ComposedFlow): RunInspection {
+function inspectWithAndWithout(path: string, flow: ComposedFlow): RunInspection {
   const without = inspectRun(path);
   expect(inspectRun(path, { flow, env: hostEnv(dir) })).toEqual(without);
   return without;
@@ -1152,8 +1173,8 @@ test("inspectRun: END succeeded with another node ready but unstarted is succeed
     log.close();
   }
 
-  expect(inspectRun(path)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
-  expect(inspectRun(path, { flow, env: hostEnv(dir) })).toEqual({
+  expect(progressOf(inspectRun(path))).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+  expect(progressOf(inspectRun(path, { flow, env: hostEnv(dir) }))).toEqual({
     status: "interrupted",
     inFlight: [],
     interruptedAttempts: new Map(),
@@ -1220,7 +1241,7 @@ test("inspectRun replays with the run's env", async () => {
   const env = hostEnv(dir, { YIAN_MAX_TOTAL_NODES: "5000" });
   await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0, env }));
 
-  expect(inspectRun(path, { flow, env })).toEqual({
+  expect(progressOf(inspectRun(path, { flow, env }))).toEqual({
     status: "interrupted",
     inFlight: ["work"],
     interruptedAttempts: new Map([["work", 1]]),
@@ -1228,4 +1249,139 @@ test("inspectRun replays with the run's env", async () => {
   expect(thrownBy(() => inspectRun(path, { flow, env: hostEnv(dir) }))).toBeInstanceOf(DefaultsMismatchError);
   // Reading without the flow doesn't check the recorded values.
   expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("interrupted");
+});
+
+test("inspectRun reads the run id, schema, fingerprint, learnable flag and last seq, with and without the flow", async () => {
+  const path = join(dir, "learnable.jsonl");
+  const plan = await load(PLAN_FLOW);
+  const result = await run(plan, { topic: "ACME" }, { log: path, learnable: true });
+  expect(inspectWithAndWithout(path, plan)).toEqual({
+    status: "succeeded",
+    inFlight: [],
+    interruptedAttempts: new Map(),
+    runId: result.runId,
+    schema: SCHEMA_VERSION,
+    flowFingerprint: flowFingerprint(plan.compiled),
+    learnable: true,
+    lastSeq: readRunLog(path).length - 1,
+    failure: null,
+  });
+
+  const crashed = join(dir, "crash.jsonl");
+  const work = await crashedWork(crashed);
+  const inspection = inspectWithAndWithout(crashed, work);
+  expect(inspection.learnable).toBe(false);
+  expect(inspection.lastSeq).toBe(3);
+  expect(inspection.failure).toBeNull();
+});
+
+test("inspectRun reads the failure of a failed run, with and without the flow", async () => {
+  const failed = join(dir, "failed.jsonl");
+  const boom = await load(
+    "id: f\nname: f\nnodes:\n  fail: {kind: code, code: ./compose_codefns.ts:boom, output: str}\n" +
+      "output: ${fail.output}\n",
+  );
+  const result = await run(boom, {}, { log: failed });
+  expect(result.failure!.nodeId).toBe("fail");
+  expect(inspectWithAndWithout(failed, boom).failure).toEqual(result.failure);
+
+  const unreachable = join(dir, "unreachable.jsonl");
+  const flow = requiredEndFlow(await load(UNREACHABLE_FLOW));
+  const routed = await run(flow, { score: 0.0 }, { log: unreachable });
+  expect(routed.failure!.code).toBe("graph.terminal_unreachable");
+  expect(inspectWithAndWithout(unreachable, flow).failure).toEqual(routed.failure);
+});
+
+test("inspectRun reads a running log with no record yet as running with nothing known", () => {
+  const path = join(dir, "fresh.jsonl");
+  using _log = JsonlRunLog.create(path, "fresh");
+  expect(inspectRun(path)).toEqual({
+    status: "running",
+    inFlight: [],
+    interruptedAttempts: new Map(),
+    runId: null,
+    schema: null,
+    flowFingerprint: null,
+    learnable: null,
+    lastSeq: null,
+    failure: null,
+  });
+});
+
+test("inspectRun refuses a log that doesn't start with RunStarted, and a schema it can't read", () => {
+  const path = join(dir, "headless.jsonl");
+  const line = (schema: number) =>
+    `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":${schema},"seq":0}\n`;
+  writeFileSync(path, line(SCHEMA_VERSION));
+  expect(() => inspectRun(path)).toThrow(new RangeError("the first run log record must be RunStarted"));
+
+  writeFileSync(path, line(9));
+  const error = thrownBy(() => inspectRun(path));
+  expect(error).toBeInstanceOf(RunLogSchemaError);
+  expect((error as RunLogSchemaError).schema).toBe(9);
+});
+
+// ---- staticNodes ----
+
+const NESTED_FLOW = `
+id: nested
+name: nested
+llm_config: {provider: openai, model: test-model}
+defs:
+  child:
+    input: {topic: !str}
+    nodes:
+      write:
+        kind: agent
+        input:
+          topic: \${input.topic}
+        output: str
+        prompt: Write about \${topic}.
+    output: \${write.output}
+nodes:
+  call:
+    kind: call
+    call: child
+    input: {topic: cats}
+  each:
+    kind: map
+    over: \${input.topics}
+    call: child
+    input:
+      topic: \${item}
+input:
+  topics: !list(str)
+output:
+  one: \${call.output}
+  many: \${each.output}
+`;
+
+test("staticNodes lists every node path of a flow and its child flows, with its node", async () => {
+  const flow = await load(NESTED_FLOW);
+  expect(staticNodes(flow).map(([nodePath, node]) => [nodePath, node.kind])).toEqual([
+    ["call", "call"],
+    ["call/write", "agent"],
+    ["call/__start__", "start"],
+    ["call/__end__", "end"],
+    ["each", "map"],
+    ["each/write", "agent"],
+    ["each/__start__", "start"],
+    ["each/__end__", "end"],
+    ["__start__", "start"],
+    ["__end__", "end"],
+  ]);
+  expect(staticNodes(flow.compiled)).toEqual(staticNodes(flow));
+  expect(staticNodes(flow)[0]![1]).toBe(flow.compiled.nodes.get("call")!);
+});
+
+test("staticNodes lists the paths a run's effective model map uses", async () => {
+  const flow = await load(NESTED_FLOW);
+  const path = join(dir, "nested.jsonl");
+  const result = await run(flow, { topics: ["dogs"] }, { log: path, models: scripted([]) });
+  expect(result.status).toBe("succeeded");
+  const started = readRunLog(path)[0]!.record as RunStartedRecord;
+  const effective = Object.keys(started.effectiveLlmByStaticPath);
+  expect(effective.length).toBeGreaterThan(0);
+  const kinds = new Map(staticNodes(flow).map(([nodePath, node]) => [nodePath, node.kind]));
+  expect(effective.map((nodePath) => kinds.get(nodePath))).toEqual(effective.map(() => "agent"));
 });

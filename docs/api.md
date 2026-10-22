@@ -2291,7 +2291,9 @@ Changed (TS yian): records use schema 10, and readers accept only schema 10. The
 is checked before anything else in a line. A schema 9 log is rejected with "run log
 schema 9 was written by Python yian; resume it with Python yian", and any other schema
 with "unsupported run-record schema: N" (a float token shows as `10.0`); the
-"predates" message for schemas 7 and 8 is gone. The vocabulary adds
+"predates" message for schemas 7 and 8 is gone. Both are a `RunLogSchemaError` (from `yian/run`),
+a `RangeError` whose `schema` holds the schema the line names (`null` when it isn't an
+integer), so a host tells a log it can't read from a damaged one. The vocabulary adds
 `RunStoppedRecord`: `reason` is `signal` when the host's abort signal fired or
 `callback` when a host callback threw or rejected, `message` is the reason's text, and
 `node_ids` lists the nodes in flight. It is not a terminal record. Every payload field
@@ -2626,8 +2628,68 @@ is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, 
 from the records, which don't hold the ready nodes: a run whose process ended after the top-level
 END succeeded (or after a route proved END unreachable) but before a node already ready started
 reads as finished, though `resumeFlow` would still run that node. Pass the flow when you have it.
-An empty log with no writer raises `RangeError`, and a missing one the `fs` error with `code`
-`ENOENT`.
+The result also holds `runId`, `schema`, `flowFingerprint` and `learnable` from the log's
+`RunStarted`, `lastSeq`, the seq of its last complete record, and `failure`, the `Failure` that
+ended a `failed` run (a node's failure, or the `graph.terminal_unreachable` failure of a route that
+proved END unreachable; `null` for any other status), so a host can list and label runs without
+reading records. The first five are `null` only for a running log with no record yet. Without
+`flow`, the records are streamed with `iterRunRecords`, so memory is bounded by the largest
+record. An empty log with no writer raises `RangeError`, as does a log whose first record isn't
+`RunStarted`; a missing one raises the `fs` error with `code` `ENOENT`, and a schema this version
+doesn't read a `RunLogSchemaError`.
+
+### Following a run log with `iterRunRecords`
+
+Changed (TS yian): `iterRunRecords(log, { afterOffset, kinds, payloads })` (from `yian/run`)
+streams the records of a run log another process may still be writing. It never takes the log's
+lock or writes the file, so the writer is never blocked. It yields one entry per record:
+
+| Field | Meaning |
+|---|---|
+| `seq` | the record's sequence number |
+| `offset` | the byte offset where its line starts |
+| `end` | the byte offset just past its newline: pass it as `afterOffset` to read on from there |
+| `runId` | the run id the record names |
+| `kind` | its wire kind, such as `node_started` |
+| `nodeId` | the node it is about (a node's start, step, success or route, a growth's spawner, a failure's node), or `null` |
+| `envelope` | the validated `RecordEnvelope`, or `null` with `payloads: false` |
+
+```ts
+let offset = 0; // the end of the last record read, saved between calls
+for (const entry of iterRunRecords(log, { afterOffset: offset, payloads: false })) {
+  show(entry.seq, entry.kind, entry.nodeId);
+  offset = entry.end;
+}
+// Later, the same loop from `offset` reads only what was appended since.
+```
+
+- It reads the file in 64 KiB chunks, so memory is bounded by the largest line, and it opens the
+  file when the first entry is asked for and closes it when the iteration ends.
+- It stops at the end of the file. An unterminated last line, which the writer may still be
+  finishing, isn't yielded; a later call from the last entry's `end` reads it once it's complete.
+- `afterOffset` (default 0) must be the end of a line. From the start, each record's `seq` must be
+  its line's index; after an offset, the first record read sets the count. Every record must name
+  the first one's run id.
+- A file shorter than where the reader got to (`afterOffset`, or the end of the last line read)
+  raises `RangeError` "run log PATH shrank to N bytes under its reader at byte M; it was truncated
+  or replaced". A record yielded while a writer runs can still be rolled back by that writer's
+  failed append; the next call then raises this error.
+- `payloads: false` checks each line's envelope (schema, run id, seq, kind) and node id without
+  validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
+  checking the others the same way; a kind no record has raises `RangeError`.
+- It reads every schema `resumeFlow` reads (schema 10); a line of another schema raises
+  `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
+  line (after an offset, the byte), with the underlying error as `cause`.
+
+### Naming a run's nodes with `staticNodes`
+
+Changed (TS yian): `staticNodes(flow)` (from `yian/run`) returns `[path, node]` for every node of a
+loaded flow (a `ComposedFlow` or its compiled graph) and of its child flows, parents before their
+children. A path joins node ids with `/`: `call/write` is node `write` of the child flow node
+`call` runs. These are the paths `RunStarted` keys `effective_llm_by_static_path` by and the node
+ids a log holds for every node the graph has from the start (a growth's nodes get ids of their
+own), so a host reads the kind of a logged node as `node.kind`. The nodes are the flow's own; read
+them, don't change them.
 
 ## Defaults and limits
 

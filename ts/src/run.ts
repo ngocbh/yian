@@ -11,7 +11,9 @@
  *
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `resumeFlow` and
  * `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering`
- * (`nodes/base.ts`). It also exports `inspectRun`, which reads where a run log stands.
+ * (`nodes/base.ts`). For hosts that show runs it also exports `inspectRun`, which reads where a run
+ * log stands, `staticNodes`, which names each node of a flow, and re-exports the lock-free reader
+ * `iterRunRecords` and `RunLogSchemaError` (`runtime/log.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -103,6 +105,7 @@ import {
   decodeRecord,
   encodeRecord,
   isRunLogLocked,
+  iterRunRecords,
   JsonlRunLog,
   MemoryRunLog,
   NodeExpandedRecord,
@@ -148,6 +151,12 @@ import {
 } from "./typesys/values.ts";
 
 export type { Steering } from "./nodes/base.ts";
+export {
+  type IterRunRecordsOptions,
+  iterRunRecords,
+  type RunLogEntry,
+  RunLogSchemaError,
+} from "./runtime/log.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */
@@ -1193,6 +1202,21 @@ export interface RunInspection {
    * resume would retry as interrupted.
    */
   readonly interruptedAttempts: ReadonlyMap<string, number>;
+  /** The run's id; `null` only for a running log with no record yet, as are the next four. */
+  readonly runId: string | null;
+  /** The run-record schema the log is written in, `SCHEMA_VERSION`. */
+  readonly schema: number | null;
+  /** The fingerprint of the flow the run started with (`RunStarted`). */
+  readonly flowFingerprint: string | null;
+  /** Whether the run was started with `learnable: true`. */
+  readonly learnable: boolean | null;
+  /** The seq of the log's last complete record. */
+  readonly lastSeq: number | null;
+  /**
+   * The failure that ended a `failed` run: the node's failure, or the `graph.terminal_unreachable`
+   * failure of a route that proved END unreachable; `null` for any other status.
+   */
+  readonly failure: Failure | null;
 }
 
 /**
@@ -1205,17 +1229,21 @@ export interface RunInspection {
  * that proof) but before a node already ready started reads as finished, though `resumeFlow` would
  * still run that node. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
  * is exact; pass the flow when you have it. The lock is probed before and after the records are
- * read, so a writer that holds it at either probe makes the run `running`.
+ * read, so a writer that holds it at either probe makes the run `running`. Without `flow`, the
+ * records are streamed (`iterRunRecords`), so memory is bounded by the largest record.
  *
  * @param log The JSONL run log's path.
  * @param options.flow The loaded flow the run was started with, for an exact status.
  * @param options.env The environment whose `YIAN_*` values the replay with `flow` checks the
  *   recorded ones against, as `resumeFlow`'s `env`; without one, the values already in effect.
  *   Reading without `flow` doesn't use it.
- * @returns The status, the nodes in flight and the interrupted counts.
+ * @returns The status, the nodes in flight, the interrupted counts, the run's id, schema, flow
+ *   fingerprint, learnable flag and last seq, and a failed run's failure.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
- * @throws RangeError when a complete line isn't a valid record, the log holds no record and no
- *   writer, or, with `flow`, the replay refuses the log (`replayRunLog`).
+ * @throws RunLogSchemaError when a record's schema isn't one this version reads.
+ * @throws RangeError when a complete line isn't a valid record, the first record isn't
+ *   `RunStarted`, the log holds no record and no writer, or, with `flow`, the replay refuses the
+ *   log (`replayRunLog`).
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError with `flow`, when the run recorded `YIAN_*` values that differ
  *   from `env`'s.
@@ -1225,16 +1253,18 @@ export function inspectRun(
   options: { flow?: ComposedFlow | null; env?: Env | null } = {},
 ): RunInspection {
   const lockedBefore = isRunLogLocked(log);
-  const envelopes = readRunLog(log);
+  const flow = options.flow ?? null;
+  // The replay needs every record at once; reading without it streams them.
+  const envelopes = flow === null ? null : readRunLog(log);
+  const scan = scanRunRecords(envelopes ?? streamedEnvelopes(log));
   // A writer that took or released the lock while the records were read is caught by one probe.
   const running = isRunLogLocked(log) || lockedBefore;
-  if (envelopes.length === 0 && !running) throw new RangeError(`cannot inspect an empty run log: ${log}`);
-  const flow = options.flow ?? null;
+  if (scan.started === null && !running) throw new RangeError(`cannot inspect an empty run log: ${log}`);
   // A running log's status needs no replay.
   const source =
-    running || flow === null
-      ? scanRunRecords(envelopes)
-      : withEnv(options.env ?? processEnv, () => replayedScan(flow, envelopes));
+    running || envelopes === null
+      ? scan
+      : withEnv(options.env ?? processEnv, () => replayedScan(flow!, envelopes));
   const { starts, interrupted, lastStop, finished } = source;
   let status: RunStatus;
   if (running) status = "running";
@@ -1243,7 +1273,23 @@ export function inspectRun(
   // A running run's attempts are still running, and a finished run's are abandoned.
   if (status === "interrupted" || status === "stopped") addInterruptedAttempts(interrupted, starts, lastStop);
   const inFlight = status === "succeeded" || status === "failed" ? [] : [...starts.keys()];
-  return { status, inFlight, interruptedAttempts: interrupted };
+  const { started } = scan;
+  return {
+    status,
+    inFlight,
+    interruptedAttempts: interrupted,
+    runId: started?.runId ?? null,
+    schema: started?.schema ?? null,
+    flowFingerprint: started === null ? null : (started.record as RunStartedRecord).flowFingerprint,
+    learnable: started === null ? null : (started.record as RunStartedRecord).learnable,
+    lastSeq: scan.lastSeq,
+    failure: status === "failed" ? source.failure : null,
+  };
+}
+
+/** Yield the envelope of each record of the log at `log`, read by `iterRunRecords`. */
+function* streamedEnvelopes(log: string): Generator<RecordEnvelope, void, undefined> {
+  for (const entry of iterRunRecords(log)) yield entry.envelope;
 }
 
 /**
@@ -1565,14 +1611,26 @@ export function skillGrants(flow: Flow): [string, readonly string[] | "all"][] {
 }
 
 /**
- * @internal Return every static node of `flow` and its child flows, keyed by node path.
+ * Return every static node of `flow` and its child flows, keyed by node path, parents before
+ * their children.
+ *
+ * A path joins node ids with `/`: `call/write` is node `write` of the child flow that node `call`
+ * runs. These are the paths `RunStarted` keys its effective model map by, and a run log's node
+ * ids for nodes the graph holds from the start (a growth's nodes get ids of their own), so a host
+ * reads each logged node's kind as `node.kind`. The nodes are the flow's own: read them, don't
+ * change them.
  *
  * Kind-blind: child flows come from `Node.originChildren()`, so the run boundary imports no node
  * class.
+ *
+ * @param flow A loaded flow, or its compiled graph.
+ * @param path The path of the node whose child flow `flow` is; `[]` (the default) for the root.
+ * @returns `[path, node]` pairs in the flow's node order, each node followed by its child flows'.
  */
-export function staticNodes(flow: Flow, path: readonly string[] = []): [string, Node][] {
+export function staticNodes(flow: ComposedFlow | Flow, path: readonly string[] = []): [string, Node][] {
+  const graph = flow instanceof ComposedFlow ? flow.compiled : flow;
   const found: [string, Node][] = [];
-  for (const [nodeId, node] of flow.nodes) {
+  for (const [nodeId, node] of graph.nodes) {
     const nodePath = [...path, nodeId];
     found.push([nodePath.join("/"), node]);
     for (const child of node.originChildren()) found.push(...staticNodes(child as Flow, nodePath));
@@ -1707,6 +1765,12 @@ type RecordScan = {
   lastStop: number | null;
   /** How the records show the run finished, or `null` when they don't. */
   finished: "succeeded" | "failed" | null;
+  /** The failure that ends the run when `finished` is `failed`. */
+  failure: Failure | null;
+  /** The log's `RunStarted` envelope, or `null` for a log with no record. */
+  started: RecordEnvelope | null;
+  /** The last record's seq, or `null` for a log with no record. */
+  lastSeq: number | null;
 };
 
 /**
@@ -1716,14 +1780,22 @@ type RecordScan = {
  * Finished means a node failed, or, with nothing in flight, the top-level END succeeded or a route
  * proved it unreachable; the records don't hold the ready nodes, so a node still ready is missed.
  */
-function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
+function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   const starts = new Map<string, number>();
   const interrupted = new Map<string, number>();
   let lastStop: number | null = null;
-  let failed = false;
+  let nodeFailure: Failure | null = null;
   let endSucceeded = false;
-  let unreachable = false;
-  for (const { seq, record } of envelopes) {
+  let unreachable: Failure | null = null;
+  let started: RecordEnvelope | null = null;
+  let lastSeq: number | null = null;
+  for (const envelope of envelopes) {
+    const { seq, record } = envelope;
+    if (seq === 0) {
+      if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+      started = envelope;
+    }
+    lastSeq = seq;
     if (record instanceof NodeStartedRecord) {
       starts.set(record.nodeId, seq);
     } else if (record instanceof NodeSucceededRecord) {
@@ -1731,12 +1803,12 @@ function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
       if (record.nodeId === END_ID) endSucceeded = true;
     } else if (record instanceof NodeRoutedRecord) {
       starts.delete(record.nodeId);
-      if (record.terminalFailure !== null) unreachable = true;
+      unreachable ??= record.terminalFailure;
     } else if (record instanceof NodeExpandedRecord) {
       starts.delete(record.spawnerId);
     } else if (record instanceof NodeFailedRecord) {
       starts.delete(record.failure.nodeId!);
-      failed = true;
+      nodeFailure ??= record.failure;
     } else if (record instanceof RunStoppedRecord) {
       lastStop = seq;
     } else if (record instanceof RunResumedRecord) {
@@ -1747,9 +1819,11 @@ function scanRunRecords(envelopes: readonly RecordEnvelope[]): RecordScan {
     }
   }
   let finished: RecordScan["finished"] = null;
-  if (failed || (starts.size === 0 && unreachable)) finished = "failed";
+  // A node failure ends the run at once, ahead of a pending unreachable END.
+  const failure = nodeFailure ?? (starts.size === 0 ? unreachable : null);
+  if (failure !== null) finished = "failed";
   else if (starts.size === 0 && endSucceeded) finished = "succeeded";
-  return { starts, interrupted, lastStop, finished };
+  return { starts, interrupted, lastStop, finished, failure, started, lastSeq };
 }
 
 /**
@@ -1767,6 +1841,9 @@ function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]):
     interrupted: new Map(state.interruptedAttempts),
     lastStop: state.lastStopSequence,
     finished,
+    failure: state.result instanceof RunFailed ? state.result.failure : null,
+    started: envelopes[0] ?? null,
+    lastSeq: envelopes.at(-1)?.seq ?? null,
   };
 }
 

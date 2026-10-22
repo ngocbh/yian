@@ -51,7 +51,7 @@ import {
   OriginRef,
   reprText,
 } from "../src/diagnostics.ts";
-import { type RunEvent, RunSucceeded, type StreamChunk } from "../src/events.ts";
+import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../src/events.ts";
 import type { Steering } from "../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
 import {
@@ -97,7 +97,7 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { JsonlRunLog, MemoryRunLog, readRunLog } from "../src/runtime/log.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addInterruptedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
@@ -1069,6 +1069,8 @@ export function compare(
 export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
   // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
   ["RangeError", "ValueError"],
+  // A RangeError naming a run-log schema TS can't read; Python raises ValueError.
+  ["RunLogSchemaError", "ValueError"],
 ]);
 
 /**
@@ -2670,7 +2672,8 @@ function goldenLog(log: string, ctx: CaseContext): void {
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
  * 0); after the run's terminal outcome only backward and memory records follow; after a
  * `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a replay's
- * status, in-flight nodes and interrupted counts, and without it the same except in its one blind
+ * status, in-flight nodes, interrupted counts and failure, and the log's run id, schema, flow
+ * fingerprint, learnable flag and last seq, and without it the same except in its one blind
  * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
  * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
  * output and appends nothing.
@@ -2722,15 +2725,24 @@ async function checkInvariants(
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
   const counts = new Map(state.interruptedAttempts);
   if (finished === null) addInterruptedAttempts(counts, state.acceptedStarts, state.lastStopSequence);
+  const first = envelopes[0]!;
+  const started = first.record as RunStartedRecord;
   const expected = {
     status: finished ?? (state.lastStopSequence === null ? "interrupted" : "stopped"),
     inFlight: finished === null ? [...state.acceptedStarts.keys()] : [],
     interruptedAttempts: Object.fromEntries(counts),
+    runId: first.runId,
+    schema: first.schema,
+    flowFingerprint: started.flowFingerprint,
+    learnable: started.learnable,
+    lastSeq: envelopes.length - 1,
+    failure: terminal instanceof RunFailed ? failureForm(terminal.failure, flow) : null,
   };
   const form = (inspection: RunInspection) => ({
     ...inspection,
     inFlight: [...inspection.inFlight],
     interruptedAttempts: Object.fromEntries(inspection.interruptedAttempts),
+    failure: inspection.failure === null ? null : failureForm(inspection.failure, flow),
   });
   compare(`inspectRun with the flow${at}`, form(inspectRun(log, { flow, env: options.env })), expected);
   const blind = form(inspectRun(log));
@@ -2742,7 +2754,7 @@ async function checkInvariants(
     state.acceptedStarts.size === 0 &&
     state.ready.length > 0 &&
     (endSucceeded || state.terminalUnreachableFailure !== null);
-  const allowed = corner ? { ...blind, status: expected.status } : blind;
+  const allowed = corner ? { ...blind, status: expected.status, failure: expected.failure } : blind;
   compare(`inspectRun without the flow${at}`, allowed, expected);
   if (finished === null) return;
   if (result !== null) {

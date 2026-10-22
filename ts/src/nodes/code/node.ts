@@ -209,18 +209,20 @@ function bodyLine(error: unknown, nodeId: string): number | null {
 /**
  * Return `stack` with each `yian-code:<nodeId>:<line>:<column>` location renamed
  * `<sourceFile>:<body line>:<body column>`: the line less the constructor's header, and a
- * first-line column less the strict prologue sharing that line. A message line holding that text
- * is renamed too.
+ * first-line column less the strict prologue sharing that line. A message holding that text is
+ * renamed too when its numbers read as a body location.
  */
 function labelBodyFrames(stack: string, nodeId: string, sourceFile: string): string {
   const marker = `yian-code:${nodeId}:`;
   const [head, ...rest] = stack.split(marker);
   return rest.reduce((text, part) => {
     const match = /^(\d+):(\d+)/.exec(part);
-    const line = match === null ? 0 : Number(match[1]) - headerLineCount();
-    if (line < 1) return text + marker + part;
-    const column = Number(match![2]) - (line === 1 ? STRICT_PROLOGUE.length : 0);
-    return `${text}${sourceFile}:${line}:${column}${part.slice(match![0].length)}`;
+    if (match === null) return text + marker + part;
+    const line = Number(match[1]) - headerLineCount();
+    const column = Number(match[2]) - (line === 1 ? STRICT_PROLOGUE.length : 0);
+    // Not a body location (a message holding the marker text): leave it.
+    if (line < 1 || column < 1) return text + marker + part;
+    return `${text}${sourceFile}:${line}:${column}${part.slice(match[0].length)}`;
   }, head!);
 }
 

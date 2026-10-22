@@ -1,11 +1,13 @@
 /**
  * How `readTypedefs` walks typedef references and bounds their nesting, and how deep a type
  * may nest once its typedef names are expanded, a port of `tests/engine/test_typedef_nesting.py`.
- * The flow-loading tests run their typedefs through `readTypedefs` and `typeFor` here, except
- * the located load errors (`test_a_flow_with_a_long_chain_is_a_located_load_error`,
- * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`), which run through `loadFlow`,
- * the CODE node naming the conformance fixture `echo`; a stack overflow (Python's
- * `RecursionError`) is checked for in the error's causes.
+ * The flow-loading tests (`test_types_at_the_limit_load`, `test_a_flow_with_a_diamond_loads`,
+ * `test_a_flow_with_a_long_chain_is_a_located_load_error` and
+ * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`) run through `loadFlow`
+ * (`loadConformanceFlow`), the CODE node naming the conformance fixture `echo`, with union and
+ * Optional field types quoted as Python quotes them; a stack overflow (Python's `RecursionError`)
+ * is checked for in the error's causes. TS-only: the at-the-limit and diamond rows also check the
+ * levels of the loaded node's output type, and the at-the-limit rows that the load takes under 5s.
  * Not ported: `test_field_parse_follows_the_int_digit_limit` (D4a: no digit limits);
  * `test_measuring_a_diamond_is_memoized` and the measure half of
  * `test_an_empty_record_and_an_enum_load` call private functions;
@@ -16,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
+import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { TypeCheckError, typeLevels } from "../../src/typesys/values.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
@@ -73,6 +76,31 @@ function flow(typedefs: Record<string, string>, output: string): string {
     `    code: ./fixtures/compose_codefns.ts:echo\n    input:\n      topic: x\n` +
     `    output: ${output}\noutput: \${use.output}\n`
   );
+}
+
+/**
+ * Render each typedef of `raw` as the flow-style YAML `flow` writes; a record field's `Union` or
+ * `Optional` type is single-quoted, as Python's builders quote them (a comma would end a plain
+ * flow scalar).
+ */
+function flowLines(raw: Raw): Record<string, string> {
+  const quoted = (type: string) => (/^(Union|Optional)\(/.test(type) ? `'${type}'` : type);
+  return Object.fromEntries(
+    Object.entries(raw).map(([name, defn]) => [
+      name,
+      typeof defn === "string"
+        ? defn
+        : `{${Object.entries(defn as Record<string, string>)
+            .map(([field, type]) => `${field}: ${quoted(type)}`)
+            .join(", ")}}`,
+    ]),
+  );
+}
+
+/** Load `flow(flowLines(raw), top)` and return the levels of the CODE node `use`'s output type. */
+async function loadedLevels(raw: Raw, top: string): Promise<number> {
+  const loaded = await loadConformanceFlow(flow(flowLines(raw), top));
+  return typeLevels((loaded.compiled.nodes.get("use")!.outputContract as ValueContract).type);
 }
 
 /** Set the type nesting limit to `limit` through `YIAN_MAX_TYPE_NESTING`. */
@@ -223,16 +251,16 @@ describe("types at the limit", () => {
   const rows = [BUILTIN.maxTypeNesting, 125].flatMap((limit) =>
     builds.map(([id, build]) => [id, limit, build] as const),
   );
-  test.each(rows)("%s load at the limit %p", (_id, limit, build) => {
+  test.each(rows)("%s load at the limit %p", async (_id, limit, build) => {
     setTypeNesting(limit);
     const [raw, top] = build(limit);
     const start = performance.now();
-    expect(typeLevels(typeFor(top, readTypedefs(raw)))).toBe(limit);
+    expect(await loadedLevels(raw, top)).toBe(limit);
     expect(performance.now() - start).toBeLessThan(5000);
   });
 
-  test("a diamond loads", () => {
-    expect(typeLevels(typeFor("D11", readTypedefs(diamond(12))))).toBe(12);
+  test("a flow with a diamond loads", async () => {
+    expect(await loadedLevels(diamond(12), "D11")).toBe(12);
   });
 
   test("an empty record and an enum load", () => {
@@ -246,20 +274,6 @@ describe("types at the limit", () => {
     expect(() => readTypedefs(raw)).toThrow(TypeCheckError);
   });
 });
-
-/** Render each typedef of `raw` as the flow-style YAML `flow` writes. */
-function flowLines(raw: Raw): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(raw).map(([name, defn]) => [
-      name,
-      typeof defn === "string"
-        ? defn
-        : `{${Object.entries(defn as Record<string, string>)
-            .map(([field, type]) => `${field}: ${type}`)
-            .join(", ")}}`,
-    ]),
-  );
-}
 
 /** Whether `error` or one of its causes is a stack overflow. */
 function overflowed(error: unknown): boolean {

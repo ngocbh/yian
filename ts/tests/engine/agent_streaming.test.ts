@@ -17,11 +17,11 @@
  * `test_reply_that_fails_normalization_sends_no_final_chunk` (at the `callModel` level and through
  * the node) is a reply the assembler refuses (a stream without its `Finish`, a `ProviderError` of
  * kind `incomplete`); a `ScriptedModel` stands in for Python's scripted LangChain chat.
- * `test_refused_credentials_with_both_sinks_fail_provider_auth`: its node half, through `evalNode`
- * rather than `run_flow` with session memory (which only rides along), for the before-any-text and
- * mid-stream refusals (a `ProviderError` of kind `auth`, reported as `ProviderError`); its
- * client-without-stream row is not ported (every `ChatModel` streams); the `run_flow` half Later
- * (T4-8).
+ * `test_refused_credentials_with_both_sinks_fail_provider_auth` runs `PLAIN_FLOW` through `loadFlow`
+ * and `runFlow` (`runWith`) with session memory, for the before-any-text and mid-stream refusals
+ * (a `ProviderError` of kind `auth`, reported as `ProviderError` where Python's reads
+ * `AuthenticationError`); its client-without-stream row is not ported (every `ChatModel`
+ * streams).
  *
  * Ported through the node's tool loop, the tool in the run's `ToolSet` and each call streamed as two
  * `ToolCallDelta`s sharing its index, as Python's scripted chat streams it:
@@ -44,6 +44,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import {
   ModelCallFinished,
@@ -69,7 +70,16 @@ import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { drive, rejected, serving } from "./run_state_fixtures.ts";
-import { effectsOf, runSessionFlow, sessionFlow, storedReplies, view } from "./session_fakes.ts";
+import {
+  effectsOf,
+  PLAIN_FLOW,
+  runSessionFlow,
+  runWith,
+  SESSION_CONFIG,
+  sessionFlow,
+  storedReplies,
+  view,
+} from "./session_fakes.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -311,10 +321,19 @@ test.each([
   ["before any text", () => new ProviderError("auth", "unauthorized", { status: 401 })],
   ["mid-stream", () => [new TextDelta(0, "partial"), new ProviderError("auth", "unauthorized", { status: 401 })]],
 ])("refused credentials with both sinks fail provider.auth (%s)", async (_name, script) => {
-  const { outcome, chunks, observed } = await evaluate(model(script()));
-  expect((outcome as EvaluationFailure).failure.code).toBe("provider.auth");
+  const chunks: StreamChunk[] = [];
+  const events: unknown[] = [];
+  const result = await runWith(
+    await loadFlow(PLAIN_FLOW),
+    { question: "q1" },
+    new SessionMemory(),
+    new ScriptedModel([script()], SESSION_CONFIG),
+    { onStream: (item) => void chunks.push(item), onEvent: (event) => void events.push(event) },
+  );
+  expect(result.status).toBe("failed");
+  expect(result.failure?.code).toBe("provider.auth");
   expect(chunks.some((item) => item.final)).toBe(false);
-  expect(observed.filter((event) => event instanceof ModelCallFinished).map((event) => event.error)).toEqual([
+  expect(events.filter((event) => event instanceof ModelCallFinished).map((event) => event.error)).toEqual([
     "ProviderError",
   ]);
 });

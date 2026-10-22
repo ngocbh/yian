@@ -7,12 +7,18 @@
  * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on) and keeps that
  * environment as the baseline. Before each test, `process.env` is put back to the baseline, with
  * `YIAN_AUTH_FILE` at a fresh temp dir's `auth.json` (not created) and `HOME` at its `home/`.
+ *
+ * Node also loads `--import` preloads in each worker thread, such as a CODE body's, which shares
+ * the test's environment; there this module does nothing, since a reset would change the
+ * environment under the running test and a hook would start a `node:test` run in the worker,
+ * whose handlers take the worker's uncaught errors.
  */
 
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { isMainThread } from "node:worker_threads";
 
 import { beforeEach } from "bun:test";
 
@@ -24,7 +30,7 @@ const CLEARED = [
   "YIAN_DEFAULT_PROVIDER",
   "YIAN_DEFAULT_MODEL",
 ];
-for (const name of CLEARED) delete process.env[name];
+if (isMainThread) for (const name of CLEARED) delete process.env[name];
 const BASELINE: Readonly<Record<string, string | undefined>> = { ...process.env };
 
 const tempDirs: string[] = [];
@@ -44,12 +50,14 @@ function isolate(): void {
 
 // Removed once at exit rather than after each test: Bun and Node order a file's `afterEach`
 // hooks differently against the preload's, and a test's own cleanup may still need them.
-process.on("exit", () => {
-  for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
-});
+if (isMainThread) {
+  process.on("exit", () => {
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
+  });
 
-// Module-level code and `beforeAll` hooks run before any `beforeEach`. Bun loads the preload once
-// per process, so this call covers only the first test file; later files start with the previous
-// test's store and home, which are temp dirs but not necessarily empty.
-isolate();
-beforeEach(isolate);
+  // Module-level code and `beforeAll` hooks run before any `beforeEach`. Bun loads the preload
+  // once per process, so this call covers only the first test file; later files start with the
+  // previous test's store and home, which are temp dirs but not necessarily empty.
+  isolate();
+  beforeEach(isolate);
+}

@@ -12,8 +12,7 @@
  *
  * Changed: a host stopping a run from `onEvent` makes the run reject with its error, as Python's
  * raise does; refused configs are `RangeError`s and refused flow files `LoadError`s (Python's
- * `ValueError`s); the AGENT inside the loop body answers its record output with a forced tool call
- * on the Chat Completions route, as Python's `_record_calls` does.
+ * `ValueError`s).
  *
  * Covered by `run-agent/engine_run_api_key__key_without_a_provider_is_rejected`:
  * `test_key_without_a_provider_is_rejected`.

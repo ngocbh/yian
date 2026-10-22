@@ -55,10 +55,12 @@
  * Ported through `loadFlow`, `runFlow` and `resumeFlow` (`runWith`, `resumeWith`), Python's
  * `_flow` loaded (`steerFlow`): `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
  * `test_resume_reuses_a_finished_steered_node_without_calling_the_inbox` and
- * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer`. Changed: the boundary wants
- * `interruptSignal` and `drain`, so its message names both (Python: "steering must provide
- * drain"); a crash is a frozen log (`CrashAt`, `crashes`) where Python's model raises
- * `_SimulatedCrash`, so no record of the crashed request's outcome reaches the log either way.
+ * `test_retry_after_a_mid_node_kill_sees_the_recorded_steer`. Changed: TS steering is push-based
+ * (design 6.8: `Steering` in `src/nodes/base.ts`, checked by `requireSteering` in
+ * `src/runtime/eval_node.ts`), so the boundary wants `interruptSignal` and `drain` and its message
+ * names both (Python: "steering must provide drain"); a crash is a frozen log (`CrashAt`,
+ * `crashes`) where Python's model raises `_SimulatedCrash`, so no record of the crashed
+ * request's outcome reaches the log either way.
  *
  * Not ported: `test_inbox_satisfies_the_public_protocol` (it checks the test's inbox against a
  * `typing.Protocol`; TS checks `Steering` statically).
@@ -83,7 +85,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -141,6 +143,10 @@ import {
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
+
+// One directory for the run logs of the boundary and resume tests, each under its own name.
+const dir = mkdtempSync(join(tmpdir(), "agent-steering-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 
@@ -244,10 +250,6 @@ function steerFlow(options: { tools?: readonly string[]; memory?: boolean; after
       : "output: ${chat.output}\n")
   );
 }
-
-let dir: string;
-beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "agent-steering-"))));
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 /**
  * Run `flow` with `model` and `options`, `memory` backing `chat`'s AGENT memory `session` when
@@ -364,7 +366,7 @@ test.each([
   ["an object", {}],
   ["drain only", { drain: () => [] }],
 ])("the run boundary rejects an object without the inbox methods: %s", async (_name, bad) => {
-  const log = join(dir, "run.jsonl");
+  const log = join(dir, "boundary.jsonl");
   const error = await rejected(runFlow(await loadFlow(steerFlow()), {}, { steering: bad as never, log }));
   expect(error).toEqual(new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null"));
   expect(existsSync(log)).toBe(false);
@@ -762,7 +764,7 @@ test("an interrupted agent in a loop lets the loop continue", async () => {
 // --- resume ----------------------------------------------------------------- //
 
 test("resume reuses a finished steered node without calling the inbox", async () => {
-  const log = join(dir, "run.jsonl");
+  const log = join(dir, "resume.jsonl");
   const flow = await loadFlow(steerFlow({ after: true }));
   const first = new CrashAt([reply("chat done"), reply("never recorded")], 2, CONFIG);
   await crashes(first, () => runWith(flow, {}, null, first, { steering: new Inbox({ chat: ["use dataset B"] }), log }));
@@ -778,7 +780,7 @@ test("resume reuses a finished steered node without calling the inbox", async ()
 });
 
 test("a retry after a mid-node kill sees the recorded steer", async () => {
-  const log = join(dir, "run.jsonl");
+  const log = join(dir, "retry.jsonl");
   const memory = new SessionMemory();
   const steering = new Inbox();
   const lookup = lookupTool(() => {

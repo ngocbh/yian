@@ -1383,30 +1383,46 @@ describe("the entry's run --json", () => {
   }, 30_000);
 
   test("a second SIGINT kills a run stuck in a sync body: exit 130, no document", async () => {
+    // The first SIGINT ends a CODE body now; only a blocked tool reaches the SIGKILL path.
     const code = "|\n      console.log('ready');\n      while (true) {}";
     const flow = file("flow.yaml", topicFlow(code));
     const log = join(tmp, "run.jsonl");
     const args = ["run", flow, "-q", "--json", "--log", log, "--input", "topic=t"];
     const { child, streams, closed } = spawnEntry(args);
-    while (!streams.err.includes("ready")) await new Promise((resolve) => setTimeout(resolve, 20));
-    child.kill("SIGINT");
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    child.kill("SIGINT");
-    expect(await closed).toEqual({ code: 130, signal: null });
-    expect(streams.out).toBe("");
+    try {
+      for (let i = 0; i < 500 && !streams.err.includes("ready"); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(streams.err).toContain("ready");
+      child.kill("SIGINT");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      child.kill("SIGINT");
+      const timeout = new Promise((resolve) => setTimeout(() => resolve("timed out"), 10_000));
+      expect(await Promise.race([closed, timeout])).toEqual({ code: 130, signal: null });
+      expect(streams.out).toBe("");
+    } finally {
+      child.kill("SIGKILL"); // no-op once it has exited
+    }
   }, 30_000);
+});
 
-  test("plain yian run: one Ctrl-C ends a run stuck in a CODE body (exit 130)", async () => {
+describe("the entry's run", () => {
+  test("one Ctrl-C ends a run stuck in a CODE body (exit 130)", async () => {
     const code = "|\n      console.log('ready');\n      while (true) {}";
     const flow = file("flow.yaml", topicFlow(code));
     const log = join(tmp, "run.jsonl");
     const { child, streams, closed } = spawnEntry(["run", flow, "--log", log, "--input", "topic=t"]);
-    for (let i = 0; i < 1000 && !streams.out.includes("ready"); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    try {
+      for (let i = 0; i < 500 && !streams.out.includes("ready"); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(streams.out).toContain("ready");
+      child.kill("SIGINT");
+      const timeout = new Promise((resolve) => setTimeout(() => resolve("timed out"), 10_000));
+      expect(await Promise.race([closed, timeout])).toEqual({ code: 130, signal: null });
+      expect(streams.err).toContain("cancelled by user");
+    } finally {
+      child.kill("SIGKILL"); // no-op once it has exited
     }
-    expect(streams.out).toContain("ready");
-    child.kill("SIGINT");
-    expect(await closed).toEqual({ code: 130, signal: null });
-    expect(streams.err).toContain("cancelled by user");
   }, 30_000);
 });

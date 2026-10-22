@@ -972,7 +972,7 @@ reported problem; see [Machine-readable output](#machine-readable-output).
 Changed (TS yian): SIGINT, SIGTERM and SIGHUP stop a run as Ctrl-C does (exit `130`) from
 the command's start, including while the flow loads and at the prompts before the run, where
 Python prints `Aborted!` and exits `1`. Once the first signal has been taken, a second one
-kills the process. A CODE body runs on its own thread, so a stop ends it at once, even a
+kills the process. A CODE body runs on a worker thread, so a stop ends it at once, even a
 body that never yields. A synchronous tool that blocks the event loop still holds every
 signal until it returns, so a stop during the last node's tool call can be lost and the run
 reported as succeeded; under `--json`, a second signal kills the run even then.

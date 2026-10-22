@@ -779,8 +779,8 @@ const NODE = ((): string | undefined => {
 
 /**
  * Run a script with `command` that loads the CODE node from `module`, aborts a spinning body
- * 300 ms after its run starts and prints `{same, ms}`; expect the reason, a prompt stop and a
- * process that exits on its own.
+ * when its forwarded `console.info` arrives and prints `{same, ms}`; expect the reason, a prompt
+ * stop and a process that exits on its own.
  */
 function expectStoppedProcessExits(command: string, args: readonly string[], module: string): void {
   const script = join(helpers, `stop-${command === process.execPath ? "bun" : "node"}.mjs`);
@@ -789,12 +789,14 @@ function expectStoppedProcessExits(command: string, args: readonly string[], mod
     `const { CodeNode } = await import(${JSON.stringify(pathToFileURL(module).href)});
 const controller = new AbortController();
 const reason = new Error("stop");
-const pending = new CodeNode("n", { code: "while (true) {}" }).run({}, { signal: controller.signal });
 let aborted = 0;
-setTimeout(() => {
+// The body's forwarded \`console.info\` says it is spinning: stop it then.
+console.info = () => {
   aborted = performance.now();
   controller.abort(reason);
-}, 300);
+};
+const code = 'console.info("busy"); while (true) {}';
+const pending = new CodeNode("n", { code }).run({}, { signal: controller.signal });
 let error;
 try {
   await pending;

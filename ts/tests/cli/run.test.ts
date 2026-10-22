@@ -16,9 +16,9 @@
 // `skillsCheck`, and `main`'s command table: the defaults check, usage errors and the routing to
 // `cli/auth.ts`; `check`, on its own and confined to `--root`; `run`'s `--json` documents, its
 // `run failed:` setup errors and its stops (Ctrl-C at a run's prompt, `io.stop`); the entry's
-// `run --json` child and its forwarded stop (`abortOnSignal`); `status`, TS-only, on logs these
-// runs write. From tests/cli/test_run_log_options.py, the run-log checks running before the flow
-// is read.
+// `run --json` child and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
+// stuck in a CODE body; `status`, TS-only, on logs these runs write. From
+// tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
@@ -1394,5 +1394,19 @@ describe("the entry's run --json", () => {
     child.kill("SIGINT");
     expect(await closed).toEqual({ code: 130, signal: null });
     expect(streams.out).toBe("");
+  }, 30_000);
+
+  test("plain yian run: one Ctrl-C ends a run stuck in a CODE body (exit 130)", async () => {
+    const code = "|\n      console.log('ready');\n      while (true) {}";
+    const flow = file("flow.yaml", topicFlow(code));
+    const log = join(tmp, "run.jsonl");
+    const { child, streams, closed } = spawnEntry(["run", flow, "--log", log, "--input", "topic=t"]);
+    for (let i = 0; i < 1000 && !streams.out.includes("ready"); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(streams.out).toContain("ready");
+    child.kill("SIGINT");
+    expect(await closed).toEqual({ code: 130, signal: null });
+    expect(streams.err).toContain("cancelled by user");
   }, 30_000);
 });

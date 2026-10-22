@@ -22,6 +22,7 @@ import {
 } from "../../src/compile/memory_layout.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import type { Env } from "../../src/defaults.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { ChildResolver } from "../../src/compose/loader.ts";
@@ -456,13 +457,21 @@ export function callReply(...calls: [string, JsonObject, string][]): Response {
   return new Response({ message: new Message({ role: "assistant", parts }), finishReason: "tool_calls" });
 }
 
-/** Return a model access over an empty environment that serves `model`; `built` counts the builds. */
-export function serving(model: ChatModel): ModelAccess & { built: number } {
+/**
+ * Return a model access over `env` (default: an empty environment) that serves `model`; `built`
+ * counts the builds and `configs` holds the config given to each build, in order.
+ */
+export function serving(
+  model: ChatModel,
+  env: Env = () => undefined,
+): ModelAccess & { built: number; configs: Readonly<Record<string, unknown>>[] } {
   const access = {
     built: 0,
-    env: () => undefined,
-    createModel: () => {
+    configs: [] as Readonly<Record<string, unknown>>[],
+    env,
+    createModel: (config: Readonly<Record<string, unknown>>) => {
       access.built++;
+      access.configs.push(config);
       return model;
     },
   };

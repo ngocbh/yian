@@ -314,7 +314,8 @@ export function validateParameters(params: readonly Parameter[]): void {
 const TRUE_SPELLINGS: ReadonlySet<string> = new Set(["1", "true", "yes", "y", "on"]);
 const FALSE_SPELLINGS: ReadonlySet<string> = new Set(["0", "false", "no", "n", "off"]);
 
-// ASCII digits with single `_` separators, as Python's `int()` and `float()` read them.
+// ASCII digits with single `_` separators, as Python's `int()` and `float()` read them, except
+// that Python also reads other Unicode decimal digits and these spellings don't.
 const DIGITS = "[0-9](?:_?[0-9])*";
 const INT_TEXT = new RegExp(`^[+-]?${DIGITS}$`);
 const FLOAT_TEXT = new RegExp(`^[+-]?(?:${DIGITS}(?:\\.(?:${DIGITS})?)?|\\.${DIGITS})(?:[eE][+-]?${DIGITS})?$`);

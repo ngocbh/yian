@@ -28,10 +28,11 @@
  * `Infinity` and `+inf`, which stay text here. An `int` input's text has no digit limit and its
  * digits are ASCII. Also TS-only: a parameter without `coerceStrings`, an `Any` input and a
  * non-record `raw`; a 5000-digit `bigint` default, the counterpart of
- * `test_long_int_boundaries.py`'s two `apply_defaults` tests (no digit limit, so it is accepted
- * rather than rejected); and the harvested-case table, which makes the loader's call on the
- * `input:` declarations of the conformance cases these readers decide, comparing the message and
- * the last frame.
+ * `test_long_int_boundaries.py::test_a_long_int_default_is_rejected` (no digit limit, so it is
+ * accepted rather than rejected; `test_a_long_int_default_is_rejected_before_its_contract` is
+ * ported in `long_int_boundaries.test.ts`); and the harvested-case table, which makes the
+ * loader's call on the `input:` declarations of the conformance cases these readers decide,
+ * comparing the message and the last frame.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

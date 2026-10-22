@@ -8,7 +8,8 @@ Bundled in the binaries
 
 The standalone yian binaries also bundle the Bun runtime and yian's npm
 dependencies: amaro (with swc), yaml, and the MCP SDK with the packages it
-depends on. `yian --licenses` prints this notice followed by their licenses.
+depends on and the packages its prebuilt files carry copied inside them (ajv
+and others). `yian --licenses` prints this notice followed by their licenses.
 
 Third-party code
 ================

@@ -5,12 +5,13 @@
 // Added here: the npm fields (`files`, `bin`, `exports`, `prepack`, `publishConfig`), exact
 // dependency pins, and the names each entry point exports, Python's `yian.__all__`, `yian.run`,
 // `yian.tools` and `yian.skills`; and `LICENSES`, the text `yian --licenses` prints, against
-// `NOTICE`, Bun's license and the license files of the packages the binaries bundle. With
-// `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's license from
-// the file `YIAN_BUN_LICENSE` names, or else from the current `LICENSES`. With `YIAN_TEST_BINARY`
-// set to a binary `bun run build:bin` made, the file also runs that binary: `--licenses`, CODE
-// flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a cwd `.env` and `bunfig.toml`
-// it must ignore.
+// `NOTICE`, Bun's license and the license files of the packages the binaries bundle, and of the
+// packages copied into their `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes
+// `src/cli/licenses.ts` instead, taking Bun's license from the file `YIAN_BUN_LICENSE` names and the
+// copied packages' from the npm packages extracted under `YIAN_VENDORED_LICENSES`, or else each from
+// the current `LICENSES`. With `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the
+// file also runs that binary: `--licenses`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an
+// MCP server, and a cwd `.env` and `bunfig.toml` it must ignore.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
@@ -115,6 +116,12 @@ describe("package.json", () => {
     expect(PACKAGE.scripts.prepack).toBe("cp ../LICENSE LICENSE && bun run build");
   });
 
+  test("links the repository's ts directory, its README and its issues", () => {
+    expect(PACKAGE.repository).toEqual({ type: "git", url: "git+https://github.com/ngocbh/yian.git", directory: "ts" });
+    expect(PACKAGE.homepage).toBe("https://github.com/ngocbh/yian/tree/main/ts#readme");
+    expect(PACKAGE.bugs).toBe("https://github.com/ngocbh/yian/issues");
+  });
+
   test("the yian bin is the built CLI, run by node", () => {
     // Without a leading `./`: `npm publish` drops a bin path written with one.
     expect(PACKAGE.bin).toEqual({ yian: "dist/src/cli/index.js" });
@@ -182,9 +189,13 @@ describe("package data", () => {
 const UPDATE = process.env.YIAN_UPDATE_LICENSES === "1";
 /** The line above and below each section header in `LICENSES`. */
 const RULE = "-".repeat(79);
-/** Bun's section in `LICENSES`: its header and its text, up to the next section. */
-const BUN_SECTION = new RegExp(`\\n${RULE}\\n(bun@[^\\n]*)\\n${RULE}\\n\\n([\\s\\S]*?)(?=\\n${RULE}\\n|$)`);
-const LICENSE_FILE = /^licen[cs]e(\.(md|txt))?$/i;
+/** A package's license and notice files, which `LICENSES` carries in order of name. */
+const LICENSE_FILE = /^(licen[cs]e|notice|third_party_notices)(\.(md|txt))?$/i;
+/**
+ * A `//#region` comment naming a file pnpm installed, `.pnpm/<name>@<version>[_<peers>]/`, with a
+ * scoped name written `@scope+name`: the mark a bundled `dist/` file leaves where it copied a package.
+ */
+const VENDORED_REGION = /^\/\/#region \S*node_modules\/\.pnpm\/((?:@[^/+]+\+)?[^/@]+)@([^/_]+)[^/]*\/node_modules\//gm;
 
 /** Return the parsed `package.json` of the package in `dir`. */
 function packageJson(dir: string) {
@@ -219,9 +230,64 @@ function bundled(): string[] {
   return [...found];
 }
 
+/** A package copied into the `dist/` of a bundled package, `carrier`. */
+interface Vendored {
+  name: string;
+  version: string;
+  carrier: string;
+}
+
+/**
+ * Return the packages copied into the `dist/` files of the bundled packages, by name: the ones their
+ * `//#region` comments name, each with the first bundled package found carrying it.
+ */
+function vendored(): Vendored[] {
+  const found = new Map<string, Vendored>();
+  for (const dir of bundled()) {
+    const dist = join(dir, "dist");
+    if (!existsSync(dist)) continue;
+    const carrier = packageJson(dir).name;
+    for (const entry of readdirSync(dist, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const source = readFileSync(join(entry.parentPath, entry.name), "utf8");
+      for (const [, scoped, version] of source.matchAll(VENDORED_REGION)) {
+        const name = scoped!.replace("+", "/");
+        if (!found.has(`${name}@${version}`)) found.set(`${name}@${version}`, { name, version: version!, carrier });
+      }
+    }
+  }
+  return [...found.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
 /** Return a section of `LICENSES`: `header` between rules, then `text`, ending in a newline. */
 function section(header: string, text: string): string {
   return `\n${RULE}\n${header}\n${RULE}\n\n${text.endsWith("\n") ? text : `${text}\n`}`;
+}
+
+/** Return the header and text of the section of the current `LICENSES` whose header `matches`. */
+function currentSection(matches: (header: string) => boolean): [string, string] | undefined {
+  // `NOTICE`, then a header and a blank line and text for each section.
+  const parts = LICENSES.split(`\n${RULE}\n`);
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    if (matches(parts[i]!)) return [parts[i]!, parts[i + 1]!.slice(1)];
+  }
+  return undefined;
+}
+
+/**
+ * Return the header and text of the package in `dir`: its name, version and license, then `suffix`;
+ * and its license and notice files, joined.
+ */
+function packageLicense(dir: string, suffix = ""): [string, string] {
+  const json = packageJson(dir);
+  const files = readdirSync(dir).sort().filter((entry) => LICENSE_FILE.test(entry));
+  if (files.length === 0) throw new Error(`${json.name} has no license file`);
+  if (typeof json.license !== "string") throw new Error(`${json.name} has no license field`);
+  const texts = files.map((file) => readFileSync(join(dir, file), "utf8"));
+  return [
+    `${json.name}@${json.version} (${json.license})${suffix}`,
+    texts.map((text) => (text.endsWith("\n") ? text : `${text}\n`)).join("\n"),
+  ];
 }
 
 /** Return Bun's header and text: from `YIAN_BUN_LICENSE` when updating, else from `LICENSES`. */
@@ -232,28 +298,53 @@ function bunLicense(): [string, string] {
     if (version === undefined) throw new Error("YIAN_BUN_LICENSE names Bun's license: update under Bun");
     return [`bun@${version} (MIT; statically links JavaScriptCore, LGPL-2)`, readFileSync(path, "utf8")];
   }
-  const match = BUN_SECTION.exec(LICENSES);
-  if (match === null) throw new Error("LICENSES has no Bun section; set YIAN_BUN_LICENSE to Bun's LICENSE.md");
-  return [match[1]!, match[2]!];
+  const kept = currentSection((header) => header.startsWith("bun@"));
+  if (kept === undefined) throw new Error("LICENSES has no Bun section; set YIAN_BUN_LICENSE to Bun's LICENSE.md");
+  return kept;
 }
 
-/** Return `LICENSES` rebuilt: `NOTICE`, Bun's section, then each bundled package's, by name. */
+/**
+ * Return the header and text of `pkg`'s section. When updating with `YIAN_VENDORED_LICENSES` set,
+ * they come from the npm package extracted there (`<dir>/package/`); else from `LICENSES`.
+ */
+function vendoredLicense(pkg: Vendored): [string, string] {
+  const id = `${pkg.name}@${pkg.version}`;
+  const suffix = `, copied into ${pkg.carrier}`;
+  const root = process.env.YIAN_VENDORED_LICENSES;
+  if (UPDATE && root) {
+    for (const entry of readdirSync(root)) {
+      const dir = join(root, entry, "package");
+      if (!existsSync(join(dir, "package.json"))) continue;
+      const json = packageJson(dir);
+      if (`${json.name}@${json.version}` === id) return packageLicense(dir, suffix);
+    }
+    throw new Error(`YIAN_VENDORED_LICENSES=${root} has no extracted ${id}`);
+  }
+  const kept = currentSection((header) => header.startsWith(`${id} (`) && header.endsWith(suffix));
+  if (kept === undefined) {
+    throw new Error(`LICENSES has no section for ${id}${suffix}; set YIAN_VENDORED_LICENSES to its extracted npm package`);
+  }
+  return kept;
+}
+
+/**
+ * Return `LICENSES` rebuilt: `NOTICE`, Bun's section, each bundled package's by name, then each
+ * package copied into their `dist/` by name.
+ */
 function buildLicenses(): string {
   const packages = bundled()
     .map((dir) => ({ dir, json: packageJson(dir) }))
     .sort((a, b) => (a.json.name < b.json.name ? -1 : a.json.name > b.json.name ? 1 : 0));
   let text = readFileSync(join(ROOT, "NOTICE"), "utf8") + section(...bunLicense());
   for (const { dir, json } of packages) {
-    const file = readdirSync(dir).sort().find((entry) => LICENSE_FILE.test(entry));
-    if (file === undefined) throw new Error(`${json.name} has no license file`);
-    if (typeof json.license !== "string") throw new Error(`${json.name} has no license field`);
-    text += section(`${json.name}@${json.version} (${json.license})`, readFileSync(join(dir, file), "utf8"));
+    text += section(...packageLicense(dir));
     // amaro's WebAssembly build of swc carries swc's own license.
     if (json.name === "amaro") {
       const swc = readFileSync(join(dir, "dist", "LICENSE"), "utf8");
       text += section(`amaro@${json.version} dist/LICENSE (swc, Apache-2.0)`, swc);
     }
   }
+  for (const pkg of vendored()) text += section(...vendoredLicense(pkg));
   return text;
 }
 
@@ -261,16 +352,16 @@ function buildLicenses(): string {
 function licensesModule(text: string): string {
   return (
     "/**\n" +
-    " * The text `yian --licenses` prints: `NOTICE`, then the licenses of Bun and of the npm packages\n" +
-    " * the binaries bundle. Generated by `YIAN_UPDATE_LICENSES=1 bun test tests/packaging.test.ts`;\n" +
-    " * not edited by hand.\n" +
+    " * The text `yian --licenses` prints: `NOTICE`, then the licenses of Bun, of the npm packages the\n" +
+    " * binaries bundle and of the packages copied into their `dist/`. Generated by\n" +
+    " * `YIAN_UPDATE_LICENSES=1 bun test tests/packaging.test.ts`; not edited by hand.\n" +
     " */\n\n" +
     `export const LICENSES: string =\n  ${JSON.stringify(text)};\n`
   );
 }
 
 describe("LICENSES", () => {
-  test("is NOTICE, then Bun's license and each bundled package's", () => {
+  test("is NOTICE, then Bun's license, each bundled package's and each copied-in package's", () => {
     const expected = buildLicenses();
     if (UPDATE) {
       writeFileSync(join(ROOT, "src", "cli", "licenses.ts"), licensesModule(expected));
@@ -297,6 +388,20 @@ describe("LICENSES", () => {
       "which",
       "yaml",
       "zod",
+    ]);
+  });
+
+  test("the copied-in packages are the ones the MCP client's dist carries", () => {
+    expect(vendored()).toEqual([
+      { name: "@cfworker/json-schema", version: "4.1.1", carrier: MCP_SDK },
+      { name: "ajv", version: "8.18.0", carrier: MCP_SDK },
+      { name: "ajv-formats", version: "3.0.1", carrier: MCP_SDK },
+      { name: "content-type", version: "1.0.5", carrier: MCP_SDK },
+      { name: "fast-deep-equal", version: "3.1.3", carrier: MCP_SDK },
+      { name: "fast-uri", version: "3.1.0", carrier: MCP_SDK },
+      { name: "jose", version: "6.2.2", carrier: MCP_SDK },
+      { name: "json-schema-traverse", version: "1.0.0", carrier: MCP_SDK },
+      { name: "json-schema-typed", version: "8.0.2", carrier: MCP_SDK },
     ]);
   });
 

@@ -99,6 +99,7 @@ const ALLOWED: Record<string, string> = {
   // Provider contracts.
   "llm/errors.ts: MAX_RETRY_AFTER_SECONDS": "provider retry-after cap, as openai's (Python's is a float its scan skips)",
   "llm/errors.ts: OVERFLOW_RETRY_AFTER": "one past the retry-after cap, so an overflowing delay is refused",
+  "llm/executor.ts: MAX_RETRY_DELAY_SECONDS": "longest model retry backoff, as openai's (Python's is a float its scan skips)",
   "llm/protocols/anthropic_messages.ts: MAX_TOKENS": "Anthropic's max_tokens per model, a provider contract",
   "llm/protocols/anthropic_messages.ts: DEFAULT_MAX_TOKENS": "Anthropic's max_tokens for other models, a provider contract",
 };

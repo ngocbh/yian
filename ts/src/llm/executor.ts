@@ -25,6 +25,11 @@ import { type Exchange, openExchange } from "./transport.ts";
 // The openai and anthropic SDKs send this Accept on every request, streamed ones too.
 const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
 const MAX_ERROR_BODY = 64 * 1024;
+/**
+ * openai's MAX_RETRY_DELAY: the longest backoff between model retries, in seconds. Fixed, as in
+ * Python; YIAN_MODEL_RETRIES bounds how long retrying takes.
+ */
+const MAX_RETRY_DELAY_SECONDS = 8;
 
 /** What every wire protocol has. */
 interface ProtocolBase {
@@ -233,7 +238,7 @@ export function retryDelay(error: ProviderError, retries: number, random: () => 
   // A non-finite or out-of-range retry-after (an adapter-built error, `inf`) gets the backoff instead.
   if (after !== null && Number.isFinite(after) && after > 0 && after <= MAX_RETRY_AFTER_SECONDS) return after;
   // The exponent is capped as openai does, so a huge retry count can't overflow.
-  return Math.min(0.5 * 2 ** Math.min(retries, 1000), 8) * (1 - 0.25 * random());
+  return Math.min(0.5 * 2 ** Math.min(retries, 1000), MAX_RETRY_DELAY_SECONDS) * (1 - 0.25 * random());
 }
 
 /**

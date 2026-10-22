@@ -1316,20 +1316,24 @@ test("inspectRun reads the failure of a failed run, with and without the flow", 
 
 test("inspectRun reads a running log with no record yet as running with nothing known", () => {
   const path = join(dir, "fresh.jsonl");
-  using _log = JsonlRunLog.create(path, "fresh");
-  expect(inspectRun(path)).toEqual({
-    status: "running",
-    inFlight: [],
-    interruptedAttempts: new Map(),
-    runId: null,
-    schema: null,
-    flowFingerprint: null,
-    learnable: null,
-    lastSeq: null,
-    startedAt: null,
-    endedAt: null,
-    failure: null,
-  });
+  const log = JsonlRunLog.create(path, "fresh");
+  try {
+    expect(inspectRun(path)).toEqual({
+      status: "running",
+      inFlight: [],
+      interruptedAttempts: new Map(),
+      runId: null,
+      schema: null,
+      flowFingerprint: null,
+      learnable: null,
+      lastSeq: null,
+      startedAt: null,
+      endedAt: null,
+      failure: null,
+    });
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 test("inspectRun refuses a log that doesn't start with RunStarted, and a schema it can't read", () => {

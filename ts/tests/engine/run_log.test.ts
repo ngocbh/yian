@@ -444,16 +444,24 @@ test.each<[string, unknown, string]>([
   const file = path.join(dir, "run.jsonl");
   let next: unknown = reading;
   const clock = () => next as number;
-  using memory = new MemoryRunLog("run", { clock });
-  using jsonl = JsonlRunLog.create(file, "run", { clock });
-  for (const log of [memory, jsonl]) {
-    expectError(() => log.append(new NodeStartedRecord("work")), RangeError, message);
-    expect(log.nextSequence).toBe(0);
+  const memory = new MemoryRunLog("run", { clock });
+  try {
+    const jsonl = JsonlRunLog.create(file, "run", { clock });
+    try {
+      for (const log of [memory, jsonl]) {
+        expectError(() => log.append(new NodeStartedRecord("work")), RangeError, message);
+        expect(log.nextSequence).toBe(0);
+      }
+      expect(fs.readFileSync(file, "utf8")).toBe("");
+      next = CLOCK();
+      for (const log of [memory, jsonl]) expect(log.append(new NodeStartedRecord("work")).at).toBe(AT);
+      expect(fs.readFileSync(file, "utf8")).toBe(`${wireLine()}\n`);
+    } finally {
+      jsonl[Symbol.dispose]();
+    }
+  } finally {
+    memory[Symbol.dispose]();
   }
-  expect(fs.readFileSync(file, "utf8")).toBe("");
-  next = CLOCK();
-  for (const log of [memory, jsonl]) expect(log.append(new NodeStartedRecord("work")).at).toBe(AT);
-  expect(fs.readFileSync(file, "utf8")).toBe(`${wireLine()}\n`);
 });
 
 test("a log refuses a clock that isn't a function, before any file is opened", () => {
@@ -741,11 +749,15 @@ test("iterRunRecords yields each record's seq, offsets, time, kind, node and env
 
 test("iterRunRecords reads a log a writer holds, without its lock", () => {
   const file = path.join(dir, "run.jsonl");
-  using log = baselineLog(file);
-  expect(isRunLogLocked(file)).toBe(true);
-  expect(nodeIds([...iterRunRecords(file)].map((entry) => entry.envelope))).toEqual(["first"]);
-  log.append(new NodeStartedRecord("second"));
-  expect(log.nextSequence).toBe(2);
+  const log = baselineLog(file);
+  try {
+    expect(isRunLogLocked(file)).toBe(true);
+    expect(nodeIds([...iterRunRecords(file)].map((entry) => entry.envelope))).toEqual(["first"]);
+    log.append(new NodeStartedRecord("second"));
+    expect(log.nextSequence).toBe(2);
+  } finally {
+    log[Symbol.dispose]();
+  }
 });
 
 test("iterRunRecords stops at a torn last line and reads it from its offset once it's complete", () => {

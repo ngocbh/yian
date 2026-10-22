@@ -15,7 +15,9 @@
  * `test_a_long_int_default_is_rejected_before_its_contract`, whose `BindingError` keeps the code
  * `binding.evaluate`. The other two partial-record fields accept the int, and the constructor
  * mismatch shows the digits cut at the cap where Python shows `<int with 5000 digits>`. CODE
- * bodies are JS (`10n ** 4999n`).
+ * bodies are JS (`10n ** 4999n`). `test_a_long_int_in_a_partial_record_output_names_the_limit` is
+ * ported whole here: `run_state_outcomes.test.ts` accepts a long int in a declared and an opaque
+ * field, but has no mistyped-field row.
  *
  * Already ported: `test_a_long_int_default_is_rejected` in `flow_inputs.test.ts` (`applyDefaults
  * accepts a long int default`).

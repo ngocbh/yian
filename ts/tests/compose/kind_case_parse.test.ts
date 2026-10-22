@@ -51,7 +51,7 @@
  *
  * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
  * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
- * from `tests/compose/test_expression_nesting.py`, which has no TS mirror yet, and
+ * from `tests/compose/test_expression_nesting.py` (mirrored in `expression_nesting.test.ts`), and
  * `load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value`, which the case-output
  * expansion raises, and `load-case/compose_kind_case_parse__a_flow_style_case_names_no_node`,
  * which the case-branch check raises.

@@ -2687,30 +2687,57 @@ An inline body is TypeScript or JavaScript that reads `inputs`. Any other `code:
 is read as an inline body, so `./helpers.ts` (no `:fn`) is a body, not a reference.
 
 Changed (TS yian): these rules replace the Python-only inline notes below (a body must
-`return`, arbitrary Python, `sys.path` imports, the dotted-token hint); the trust note
-holds for TS and JS code. An inline body runs as a strict async function of `inputs`
-(`return inputs.n * 2`). Its types are stripped, not checked, so use erasable TypeScript
-only (no `enum`, `namespace`, or parameter properties). A body can't use a static
-`import`; a dynamic `import()` of a package or an absolute path works, and local helpers
-go in a reference. `inputs` holds the declared inputs (its top level frozen), with ints
-up to 2^53 as numbers (larger ones as `bigint`s); reading an undeclared name throws. `inputs` is a
-Proxy: only a top-level `return inputs` returns the record, while `return {all: inputs}`
-fails `contract.output` (`Proxy is not a yian value`) and `structuredClone(inputs)`
-throws, so copy it with `{...inputs}`. A whole-number float such as `2.0` reaches the
-body as `2`, and a returned `2` is the int `2`. A body or a referenced function that
-returns `undefined` fails (`CODE body returned no value; return null for no value`). The
-result is checked like a host tool's: a `Date`, a `Map`, or a class instance, even
-nested, fails `contract.output` naming the path (`output at when: Date is not a yian
-value`). A thrown error fails with `node.execute` and the message `<name>: <message>`
-(`TypeError: ...`), located at the throwing line when the runtime reports it, else at
-the `code:` value (a reference's always is, and so is a thrown non-`Error`, a native
-error thrown after an `await` on Bun, or a throw deep in a library's stack). A
-referenced module is imported when the node first runs and cached for the process, so an
-edited file takes effect in a new process. Loading checks an inline body's syntax and
-that a reference's file exists, refuses a Python-style `module:function` value such as
-`pkg.mod:fn` ("use `./file.ts:fn`"), and runs no code. A CODE syntax error is reported
-after the flow's other load errors, such as an invalid `output:` type, because the check
-runs after the flow is assembled.
+`return`, arbitrary Python, a runaway body is not killed, `sys.path` imports, the
+dotted-token hint); the trust note holds for TS and JS code, except that the code runs on
+a worker thread, not in-process (see below). An inline body runs as a strict async
+function of `inputs` (`return inputs.n * 2`). Its types are stripped, not checked, so use
+erasable TypeScript only (no `enum`, `namespace`, or parameter properties). A body can't
+use a static `import`; a dynamic `import()` of a package or an absolute path works, and
+local helpers go in a reference. `inputs` holds the declared inputs (its top level
+frozen), with ints up to 2^53 as numbers (larger ones as `bigint`s); reading an undeclared
+name throws. `inputs` is a Proxy: only a top-level `return inputs` returns the record,
+while `return {all: inputs}` fails `contract.output` (`Proxy is not a yian value`) and
+`structuredClone(inputs)` throws, so copy it with `{...inputs}`. A whole-number float such
+as `2.0` reaches the body as `2`, and a returned `2` is the int `2`. A body or a
+referenced function that returns `undefined` fails
+(`CODE body returned no value; return null for no value`). The result is checked like a
+host tool's: a `Date`, a `Map`, or a class instance, even nested, fails `contract.output`
+naming the path (`output at when: Date is not a yian value`). A thrown error fails with
+`node.execute` and the message `<name>: <message>` (`TypeError: ...`), located at the
+throwing line when the runtime reports it, else at the `code:` value (a reference's always
+is, and so is a thrown non-`Error`, a native error thrown after an `await` on Bun, or a
+throw deep in a library's stack). A referenced module is imported once per thread and
+cached there (see below), so an edited file takes effect in a new process or on a new
+thread. Loading checks an inline body's syntax and that a reference's file exists, refuses
+a Python-style `module:function` value such as `pkg.mod:fn` ("use `./file.ts:fn`"), and
+runs no code. A CODE syntax error is reported after the flow's other load errors, such as
+an invalid `output:` type, because the check runs after the flow is assembled.
+
+Changed (TS yian): a CODE call, a reference or an inline body, runs on a worker thread
+(`worker_threads`), not in-process. This is not the run's `num_workers` (`--num-workers`)
+pool, which caps how many nodes run at once. A stop (Ctrl-C) ends the thread at once, even
+a body that never yields (a JS loop); one blocked in a synchronous system call (a child
+process run with `execSync`, a blocking read) ends when that call returns. A busy body
+doesn't block the host's event loop: signals and timers still run. A thread runs one call
+at a time and is reused when idle. Up to `availableParallelism()` idle threads stay for
+the life of the process, and an idle thread never keeps the process alive. Inputs and the
+result are copied between threads; the checks above are unchanged. A call may land on a
+new thread or on one an earlier call used, so module state and globals may or may not
+persist between calls (don't rely on either), and a referenced module's top-level code may
+run more than once in a run, once per thread. The host's own globals and modules aren't
+visible. `console` output reaches the host's console as text, in order, before the node
+finishes; `console.dir` and direct `process.stdout` or `process.stderr` writes don't go
+through it, so they may arrive out of order or be lost. A body that calls `process.exit`,
+or awaits a promise nothing can resolve while nothing else is pending on its thread, fails
+with `CODE worker exited with code N before the body returned`; with work pending, such as
+an earlier body's timer, it waits until stopped. Finish work a body starts, such as a
+timer, before returning: a later error from it fails the call its thread runs then, or
+prints `CODE error after its body returned: ...` when the thread is idle. A thrown error
+arrives as a copy: its name, message and stack (a custom class becomes an `Error` with
+that name; other fields such as `code` or `cause` aren't kept). A body can't read the
+host's stdin, and signal handlers it installs don't fire. `process.chdir` throws.
+`process.env` is the host's live environment, shared both ways as in-process. The thread
+is not a sandbox: it shares the host's process, privileges and file system.
 
 Inline notes:
 

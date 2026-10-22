@@ -23,41 +23,40 @@
  * `test_an_unknown_keyword_field_is_a_load_error`, `test_a_disjoint_keyword_field_is_a_load_error`,
  * `test_keywords_cannot_build_a_union`, `test_keywords_cannot_build_a_scalar_type`,
  * `test_a_constructor_in_a_call_nodes_asserts_is_a_located_load_error` (the node-assert check,
- * pinning the whole message), the typed-binding row `test_downstream_sees_the_constructed_type`,
- * the call-type row `test_a_call_argument_is_checked_with_the_constructed_type` and
- * `test_a_parent_cannot_construct_a_childs_typedef`. `engine/inline_calls.test.ts` pins the cases
- * of the binding sites the inline-call desugar raises.
+ * pinning the whole message), the typed-binding row `test_downstream_sees_the_constructed_type` and
+ * the call-type row `test_a_call_argument_is_checked_with_the_constructed_type`;
+ * `test_a_union_typedef_and_an_enum_alias_check` (both runs; its case
+ * `run-core/compose_constructor_load__an_enum_alias_constructor_rejects_a_non_member` holds the
+ * second); each as a load row then a run row (`loadConformanceFlow` and `runFlow`, every run),
+ * `test_a_constructor_in_a_case_when` (its type table, then both parameter rows),
+ * `test_a_constructor_in_node_and_flow_asserts`, `test_a_constructor_in_a_flow_output`,
+ * `test_a_constructor_in_a_map_per_item_input`,
+ * `test_an_inline_body_parameter_takes_the_constructed_type` (the inline child's START parameter
+ * type), `test_a_caller_sees_a_childs_constructed_output_type` and
+ * `test_a_uses_child_resolves_constructors_against_its_own_typedefs` (loaded with `loadFlow`);
+ * the load rows of the covered `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`,
+ * `test_a_bad_built_field_fails_with_binding_type` and `test_a_nested_constructor_failure_is_binding_type`;
+ * and `test_a_parent_cannot_construct_a_childs_typedef`. `engine/inline_calls.test.ts` pins the
+ * cases of the binding sites the inline-call desugar raises.
  *
- * Ported through `loadFlow` and `runFlow`: `test_a_constructor_in_node_and_flow_asserts`,
- * `test_a_constructor_in_a_flow_output`, `test_a_constructor_in_a_map_per_item_input`,
- * `test_a_uses_child_resolves_constructors_against_its_own_typedefs`,
- * `test_a_caller_sees_a_childs_constructed_output_type`,
- * `test_an_inline_body_parameter_takes_the_constructed_type`, the `weak` row of
- * `test_a_constructor_in_a_case_when` and the passing run of
- * `test_a_union_typedef_and_an_enum_alias_check`.
- *
- * Covered by `run-core` cases: `test_a_value_that_fits_passes_unchanged`
- * (`compose_constructor_load__a_value_that_fits_passes_unchanged`), the run of
- * `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`
- * (`compose_constructor_load__a_value_lacking_a_field_fails`), `test_keywords_build_the_record`
- * (`compose_constructor_load__keywords_build_the_record`), the run of
- * `test_a_bad_built_field_fails_with_binding_type`
- * (`compose_constructor_load__a_bad_built_field_fails_with_binding_type`), the failing run of
- * `test_a_union_typedef_and_an_enum_alias_check`
- * (`compose_constructor_load__an_enum_alias_constructor_rejects_a_non_member`),
- * `test_constructors_in_a_list_literal_and_a_nested_value`
- * (`compose_constructor_load__constructors_in_a_list_and_a_nested_value`), the run of
- * `test_a_nested_constructor_failure_is_binding_type`
- * (`compose_constructor_load__a_nested_constructor_failure_is_binding_type`) and the `strong` row
- * of `test_a_constructor_in_a_case_when` (`compose_constructor_load__a_constructor_in_a_case_when`).
- * Their load halves stay here.
+ * Covered by `run-core/compose_constructor_load__<case>`: `test_a_value_that_fits_passes_unchanged`
+ * (`a_value_that_fits_passes_unchanged`), `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`
+ * (`a_value_lacking_a_field_fails`, which pins the frame Python reads through `diagnose`; TS
+ * expect, decision 43),
+ * `test_keywords_build_the_record` (same name), `test_a_bad_built_field_fails_with_binding_type`
+ * (same name), `test_constructors_in_a_list_literal_and_a_nested_value`
+ * (`constructors_in_a_list_and_a_nested_value`) and `test_a_nested_constructor_failure_is_binding_type`
+ * (same name).
  *
  * TS-only: one row per constructor message the type-table pass reports at a `case when` (a union,
  * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read); Python
  * reports them there too, but its tests pin them only at binding sites.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -68,14 +67,20 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   loadErrorAsync,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-constructor-load-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 install(BUILTIN);
 beforeEach(() => install(BUILTIN));
@@ -139,6 +144,17 @@ function lineOf(text: string, marker: string): number {
 const errorLine = (error: { diagnostic: { frames: readonly { range: { startLine: number } }[] } }) =>
   error.diagnostic.frames.at(-1)!.range.startLine;
 
+/** Load and run `text` on `inputs`. */
+const run = async (text: string, inputs: Record<string, unknown>) =>
+  runFlow(await loadConformanceFlow(text), inputs, { env });
+
+/** Run `text` on `inputs` and return its output, expecting it succeeded. */
+async function ok(text: string, inputs: Record<string, unknown>): Promise<unknown> {
+  const result = await run(text, inputs);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return result.output;
+}
+
 /** Assemble `text` as the root flow; return its nodes. */
 const loadedNodes = (text: string) => assembleText(text).flow.compiled.nodes;
 
@@ -178,10 +194,9 @@ test("a union typedef and an enum alias check", async () => {
 output: \${c.output}
 `);
 
-  const result = await runFlow(await loadFlow(text), { order: { decision: A_SELL, size: "m" } });
-
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toEqual(["sell", "m"]);
+  expect(await ok(text, { order: { decision: A_SELL, size: "m" } })).toStrictEqual(["sell", "m"]);
+  const failed = await run(text, { order: { decision: A_SELL, size: "xl" } });
+  expect(failed.failure!.code).toBe("binding.type");
 });
 
 test("isinstance with a builtin name does not make it a constructor", () => {
@@ -205,18 +220,18 @@ const CASE_FLOW = flow(`  route:
 output: \${strong.output | weak.output}
 `);
 
-test("a constructor in a case when", async () => {
-  const loaded = await loadFlow(CASE_FLOW);
-  expectTypes(loaded.compiled.nodes.get("route"), { Buy: BUY });
-
-  const result = await runFlow(loaded, { order: { action: "buy", conviction: 0.1 } });
-
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe("weak");
+test("a constructor in a case when (loads)", () => {
+  expectTypes(loadedNodes(CASE_FLOW).get("route"), { Buy: BUY });
 });
 
-test("a constructor in node and flow asserts", async () => {
-  const text = flow(`  c:
+test.each<[string, object, string]>([
+  ["a strong buy", A_BUY, "strong"],
+  ["a weak buy", { action: "buy", conviction: 0.1 }, "weak"],
+])("a constructor in a case when (runs): %s", async (_name, order, expected) => {
+  expect(await ok(CASE_FLOW, { order })).toBe(expected);
+});
+
+const ASSERTS_FLOW = flow(`  c:
     kind: code
     input:
       x: \${d.output}
@@ -229,29 +244,32 @@ asserts:
   - \${Buy(c.output).conviction < 0.9}
 `);
 
-  const loaded = await loadFlow(text);
-  expectTypes(loaded.compiled.nodes.get("c"), { Buy: BUY });
-
-  expect((await runFlow(loaded, { order: A_BUY })).status).toBe("succeeded");
-  for (const conviction of [0.95, 0.05]) {
-    const failed = await runFlow(loaded, { order: { action: "buy", conviction } });
-    expect(failed.status).toBe("failed");
-    expect(failed.failure?.code).toBe("assertion.failed");
-  }
+test("a constructor in node and flow asserts (loads)", () => {
+  expectTypes(loadedNodes(ASSERTS_FLOW).get("c"), { Buy: BUY });
 });
 
-test("a constructor in a flow output", async () => {
-  const result = await runFlow(await loadFlow(flow("output:\n  decision: ${Buy(d.output)}\n")), { order: A_BUY });
+test("a constructor in node and flow asserts (runs)", async () => {
+  const loaded = await loadConformanceFlow(ASSERTS_FLOW);
 
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toEqual({ decision: A_BUY });
+  expect((await runFlow(loaded, { order: A_BUY }, { env })).status).toBe("succeeded");
+  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.95 } }, { env })).status).toBe("failed");
+  expect((await runFlow(loaded, { order: { action: "buy", conviction: 0.05 } }, { env })).status).toBe("failed");
 });
 
-test("a constructor in a map per-item input", async () => {
-  const text =
-    "id: m\nname: m\n" +
-    TYPEDEFS +
-    `input:
+test("a constructor in a flow output (loads)", () => {
+  loadedNodes(flow("output:\n  decision: ${Buy(d.output)}\n"));
+});
+
+test("a constructor in a flow output (runs)", async () => {
+  const text = flow("output:\n  decision: ${Buy(d.output)}\n");
+
+  expect(await ok(text, { order: A_BUY })).toStrictEqual({ decision: A_BUY });
+});
+
+const MAP_FLOW =
+  "id: m\nname: m\n" +
+  TYPEDEFS +
+  `input:
   orders: !list(object)
 defs:
   one:
@@ -274,13 +292,13 @@ nodes:
       x: \${Buy(item)}
 output: \${each.output}
 `;
-  const loaded = await loadFlow(text);
-  expectTypes(loaded.compiled.nodes.get("each"), { Buy: BUY });
 
-  const result = await runFlow(loaded, { orders: [A_BUY, A_BUY] });
+test("a constructor in a map per-item input (loads)", () => {
+  expectTypes(loadedNodes(MAP_FLOW).get("each"), { Buy: BUY });
+});
 
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toEqual([0.5, 0.5]);
+test("a constructor in a map per-item input (runs)", async () => {
+  expect(await ok(MAP_FLOW, { orders: [A_BUY, A_BUY] })).toStrictEqual([0.5, 0.5]);
 });
 
 // ---------- typed bindings and call types over a constructor ----------
@@ -375,17 +393,18 @@ nodes:
 output: \${use.output}
 `;
 
-test("a caller sees a child's constructed output type", async () => {
-  const result = await runFlow(await loadFlow(PARENT), { order: A_BUY });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe(0.5);
+test("a caller sees a child's constructed output type (loads)", async () => {
+  await loadFlow(PARENT);
   const text = PARENT.replace("${run.output.conviction}", "${run.output.size}");
 
   expect((await loadErrorAsync(loadFlow(text))).message).toContain("reads unknown field 'size' on record");
 });
 
-test("an inline body parameter takes the constructed type", async () => {
-  const text = flow(`  inline:
+test("a caller sees a child's constructed output type (runs)", async () => {
+  expect(await ok(PARENT, { order: A_BUY })).toBe(0.5);
+});
+
+const INLINE_FLOW = flow(`  inline:
     kind: call
     input:
       decision: \${Buy(d.output)}
@@ -400,13 +419,14 @@ test("an inline body parameter takes the constructed type", async () => {
 output: \${inline.output}
 `);
 
-  const loaded = await loadFlow(text);
-  const child = (loaded.compiled.nodes.get("inline") as CallNode).child as CompiledFlow;
+test("an inline body parameter takes the constructed type (loads)", () => {
+  const child = (loadedNodes(INLINE_FLOW).get("inline") as CallNode).child as CompiledFlow;
 
   expect(typeEquals(child.nodes.get(child.startId)!.params![0]!.contract!.type, BUY)).toBe(true);
-  const result = await runFlow(loaded, { order: A_BUY });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe(0.5);
+});
+
+test("an inline body parameter takes the constructed type (runs)", async () => {
+  expect(await ok(INLINE_FLOW, { order: A_BUY })).toBe(0.5);
 });
 
 const USES_CHILD = `id: child
@@ -446,14 +466,20 @@ async function usesResolver(): Promise<(flowId: string) => ComposedFlow> {
   return (flowId) => loaded[flowId]!;
 }
 
-test("a uses child resolves constructors against its own typedefs", async () => {
+test("a uses child resolves constructors against its own typedefs (loads)", async () => {
   const loaded = await loadFlow(USES_PARENT, { childResolver: await usesResolver() });
 
   const child = (loaded.compiled.nodes.get("run") as CallNode).child as CompiledFlow;
   expect(child.nodes.get("c")!.types.has("Hold")).toBe(true);
-  const result = await runFlow(loaded, { order: { action: "hold" } });
+});
+
+test("a uses child resolves constructors against its own typedefs (runs)", async () => {
+  const loaded = await loadConformanceFlow(USES_PARENT, { childResolver: await usesResolver() });
+
+  const result = await runFlow(loaded, { order: { action: "hold" } }, { env });
+
   expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toEqual({ action: "hold" });
+  expect(result.output).toStrictEqual({ action: "hold" });
 });
 
 test("a flow call with several arguments keeps the flow call message", () => {

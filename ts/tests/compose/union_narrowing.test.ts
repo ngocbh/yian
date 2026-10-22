@@ -93,23 +93,32 @@
  * `'biy'` / `did you mean 'buy'?`), and the cycle's nodes and the uncovered tags as JSON text,
  * `["b","c"]` and `["hold","sell"]` (Python `['b', 'c']` and `['hold', 'sell']`).
  *
- * Ported through `loadFlow` and `runFlow`, `d`'s CODE body in TS:
- * `test_a_searched_when_with_a_tag_check_and_a_member_read_runs` (both runs) and
- * `test_a_partly_shared_union_branch_runs`.
+ * Ported through `loadConformanceFlow` and `runFlow`: `test_a_searched_when_with_a_tag_check_and_a_member_read_runs`
+ * (both runs; the case `run-core/compose_union_narrowing__a_searched_when_with_a_tag_check_and_a_member_read`
+ * runs only the `sell` one) and `test_a_partly_shared_union_branch_runs`, the producer's CODE body
+ * in JS (decision 11).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-union-narrowing-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -613,37 +622,6 @@ test("a when check the routing rules out is an error", () => {
   );
 });
 
-/** A flow with `TYPEDEFS`, whose CODE node `d` runs `body` to return a `Decision`, then `nodes`. */
-const runnable = (body: string, ...nodes: string[]) =>
-  "id: p\nname: p\n" +
-  TYPEDEFS +
-  "input:\n  s: !str\nnodes:\n" +
-  "  d:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Decision\n    code: |\n" +
-  body +
-  nodes.join("") +
-  "output: ${route.output}\n";
-
-const SELL_RETURN = "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n";
-
-test.each([
-  ["buy", "branch"],
-  ["sell", "else"],
-])("a searched when with a tag check and a member read runs: %s", async (s, expected) => {
-  const text = runnable(
-    "      if (inputs['s'] === 'buy')\n" +
-      "          return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}\n" +
-      SELL_RETURN,
-    searched([`"d.output.action == 'buy' and d.output.limit > 5"`, "t"]),
-    "  t:\n    kind: code\n    output: str\n    code: return 'branch'\n",
-    "  e:\n    kind: code\n    output: str\n    code: return 'else'\n",
-  );
-
-  const result = await runFlow(await loadFlow(text), { s });
-
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe(expected);
-});
-
 // --- calls --- //
 
 test("a call target under buy passes a buy order", () => {
@@ -909,16 +887,30 @@ test("an on inside a partly shared union branch covers the shared tags", () => {
 });
 
 test("a partly shared union branch runs", async () => {
-  const text = runnable(
-    SELL_RETURN,
-    searched(["isinstance(d.output, Rest)", "t"]),
-    "  t:\n    kind: code\n    input:\n      n: ${d.output.note}\n    output: str\n    code: return inputs['n']\n",
-    code("e"),
-  );
+  const text =
+    "id: p\nname: p\n" +
+    TYPEDEFS +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  d:\n" +
+    "    kind: code\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "    output: Decision\n" +
+    "    code: |\n" +
+    "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n" +
+    searched(["isinstance(d.output, Rest)", "t"]) +
+    "  t:\n" +
+    "    kind: code\n" +
+    "    input:\n      n: ${d.output.note}\n" +
+    "    output: str\n" +
+    "    code: return inputs['n']\n" +
+    code("e") +
+    "output: ${route.output}\n";
 
-  const result = await runFlow(await loadFlow(text), { s: "x" });
+  const result = await runFlow(await loadConformanceFlow(text), { s: "x" }, { env });
 
-  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
   expect(result.output).toBe("n");
 });
 
@@ -1086,6 +1078,36 @@ test("a when read past a check the checks before it decide is checked under them
     "reference ${d.output.limit} reads field 'limit', which Sell doesn't have; d.output is " +
       "Sell here, by the checks before this read",
   );
+});
+
+test("a searched when with a tag check and a member read runs", async () => {
+  const text =
+    "id: p\nname: p\n" +
+    TYPEDEFS +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  d:\n" +
+    "    kind: code\n" +
+    "    input:\n      s: ${input.s}\n" +
+    "    output: Decision\n" +
+    "    code: |\n" +
+    "      if (inputs['s'] === 'buy')\n" +
+    "          return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}\n" +
+    "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n" +
+    searched(["\"d.output.action == 'buy' and d.output.limit > 5\"", "t"]) +
+    "  t:\n    kind: code\n    output: str\n    code: return 'branch'\n" +
+    "  e:\n    kind: code\n    output: str\n    code: return 'else'\n" +
+    "output: ${route.output}\n";
+  const loaded = await loadConformanceFlow(text);
+
+  let result = await runFlow(loaded, { s: "buy" }, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("branch");
+  result = await runFlow(loaded, { s: "sell" }, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("else");
 });
 
 test("overlapping checks narrow each branch by its own check", () => {

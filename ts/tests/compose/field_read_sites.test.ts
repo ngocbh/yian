@@ -48,18 +48,17 @@
  * `::test_flow_assert_check_impossible_even_on_null_is_reported` (2),
  * `::test_flow_assert_read_error_names_the_declared_type` (6),
  * `::test_flow_assert_shorthand_check_is_reported_as_written`, `::test_flow_assert_reads_unknown_input_field` (2),
- * `::test_flow_assert_readable_input_fields_load` (2); and the load half of
- * `::test_flow_assert_on_a_skippable_producer_reads_null` `always-on-the-declared-type`.
- *
- * Ported through `loadFlow` and `runFlow`: `::test_loop_assert_reads_the_carried_field` (2),
+ * `::test_flow_assert_readable_input_fields_load` (2); `::test_guarded_node_assert_runs` (3) and
+ * `::test_guarded_flow_assert_runs` (2), run with `loadConformanceFlow` and `runFlow`; and, each
+ * as a load row then a run row, `::test_loop_assert_reads_the_carried_field` (2),
  * `::test_node_assert_known_input_field_loads_and_runs`,
- * `::test_loop_node_assert_tag_checks_narrow_its_local` (with its two load errors),
- * `::test_partial_record_local_root_reads` (with its load error),
- * `::test_flow_assert_known_input_field_loads_and_runs`, the `sell` and `buy-positive` rows of
- * `::test_guarded_node_assert_runs`, `::test_guarded_flow_assert_runs` (2) and the
- * `every-member-ruled-out` row of `::test_flow_assert_on_a_skippable_producer_reads_null`. Their
- * other rows are covered by `run-core/compose_field_read_sites__guarded_node_assert_fails` and
- * `__flow_assert_on_a_skipped_producer_reads_null`.
+ * `::test_loop_node_assert_tag_checks_narrow_its_local` (the load row with its two load errors),
+ * `::test_partial_record_local_root_reads` (the load row with its load error),
+ * `::test_flow_assert_on_a_skippable_producer_reads_null` (2) and
+ * `::test_flow_assert_known_input_field_loads_and_runs` (both runs). The harvested
+ * `run-core/compose_field_read_sites__{guarded_node_assert_fails,guarded_flow_assert_short_circuits,
+ * flow_assert_on_a_skipped_producer_reads_null}` each hold one parameter row, the second over a
+ * smaller flow, so those tests are ported whole.
  *
  * Ported, the builtin-result rows: `::test_binding_reads_a_field_on_a_builtin_result`,
  * `::test_flow_output_reads_a_field_on_a_builtin_result`, `::test_prompt_reads_a_field_on_a_builtin_result`,
@@ -85,18 +84,26 @@
  * `prompt_inside_a_def_reads_unknown_field`.
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
 import { runFlow } from "../../src/run.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
   type CaseRow,
+  loadConformanceFlow,
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-field-read-sites-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 const PREAMBLE =
   "id: p\nname: p\n" +
@@ -168,10 +175,12 @@ const load = (text: string) => assembleText(text);
 /** Return the message of the `LoadError` assembling `text` throws. */
 const loadMessage = (text: string) => loadError(() => load(text)).message;
 
-/** Load `text` with `loadFlow` and run it on `inputs` (default: the flow inputs `s` and `r`). */
-async function run(text: string, inputs: Readonly<Record<string, unknown>> = { s: "x", r: { a: "x" } }) {
-  return runFlow(await loadFlow(text), inputs);
-}
+/** The inputs every run passes: the flow's `s` and `r`. */
+const INPUT_VALUES = { s: "x", r: { a: "x" } };
+
+/** Load and run `text` on `INPUT_VALUES` and `inputs`. */
+const run = async (text: string, inputs: Record<string, unknown> = {}) =>
+  runFlow(await loadConformanceFlow(text), { ...INPUT_VALUES, ...inputs }, { env });
 
 /** A CODE node typed `output` reading the flow input `s`. */
 function producer(nodeId: string, output: string): string {
@@ -457,7 +466,11 @@ const LOOPS: [string, (assertion: string) => string][] = [
   ["inline", inlineLoop],
 ];
 
-test.each(LOOPS)("a loop assert reads the carried field: %s", async (_id, build) => {
+test.each(LOOPS)("a loop assert reads the carried field (loads): %s", (_id, build) => {
+  load(build("st.b == null or st.b == 'y'"));
+});
+
+test.each(LOOPS)("a loop assert reads the carried field (runs): %s", async (_id, build) => {
   const result = await run(build("st.b == null or st.b == 'y'"));
 
   expect(result.status, result.failure?.message).toBe("succeeded");
@@ -482,7 +495,11 @@ test.each([
   load(flow(nodes, "${c.output}"));
 });
 
-test("a node assert known input field loads and runs", async () => {
+test("a node assert known input field loads and runs (loads)", () => {
+  load(flow(code({ v: "${step.output}" }, ["v.a == 'x'"]), "${c.output}"));
+});
+
+test("a node assert known input field loads and runs (runs)", async () => {
   const result = await run(flow(code({ v: "${step.output}" }, ["v.a == 'x'"]), "${c.output}"));
 
   expect(result.status, result.failure?.message).toBe("succeeded");
@@ -568,15 +585,17 @@ test("a node assert read under two guards is checked under each", () => {
   expect(count(message, `reference \${v.qty} ${ASSERT_QTY_HINT}`)).toBe(1);
 });
 
-test.each([
-  ["sell", { action: "sell" }],
-  ["buy-positive", { action: "buy", qty: 2 }],
-])("a guarded node assert runs: %s", async (_id, order) => {
+test.each<[string, Record<string, unknown>, "succeeded" | "failed"]>([
+  ["sell", { action: "sell" }, "succeeded"],
+  ["buy-positive", { action: "buy", qty: 2n }, "succeeded"],
+  ["buy-zero", { action: "buy", qty: 0n }, "failed"],
+])("guarded node assert runs: %s", async (_id, order, status) => {
   const node = code({ v: "${input.o}" }, ["not isinstance(v, Buy) or v.qty > 0"]);
 
-  const result = await run(flow(node, "${c.output}", { inputs: ORDER_INPUT }), { s: "x", r: { a: "x" }, o: order });
+  const result = await run(flow(node, "${c.output}", { inputs: ORDER_INPUT }), { o: order });
 
-  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.status, result.failure?.message).toBe(status);
+  if (status === "failed") expect(result.failure!.code).toBe("assertion.failed");
 });
 
 test("agent node assert reads are narrowed", () => {
@@ -797,10 +816,8 @@ function orderLoop(assertion: string): string {
   return flow(nodes, "${drive.output}", { inputs: "  o: !Order\n" });
 }
 
-test("a loop node assert's tag checks narrow its local", async () => {
-  const order = { action: "buy", qty: 2 };
-  const result = await run(orderLoop("o.action != 'buy' or o.qty > 0"), { s: "x", r: { a: "x" }, o: order });
-  expect(result.status, result.failure?.message).toBe("succeeded");
+test("a loop node assert's tag checks narrow its local (loads)", () => {
+  load(orderLoop("o.action != 'buy' or o.qty > 0"));
   expect(loadMessage(orderLoop("o.qty > 0"))).toContain(
     "node 'drive' assert: reference ${o.qty} reads field 'qty', which only union members with action buy " +
       'have; check the member first with `o.action == "buy" and ...`',
@@ -808,6 +825,12 @@ test("a loop node assert's tag checks narrow its local", async () => {
   const message = loadMessage(orderLoop("o.action == 'sell' and o.action == 'buy' and o.zz > 0"));
   expect(message).toContain('`o.action == "buy"` can never be true here: o is Sell');
   expect(message).not.toContain("${o.zz}");
+});
+
+test("a loop node assert's tag checks narrow its local (runs)", async () => {
+  const result = await run(orderLoop("o.action != 'buy' or o.qty > 0"), { o: { action: "buy", qty: 2n } });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
 });
 
 const PARTIAL_CHILD_TEXT =
@@ -840,10 +863,14 @@ function partialRead(assertion: string): string {
   return flow(nodes, "${c.output}", { defs: PARTIAL_CHILD_TEXT });
 }
 
-test("partial record local root reads", async () => {
+test("partial record local root reads (loads)", () => {
   expect(loadMessage(partialRead("v.zz == 1"))).toContain(
     "node 'c' assert: reference ${v.zz} reads unknown field 'zz' on record",
   );
+  load(partialRead("v.a == 'a' and v.b.deep.k == 1"));
+});
+
+test("partial record local root reads (runs)", async () => {
   expect((await run(partialRead("v.a == 'a' and v.b.deep.k == 1"))).status).toBe("succeeded");
 });
 
@@ -882,14 +909,11 @@ test("a flow assert read before its check is rejected", () => {
 
 test.each<[string, Record<string, unknown>, "succeeded" | "failed"]>([
   ["sell", { action: "sell" }, "succeeded"],
-  ["buy-zero", { action: "buy", qty: 0 }, "failed"],
-])("a guarded flow assert runs: %s", async (_id, order, status) => {
-  const inputs = { s: "x", r: { a: "x" }, o: order, ab: { x: 1 } };
-
-  const result = await run(flowAssert("not isinstance(input.o, Buy) or input.o.qty > 0"), inputs);
+  ["buy-zero", { action: "buy", qty: 0n }, "failed"],
+])("guarded flow assert runs: %s", async (_id, order, status) => {
+  const result = await run(flowAssert("not isinstance(input.o, Buy) or input.o.qty > 0"), { o: order, ab: { x: 1n } });
 
   expect(result.status, result.failure?.message).toBe(status);
-  if (status === "failed") expect(result.failure?.code).toBe("assertion.failed");
 });
 
 test("an impossible flow assert check is located at the assert", () => {
@@ -913,16 +937,18 @@ function skippableAssert(assertion: string): string {
   return flow(nodes, "${step.output}", { tail: asserts(assertion) });
 }
 
-// END binds a producer it reads with `:- null`, so a skipped one reads null.
-test("a flow assert on a skippable producer reads null (load half): always-on-the-declared-type", () => {
-  load(skippableAssert("not isinstance(d.output, Order) or d.output.action == 'sell'"));
+const SKIPPABLE_READS: [string, string][] = [
+  ["always-on-the-declared-type", "not isinstance(d.output, Order) or d.output.action == 'sell'"],
+  ["every-member-ruled-out", "not isinstance(d.output, Buy) and not isinstance(d.output, Sell)"],
+];
+
+test.each(SKIPPABLE_READS)("a flow assert on a skippable producer reads null (loads): %s", (_id, assertion) => {
+  // END binds a producer it reads with `:- null`, so a skipped one reads null.
+  load(skippableAssert(assertion));
 });
 
-test("a flow assert on a skippable producer reads null: every-member-ruled-out", async () => {
-  const result = await run(
-    skippableAssert("not isinstance(d.output, Buy) and not isinstance(d.output, Sell)"),
-    { s: "stop", r: { a: "x" } },
-  );
+test.each(SKIPPABLE_READS)("a flow assert on a skippable producer reads null (runs): %s", async (_id, assertion) => {
+  const result = await run(skippableAssert(assertion), { s: "stop" });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
 });
@@ -995,13 +1021,15 @@ test.each([
   expect(loadMessage(flow("", "${step.output}", { tail: asserts(assertion) }))).toContain(expected);
 });
 
-test("a flow assert known input field loads and runs", async () => {
+test("a flow assert known input field loads and runs (loads)", () => {
+  load(flow("", "${step.output}", { tail: asserts("input.r.a == 'x'") }));
+});
+
+test("a flow assert known input field loads and runs (runs)", async () => {
   const text = flow("", "${step.output}", { tail: asserts("input.r.a == 'x'") });
 
   expect((await run(text)).status).toBe("succeeded");
-  const failed = await run(text, { s: "x", r: { a: "y" } });
-  expect(failed.status).toBe("failed");
-  expect(failed.failure?.code).toBe("assertion.failed");
+  expect((await run(text, { r: { a: "y" } })).status).toBe("failed");
 });
 
 test.each([

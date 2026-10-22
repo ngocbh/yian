@@ -46,7 +46,21 @@
  * one that strips cleanly by the constructor, a `SyntaxError`), a body redeclaring `inputs` (the
  * constructor's `SyntaxError`), a Python-style `module:function` value and a reference to a
  * missing file, and passes an existing file (`../` included, never imported), a body that would
- * throw (never called) and a built-in.
+ * throw (never called) and a built-in. The body runs in a worker thread: a file input arrives as
+ * a `FileRef` and a returned one commits a `FileRef`; a class instance, a getter and a function
+ * in a result fail `contract.output` with intake's messages; a custom error class keeps its name
+ * and its line; `process.exit(3)` in a body and a body awaiting a promise nothing resolves reject
+ * with the worker's exit code, and the next call still works; a late timer throw rejects as a
+ * `CodeError`; the worker uses the caller's `withEnv` values (a refused result's path is cut to a
+ * small shown-value cap); two serial calls reuse one thread (a global set by the first is seen by
+ * the second); a worker shares the host's live environment both ways (a host change after its
+ * thread started reaches a body, and a body's change reaches the host); a call after an aborted
+ * call still works; an input the clone refuses rejects, leaves no abort listener on the signal,
+ * and the next call works; a late error from an earlier body while its worker is idle prints a
+ * console error line and doesn't fail the next call; aborting the signal stops a body that never
+ * yields, rejecting with its reason within 5 s; an already-aborted signal rejects before a worker
+ * starts; a process whose spinning body was stopped exits on its own, on Bun and, with
+ * `YIAN_TEST_NODE`, built on Node; and in a pooled run a busy CODE node doesn't block a sibling.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
@@ -58,13 +72,16 @@
  * `test_inline_raise_becomes_failed_run` (the body JavaScript, `toFixed(1)` for Python's `:.1f`).
  */
 
-import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { getEventListeners } from "node:events";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { withEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { HostOutputError, Output } from "../../src/nodes/base.ts";
@@ -73,7 +90,7 @@ import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from 
 import { TypeStripError } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
-import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { drive, engine, graph, rejected } from "./run_state_fixtures.ts";
@@ -577,6 +594,286 @@ test("the runtime's function header is 2 lines", () => {
 
   expect(text.slice(0, text.indexOf("/*body*/")).split("\n").length - 1).toBe(2);
 });
+
+// --- the worker thread --- //
+
+test("a file input arrives as a FileRef and a returned FileRef commits a FileRef", async () => {
+  const file = new FileRef({ uri: "file:///tmp/a.txt", mime: "text/plain" });
+
+  const value = await run("return { f: inputs.f, uri: inputs.f.uri, mime: inputs.f.mime, name: inputs.f.name }", {
+    f: file,
+  });
+
+  const { f, ...fields } = value as Record<string, unknown>;
+  expect(fields).toEqual({ uri: "file:///tmp/a.txt", mime: "text/plain", name: null });
+  expect(FileRef.isFileRef(f)).toBe(true);
+  expect(f).toEqual(file);
+});
+
+test("a class instance, a getter and a function in a result fail contract.output", async () => {
+  for (const [code, message] of [
+    ["class Thing {}\nreturn { x: new Thing() }", "output at x: Thing is not a yian value"],
+    ["return { get x() { return 1 } }", "output at x: accessor property is not a yian value"],
+    ["return { x: () => 1 }", "output at x: function is not a yian value"],
+  ] as const) {
+    const node = new CodeNode("n", { code });
+
+    const error = await rejected(node.run({}));
+
+    expect(error).toBeInstanceOf(HostOutputError);
+    expect((error as HostOutputError).message).toBe(message);
+    expect((error as HostOutputError).path).toEqual(["x"]);
+    expect(node.exceptionCode(error)).toBe("contract.output");
+  }
+});
+
+test("a custom error class keeps its name and its line", async () => {
+  const node = locatedNode('class MyError extends Error {\n  name = "MyError"\n}\nthrow new MyError("m")');
+
+  const error = await rejected(node.run({}));
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("MyError: m");
+  expect(node.exceptionOrigin(error)).toBe(node.codeLineOrigins[3]!);
+});
+
+test("process.exit in a body rejects with the worker's exit code and this process lives on", async () => {
+  const error = await failure("process.exit(3)\nreturn 1");
+
+  expect((error as Error).constructor).toBe(Error);
+  expect((error as Error).message).toBe("CODE worker exited with code 3 before the body returned");
+  expect(await run("return 1")).toBe(1n);
+});
+
+test("a body awaiting a promise nothing resolves rejects rather than hangs", async () => {
+  const error = await failure("await new Promise(() => {})\nreturn 1");
+
+  expect((error as Error).message).toBe("CODE worker exited with code 0 before the body returned");
+  expect(await run("return 1")).toBe(1n);
+});
+
+test("a late timer throw rejects as a CodeError", async () => {
+  const error = await failure('setTimeout(() => { throw new RangeError("late") }, 1)\nawait new Promise(() => {})');
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("RangeError: late");
+  expect((error as CodeError).original).toBeInstanceOf(RangeError);
+});
+
+test("two serial calls reuse one thread", async () => {
+  const body = "globalThis.yianCount = (globalThis.yianCount ?? 0) + 1\nreturn globalThis.yianCount";
+
+  // An earlier row may have run this body on the popped thread, so only the step is fixed.
+  const first = (await run(body)) as bigint;
+  expect(await run(body)).toBe(first + 1n);
+});
+
+test("a worker shares the host's live environment both ways", async () => {
+  try {
+    // A call first, so the next one lands on a thread that started before the host's change.
+    expect(await run("return 1")).toBe(1n);
+    process.env.YIAN_TEST_D47_ENV = "later";
+    expect(await run("return process.env.YIAN_TEST_D47_ENV ?? null")).toBe("later");
+
+    expect(await run('process.env.YIAN_TEST_D47_FROM_BODY = "body"\nreturn 1')).toBe(1n);
+    expect(process.env.YIAN_TEST_D47_FROM_BODY).toBe("body");
+  } finally {
+    delete process.env.YIAN_TEST_D47_ENV;
+    delete process.env.YIAN_TEST_D47_FROM_BODY;
+  }
+});
+
+test("a call after an aborted call still works", async () => {
+  const controller = new AbortController();
+  const reason = new Error("stop");
+  const node = new CodeNode("n", { code: "await new Promise((r) => setTimeout(r, 60_000))\nreturn 1" });
+
+  const pending = rejected(node.run({}, { signal: controller.signal }));
+  setTimeout(() => controller.abort(reason), 50);
+
+  expect(await pending).toBe(reason);
+  expect(await run("return 2")).toBe(2n);
+});
+
+test("an input the clone refuses rejects, leaves no abort listener, and the next call works", async () => {
+  const controller = new AbortController();
+  const node = new CodeNode("n", { code: "return 1" });
+
+  const error = await rejected(node.run({ f: () => 1 }, { signal: controller.signal }));
+
+  expect((error as Error).name).toBe("DataCloneError");
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  expect(await run("return 2")).toBe(2n);
+});
+
+test("a late error while the worker is idle prints a console line and doesn't fail the next call", async () => {
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await run('setTimeout(() => { throw new RangeError("later") }, 20)\nreturn 1')).toBe(1n);
+    const line = "CODE error after its body returned: RangeError: later";
+    for (let waited = 0; waited < 2000 && !logged.mock.calls.some(([text]) => text === line); waited += 10) {
+      await Bun.sleep(10);
+    }
+
+    expect(logged).toHaveBeenCalledWith(line);
+    expect(await run("return 2")).toBe(2n);
+  } finally {
+    logged.mockRestore();
+  }
+});
+
+test("the worker uses the caller's withEnv values", async () => {
+  const env = (name: string) => (name === "YIAN_MAX_SHOWN_VALUE_CHARS" ? "10" : undefined);
+  const node = new CodeNode("n", { code: 'return { ["k".repeat(50)]: new Date(0) }' });
+
+  const error = await rejected(withEnv(env, () => node.run({})));
+
+  // In-process, intake cuts the path's key to 9 characters and `…` under this cap.
+  expect((error as Error).message).toBe("output at kkkkkkkkk…: Date is not a yian value");
+});
+
+// --- stopping a body, and bodies that overlap --- //
+
+test(
+  "aborting the signal stops a body that never yields",
+  async () => {
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const controller = new AbortController();
+      const reason = new Error("stop");
+      const node = new CodeNode("n", { code: 'console.log("busy")\nwhile (true) {}' });
+
+      const pending = rejected(node.run({}, { signal: controller.signal }));
+      for (let waited = 0; waited < 10_000 && !log.mock.calls.some(([text]) => text === "busy"); waited += 10) {
+        await Bun.sleep(10);
+      }
+      const aborted = performance.now();
+      controller.abort(reason);
+
+      expect(log).toHaveBeenCalledWith("busy");
+      expect(await pending).toBe(reason);
+      expect(performance.now() - aborted).toBeLessThan(5000);
+    } finally {
+      log.mockRestore();
+    }
+  },
+  30_000,
+);
+
+test("an already-aborted signal rejects before a worker starts", async () => {
+  const controller = new AbortController();
+  const reason = new Error("stopped before");
+  controller.abort(reason);
+
+  expect(await rejected(new CodeNode("n", { code: "return 1" }).run({}, { signal: controller.signal }))).toBe(reason);
+});
+
+const BUILT_NODE = join(import.meta.dir, "..", "..", "dist", "src", "nodes", "code", "node.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
+ * can't run, a Node older than the `engines` floor, or a missing build fails the whole file, so a
+ * typo can't pass as a run with the Node case skipped. A copy of `terminal.test.ts`'s: importing a
+ * test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT_NODE)) throw new Error(`${BUILT_NODE} is missing; run bun run build first`);
+  return node;
+})();
+
+/**
+ * Run a script with `command` that loads the CODE node from `module`, aborts a spinning body
+ * when its forwarded `console.info` arrives and prints `{same, ms}`; expect the reason, a prompt
+ * stop and a process that exits on its own.
+ */
+function expectStoppedProcessExits(command: string, args: readonly string[], module: string): void {
+  const script = join(helpers, `stop-${command === process.execPath ? "bun" : "node"}.mjs`);
+  writeFileSync(
+    script,
+    `const { CodeNode } = await import(${JSON.stringify(pathToFileURL(module).href)});
+const controller = new AbortController();
+const reason = new Error("stop");
+let aborted = 0;
+// The body's forwarded \`console.info\` says it is spinning: stop it then.
+console.info = () => {
+  aborted = performance.now();
+  controller.abort(reason);
+};
+const code = 'console.info("busy"); while (true) {}';
+const pending = new CodeNode("n", { code }).run({}, { signal: controller.signal });
+let error;
+try {
+  await pending;
+} catch (caught) {
+  error = caught;
+}
+console.log(JSON.stringify({ same: error === reason, ms: performance.now() - aborted }));
+`,
+  );
+  const result = spawnSync(command, [...args, script], { encoding: "utf8", timeout: 50_000 });
+  const context = `signal: ${result.signal}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`;
+  expect(result.status, context).toBe(0);
+  const { same, ms } = JSON.parse(result.stdout) as { same: boolean; ms: number };
+  expect(same).toBe(true);
+  expect(ms).toBeLessThan(5000);
+}
+
+describe("a stopped body leaves no worker: the process exits", () => {
+  test(
+    "on Bun",
+    () => {
+      const source = join(import.meta.dir, "..", "..", "src", "nodes", "code", "node.ts");
+      expectStoppedProcessExits(process.execPath, ["--no-install"], source);
+    },
+    60_000,
+  );
+
+  test.skipIf(!NODE)("on Node, built", () => expectStoppedProcessExits(NODE!, [], BUILT_NODE), 60_000);
+});
+
+test(
+  "pooled: a busy CODE node doesn't block a sibling",
+  async () => {
+    const flag = join(helpers, "flag");
+    rmSync(flag, { force: true });
+    const a = new CodeNode("a", {
+      code: `const fs = await import("node:fs")
+const end = Date.now() + 10000
+while (!fs.existsSync(${JSON.stringify(flag)}) && Date.now() < end) {}
+return fs.existsSync(${JSON.stringify(flag)})`,
+    });
+    const b = new CodeNode("b", {
+      code: `await new Promise((resolve) => setTimeout(resolve, 50))
+const fs = await import("node:fs")
+fs.writeFileSync(${JSON.stringify(flag)}, "")
+return true`,
+    });
+    const flow = graph([a, b], [
+      [START_ID, "a"],
+      [START_ID, "b"],
+      ["a", END_ID],
+      ["b", END_ID],
+    ]);
+
+    const events = await engine(flow, { numWorkers: 2 }).run();
+
+    const succeeded = events.filter((event) => event instanceof NodeSucceeded && ["a", "b"].includes(event.nodeId));
+    expect(succeeded.map((event) => (event as NodeSucceeded).output)).toEqual([true, true]);
+  },
+  30_000,
+);
 
 // --- the awaited load check --- //
 

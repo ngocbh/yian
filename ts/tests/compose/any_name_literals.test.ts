@@ -8,14 +8,14 @@
  * `test_a_map_over_literal_under_a_credential_name_loads`,
  * `test_an_inline_call_in_a_node_assert_shows_the_assert_under_any_keyword` (the node-assert check
  * refuses the call before the `g` def is resolved), the multi-node-def and single-node-def params
- * of `test_a_def_env_literal_under_a_credential_name_loads` and
- * `test_a_def_input_default_under_a_credential_name_loads` (loaded with `loadFlow`); and, loaded
- * with `loadFlow` and run with `runFlow`, `test_a_value_entry_under_a_credential_name_is_identity`.
+ * of `test_a_def_env_literal_under_a_credential_name_loads`,
+ * `test_a_def_input_default_under_a_credential_name_loads` (loaded with `loadFlow`) and
+ * `test_a_value_entry_under_a_credential_name_is_identity` (its fingerprints and its run).
  *
  * Changed: CODE bodies are TS.
  *
- * Not ported here, decided by already-ported modules (the manifest and fingerprint, the tags
- * reader, inline calls): `test_a_node_env_literal_under_a_credential_name_loads` (4),
+ * Not ported (not T3-19 rows), decided by already-ported modules (the manifest and fingerprint, the
+ * tags reader, inline calls): `test_a_node_env_literal_under_a_credential_name_loads` (4),
  * `test_a_flow_env_literal_under_a_credential_name_loads`, the compact-flow param of
  * `test_a_def_env_literal_under_a_credential_name_loads`
  * `test_an_input_default_under_a_credential_name_loads` (2),
@@ -31,12 +31,20 @@
  * `inline_calls.test.ts`).
  */
 
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+import { assembleText, loadConformanceFlow, loadError } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-any-name-literals-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 /**
  * Assert two flows that differ only in a literal have different fingerprints and that `literalA`
@@ -121,9 +129,7 @@ test("a value entry under a credential name is identity", async () => {
   const flow = (value: string) => `id: f\nname: f\nnodes:\n  api_key: !str ${value}\noutput: \${api_key.output}\n`;
 
   await assertIdentity(flow("hunter2"), flow("hunter3"), "hunter2");
-  const result = await runFlow(await loadFlow(flow("hunter2")), {});
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe("hunter2");
+  expect((await runFlow(await loadConformanceFlow(flow("hunter2")), {}, { env })).output).toBe("hunter2");
 });
 
 test("an inline call in a node assert shows the assert under any keyword", () => {

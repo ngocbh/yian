@@ -11,45 +11,47 @@
  * `test_typed_nullable_binding_into_strict_child_fails_to_load`,
  * `test_declared_float_does_not_fit_a_strict_int_child`, `test_map_binding_uses_the_declared_type`,
  * `test_declared_seed_type_is_checked_against_the_body_input`,
- * `test_declared_seed_type_is_compared_with_the_returned_field` and the harvested case
+ * `test_declared_seed_type_is_compared_with_the_returned_field`, and, each as a load row then a run
+ * row (`loadConformanceFlow` and `runFlow`), `test_typed_binding_narrows_a_nullable_source_into_a_strict_child`,
+ * `test_typed_binding_rejects_a_null_at_runtime`,
+ * `test_declared_seed_type_types_an_opaque_producer`,
+ * `test_declared_seed_type_is_checked_on_the_loop_node` (both flows),
+ * `test_typed_inline_loop_seed_types_the_body_parameter` and
+ * `test_typed_inline_loop_seed_types_an_opaque_producer`; then, loaded and run whole,
+ * `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
+ * `test_typed_inline_binding_types_an_empty_list` and `test_typed_inline_map_item_binding_runs`.
+ * Each reads the inline body's parameters from the node's `childInputs`, where Python reads the
+ * child's START parameters; and the harvested case
  * `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`.
  *
- * Ported through `loadFlow` and `runFlow`:
- * `test_typed_binding_narrows_a_nullable_source_into_a_strict_child`,
- * `test_typed_binding_rejects_a_null_at_runtime`, `test_declared_seed_type_types_an_opaque_producer`,
- * the untyped flow of `test_declared_seed_type_is_checked_on_the_loop_node` (its declared-int flow
- * only loads here; its run is covered by
- * `run-core/compose_typed_bindings_downstream__declared_seed_type_fails_on_the_loop_node`), and the
- * inline-body rows `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
- * `test_typed_inline_binding_types_an_empty_list`,
- * `test_typed_inline_loop_seed_types_the_body_parameter`,
- * `test_typed_inline_loop_seed_types_an_opaque_producer` and
- * `test_typed_inline_map_item_binding_runs`, each reading the inline body's parameters from the
- * node's `childInputs`, where Python reads the child's START parameters.
- *
- * Pinned in `engine/inline_composite_bodies.test.ts` through its case:
- * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load`.
- *
  * Changed: the error rows pin the whole message, where Python matches a fragment. CODE bodies are
- * TS; ints reach them as numbers and a flow's int output is a `bigint`. In
- * `test_typed_inline_loop_seed_types_the_body_parameter` the carried `r` ends as the int `1n`
- * (Python `1.0`): a whole host number reads as an int, and CODE inputs and outputs follow that
- * (decisions 9A and 45), and an int in a `float` slot stays an int (decision 38).
+ * JS, getting ints as `number`s (decision 45); a whole-number return reads back as an int, so the
+ * outputs hold `bigint`s (decision 4a), and the float loop's `{r: 1.0}` is `{r: 1n}` (decision 38).
+ *
+ * Covered by `load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list`
+ * (pinned in `engine/inline_composite_bodies.test.ts`):
+ * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load`.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
-import type { FailureCode } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
-import type { Parameter } from "../../src/nodes/contracts.ts";
+import { type Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
-import { type RunResult, runFlow } from "../../src/run.ts";
+import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
-import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
+import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-downstream-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -95,18 +97,8 @@ const opaque = (value: string) => `  opaque:\n    kind: code\n    code: |\n     
 /** Assemble `text`. */
 const load = (text: string) => assembleText(text);
 
-/** Load `text` with `loadFlow` and run it with no inputs. */
-const run = async (text: string) => runFlow(await loadFlow(text), {});
-
-/** Load and run `text`, returning its output and expecting success. */
-const ok = async (text: string): Promise<unknown> => okLoaded(await loadFlow(text));
-
-/** Expect `result` to have failed with `code` at `nodeId`. */
-function expectFailed(result: RunResult, code: FailureCode, nodeId: string): void {
-  expect(result.status).toBe("failed");
-  expect(result.failure?.code).toBe(code);
-  expect(result.failure?.nodeId).toBe(nodeId);
-}
+/** Load `text` and run it with no inputs. */
+const run = async (text: string) => runFlow(await loadConformanceFlow(text), {}, { env });
 
 // ---------- CALL ----------
 
@@ -116,12 +108,27 @@ test("an untyped nullable source into a strict child fails to load", () => {
   expect(error.message).toBe("call node 'run': binding 'x' — child expects 'int', source is 'Optional(int)'");
 });
 
-test("a typed binding narrows a nullable source into a strict child", async () => {
-  expect(await ok(callFlow("!int ${maybe.output}", maybe("3")))).toBe(6n);
+test.each([
+  ["narrows a nullable source into a strict child", "3"],
+  ["rejects a null at runtime", "null"],
+])("a typed binding %s (loads)", (_name, value) => {
+  load(callFlow("!int ${maybe.output}", maybe(value)));
 });
 
-test("a typed binding rejects a null at runtime", async () => {
-  expectFailed(await run(callFlow("!int ${maybe.output}", maybe("null"))), "binding.type", "run");
+test("a typed binding narrows a nullable source into a strict child (runs)", async () => {
+  const result = await run(callFlow("!int ${maybe.output}", maybe("3")));
+
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(6n);
+});
+
+test("a typed binding rejects a null at runtime (runs)", async () => {
+  const result = await run(callFlow("!int ${maybe.output}", maybe("null")));
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("binding.type");
+  expect(result.failure!.nodeId).toBe("run");
 });
 
 test("a typed nullable binding into a strict child fails to load", () => {
@@ -204,43 +211,51 @@ test("a declared seed type is compared with the returned field", () => {
   );
 });
 
-test("a declared seed type types an opaque producer", async () => {
-  expect(await ok(loopFlow("!int ${opaque.output}", opaque("1")))).toEqual({ n: 3n });
+test("a declared seed type types an opaque producer (loads)", () => {
+  load(loopFlow("!int ${opaque.output}", opaque("1")));
 });
 
-test("a declared seed type is checked on the loop node", async () => {
+test("a declared seed type types an opaque producer (runs)", async () => {
+  const result = await run(loopFlow("!int ${opaque.output}", opaque("1")));
+
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ n: 3n });
+});
+
+test.each([
+  ["untyped", "${opaque.output}"],
+  ["declared int", "!int ${opaque.output}"],
+])("a declared seed type is checked on the loop node (loads): %s", (_name, seed) => {
+  load(loopFlow(seed, opaque('"1"')));
+});
+
+test("a declared seed type is checked on the loop node (runs)", async () => {
   // Untyped, the text reaches the body's own `int` parameter, which does not convert it across
   // the LOOP edge, so the body's start fails.
-  expectFailed(await run(loopFlow("${opaque.output}", opaque('"1"'))), "contract.input", "loop#0/__start__");
-  load(loopFlow("!int ${opaque.output}", opaque('"1"')));
+  const untyped = await run(loopFlow("${opaque.output}", opaque('"1"')));
+  expect(untyped.status).toBe("failed");
+  expect(untyped.failure!.code).toBe("contract.input");
+  expect(untyped.failure!.nodeId).toBe("loop#0/__start__");
+
+  const result = await run(loopFlow("!int ${opaque.output}", opaque('"1"')));
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("binding.type");
+  expect(result.failure!.nodeId).toBe("loop");
 });
 
 // ---------- inline bodies ----------
 
 /** The parameters of the inline body of CALL, MAP or LOOP `nodeId` in `flow`, keyed by name. */
-function bodyInputs(flow: ComposedFlow, nodeId: string): Map<string, Parameter> {
+function bodyInputs(flow: Pick<ComposedFlow, "compiled">, nodeId: string): Map<string, Parameter> {
   const node = flow.compiled.nodes.get(nodeId) as CallNode | MapNode | LoopNode;
   return new Map(node.childInputs.map((param) => [param.name, param]));
 }
 
-/** Load `text`, expect `nodeId`'s body parameter `name` typed `type`, and return the loaded flow. */
-async function typedBody(text: string, nodeId: string, name: string, type: string): Promise<ComposedFlow> {
-  const flow = await loadFlow(text);
-  expect(bodyInputs(flow, nodeId).get(name)!.contract!.type).toStrictEqual(typeFor(type, new Map()));
-  return flow;
-}
-
-/** Run the loaded `flow` with no inputs, returning its output and expecting success. */
-async function okLoaded(flow: ComposedFlow): Promise<unknown> {
-  const result = await runFlow(flow, {});
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  return result.output;
-}
-
-test("a typed inline binding skips inference of an opaque expression", async () => {
+test("typed inline binding skips inference of an opaque expression", async () => {
   // A declared type types the inline parameter even when its value cannot be inferred.
-  const flow = await typedBody(
-    `id: inline-typed
+  const loaded = await loadConformanceFlow(`id: inline-typed
 name: inline_typed
 nodes:
   a:
@@ -261,20 +276,21 @@ nodes:
           return inputs["n"] * 2
     output: \${twice.output}
 output: \${wrap.output}
-`,
-    "wrap",
-    "n",
-    "int",
-  );
+`);
 
-  expect(bodyInputs(flow, "wrap").get("n")!.required).toBe(true);
-  expect(await okLoaded(flow)).toBe(10n);
+  const param = bodyInputs(loaded, "wrap").get("n")!;
+  expect(param.contract).toStrictEqual(new ValueContract(typeFor("int", new Map())));
+  expect(param.required).toBe(true);
+
+  const result = await runFlow(loaded, {}, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(10n);
 });
 
-test("a typed inline binding types an empty list", async () => {
+test("typed inline binding types an empty list", async () => {
   // An empty list literal takes its element type from the declaration.
-  const flow = await typedBody(
-    `id: inline-empty
+  const loaded = await loadConformanceFlow(`id: inline-empty
 name: inline_empty
 nodes:
   wrap:
@@ -291,18 +307,17 @@ nodes:
           return inputs["items"].length
     output: \${count.output}
 output: \${wrap.output}
-`,
-    "wrap",
-    "items",
-    "list(str)",
-  );
+`);
 
-  expect(await okLoaded(flow)).toBe(0n);
+  expect(bodyInputs(loaded, "wrap").get("items")!.contract!.type).toStrictEqual(typeFor("list(str)", new Map()));
+
+  const result = await runFlow(loaded, {}, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(0n);
 });
 
-test("a typed inline loop seed types the body parameter", async () => {
-  // A `float` seed lets an inline body carry a float past its int literal seed.
-  const flow = await loadFlow(`id: inline-float-loop
+const FLOAT_LOOP = `id: inline-float-loop
 name: inline_float_loop
 nodes:
   loop:
@@ -321,16 +336,24 @@ nodes:
     output:
       r: \${half.output}
 output: \${loop.output}
-`);
+`;
+
+test("a typed inline loop seed types the body parameter (loads)", () => {
+  // A `float` seed lets an inline body carry a float past its int literal seed.
+  const { flow } = assembleText(FLOAT_LOOP);
 
   expect(bodyInputs(flow, "loop").get("r")!.contract!.type).toStrictEqual(typeFor("float", new Map()));
-  // The body returns the number 1, which is read as the int 1 and stays an int in the `float` slot.
-  expect(await okLoaded(flow)).toEqual({ r: 1n });
 });
 
-test("a typed inline loop seed types an opaque producer", async () => {
-  // An `Optional(str)` seed over an untyped producer loads and carries its value.
-  const flow = await loadFlow(`id: inline-optional-seed
+test("a typed inline loop seed types the body parameter (runs)", async () => {
+  const result = await run(FLOAT_LOOP);
+
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ r: 1n });
+});
+
+const OPTIONAL_SEED = `id: inline-optional-seed
 name: inline_optional_seed
 nodes:
   p:
@@ -354,18 +377,28 @@ nodes:
     output:
       n: \${step.output}
 output: \${loop.output}
-`);
+`;
+
+test("a typed inline loop seed types an opaque producer (loads)", () => {
+  // An `Optional(str)` seed over an untyped producer loads.
+  const { flow } = assembleText(OPTIONAL_SEED);
 
   const param = bodyInputs(flow, "loop").get("label")!;
   expect(param.contract!.type).toStrictEqual(typeFor("Optional(str)", new Map()));
   expect(param.required).toBe(false);
-  expect(await okLoaded(flow)).toEqual({ n: 2n, label: "seed" });
 });
 
-test("a typed inline map item binding runs", async () => {
+test("a typed inline loop seed types an opaque producer (runs)", async () => {
+  const result = await run(OPTIONAL_SEED);
+
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ n: 2n, label: "seed" });
+});
+
+test("typed inline map item binding runs", async () => {
   // A typed `${item}` binding types an inline MAP body over an untyped producer.
-  const flow = await typedBody(
-    `id: inline-map-item
+  const loaded = await loadConformanceFlow(`id: inline-map-item
 name: inline_map_item
 nodes:
 ${opaque('["a", "b"]')}  each:
@@ -383,13 +416,14 @@ ${opaque('["a", "b"]')}  each:
           return inputs["t"].toUpperCase()
     output: \${shout.output}
 output: \${each.output}
-`,
-    "each",
-    "t",
-    "str",
-  );
+`);
 
-  expect(await okLoaded(flow)).toEqual(["A", "B"]);
+  expect(bodyInputs(loaded, "each").get("t")!.contract!.type).toStrictEqual(typeFor("str", new Map()));
+
+  const result = await runFlow(loaded, {}, { env });
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual(["A", "B"]);
 });
 
 // ---------- harvested conformance cases ----------

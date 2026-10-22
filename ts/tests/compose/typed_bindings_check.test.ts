@@ -26,9 +26,9 @@
  * `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry` prefix comes from the
  * scope's def loading).
  *
- * Changed: the error rows pin the whole message where Python matches its start, and the last
- * frame's label and range where Python checks the first frame's line. CODE bodies are written in
- * TS and code refs name `./fixtures/compose_codefns.ts`, as the harvested cases write them.
+ * Changed: the error rows pin the whole message where Python matches its start, and the last frame's label and range where Python
+ * checks the first frame's line. CODE bodies are written in TS and code refs name
+ * `./fixtures/compose_codefns.ts`, as the harvested cases write them; load doesn't run them.
  *
  * Not ported here: the literal rows the tags reader (`readTaggedValue`, tested in `tags.test.ts`)
  * decides while the binding is split, before this check runs. Pinned in `tags.test.ts` through
@@ -42,27 +42,28 @@
  * `test_bad_literal_into_a_call_reports_the_binding_not_the_child` and
  * `test_bad_literal_loop_seed_reports_the_binding_not_the_carried_type`.
  *
- * Ported from `tests/compose/test_nested_template_types.py` (its mirror doesn't exist yet):
- * `test_nested_typed_binding_is_checked_at_its_own_line`.
+ * TS-only: a flow-style variant of `test_nested_template_types.py`'s
+ * `test_nested_typed_binding_is_checked_at_its_own_line` (ported in `nested_template_types.test.ts`)
+ * that pins the nested binding's whole frame; `shownLiteral` rows (compact JSON, ints as digits);
+ * `localInputContracts` rows over hand-built maps (Python has no direct test; the reference and
+ * assert checks read it); and the harvested cases these checks decide (`runCase`, `assembled`),
+ * in the "Pinned harvested cases" block, then those from `test_open_range_flows.py`,
+ * `test_nested_template_types.py` and `test_tagged_bindings.py`, which these checks decide, in the
+ * "Pinned harvested cases (TS-only placement)" block.
  *
- * TS-only: `shownLiteral` rows (compact JSON, ints as digits); `localInputContracts` rows over
- * hand-built maps (Python has no direct test; the reference and assert checks read it); and the
- * harvested cases these checks decide (`runCase`, `assembled`), in the "Pinned harvested cases"
- * block, then those from test files whose mirrors don't exist yet (`test_nested_template_types.py`,
- * `test_tagged_bindings.py`) in the "Pinned harvested cases (TS-only placement)" block.
+ * Ported through `loadConformanceFlow` and `runFlow`: `test_unquoted_yes_or_no_literal_for_str_is_text`
+ * (2).
  *
- * Ported through `loadFlow` (`loadConformanceFlow`, which resolves the fixture reference) and
- * `runFlow`: the `yes` row of `test_unquoted_yes_or_no_literal_for_str_is_text`. Covered by
- * `run-core` cases running the same flows: its `no` row
- * (`compose_typed_bindings_check__unquoted_no_for_str_is_text`),
- * `test_escaped_template_binds_its_text`
- * (`compose_typed_bindings_check__escaped_template_binds_its_text`) and the run half of
- * `test_optional_into_non_optional_loads_and_fails_at_runtime`
- * (`compose_typed_bindings_check__optional_into_non_optional_fails_at_runtime`, failing with
- * `binding.type` at `use`).
+ * Covered by `run-core/compose_typed_bindings_check__escaped_template_binds_its_text`:
+ * `test_escaped_template_binds_its_text`; by
+ * `run-core/compose_typed_bindings_check__optional_into_non_optional_fails_at_runtime`:
+ * `test_optional_into_non_optional_loads_and_fails_at_runtime` (its load half is ported too).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { BuildResult } from "../../src/compose/nodes/base.ts";
@@ -74,6 +75,7 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { hostEnv } from "../engine/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -82,6 +84,10 @@ import {
   loadError,
   runCase,
 } from "./declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-check-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const env = hostEnv(dir);
 
 afterEach(() => forget());
 
@@ -242,7 +248,7 @@ test("a missing field is not named when another field mismatches", () => {
   expect(error.message).toBe("node 'use' input 'x': declared Buy, but the value is {\"conviction\":str}");
 });
 
-// Ported from `test_nested_template_types.py::test_nested_typed_binding_is_checked_at_its_own_line`.
+// A flow-style variant of `test_nested_template_types.py::test_nested_typed_binding_is_checked_at_its_own_line`.
 test("a disjoint binding nested in a value template names its path", () => {
   const text = flow("{a: !int '${note.output}'}", { producers: producer("note", '"hi"', "str") });
 
@@ -257,11 +263,12 @@ test("a disjoint binding nested in a value template names its path", () => {
 
 // ---------- literals ----------
 
-test("an unquoted yes literal for str is text", async () => {
-  const result = await runFlow(await loadConformanceFlow(flow("!str yes")), {});
+test.each(["yes", "no"])("unquoted yes or no literal for str is text: %s", async (word) => {
+  const result = await runFlow(await loadConformanceFlow(flow(`!str ${word}`)), {}, { env });
 
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe("yes");
+  expect(result.failure).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe(word);
 });
 
 test.each(["!Optional(int) null", "!int 3", "!list(str) []", "!float 3", "!str abc", "!str $${x}"])(
@@ -640,8 +647,6 @@ describe("localInputContracts", () => {
 
 // ---------- Pinned harvested cases ----------
 
-// The open-range case comes from `test_open_range_flows.py`, whose mirror doesn't exist yet.
-
 test.each<CaseRow>([
   ...[
     "disjoint_node_input_fails_at_its_line",
@@ -654,15 +659,15 @@ test.each<CaseRow>([
     "a_record_with_an_extra_field_is_disjoint",
     "record_missing_a_required_field_names_the_field",
   ].map((name) => ({ id: `load-types/compose_typed_bindings_check__${name}`, call: assembled })),
-  { id: "types/compose_open_range_flows__tagged_binding_disjoint_from_an_open_range", call: assembled },
 ])("assemble: $id", runCase);
 
 // ---------- Pinned harvested cases (TS-only placement) ----------
 
-// From `test_nested_template_types.py` and `test_tagged_bindings.py`, whose mirrors don't exist
-// yet; the record and template messages decide them.
+// From `test_open_range_flows.py`, `test_nested_template_types.py` and `test_tagged_bindings.py`;
+// the range, record and template messages decide them.
 
 test.each<CaseRow>([
+  { id: "types/compose_open_range_flows__tagged_binding_disjoint_from_an_open_range", call: assembled },
   {
     id: "load-types/compose_nested_template_types__nested_item_read_is_typed_from_the_map_element",
     call: assembled,

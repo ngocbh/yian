@@ -29,9 +29,9 @@
  * message writes the node list in the text form (`["pick"]`, rule `messages`), the two
  * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
  *
- * Ported through `loadFlow` and `runFlow`:
- * `test_runs_with_different_inputs_record_the_same_fingerprint`, its model a `ScriptedModel`
- * served through `models` where Python patches the client factory.
+ * `test_runs_with_different_inputs_record_the_same_fingerprint` runs with a scripted model from
+ * `models`, where Python patches `model_from_config`, and in an isolated environment with an empty
+ * auth file, where Python sets `OPENAI_API_KEY`.
  *
  * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
  */
@@ -231,13 +231,17 @@ output: \${chat.output}
 `;
 
 test("runs with different inputs record the same fingerprint", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "yian-llm-config-wiring-"));
+  const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-run-"));
   try {
+    const env = (name: string) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
     const fingerprints: unknown[] = [];
     for (const [index, model] of ["gpt-a", "gpt-b"].entries()) {
       const log = join(dir, `run${index}.jsonl`);
-      const models = serving(new ScriptedModel([textReply("ok")]));
-      const result = await runFlow(await loadFlow(RUN), { m: model }, { log, models });
+      const result = await runFlow(await loadFlow(RUN, { env }), { m: model }, {
+        log,
+        env,
+        models: serving(new ScriptedModel([textReply("ok")])),
+      });
       expect(result.status, result.failure?.message).toBe("succeeded");
       const started = JSON.parse(readFileSync(log, "utf8").split("\n")[0]!);
       expect(started.payload.effective_llm_by_static_path.chat.model).toBe(model);

@@ -1,22 +1,26 @@
 /**
- * A deep `output:` record runs under nested calls: a port of
+ * A run's copy of its flow shares the flow's types, so a deep `output:` record runs: a port of
  * `tests/engine/test_deep_type_copies.py`.
  *
- * A 100-level `output:` record on a CODE node runs, runs learnably, and resumes under 10 nested
- * `defs:` calls, and runs under 50; a union nested at every level runs; and a deeper record
- * allowed by a raised type limit fails its output contract instead of overflowing.
+ * Copying a compiled flow gives fresh nodes that share their types. A 100-level `output:` record
+ * on a CODE node runs, runs learnably, and resumes under 10 nested `defs:` calls, and runs under
+ * 50; a union nested at every level runs; and a deeper record allowed by a raised type limit fails
+ * its output contract instead of overflowing.
  *
- * Ported: the run rows. `deep_tree` is the TS fixture `./fixtures/compose_codefns.ts:deep_tree`;
- * the union row's CODE body is written in JS. Python pins the recursion limit to a few hundred
- * frames past the current depth around each run (`_stack_headroom`); TS has no such limit to pin,
- * so the rows run on the default stack, each with an explicit timeout. Python's
- * `set_defaults(MAX_TYPE_NESTING=125)` is `YIAN_MAX_TYPE_NESTING=125` in the load's and run's
- * environment.
+ * Ported: the copy rows, against `copyGraph` (the per-run copy `runFlow` makes, Python's
+ * `copy.deepcopy` of a compiled flow), and the run rows. `deep_tree` is the TS fixture
+ * `./fixtures/compose_codefns.ts:deep_tree`; the union row's CODE body is written in JS. Python
+ * pins the recursion limit to a few hundred frames past the current depth around each run and
+ * copy (`_stack_headroom`); TS has no such limit to pin, so the rows run on the default stack,
+ * each run row with an explicit timeout. Python's `set_defaults(MAX_TYPE_NESTING=125)` is
+ * `YIAN_MAX_TYPE_NESTING=125` in the load's and run's environment.
  *
- * Not ported: `test_a_type_copies_as_itself`,
- * `test_copying_a_compiled_flow_does_not_recurse_through_a_deep_record` and
- * `test_a_compiled_flow_copy_has_its_own_nodes_and_shares_their_types` (Python's `copy.deepcopy`
- * of a `Type` and a compiled flow, and its recursion limit; TS doesn't deep-copy a flow per run).
+ * Changed: `test_copying_a_compiled_flow_does_not_recurse_through_a_deep_record` checks only that
+ * the copy is a new flow: there is no recursion limit to pin, and `copyGraph` never walks a type,
+ * which `test_a_compiled_flow_copy_has_its_own_nodes_and_shares_their_types` checks.
+ *
+ * Not ported: `test_a_type_copies_as_itself` (TS has no copy operation on a `Type`; `copyGraph`
+ * shares types instead of copying them).
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -24,6 +28,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { copyGraph } from "../../src/compile/model.ts";
+import { outputContractType } from "../../src/nodes/contracts.ts";
 import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -90,6 +96,25 @@ function expectSucceeded(result: RunResult, output: unknown): void {
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual(output);
 }
+
+test("copying a compiled flow does not recurse through a deep record", async () => {
+  const compiled = (await loadConformanceFlow(flow(100, 0), { env })).compiled;
+
+  const copied = copyGraph(compiled);
+
+  expect(copied).not.toBe(compiled);
+});
+
+test("a compiled flow copy has its own nodes and shares their types", async () => {
+  const original = (await loadConformanceFlow(flow(3, 0), { env })).compiled;
+
+  const copied = copyGraph(original);
+
+  expect(copied.nodes.get("u")).not.toBe(original.nodes.get("u"));
+  const typ = outputContractType(original.nodes.get("u")!.outputContract);
+  expect(typ).not.toBeNull();
+  expect(outputContractType(copied.nodes.get("u")!.outputContract)).toBe(typ);
+});
 
 test(
   "a deep record under nested calls runs",

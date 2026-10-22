@@ -47,22 +47,23 @@
  * (`a_list_of_any_output_returns_mixed_items`), `test_an_any_output_rejects_null`
  * (`an_any_output_rejects_null`), `test_an_optional_any_output_returns_null`
  * (`an_optional_any_output_returns_null`), `test_an_any_flow_input_rejects_null_naming_the_input`
- * (`an_any_flow_input_rejects_null_naming_the_input`),
+ * (`an_any_flow_input_rejects_null_naming_the_input`, TS expect, decision 7),
  * `test_an_unquoted_date_when_on_an_any_value_matches_its_text`
  * (`an_unquoted_date_when_matches_its_text`), and the runs of
  * `test_a_tagged_any_binding_into_a_child_str_input_fails_at_runtime_for_an_int`
  * (`a_tagged_any_binding_into_a_child_str_input_fails`),
  * `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs` (`a_loop_carrying_an_any_seed_runs`),
- * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn` (same name) and
+ * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn` (same name; TS expect,
+ * decision 7) and
  * `test_a_text_when_on_an_any_value_loads_and_matches` (`a_text_when_on_an_any_value_matches`).
+ * Covered by `load-types/compose_any_flows__a_null_any_literal_is_a_load_error` (pinned in
+ * `tags.test.ts`): `test_a_null_any_literal_is_a_load_error`.
  *
  * Changed: rows asserting fragments pin the whole message. CODE bodies are JS, getting ints as
  * `number`s (decision 45); the `child` def returns `JSON.stringify` of its input where Python
  * returns its `repr`, so `"hi"` reads `'"hi"'` and a null `'null'`. Ints read back as `bigint`s
  * (decision 4a).
  *
- * Not ported: `test_a_null_any_literal_is_a_load_error`, decided by the tags reader (its case is
- * pinned in `tags.test.ts`).
  * Python-only (dates and non-text keys): `test_an_object_output_rejects_a_date_member`,
  * `test_an_object_output_rejects_a_non_text_key_at_the_output`,
  * `test_an_object_flow_input_rejects_a_non_text_key_naming_the_input`,

@@ -41,7 +41,8 @@
  *
  * Covered by `run-core/compose_constructor_load__<case>`: `test_a_value_that_fits_passes_unchanged`
  * (`a_value_that_fits_passes_unchanged`), `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`
- * (`a_value_lacking_a_field_fails`, which pins the frame Python reads through `diagnose`),
+ * (`a_value_lacking_a_field_fails`, which pins the frame Python reads through `diagnose`; TS
+ * expect, decision 43),
  * `test_keywords_build_the_record` (same name), `test_a_bad_built_field_fails_with_binding_type`
  * (same name), `test_constructors_in_a_list_literal_and_a_nested_value`
  * (`constructors_in_a_list_and_a_nested_value`) and `test_a_nested_constructor_failure_is_binding_type`

@@ -35,7 +35,9 @@
  * `test_quoted_or_tagged_dates_keep_their_behavior`,
  * `test_other_untagged_literals_in_untyped_outputs_still_load` (its `!!omap` run is refused at load,
  * above) and `test_quoted_tagged_or_finite_numbers_keep_their_behavior` (its `!float .nan` run is
- * refused at load, above). Their ints read back as `bigint`s (decision 4a).
+ * refused at load, above).
+ *
+ * Changed: the ints of those runs read back as `bigint`s (decision 4a).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

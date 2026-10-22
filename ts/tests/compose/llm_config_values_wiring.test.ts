@@ -30,7 +30,8 @@
  * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
  *
  * `test_runs_with_different_inputs_record_the_same_fingerprint` runs with a scripted model from
- * `models`, where Python patches `model_from_config`.
+ * `models`, where Python patches `model_from_config`, and in an isolated environment with an empty
+ * auth file, where Python sets `OPENAI_API_KEY`.
  *
  * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
  */
@@ -232,11 +233,13 @@ output: \${chat.output}
 test("runs with different inputs record the same fingerprint", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-run-"));
   try {
+    const env = (name: string) => (name === "YIAN_AUTH_FILE" ? join(dir, "auth.json") : undefined);
     const fingerprints: unknown[] = [];
     for (const [index, model] of ["gpt-a", "gpt-b"].entries()) {
       const log = join(dir, `run${index}.jsonl`);
-      const result = await runFlow(await loadFlow(RUN), { m: model }, {
+      const result = await runFlow(await loadFlow(RUN, { env }), { m: model }, {
         log,
+        env,
         models: serving(new ScriptedModel([textReply("ok")])),
       });
       expect(result.status, result.failure?.message).toBe("succeeded");

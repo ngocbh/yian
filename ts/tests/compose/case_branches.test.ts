@@ -20,7 +20,7 @@
  * Ported: every row. `test_case_output_over_node_branches_reads_the_taken_branch` and
  * `test_case_output_over_a_value_entry_branch_reads_the_taken_branch` run both branches. A row
  * that applies the suggested rewrite runs the rewritten flow on the branch it names (Python's
- * `_taken`), expecting it to succeed:
+ * `_taken`), expecting it to succeed with Python's value:
  * `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_an_else_value_shows_its_value_entry_and_the_entry_loads`,
  * `test_a_suggested_entry_id_skips_ids_already_taken`,
@@ -55,7 +55,8 @@
  * back as `bigint`s (decision 4a), and the whole number in `!list(float) [1, 2.5]` stays an int
  * (decision 38). An unquoted date is text (rule `dates`). So `then: 2026-01-02` is a word that
  * names no node and gets the text entry `route_then_0: !str 2026-01-02` (Python: the value entry
- * `!date "2026-01-02"`), whose run gives the same text; a date in a mapping or list is shown plain and typed as text
+ * `!date "2026-01-02"`), whose run gives the same text; a date in a mapping or list is shown plain
+ * and typed as text
  * (`!object {a: 2026-01-02}`, `!list(str) [2026-01-02]`, `!list(Any) [1, 2024-01-01]`; Python
  * quotes it and types the list `list(date)`); and quoted date text in a branch is shown plain,
  * since plain YAML reads it back unchanged (`!date 2026-01-02` for the tagged `!date

@@ -53,6 +53,7 @@
  * raises `ValueError`; and the harvested `load-case/compose_value_entries_load__*` cases this
  * reader, the build-cache reader, the typed-binding check and the reference validator decide
  * (`tags.test.ts` pins the ones `readTaggedValue` decides).
+ *
  * Changed: the run of `test_an_empty_key_outside_a_written_out_record_loads` reads its ints back as
  * `bigint`s (decision 4a).
  */

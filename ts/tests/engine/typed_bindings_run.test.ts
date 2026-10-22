@@ -14,6 +14,9 @@
  * (decision 4a). `test_typed_input_does_not_convert_an_int_declared_float`: the int stays an int
  * (decision 38, as in Python), but a CODE body receives an int as a JS `number` (decision 45), so
  * the body's `typeof` reads `number` where Python's type name reads `int`.
+ * The row can't tell an int from a whole float, since a CODE body sees both as a JS `number`
+ * (decision 45) and a whole number it returns reads back as an int (decision 9A); decision 38 is
+ * pinned by `values/int_fills_float` and the flow-output rows of `typed_flow_outputs_run.test.ts`.
  */
 
 import { afterAll, expect, test } from "bun:test";

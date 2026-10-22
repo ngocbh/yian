@@ -16,6 +16,9 @@
  * Changed: `test_tagged_input_does_not_convert_an_int_declared_float` keeps the int, as Python
  * does; an int is a `bigint` (decision 4a), so the output is `30n`, and every int output reads as
  * a `bigint`.
+ * The row can't tell an int from a whole float, since a CODE body sees both as a JS `number`
+ * (decision 45) and a whole number it returns reads back as an int (decision 9A); decision 38 is
+ * pinned by `values/int_fills_float` and the flow-output rows of `typed_flow_outputs_run.test.ts`.
  *
  * Covered by `run-core/engine_tagged_bindings_run__narrower_source_fails_on_its_tagged_line`:
  * `test_narrower_source_fails_on_its_tagged_line`; by

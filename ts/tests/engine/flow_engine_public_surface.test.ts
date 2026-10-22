@@ -25,9 +25,9 @@
  *
  * Ported: `test_flow_engine_is_not_exported_from_the_package_root`, on `index.ts`.
  *
- * Changed: `test_direct_agent_uses_its_node_owned_model_factory`: the model factory comes from
- * `FlowEngineOptions.models` (ESM exports can't be patched), and the AGENT is built with the
- * effective config Python's `resolve_llm_cascade` gives (run start bakes it, T4-8).
+ * Changed: `test_direct_agent_uses_its_node_owned_model_factory`, on `engine(...)` over the loaded
+ * flow and its `resolveLlmCascade` map: the model factory comes from `FlowEngineOptions.models`
+ * (ESM exports can't be patched).
  *
  * Changed: `test_direct_engine_executes_real_dynamic_combinators` (`call`, `map`, `loop`): on
  * `engine(..., { growBuilder: buildGrow })` over the loaded flows; the CODE references
@@ -42,6 +42,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import {
@@ -56,7 +57,6 @@ import {
 import * as yian from "../../src/index.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult } from "../../src/nodes/base.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -293,16 +293,23 @@ test("engine borrows and never closes the run log", async () => {
   expect(closes).toBe(1);
 });
 
+const AGENT_FLOW = `
+id: direct-agent
+name: direct_agent
+nodes:
+  answer:
+    kind: agent
+    prompt: answer directly
+output: \${answer.output}
+`;
+
 test("direct agent uses the run's model factory", async () => {
   const configs: Record<string, unknown>[] = [];
   const message = new Message({ role: "assistant", parts: [new TextPart("direct answer")] });
   const reply = new Response({ message, finishReason: "stop" });
   const model = new ScriptedModel([reply], { provider: "openai", model: "fake-direct" });
-  const agent = new AgentNode("agent", { prompt: "hi", llmConfig: { provider: "openai", model: "fake-direct" } });
-  const flow = graph([agent], [
-    [START_ID, "agent"],
-    ["agent", END_ID],
-  ], { outputs: [new FlowOutput("output", "${agent.output}")] });
+  const flow = (await loadFlow(AGENT_FLOW)).compiled;
+  const effective = resolveLlmCascade(flow, {}, { defaults: { provider: "openai", model: "fake-direct" } });
   const models = {
     env: () => undefined,
     createModel: (config: Readonly<Record<string, unknown>>) => {
@@ -310,7 +317,7 @@ test("direct agent uses the run's model factory", async () => {
       return model;
     },
   };
-  const events = await engine(flow, { models }).run();
+  const events = await engine(flow, { effectiveLlmByStaticPath: effective, growBuilder: buildGrow, models }).run();
 
   expect(configs).toEqual([{ provider: "openai", model: "fake-direct" }]);
   expect(model.requests[0]!.messages).toHaveLength(2);

@@ -1,10 +1,11 @@
 /**
  * How `readTypedefs` walks typedef references and bounds their nesting, and how deep a type
  * may nest once its typedef names are expanded, a port of `tests/engine/test_typedef_nesting.py`.
- * The flow-loading tests run their typedefs through `readTypedefs` and `typeFor` here.
- * Later: the located load errors
- * (`test_a_flow_with_a_long_chain_is_a_located_load_error`,
- * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`), which need the loader.
+ * The flow-loading tests run their typedefs through `readTypedefs` and `typeFor` here, except
+ * the located load errors (`test_a_flow_with_a_long_chain_is_a_located_load_error`,
+ * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`), which run through `loadFlow`,
+ * the CODE node naming the conformance fixture `echo`; a stack overflow (Python's
+ * `RecursionError`) is checked for in the error's causes.
  * Not ported: `test_field_parse_follows_the_int_digit_limit` (D4a: no digit limits);
  * `test_measuring_a_diamond_is_memoized` and the measure half of
  * `test_an_empty_record_and_an_enum_load` call private functions;
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { TypeCheckError, typeLevels } from "../../src/typesys/values.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -59,6 +61,18 @@ function aliases(n: number, prefix = "A", bottom: unknown = "int", wrap = (t: st
 /** Return `name` wrapped in `n` nested `ctor(...)`s. */
 function nest(ctor: string, n: number, name: string): string {
   return `${ctor}(`.repeat(n) + name + ")".repeat(n);
+}
+
+/** Return a flow declaring `typedefs` whose CODE node `use` has `output: <output>`. */
+function flow(typedefs: Record<string, string>, output: string): string {
+  const lines = Object.entries(typedefs)
+    .map(([name, defn]) => `  ${name}: ${defn}\n`)
+    .join("");
+  return (
+    `id: f\nname: f\ntypedefs:\n${lines}nodes:\n  use:\n    kind: code\n` +
+    `    code: ./fixtures/compose_codefns.ts:echo\n    input:\n      topic: x\n` +
+    `    output: ${output}\noutput: \${use.output}\n`
+  );
 }
 
 /** Set the type nesting limit to `limit` through `YIAN_MAX_TYPE_NESTING`. */
@@ -233,6 +247,28 @@ describe("types at the limit", () => {
   });
 });
 
+/** Render each typedef of `raw` as the flow-style YAML `flow` writes. */
+function flowLines(raw: Raw): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(raw).map(([name, defn]) => [
+      name,
+      typeof defn === "string"
+        ? defn
+        : `{${Object.entries(defn as Record<string, string>)
+            .map(([field, type]) => `${field}: ${type}`)
+            .join(", ")}}`,
+    ]),
+  );
+}
+
+/** Whether `error` or one of its causes is a stack overflow. */
+function overflowed(error: unknown): boolean {
+  for (let cause = error; cause !== undefined; cause = (cause as Error).cause) {
+    if (String(cause).includes("Maximum call stack size exceeded")) return true;
+  }
+  return false;
+}
+
 describe("levels and chains", () => {
   test.each([101, 1000])("a record chain of %p fails on levels", (n) => {
     expectRejected(records(n), levelsMessage("T100", "a", "T99", 100), ["T100", "a"]);
@@ -292,6 +328,20 @@ describe("levels and chains", () => {
     expect(typedefsError(aliases(6)).message).toBe(chainMessage("A5", 6, undefined, 5));
   });
 
+  test.each([
+    ["1000-records", records(1000), "bad typedefs: typedef 'T100' field 'a'", "  T100: {a: ".length + 1],
+    ["300-records", records(300), "bad typedefs: typedef 'T100' field 'a'", "  T100: {a: ".length + 1],
+    ["1000-aliases", aliases(1000), "bad typedefs: typedef 'A100'", "  ".length + 1],
+  ] as const)("a flow with a long chain is a located load error: %s", async (_id, raw, prefix, column) => {
+    const last = Object.keys(raw).at(-1)!;
+    const error = await loadErrorAsync(loadConformanceFlow(flow(flowLines(raw), last)));
+    expect(error.message.startsWith(prefix)).toBe(true);
+    // Line 4 holds the first typedef, so the 101st is on line 104.
+    const range = error.diagnostic.frames.at(-1)!.range;
+    expect([range.startLine, range.startCol]).toEqual([104, column]);
+    expect(overflowed(error)).toBe(false);
+  });
+
   // Each typedef's levels as Python's `_measure_typedef` measures them.
   const MEASURED: Raw = {
     E: {},
@@ -335,6 +385,21 @@ const EXPANDED =
   "type nests deeper than 100 levels once its typedef names are expanded, the limit for a " +
   "type (each record and list is a level)";
 
+/** Return the 1-based line of the first `needle` in `text`. */
+function lineOf(text: string, needle: string): number {
+  return text.slice(0, text.indexOf(needle)).split("\n").length;
+}
+
+/** Return a flow whose CODE node passes `topic` an empty list tagged `!<tag>`. */
+function nodeInputTagFlow(typedefs: Record<string, string>, tag: string): string {
+  return flow(typedefs, "T0").replace("      topic: x\n", `      topic: !${tag} []\n`);
+}
+
+/** Return a flow declaring a flow input `t` with the tag `!<tag>`. */
+function flowInputTagFlow(typedefs: Record<string, string>, tag: string): string {
+  return flow(typedefs, "T0").replace("name: f\n", `name: f\ninput:\n  t: !${tag}\n`);
+}
+
 describe("typeFor nesting", () => {
   test("bounds a type with its typedefs expanded", () => {
     const registry = readTypedefs(records(100));
@@ -347,5 +412,17 @@ describe("typeFor nesting", () => {
   test("a type at the limit resolves", () => {
     expect(typeLevels(typeFor(wrapped("T98", 1), readTypedefs(records(99))))).toBe(100);
     typeFor(wrapped("int"), new Map());
+  });
+
+  test.each([
+    ["output", (typedefs: Record<string, string>, t: string) => flow(typedefs, `'${t}'`), "    output: 'list("],
+    ["node-input-tag", nodeInputTagFlow, "      topic: !list("],
+    ["flow-input-tag", flowInputTagFlow, "  t: !list("],
+  ] as const)("a flow wrapping a deep typedef is a located load error: %s", async (_id, build, needle) => {
+    const text = build(flowLines(records(100)), wrapped("T99"));
+    const error = await loadErrorAsync(loadConformanceFlow(text));
+    expect(error.message).toContain(EXPANDED);
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, needle));
+    expect(overflowed(error)).toBe(false);
   });
 });

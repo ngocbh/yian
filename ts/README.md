@@ -29,6 +29,7 @@ The first release isn't published yet; until then, `npm pack` in `ts/` makes the
   `bunfig.toml` from the working directory.
 - `yian --licenses` prints yian's notice, Bun's, and the licenses of the packages the binaries
   bundle.
+- `yian --version` prints the package version.
 
 ## Example
 
@@ -408,7 +409,7 @@ function `${...}` expressions can call; each `default` goes through host intake.
 ## CLI
 
 The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
-`yian --help` lists its commands.
+`yian --help` lists its commands, and `yian --version` prints the version.
 
 [conformance/schema/events.schema.json]: https://github.com/ngocbh/yian/blob/main/conformance/schema/events.schema.json
 [docs/api.md]: https://github.com/ngocbh/yian/blob/main/docs/api.md

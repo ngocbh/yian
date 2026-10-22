@@ -11,6 +11,7 @@ yian check [--root DIR] FLOW.yaml... [--json]
 yian skills check DIR... [--json]
 yian status LOG [--json]
 yian --licenses
+yian --version
 yian config check [--json] < llm_config.json
 yian providers [--json]
 yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--json]
@@ -19,8 +20,9 @@ yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--jso
 `yian check` loads flows without running them, `yian skills check` checks skill
 directories, `yian status` (TS yian only) reports where the run in a run log stands,
 `yian config check` checks an `llm_config` layer, `yian providers`
-lists the providers, `yian models` lists the models a login or a key offers, and
-`yian --licenses` (TS yian only) prints the notices of what yian bundles.
+lists the providers, `yian models` lists the models a login or a key offers,
+`yian --licenses` (TS yian only) prints the notices of what yian bundles, and
+`yian --version` (TS yian only) prints the version.
 With `--json`, these commands, `yian auth --remove`, and `yian run` write one JSON
 document on stdout, and device sign-in writes JSON lines; see
 [Machine-readable output](#machine-readable-output).
@@ -31,6 +33,9 @@ single-file binaries are built not to load a `.env` or `bunfig.toml` from the wo
 which a compiled Bun program does by default. A program run with `bun` itself (a host, `bun
 test`) still has Bun load the working directory's `.env` into its environment, and yian reads
 `YIAN_*` and provider variables from it; start Bun with `--no-env-file` to avoid that.
+
+Changed (TS yian): `yian --version` prints the package's version (its `package.json` `version`)
+and a newline, and exits 0. Python yian has no `--version`.
 
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.

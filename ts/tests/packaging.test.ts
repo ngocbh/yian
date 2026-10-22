@@ -10,8 +10,8 @@
 // `src/cli/licenses.ts` instead, taking Bun's license from the file `YIAN_BUN_LICENSE` names and the
 // copied packages' from the npm packages extracted under `YIAN_VENDORED_LICENSES`, or else each from
 // the current `LICENSES`. With `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the
-// file also runs that binary: `--licenses`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an
-// MCP server, and a cwd `.env` and `bunfig.toml` it must ignore.
+// file also runs that binary: `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`,
+// `check`, an MCP server, and a cwd `.env` and `bunfig.toml` it must ignore.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
@@ -600,6 +600,16 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
       const result = await runBinary(workdir(), ["--licenses"]);
       expect(result.code, context(result)).toBe(0);
       expect(result.stdout).toBe(LICENSES);
+    },
+    BINARY_TEST_LIMIT,
+  );
+
+  test(
+    "--version prints package.json's version",
+    async () => {
+      const result = await runBinary(workdir(), ["--version"]);
+      expect(result.code, context(result)).toBe(0);
+      expect(result.stdout).toBe(`${PACKAGE.version}\n`);
     },
     BINARY_TEST_LIMIT,
   );

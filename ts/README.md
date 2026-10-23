@@ -429,7 +429,9 @@ console.log(store.selection()?.model);
   `null` together with its selection. `credentials(provider, credentialId, { refresh })` returns
   the saved credentials, refreshing an expiring subscription token under the store's lock.
   `delete()` removes the whole store under that lock, so it waits for a refresh in flight, and
-  keeps the lock file; with no store it does nothing.
+  keeps the lock file; it creates nothing when neither the store nor its lock file exists (a
+  missing directory too). It throws `AuthError` when the directory isn't private or the lock wait
+  passes `lockTimeoutMs` (30 s by default).
 - `new OpenAIAuth({ request, scheduler, signal, requestTimeoutMs })` signs in to a ChatGPT
   subscription: `deviceLogin(displayCode, { timeoutMs })` and `browserLogin(openUrl, {
   awaitCallback, timeoutMs })` resolve to `OAuthCredentials`, `refresh(credentials)` renews them,
@@ -796,11 +798,12 @@ Node 22, and so does every unit test; a change keeps both green.
 - `auth/common.ts`: `AuthError`, the credential classes and `ProviderSelection`.
 - `auth/store.ts`: `AuthStore`, the saved-login file in Python's format. Reads are sync. `save`,
   `remove`, `setDefault` and `delete` (the whole store) are async and hold `<path>.lock` through
-  `waitForLock`; `credentials` is async and takes the lock only to refresh, so `delete` waits for
-  a refresh in flight. Nothing unlinks the lock file: a waiter and a newcomer would then lock
-  different files. Node and Bun have no `dir_fd`, so private-path checks use `lstat`, an
-  `O_NOFOLLOW` open and `fstat`. Parallel `credentials` calls in one process that refresh the same
-  login share one refresh (success or failure); the file lock still serializes processes.
+  `waitForLock`; `credentials` is async and takes the lock only to refresh, so `delete` waits for a
+  refresh in flight. Nothing unlinks the lock file: a waiter and a newcomer would then lock
+  different files. The lock is a SQLite lock that Python's `flock` doesn't see. Node and Bun have
+  no `dir_fd`, so private-path checks use `lstat`, an `O_NOFOLLOW` open and `fstat`. Parallel
+  `credentials` calls in one process that refresh the same login share one refresh (success or
+  failure); the file lock still serializes processes.
 - `auth/http.ts`: `request`, Python's `HttpResponse` over `shortRequest`: one total timeout,
   redirects never followed (a 3xx comes back with `null` data), the body capped.
 - `auth/openai.ts`: `OpenAIAuth`, browser and device sign-in, refresh and the model catalogs.

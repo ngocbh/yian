@@ -2824,6 +2824,63 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 
+### Reading values from a run log
+
+Changed (TS yian): for hosts that read run-log values, `yian/run` exports the codec the log writes
+them with: `TypedValue` and `FileRef`, `logJson`, `parseJson` and `JSONDecodeError`, and the types
+`StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject` and `JsonMode`. A `pool_commit`
+payload is flat, `{node_id, key, kind, value}`, and its `kind` and `value` are the typed value's
+wire form. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
+`kind` and `value`, `kind` must be a storage kind (not `Any`) and `value` of that kind, or it throws
+a `RangeError`. It checks the value's top level and a typed list's items, not nested contents, which
+it trusts `parseJson` to have read. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int
+items as `bigint`s.
+`typed.toWire()` gives `{kind, value}` back, each `FileRef` written as its `{uri, mime, name}`
+mapping.
+
+`logJson(value)` writes JSON as a run-log line does: compact, keys in UTF-16 code-unit order, a
+`bigint` as an int of any size, a `number` as a float (`.0` added when it has no `.` or exponent),
+`±Infinity` as `{"$float": "inf"}` or `{"$float": "-inf"}`, and a record shaped like a tag (exactly
+`{"$float": "inf"}` or `{"$float": "-inf"}`, or with `$record` as its only key) wrapped as
+`{"$record": …}`. NaN, `-0`, text holding a lone surrogate and anything else that isn't JSON throw
+`TypeError`. `parseJson(text, "codec")` reads that text back: an int as a `bigint`, any other number
+as a `number`, the tags as `±Infinity` and a `{"$record": …}` escape as the record inside it;
+`parseJson(text, "plain")` decodes neither. Text yian doesn't read (not JSON, a `NaN` or `Infinity`
+token, a float that overflows, a duplicate key, a lone surrogate) throws `JSONDecodeError`, whose
+`reason`, `line`, `column` and `position` say where. This is the codec the log writer,
+`VariablePool.dumps` and `yian run --json` use, so re-encoding a decoded `pool_commit` gives the
+log's bytes: `logJson({ ...payload, ...typed.toWire() })` is the payload as the line holds it.
+
+```ts
+import { iterRunRecords, logJson, parseJson, TypedValue } from "@ngocbh/yian/run";
+
+for (const { envelope } of iterRunRecords(log, { kinds: ["pool_commit"] })) {
+  const { node_id, key, kind, value } = envelope.payload;
+  const typed = TypedValue.fromWire({ kind, value }); // an int is a bigint, a file a FileRef
+  show(node_id, key, typed.kind, typed.value);
+  const text = logJson(typed.toWire()); // {"kind":…,"value":…}, the value as the log writes it
+  const back = TypedValue.fromWire(parseJson(text, "codec")); // the same value again
+}
+```
+
+The `json` conformance group (`conformance/cases/json/`) specifies the form, for example
+`log_number_form`, `log_infinity_and_record_escape` and `read_codec_record_escape`.
+
+- The `TypedValue` constructor doesn't check that the value fits the kind; `fromWire` is the checked
+  way to build one.
+- `toWire` throws `TypeCheckError` (a `RangeError`, not exported) for a value that isn't JSON, which
+  the unchecked constructor, or `fromWire` given data `parseJson` didn't make, can hold.
+- A `FileRef` appears only for kind `file`; it holds only `uri`, `mime` and `name`, and yian stores
+  no file content.
+- `logJson` writes every JS `number` as a float (`{a: 1}` gives `{"a":1.0}`), so pass ints as
+  `bigint`s; it refuses `undefined` and a `Date`.
+- Plain `JSON.parse` reads `logJson` text, but loses ints past 2^53 and reads `±Infinity` as the
+  tag object and an escaped record with its `$record` wrapper.
+- `yian/run` imports `node:` modules, so it is for server-side hosts, not browsers.
+
+No Python counterpart: Python yian's run log refuses infinity and writes no tags, so Python hosts
+read values with `json` and `yian.typesys.TypedValue`.
+
 ### Naming a run's nodes with `staticNodes`
 
 Changed (TS yian): `staticNodes(flow)` (from `yian/run`) returns `[path, node]` for every node of a

@@ -15,7 +15,10 @@
  * log stands, and `staticNodes`, which names each node of a flow, and re-exports `staticPathOf`
  * (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
  * `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
- * the host's runs folder and names its log there.
+ * the host's runs folder and names its log there. For hosts that read run-log values it re-exports
+ * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
+ * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
+ * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with.
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -168,6 +171,15 @@ export {
   RunLogSchemaError,
   runRecordOffsets,
 } from "./runtime/log.ts";
+export {
+  type JsonMode,
+  type JsonObject,
+  JSONDecodeError,
+  type JsonValue,
+  logJson,
+  parseJson,
+} from "./typesys/json.ts";
+export { FileRef, type StorageKind, TypedValue, type Value, type ValueRecord } from "./typesys/values.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */

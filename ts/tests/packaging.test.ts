@@ -56,7 +56,15 @@ import type {
   SqliteStatement,
   SqliteValue,
 } from "../src/platform.ts";
-import type { Steering } from "../src/run.ts";
+import type {
+  JsonMode,
+  JsonObject,
+  JsonValue,
+  Steering,
+  StorageKind,
+  Value,
+  ValueRecord,
+} from "../src/run.ts";
 import { stdioOptions } from "./engine/mcp_helpers.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -106,7 +114,20 @@ const NAMES: Record<string, string[]> = {
     "markdownVersion",
     "ProfileMemory",
   ],
-  "./run": ["RunResult", "BackwardOutcome", "inspectRun", "runFlow", "resumeFlow", "loadRecordedFlow", "runLogPath"],
+  "./run": [
+    "RunResult",
+    "BackwardOutcome",
+    "inspectRun",
+    "runFlow",
+    "resumeFlow",
+    "loadRecordedFlow",
+    "runLogPath",
+    "TypedValue",
+    "FileRef",
+    "logJson",
+    "parseJson",
+    "JSONDecodeError",
+  ],
   "./tools": [
     "registerTool",
     "registeredTools",
@@ -218,6 +239,12 @@ describe("entry points", () => {
     // The check is `bun run typecheck`: the imports above fail to compile without the names.
     const names = [] as [
       Steering?,
+      StorageKind?,
+      Value?,
+      ValueRecord?,
+      JsonValue?,
+      JsonObject?,
+      JsonMode?,
       MarkdownStore?,
       FileLock?,
       FileLockReason?,

@@ -312,7 +312,7 @@ test("a resumed run gives its AGENT the same run folder", async () => {
   const flow = await loadFlow(FLOW);
   await crashAfter(BEFORE_REPLY_SUCCESS, () => runFlow(flow, { message: "hi" }, { log, ...served("lost") }));
   const dirs = await runDirs(async () => {
-    const resumed = await resumeFlow(flow, { log, ...served("ok") });
+    const resumed = await resumeFlow({ log, ...served("ok") });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   });
   expect(dirs).toEqual([run]);

@@ -49,7 +49,7 @@ import {
   type VisibleInteraction,
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
-import { type FileLock, FileLockError, isLocked, lockFile } from "../platform.ts";
+import { type FileLock, FileLockError, isLocked, lockFile, VERSION } from "../platform.ts";
 import {
   comparePaths,
   ExecutionPosition,
@@ -82,10 +82,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -195,6 +195,54 @@ export interface OutcomeCarriers {
   forwardCapture?: ForwardCapture | null;
 }
 
+/** One flow file a load read: its text, and where each `uses:` ref written in it resolved. */
+export interface FlowSourceFile {
+  readonly text: string;
+  /** Each `uses:` ref (its path, with `@<version>` when pinned), mapped to the key of its file. */
+  readonly refs: Readonly<Record<string, string>>;
+}
+
+/**
+ * The flow files a loaded flow was compiled from, as `ComposedFlow.source` holds them and
+ * `RunStarted.flow` records them; frozen. Each file is keyed by its real path relative to `dir`
+ * (`..` for a file outside it); a file is labelled with its key's file name, and its CODE
+ * references resolve in its key's folder. Two different files claiming one path (texts a host
+ * resolver gave) get keys of their own, `<key>~1`, ... A load from the source follows `refs`
+ * and reads no flow file from disk.
+ */
+export interface FlowSource {
+  /** The root file's key in `files`: the file name of the label it was loaded under. */
+  readonly root: string;
+  /** The real path of the folder the root was loaded from. */
+  readonly dir: string;
+  /** Each flow file the load read, by key. */
+  readonly files: Readonly<Record<string, FlowSourceFile>>;
+}
+
+/** A tool an AGENT of the run grants, as the model is told about it. */
+export interface RecordedTool {
+  /** The tool's description. */
+  readonly description: string;
+  /** The tool's parameters, a JSON Schema object. */
+  readonly parameters: Readonly<JsonObject>;
+}
+
+/** A skill an AGENT of the run grants. */
+export interface RecordedSkill {
+  /** When to use the skill. */
+  readonly description: string;
+  /** The `SKILL.md` body after the frontmatter. */
+  readonly instructions: string;
+}
+
+/** The run that started this one: a host-started child run or a learning pass. */
+export interface RunParent {
+  /** The parent run's id. */
+  readonly runId: string;
+  /** The parent's node that started this run, or `null` when no one node did. */
+  readonly node: string | null;
+}
+
 /** The fields of a `RunStartedRecord`. */
 export interface RunStartedFields {
   /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
@@ -223,6 +271,16 @@ export interface RunStartedFields {
    * they bind from. `null` (the default) when the run has no such agent.
    */
   callTimeLlm?: Readonly<Record<string, unknown>> | null;
+  /** The flow files the run compiled; `null` (the default) for a flow built in code. */
+  flow?: FlowSource | null;
+  /** Each skill an AGENT grants, by name; defaults to `{}`. */
+  skills?: Readonly<Record<string, RecordedSkill>>;
+  /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
+  tools?: Readonly<Record<string, RecordedTool>>;
+  /** The yian version that started the run; defaults to this one's `VERSION`. */
+  yianVersion?: string;
+  /** The run that started this one; `null` (the default) for a run the host started on its own. */
+  parent?: RunParent | null;
 }
 
 /** Initialize a run from its complete canonical inputs and resolved configuration. Frozen. */
@@ -249,6 +307,16 @@ export class RunStartedRecord {
   readonly defaults: Readonly<Record<string, bigint>>;
   /** The deep-frozen canonical call-time agents `{selection, agents}`, or `null` when there are none. */
   readonly callTimeLlm: Readonly<JsonObject> | null;
+  /** The deep-frozen flow files the run compiled, or `null` for a flow built in code. */
+  readonly flow: FlowSource | null;
+  /** The deep-frozen skills the AGENTs grant, by name. */
+  readonly skills: Readonly<Record<string, RecordedSkill>>;
+  /** The deep-frozen tools the AGENTs grant, by name. */
+  readonly tools: Readonly<Record<string, RecordedTool>>;
+  /** The yian version that started the run. */
+  readonly yianVersion: string;
+  /** The frozen parent run, or `null`. */
+  readonly parent: RunParent | null;
 
   /**
    * The memory table, stacks and snapshots are all recorded or all `null`; recorded, they are
@@ -258,13 +326,16 @@ export class RunStartedRecord {
    * @throws TypeError when the fingerprint isn't a string, the wiring override, the agent
    *   configuration or one agent's configuration isn't a JSON object, `numWorkers` isn't a safe
    *   integer, `learnable` isn't a boolean, the memory fields aren't arrays of exactly their carrier
-   *   class, `defaults` isn't a plain object of `bigint`s, or `callTimeLlm` or one of its parts
-   *   isn't a plain object.
+   *   class, `defaults` isn't a plain object of `bigint`s, `callTimeLlm` or one of its parts
+   *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `yianVersion` or `parent` has
+   *   the wrong type.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
    *   negative, the initial pool isn't a pool wire object (see `decodePool`), the memory fields
    *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
-   *   an unknown key, a defaults name is empty, or `callTimeLlm` has missing or extra fields, no
-   *   agent, an empty agent path or a non-JSON value.
+   *   an unknown key, a defaults name is empty, `callTimeLlm` has missing or extra fields, no
+   *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.root` or a file
+   *   its refs name, a name, the flow's root or folder or the version is empty, or a tool's
+   *   parameters aren't JSON.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -276,6 +347,11 @@ export class RunStartedRecord {
       memoryStacks = null,
       defaults = {},
       callTimeLlm = null,
+      flow = null,
+      skills = {},
+      tools = {},
+      yianVersion = VERSION,
+      parent = null,
     } = fields;
     this.flowFingerprint = requireSha256(fields.flowFingerprint, "flow_fingerprint");
     // Decoding only validates: a decoded pool writes back exactly this canonical copy.
@@ -303,8 +379,105 @@ export class RunStartedRecord {
     this.learnable = learnable;
     this.defaults = validatedDefaults(defaults);
     this.callTimeLlm = callTimeLlm === null ? null : validatedCallTimeLlm(callTimeLlm);
+    this.flow = flow === null ? null : validatedFlowSource(flow);
+    this.skills = validatedEntries(skills, "skills", (skill, label) => ({
+      description: requireText(skill["description"], `${label} description`),
+      instructions: requireText(skill["instructions"], `${label} instructions`),
+    }));
+    this.tools = validatedEntries(tools, "tools", (tool, label) => {
+      if (!isRecord(tool["parameters"])) throw new TypeError(`${label} parameters must be an object`);
+      return {
+        description: requireText(tool["description"], `${label} description`),
+        parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
+      };
+    });
+    this.yianVersion = requireName(yianVersion, "RunStarted yian_version");
+    this.parent = parent === null ? null : validatedParent(parent);
     Object.freeze(this);
   }
+}
+
+/**
+ * Return `value` when it is a string.
+ *
+ * @throws TypeError otherwise.
+ */
+function requireText(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
+  return value;
+}
+
+/**
+ * Return `value` when it is a non-empty string.
+ *
+ * @throws TypeError when it isn't a string.
+ * @throws RangeError when it is empty.
+ */
+function requireName(value: unknown, label: string): string {
+  if (requireText(value, label) === "") throw new RangeError(`${label} must be a non-empty string`);
+  return value as string;
+}
+
+/**
+ * Return a frozen copy of a `RunStarted.flow` value.
+ *
+ * @throws TypeError when a part has the wrong type.
+ * @throws RangeError when the root or folder is empty, or `files` doesn't hold the root or a file a
+ *   ref names.
+ */
+function validatedFlowSource(flow: FlowSource): FlowSource {
+  if (!isRecord(flow)) throw new TypeError("RunStarted flow must be an object or null");
+  const root = requireName(flow.root, "RunStarted flow root");
+  const dir = requireName(flow.dir, "RunStarted flow dir");
+  const files = validatedEntries(flow.files, "flow files", (file, label) => {
+    const refs = file["refs"];
+    if (!isRecord(refs)) throw new TypeError(`${label} refs must be an object`);
+    for (const [path, target] of Object.entries(refs)) {
+      const key = requireText(target, `${label} refs[${reprText(path)}]`);
+      if (!Object.hasOwn(flow.files, key)) {
+        throw new RangeError(`${label} refs[${reprText(path)}] names no recorded file: ${reprText(key)}`);
+      }
+    }
+    const text = requireText(file["text"], `${label} text`);
+    return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
+  });
+  if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
+  return Object.freeze({ root, dir, files });
+}
+
+/**
+ * Return a frozen copy of a by-name record, each entry checked and copied by `entry`.
+ *
+ * @throws TypeError when `value` or an entry isn't a plain object, besides `entry`'s errors.
+ * @throws RangeError when a name is empty.
+ */
+function validatedEntries<T>(
+  value: unknown,
+  field: string,
+  entry: (item: Readonly<Record<string, unknown>>, label: string) => T,
+): Readonly<Record<string, T>> {
+  if (!isRecord(value)) throw new TypeError(`RunStarted ${field} must be an object`);
+  const entries = Object.entries(value).map(([name, item]): [string, T] => {
+    const label = `RunStarted ${field}[${reprText(name)}]`;
+    if (!name) throw new RangeError(`RunStarted ${field} names must be non-empty strings`);
+    if (!isRecord(item)) throw new TypeError(`${label} must be an object`);
+    return [name, Object.freeze(entry(item, label))];
+  });
+  // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+/**
+ * Return a frozen copy of a `RunStarted.parent` value.
+ *
+ * @throws TypeError when a part has the wrong type.
+ * @throws RangeError when the run id or the node is empty.
+ */
+function validatedParent(parent: RunParent): RunParent {
+  if (!isRecord(parent)) throw new TypeError("RunStarted parent must be an object or null");
+  const runId = requireName(parent.runId, "RunStarted parent run_id");
+  const node = parent.node === null ? null : requireName(parent.node, "RunStarted parent node");
+  return Object.freeze({ runId, node });
 }
 
 /**
@@ -1998,7 +2171,6 @@ function memorySpecPayload(spec: MemorySpec): JsonObject {
     type: spec.type,
     config: memoryJson(spec.config),
     owners: spec.owners.map((site) => ({ scope: [...site.scope], owner: [...site.owner], node: site.node })),
-    conversation_eligible: spec.conversationEligible,
   };
 }
 
@@ -2010,7 +2182,7 @@ function memorySpecPayload(spec: MemorySpec): JsonObject {
  * @throws TypeError when a field has the wrong JSON type.
  */
 function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
-  const wire = wireObject(value, label, ["key", "type", "config", "owners", "conversation_eligible"]);
+  const wire = wireObject(value, label, ["key", "type", "config", "owners"]);
   const owners = wireArray(wire["owners"], `${label} owners`).map((item) => {
     const siteLabel = `${label} owners item`;
     const site = wireObject(item, siteLabel, ["scope", "owner", "node"]);
@@ -2025,8 +2197,51 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
     wireName(wire["type"], `${label} type`),
     wireObject(wire["config"], `${label} config`),
     owners,
-    wireBool(wire["conversation_eligible"], `${label} conversation_eligible`),
   );
+}
+
+/** Encode a `run_started` flow. */
+function flowPayload(flow: FlowSource): JsonObject {
+  return { root: flow.root, dir: flow.dir, files: flow.files as unknown as JsonObject };
+}
+
+/**
+ * Decode a `run_started` flow; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function flowFromPayload(value: unknown, label: string): FlowSource {
+  const wire = wireObject(value, label, ["root", "dir", "files"]);
+  return {
+    root: wireText(wire["root"], `${label} root`),
+    dir: wireText(wire["dir"], `${label} dir`),
+    files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
+  };
+}
+
+/**
+ * Return a by-name object whose every entry is an object with exactly `fields`; `label` names it
+ * in errors.
+ *
+ * @throws RangeError for an entry's missing or extra fields.
+ * @throws TypeError when `value` or an entry isn't an object.
+ */
+function wireEntries(value: unknown, label: string, fields: readonly string[]): JsonObject {
+  const wire = wireObject(value, label);
+  for (const [name, item] of Object.entries(wire)) wireObject(item, `${label}[${reprText(name)}]`, fields);
+  return wire;
+}
+
+/**
+ * Decode a `run_started` parent; `label` names it in errors.
+ *
+ * @throws RangeError for missing or extra fields.
+ * @throws TypeError when a field has the wrong JSON type.
+ */
+function parentFromPayload(value: unknown, label: string): RunParent {
+  const wire = wireObject(value, label, ["run_id", "node"]);
+  return { runId: wireText(wire["run_id"], `${label} run_id`), node: wireNullableText(wire["node"], `${label} node`) };
 }
 
 /** Encode one target's memory key stack. */
@@ -2730,7 +2945,7 @@ function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers
   };
 }
 
-/** The fields of a `run_started` payload; schema 10 writes every one. */
+/** The fields of a `run_started` payload; schema 12 writes every one. */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
   "initial_pool",
@@ -2743,6 +2958,11 @@ const RUN_STARTED_FIELDS = [
   "memory_stacks",
   "defaults",
   "call_time_llm",
+  "flow",
+  "skills",
+  "tools",
+  "yian_version",
+  "parent",
 ];
 
 /** Build the canonical JSON payload of one record; counters are written as `bigint`s. */
@@ -2761,6 +2981,11 @@ function payloadForRecord(record: RunRecord): JsonObject {
       // The writer sorts every object's keys, so the defaults come out sorted by name.
       defaults: record.defaults as JsonObject,
       call_time_llm: record.callTimeLlm as JsonObject | null,
+      flow: record.flow === null ? null : flowPayload(record.flow),
+      skills: record.skills as unknown as JsonObject,
+      tools: record.tools as unknown as JsonObject,
+      yian_version: record.yianVersion,
+      parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
     };
   }
   if (record instanceof RunResumedRecord) {
@@ -2869,6 +3094,11 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         memoryStacks: wireNullableItems(payload["memory_stacks"], `${label} memory_stacks`, memoryStackFromPayload),
         defaults: wireObject(payload["defaults"], `${label} defaults`) as Record<string, bigint>,
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
+        flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
+        skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
+        tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
+        yianVersion: wireText(payload["yian_version"], `${label} yian_version`),
+        parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });
     case "run_resumed":
       requireFields(payload, ["retry_node_ids", "num_workers"], label);

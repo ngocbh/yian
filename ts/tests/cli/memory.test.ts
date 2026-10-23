@@ -114,7 +114,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
-import { NO_ENV } from "../engine/run_state_fixtures.ts";
+import { editRecordedFlow, NO_ENV } from "../engine/run_state_fixtures.ts";
 
 /** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
 const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
@@ -515,9 +515,9 @@ async function runCli(flow: string, ...extra: string[]) {
   return { ...(await cli([flow, "--log", log, "--quiet", ...extra])), log };
 }
 
-/** Run `yian run <flow> --resume <log> --quiet ...extra` as `runCli` runs a fresh one. */
-function resumeCli(flow: string, log: string, ...extra: string[]) {
-  return cli([flow, "--resume", log, "--quiet", ...extra]);
+/** Run `yian run --resume <log> --quiet ...extra` as `runCli` runs a fresh one. */
+function resumeCli(log: string, ...extra: string[]) {
+  return cli(["--resume", log, "--quiet", ...extra]);
 }
 
 /** The command's env for `runCli` and `resumeCli`. */
@@ -798,8 +798,10 @@ describe("yian run --resume", () => {
   test("custom type points to the TS API (resume)", async () => {
     const finished = await runCli(flowFile(codeFlowText(null)));
     expect(finished.code, finished.stderr).toBe(0);
+    // The resume reads the recorded flow, so the custom type is written into the recorded text.
+    editRecordedFlow(finished.log, () => codeFlowText("{vec: vector}"));
     const before = readFileSync(finished.log);
-    const result = await resumeCli(flowFile(codeFlowText("{vec: vector}")), finished.log);
+    const result = await resumeCli(finished.log);
     expect(result.code).toBe(1);
     const text = plain(result.stderr);
     expect(text.startsWith("resume failed:"), text).toBe(true);
@@ -814,7 +816,7 @@ describe("yian run --resume", () => {
     const result = await runCli(flowFile(codeFlowText()), "--memory-root", root);
     expect(result.code, result.stderr).toBe(0);
     const before = readFileSync(result.log);
-    const resumed = await resumeCli(flowFile(codeFlowText()), result.log, "--memory-root", root);
+    const resumed = await resumeCli(result.log, "--memory-root", root);
     expect(resumed.code, resumed.stderr).toBe(0);
     expect(readFileSync(result.log)).toEqual(before);
   });
@@ -856,7 +858,7 @@ describe("yian run --resume", () => {
       };
       let result;
       try {
-        result = await resumeCli(flow, log, "--memory-storage", `chat=${memoryPath}`);
+        result = await resumeCli(log, "--memory-storage", `chat=${memoryPath}`);
       } finally {
         EpisodicMemory.prototype.openRun = openRun;
         holder?.close();
@@ -886,7 +888,7 @@ describe("yian run --resume", () => {
     try {
       const run = runFlow(composed, {}, { log, memory: registry, onEvent: stopAfterStart, env: cliEnv() });
       await expect(run).rejects.toThrow("host stop");
-      const resumed = await resumeCli(flow, log);
+      const resumed = await resumeCli(log);
       expect(resumed.code, resumed.stderr).toBe(0);
     } finally {
       await registry[Symbol.asyncDispose]();

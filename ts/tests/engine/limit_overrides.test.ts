@@ -329,7 +329,7 @@ test("learnable run at the expression maximum logs and resumes", async () => {
   const result = await runFlow(flow, { s: "a" }, { env, log: path, learnable: true, memory: new Map([["test", backend]]) });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("A");
-  const replayed = await resumeFlow(flow, { env, log: path, memory: new Map([["test", backend]]) });
+  const replayed = await resumeFlow({ env, log: path, memory: new Map([["test", backend]]) });
 
   expect(replayed.status, replayed.failure?.message).toBe("succeeded");
   expect(replayed.output).toBe("A");

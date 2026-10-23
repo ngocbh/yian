@@ -223,7 +223,7 @@ test("a log routed to the old default handle does not resume", async () => {
     lines[routed] = JSON.stringify(records[routed]);
     writeFileSync(path, `${lines.join("\n")}\n`);
 
-    const caught = await rejected(resumeFlow(await loadFlow(ELSE_LESS_FLOW), { log: path, env }));
+    const caught = await rejected(resumeFlow({ log: path, env }));
     expect((caught as Error).constructor).toBe(RangeError);
     expect((caught as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'gate'");
   } finally {

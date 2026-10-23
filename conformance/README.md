@@ -530,7 +530,7 @@ they are, except as the rules below say), and an empty payload is left out.
 
 | Record | Node | Payload fields |
 |---|---|---|
-| `run_started` | null | `inputs` (the run's inputs as recorded), `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm` |
+| `run_started` | null | `inputs` (the run's inputs as recorded), `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
 | `run_resumed` | null | `retry_node_ids`, `num_workers` |
 | `run_stopped` (TS only) | null | `reason` (the reason's kind), `node_ids` |
 | `node_started` | `node_id` | none |
@@ -557,11 +557,12 @@ For example:
 - Values are plain values: `run_started.inputs` and `node_succeeded.value` are recorded
   typed, and are written without the kind tag (a file as `{uri, mime, name}`); every other
   value (seeds, captures, feedback) is recorded plain already.
-- `defaults`, `effective_llm_by_static_path` and `call_time_llm` are left out when empty or
-  absent.
+- `defaults`, `effective_llm_by_static_path`, `call_time_llm` and `parent` are left out when
+  empty or absent.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); from `run_started`, `flow_fingerprint`,
-  `initial_pool` (beyond the inputs), `start_wiring_override`, `memory_snapshots`, `memories` and
-  `memory_stacks`; `topology_digest`; and every `evidence` field (the model and tool evaluation
+  `initial_pool` (beyond the inputs), `start_wiring_override`, `memory_snapshots`, `memories`,
+  `memory_stacks`, and the bulky `flow` (the flow files), `skills`, `tools` and `yian_version`;
+  `topology_digest`; and every `evidence` field (the model and tool evaluation
   evidence, whose shape is implementation-specific).
 - Failures: `node_failed.failure`, `node_routed.terminal_failure` and a backward failure's
   `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
@@ -706,10 +707,12 @@ capture source's `execution_seq` is compared by the kind and node of the record 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
 case, with its backward records), pinned byte for byte. Before
-the comparison, every `traceback` value, each record's time (`at`) and the seeded clock values
-(`initial_pool.system`'s `now` and `today`) are replaced by `"<masked>"`, since the times come from
-the virtual clock, which starts at the real time; each line is then written again with the log's
-own encoder, which gives back the line as written. When the TS log format changes, regenerate the
+the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
+(`initial_pool.system`'s `now` and `today`), the recorded flow's folder (`run_started`'s
+`flow.dir`) and the yian version (`yian_version`) are replaced by `"<masked>"`, since the times
+come from the virtual clock, which starts at the real time, the folder is the case's temporary one,
+and the version changes with each release; each line is then written again with the log's own
+encoder, which gives back the line as written. When the TS log format changes, regenerate the
 golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
 change. Bun and Node write the same bytes. A golden log goes
 with a serial case that sets `run.run_id`, makes no random ids (no memory; an AGENT case only when

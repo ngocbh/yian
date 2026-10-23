@@ -35,9 +35,6 @@ import { logJson } from "../typesys/json.ts";
 import { isList, jsTypeName, writeAsText } from "../typesys/values.ts";
 import { CompiledFlow, END_ID, Flow, START_ID } from "./model.ts";
 
-/** One reachable declaration and the locator of the AGENT that owns it, `null` for a flow's. */
-type Declared = readonly [MemoryDecl, readonly string[] | null];
-
 /** Return a key no two distinct locators share; never shown. */
 function locatorKey(locator: readonly string[]): string {
   return JSON.stringify(locator);
@@ -92,9 +89,8 @@ export function revalidateMemoryScope(value: unknown, name = "memory_scope"): Me
 }
 
 /**
- * One reachable memory key with its owners and AGENT placements. Frozen.
+ * One reachable memory key with its owners. Frozen.
  *
- * `placements` lists the locators of AGENT targets whose own declarations include the key.
  * `origins` aligns with `owners` and serves diagnostics only.
  */
 export class ResolvedMemory {
@@ -104,9 +100,6 @@ export class ResolvedMemory {
   readonly config: JsonObject;
   /** The declaring sites, sorted and unique by `DeclSite.compare`. */
   readonly owners: readonly DeclSite[];
-  readonly conversationEligible: boolean;
-  /** The owning AGENT targets' locators, sorted and unique. */
-  readonly placements: readonly (readonly string[])[];
   /** Each owner's declaration origin; not part of a layout's value. */
   readonly origins: readonly (OriginRef | null)[];
 
@@ -115,31 +108,16 @@ export class ResolvedMemory {
    *
    * @throws TypeError as `MemorySpec` does, or for an origin that is neither `null` nor an
    *   `OriginRef`.
-   * @throws RangeError as `MemorySpec` does, for placements that aren't an array of non-empty
-   *   string locators, sorted and unique, or for origins that don't align with the owners.
+   * @throws RangeError as `MemorySpec` does, or for origins that don't align with the owners.
    */
   constructor(
     key: string,
     type: string,
     config: JsonObject,
     owners: readonly DeclSite[],
-    conversationEligible: boolean,
-    placements: readonly (readonly string[])[],
     origins: readonly (OriginRef | null)[],
   ) {
-    const spec = new MemorySpec(key, type, config, owners, conversationEligible);
-    if (
-      !isList(placements) ||
-      placements.some(
-        (locator: unknown) =>
-          !isList(locator) || locator.length === 0 || locator.some((part) => typeof part !== "string" || !part),
-      )
-    ) {
-      throw new RangeError("placements must be an array of non-empty string locators");
-    }
-    if (placements.some((locator, i) => i > 0 && comparePaths(placements[i - 1]!, locator) >= 0)) {
-      throw new RangeError("placements must be sorted and unique");
-    }
+    const spec = new MemorySpec(key, type, config, owners);
     if (!isList(origins) || origins.length !== spec.owners.length) {
       throw new RangeError("origins must align with owners");
     }
@@ -150,15 +128,13 @@ export class ResolvedMemory {
     this.type = spec.type;
     this.config = spec.config;
     this.owners = spec.owners;
-    this.conversationEligible = spec.conversationEligible;
-    this.placements = Object.freeze(placements.map((locator) => Object.freeze([...locator])));
     this.origins = Object.freeze([...origins]);
     Object.freeze(this);
   }
 
   /** The record-facing table entry. */
   get spec(): MemorySpec {
-    return new MemorySpec(this.key, this.type, this.config, this.owners, this.conversationEligible);
+    return new MemorySpec(this.key, this.type, this.config, this.owners);
   }
 
   /** The first owner's origin, where key-level errors point. */
@@ -233,15 +209,7 @@ export class ResolvedMemoryLayout {
     }
     for (const target of targets) new ResolvedMemoryTarget(target.locator, target.scope, target.node);
     for (const memory of memories) {
-      new ResolvedMemory(
-        memory.key,
-        memory.type,
-        memory.config,
-        memory.owners,
-        memory.conversationEligible,
-        memory.placements,
-        memory.origins,
-      );
+      new ResolvedMemory(memory.key, memory.type, memory.config, memory.owners, memory.origins);
     }
     const keys = memories.map((memory) => memory.key);
     if (keys.some((key, i) => i > 0 && compareCodeUnits(keys[i - 1]!, key) >= 0)) {
@@ -286,11 +254,7 @@ function sameLayout(a: ResolvedMemoryLayout, b: ResolvedMemoryLayout): boolean {
         sameItems(x.locator, y.locator) &&
         sameOptional(x.scope, y.scope, sameMemoryScope),
     ) &&
-    sameItems(
-      a.memories,
-      b.memories,
-      (x, y) => sameMemorySpec(x.spec, y.spec) && sameItems(x.placements, y.placements, (p, q) => sameItems(p, q)),
-    )
+    sameItems(a.memories, b.memories, (x, y) => sameMemorySpec(x.spec, y.spec))
   );
 }
 
@@ -514,18 +478,18 @@ function siteLabel(site: DeclSite): string {
  *
  * @throws MemorySetupError when a rule fails; its notes name the other sites.
  */
-export function memoryTable(declared: readonly Declared[]): readonly ResolvedMemory[] {
-  const byKey = new Map<string, Declared[]>();
-  for (const entry of declared) {
-    const entries = byKey.get(entry[0].key);
-    if (entries === undefined) byKey.set(entry[0].key, [entry]);
-    else entries.push(entry);
+export function memoryTable(declared: readonly MemoryDecl[]): readonly ResolvedMemory[] {
+  const byKey = new Map<string, MemoryDecl[]>();
+  for (const decl of declared) {
+    const entries = byKey.get(decl.key);
+    if (entries === undefined) byKey.set(decl.key, [decl]);
+    else entries.push(decl);
   }
   const table: ResolvedMemory[] = [];
   for (const key of [...byKey.keys()].sort(compareCodeUnits)) {
     const entries = byKey.get(key)!;
     // Stable sort: declarations at one site keep walk order.
-    const declarations = entries.map(([decl]) => decl).sort((a, b) => DeclSite.compare(a.site, b.site));
+    const declarations = [...entries].sort((a, b) => DeclSite.compare(a.site, b.site));
     const first = declarations[0]!;
     const firstConfig = exactJson(first.config);
     const conflicts = declarations
@@ -556,21 +520,7 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
     }
     const ordered = [...bySite.values()];
     const owners = ordered.map((decl) => decl.site);
-    const placements = new Map<string, readonly string[]>();
-    for (const [, placement] of entries) {
-      if (placement !== null) placements.set(locatorKey(placement), placement);
-    }
-    table.push(
-      new ResolvedMemory(
-        key,
-        first.type,
-        first.config,
-        owners,
-        owners.length === 1 && owners[0]!.node !== null,
-        [...placements.values()].sort(comparePaths),
-        ordered.map((decl) => decl.origin),
-      ),
-    );
+    table.push(new ResolvedMemory(key, first.type, first.config, owners, ordered.map((decl) => decl.origin)));
   }
   return Object.freeze(table);
 }
@@ -581,8 +531,8 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
  * A dotted alias renders the same key as a nested import, so this runs first to name the alias
  * rather than a key clash.
  */
-function checkScopeSegments(declared: readonly Declared[]): void {
-  for (const [decl] of declared) {
+function checkScopeSegments(declared: readonly MemoryDecl[]): void {
+  for (const decl of declared) {
     for (const segment of decl.site.scope) {
       if (!MEMORY_IDENTIFIER_PATTERN.test(segment)) {
         throw setupError(
@@ -635,7 +585,7 @@ function resolveFlow(
   locator: readonly string[],
   inherited: readonly string[],
   targets: ResolvedMemoryTarget[],
-  declared: Declared[],
+  declared: MemoryDecl[],
   activeFlows: Set<object>,
   ownerOrigin: OriginRef | null = null,
 ): void {
@@ -647,14 +597,14 @@ function resolveFlow(
     const decls = flowDecls(flow);
     if (decls.length > 0) {
       validateMemoryFlowBoundaries(flow, decls[0]!);
-      for (const decl of decls) declared.push([decl, null]);
+      declared.push(...decls);
     }
     const stack = extendStack(inherited, decls);
 
     for (const [nodeId, node] of flowNodes(flow, ownerOrigin)) {
       const nodeLocator = [...locator, nodeId];
       const ownDecls = agentDecls(node);
-      for (const decl of ownDecls) declared.push([decl, nodeLocator]);
+      declared.push(...ownDecls);
       targets.push(
         new ResolvedMemoryTarget(
           nodeLocator,
@@ -684,7 +634,7 @@ function resolveFlow(
 export function resolveMemoryLayout(flow: CompiledFlow): ResolvedMemoryLayout {
   if (!isExactly(flow, CompiledFlow)) throw new TypeError("resolveMemoryLayout expects an exact CompiledFlow");
   const targets: ResolvedMemoryTarget[] = [];
-  const declared: Declared[] = [];
+  const declared: MemoryDecl[] = [];
   resolveFlow(flow, [], [], targets, declared, new Set());
   if (declared.length === 0) {
     return new ResolvedMemoryLayout(

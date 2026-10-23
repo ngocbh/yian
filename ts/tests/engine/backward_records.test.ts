@@ -154,7 +154,7 @@
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
  * Ported, through `run.ts`: `test_historical_backward_prepares_recorded_schema_bytes` (7 rows).
- * Changed: Python reads recorded schema-9 lines; schema 11 is the only TS schema, so a live
+ * Changed: Python reads recorded schema-9 lines; schema 12 is the only TS schema, so a live
  * learnable `runFlow` of the source test's flow (memory `test` served by `FakeMemory`) and its
  * `RunResult.backward` write the lines (the failed rows' commit throws a `MemoryOperationError`);
  * each prefix replays through `replayRunLog` from a `MemoryRunLog`, and the next line is prepared
@@ -1112,7 +1112,7 @@ function retainedTerminal(
   const root = new DeclSite([], ["root"]);
   const { state, log } = learnableStarted(owned, {
     inputs: { topic },
-    memories: keys === null ? null : keys.map((key) => new MemorySpec(key, key, {}, [root], false)),
+    memories: keys === null ? null : keys.map((key) => new MemorySpec(key, key, {}, [root])),
     memoryStacks: keys === null ? null : [],
     memorySnapshots: keys === null ? null : keys.map((key) => new MemorySnapshotEnvelope(key, {})),
   });
@@ -1406,7 +1406,7 @@ async function retainedBackward(
   const built = engine(owned, {
     inputs: { topic },
     learnable: true,
-    memories: keys === null ? null : keys.map((key) => new MemorySpec(key, key, {}, [root], false)),
+    memories: keys === null ? null : keys.map((key) => new MemorySpec(key, key, {}, [root])),
     memoryStacks: keys === null ? null : [],
     memorySnapshots: keys === null ? null : keys.map((key) => new MemorySnapshotEnvelope(key, {})),
   });

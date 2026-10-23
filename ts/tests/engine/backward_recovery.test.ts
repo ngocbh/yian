@@ -110,7 +110,7 @@ const run = (flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
   runFlow(flow, inputs, { env, ...options });
 
 /** `resumeFlow` in the file's env. */
-const resume = (flow: ComposedFlow, options: ResumeFlowOptions) => resumeFlow(flow, { env, ...options });
+const resume = (flow: ComposedFlow, options: ResumeFlowOptions) => resumeFlow({ env, ...options });
 
 /** A `Map` serving the memory key `test` with `backend`. */
 const testMemory = (backend: unknown) => new Map([["test", backend as FakeMemory]]);

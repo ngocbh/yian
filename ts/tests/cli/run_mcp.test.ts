@@ -23,7 +23,10 @@
  *   TS-only row checks the `--json` document's `run.setup` error keeps the notes.
  * - The crash before a resume is a frozen log: the local `whoami` tool freezes every durable log,
  *   whose next append throws, and the run rejects with it (Python: the tool raises
- *   `_SimulatedCrash`).
+ *   `_SimulatedCrash`). A resume names no flow file: it runs the flow the log recorded.
+ *
+ * TS-only: a resume opens the server and reads the skill of the flow the log recorded, not of the
+ * flow file edited since, and `yian run <flow> --resume <log>` is a usage error.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -37,14 +40,15 @@ import { loadMcpConfig } from "../../src/cli/mcp_config.ts";
 import { openMcpServers } from "../../src/cli/run.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { loadSkills } from "../../src/compose/skills.ts";
 import { runFlow } from "../../src/run.ts";
 import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
-import { McpServer } from "../../src/tools/mcp.ts";
+import { McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../engine/mcp_helpers.ts";
-import { NO_ENV } from "../engine/run_state_fixtures.ts";
+import { crashAfter, NO_ENV } from "../engine/run_state_fixtures.ts";
 
 // Each row starts server processes; the default 5 s is too tight on a loaded machine.
 const SLOW = 60_000;
@@ -403,7 +407,7 @@ test(
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
 
-    const result = await run([flow, "--mcp-config", cfg], {}, log);
+    const result = await run(["--mcp-config", cfg], {}, log);
 
     expect(result.code, result.output).toBe(0);
     expect(lastLine(result.stdout)).toStartWith("run-5c2e/call ");
@@ -438,11 +442,65 @@ test(
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
 
-    const result = await run([flow, "--mcp-config", cfg], vars, log);
+    const result = await run(["--mcp-config", cfg], vars, log);
 
     expect(result.code, result.output).toBe(0);
     expect(lastLine(result.stdout)).toBe("done");
     expect(existsSync(pid)).toBe(false);
+  },
+  SLOW,
+);
+
+/** A flow whose AGENT grants the tool `tool` and the skill `skill`. */
+const grantingFlow = (tool: string, skill: string) => `id: mcp_skill_resume
+name: mcp_skill_resume
+nodes:
+  worker:
+    kind: agent
+    prompt: go
+    tools: [${tool}]
+    skills: [${skill}]
+output: \${worker.output}
+`;
+
+test(
+  "a resume runs the recorded flow, not the flow file edited since",
+  async () => {
+    const vars = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name as keyof typeof vars] : NO_ENV(name));
+    const skillDir = join(home, ".claude", "skills", "brief");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: brief\ndescription: Answer briefly.\n---\nBe brief.\n");
+    const skills = loadSkills([join(home, ".claude", "skills")]);
+    const flow = flowFile(grantingFlow("echo", "brief"));
+    const log = join(tmp, "run.jsonl");
+    const pid = marker();
+    const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
+    // Cut after START: the run records the server's `echo` spec and the skill, and its AGENT never starts.
+    const loaded = await loadFlow(grantingFlow("echo", "brief"), { searchPaths: [tmp], sourceLabel: "flow.yaml" });
+    const server = mcpServer(stdio("--marker", pid));
+    await crashAfter(3, () => runFlow(loaded, {}, { log, tools: { fake: server }, skills, env }));
+    // An edit the resume must not read: a tool no server has, a skill no folder holds.
+    writeFileSync(flow, grantingFlow("nowhere", "missing-skill"));
+
+    const refused = await run([flow, "--mcp-config", cfg], vars, log);
+    const send = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(DONE, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+    let result;
+    try {
+      result = await run(["--mcp-config", cfg], vars, log);
+    } finally {
+      globalThis.fetch = send;
+    }
+
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("--resume runs the flow recorded in the log; leave out <flow>");
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("done");
+    // The cut run and the resume each started the recorded flow's server.
+    expect(pids(pid)).toHaveLength(2);
+    await expectNoChildren(pid);
   },
   SLOW,
 );

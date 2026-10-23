@@ -548,7 +548,7 @@ test("a loop with a type table resumes mid-loop", async () => {
     const kept = cutLogAfter(log, "loop#1/__end__");
     expect(kept).toContain("loop~1");
     expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
-    const resumed = await resumeFlow(await loopFlow(), { log });
+    const resumed = await resumeFlow({ log });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toEqual(first.output);
   } finally {

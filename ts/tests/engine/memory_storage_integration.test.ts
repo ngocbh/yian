@@ -159,7 +159,7 @@ for (const policy of POLICIES) {
     const prefix = fs.readFileSync(log);
     await withBackend(backend(policy, file, reflector), async (reopened) => {
       expect(memorySnapshot(reopened)).toEqual(recorded);
-      const inspected = await resumeFlow(flow, { log, memory: new Map([[policy, reopened]]), env: NO_ENV });
+      const inspected = await resumeFlow({ log, memory: new Map([[policy, reopened]]), env: NO_ENV });
       expect(inspected.output).toBe(7n);
       expect(memorySnapshot(reopened)).toEqual(recorded);
     });

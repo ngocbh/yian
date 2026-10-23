@@ -296,7 +296,7 @@ test("optional seed pagination resumes after its first expansion", async () => {
   expect(expanded).toBeGreaterThanOrEqual(0);
   writeFileSync(path, lines.slice(0, expanded + 1).join(""));
 
-  const resumed = await resumeFlow(await loadConformanceFlow(source), { log: path, env: hostEnv(dir) });
+  const resumed = await resumeFlow({ log: path, env: hostEnv(dir) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toEqual({ cursor: null });

@@ -23,6 +23,8 @@
  * `test_resume_refuses_a_flow_whose_system_prompt_changed`. Changed: the process loss is
  * `crashAfter`'s log refusing the append of the crashed node's success, after its model answered
  * (Python: the model call raises); the fingerprint refusal is a `RangeError` (Python's `ValueError`).
+ * Resume compiles the flow the run recorded, so the changed prompt is an edit of the recorded text
+ * (Python passes the changed flow).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -51,7 +53,7 @@ import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, nodeFlow, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, editRecordedFlow, nodeFlow, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-system-prompt-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -269,7 +271,7 @@ test("resume replays a finished node with its recorded system prompt", async () 
     JSON.stringify({ input_feedback: { draft: ["Too stiff."] }, self_feedback: [], variable_feedback: {} }),
     JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} }),
   );
-  const resumed = await resumeFlow(flow, { log: path, ...served(model) });
+  const resumed = await resumeFlow({ log: path, ...served(model) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
@@ -291,7 +293,7 @@ test("retry after a mid node crash renders the same system prompt", async () => 
   expect(systems(first)[0]).toBe(RENDERED);
 
   const retry = scripted("draft", "final");
-  const resumed = await resumeFlow(flow, { log: path, ...served(retry) });
+  const resumed = await resumeFlow({ log: path, ...served(retry) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
@@ -305,7 +307,9 @@ test("resume refuses a flow whose system prompt changed", async () => {
     runFlow(await chatFlow(), INPUTS, { log: path, ...served(scripted("draft", "lost")) }),
   );
 
-  const error = await rejected(resumeFlow(await chatFlow("You are ${name}."), { log: path, ...served(scripted()) }));
+  // Resume compiles the recorded flow, so the change is to the recorded text.
+  editRecordedFlow(path, (text) => text.replace(JSON.stringify(TEMPLATE), JSON.stringify("You are ${name}.")));
+  const error = await rejected(resumeFlow({ log: path, ...served(scripted()) }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("flow fingerprint mismatch");
 });

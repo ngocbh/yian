@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 
 import type { Flow } from "../../src/compile/model.ts";
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -449,7 +449,8 @@ output: \${b.output}
 `;
 
 test("a code-built binding mis-calling a builtin fails before resume appends", async () => {
-  const flow = await loadFlow(TWO_NODES);
+  // Built in code, so resume runs this flow, rewired while the run is stopped.
+  const flow = new ComposedFlow((await loadFlow(TWO_NODES)).compiled);
   const dir = mkdtempSync(join(tmpdir(), "span-calls-"));
   try {
     const path = join(dir, "run.jsonl");
@@ -457,7 +458,7 @@ test("a code-built binding mis-calling a builtin fails before resume appends", a
       rewire(flow.compiled, "b", "n", "${render_as_json(a.output, 1, 2)}"),
     );
 
-    const error = await rejected(resumeFlow(flow, { log: path }));
+    const error = await rejected(resumeFlow({ log: path, flow }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(
       /^node 'b' input 'n': expression function 'render_as_json' takes \(value, indent=2\): too many positional arguments$/,

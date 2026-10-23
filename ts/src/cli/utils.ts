@@ -365,7 +365,9 @@ export function parseCommand(spec: CommandSpec, argv: readonly string[]): Parsed
       throw new UsageError(`Missing argument '${metavar(positional)}'.`);
     }
     const taken = positional.variadic ? rest.splice(0) : rest.splice(0, 1);
-    if (positional.path) for (const value of taken) checkPath(`'${metavar(positional)}'`, value, positional.path);
+    // An optional positional's usage shows it in brackets; its errors name it bare.
+    const shown = metavar({ ...positional, optional: false });
+    if (positional.path) for (const value of taken) checkPath(`'${shown}'`, value, positional.path);
     args[positional.name] = positional.variadic ? taken : taken[0]!;
   }
 

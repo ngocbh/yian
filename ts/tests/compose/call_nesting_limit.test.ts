@@ -837,7 +837,7 @@ describe("chains of defs: entries", () => {
     expect(expanded).toHaveLength(50);
     writeFileSync(path, `${lines.slice(0, expanded.at(-1)! + 1).join("\n")}\n`);
 
-    const resumed = await resumeFlow(await loadConformanceFlow(text), { log: path, env });
+    const resumed = await resumeFlow({ log: path, env });
 
     expect(resumed.status).toBe("succeeded");
     expect(resumed.output).toBe("hi");

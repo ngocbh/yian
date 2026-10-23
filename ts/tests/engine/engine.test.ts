@@ -517,7 +517,7 @@ test("resumedAttemptEvents follows the record's retryNodeIds", () => {
 // --- fixture sanity ---
 
 test("engine records the memory table, stacks and snapshots in RunStarted", () => {
-  const memories = [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])], false)];
+  const memories = [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])])];
   const memoryStacks = [new MemoryStack(["a"], ["notes"])];
   const memorySnapshots = [new MemorySnapshotEnvelope("notes", { epoch: 1n })];
   const built = engine(graph([new RecordNode("a", [])], [
@@ -544,7 +544,7 @@ test("ownerEngine scopes every node of a flat flow under one root-owned memory",
   for (const [id, node] of flow.nodes) {
     expect(node.memoryScope).toEqual(new MemoryScope([id], { memories: [POLICY] }));
   }
-  expect(memories).toEqual([new MemorySpec(POLICY, POLICY, {}, [new DeclSite([], ["root"])], false)]);
+  expect(memories).toEqual([new MemorySpec(POLICY, POLICY, {}, [new DeclSite([], ["root"])])]);
   expect(stacks).toEqual([END_ID, START_ID, "a", "b"].map((id) => new MemoryStack([id], [POLICY])));
   const started = built.log.records()[0]!.record as RunStartedRecord;
   expect(started.learnable).toBe(true);

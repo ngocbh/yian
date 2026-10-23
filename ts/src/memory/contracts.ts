@@ -1329,18 +1329,15 @@ export class MemorySpec {
   readonly config: JsonObject;
   /** The declaring sites, sorted and unique by `DeclSite.compare`. */
   readonly owners: readonly DeclSite[];
-  /** True exactly when the memory has one owner and it is an AGENT site. */
-  readonly conversationEligible: boolean;
 
   /**
    * Validate one table entry; `owners` is copied. Compiled keys and configs are taken as they
    * are: only the JSON snapshot and the private-key rule apply, not the declaration check.
    *
    * @throws TypeError for a value of the wrong type or an owner that isn't a `DeclSite`.
-   * @throws RangeError for an empty key, type or owners, a bad config, owners out of order, or an
-   *   eligibility flag that doesn't match the owners.
+   * @throws RangeError for an empty key, type or owners, a bad config, or owners out of order.
    */
-  constructor(key: string, type: string, config: unknown, owners: readonly DeclSite[], conversationEligible: boolean) {
+  constructor(key: string, type: string, config: unknown, owners: readonly DeclSite[]) {
     this.key = requireString(key, "key");
     this.type = requireString(type, "type");
     this.config = freezeJsonObject(config, "config");
@@ -1354,10 +1351,6 @@ export class MemorySpec {
       throw new RangeError("owners must be sorted and unique by DeclSite.compare");
     }
     this.owners = Object.freeze([...owners]);
-    this.conversationEligible = requireBoolean(conversationEligible, "conversation_eligible");
-    if (conversationEligible !== (owners.length === 1 && owners[0]!.node !== null)) {
-      throw new RangeError("conversation_eligible must be true exactly for one AGENT owner");
-    }
     Object.freeze(this);
   }
 }
@@ -1480,7 +1473,7 @@ export function sameMemorySnapshotEnvelope(a: MemorySnapshotEnvelope, b: MemoryS
 }
 
 /**
- * Whether two specs have the same key, type, config, owners and eligibility, by value and type:
+ * Whether two specs have the same key, type, config and owners, by value and type:
  * Python's dataclass equality, with configs compared as `sameMemorySnapshotEnvelope` compares
  * snapshots and owners item by item with `DeclSite.compare`.
  */
@@ -1489,8 +1482,7 @@ export function sameMemorySpec(a: MemorySpec, b: MemorySpec): boolean {
     a.key === b.key &&
     a.type === b.type &&
     sameJson(a.config, b.config) &&
-    sameItems(a.owners, b.owners, (x, y) => DeclSite.compare(x, y) === 0) &&
-    a.conversationEligible === b.conversationEligible
+    sameItems(a.owners, b.owners, (x, y) => DeclSite.compare(x, y) === 0)
   );
 }
 

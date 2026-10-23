@@ -149,7 +149,7 @@ for (const numWorkers of [0, 8]) {
         parameters: { type: "object", properties: { seconds: { type: "number" } }, required: ["seconds"] },
         execute: () => "done",
       });
-      const resumed = await resumeFlow(await loadFlow(SLOW_FLOW), { log, env: hostEnv(dir), tools: { fake: [slow] } });
+      const resumed = await resumeFlow({ log, env: hostEnv(dir), tools: { fake: [slow] } });
       expect(resumed.failure).toBeNull();
       expect(resumed.status).toBe("succeeded");
     },

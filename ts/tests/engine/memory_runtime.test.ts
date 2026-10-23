@@ -208,8 +208,8 @@ class FakeMemory implements Memory {
 /** Return the recorded table: AGENT-owned alpha and flow-owned beta. */
 function table(): MemorySpec[] {
   return [
-    new MemorySpec("alpha", "alpha", {}, [new DeclSite([], ["root"], "agent")], true),
-    new MemorySpec("beta", "beta", { limit: 2n }, [new DeclSite([], ["root"])], false),
+    new MemorySpec("alpha", "alpha", {}, [new DeclSite([], ["root"], "agent")]),
+    new MemorySpec("beta", "beta", { limit: 2n }, [new DeclSite([], ["root"])]),
   ];
 }
 

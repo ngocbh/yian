@@ -583,7 +583,7 @@ describe("type tables and runs", () => {
     const log = join(dir, "replay.jsonl");
     const first = await runFlow(await loadConformanceFlow(LOOP_FLOW), {}, { env, log });
     expect(first.status, first.failure?.message).toBe("succeeded");
-    const replayed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { env, log });
+    const replayed = await resumeFlow({ env, log });
     expect(replayed.status, replayed.failure?.message).toBe("succeeded");
     expect(replayed.output).toStrictEqual(first.output);
 
@@ -591,7 +591,7 @@ describe("type tables and runs", () => {
     const kept = cutLogAfter(log, "loop#1/__end__");
     expect(kept).toContain("loop~1");
     expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
-    const resumed = await resumeFlow(await loadConformanceFlow(LOOP_FLOW), { env, log });
+    const resumed = await resumeFlow({ env, log });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toStrictEqual(first.output);
   });

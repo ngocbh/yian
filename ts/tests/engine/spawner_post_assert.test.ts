@@ -215,7 +215,7 @@ test("spawner post assert fires after log recovery", async () => {
   );
   expect(caught).toBe(interruption);
 
-  const res = await resumeFlow(await loadBlocking(), { log: path, tools: { ask_user: () => 120 }, env: hostEnv(dir) });
+  const res = await resumeFlow({ log: path, tools: { ask_user: () => 120 }, env: hostEnv(dir) });
 
   expect(res.status).toBe("failed");
   const failed = res.events.filter((event) => event instanceof RunFailed);

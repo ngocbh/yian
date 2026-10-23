@@ -1341,7 +1341,7 @@ async function runCutAndResume(
   // Cut mid-run, so the resume replays the recorded drivers and runs the rest live.
   const lines = readFileSync(path, "utf8").split(/(?<=\n)/);
   writeFileSync(path, lines.slice(0, Math.floor(lines.length / 2)).join(""));
-  const resumed = await resumeFlow(await loadConformanceFlow(source), { log: path, numWorkers, env: hostEnv(dir) });
+  const resumed = await resumeFlow({ log: path, numWorkers, env: hostEnv(dir) });
   expect(resumed.failure).toBeNull();
   expect(resumed.output).toEqual(first.output);
   return path;

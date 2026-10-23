@@ -138,6 +138,7 @@ import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
 import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
+import type { FlowSource } from "../../runtime/log.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
 // returns the bare resolved value, so the name only labels the carrier.
@@ -274,8 +275,13 @@ export class ComposedFlow {
    * without the loader.
    */
   readonly importDepth: number;
+  /**
+   * The flow files this flow was compiled from, which a run records and resume compiles again;
+   * `null` for a flow built in code, or loaded over a child resume couldn't read back.
+   */
+  readonly source: FlowSource | null;
 
-  /** Wrap `compiled`; the metadata and resolver default to `null`, `importDepth` to 0. */
+  /** Wrap `compiled`; the metadata, resolver and source default to `null`, `importDepth` to 0. */
   constructor(
     compiled: CompiledFlow,
     options: {
@@ -284,6 +290,7 @@ export class ComposedFlow {
       description?: string | null;
       originResolver?: OriginResolver | null;
       importDepth?: number;
+      source?: FlowSource | null;
     } = {},
   ) {
     const {
@@ -292,6 +299,7 @@ export class ComposedFlow {
       description = null,
       originResolver = null,
       importDepth = 0,
+      source = null,
     } = options;
     this.compiled = compiled;
     this.version = version;
@@ -299,6 +307,7 @@ export class ComposedFlow {
     this.description = description;
     this.originResolver = originResolver;
     this.importDepth = importDepth;
+    this.source = source;
     Object.freeze(this);
   }
 

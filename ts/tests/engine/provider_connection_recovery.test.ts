@@ -114,7 +114,7 @@ test("store connection is pinned across resume", async () => {
 
   await new AuthStore(null, { env }).save("anthropic", new ApiKeyCredentials("new-key"), "claude-x");
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, models, env });
+  const result = await resumeFlow({ log: path, models, env });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.message).toContain("yian auth anthropic");
@@ -130,7 +130,7 @@ test("environment connection never switches to a later login", async () => {
 
   await new AuthStore(null, { env }).save("anthropic", new ApiKeyCredentials("later-key"), "claude-x");
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, models, env });
+  const result = await resumeFlow({ log: path, models, env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(models.requests.length).toBeGreaterThan(0);
@@ -145,7 +145,7 @@ test("removed login fails cleanly", async () => {
 
   await new AuthStore(null, { env }).remove("anthropic");
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, models, env });
+  const result = await resumeFlow({ log: path, models, env });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.message).toContain("yian auth anthropic");
@@ -160,7 +160,7 @@ test("ollama resume never reads the snapshot", async () => {
 
   await breakStore(env, auth, flow);
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, models, env });
+  const result = await resumeFlow({ log: path, models, env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(new URL(models.requests[0]!.url).pathname).toBe("/api/chat");
@@ -176,7 +176,7 @@ test("host key resume and backward", async () => {
 
   await breakStore(env, auth, flow);
   const models = recording(env, answers("ok", NO_FEEDBACK));
-  const result = await resumeFlow(flow, { log: path, apiKey: "host-key", models, env });
+  const result = await resumeFlow({ log: path, apiKey: "host-key", models, env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   const outcome = await result.backward("Be brief.", { apiKey: "host-key" });
   expect(outcome.status, outcome.failure?.message).toBe("succeeded");
@@ -208,7 +208,7 @@ test("saved settings are recorded by name and sent on resume", async () => {
   expect(readFileSync(path, "utf8")).not.toContain("sk-saved");
 
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, models, env });
+  const result = await resumeFlow({ log: path, models, env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(models.requests).toHaveLength(1);
@@ -230,7 +230,7 @@ test("a login without settings records and replays the old fields", async () => 
   expect(Object.keys(recorded(path)["_connection"]).sort()).toEqual(CONNECTION_FIELDS);
 
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, models, env });
+  const result = await resumeFlow({ log: path, models, env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(keyOf(models.requests[0]!)).toBe("saved-key");
@@ -250,7 +250,7 @@ test("a host key run never sends the saved settings", async () => {
   expect("_connection" in config || "_header_names" in config).toBe(false);
 
   const models = recording(env, answers("ok"));
-  const result = await resumeFlow(flow, { log: path, apiKey: "host-key", models, env });
+  const result = await resumeFlow({ log: path, apiKey: "host-key", models, env });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(keyOf(models.requests[0]!)).toBe("host-key");

@@ -3323,7 +3323,7 @@ test("the trace memory scope is detached and replayed without evidence", async (
   node.memoryScope = scope;
   const built = engine(graph([node], [[START_ID, "code"]], { outputs: [new FlowOutput("value", "${code.output}")] }), {
     learnable: true,
-    memories: [new MemorySpec("memory", "memory", {}, [new DeclSite([], ["root"])], false)],
+    memories: [new MemorySpec("memory", "memory", {}, [new DeclSite([], ["root"])])],
     memoryStacks: [new MemoryStack(["code"], ["memory"])],
     memorySnapshots: [new MemorySnapshotEnvelope("memory", {})],
   });

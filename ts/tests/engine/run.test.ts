@@ -1089,9 +1089,12 @@ nodes:
 output: \${input.x}
 `;
 
-/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
+/**
+ * `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`; `flow` is passed only when it was
+ * built in code, since resume compiles a loaded flow's recorded files.
+ */
 function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow(flow, { env: hostEnv(dir), ...options });
+  return resumeFlow({ env: hostEnv(dir), ...(flow.source === null ? { flow } : {}), ...options });
 }
 
 /**

@@ -87,7 +87,7 @@ test("render only node metadata does not ride run log", async () => {
 
   // A terminal resume is read-only and rebuilds the same result from clean topology.
   const before = readFileSync(path);
-  const res2 = await resumeFlow(await loadConformanceFlow(RANGE_FLOW, { env }), { log: path, env });
+  const res2 = await resumeFlow({ log: path, env });
   expect(res2.status).toBe("succeeded");
   expect(res2.output).toBe("cancel");
   expect(res2.events).toEqual([]);

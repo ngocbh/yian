@@ -42,7 +42,8 @@
  * are TS's form (`./fixtures/compose_codefns.ts:echo`), resolved against the conformance directory.
  * Frozen values can't be changed in place, so Python's `object.__setattr__` forgeries are
  * unfrozen objects of the same class carrying the forged field (`forged`), and its
- * `copy.deepcopy` of a node is `copyGraph`.
+ * `copy.deepcopy` of a node is `copyGraph`. A key has no `placements` and no
+ * `conversation_eligible` flag (session memory is gone), so those rows check the owners only.
  *
  * Not ported: the session rows (`test_agent_with_two_session_memories_is_a_setup_error`,
  * `test_flow_level_session_is_a_load_error`, `test_session_key_with_two_agent_owners_is_a_load_error`,
@@ -181,8 +182,8 @@ test.each([
   const error = setupError(
     () =>
       memoryTable([
-        [first, null],
-        [clash, null],
+        first,
+        clash,
       ]),
     /memory 'notes' is declared with different type or config/,
   );
@@ -194,9 +195,9 @@ test("memory table merges identical declarations at one site", () => {
   const first = new MemoryDecl("notes", "notes", { limit: 1n }, site);
   const again = new MemoryDecl("notes", "notes", { limit: 1n }, site);
   const table = memoryTable([
-    [first, null],
-    [again, null],
-    [first, null],
+    first,
+    again,
+    first,
   ]);
   expect(table).toHaveLength(1);
   expect(table[0]!.owners).toEqual([site]);
@@ -216,9 +217,9 @@ test("config clash carries every other site as a related origin", () => {
   const third = new MemoryDecl("notes", "notes", { limit: 1n }, new DeclSite([], ["root"], null), new OriginRef("c"));
   const error = setupError(() =>
     memoryTable([
-      [third, null],
-      [second, null],
-      [first, null],
+      third,
+      second,
+      first,
     ]),
   );
   expect(error.origin).toEqual(new OriginRef("a"));
@@ -249,9 +250,9 @@ test.each([
   expect(again === twice).toBe(!copied);
   const error = setupError(() =>
     memoryTable([
-      [twice, ["p1"]],
-      [again, ["p2"]],
-      [once, null],
+      twice,
+      again,
+      once,
     ]),
   );
   expect(error.origin).toEqual(new OriginRef("a"));
@@ -371,11 +372,7 @@ test("composite drivers see only enclosing keys", async () => {
   // The CALL sees only its enclosing flow's keys; the child flow's keys begin inside the called
   // child.
   expect(target(layout, "invoke").scope!.memories).toEqual(["outer"]);
-  expect(layout.memories.map((memory) => [memory.key, memory.placements])).toEqual([
-    ["inner", []],
-    ["local", [["invoke", "answer"]]],
-    ["outer", []],
-  ]);
+  expect(layout.memories.map((memory) => memory.key)).toEqual(["inner", "local", "outer"]);
 });
 
 test("repeated definition shares one owner and inline children own their keys", async () => {
@@ -434,11 +431,6 @@ output: \${right.output}
     new DeclSite([], ["root", "node", "left", "inline"], "answer"),
     new DeclSite([], ["root", "node", "right", "inline"], "answer"),
   ]);
-  expect(memory.placements).toEqual([
-    ["left", "answer"],
-    ["right", "answer"],
-  ]);
-  expect(memory.conversationEligible).toBe(false);
 });
 
 test("apply is idempotent and does not change authored identity", async () => {
@@ -561,22 +553,13 @@ test("key table retains config and origin outside node scopes", async () => {
   expect("origin" in target(layout, "invoke", "answer").scope!).toBe(false);
 });
 
-test("layout records the key table with sorted owners and placements", async () => {
+test("layout records the key table with sorted owners", async () => {
   const source = NESTED.replace("long_term_memory: local", "long_term_memory: outer");
   const layout = resolveMemoryLayout(await compiled(source));
 
-  expect(
-    layout.memories.map((m) => [m.key, m.type, m.config, m.owners, m.conversationEligible, m.placements]),
-  ).toEqual([
-    ["inner", "inner", { limit: 3n }, [new DeclSite([], ["def", "child"], null)], false, []],
-    [
-      "outer",
-      "outer",
-      {},
-      [new DeclSite([], ["def", "child"], "answer"), new DeclSite([], ["root"], null)],
-      false,
-      [["invoke", "answer"]],
-    ],
+  expect(layout.memories.map((m) => [m.key, m.type, m.config, m.owners])).toEqual([
+    ["inner", "inner", { limit: 3n }, [new DeclSite([], ["def", "child"], null)]],
+    ["outer", "outer", {}, [new DeclSite([], ["def", "child"], "answer"), new DeclSite([], ["root"], null)]],
   ]);
   expect(layout.memories[1]!.spec.owners).toEqual(layout.memories[1]!.owners);
 });
@@ -595,7 +578,7 @@ test("memory stacks dedupe a repeated key at its outermost position", async () =
   expect(byLocator.get("invoke\0answer")).toEqual(["outer", "inner"]);
 });
 
-test("a single agent owner is conversation eligible", async () => {
+test("a single agent owner owns its key", async () => {
   const flow = await compiled(
     "id: one\nname: one\nnodes:\n  ask:\n    kind: agent\n" +
       "    long_term_memory: chat\n    prompt: hi\n    output: str\n" +
@@ -604,8 +587,6 @@ test("a single agent owner is conversation eligible", async () => {
   const memories = resolveMemoryLayout(flow).memories;
   expect(memories).toHaveLength(1);
   expect(memories[0]!.owners).toEqual([new DeclSite([], ["root"], "ask")]);
-  expect(memories[0]!.conversationEligible).toBe(true);
-  expect(memories[0]!.placements).toEqual([["ask"]]);
 });
 
 test("one key with two configs is a load error at the first site", async () => {
@@ -638,15 +619,10 @@ nodes:
 output: \${[a.output, b.output]}
 `;
 
-test("an agent memory def called twice has one owner and two placements", async () => {
+test("an agent memory def called twice has one owner", async () => {
   const memories = resolveMemoryLayout(await compiled(AGENT_CALLS)).memories;
   expect(memories).toHaveLength(1);
   expect(memories[0]!.owners).toEqual([new DeclSite([], ["def", "body"], "ask")]);
-  expect(memories[0]!.conversationEligible).toBe(true);
-  expect(memories[0]!.placements).toEqual([
-    ["a", "ask"],
-    ["b", "ask"],
-  ]);
 });
 
 test("a session memory is a load error", async () => {

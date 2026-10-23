@@ -13,7 +13,8 @@
  * the `ask_user` handler aborting the run's signal and throwing its reason, where Python raises
  * `_HostStop`; the run rejects with that reason. A refused resume is a `RangeError` (a
  * `TypeCheckError` for the recovered END value), where Python raises `ValueError`. Ints read as
- * `bigint`s (decision 4a).
+ * `bigint`s (decision 4a). Resume compiles the flow the run recorded, so a changed binding type
+ * is an edit of the recorded text (Python passes the changed flow).
  *
  * The `resume/typed_bindings_replay__*` cases crash the log after `ask` starts and give the
  * answer to the retried gate, and their consumer returns its input undoubled, so they don't cover
@@ -30,7 +31,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, startedIds } from "./run_state_fixtures.ts";
+import { editRecordedFlow, rejected, startedIds } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-replay-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -92,7 +93,7 @@ test("resuming a completed typed run replays without running code", async () => 
   expect(first.output).toEqual({ total: 40n, rounds: 2n });
   expect(codeRuns(first)).toEqual(["bump", "bump", "p", "use"]);
 
-  const resumed = await resumeFlow(await loadFlow(TYPED_FLOW, { env }), { log: path, env });
+  const resumed = await resumeFlow({ log: path, env });
 
   expect(resumed.status).toBe(first.status);
   expect(resumed.output).toEqual(first.output);
@@ -130,7 +131,7 @@ async function interruptThenResume(answer: unknown): Promise<RunResult> {
   );
   expect(caught).toBe(interruption);
 
-  return resumeFlow(await loadFlow(GATE_FLOW, { env }), { log: path, env, tools: { ask_user: () => answer } });
+  return resumeFlow({ log: path, env, tools: { ask_user: () => answer } });
 }
 
 test("typed consumer after resume rejects a mistyped answer", async () => {
@@ -154,8 +155,10 @@ test("resume rejects a changed declared binding type", async () => {
   expect((await runFlow(await loadFlow(TYPED_FLOW, { env }), {}, { env, log: path })).status).toBe("succeeded");
   const changed = TYPED_FLOW.replace("qty: !int ${p.output}", "qty: !float ${p.output}");
   expect(changed).not.toBe(TYPED_FLOW);
+  // Resume compiles the recorded flow, so the change is to the recorded text.
+  editRecordedFlow(path, () => changed);
 
-  const error = await rejected(resumeFlow(await loadFlow(changed, { env }), { log: path, env }));
+  const error = await rejected(resumeFlow({ log: path, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("flow fingerprint mismatch");
@@ -194,7 +197,7 @@ output:
   expect(edited).toBe(1);
   writeFileSync(path, lines.join("\n") + "\n");
 
-  const error = await rejected(resumeFlow(await loadFlow(flow, { env }), { log: path, env }));
+  const error = await rejected(resumeFlow({ log: path, env }));
 
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toContain("does not match declared type int");

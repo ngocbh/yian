@@ -97,7 +97,7 @@ may change without notice.
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 
@@ -140,7 +140,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `AuthError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 11) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 12) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -249,15 +249,22 @@ replacer for them. Meanings: the `on_event` and `on_stream` items of
 ## Recovering and inspecting runs
 
 ```ts
-resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions): Promise<RunResult>
+resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
+loadRecordedFlow(log: string, env?: (name: string) => string | undefined): Promise<ComposedFlow | null>
 inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
 ```
 
 `resumeFlow` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
 `onEvent`, `onStream`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
 `scheduler`, `random` and `models`, plus `apiKey` and `headers` for a run started with
-`llmConfig.api_key`. Tools, skills, memory and context aren't recorded: pass the ones the run had.
-See [Durable recovery with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
+`llmConfig.api_key`. It runs the flow `RunStarted` recorded, compiled from the recorded flow
+files; `flow` is only for a run whose flow was built in code (`RunStarted.flow` is `null`).
+`loadRecordedFlow` compiles a log's recorded flow the same way, for a host that needs it first;
+both follow each recorded file's `refs` to the files it uses, never the disk.
+The specs of the tools and skills the AGENTs grant are recorded, and an unfinished run's must
+match the ones passed; tool implementations, memory and context aren't recorded: pass the ones
+the run had. A log another yian version started resumes with a warning. See [Durable recovery
+with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
 `"failed"`, `"stopped"` or `"interrupted"`), `inFlight`, `interruptedAttempts`, `runId`, `schema`,
@@ -902,7 +909,7 @@ Node 22, and so does every unit test; a change keeps both green.
   never `bigint`.
 - A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
 - `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
-  `decodeRecord`, schema 11), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
+  `decodeRecord`, schema 12), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
   `encodePool`, `decodePool`), and the payload helpers later runtime modules share
   (`routePayload`, `routeFromPayload`, `executionScopePayload`, `evidencePayload`). Records and
   envelopes are frozen: a record's JSON values are deep-frozen canonical copies made once by its
@@ -1061,12 +1068,13 @@ Node 22, and so does every unit test; a change keeps both green.
   overtaken by another while it awaits (its opener, a handler, a learner or a commit) is refused
   after that await and appends nothing further (Python re-reads the current attempt, which is the
   same while synchronous).
-- `src/run.ts` (`yian/run`) holds `runFlow`, `resumeFlow`, `inspectRun` and `RunResult`.
-  `runFlow` takes the inputs and `llmConfig` through host intake, checks the run's tools, skills
-  and model configs, opens its memory sessions and MCP servers, creates the log and drives a
-  `FlowEngine` to a result, then closes what it opened. `resumeFlow` locks an existing log,
-  replays it on a private copy of the flow and drives the rest (a finished log returns its result
-  and appends nothing). `inspectRun` reads a log's status, in-flight nodes, interrupted counts,
+- `src/run.ts` (`yian/run`) holds `runFlow`, `resumeFlow`, `loadRecordedFlow`, `inspectRun` and
+  `RunResult`. `runFlow` takes the inputs and `llmConfig` through host intake, checks the run's
+  tools, skills and model configs, opens its memory sessions and MCP servers, creates the log,
+  recording the flow files, granted tool specs and skills, and drives a `FlowEngine` to a result,
+  then closes what it opened. `resumeFlow` locks an existing log, compiles the flow it recorded,
+  replays it on a private copy and drives the rest (a finished log returns its result and appends
+  nothing; an unfinished one first checks the granted tool specs and skills). `inspectRun` reads a log's status, in-flight nodes, interrupted counts,
   run id, schema, flow fingerprint, learnable flag, last seq, start time (`startedAt`), a finished
   run's end time (`endedAt`, its last record's `at`) and a failed run's failure without taking
   its lock; a shrink under the read while a writer holds the lock (a rolled-back append)
@@ -1151,7 +1159,8 @@ Node 22, and so does every unit test; a change keeps both green.
   (one `yian.cli.v1` document; ints must be `bigint`, a `number` is written as a float), and the
   key prompts `ensureEnvKey`, `ensureApiKey`, `confirmOllamaEndpoint`.
 - `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, wired to
-  `loadFlow`, `runFlow` (fresh), `resumeFlow` (`--resume`, with the recorded-key checks),
+  `loadFlow`, `runFlow` (fresh), `loadRecordedFlow` and `resumeFlow` (`--resume`, which takes no
+  flow file and runs the recorded flow, with the recorded-key checks),
   `loadSkillDir` and `inspectRun`; the diagnostic boxes, the banner, progress on stderr and
   `stopOnSignals` (SIGINT, SIGTERM and SIGHUP stop a run; exit 130).
 - A stop aborts the run's controller with a `HostStop` (`utils.ts`) naming the signal; Ctrl-C at

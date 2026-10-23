@@ -162,7 +162,7 @@ function table(...keys: string[]): MemorySpec[] {
     .sort()
     .map(
       (key, index) =>
-        new MemorySpec(key, key, {}, [index === 0 ? ROOT : new DeclSite([], ["def", `unused${index}`])], false),
+        new MemorySpec(key, key, {}, [index === 0 ? ROOT : new DeclSite([], ["def", `unused${index}`])]),
     );
 }
 

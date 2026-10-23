@@ -1982,7 +1982,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
     "run_started",
     [
       null,
-      ["inputs", "learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm"],
+      ["inputs", "learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"],
     ],
   ],
   ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
@@ -2004,7 +2004,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["backward_finished", [null, ["attempt_id", "outcome", "attributed_results"]]],
 ]);
 const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "defaults", "effective_llm_by_static_path", "call_time_llm",
+  "defaults", "effective_llm_by_static_path", "call_time_llm", "parent",
 ]);
 const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "evaluated_keys", "items", "node_data", "input_names", "variable_names",
@@ -2528,7 +2528,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       events.length = 0;
       chunks.length = 0;
       const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
-      start = (memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory });
+      start = (memory) => resumeFlow({ ...resumeArguments, ...hooks, memory });
     }
   }
   let outcomes: Value[] = [];
@@ -2640,9 +2640,11 @@ function checkResults(
 
 /**
  * Return the run log text `text` as a golden log holds it: each line with every `traceback` value,
- * its time (`at`) and the seeded clock values (`initial_pool.system`'s `now` and `today`) replaced
- * by `<masked>`, written again with the log's own encoder. The times and the seeded values come
- * from the case's virtual clock, which starts at the real time.
+ * its time (`at`), the seeded clock values (`initial_pool.system`'s `now` and `today`), the
+ * recorded flow's folder (`flow.dir`) and the yian version (`yian_version`) replaced by
+ * `<masked>`, written again with the log's own encoder. The times and the seeded values come from
+ * the case's virtual clock, which starts at the real time; the folder is the case's temporary one;
+ * the version changes with each release.
  */
 function masked(text: string): string {
   const lines = text.split("\n").filter((line) => line !== "");
@@ -2666,6 +2668,10 @@ function masked(text: string): string {
       if (record["kind"] === "run_started") {
         const system = ((record["payload"] as Case)["initial_pool"] as Case)["system"] as Case;
         for (const name of ["now", "today"]) (system[name] as Case)["value"] = "<masked>";
+        const payload = record["payload"] as Case;
+        const flow = payload["flow"] as Case | null;
+        if (flow !== null) flow["dir"] = "<masked>";
+        payload["yian_version"] = "<masked>";
       }
       return `${logJson(record)}\n`;
     })
@@ -2796,7 +2802,7 @@ async function checkInvariants(
     compare(`interrupted counts${at}`, counted, expected.interruptedAttempts);
   }
   const before = readFileSync(log);
-  const reopened = await resumeFlow(flow, { log, ...options });
+  const reopened = await resumeFlow({ log, ...options });
   if (!readFileSync(log).equals(before)) fail("resuming the finished log changed it");
   if (reopened.status !== finished) {
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
@@ -2906,7 +2912,7 @@ export async function crashSweep(
     try {
       // The cut run's `context`, which the log doesn't hold, as a `resume` case passes it again.
       const context = args.context === undefined ? {} : { context: args.context };
-      resumed = await resumeFlow(flow, { ...hooks, ...context });
+      resumed = await resumeFlow({ ...hooks, ...context });
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }

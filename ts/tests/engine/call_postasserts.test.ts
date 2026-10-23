@@ -187,7 +187,7 @@ async function driveDurable(name: string, asserts: string, answer: string) {
     ),
   );
   expect(caught).toBe(interruption);
-  return resumeFlow(await loadBlocking(asserts), { log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
+  return resumeFlow({ log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
 }
 
 test("call post assert survives recovery true", async () => {

@@ -36,7 +36,7 @@
  *   the sleep `evalNode` asks the scheduler for, whose clock reads 12:00:04 then 12:00:07 and
  *   moves past each sleep, which returns at once.
  * - `test_recorded_nested_growth_resumes_with_exact_memory_and_trace`: the prefix is the first 25
- *   lines of a live learnable TS run (schema 11 is the only TS schema) whose memory keys are served
+ *   lines of a live learnable TS run (schema 12 is the only TS schema) whose memory keys are served
  *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
  *
  * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
@@ -744,7 +744,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       return original.call(this, inputs);
     });
     try {
-      const result = await resumeFlow(flow, { log: path, memory: backends, env });
+      const result = await resumeFlow({ log: path, memory: backends, env });
       expect(result.status).toBe("succeeded");
       expect(result.output).toEqual({ mapped: [1n, 2n], repeated: { n: 2n, exited: false } });
       expect(calls).toEqual(["outer/repeated#1/bump"]);
@@ -769,7 +769,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       for (const occurrence of historical) expect(occurrence.recordJson).toBe(untimed(lines[occurrence.outcomeSeq]!));
 
       const complete = readFileSync(path, "utf8");
-      const inspected = await resumeFlow(flow, {
+      const inspected = await resumeFlow({
         log: path,
         memory: new Map([["episodic", {}], ["reflective", {}]]) as never,
         env,
@@ -872,7 +872,7 @@ function agentStarted(
       effectiveLlmByStaticPath: {},
       numWorkers: 0,
       learnable: options.learnable ?? false,
-      memories: enabled ? [new MemorySpec("notes", "episodic", {}, [new DeclSite([], ["root"], "agent")], true)] : null,
+      memories: enabled ? [new MemorySpec("notes", "episodic", {}, [new DeclSite([], ["root"], "agent")])] : null,
       memoryStacks: enabled ? [new MemoryStack(["agent"], ["notes"])] : null,
       memorySnapshots: enabled ? [new MemorySnapshotEnvelope("notes", {})] : null,
     }),

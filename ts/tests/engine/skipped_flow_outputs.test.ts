@@ -612,7 +612,7 @@ test("a replay returns the same null", async () => {
     expect(readFileSync(seen, "utf8")).toBe("rejected\n");
 
     writeFileSync(seen, "");
-    const resumed = await resumeFlow(await loadFlow(text), { log });
+    const resumed = await resumeFlow({ log });
     expect(resumed.status).toBe(first.status);
     expect(resumed.output).toEqual(first.output);
     expect(readFileSync(seen, "utf8")).toBe("");

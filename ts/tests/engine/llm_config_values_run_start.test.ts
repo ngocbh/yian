@@ -14,7 +14,7 @@
  * raises `ValueError`; ints have no digit limit (decisions 4a, 23), so in the uncoercible-input row
  * the 5000-digit `window` is accepted (a run with a good `llm_config` takes it whole) and the bad
  * `llm_config` is the reported error; names and null are written in the text form (`"nope"`,
- * `["bogus"]`, `null`; decisions 7, 43); the golden `run_started` record is TS's (schema 11, with
+ * `["bogus"]`, `null`; decisions 7, 43); the golden `run_started` record is TS's (schema 12, with
  * `defaults`, `call_time_llm` and a wall-clock `at`, masked like `now`; TS starts its own
  * versioned logs, decisions 8, 16).
  *
@@ -176,6 +176,7 @@ const GOLDEN_RUN_STARTED = {
         provider: "openai",
       },
     },
+    flow: { dir: "<dir>", files: { "<flow>": { refs: {}, text: FLOW } }, root: "<flow>" },
     flow_fingerprint: "3d9b9bbd0808d27babce1bded77b3e90b642d179cc9678abcae0f4da66d4bfa7",
     initial_pool: {
       start_id: "__start__",
@@ -191,10 +192,14 @@ const GOLDEN_RUN_STARTED = {
     memory_snapshots: null,
     memory_stacks: null,
     num_workers: 8,
+    parent: null,
+    skills: {},
     start_wiring_override: { topic: "${input.topic}" },
+    tools: {},
+    yian_version: "0.0.0",
   },
   run_id: "golden",
-  schema: 11,
+  schema: 12,
   seq: 0,
   at: "<at>",
 };
@@ -216,6 +221,9 @@ test("a run with a default input records and returns as before", async () => {
   system["today"] = "<today>";
   expect(Number.isNaN(Date.parse(started["at"]))).toBe(false);
   started["at"] = "<at>";
+  // Loaded without a folder, the flow's base folder is the current one.
+  expect(started["payload"]["flow"]["dir"]).toBe(process.cwd());
+  started["payload"]["flow"]["dir"] = "<dir>";
   expect(started).toEqual(GOLDEN_RUN_STARTED);
 });
 

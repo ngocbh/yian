@@ -145,7 +145,7 @@ test(
     expect(expanded).toHaveLength(10);
     writeFileSync(path, lines.slice(0, expanded.at(-1)! + 1).join(""));
 
-    const resumed = await resumeFlow(await loadConformanceFlow(text, { env }), { log: path, env });
+    const resumed = await resumeFlow({ log: path, env });
 
     expectSucceeded(resumed, treeValue(100));
   },

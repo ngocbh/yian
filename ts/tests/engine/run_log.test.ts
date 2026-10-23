@@ -50,17 +50,18 @@
  * binary, the built log on Node through a failed sync, a failed write, a short write and a write
  * whose rollback truncate also fails.
  *
- * TS-only, record times (schema 11): each log stamps `at` from its clock, as read, even when the
+ * TS-only, record times (schema 11 on): each log stamps `at` from its clock, as read, even when the
  * clock moves back, and drops a fraction of a millisecond; the default clock is the wall clock; a
  * reading that isn't finite or falls outside the years 0000 to 9999 fails the append before any
  * write, without poisoning the log; a clock that isn't a function is refused before any file is
  * opened; a reopened log keeps its records' times and stamps new ones from its own clock; the
  * envelope's and the decoder's time checks, and the first and last times they take; an envelope
  * without a time encodes without `at`, decodes back with `null`, and every log reader refuses it;
- * a schema 10 record, from before record times, is retired.
+ * a schema 10 record, from before record times, and a schema 11 one, from before `run_started` held
+ * the flow files, are retired.
  *
  * Changed:
- * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 11.
+ * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 12.
  * - `MemoryRunLog._from_records` is `MemoryRunLog.fromRecords`, and Python's "tuple" reads
  *   "array".
  * - `test_memory_log_reopens_a_detached_prefix_at_the_next_sequence`,
@@ -72,11 +73,11 @@
  *   subclass) is a `TypeError`.
  * - `test_retired_schema_record_is_rejected_by_name` and `test_retired_schema_log_is_rejected_on_resume`:
  *   every schema below 10 is Python's, so 7 and 8 read `unsupported run-record schema: N` and 9
- *   names Python yian; TS's own schema 10, from before record times, is retired as Python names
- *   its retired schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
- * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 12 and the float
- *   token `11.0` (the current schema written as a float); the float row is wire-only, since a JS
- *   `11.0` is the number 11.
+ *   names Python yian; TS's own schemas 10 and 11 are retired as Python names its retired
+ *   schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
+ * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 13 and the float
+ *   token `12.0` (the current schema written as a float); the float row is wire-only, since a JS
+ *   `12.0` is the number 12.
  * - The writer's lock is a SQLite lock on the sibling `<log>.lock`, not a `flock` on the log:
  *   `test_jsonl_resume_locks_before_its_first_read` checks the lock is held when the log is read;
  *   `test_jsonl_lock_contention_names_the_log_and_the_likely_cause` pins a busy `FileLockError` as
@@ -141,7 +142,9 @@ const DIGEST = "d".repeat(64);
 /** A record time, as a log writes one, and a clock that always reads it. */
 const AT = "2026-10-20T14:02:11.123Z";
 const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
-const RETIRED_SCHEMA = "run log schema 10 predates schema 11 and is not supported";
+/** The error text for the retired TS schema `schema`. */
+const retired = (schema: number) => `run log schema ${schema} predates schema 12 and is not supported`;
+const RETIRED_SCHEMA = retired(11);
 const PYTHON_SCHEMA = "run log schema 9 was written by Python yian; resume it with Python yian";
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
@@ -251,8 +254,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 11", () => {
-  expect(SCHEMA_VERSION).toBe(11);
+test("the schema version is 12", () => {
+  expect(SCHEMA_VERSION).toBe(12);
 });
 
 test.each([7, 8])("retired schema %d record is rejected by name", (schema) => {
@@ -266,18 +269,19 @@ test("a schema 9 record names Python yian", () => {
   expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, PYTHON_SCHEMA);
 });
 
-test("a schema 10 record, from before record times, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":10,"seq":0}`;
+test("a schema 11 record, from before run_started recorded the flow files, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":11,"seq":0}`;
   const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
-  expect(error.schema).toBe(10);
-  expectError(() => new RecordEnvelope(10, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+  expect(error.schema).toBe(11);
+  expectError(() => new RecordEnvelope(11, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
 });
 
 test.each<[number, string]>([
   [7, "unsupported run-record schema: 7"],
   [8, "unsupported run-record schema: 8"],
   [9, PYTHON_SCHEMA],
-  [10, RETIRED_SCHEMA],
+  [10, retired(10)],
+  [11, RETIRED_SCHEMA],
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -292,10 +296,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["12", 12, "12"],
+  ["13", 13, "13"],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["11.0", undefined, "11.0"],
+  ["12.0", undefined, "12.0"],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -339,7 +343,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 11",
+    "run-record kind 'unsupported' is unsupported in schema 12",
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -999,7 +1003,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 11"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 12"],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -1039,8 +1043,9 @@ test("iterRunRecords yields only the kinds asked for, still checking every line'
 
 test.each<[string, string, number]>([
   ["9", PYTHON_SCHEMA, 9],
-  ["10", RETIRED_SCHEMA, 10],
-  ["12", "unsupported run-record schema: 12", 12],
+  ["10", retired(10), 10],
+  ["11", RETIRED_SCHEMA, 11],
+  ["13", "unsupported run-record schema: 13", 13],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1289,7 +1294,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 11",
+    "run-record kind 'xnode_started' is unsupported in schema 12",
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],

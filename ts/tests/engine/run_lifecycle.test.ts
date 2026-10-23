@@ -20,7 +20,7 @@
  * Changed:
  * - Python's `ValueError` is a `RangeError`; a CODE failure's message and traceback name the JS
  *   error, `Error: boom` (Python: the message `boom`, the traceback `ValueError: boom`).
- * - `test_final_run_boundary_signatures_and_result_fields_are_exact`: `resumeFlow(flow, options)`
+ * - `test_final_run_boundary_signatures_and_result_fields_are_exact`: `resumeFlow(options)`
  *   takes an options record, so its keys are checked once, with `runFlow`'s and `RunResult`'s, in
  *   `retired_runtime_surface.test.ts` (the same check as that file's `resume_flow` row).
  * - `test_terminal_resume_is_read_only_silent_and_unlocks[succeeded]`,
@@ -166,9 +166,12 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
   return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
-/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
+/**
+ * `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`; `flow` is passed only when it was
+ * built in code, since resume compiles a loaded flow's recorded files.
+ */
 function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow(flow, { env: hostEnv(dir), ...options });
+  return resumeFlow({ env: hostEnv(dir), ...(flow.source === null ? { flow } : {}), ...options });
 }
 
 /** Read one closed durable log's records, proving its lock was released. */

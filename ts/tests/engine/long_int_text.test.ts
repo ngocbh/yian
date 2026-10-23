@@ -55,7 +55,7 @@ async function run(
   const flow = await loadFlow(text, { env });
   const log = join(dir, `run-${runs++}.jsonl`);
   const result = await runFlow(flow, { n: 4999n }, { env, log, ...options });
-  const resumed = await resumeFlow(flow, { log, env, tools: options.tools ?? null });
+  const resumed = await resumeFlow({ log, env, tools: options.tools ?? null });
   expect(resumed.status).toBe(result.status);
   if (result.failure !== null) expect(resumed.failure!.message).toBe(result.failure.message);
   else expect(resumed.output).toEqual(result.output);

@@ -214,7 +214,7 @@ test("deep static CALL/MAP chain resumes after its last expansion", async () => 
     expect(expanded).toHaveLength(DEEP_LEVELS);
     writeFileSync(path, `${lines.slice(0, expanded.at(-1)! + 1).join("\n")}\n`);
 
-    const resumed = await resumeFlow(await loadFlow(source), { log: path, env });
+    const resumed = await resumeFlow({ log: path, env });
 
     expect(resumed.failure).toBeNull();
     expect(resumed.output).toEqual(DEEP_OUTPUT);

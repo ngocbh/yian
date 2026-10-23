@@ -444,7 +444,7 @@ test("a resumed run routes to a value entry and replays it", async () => {
   expect(caught).toBe(interruption);
   expect("exit_result" in succeededValues(path)).toBe(false);
 
-  const answered = await resumeFlow(await loadFlow(GATE_FLOW, { env }), { log: path, env, tools: { ask_user: () => "exit" } });
+  const answered = await resumeFlow({ log: path, env, tools: { ask_user: () => "exit" } });
 
   expect(answered.failure).toBeNull();
   expect(answered.status).toBe("succeeded");
@@ -454,7 +454,7 @@ test("a resumed run routes to a value entry and replays it", async () => {
   expect(succeededValues(path)["exit_result"]!.value).toEqual(answered.output);
   const before = readFileSync(path);
 
-  const replayed = await resumeFlow(await loadFlow(GATE_FLOW, { env }), { log: path, env });
+  const replayed = await resumeFlow({ log: path, env });
 
   expect(replayed.failure).toBeNull();
   expect(replayed.status).toBe("succeeded");

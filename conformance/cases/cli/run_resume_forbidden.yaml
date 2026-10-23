@@ -1,4 +1,6 @@
 kind: cli
+# A resume names no flow file: it runs the flow the log recorded.
+rules: [run-log]
 flow: |
   id: echo
   name: echo
@@ -8,7 +10,7 @@ flow: |
   output:
     n: ${input.n}
 files: {old.jsonl: ""}
-args: [run, flow.yaml, --resume, old.jsonl, --input, n=1]
+args: [run, --resume, old.jsonl, --input, n=1]
 expect:
   exit: 2
   stdout: ""

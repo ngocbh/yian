@@ -2296,16 +2296,37 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 11, and readers accept only schema 11. The schema
+Changed (TS yian): records use schema 12, and readers accept only schema 12. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 log (TS
-yian's, from before record times) with "run log schema 10 predates schema 11 and is not
-supported", and any other schema with "unsupported run-record schema: N" (a float token
-shows as `11.0`); the "predates" message for schemas 7 and 8 is gone. All are a
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 or 11 log (TS
+yian's, from before record times, or before `RunStarted` held the flow files) with "run log
+schema N predates schema 12 and is not supported", and any other schema with "unsupported
+run-record schema: N" (a float token shows as `12.0`); the "predates" message for schemas 7
+and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
-damaged one. yian isn't released yet, so there is no migration: finish or drop a schema 10
+damaged one. yian isn't released yet, so there is no migration: finish or drop an older
 run with the yian version that wrote it.
+
+Changed (TS yian): `RunStartedRecord` records what the run needs to rebuild it, once:
+`flow`, the flow file and every `uses:` file the loader read, `{root, dir, files}`, or
+`null` for a flow built in code. `files` maps each file's key to `{text, refs}`: its text,
+and `refs`, each `uses:` ref written in it (its path, with `@<version>` when pinned) mapped to
+the key of the file it resolved to. `dir` is the real path of the folder the root was loaded
+from, and a key is a file's real path relative to it (`..` for a file outside it, such as a
+`system.paths` folder or a child a host resolver read from elsewhere), so one file reached
+by two paths is recorded once; a file's CODE references resolve in its key's folder. The
+root is keyed by the file name of its label, and a host resolver's child's files by their
+real paths too. Two texts a host resolver gave that claim one path get keys of their own
+(`<key>~1`). A YAML root whose host-resolver child was built in code records `flow: null`. `skills`, each skill an AGENT
+grants, `{<name>: {description, instructions}}`; `tools`, each tool an AGENT grants, groups
+expanded, `{<name>: {description, parameters}}`; `yian_version`, the version that started the
+run; and `parent`, `{run_id, node}` for a run the host started from another run (a child run
+or a learning pass, `runFlow`'s `parent` option; `node` is `null` when no one node did), else
+`null`. A CALL, MAP or LOOP splices its child into the same run, so a subflow has no `parent`.
+`flow_fingerprint` stays. A memory key table entry no longer holds `conversation_eligible`.
+Codex's `session_meta` (the base instructions and tools, once, on the first line) and
+DeepSeek Harness's request header are the counterparts.
 
 Changed (TS yian): every record carries `at`, when the log appended it: a UTC RFC 3339
 time with milliseconds, such as `"at":"2026-10-20T14:02:11.123Z"` (the form of
@@ -2485,6 +2506,26 @@ the log is locked. `env` is the environment the resume reads connections, creden
 `YIAN_*` values from; the run's recorded values must match it. `scheduler`, `random` and `models`
 are for tests, as for `runFlow`. Header names that aren't the recorded ones, a negative
 `numWorkers` and an invalid log prefix raise `RangeError`, not `ValueError`.
+
+Changed (TS yian): `resumeFlow({ log, flow, ... })` takes no flow argument. It compiles the
+flow files `RunStarted` recorded, never the files on disk now, so an edited flow file means a
+new run; the fingerprint is still checked, against the compiled recorded flow. The load
+(`loadFlowSource(source)`, which takes a loaded flow's `source` or a run's recorded `flow`)
+starts at the root and follows each file's `refs` inside the log: no disk, search path or
+symlink. A CODE reference's file is not recorded and must still be there, in the folder of
+the file's key below `dir`. CODE files are read from disk on resume, so an edited CODE file is picked up, as a
+reference-mode CODE node's function is today. `loadRecordedFlow(log, env)` (from `yian/run`)
+compiles a log's recorded flow
+the same way without locking it, for a host that needs the flow before it resumes (the CLI
+reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
+resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`
+for a run with recorded files raises `RangeError`. For an unfinished run, once the MCP servers
+are open and before anything is appended, the description and parameters of each tool an AGENT
+grants, and the description and instructions of each granted skill, must be the recorded ones:
+a difference, a missing one or an added one raises `RangeError`
+(`resume refused: tools.lookup description differs from the recorded one`); a finished log
+isn't checked. A log another yian version started resumes with a warning naming both versions,
+through `warn`.
 
 Recovery locks the existing file before reading it and validates the complete
 record prefix; a file whose complete lines are not a valid run log is rejected and
@@ -2738,7 +2779,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 11); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 12); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

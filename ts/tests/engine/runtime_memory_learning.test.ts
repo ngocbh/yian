@@ -399,8 +399,8 @@ test("an episode refuses a success without a canonical typed value", () => {
 test("owner context projects a synthetic source-free failure only to the root flow", async () => {
   const trace = syntheticTrace();
   const memories = [
-    new MemorySpec("inner", "inner", {}, [new DeclSite([], ["def", "child"])], false),
-    new MemorySpec("outer", "outer", {}, [ROOT], false),
+    new MemorySpec("inner", "inner", {}, [new DeclSite([], ["def", "child"])]),
+    new MemorySpec("outer", "outer", {}, [ROOT]),
   ];
   const [root, results] = await computeBackward(trace, "original text");
   const [inner, outer] = learning.projectOwnerContexts(trace, memories, [], "original text", root, results);
@@ -426,11 +426,11 @@ test("owner context projects a synthetic source-free failure only to the root fl
 test("root fallback reaches only keys owned by the root flow site", async () => {
   const trace = syntheticTrace();
   const memories = [
-    new MemorySpec("agent_notes", "agent_notes", {}, [new DeclSite([], ["root"], "agent")], true),
-    new MemorySpec("def_notes", "def_notes", {}, [new DeclSite([], ["def", "child"])], false),
+    new MemorySpec("agent_notes", "agent_notes", {}, [new DeclSite([], ["root"], "agent")]),
+    new MemorySpec("def_notes", "def_notes", {}, [new DeclSite([], ["def", "child"])]),
     // An imported file's root flow is not the run's root flow.
-    new MemorySpec("lib.notes", "lib.notes", {}, [new DeclSite(["lib"], ["root"])], false),
-    new MemorySpec("shared", "shared", {}, [new DeclSite([], ["def", "child"]), ROOT], false),
+    new MemorySpec("lib.notes", "lib.notes", {}, [new DeclSite(["lib"], ["root"])]),
+    new MemorySpec("shared", "shared", {}, [new DeclSite([], ["def", "child"]), ROOT]),
   ];
   const [root, results] = await computeBackward(trace, "original text");
 
@@ -488,7 +488,7 @@ function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: Memo
     prepareNodeSucceeded(state, END_ID, null, { forwardCapture: forwardCapture(state.flow.nodes.get(END_ID)!, {}) }),
   );
   expect(state.result).toBeInstanceOf(RunSucceeded);
-  const table = [...memoryScope.memories].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT], false));
+  const table = [...memoryScope.memories].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT]));
   return { state, log, table };
 }
 
@@ -848,9 +848,9 @@ function workFlow(node: Node): CompiledFlow {
 
 test("owner contexts include general occurrences and empty memories", async () => {
   const memories = [
-    new MemorySpec("empty", "empty", {}, [new DeclSite([], ["def", "unused"])], false),
-    new MemorySpec("local", "local", {}, [new DeclSite([], ["root"], "work")], true),
-    new MemorySpec("outer", "outer", {}, [ROOT], false),
+    new MemorySpec("empty", "empty", {}, [new DeclSite([], ["def", "unused"])]),
+    new MemorySpec("local", "local", {}, [new DeclSite([], ["root"], "work")]),
+    new MemorySpec("outer", "outer", {}, [ROOT]),
   ];
   const node = new RecordingBackwardNode("work", (inputs) => inputs.topic, (_context, feedback) => new BackwardResult({
     inputFeedback: { topic: feedback, literal: ["keep literal"] },
@@ -1046,7 +1046,7 @@ async function startOnlyRun(sameBoundary: boolean): Promise<{
   initialPool.addSystem("run_id", RUN_ID);
   const state = new RunState(flow);
   const log = new MemoryRunLog(RUN_ID);
-  const memories = [new MemorySpec(POLICY, POLICY, { limit: 3n }, [ROOT], false)];
+  const memories = [new MemorySpec(POLICY, POLICY, { limit: 3n }, [ROOT])];
   const recorded = stacks(start.memoryScope);
   commitPrepared(log, state, prepareRunStarted(state, {
     runId: RUN_ID,

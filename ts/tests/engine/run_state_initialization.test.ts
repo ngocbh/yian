@@ -54,7 +54,7 @@
  *
  * Not ported:
  * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema
- *   parameter, since schema 11 is the only one.
+ *   parameter, since schema 12 is the only one.
  * - TS types: the `1.0` row of the worker-count test (`1.0` is `1`), and the `ready-container`,
  *   `in-flight-container`, `node-state-container` (dict subclass) and `node-disposition-type`
  *   (`NodeState.UNKNOWN` is the text `"unknown"`) rows of the stale-mutation test.

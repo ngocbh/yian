@@ -57,7 +57,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       name: "run",
       summary: "Start or recover a durable flow run and print its terminal output.",
       positionals: [
-        { name: "flow", help: "Path to a flow .yaml", path: { exists: true, dir: false, readable: true } },
+        {
+          name: "flow",
+          help: "Path to a flow .yaml; left out with --resume, which runs the flow the log recorded",
+          optional: true,
+          path: { exists: true, dir: false, readable: true },
+        },
       ],
       options: [
         { name: "input", short: "i", type: "string", multiple: true, help: "An input as k=v (repeatable)." },
@@ -77,7 +82,9 @@ const COMMANDS: Readonly<Record<string, Command>> = {
           name: "resume",
           type: "string",
           path: { exists: true, dir: false, readable: true, writable: true },
-          help: "Recover the run recorded at PATH; fresh input, provider/model, and log flags are forbidden.",
+          help:
+            "Recover the run recorded at PATH with the flow it recorded; FLOW and fresh input, " +
+            "provider/model, and log flags are forbidden.",
         },
         { name: "quiet", short: "q", type: "boolean", help: "Suppress per-node progress." },
         {
@@ -142,7 +149,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       const { run } = await import("./run.ts");
       return ({ args, options: o }, io) =>
         run(
-          args["flow"] as string,
+          args["flow"] as string | undefined,
           {
             inputValues: o["input"] as string[],
             inputs: o["inputs"] as string | undefined,

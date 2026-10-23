@@ -1,0 +1,33 @@
+# TS-only: a text item that isn't a lone `${name}` isn't a splice; it is refused at the item, with a fix.
+kind: load
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  input:
+    history: !list(Msg)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - ${history}
+        - ${message} please
+  output: ${reply.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'reply' (kind=agent): prompt list item `${message} please` isn't a splice: a splice is a lone `${name}` naming one of this node's inputs or variables; write a message as `user: <text>`"
+      frames:
+      - label: flow.yaml
+        range: [20, 9, 20, 26]

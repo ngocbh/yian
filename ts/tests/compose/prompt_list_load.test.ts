@@ -87,12 +87,24 @@ test("a text prompt stays text", () => {
 });
 
 test.each([
-  ["a plain string", ["- user: hi", "- hello"], 1],
-  ["a span inside text", ["- 'Earlier: ${history}'"], 0],
-  ["an expression span", ["- ${history[0]}"], 0],
+  ["a pool reference", ["- ${input.history}"], 0, "${input.history}"],
+  ["a plain string", ["- user: hi", "- hello"], 1, "hello"],
+  ["a span inside text", ["- 'Earlier: ${history}'"], 0, "Earlier: ${history}"],
+  ["an expression span", ["- ${history[0]}"], 0, "${history[0]}"],
+])("a text item that isn't a lone ${name} is refused at it: %s", (_, prompt, index, item) => {
+  expect(failure(chatFlow(prompt))).toEqual({
+    message:
+      `node 'reply' (kind=agent): prompt list item \`${item}\` isn't a splice: a splice is a lone ` +
+      "`${name}` naming one of this node's inputs or variables; write a message as `user: <text>`",
+    line: PROMPT_LINE + index,
+  });
+});
+
+test.each([
   ["two keys", ["- {user: a, assistant: b}"], 0],
   ["an unknown role", ["- tool: hi"], 0],
   ["a list", ["- [a]"], 0],
+  ["a null", ["- null"], 0],
 ])("a prompt list item of another shape is refused at it: %s", (_, prompt, index) => {
   expect(failure(chatFlow(prompt))).toEqual({
     message: "node 'reply' (kind=agent): a prompt list item is `${name}` or `user:`/`assistant:` text",
@@ -162,6 +174,15 @@ test.each([
   expect(line).toBe(PROMPT_LINE);
 });
 
+test("a splice of a record whose text may be null is refused", () => {
+  const text = chatFlow(["- ${history}", "- user: ${message}"], "!list(Turn)").replace(
+    "typedefs:\n",
+    "typedefs:\n  Turn: {role: str, text: Optional(str)}\n",
+  );
+  expect(failure(text).message).toContain("${history} is `list(");
+  expect(failure(text).message).toContain("which can't hold messages");
+});
+
 test("a splice of a record without text is refused", () => {
   const text = chatFlow(["- ${history}", "- user: ${message}"], "!Turn").replace(
     "typedefs:\n",
@@ -177,4 +198,7 @@ test("a list prompt is identity; a text prompt's manifest is unchanged", async (
 
   const other = (await loadFlow(chatFlow(["- ${history}", "- user: '${message}!'"]))).compiled;
   expect(flowFingerprint(other)).not.toBe(flowFingerprint(listed));
+
+  const texted = (await loadFlow(chatFlow([]).replace("    prompt:\n\n", "    prompt: ${message}\n"))).compiled;
+  expect(((flowManifest(texted).nodes as JsonObject).reply as JsonObject).prompt).toBe("${message}");
 });

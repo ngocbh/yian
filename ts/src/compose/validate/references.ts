@@ -89,8 +89,8 @@ import type { Narrowing } from "./narrowing.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /**
- * Return whether a value of `typ` can be a prompt message (a record with `role` and `text: str`)
- * or, with `list`, a list of them. `object` and `Any` can; a union can when every member can.
+ * Return whether a value of `typ` can be a prompt message (a record with non-null `role` and
+ * `text: str`) or, with `list`, a list of them. `object` and `Any` can; a union can when every member can.
  */
 function holdsMessages(typ: Type, list: boolean): boolean {
   if (typ.variants !== undefined) return typ.variants.every((variant) => holdsMessages(variant, list));
@@ -99,7 +99,8 @@ function holdsMessages(typ: Type, list: boolean): boolean {
     if (typ.fields === undefined) return true;
     const role = typ.fields.get("role");
     const text = typ.fields.get("text");
-    return role?.kind === ValueKind.STRING && text?.kind === ValueKind.STRING;
+    // A nullable `role` or `text` could splice a null, which the render refuses.
+    return role?.kind === ValueKind.STRING && !role.nullable && text?.kind === ValueKind.STRING && !text.nullable;
   }
   if (list && (typ.kind === ValueKind.LIST_OBJECT || typ.kind === ValueKind.LIST_ANY)) {
     return typ.element === undefined || holdsMessages(typ.element, false);

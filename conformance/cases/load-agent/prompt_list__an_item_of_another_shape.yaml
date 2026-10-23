@@ -1,4 +1,4 @@
-# TS-only: a prompt list item is `${name}` or `user:`/`assistant:` text; plain text is refused at the item.
+# TS-only: a prompt list item is `${name}` or `user:`/`assistant:` text; a two-key mapping is refused at the item.
 kind: load
 python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
@@ -21,7 +21,7 @@ flow: |
       system_prompt: You are a helpful conversational assistant.
       prompt:
         - ${history}
-        - ${message} please
+        - {user: '${message}', assistant: Sure.}
   output: ${reply.output}
 expect:
   load:
@@ -30,4 +30,4 @@ expect:
       message: "node 'reply' (kind=agent): a prompt list item is `${name}` or `user:`/`assistant:` text"
       frames:
       - label: flow.yaml
-        range: [20, 9, 20, 26]
+        range: [20, 9, 20, 47]

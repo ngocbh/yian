@@ -1674,8 +1674,9 @@ classify:
     Answer with exactly one of: positive, neutral, negative.
 ```
 
-`prompt:` must be text or a list of messages (see [A list prompt](#a-list-prompt)). A value
-YAML reads as a number, boolean, date, or mapping is a load error at that value; quote it:
+`prompt:` must be text, or (TS yian) a list of messages (see [A list prompt](#a-list-prompt)).
+A value YAML reads as a number, boolean, date, or mapping is a load error at that value; quote
+it:
 
 ```
 node 'classify' (kind=agent): `prompt:` must be text, but YAML read it as an integer; put it in quotes
@@ -1884,12 +1885,14 @@ history, so a LOOP can carry it.
   ignored. Messages hold text only, not tool calls or media.
 - The request is the system message, then the rendered list in order. A text `prompt:` means a
   one-item list, `[user: <text>]`, and sends the same request as before.
-- These are load errors, each at its item: an item of another shape ("a prompt list item is
-  `${name}` or `user:`/`assistant:` text"), a `system:` item (use `system_prompt:`), a last item
+- These are load errors, each at its item: text that isn't a lone `${name}` (such as
+  `${input.history}` or `Earlier: ${history}`; write a message as `user: <text>`), an item of
+  another shape ("a prompt list item is `${name}` or `user:`/`assistant:` text"), message text
+  that isn't text (`user: 5`), a `system:` item (use `system_prompt:`), a last item
   that is an `assistant:` message, a `${name}` naming no input or variable, and a `${name}`
-  whose declared type can't hold messages (it must be a record with `role` and `text: str`, a
-  list of those, `object`, `list(object)` or `Any`). An empty list is a load error at
-  `prompt:`.
+  whose declared type can't hold messages (it must be a record with non-null `role` and
+  `text: str`, a list of those, `object`, `list(object)` or `Any`). An empty list is a load
+  error at `prompt:`.
 - At run time the node fails, before any model call, when a spliced value isn't a message or a
   list of messages, or the rendered list is empty or doesn't end with a `user` message.
 - Memory recall and evidence read the last message's text as the prompt. The render capture

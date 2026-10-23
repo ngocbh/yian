@@ -13,8 +13,10 @@ import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentNode, type PromptItem } from "../../src/nodes/agent/node.ts";
 import { type NodeCaps, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
-import { rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -76,6 +78,48 @@ test("a spliced message, literal turns and an empty spliced list render in order
     ["assistant", "Ready."],
     ["user", "Go"],
   ]);
+});
+
+test("a spliced message's text is sent verbatim, never rendered as a template", async () => {
+  const history = [
+    { role: "user", text: "What does ${message} do?" },
+    { role: "assistant", text: "It reads `message`." },
+  ];
+  const { model } = await run(agent(CHAT), history);
+
+  expect(sent(model).slice(1, 3)).toEqual([
+    ["user", "What does ${message} do?"],
+    ["assistant", "It reads `message`."],
+  ]);
+});
+
+test("every request of the tool loop carries the history", async () => {
+  const parametersJsonSchema = { type: "object", properties: {} };
+  const noop = new FunctionTool({
+    name: "noop",
+    description: "Do nothing.",
+    parametersJsonSchema,
+    execute: () => "ok",
+  });
+  const node = new AgentNode("reply", { prompt: CHAT, systemPrompt: "Be kind.", llmConfig: CONFIG, tools: ["noop"] });
+  node.params = [new Parameter("history", { required: true }), new Parameter("message", { required: true })];
+  const model = new ScriptedModel([callReply(["noop", {}, "call-1"]), textReply("done")], CONFIG);
+
+  const result = await node.forward(
+    { history: HISTORY, message: "again" },
+    { models: serving(model), tools: new ToolSet({ noop }) },
+  );
+
+  expect(result).toEqual(new Output("done"));
+  expect(model.requests).toHaveLength(2);
+  const second = model.requests[1]!.messages.map((message) => [message.role, message.text()]);
+  expect(second.slice(0, 4)).toEqual([
+    ["system", "Be kind."],
+    ["user", "Hi"],
+    ["assistant", "Hello! How can I help?"],
+    ["user", "Now: again"],
+  ]);
+  expect(second.slice(4).map(([role]) => role)).toEqual(["assistant", "tool"]);
 });
 
 test("a text prompt sends the system message and one user message, as before", async () => {

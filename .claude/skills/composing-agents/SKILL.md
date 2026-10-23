@@ -564,7 +564,8 @@ and is still checked on the reply. Use a downstream `code`
 node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
 otherwise it is a load error at the value. TS yian only: it may also be a list of messages
-(see the chat pattern under `loop`).
+(see the chat pattern under `loop`), so there an unquoted value starting with `[` is read as a
+list prompt, not text.
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
 call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
 load error.

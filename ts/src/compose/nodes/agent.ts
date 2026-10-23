@@ -3,8 +3,9 @@
  *
  * Owns the `agent` node's `AgentDescriptor`, which wraps the template `parse` from
  * `NodeDescriptor` (which records each field's `SourceRange`) to reject the removed `mode:` key
- * and a variable named `inf`, checks the shapes of its own fields, and builds the runtime
- * `AgentNode`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * and a variable named `inf` and to read a list `prompt:` into its items (`readPromptList`),
+ * checks the shapes of its own fields, and builds the runtime `AgentNode`. Registered in `KINDS`
+ * and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  * `readLlmConfig` reads an authored `llm_config:` layer with the `${...}` values and tags in it,
  * and `checkLlmConfigValue` checks a layer holding values.
  *
@@ -442,9 +443,9 @@ const PROMPT_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
  * An item is a lone `${name}` (a splice) or a one-key `user:`/`assistant:` mapping whose value is
  * template text.
  *
- * @throws LoadError at the item for any other shape, a `system:` item, non-text message text or
- *   text holding a lone surrogate, or a last item that is an `assistant:` message; at the field
- *   for an empty list.
+ * @throws LoadError at the item for text that isn't a lone `${name}`, any other shape, a
+ *   `system:` item, non-text message text or text holding a lone surrogate, or a last item that
+ *   is an `assistant:` message; at the field for an empty list.
  */
 function readPromptList(
   nodeId: string,
@@ -461,13 +462,21 @@ function readPromptList(
   const items = list.map((item, index): PromptItem => {
     const range = rangeAt(cursor, ["prompt", index]) ?? fieldRange;
     if (range !== null) desc.fieldRanges.set(siteKey("field", `prompt[${index}]`), range);
-    const name = typeof item === "string" ? wholeRefName(item) : null;
-    if (name !== null) return { splice: name };
-    const [role] = isRecord(item) ? Object.keys(item) : [];
-    if (role === "system" && Object.keys(item as object).length === 1) {
+    if (typeof item === "string") {
+      const name = wholeRefName(item);
+      if (name !== null) return { splice: name };
+      throw diagnostics.error(
+        `${where}: prompt list item \`${item}\` isn't a splice: a splice is a lone \`\${name}\` naming one ` +
+          "of this node's inputs or variables; write a message as `user: <text>`",
+        { range },
+      );
+    }
+    const keys = isRecord(item) ? Object.keys(item) : [];
+    const role = keys.length === 1 ? keys[0]! : undefined;
+    if (role === "system") {
       throw diagnostics.error(`${where}: a prompt list item can't be \`system:\`; use \`system_prompt:\``, { range });
     }
-    if (role === undefined || !PROMPT_ROLES.has(role) || Object.keys(item as object).length !== 1) {
+    if (role === undefined || !PROMPT_ROLES.has(role)) {
       throw diagnostics.error(`${where}: a prompt list item is \`\${name}\` or \`user:\`/\`assistant:\` text`, {
         range,
       });

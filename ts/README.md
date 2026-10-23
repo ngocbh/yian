@@ -91,8 +91,9 @@ console.log(result.status, result.output); // succeeded total: 7.5
 
 Only the names below are the supported surface. The other exports on `/run` (`hostInputs`,
 `runStartInputs`, `runStartLlm`, `LlmConfigsCheck`, `checkRecordedLlmFields`, `skillGrants`,
-`replayRunLog`, `replayCompiledRunLog`) and on `/platform` are internal: they serve the CLI and
-yian's own code, and may change without notice.
+`replayRunLog`, `replayCompiledRunLog`), on `/llm_clients` (`chatModelFromConfig`,
+`defaultModelAccess`, `ModelAccess`, `callCredentials`, `scrubCallCredentials`) and on `/platform`
+are internal: they serve the CLI and yian's own code, and may change without notice.
 
 | Import | Names |
 |---|---|
@@ -101,12 +102,15 @@ yian's own code, and may change without notice.
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
+| `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `ResumeFlowOptions`, `RunInspection`,
 `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `ToolEntry`, `AskUserHandler`,
 `AskUserRequest`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`,
 `StandardIssue`, `StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`,
-`Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue` and `SqliteRow` are types only.
+`Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `LLMProvider`,
+`ListModelsOptions`, `AuthStoreOptions`, `AuthState`, `Credentials`, `AuthRequest` and
+`AuthRequestOptions` are types only.
 
 ## Differences from Python yian
 
@@ -139,7 +143,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `nodes/code/worker.js` beside the bundle file, or every CODE call fails.
 - **Errors.** Python's `ValueError` is a `RangeError` or `TypeError`, and every yian error sets
   `error.name` to its class. Some errors a call can throw aren't exported (`TypeCheckError`,
-  `MemorySetupError`, `AuthError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
+  `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
 - **Storage.** Run logs (schema 12) and memory stores (SQLite envelope version 3) are not compatible
@@ -384,6 +388,51 @@ throws `SkillError`. See [Skills][docs/api.md#skills].
 to interrupt that AGENT node, and `drain(nodeId)`, returning the queued steer messages (or a promise
 of them). It reaches AGENT nodes authored `steerable: true`; pass the same inbox to `resumeFlow`.
 See [Steering][docs/api.md#steering].
+
+## Provider setup
+
+`@ngocbh/yian/llm_clients` gives hosts that set up providers (a settings page, a login command) the
+pieces `yian auth` uses.
+
+```ts
+import { ApiKeyCredentials, AuthStore, listModels } from "@ngocbh/yian/llm_clients";
+
+const models = await listModels("anthropic", { apiKey }); // a refused key throws ModelListError
+const store = new AuthStore();
+await store.save("anthropic", new ApiKeyCredentials(apiKey), models![0]!);
+console.log(store.selection()?.model);
+```
+
+- `LLMConfig.fromHost(data)` checks a JSON `llm_config` through the host intake `runFlow` uses
+  and throws `ValidationError` (a `RangeError` with `issues`). Its messages never hold a value, but
+  they name record keys as written, at any depth (an unknown key, a block field, a header name),
+  so a host that must not echo input names shows its own fixed text. `LLM_CONFIG_KEYS` holds the
+  top-level keys.
+- `listModels(provider, { apiKey, baseUrl, timeout, headers, organization, project, signal,
+  scheduler, request })` resolves to the model ids the provider's host offers, sorted and without
+  duplicates, or `null` for `azure`, which has no listing. It reads no environment, so a host can
+  try a key before it saves it. Every failure is a `ModelListError` with a short fixed message
+  (`HTTP 401`, `timed out`, ...) and no `cause`; its `status` is the HTTP status of an `HTTP
+  <status>` failure, else `null`.
+- `new AuthStore(path?, options?)` is the private saved-login file: `path`, else `YIAN_AUTH_FILE`,
+  else `~/.config/yian/auth.json` (under `XDG_CONFIG_HOME` when set). `selection(provider?)`
+  returns the provider's nonsecret `ProviderSelection`, or the default's, or `null`; `read()`
+  returns every selection and the default. `save(provider, credentials, model, { endpoint,
+  organization, project, makeDefault })` commits an `ApiKeyCredentials`, an `OAuthCredentials` or
+  `null` together with its selection. `credentials(provider, credentialId, { refresh })` returns
+  the saved credentials, refreshing an expiring subscription token under the store's lock.
+- `new OpenAIAuth({ request, scheduler, signal, requestTimeoutMs })` signs in to a ChatGPT
+  subscription: `deviceLogin(displayCode, { timeoutMs })` and `browserLogin(openUrl, {
+  awaitCallback, timeoutMs })` resolve to `OAuthCredentials`, `refresh(credentials)` renews them,
+  and `subscriptionModels(credentials, { clientVersion })` lists the subscription's models. A
+  failure throws `AuthError`, whose `status` is the HTTP status of a failed authentication request,
+  else `null`.
+- One `AuthRequest`, `(method, url, { headers, timeoutMs, jsonBody, form, signal })` resolving to an
+  `HttpResponse(status, data)`, serves as both `OpenAIAuth`'s and `listModels`' `request`
+  (`listModels` also passes `bodyLimit` and `scheduler`). Unset, both use yian's sender, which
+  never follows a redirect.
+- `SUPPORTED_LLM_PROVIDERS` lists the provider names; `azureResourceEndpoint(url)` strips an
+  `/openai/v1` or `/openai` suffix from an Azure portal URL, leaving the resource endpoint.
 
 ## Errors and failure codes
 
@@ -725,7 +774,8 @@ Node 22, and so does every unit test; a change keeps both green.
   Azure resource on an AD token. The unknown-model warning goes through `onWarning`.
 - `model_list.ts`: `listModels` lists a provider's model ids over `auth/http.ts`'s `request`, with
   Python's per-provider paging and reasons (`ModelListError`); it reads no environment.
-- `index.ts`: the package's exports, as Python's `__init__.py`.
+- `index.ts`: the package's exports, as Python's `__init__.py`, and the `./llm_clients` entry (see
+  [Provider setup](#provider-setup)).
 - `layers.ts`: resolves one agent's `llm_config` layers into its effective config, and checks
   layers and complete selections. It reads no environment or saved settings.
 - `redact.ts`: `redactKey`/`redactKeys` remove keys and their masked echoes (`sk-abc****wxyz`)
@@ -748,7 +798,8 @@ Node 22, and so does every unit test; a change keeps both green.
   login's deadline is one timer that aborts its signal. The browser callback listener is
   `node:net` on `127.0.0.1:1455`.
 - `auth/index.ts`: the `auth` package's exports, as Python's `auth/__init__.py`.
-- Values are yian values (ints are `bigint`), so a host `llm_config` goes through `fromHost` first.
+- Values are yian values (ints are `bigint`), so a host `llm_config` goes through
+  `LLMConfig.fromHost` first.
 - `LLMConfig` holds the key, the header values and the blocks in `#private` fields. The key and
   headers are never dumped; the blocks are read through `blockFor` and `dump`.
 - Lookups by a user key use `Object.hasOwn`. `PROVIDER_BLOCKS` and the schema tables have no

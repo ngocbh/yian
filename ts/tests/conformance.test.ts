@@ -1627,6 +1627,41 @@ describe("crashSweep", () => {
     await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 4)");
   });
 
+  test("a cut after a retried tool's commit resumes from the recorded steps and succeeds", async () => {
+    // The flaky tool fails twice, so its node records two steps before the commit. A cut right
+    // after the commit runs the node again, replaying those steps: only the entry the last call
+    // took goes back, not the two the replayed steps already hold.
+    const text = `kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 2
+  output: \${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '1'
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    flaky:
+      parameters: {type: object, properties: {}}
+      results:
+      - raise: {class: TimeoutError, message: a}
+      - raise: {class: TimeoutError, message: b}
+      - return: ok
+  jitter: [0.0, 0.0]
+expect:
+  output: {status: succeeded, output: ok}
+`;
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    await crashSweep(case_, ctx);
+  });
+
   test("fails the strong oracle when a recorded value changes before the resume", async () => {
     const [case_, ctx] = twoNodes();
     const rewrite = (log: string) => {

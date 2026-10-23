@@ -1104,8 +1104,8 @@ Node 22, and so does every unit test; a change keeps both green.
 - `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*` function
   (`prepareRunStarted`, `prepareInitialCommit`, `prepareNodeStarted`, `prepareNodeStep`,
   `preparePoolCommit`, `prepareNodeSucceeded`, `prepareNodeRouted`, `prepareNodeFailed`,
-  `prepareExpanded`, `prepareRunResumed`, `prepareRunStopped`, `prepareRecord`) validates one transition without mutating the state and
-  returns a frozen `PreparedTransition`: the canonical record, the run id and sequence it expects,
+  `prepareExpanded`, `prepareRunResumed`, `prepareRunStopped`, `prepareRecord`) validates one
+  transition without mutating the state and returns a frozen `PreparedTransition`: the canonical record, the run id and sequence it expects,
   and a frozen plan. `commitPrepared(log, state, prepared)` appends the record, checks what the log
   returned, then applies the plan, with no `await` in between, so nothing interleaves between the
   append and the apply. `commitInitialPool` commits the run start's commits (the system values in

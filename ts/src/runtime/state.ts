@@ -122,6 +122,7 @@ import {
   selectSeedRoute,
   SourceEntry,
   sameSourceEntry,
+  SYSTEM_PREFIX,
   TraceDelta,
   TraceOccurrence,
   TraceTerminal,
@@ -3495,9 +3496,6 @@ function validateFailureRecord(state: RunState, record: NodeFailedRecord): void 
   requireFailingNode(state, nodeId);
   validateNodeEvidence(state, nodeId, record.evidence);
 }
-
-/** The key prefix of a system value's run-start commit: `system.<name>`. */
-const SYSTEM_PREFIX = "system.";
 
 /**
  * Validate one run-start commit: a system value, or the START inputs after `system.run_id`.

@@ -1135,7 +1135,7 @@ export function failureJson(failure: Failure): JsonObject {
  */
 export function episodeOutcome(
   record: OutcomeRecord,
-  committed: JsonValue = null,
+  committed: JsonValue,
 ): [MemoryEpisodeStatus, JsonValue, JsonObject | null] {
   if (isExactly(record, NodeSucceededRecord)) return [MemoryEpisodeStatus.SUCCEEDED, canonicalSeed(committed)[1], null];
   if (isExactly(record, NodeRoutedRecord)) {

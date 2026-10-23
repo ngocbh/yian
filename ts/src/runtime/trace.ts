@@ -746,6 +746,9 @@ function frozenPair<A, B>(pair: readonly [A, B] | null): readonly [A, B] | null 
 /** The record classes that accept a node outcome. */
 const OUTCOME_RECORDS = [NodeSucceededRecord, NodeRoutedRecord, NodeExpandedRecord, NodeFailedRecord] as const;
 
+/** The key prefix of a system value's run-start commit: `system.<name>`. */
+export const SYSTEM_PREFIX = "system.";
+
 /** The options of `prepareTrace`. */
 export interface PrepareTraceOptions {
   /** The seed connections the outcome's growth installs; defaults to none. */
@@ -838,10 +841,11 @@ export function prepareTrace(
     // The record holds a canonical wire.
     const valueJson = logJson(record.value);
     if (record.key !== trace.startId) {
-      return new TraceDelta(trace, envelope.seq, { systemValue: [record.key.slice("system.".length), valueJson] });
+      return new TraceDelta(trace, envelope.seq, { systemValue: [record.key.slice(SYSTEM_PREFIX.length), valueJson] });
     }
     // The run inputs keep their own source, seq 0: an internal number, not a record's seq.
     const entry = new SourceEntry(new SourceRef(envelope.runId, 0), 0, valueJson);
+    // A flow with only a START has it as its END too, so the inputs are the root writer.
     return new TraceDelta(trace, envelope.seq, {
       writer: [record.key, entry],
       rootWriter: record.key === trace.endId ? entry : null,

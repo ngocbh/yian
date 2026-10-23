@@ -97,7 +97,7 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { JsonlRunLog, MemoryRunLog, readRunLog, type RecordEnvelope, type RunStartedRecord } from "../src/runtime/log.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addInterruptedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
@@ -2875,31 +2875,10 @@ function sweepable(case_: Case): boolean {
 }
 
 /**
- * Return the seq of the `node_started` of a node that has committed its value by record `k` but
- * not succeeded; `undefined` when there is none. The resume runs that node again, so what it took
- * from the host scripts goes back from its start, not from the cut.
- */
-function committedNodeStart(records: readonly RecordEnvelope[], k: number): number | undefined {
-  const started = new Map<string, number>();
-  const committed = new Set<string>();
-  for (const { kind, seq, record } of records.slice(0, k + 1)) {
-    const nodeId = (record as { nodeId?: string }).nodeId;
-    if (nodeId === undefined) continue;
-    if (kind === "node_started") started.set(nodeId, seq);
-    else if (kind === "pool_commit" && started.has(nodeId)) committed.add(nodeId);
-    else if (kind === "node_succeeded") {
-      started.delete(nodeId);
-      committed.delete(nodeId);
-    }
-  }
-  const open = [...committed].map((nodeId) => started.get(nodeId)!);
-  return open.length === 0 ? undefined : Math.min(...open);
-}
-
-/**
  * Run a `run` case's crash sweep. An uncut run writes N records; then, for each k in 0..N-2, a run
- * on a fresh host is cut after record k, the script entries it took after the cut are put back,
- * the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
+ * on a fresh host is cut after record k, the script entries it took after the cut are put back (a
+ * cut right after a node's commit puts back from the node's last record before it, since the node
+ * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
  * the run is resumed. A cut inside the run start (before the START inputs' commit) must instead be
  * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
@@ -2936,8 +2915,11 @@ export async function crashSweep(
   const expected = outcomes(uncutLog);
   const uncutRecords = readRunLog(uncutLog);
   const count = uncutRecords.length;
-  // The run start's last record, the START inputs' commit, comes just before the first node start.
-  const inputsCommit = uncutRecords.findIndex(({ kind }) => kind === "node_started") - 1;
+  // The run start's last record is the START inputs' commit, the first whose key is its node.
+  const inputsCommit = uncutRecords.findIndex(({ kind, record }) => {
+    const { nodeId, key } = record as { nodeId?: string; key?: string };
+    return kind === "pool_commit" && key === nodeId;
+  });
   for (let k = 0; k <= count - 2; k += 1) {
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
@@ -2946,7 +2928,11 @@ export async function crashSweep(
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
     await cutAt(k, cut, at);
-    scripted.putBack(committedNodeStart(uncutRecords, k) ?? k);
+    // A node's commit and its success are written with nothing awaited between them, so a cut
+    // right after a commit is a crash before the success: the node runs again and takes its
+    // script entries again. Entries taken up to the node's last record before the commit stay,
+    // since the resume replays that record's steps.
+    scripted.putBack(k > inputsCommit && uncutRecords[k]!.kind === "pool_commit" ? k - 1 : k);
     if (k < inputsCommit) {
       // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed.
       const before = readFileSync(log);
@@ -2972,6 +2958,9 @@ export async function crashSweep(
     if (strong) {
       compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });
       compare(`node outcomes${at}`, outcomes(log), expected);
+    } else if (resumed.status !== uncut.status) {
+      // Without the strong oracle, a resume still ends as the uncut run did.
+      throw new CaseFailure(`the resume ${resumed.status}, the uncut run ${uncut.status}${at}`);
     }
     await checkInvariants(flow, log, reopen, resumed, at);
   }

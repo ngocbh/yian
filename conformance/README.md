@@ -717,8 +717,8 @@ also cuts each serial `run` case that expects `output`, isn't `pending`, and has
 checks the invariants, plus the output and node outcomes when the case has no `host.human` or
 `host.jitter` and its tool scripts only return. A resume adds records, so in those outcomes a
 capture source's `execution_seq` is compared by the kind and node of the record it names, and a
-success's `commit` by the trace fields of the `pool_commit` it names. A node cut between its `pool_commit` and its `node_succeeded` runs again, so what it took from
-the host scripts goes back from its start. A cut inside the run start
+success's `commit` by the trace fields of the `pool_commit` it names. A node cut right after its `pool_commit` runs again, so what it took from the host scripts goes
+back from its last record before the commit (its steps replay). A cut inside the run start
 (before the START inputs' commit) can't be resumed: the sweep expects the resume to refuse it
 (`run log <path> ends inside its run start; start the run again`) and leave the log as it is.
 

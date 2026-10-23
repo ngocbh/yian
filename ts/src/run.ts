@@ -943,6 +943,9 @@ async function startRun(
         ? new MemoryRunLog(canonicalRunId, { clock })
         : JsonlRunLog.create(locator, canonicalRunId, { clock });
     const observers = commitPrepared(authority, state, preparedStart);
+    // The pool's commits are validated as they are written, after `run_started` is on disk: input
+    // intake has already rejected bad values, before any file exists, so a failure here is not an
+    // input error.
     commitInitialPool(authority, state, pool);
     const runtime = memoryRuntime;
     // Built before publishing so a callback's rejected promise can stop it.

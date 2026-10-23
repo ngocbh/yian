@@ -359,16 +359,17 @@ test("failure JSON refuses a value that isn't exactly a Failure and revalidates 
 test("causal route episode retains the accepted failure", () => {
   const failure = new Failure({ code: "graph.terminal_unreachable", message: "No terminal route.", nodeId: "agent" });
   const record = new NodeRoutedRecord("agent", "go", { evidence: evidence(scope()), terminalFailure: failure });
-  const [status, output, failurePayload] = learning.episodeOutcome(record);
+  const [status, output, failurePayload] = learning.episodeOutcome(record, null);
   expect(status).toBe(MemoryEpisodeStatus.FAILED);
   expect(output).toBeNull();
   expect(failurePayload!.code).toBe(failure.code);
 });
 
 test("route and growth projection use closed source-neutral envelopes", () => {
-  const [, route] = learning.episodeOutcome(new NodeRoutedRecord("agent", "yes"));
+  const [, route] = learning.episodeOutcome(new NodeRoutedRecord("agent", "yes"), null);
   const [, growth] = learning.episodeOutcome(
     new NodeExpandedRecord("agent", { value: [1n, 2n] }, ["a", "z"], "b".repeat(64)),
+    null,
   );
 
   expect(route).toEqual({ kind: "route", handle: "yes" });
@@ -382,14 +383,14 @@ test("an episode projects a success's canonical value and a failed record's fail
   expect(Object.keys(succeeded[1] as object)).toEqual(["a", "b"]);
 
   const failure = new Failure({ code: "node.execute", message: "Failed.", nodeId: "agent" });
-  expect(learning.episodeOutcome(new NodeFailedRecord(failure))).toEqual([
+  expect(learning.episodeOutcome(new NodeFailedRecord(failure), null)).toEqual([
     MemoryEpisodeStatus.FAILED,
     null,
     failure.toJSON(),
   ]);
 
   expectError(
-    () => learning.episodeOutcome(new NodeStartedRecord("agent") as unknown as OutcomeRecord),
+    () => learning.episodeOutcome(new NodeStartedRecord("agent") as unknown as OutcomeRecord, null),
     TypeError,
     "unsupported graph outcome for episode projection",
   );

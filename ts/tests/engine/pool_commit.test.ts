@@ -281,6 +281,9 @@ test("a log cut inside its run start can't be resumed, and stays as it is", asyn
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toBe(`run log ${log} ends inside its run start; start the run again`);
     expect(readFileSync(log).equals(before)).toBe(true);
+    // `inspectRun` replays the log too, and refuses it the same way.
+    expect(() => inspectRun(log, { flow, env: NO_ENV })).toThrow(RangeError);
+    expect(() => inspectRun(log, { flow, env: NO_ENV })).toThrow("ends inside its run start; start the run again");
   }
 });
 

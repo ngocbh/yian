@@ -97,7 +97,7 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RecordEnvelope, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addInterruptedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
@@ -2875,6 +2875,28 @@ function sweepable(case_: Case): boolean {
 }
 
 /**
+ * Return the seq of the `node_started` of a node that has committed its value by record `k` but
+ * not succeeded; `undefined` when there is none. The resume runs that node again, so what it took
+ * from the host scripts goes back from its start, not from the cut.
+ */
+function committedNodeStart(records: readonly RecordEnvelope[], k: number): number | undefined {
+  const started = new Map<string, number>();
+  const committed = new Set<string>();
+  for (const { kind, seq, record } of records.slice(0, k + 1)) {
+    const nodeId = (record as { nodeId?: string }).nodeId;
+    if (nodeId === undefined) continue;
+    if (kind === "node_started") started.set(nodeId, seq);
+    else if (kind === "pool_commit" && started.has(nodeId)) committed.add(nodeId);
+    else if (kind === "node_succeeded") {
+      started.delete(nodeId);
+      committed.delete(nodeId);
+    }
+  }
+  const open = [...committed].map((nodeId) => started.get(nodeId)!);
+  return open.length === 0 ? undefined : Math.min(...open);
+}
+
+/**
  * Run a `run` case's crash sweep. An uncut run writes N records; then, for each k in 0..N-2, a run
  * on a fresh host is cut after record k, the script entries it took after the cut are put back,
  * the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
@@ -2924,7 +2946,7 @@ export async function crashSweep(
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
     await cutAt(k, cut, at);
-    scripted.putBack(k);
+    scripted.putBack(committedNodeStart(uncutRecords, k) ?? k);
     if (k < inputsCommit) {
       // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed.
       const before = readFileSync(log);

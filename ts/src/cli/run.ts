@@ -69,6 +69,7 @@ import {
   type RunInspection,
   type RunResult,
   runFlow,
+  runLogPath,
   runStartLlm,
   skillGrants,
   staticNodes,
@@ -670,14 +671,16 @@ export function validateRunLogOptions(options: {
 }
 
 /**
- * Create the private CLI directories and return a fresh run's default log path,
- * `~/.yian/runs/<runId>.jsonl`, with `HOME` from `env` (the process user's home directory,
- * `os.homedir()`, when it is unset or empty).
+ * Create the private CLI directories and the run's folder, and return a fresh run's default log
+ * path, `~/.yian/runs/<runId>/log.jsonl` (`runLogPath` under `~/.yian/runs`), with `HOME` from
+ * `env` (the process user's home directory, `os.homedir()`, when it is unset or empty).
  *
- * Both directories are created with mode 0700, or set to it if they exist. The file itself is
- * not created: the run log creates it exclusively, owner-only.
+ * `~/.yian` and `~/.yian/runs` are created with mode 0700, or set to it if they exist; the run's
+ * folder must be new and is created with mode 0700. The file itself is not created: the run log
+ * creates it exclusively, owner-only.
  *
- * @throws {Error} When a directory can't be created or changed, or a non-directory holds its path.
+ * @throws {Error} When a directory can't be created or changed, a non-directory holds the path of
+ *   `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
  */
 export function defaultRunLogPath(runId: string, env: Env): string {
   const stateDir = join(env("HOME") || homedir(), ".yian");
@@ -691,7 +694,7 @@ export function defaultRunLogPath(runId: string, env: Env): string {
     }
     chmodSync(dir, 0o700);
   }
-  return join(runsDir, `${runId}.jsonl`);
+  return runLogPath(runsDir, runId);
 }
 
 /** Write the run's log path to `out`, even when progress is quiet. */
@@ -1177,7 +1180,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
  * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
  * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
- * printed and exits 1. The log is `log`, else a fresh one under `~/.yian/runs` named by the run id.
+ * printed and exits 1. The log is `log`, else `~/.yian/runs/<run id>/log.jsonl` in a fresh folder.
  * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
  * stderr and exits 1. A host failure (a bad option value, a log that can't be created, an MCP
  * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an

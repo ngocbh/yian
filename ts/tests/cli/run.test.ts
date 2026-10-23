@@ -19,7 +19,7 @@
 // prompt, `io.stop`) and the `warning:` lines a run's warnings print as, through progress and
 // under `--quiet`; the entry's `run --json` child, its command line in a binary and as a script
 // (`childCommand`) and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
-// stuck in a CODE body; `status`, TS-only, on logs these runs write. From
+// stuck in a CODE body; `status`, TS-only, on logs these runs write, and its help. From
 // tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -1398,6 +1398,12 @@ describe("check", () => {
 });
 
 describe("status", () => {
+  test("--help names the run log the CLI writes", async () => {
+    const { io, stdout } = testIo();
+    expect(await main(["status", "--help"], io)).toBe(0);
+    expect(stdout()).toMatch(/^ {2}LOG +Path to a run log, such as ~\/\.yian\/runs\/<run_id>\/log\.jsonl$/m);
+  });
+
   /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */
   async function finishedLog(name = "finished.jsonl"): Promise<string> {
     const log = join(tmp, name);

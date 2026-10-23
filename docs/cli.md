@@ -158,7 +158,7 @@ including under `--quiet`. The file becomes authoritative once runtime
 initialization durably commits `RunStarted`:
 
 ```console
-# fresh log: ~/.yian/runs/<run_id>.jsonl
+# fresh log: ~/.yian/runs/<run_id>.jsonl (TS yian: <run_id>/log.jsonl)
 yian run flow.yaml --input topic=climate
 
 # choose another new path (it must not already exist)
@@ -173,6 +173,13 @@ the runtime creates each log exclusively with mode `0600`. A log can retain
 canonical inputs, node outputs (including model, tool, and human data), resolved
 model configuration, and failure tracebacks. Treat it as sensitive data: do not
 commit or publish it.
+
+Changed (TS yian): a fresh run's default log is `~/.yian/runs/<run_id>/log.jsonl`, in a
+folder of its own that the CLI creates with mode `0700`. A run's folder is the folder
+that holds its log, and the files the run writes beside the log (today the writer's lock,
+`log.jsonl.lock`) go only there. With `--log PATH`, the run's folder is `PATH`'s folder,
+so choose a path in a folder no other run uses. `yian status` and `--resume` take the log's
+path.
 
 Recovery reads the original inputs, run identity, and resolved model map from the
 log, including each agent's connection identity (a saved login or the provider's key
@@ -944,8 +951,9 @@ second stop still kills the child.
 
 ### Run status
 
-`yian status LOG` (TS yian only) reports where the run recorded in the run log `LOG` stands. It
-reads the log and never appends to it or takes its lock, so it works while the run is going.
+`yian status LOG` (TS yian only) reports where the run recorded in the run log `LOG` (such as
+`~/.yian/runs/<run_id>/log.jsonl`) stands. It reads the log and never appends to it or takes its
+lock, so it works while the run is going.
 
 ```json
 {"format": "yian.cli.v1", "status": "interrupted", "in_flight": ["draft"], "interrupted_attempts": {"draft": 1}}

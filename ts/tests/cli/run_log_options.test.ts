@@ -30,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
@@ -93,11 +93,12 @@ describe("validateRunLogOptions", () => {
 });
 
 describe("defaultRunLogPath", () => {
-  test("creates both private directories and not the file", () => {
+  test("creates the private directories and the run's folder, and not the file", () => {
     const path = defaultRunLogPath("run-1", (name) => (name === "HOME" ? tmp : undefined));
-    expect(path).toBe(join(tmp, ".yian", "runs", "run-1.jsonl"));
+    expect(path).toBe(join(tmp, ".yian", "runs", "run-1", "log.jsonl"));
     expect(mode(join(tmp, ".yian"))).toBe(0o700);
     expect(mode(join(tmp, ".yian", "runs"))).toBe(0o700);
+    expect(mode(join(tmp, ".yian", "runs", "run-1"))).toBe(0o700);
     expect(existsSync(path)).toBe(false);
   });
 
@@ -113,6 +114,12 @@ describe("defaultRunLogPath", () => {
   test("a state path that is a file is an error", () => {
     writeFileSync(join(tmp, ".yian"), "");
     expect(() => defaultRunLogPath("run-3", (name) => (name === "HOME" ? tmp : undefined))).toThrow(/EEXIST/);
+  });
+
+  test("a run folder path that is a file is an error", () => {
+    mkdirSync(join(tmp, ".yian", "runs"), { recursive: true });
+    writeFileSync(join(tmp, ".yian", "runs", "run-4"), "");
+    expect(() => defaultRunLogPath("run-4", (name) => (name === "HOME" ? tmp : undefined))).toThrow(/EEXIST/);
   });
 });
 
@@ -166,14 +173,17 @@ describe("fresh runs", () => {
     mkdirSync(runsDir, { recursive: true, mode: 0o755 });
     const { code, stdout, stderr } = await runCli(["--input", "topic=clouds", "--quiet"]);
     expect(code).toBe(0);
-    const logs = readdirSync(runsDir).filter((name) => name.endsWith(".jsonl"));
-    expect(logs).toHaveLength(1);
-    const path = join(runsDir, logs[0]!);
+    const runs = readdirSync(runsDir);
+    expect(runs).toHaveLength(1);
+    // The writer's lock file stays beside the log, in the run's folder.
+    expect(readdirSync(join(runsDir, runs[0]!)).sort()).toEqual(["log.jsonl", "log.jsonl.lock"]);
+    const path = join(runsDir, runs[0]!, "log.jsonl");
     const started = readRunLog(path)[0]!;
     expect(started.record).toBeInstanceOf(RunStartedRecord);
-    expect(started.runId).toBe(basename(path, ".jsonl"));
+    expect(started.runId).toBe(runs[0]!);
     expect(mode(stateDir)).toBe(0o700);
     expect(mode(runsDir)).toBe(0o700);
+    expect(mode(join(runsDir, runs[0]!))).toBe(0o700);
     expect(mode(path)).toBe(0o600);
     expect(stderr).toContain(`Run log: ${path}`);
     expect(stdout).toBe("clouds\n");
@@ -322,9 +332,9 @@ describe("resumed runs", () => {
     expect(interrupted.code, err.join("")).toBe(130);
     expect(err.join("")).toContain("cancelled by user");
     const runsDir = join(tmp, "home", ".yian", "runs");
-    const logs = readdirSync(runsDir).filter((name) => name.endsWith(".jsonl"));
-    expect(logs).toHaveLength(1);
-    const log = join(runsDir, logs[0]!);
+    const runs = readdirSync(runsDir);
+    expect(runs).toHaveLength(1);
+    const log = join(runsDir, runs[0]!, "log.jsonl");
     expect(err.join("")).toContain(`Run log: ${log}`);
 
     const resumed = await runCli(["--resume", log, "--quiet"]);

@@ -97,7 +97,7 @@ may change without notice.
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 
@@ -195,6 +195,14 @@ A failed flow resolves with `status: "failed"`; host, callback and log errors re
 
 A callback that throws, or returns a promise that rejects, stops the run, which rejects with that
 error.
+
+Each run gets a folder of its own: a run's folder is the folder that holds its `log`, and the files
+the run writes beside the log (today the writer's lock, `<log>.lock`) go only there. Pass
+`log: runLogPath(runsDir, runId)` with the same `runId` to get `<runsDir>/<runId>/log.jsonl`;
+`runLogPath` makes the new run folder with mode 0700 (the runs folder too, when missing), creates
+no file, throws `EEXIST` when anything already holds the run folder's path, and throws a
+`RangeError` for a run id that isn't one folder name. A host that passes a `log` path of its own
+must keep one run per folder; Yian doesn't check it. The CLI uses `~/.yian/runs`.
 
 ### `RunResult`
 

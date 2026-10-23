@@ -141,6 +141,7 @@ test("only the final log-only runtime and run API remain", () => {
   const resumeOptions: Record<keyof run.ResumeFlowOptions, true> = {
     log: true,
     flow: true,
+    codeRoot: true,
     numWorkers: true,
     onEvent: true,
     onStream: true,
@@ -158,7 +159,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(resumeOptions)).toHaveLength(18);
+  expect(Object.keys(resumeOptions)).toHaveLength(19);
   expect(run.resumeFlow.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });

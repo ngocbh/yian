@@ -4,10 +4,19 @@
  * compiles the recorded flow, never the files on disk.
  *
  * TS-only too: `loadFlowSource` with `codeRoot` checks every recorded file's CODE references, a
- * host child's included, against it.
+ * host child's included, against it, and so do `resumeFlow` and `loadRecordedFlow` with `codeRoot`.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -18,7 +27,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { VERSION, withWarnings } from "../../src/platform.ts";
-import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { loadRecordedFlow, resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
@@ -563,6 +572,78 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("up:x");
+});
+
+/** Write, in `root/flows`, a flow whose child runs the CODE file `lib/fn.ts`; return the flow. */
+async function writeCodeFlow(root: string): Promise<{ flows: string; flow: ComposedFlow }> {
+  const flows = join(root, "flows");
+  writeTree(flows, { "flow.yaml": ROOT, "lib/child.yaml": CODE_CHILD, "lib/fn.ts": UP });
+  return { flows, flow: await loadRoot(flows) };
+}
+
+/** Replace `flows/lib/fn.ts` by a symlink to a copy in `out`. */
+function linkCodeFileOut(flows: string, out: string): void {
+  writeTree(out, { "fn.ts": UP });
+  rmSync(join(flows, "lib", "fn.ts"));
+  symlinkSync(join(out, "fn.ts"), join(flows, "lib", "fn.ts"));
+}
+
+test("resume with codeRoot runs a recorded flow whose CODE files stay inside it", async () => {
+  const root = freshDir("code-root");
+  const { flow } = await writeCodeFlow(root);
+  const log = await cutRun(flow, 9);
+
+  expect((await loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }))!.compiled.flowId).toBe("root");
+  const resumed = await resumeFlow({ log, env: hostEnv(logs), codeRoot: root });
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("up:x");
+});
+
+test.each<[string, (flows: string, out: string) => void]>([
+  ["the file replaced by a symlink pointing out", linkCodeFileOut],
+  [
+    "its folder moved out and linked back",
+    (flows, out) => {
+      renameSync(join(flows, "lib"), join(out, "lib"));
+      symlinkSync(join(out, "lib"), join(flows, "lib"));
+    },
+  ],
+])(
+  "resume with codeRoot refuses a recorded CODE file that now resolves outside it, before appending anything: %s",
+  async (_name, change) => {
+    const root = freshDir("code-root");
+    const out = freshDir("code-out");
+    const { flows, flow } = await writeCodeFlow(root);
+    const log = await cutRun(flow, 9);
+    change(flows, out);
+    const before = readFileSync(log);
+
+    const error = await loadErrorAsync(resumeFlow({ log, env: hostEnv(logs), codeRoot: root }));
+    expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect(readFileSync(log).equals(before)).toBe(true);
+    const loadError = await loadErrorAsync(loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }));
+    expect(loadError.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+
+    // Unconfined, the same log resumes: the moved file still exports `up`.
+    const resumed = await resumeFlow({ log, env: hostEnv(logs) });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toBe("up:x");
+  },
+);
+
+test("a finished log is refused with codeRoot too when its CODE file resolves outside it", async () => {
+  const root = freshDir("code-root");
+  const out = freshDir("code-out");
+  const { flows, flow } = await writeCodeFlow(root);
+  const log = await runInto(flow);
+  linkCodeFileOut(flows, out);
+  const before = readFileSync(log);
+
+  const error = await loadErrorAsync(resumeFlow({ log, env: hostEnv(logs), codeRoot: root }));
+
+  expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+  expect(readFileSync(log).equals(before)).toBe(true);
 });
 
 /** Cut a run of `AGENT_FLOW` after its AGENT ran, with the tool `t`; return the log. */

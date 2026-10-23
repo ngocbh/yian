@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "yian.message.v1",
-  "description": "One yian message: yian's own message records (run logs, session transcripts, model_attempt.partial, conformance scripts). yian reads them strictly and refuses an unknown key or part type; later versions add keys and part types, so a newer record fails an older yian. An optional key is left out, never null. Payloads (provider_payload, tool-call arguments) are opaque JSON whose numbers are finite and whose ints have any size. In yian's codec form (run logs, frames), a payload object shaped like {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, or whose only key is $record, is written as {\"$record\": <object>}; message numbers are never infinite.",
+  "description": "One yian message: yian's own message records (run logs, session transcripts, model_call step outputs, conformance scripts). yian reads them strictly and refuses an unknown key or part type; later versions add keys and part types, so a newer record fails an older yian. An optional key is left out, never null. Payloads (provider_payload, tool-call arguments) are opaque JSON whose numbers are finite and whose ints have any size. In yian's codec form (run logs, frames), a payload object shaped like {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, or whose only key is $record, is written as {\"$record\": <object>}; message numbers are never infinite.",
   "type": "object",
   "required": ["format", "role", "parts"],
   "additionalProperties": false,

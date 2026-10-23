@@ -1,10 +1,11 @@
 /**
- * Transient AGENT observers: streamed reply text, model and tool call brackets, usage.
+ * An AGENT's model call, recorded as a `model_call` step, and its transient observers: streamed
+ * reply text, model and tool call brackets, usage.
  *
- * Everything here is callback-only: chunks and events go to evaluator-supplied sinks and nowhere
- * else. Nothing is recorded, retained in memory, or replayed on resume, and the reply is the same
- * with or without sinks. Every call streams on the wire; a chat reply's text reaches the host only
- * when a stream sink exists.
+ * Chunks and events go to evaluator-supplied sinks and nowhere else; the reply is the same with
+ * or without sinks. The call itself is written to the node's steps (`AgentSteps`) once it returns,
+ * before anything acts on it; nothing is replayed on resume yet. Every call streams on the wire; a
+ * chat reply's text reaches the host only when a stream sink exists.
  *
  * A model call retries under `YIAN_MODEL_RETRIES` and publishes one bracket per attempt: each
  * attempt's `ModelCallStarted`, its chunks, then its `ModelCallFinished`. A finished event with
@@ -31,16 +32,16 @@ import {
   ToolCallStarted,
 } from "../../events.ts";
 import { type ErrorKind, ProviderError } from "../../llm/errors.ts";
-import { type ChatModel, TextDelta, UsageReport } from "../../llm/events.ts";
+import { type ChatModel, ReplyAssembler, TextDelta, UsageReport } from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
-import { Message, type Request, type Response, TextPart } from "../../llm/messages.ts";
+import { Message, type Request, Response, TextPart } from "../../llm/messages.ts";
 import { isAuthFailure } from "../../llm_clients/auth/common.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
 import { copyValue } from "../binding.ts";
-import type { AgentRunContext, RetrySettings } from "./context.ts";
+import { type AgentRunContext, type AgentSteps, fileToInline, inlineToFile, type RetrySettings } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 
 /** The stream key of AGENT reply text. */
@@ -120,7 +121,8 @@ export function errorName(error: unknown): string {
 }
 
 /**
- * Make one model call through `callWithRetries`, publishing each attempt to the sinks.
+ * Make one model call through `callWithRetries`, publishing each attempt to the sinks and, with
+ * `record`, writing it as a `model_call` step.
  *
  * Each attempt emits `ModelCallStarted`, then, for purpose `chat` with a stream sink, one chunk
  * per non-empty text delta; a retried attempt ends with `ModelCallFinished` naming its error and
@@ -129,6 +131,14 @@ export function errorName(error: unknown): string {
  * by name on the last attempt's `ModelCallFinished`, with or without sinks; a `CapabilityFault`,
  * or any error once `signal` aborted, passes through untouched with nothing more emitted. Sinks
  * throw `CapabilityFault` (the evaluator wraps them); any other sink error counts as a model failure.
+ *
+ * With `record`, the request goes to the model with its file media inlined (`fileToInline`), and
+ * the call is written before anything acts on it: each failed attempt, before its
+ * `ModelCallFinished`, with its wait (`retry_in`, `null` when it isn't retried), what arrived and
+ * its usage; the reply, with its media stored as run files (`inlineToFile`), before this returns
+ * (as settled, since it arrived while the call was live); a reply a host interrupt cut, with
+ * finish `interrupted`. A call the stop cut writes nothing, nor does a retry wait an interrupt
+ * ended.
  *
  * With `interrupt`, a host interrupt cuts the call. During an attempt it is checked right before
  * each non-empty `TextDelta` that isn't the attempt's first event (a later chunk, as a host sees
@@ -140,9 +150,9 @@ export function errorName(error: unknown): string {
  * @param live The sinks, or `null` when there are none.
  * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call;
  *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
- *   waits, and its `onRetry` runs before each failed attempt's `ModelCallFinished`, its errors
- *   treated as a sink's.
- * @returns The successful attempt's reply.
+ *   waits; `record` holds the steps to write to and the request's digest (`requestSha256`).
+ * @returns The successful attempt's reply, its media in file form with `record`, and with
+ *   `record` the `n` of the reply's `model_call` step (`null` without).
  * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
  *   reply and `null` usage for a cut wait; it is never marked.
  */
@@ -156,24 +166,38 @@ export async function callModel(
     signal?: AbortSignal;
     interrupt?: AbortSignal;
     retry?: RetrySettings;
+    record?: { steps: AgentSteps; digest: string };
   },
-): Promise<Response> {
-  const { purpose, exchangeId, signal, interrupt, retry = {} } = options;
-  const { scheduler = realScheduler, random, onRetry } = retry;
+): Promise<{ response: Response; n: number | null }> {
+  const { purpose, exchangeId, signal, interrupt, retry = {}, record } = options;
+  const { scheduler = realScheduler, random } = retry;
   const emitEvent = live?.emitEvent ?? null;
   const emitStream = purpose === "chat" ? (live?.emitStream ?? null) : null;
   const identity = { nodeId: live?.nodeId ?? "", exchangeId, purpose, provider: live?.provider, model: live?.model };
   const chunk = (text: string, attempt: number, final = false) =>
     new StreamChunk({ nodeId: identity.nodeId, key: STREAM_KEY, chunk: text, final, exchangeId, attempt });
+  const runDir = record?.steps.runDir ?? null;
+  const sent = runDir === null ? request : await fileToInline(request, runDir);
   let attempt = 0;
-  // The current attempt so far: whether no event arrived yet, the text shown, the latest usage.
+  // The current attempt so far: whether no event arrived yet, the text shown, the latest usage,
+  // when it started and its first event arrived, and what arrived, for its step.
   let first = true;
   let shownText = "";
   let usage: TokenUsage | null = null;
+  let startedAt = 0;
+  let firstTokenAt: number | null = null;
+  let arrived = new ReplyAssembler();
   let waiting = false;
+  const call = () => ({
+    purpose,
+    model: model.model,
+    requestSha256: record!.digest,
+    startedAt,
+    firstTokenAt,
+  });
   let response: Response;
   try {
-    response = await callWithRetries(model, request, {
+    response = await callWithRetries(model, sent, {
       signal,
       random,
       scheduler: interrupt === undefined ? scheduler : interruptible(scheduler, interrupt, () => (waiting = true)),
@@ -183,6 +207,9 @@ export async function callModel(
         first = true;
         shownText = "";
         usage = null;
+        firstTokenAt = null;
+        arrived = new ReplyAssembler();
+        if (record !== undefined) startedAt = record.steps.now();
         emitEvent?.(new ModelCallStarted({ ...identity, attempt: k }));
       },
       onEvent: (event, k) => {
@@ -191,14 +218,16 @@ export async function callModel(
           const parts = shownText ? [new TextPart(shownText)] : [];
           throw new ReplyInterrupted(new Message({ role: "assistant", parts }), usage);
         }
+        if (first && record !== undefined) firstTokenAt = record.steps.now();
         first = false;
+        if (record !== undefined) arrived.add(event);
         if (event instanceof UsageReport) usage = new TokenUsage(event.usage);
         if (text === "") return;
         shownText += text;
         emitStream?.(chunk(text, k));
       },
       onRetry: (info) => {
-        onRetry?.(info);
+        record?.steps.failedModelCall({ ...call(), output: info.partial, usage, retryIn: info.retryIn }, info.error);
         emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(info.error), attempt: info.attempt }));
       },
     });
@@ -208,17 +237,35 @@ export async function callModel(
     if (error instanceof ReplyInterrupted) {
       // A cut wait already reported its attempt's end, with the error it was retrying.
       if (!waiting) {
+        record?.steps.modelCall({
+          ...call(),
+          output: error.reply,
+          responseId: null,
+          finish: "interrupted",
+          usage: error.usage,
+        });
         emitStream?.(chunk("", attempt, true));
         emitEvent?.(new ModelCallFinished({ ...identity, usage: error.usage, attempt }));
       }
       throw error;
     }
+    record?.steps.failedModelCall({ ...call(), output: arrived.partial(), usage, retryIn: null }, error);
     markModelFailure(error);
     emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(error), attempt }));
     throw error;
   }
+  let n: number | null = null;
+  if (record !== undefined) {
+    const reply = inlineToFile(response.message, runDir);
+    const { usage: used, finishReason, responseId } = response;
+    n = record.steps.modelCall(
+      { ...call(), output: reply, responseId, finish: finishReason, usage: used },
+      { settled: true },
+    );
+    response = new Response({ message: reply, usage: used, finishReason, responseId });
+  }
   emitEvent?.(new ModelCallFinished({ ...identity, usage: usageOf(response), attempt }));
-  return response;
+  return { response, n };
 }
 
 /**

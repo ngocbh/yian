@@ -119,12 +119,28 @@ expect:
           occurrence_path: []
           static_path: [__start__]
   - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: recorded answer, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 9d3569c0b91ae9281c0ca9e2eaafd2273812e1ffcbaa9a7e1baba74246ad960a
+        response_id: null
+        usage: null
   - - pool_commit
     - writer
     - value: recorded answer
   - - node_succeeded
     - writer
-    - commit: 9
+    - commit: 10
       forward_capture:
         bound_inputs:
           tags: [a, b]
@@ -166,7 +182,7 @@ expect:
     - value: recorded answer
   - - node_succeeded
     - __end__
-    - commit: 12
+    - commit: 13
       forward_capture:
         bound_inputs: {result: recorded answer}
         evaluated_keys: [result]
@@ -224,7 +240,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 11
+            execution_seq: 12
             path: []
             run_id: r1
         feedback: [Explain the answer.]
@@ -254,7 +270,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
+          execution_seq: 12
           path: []
           run_id: r1
       proposals: []

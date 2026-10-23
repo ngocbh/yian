@@ -91,19 +91,43 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: tool_calls
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: ok go, type: text}
+          - arguments: {topic: a}
+            id: call-1
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
+        response_id: null
+        usage: {cache_read_tokens: null, input_tokens: 500, output_tokens: 20, reasoning_tokens: null}
+  - - node_step
+    - chat
+    - n: 2
+      step: {call_id: call-1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
   - - pool_commit
     - chat
     - value: ok go
   - - node_succeeded
     - chat
-    - {commit: 9}
+    - {commit: 11}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: ok go
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted

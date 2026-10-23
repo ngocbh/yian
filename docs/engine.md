@@ -222,10 +222,11 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 13, with a `RunStoppedRecord`, every payload field
+Changed (TS yian): records use schema 14, with a `RunStoppedRecord`, every payload field
 required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
-flow files, the skills and tool specs the AGENTs grant, the yian version and the parent run, and
-a `PoolCommitRecord` for every write to the variable pool; see
+flow files, the skills and tool specs the AGENTs grant, the yian version and the parent run,
+a `PoolCommitRecord` for every write to the variable pool, and node steps numbered within their
+node (`n`), an AGENT's model calls and tool results among them; see
 [Authoritative run logs](api.md#authoritative-run-logs).
 
 Changed (TS yian): a node's output is a `pool_commit` written before the `node_succeeded` that

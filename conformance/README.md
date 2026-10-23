@@ -534,7 +534,7 @@ they are, except as the rules below say), and an empty payload is left out.
 | `run_resumed` | null | `retry_node_ids`, `num_workers` |
 | `run_stopped` (TS only) | null | `reason` (the reason's kind), `node_ids` |
 | `node_started` | `node_id` | none |
-| `node_step` | `node_id` | `step` |
+| `node_step` | `node_id` | `n` (TS only: the step's number within the node), `step` |
 | `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`) |
 | `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `forward_capture` |
 | `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
@@ -554,7 +554,7 @@ For example:
 - [pool_commit, __start__, {key: system.today}]
 - [pool_commit, __start__, {value: {q: x}}]
 - [node_started, fetch]
-- [node_step, fetch, {step: {event: failed, attempt: 1, error: {type: TransientToolError, message: busy}, retry_in: 0.5}}]
+- [node_step, fetch, {n: 1, step: {kind: tool_attempt, event: failed, attempt: 1, error: {type: TransientToolError, message: busy}, retry_in: 0.5}}]
 - [pool_commit, fetch, {value: F1}]
 - [node_succeeded, fetch, {commit: 7}]
 - [node_failed, place, {failure: {code: node.execute, message: rejected, node: place, frames: [{label: flow.yaml, range: [12, 3, 12, 8]}]}}]
@@ -603,8 +603,12 @@ For example:
   internal and its effect is recorded in each call-time agent's `effective_llm_config` step.
 - The backward records' nested structures are kept as recorded, except the backward failure
   above.
+- A step (TS schema 14) shows its `n` and every field as written, its `kind` included: a TOOL's
+  `tool_attempt`, a call-time agent's `llm_config`, an AGENT's `model_call` and `tool_result`.
+  Its times (`started_at`, `first_token_at`) are left out.
 - In TOOL steps, `retry_in` is a float, and a `failed` step's error type goes through the
-  error-class table.
+  error-class table; so does a failed `model_call`'s error `kind` (a provider error's kind, such
+  as `rate_limit`, is no class and stays).
 
 **Python reference.** The trace rules at tag `conformance-trace-python` are the last ones both
 implementations share. After that the TS trace shows the TS log as written; a shared case whose
@@ -726,7 +730,8 @@ A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.json
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
 case, with its backward records), pinned byte for byte. Before
 the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
-(the `value` of the `system.now` and `system.today` commits), the recorded flow's folder (`run_started`'s
+(the `value` of the `system.now` and `system.today` commits), a step's times (`started_at` and
+`first_token_at`, when set), the recorded flow's folder (`run_started`'s
 `flow.dir`) and the yian version (`yian_version`) are replaced by `"<masked>"`, since the times
 come from the virtual clock, which starts at the real time, the folder is the case's temporary one,
 and the version changes with each release; each line is then written again with the log's own

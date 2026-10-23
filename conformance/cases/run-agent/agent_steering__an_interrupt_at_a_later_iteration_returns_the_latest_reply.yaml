@@ -91,19 +91,43 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: Looking., type: text}
+          - arguments: {topic: a}
+            id: call-1
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {call_id: call-1, is_error: false, kind: tool_result, output: found}
   - - pool_commit
     - chat
     - value: Looking.
   - - node_succeeded
     - chat
-    - {commit: 9}
+    - {commit: 11}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: Looking.
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -166,5 +190,5 @@ expect:
     - args:
         topic: a
       attempt: 1
-      call_id: r1/chat/<id:1>/0
+      call_id: r1/chat/1/0
       node: chat

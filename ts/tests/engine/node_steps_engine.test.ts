@@ -29,6 +29,8 @@
  *
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
  * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
+ * `record` returns what its recorder returns: through the engine, the committed record's `n`, which
+ * continues across the node's starts. A step without a `kind` is a host error.
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
  * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step either;
@@ -79,7 +81,7 @@ class PlainNode extends StepNode {
 }
 
 test("NodeSteps checks its fields", () => {
-  const record = (): void => {};
+  const record = (): number => 1;
 
   expect(() => new NodeSteps(true as never, [], record)).toThrow(TypeError);
   expect(() => new NodeSteps(0, [], record)).toThrow(RangeError);
@@ -88,8 +90,13 @@ test("NodeSteps checks its fields", () => {
   expect(() => new NodeSteps(1, [], null as never)).toThrow(TypeError);
 });
 
+test("NodeSteps.record returns the n its recorder returns", () => {
+  const steps = new NodeSteps(1, [], () => 7);
+  expect(steps.record({ kind: "test" })).toBe(7);
+});
+
 test("eval node passes steps only to opted in nodes and checks the type", async () => {
-  const steps = new NodeSteps(1, [], () => {});
+  const steps = new NodeSteps(1, [], () => 1);
   const seen: unknown[] = [];
   const body = (caps: NodeCaps): NodeResult => {
     seen.push(caps.steps);
@@ -106,16 +113,16 @@ test("eval node passes steps only to opted in nodes and checks the type", async 
   expect([given.starts, given.prior]).toEqual([1, []]);
   expect(seen.slice(1)).toEqual([undefined, undefined]);
   const recorded: ValueRecord[] = [];
-  const recording = new NodeSteps(2, [{ attempt: 1n }], (step) => recorded.push(step));
+  const recording = new NodeSteps(2, [{ kind: "test", attempt: 1n }], (step) => recorded.push(step));
   const recordingBody = (caps: NodeCaps): NodeResult => {
     seen.push(caps.steps);
-    caps.steps!.record({ attempt: 2n });
+    caps.steps!.record({ kind: "test", attempt: 2n });
     return new Output("done");
   };
   await evalNode(new StepNode("e", recordingBody), null, pool, { steps: recording });
   const passed = seen.at(-1) as NodeSteps;
-  expect([passed.starts, passed.prior]).toEqual([2, [{ attempt: 1n }]]);
-  expect(recorded).toEqual([{ attempt: 2n }]);
+  expect([passed.starts, passed.prior]).toEqual([2, [{ kind: "test", attempt: 1n }]]);
+  expect(recorded).toEqual([{ kind: "test", attempt: 2n }]);
   await expect(evalNode(new StepNode("d", body), null, pool, { steps: { starts: 1 } as never })).rejects.toThrow(
     new TypeError("steps must be a NodeSteps or null"),
   );
@@ -128,7 +135,7 @@ test("a node that catches the recorder's fault still rejects evalNode with its o
   });
   const node = new StepNode("a", (caps) => {
     try {
-      caps.steps!.record({ event: "started" });
+      caps.steps!.record({ kind: "test", event: "started" });
     } catch {}
     return new Output("done");
   });
@@ -197,7 +204,7 @@ test.each(WORKERS)("steps are durable before record returns (numWorkers %p)", as
     const steps = caps.steps!;
     seen.push([steps.constructor, steps.starts, steps.prior]);
     for (const attempt of [1n, 2n]) {
-      steps.record({ event: "started", attempt });
+      steps.record({ kind: "test", event: "started", attempt });
       const stepRecords = built.log.records().filter((envelope) => envelope.record instanceof NodeStepRecord);
       seen.push((stepRecords.at(-1)!.record as NodeStepRecord).step);
     }
@@ -208,14 +215,14 @@ test.each(WORKERS)("steps are durable before record returns (numWorkers %p)", as
 
   expect(seen).toEqual([
     [NodeSteps, 1, []],
-    { attempt: 1n, event: "started" },
-    { attempt: 2n, event: "started" },
+    { attempt: 1n, event: "started", kind: "test" },
+    { attempt: 2n, event: "started", kind: "test" },
   ]);
   const work = records(built, "work");
   expect(work.slice(0, 3)).toEqual([
     new NodeStartedRecord("work"),
-    new NodeStepRecord("work", { event: "started", attempt: 1n }),
-    new NodeStepRecord("work", { event: "started", attempt: 2n }),
+    new NodeStepRecord("work", 1, { kind: "test", event: "started", attempt: 1n }),
+    new NodeStepRecord("work", 2, { kind: "test", event: "started", attempt: 2n }),
   ]);
   // The output's commit, then the success that accepts it.
   expect(work[3]).toBeInstanceOf(PoolCommitRecord);
@@ -247,7 +254,7 @@ test("prior is a snapshot taken at the start", async () => {
   const built = single(
     new StepNode("work", (caps) => {
       const steps = caps.steps!;
-      steps.record({ event: "started" });
+      steps.record({ kind: "test", event: "started" });
       seen.push(steps.prior);
       return new Output("done");
     }),
@@ -265,7 +272,7 @@ function crashingNode(later: (steps: NodeSteps) => NodeResult): StepNode {
   return new StepNode("work", (caps) => {
     const steps = caps.steps!;
     if (steps.starts === 1) {
-      steps.record({ event: "failed", attempt: 1n, nested: { retry_in: 1n } });
+      steps.record({ kind: "test", event: "failed", attempt: 1n, nested: { retry_in: 1n } });
       caps.emitStream!(new StreamChunk({ nodeId: "work", key: "output", chunk: "crash" }));
     }
     return later(steps);
@@ -311,13 +318,26 @@ describe.each(WORKERS)("resume sees the second start and the prior steps (numWor
         return new Output("done");
       });
       const resumed = await crashAndResume(crashing(node, numWorkers), numWorkers, replay);
-      const failed = { attempt: 1n, event: "failed", nested: { retry_in: 1n } };
+      const failed = { attempt: 1n, event: "failed", kind: "test", nested: { retry_in: 1n } };
       expect(seen).toEqual([[2, [failed]]]);
       expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
       const steps = records(resumed, "work").filter((record) => record instanceof NodeStepRecord);
       expect(steps.map((record) => (record as NodeStepRecord).step)).toEqual([failed]);
     });
   }
+});
+
+test.each(WORKERS)("an engine step's n is the node's step count, across starts (numWorkers %p)", async (numWorkers) => {
+  const seen: number[] = [];
+  const node = crashingNode((steps) => {
+    seen.push(steps.record({ kind: "test", event: "started" }));
+    return new Output("done");
+  });
+  const resumed = await crashAndResume(crashing(node, numWorkers), numWorkers);
+  // `record` returns the committed record's n, which counts the first start's step.
+  expect(seen).toEqual([2]);
+  const steps = records(resumed, "work").filter((record) => record instanceof NodeStepRecord);
+  expect(steps.map((record) => (record as NodeStepRecord).n)).toEqual([1, 2]);
 });
 
 test("resume hands detached prior steps", async () => {
@@ -331,14 +351,14 @@ test("resume hands detached prior steps", async () => {
   });
   first = crashing(node);
   await crashAndResume(first);
-  expect(kept).toEqual([[{ attempt: 1n, event: "failed", nested: { retry_in: 1n } }]]);
+  expect(kept).toEqual([[{ attempt: 1n, event: "failed", kind: "test", nested: { retry_in: 1n } }]]);
 });
 
 test.each(WORKERS)("a recorder log fault escapes as a host error (numWorkers %p)", async (numWorkers) => {
   const after: string[] = [];
   const built = single(
     new StepNode("work", (caps) => {
-      caps.steps!.record({ event: "started", attempt: 2n });
+      caps.steps!.record({ kind: "test", event: "started", attempt: 2n });
       after.push("continued");
       return new Output("done");
     }),
@@ -360,7 +380,7 @@ test("a node that catches the recorder's log fault still fails the run with it",
   const built = single(
     new StepNode("work", (caps) => {
       try {
-        caps.steps!.record({ event: "started" });
+        caps.steps!.record({ kind: "test", event: "started" });
       } catch {}
       return new Output("done");
     }),
@@ -381,6 +401,7 @@ const invalidSteps: [string, unknown, ErrorConstructor][] = [
   ["object", { when: new Date(0) }, RangeError],
   ["nan", { retry_in: NaN }, RangeError],
   ["list", ["x"], TypeError],
+  ["no kind", { event: "started" }, TypeError],
 ];
 
 test.each(WORKERS.flatMap((numWorkers) => invalidSteps.map((row) => [numWorkers, ...row] as const)))(
@@ -406,7 +427,7 @@ test("serial skips a step once stop is set", async () => {
   const node = new StepNode("work", async (caps) => {
     await aborted(caps.signal!).catch(() => {});
     try {
-      caps.steps!.record({ event: "started", attempt: 2n });
+      caps.steps!.record({ kind: "test", event: "started", attempt: 2n });
     } catch (error) {
       raised.push(error);
       throw error;
@@ -431,7 +452,7 @@ test("a sibling failure stops a pooled node's steps", async () => {
     await aborted(caps.signal!).catch(() => {});
     reasons.push(caps.signal!.reason);
     try {
-      caps.steps!.record({ event: "started", attempt: 2n });
+      caps.steps!.record({ kind: "test", event: "started", attempt: 2n });
     } catch (error) {
       raised.push(error);
       throw error;
@@ -501,7 +522,7 @@ test("pooled nodes interleave their own steps", async () => {
         await Promise.race([turns.get(nodeId)!.promise, aborted(caps.signal!)]);
         turns.set(nodeId, Promise.withResolvers<void>());
       }
-      caps.steps!.record({ node: nodeId, attempt });
+      caps.steps!.record({ kind: "test", node: nodeId, attempt });
       turns.get(other)!.resolve();
     }
     return new Output(nodeId);
@@ -515,11 +536,11 @@ test("pooled nodes interleave their own steps", async () => {
     .records()
     .map((envelope) => envelope.record)
     .filter((record) => record instanceof NodeStepRecord)
-    .map((record) => [(record as NodeStepRecord).nodeId, (record as NodeStepRecord).step]);
+    .map((record) => [(record as NodeStepRecord).nodeId, (record as NodeStepRecord).n, (record as NodeStepRecord).step]);
   expect(steps).toEqual([
-    ["a", { attempt: 1n, node: "a" }],
-    ["b", { attempt: 1n, node: "b" }],
-    ["a", { attempt: 2n, node: "a" }],
-    ["b", { attempt: 2n, node: "b" }],
+    ["a", 1, { attempt: 1n, kind: "test", node: "a" }],
+    ["b", 1, { attempt: 1n, kind: "test", node: "b" }],
+    ["a", 2, { attempt: 2n, kind: "test", node: "a" }],
+    ["b", 2, { attempt: 2n, kind: "test", node: "b" }],
   ]);
 });

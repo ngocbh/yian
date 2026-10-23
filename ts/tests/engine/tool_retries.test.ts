@@ -360,9 +360,9 @@ test("forward without steps retries in memory", async () => {
 test("a resumed start continues the numbering and re-waits", async () => {
   const recorded: ValueRecord[] = [];
   const prior: ValueRecord[] = [
-    { event: "failed", attempt: 1n, error: { type: "TimeoutError", message: "a" }, retry_in: 1 },
-    { event: "started", attempt: 2n },
-    { event: "failed", attempt: 2n, error: { type: "TimeoutError", message: "b" }, retry_in: 2 },
+    { kind: "tool_attempt", event: "failed", attempt: 1n, error: { type: "TimeoutError", message: "a" }, retry_in: 1 },
+    { kind: "tool_attempt", event: "started", attempt: 2n },
+    { kind: "tool_attempt", event: "failed", attempt: 2n, error: { type: "TimeoutError", message: "b" }, retry_in: 2 },
   ];
   // Starts: the first evaluation, a crash inside attempt 3's start, and this one.
   const steps = new NodeSteps(3, prior, (step) => recorded.push(step));
@@ -597,7 +597,7 @@ test("odd error text is recorded safely", async () => {
     expect(result).toEqual(new Output("ok"));
     const [failed, started] = recorded;
     expect(failed!.error).toEqual(shown);
-    expect(started).toEqual({ event: "started", attempt: 2n });
+    expect(started).toEqual({ kind: "tool_attempt", event: "started", attempt: 2n });
   }
 });
 
@@ -664,10 +664,10 @@ for (const numWorkers of [0, 2]) {
     expect(new Set(flaky.seen.map((ctx) => ctx.callId))).toEqual(new Set(["run-123/call"]));
     expect(sleeps).toEqual([1000, 2000]);
     expect(steps).toEqual([
-      { event: "failed", attempt: 1n, error: { type: "TimeoutError", message: "a" }, retry_in: 1 },
-      { event: "started", attempt: 2n },
-      { event: "failed", attempt: 2n, error: { type: "TimeoutError", message: "b" }, retry_in: 2 },
-      { event: "started", attempt: 3n },
+      { kind: "tool_attempt", event: "failed", attempt: 1n, error: { type: "TimeoutError", message: "a" }, retry_in: 1 },
+      { kind: "tool_attempt", event: "started", attempt: 2n },
+      { kind: "tool_attempt", event: "failed", attempt: 2n, error: { type: "TimeoutError", message: "b" }, retry_in: 2 },
+      { kind: "tool_attempt", event: "started", attempt: 3n },
     ]);
   });
 }

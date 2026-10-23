@@ -80,10 +80,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -562,26 +562,36 @@ export class NodeStartedRecord {
 /**
  * Append one step an in-flight node recorded while it runs. Frozen.
  *
- * The step is opaque to the runtime: the node that writes it gives it meaning, and a later
- * evaluation of the same node reads its recorded steps back.
+ * The step is a JSON object with a string `kind`; the node that writes it gives it meaning, and a
+ * later evaluation of the same node reads its recorded steps back. `n` numbers the node's steps
+ * from 1 across its starts, so `node_id` + `n` names the step.
  */
 export class NodeStepRecord {
   /** Non-empty id of the in-flight node that recorded the step. */
   readonly nodeId: string;
+  /** The step's number among the node's steps, from 1. */
+  readonly n: number;
   /** A deep-frozen canonical copy of the step, keys in code-unit order. */
   readonly step: Readonly<JsonObject>;
 
   /**
-   * @param step A JSON object; `-0` is kept as `0` and `±Infinity` as is.
-   * @throws TypeError when `nodeId` isn't a string or `step` isn't a plain object.
-   * @throws RangeError when `nodeId` is empty.
+   * @param step A JSON object with a non-empty string `kind`; `-0` is kept as `0` and
+   *   `±Infinity` as is.
+   * @throws TypeError when `nodeId` isn't a string, `n` isn't a safe integer, `step` isn't a
+   *   plain object, or its `kind` isn't a non-empty string.
+   * @throws RangeError when `nodeId` is empty or `n` is less than 1.
    * @throws TypeCheckError at the bad part's path when the step holds NaN, a `FileRef` or
    *   another non-JSON value (see `jsonPart`).
    */
-  constructor(nodeId: string, step: Readonly<Record<string, unknown>>) {
+  constructor(nodeId: string, n: number, step: Readonly<Record<string, unknown>>) {
     this.nodeId = requireNonemptyString(nodeId, "node_id");
+    if (typeof n !== "number" || !Number.isSafeInteger(n)) throw new TypeError("node step n must be an int");
+    if (n < 1) throw new RangeError("node step n must be at least 1");
+    this.n = n;
     if (!isRecord(step)) throw new TypeError("node step must be a JSON object");
     this.step = freezeParsed(canonicalCopy(jsonPart(step, [], "refuse")) as JsonObject);
+    const kind = this.step["kind"];
+    if (typeof kind !== "string" || kind === "") throw new TypeError("node step kind must be a non-empty string");
     Object.freeze(this);
   }
 }
@@ -2995,7 +3005,9 @@ function payloadForRecord(record: RunRecord): JsonObject {
     return { reason: record.reason, message: record.message, node_ids: [...record.nodeIds] };
   }
   if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
-  if (record instanceof NodeStepRecord) return { node_id: record.nodeId, step: record.step as JsonObject };
+  if (record instanceof NodeStepRecord) {
+    return { node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject };
+  }
   if (record instanceof PoolCommitRecord) {
     return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
   }
@@ -3114,9 +3126,10 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       requireFields(payload, ["node_id"], label);
       return new NodeStartedRecord(wireName(payload["node_id"], `${label} node_id`));
     case "node_step":
-      requireFields(payload, ["node_id", "step"], label);
+      requireFields(payload, ["node_id", "n", "step"], label);
       return new NodeStepRecord(
         wireName(payload["node_id"], `${label} node_id`),
+        wireInt(payload["n"], `${label} n`),
         wireObject(payload["step"], `${label} step`),
       );
     case "pool_commit":

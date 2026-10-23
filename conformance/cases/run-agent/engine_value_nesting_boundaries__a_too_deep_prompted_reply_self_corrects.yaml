@@ -77,13 +77,45 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, agent]
+  - - node_step
+    - agent
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: no-structured-sentinel
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"value": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": "leaf"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}', type: text}
+          role: assistant
+        purpose: structured_fallback
+        request_sha256: 7bf43a834834c603167650ddde21875a760198f43b005f55a07f1d36549be062
+        response_id: null
+        usage: null
+  - - node_step
+    - agent
+    - n: 2
+      step:
+        finish: null
+        kind: model_call
+        model: no-structured-sentinel
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"value": {"k": 1}}', type: text}
+          role: assistant
+        purpose: structured_fallback
+        request_sha256: 43d49e77c0d0c54b3ea516888778f1503bc19cbba22a0d81ed0be6b511d27bdd
+        response_id: null
+        usage: null
   - - pool_commit
     - agent
     - value:
         k: 1
   - - node_succeeded
     - agent
-    - {commit: 9}
+    - {commit: 11}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -91,7 +123,7 @@ expect:
         k: 1
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted

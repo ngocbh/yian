@@ -21,7 +21,7 @@ import { reprText } from "../../diagnostics.ts";
 import { realScheduler } from "../../platform.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError } from "../../tools/errors.ts";
 import { ToolSet } from "../../tools/registry.ts";
-import { jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
+import { jsonSafeText, jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
 import { CapabilityFault, hostOutput, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { HostToolCall, outputContractType } from "../contracts.ts";
 
@@ -61,10 +61,8 @@ export function backoff(failure: number, error: unknown, random: () => number): 
   return delay / 2 + (random() * delay) / 2;
 }
 
-/** Return `text` with each lone surrogate replaced by `?`, so it can be written as JSON. */
-function clean(text: string): string {
-  return text.replace(/\p{Cs}/gu, "?");
-}
+/** The `kind` of each step a TOOL records. */
+const STEP_KIND = "tool_attempt";
 
 /** Return the recorded form of a failed attempt's error: its type name and message. */
 function errorStep(error: unknown): { type: string; message: string } {
@@ -75,14 +73,14 @@ function errorStep(error: unknown): { type: string; message: string } {
   } catch {
     name = jsTypeName(error);
   }
-  const type = shownText(clean(name));
+  const type = shownText(jsonSafeText(name));
   let text: string;
   try {
     text = error instanceof Error ? String(error.message) : String(error);
   } catch {
     text = `<${type} object>`;
   }
-  return { type, message: shownText(clean(text)) };
+  return { type, message: shownText(jsonSafeText(text)) };
 }
 
 /**
@@ -121,8 +119,9 @@ function attemptsMessage(toolId: string, history: readonly ValueRecord[], attemp
  * `current().toolRetryMaxDelaySeconds`, drawn from its upper half), or a transient error's
  * `retryAfter` up to that cap. Each attempt sees `ToolContext.attempt`; the call id stays the same.
  *
- * Through the engine's node steps the node records `{event: "failed", ...}` after each failure it
- * will retry and `{event: "started", ...}` before the retry, so a resumed run continues the attempt
+ * Through the engine's node steps the node records `{kind: "tool_attempt", event: "failed", ...}`
+ * after each failure it will retry and `{kind: "tool_attempt", event: "started", ...}` before the
+ * retry, so a resumed run continues the attempt
  * count; an attempt interrupted by a crash uses up no retry. A failure without a retry propagates
  * unchanged; after a retry the node rejects with `ToolAttemptsFailed`, whose message lists every
  * attempt's error.
@@ -228,10 +227,10 @@ export class ToolNode extends Node {
           throw new ToolAttemptsFailed(attemptsMessage(this.toolId, history, attempt, error), { cause: error });
         }
         const delay = backoff(failures, error, random);
-        record({ event: "failed", attempt: BigInt(attempt), error: errorStep(error), retry_in: delay });
+        record({ kind: STEP_KIND, event: "failed", attempt: BigInt(attempt), error: errorStep(error), retry_in: delay });
         await scheduler.sleep(delay * 1000, signal);
         attempt += 1;
-        record({ event: "started", attempt: BigInt(attempt) });
+        record({ kind: STEP_KIND, event: "started", attempt: BigInt(attempt) });
       }
     }
     // Outside the loop's `try`, so a result that isn't a yian value is never retried.

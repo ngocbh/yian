@@ -19,7 +19,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { ModelCallStarted, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import {
@@ -667,7 +667,7 @@ test("a run stop during a group awaits its started calls and starts no later gro
   expect(toolEvents(events)).toEqual(["started a", "started b", "finished a a result"]);
 });
 
-test("each call gets its own call id, node and run id", async () => {
+test("each call gets its own call id, from its reply's model_call step, node and run id", async () => {
   const log: string[] = [];
   const a = gated("a", log);
   const b = gated("b", log);
@@ -682,10 +682,10 @@ test("each call gets its own call id, node and run id", async () => {
   b.resolve("b result");
   await run.running;
 
-  const exchange = run.events.find((event): event is ModelCallStarted => event instanceof ModelCallStarted)!.exchangeId;
+  // The key names the reply's `model_call` step, its first: `<run>/<node>/<n>/<index>`.
   const fields = (ctx: ToolContext) => [ctx.callId, ctx.node, ctx.runId, ctx.toolName, ctx.attempt];
-  expect(fields(a.ctx!)).toEqual([`r1/writer/${exchange}/0`, "writer", "r1", "a", 1]);
-  expect(fields(b.ctx!)).toEqual([`r1/writer/${exchange}/1`, "writer", "r1", "b", 1]);
+  expect(fields(a.ctx!)).toEqual(["r1/writer/1/0", "writer", "r1", "a", 1]);
+  expect(fields(b.ctx!)).toEqual(["r1/writer/1/1", "writer", "r1", "b", 1]);
   // One group: both calls share its signal, a child of the node's.
   expect(a.ctx!.signal).toBe(b.ctx!.signal);
   expect(a.ctx!.signal).not.toBe(stop.signal);

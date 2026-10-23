@@ -123,19 +123,58 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, worker]
+  - - node_step
+    - worker
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: test-model
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {path: a.txt}
+            id: c0
+            name: read_file
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: 30f869a441bc0c613f8ed3397486487dcbbf31cd7f50c74a8d8032f5e68bc6ba
+        response_id: null
+        usage: null
+  - - node_step
+    - worker
+    - n: 2
+      step: {call_id: c0, is_error: true, kind: tool_result, output: ReportedToolError}
+  - - node_step
+    - worker
+    - n: 3
+      step:
+        finish: null
+        kind: model_call
+        model: test-model
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: the file is missing, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: a274497ce5a235e35f3a0ac775af5b60b8a856aa5c63914c4816b405336983fa
+        response_id: null
+        usage: null
   - - pool_commit
     - worker
     - value: the file is missing
   - - node_succeeded
     - worker
-    - {commit: 9}
+    - {commit: 12}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: the file is missing
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 15}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -215,5 +254,5 @@ expect:
     - args:
         path: a.txt
       attempt: 1
-      call_id: r1/worker/<id:1>/0
+      call_id: r1/worker/1/0
       node: worker

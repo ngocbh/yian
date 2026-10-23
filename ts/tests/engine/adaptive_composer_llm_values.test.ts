@@ -97,10 +97,15 @@ async function run(text: string, inputs: Record<string, unknown>, models: Return
   return { result, records, requests };
 }
 
-/** The composer's recorded steps. */
+/** The composer's recorded `llm_config` steps. */
 function composerSteps(records: { kind: string; payload: Record<string, any> }[]): Record<string, any>[] {
   return records
-    .filter((record) => record.kind === "node_step" && record.payload["node_id"] === COMPOSER)
+    .filter(
+      (record) =>
+        record.kind === "node_step" &&
+        record.payload["node_id"] === COMPOSER &&
+        record.payload["step"]["kind"] === "llm_config",
+    )
     .map((record) => record.payload["step"]);
 }
 

@@ -73,11 +73,15 @@ expect:
           type: ConnectionError
         event: failed
         retry_in: 0.0
+        kind: tool_attempt
+      n: 1
   - - node_step
     - call
     - step:
         attempt: 2
         event: started
+        kind: tool_attempt
+      n: 2
   - - node_step
     - call
     - step:
@@ -87,11 +91,15 @@ expect:
           type: QuotaGlitch
         event: failed
         retry_in: 0.0
+        kind: tool_attempt
+      n: 3
   - - node_step
     - call
     - step:
         attempt: 3
         event: started
+        kind: tool_attempt
+      n: 4
   - - pool_commit
     - call
     - value: ok

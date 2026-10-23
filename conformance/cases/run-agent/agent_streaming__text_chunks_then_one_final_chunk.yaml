@@ -67,19 +67,35 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: stop
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: hello big world, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 0c2d612474786e4d309464090eba530c35a97e3b3432cf6da0b668dd13355633
+        response_id: null
+        usage: {cache_read_tokens: null, input_tokens: 5, output_tokens: 3, reasoning_tokens: null}
   - - pool_commit
     - writer
     - value: hello big world
   - - node_succeeded
     - writer
-    - {commit: 9}
+    - {commit: 10}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: hello big world
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 13}
   events:
   - [RunStarted]
   - - NodeStarted

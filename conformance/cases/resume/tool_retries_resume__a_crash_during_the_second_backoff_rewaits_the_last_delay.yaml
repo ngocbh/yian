@@ -74,11 +74,15 @@ expect:
           type: TransientToolError
         event: failed
         retry_in: 0.25
+        kind: tool_attempt
+      n: 1
   - - node_step
     - call
     - step:
         attempt: 2
         event: started
+        kind: tool_attempt
+      n: 2
   - - node_step
     - call
     - step:
@@ -88,6 +92,8 @@ expect:
           type: TransientToolError
         event: failed
         retry_in: 0.1
+        kind: tool_attempt
+      n: 3
   - - run_resumed
     - null
     - num_workers: 0

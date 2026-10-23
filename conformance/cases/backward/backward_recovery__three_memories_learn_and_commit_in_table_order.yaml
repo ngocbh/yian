@@ -150,12 +150,28 @@ expect:
           occurrence_path: []
           static_path: [__start__]
   - [node_started, first]
+  - - node_step
+    - first
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: local-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: draft, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 692227500e7b5cc55d127fadb7fd3b02d57ca7200268a47d4d69b7568ec0db66
+        response_id: null
+        usage: null
   - - pool_commit
     - first
     - value: draft
   - - node_succeeded
     - first
-    - commit: 9
+    - commit: 10
       forward_capture:
         bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
@@ -181,12 +197,28 @@ expect:
           occurrence_path: []
           static_path: [first]
   - [node_started, second]
+  - - node_step
+    - second
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: local-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: answer, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 153b8fa790af8943c6b0f6174195c4110721eba68aaec53bfface55493c4954e
+        response_id: null
+        usage: null
   - - pool_commit
     - second
     - value: answer
   - - node_succeeded
     - second
-    - commit: 12
+    - commit: 14
       forward_capture:
         bound_inputs: {draft: draft}
         evaluated_keys: [draft]
@@ -217,7 +249,7 @@ expect:
     - value: answer
   - - node_succeeded
     - __end__
-    - commit: 15
+    - commit: 17
       forward_capture:
         bound_inputs: {result: answer}
         evaluated_keys: [result]
@@ -229,7 +261,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 11
+              execution_seq: 12
               path: []
               run_id: r1
           kind: record
@@ -274,7 +306,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 11
+            execution_seq: 12
             path: []
             run_id: r1
         feedback: [draft review]
@@ -294,7 +326,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 14
+            execution_seq: 16
             path: []
             run_id: r1
         feedback: [Review.]
@@ -305,7 +337,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
+          execution_seq: 12
           path: []
           run_id: r1
       - attribution:
@@ -322,7 +354,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 14
+          execution_seq: 16
           path: []
           run_id: r1
       proposals:
@@ -375,7 +407,7 @@ expect:
               entry_id: <id:3>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 11
+                execution_seq: 12
                 failure: null
                 inputs:
                   draft: draft
@@ -399,7 +431,7 @@ expect:
               entry_id: <id:4>
               episode:
                 base_system_prompt: null
-                execution_seq: 14
+                execution_seq: 16
                 failure: null
                 inputs:
                   result: answer
@@ -490,7 +522,7 @@ expect:
             entry_id: <id:3>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 11
+              execution_seq: 12
               failure: null
               inputs:
                 draft: draft
@@ -514,7 +546,7 @@ expect:
             entry_id: <id:4>
             episode:
               base_system_prompt: null
-              execution_seq: 14
+              execution_seq: 16
               failure: null
               inputs:
                 result: answer
@@ -696,8 +728,8 @@ expect:
     A: |-
       {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
       {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":8,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"draft"}],"memory_sections":[],"occurrence_path":[],"output":"draft","owner_static_path":["first"],"prompt":"Draft reefs","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:3>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":11,"failure":null,"inputs":{"draft":"draft"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[{"memory":"C","text":"# Reviews\n"}],"occurrence_path":[],"output":"answer","owner_static_path":["second"],"prompt":"Review draft","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":14,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:3>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":12,"failure":null,"inputs":{"draft":"draft"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[{"memory":"C","text":"# Reviews\n"}],"occurrence_path":[],"output":"answer","owner_static_path":["second"],"prompt":"Review draft","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":16,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
     B: '[topic] Name the topic.'
     C: |
       # Reviews

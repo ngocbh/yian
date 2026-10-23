@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: model-tool-loop
   name: model_tool_loop
@@ -67,4 +68,4 @@ expect:
   # <id:1> is the first model call's exchange id.
   tool_calls:
     lookup:
-      - {args: {q: x}, call_id: r1/research/<id:1>/0, attempt: 1, node: research}
+      - {args: {q: x}, call_id: r1/research/1/0, attempt: 1, node: research}

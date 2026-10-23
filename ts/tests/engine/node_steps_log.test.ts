@@ -6,7 +6,7 @@
  * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
  * `Set`, an empty and a non-text node id; each with its exact error).
  *
- * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 13),
+ * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 14),
  * `test_node_step_wire_payload_rejects_invalid_shapes` (list, text, empty node id, missing step,
  * extra field; each with its exact class and message),
  * `test_node_step_wire_payload_rejects_non_finite_numbers` (`invalid run-record JSON`, caused by
@@ -14,7 +14,6 @@
  *
  * Ported, the reducer tests: `test_prepare_node_step_requires_an_in_flight_node` (3 rows),
  * `test_prepare_node_step_rejects_an_uninitialized_state`,
- * `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`,
  * `test_node_starts_count_started_records`, `test_resume_keeps_steps_and_a_resumed_start_counts_two`,
  * `test_success_deletes_the_nodes_steps_and_starts`, `test_prepare_node_step_rejects_a_terminal_state`,
  * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
@@ -33,13 +32,18 @@
  * `test_replay_without_steps_has_no_steps`.
  *
  * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused; a wire step keeps
- * yian's infinity tag as `Infinity`.
+ * yian's infinity tag as `Infinity`. A step has a string `kind` and an int `n` from 1, the node's
+ * step count across its starts plus one; a record with any other `n` is refused on append and on
+ * replay ("node step n is not dense").
  *
  * Changed:
  * - the `infinity` row of `test_node_step_record_rejects_invalid_values`: a step keeps
  *   `±Infinity` (a TS yian value).
  * - `test_node_step_too_deep_for_python_is_a_value_error`: a 5000-deep step is accepted (the TS
  *   codec is iterative).
+ * - `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`: a live step past the limit is
+ *   accepted. A step is node detail, not a yian value, and an AGENT's `model_call` step holds a
+ *   reply whose tool call arguments may themselves sit at the limit.
  * - `test_prepare_node_step_appends_in_order_without_observers`: the plan's delta is checked by
  *   its `kind` and fields, not its class name; a node's steps are a frozen array, not a tuple.
  * - `test_committed_step_is_detached_from_the_caller_and_the_record`: the record's step is
@@ -79,6 +83,7 @@ import {
   prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeStep,
+  prepareRecord,
   prepareRunResumed,
   replayRecords,
   RunState,
@@ -123,6 +128,7 @@ function nested(levels: number): Record<string, unknown> {
 class Thing {}
 
 const FAILED = {
+  kind: "tool_attempt",
   event: "failed",
   attempt: 1n,
   error: { type: "TimeoutError", message: "slow" },
@@ -130,7 +136,7 @@ const FAILED = {
 };
 
 test("a node step round trips under its wire kind", () => {
-  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-1", 3, new NodeStepRecord("a", FAILED));
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run-1", 3, new NodeStepRecord("a", 1, FAILED));
 
   const encoded = encodeRecord(envelope);
   const decoded = decodeRecord(encoded);
@@ -139,27 +145,32 @@ test("a node step round trips under its wire kind", () => {
   expect(encodeRecord(decoded)).toBe(encoded);
   const wire = parseJson(encoded, "codec") as Record<string, unknown>;
   expect(wire["kind"]).toBe("node_step");
-  expect(wire["schema"]).toBe(13n);
-  expect(wire["payload"]).toEqual({ node_id: "a", step: FAILED });
+  expect(wire["schema"]).toBe(14n);
+  expect(wire["payload"]).toEqual({ node_id: "a", n: 1n, step: FAILED });
 });
 
 test("a wire step keeps yian's infinity tag", () => {
   const text =
-    '{"kind":"node_step","payload":{"node_id":"a","step":{"high":{"$float":"inf"}}},' +
-    '"run_id":"run-1","schema":13,"seq":0}';
+    '{"kind":"node_step","payload":{"n":1,"node_id":"a","step":{"high":{"$float":"inf"},"kind":"x"}},' +
+    '"run_id":"run-1","schema":14,"seq":0}';
   const record = decodeRecord(text).record as NodeStepRecord;
-  expect(record.step).toEqual({ high: Infinity });
+  expect(record.step).toEqual({ high: Infinity, kind: "x" });
+  expect(record.n).toBe(1);
   expect(encodeRecord(decodeRecord(text))).toBe(text);
 });
 
 test.each<[string, unknown, new (...args: never[]) => Error, string]>([
-  ["list", { node_id: "a", step: [1] }, TypeError, "node_step payload step must be an object"],
-  ["text", { node_id: "a", step: "text" }, TypeError, "node_step payload step must be an object"],
-  ["empty-node-id", { node_id: "", step: {} }, RangeError, "node_step payload node_id must be a non-empty string"],
-  ["missing-step", { node_id: "a" }, RangeError, 'invalid node_step payload fields; missing=["step"], extra=[]'],
+  ["list", { node_id: "a", n: 1, step: [1] }, TypeError, "node_step payload step must be an object"],
+  ["text", { node_id: "a", n: 1, step: "text" }, TypeError, "node_step payload step must be an object"],
+  ["empty-node-id", { node_id: "", n: 1, step: { kind: "x" } }, RangeError, "node_step payload node_id must be a non-empty string"],
+  ["missing-step", { node_id: "a", n: 1 }, RangeError, 'invalid node_step payload fields; missing=["step"], extra=[]'],
+  ["missing-n", { node_id: "a", step: { kind: "x" } }, RangeError, 'invalid node_step payload fields; missing=["n"], extra=[]'],
+  ["zero-n", { node_id: "a", n: 0, step: { kind: "x" } }, RangeError, "node step n must be at least 1"],
+  ["text-n", { node_id: "a", n: "1", step: { kind: "x" } }, TypeError, "node_step payload n must be an integer"],
+  ["no-kind", { node_id: "a", n: 1, step: {} }, TypeError, "node step kind must be a non-empty string"],
   [
     "extra-field",
-    { node_id: "a", step: {}, extra: true },
+    { node_id: "a", n: 1, step: { kind: "x" }, extra: true },
     RangeError,
     'invalid node_step payload fields; missing=[], extra=["extra"]',
   ],
@@ -170,53 +181,60 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
 
 test("a node step wire payload rejects non-finite numbers", () => {
   const text =
-    '{"schema":13,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","step":{"retry_in":NaN}}}';
+    '{"schema":14,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
   const caught = expectError(() => decodeRecord(text), RangeError, "invalid run-record JSON") as Error;
   expect((caught.cause as Error).constructor).toBe(JSONDecodeError);
   expect((caught.cause as Error).message).toStartWith("NaN is not JSON");
 });
 
 test("a node step record detaches the caller's step", () => {
-  const step = { event: "started", attempt: 2n, tags: ["x", "y"] };
-  const record = new NodeStepRecord("a", step);
+  const step = { kind: "tool_attempt", event: "started", attempt: 2n, tags: ["x", "y"] };
+  const record = new NodeStepRecord("a", 1, step);
   step.attempt = 99n;
   step.tags.push("z");
 
-  expect(record.step).toEqual({ attempt: 2n, event: "started", tags: ["x", "y"] });
-  expect(Object.keys(record.step)).toEqual(["attempt", "event", "tags"]);
+  expect(record.step).toEqual({ attempt: 2n, event: "started", kind: "tool_attempt", tags: ["x", "y"] });
+  expect(Object.keys(record.step)).toEqual(["attempt", "event", "kind", "tags"]);
 });
 
-test.each<[string, unknown, unknown, new (...args: never[]) => Error, string, (string | number)[] | null]>([
-  ["list", "a", ["not", "an", "object"], TypeError, "node step must be a JSON object", null],
-  ["text", "a", "text", TypeError, "node step must be a JSON object", null],
-  ["null", "a", null, TypeError, "node step must be a JSON object", null],
-  ["NaN", "a", { retry_in: NaN }, TypeCheckError, "NaN is not a yian value", ["retry_in"]],
-  ["a class instance", "a", { when: new Thing() }, TypeCheckError, "<Thing object> is not a JSON value", ["when"]],
-  ["a Set", "a", { items: new Set([1, 2]) }, TypeCheckError, "<Set object> is not a JSON value", ["items"]],
+test.each<[string, unknown, unknown, unknown, new (...args: never[]) => Error, string, (string | number)[] | null]>([
+  ["list", "a", 1, ["not", "an", "object"], TypeError, "node step must be a JSON object", null],
+  ["text", "a", 1, "text", TypeError, "node step must be a JSON object", null],
+  ["null", "a", 1, null, TypeError, "node step must be a JSON object", null],
+  ["NaN", "a", 1, { kind: "x", retry_in: NaN }, TypeCheckError, "NaN is not a yian value", ["retry_in"]],
+  ["a class instance", "a", 1, { kind: "x", when: new Thing() }, TypeCheckError, "<Thing object> is not a JSON value", ["when"]],
+  ["a Set", "a", 1, { kind: "x", items: new Set([1, 2]) }, TypeCheckError, "<Set object> is not a JSON value", ["items"]],
   [
     "a FileRef",
     "a",
-    { file: new FileRef({ uri: "memory://answer" }) },
+    1,
+    { kind: "x", file: new FileRef({ uri: "memory://answer" }) },
     TypeCheckError,
     '{"uri":"memory://answer","mime":null,"name":null} is not a JSON value',
     ["file"],
   ],
-  ["an empty node id", "", { event: "started" }, RangeError, "node_id must be non-empty", null],
-  ["a non-text node id", 1, { event: "started" }, TypeError, "node_id must be a string", null],
-])("a node step record rejects %s", (_name, nodeId, step, cls, message, path) => {
-  const caught = expectError(() => new NodeStepRecord(nodeId as never, step as never), cls, message);
+  ["an empty node id", "", 1, { kind: "x" }, RangeError, "node_id must be non-empty", null],
+  ["a non-text node id", 1, 1, { kind: "x" }, TypeError, "node_id must be a string", null],
+  ["no kind", "a", 1, { event: "started" }, TypeError, "node step kind must be a non-empty string", null],
+  ["an empty kind", "a", 1, { kind: "" }, TypeError, "node step kind must be a non-empty string", null],
+  ["a non-text kind", "a", 1, { kind: 1n }, TypeError, "node step kind must be a non-empty string", null],
+  ["a float n", "a", 1.5, { kind: "x" }, TypeError, "node step n must be an int", null],
+  ["a bigint n", "a", 1n, { kind: "x" }, TypeError, "node step n must be an int", null],
+  ["a zero n", "a", 0, { kind: "x" }, RangeError, "node step n must be at least 1", null],
+])("a node step record rejects %s", (_name, nodeId, n, step, cls, message, path) => {
+  const caught = expectError(() => new NodeStepRecord(nodeId as never, n as never, step as never), cls, message);
   if (path !== null) expect((caught as TypeCheckError).path).toEqual(path);
 });
 
 test("a node step record keeps infinite floats and writes -0 as 0", () => {
-  const record = new NodeStepRecord("a", { high: Infinity, low: [-Infinity], zero: -0 });
+  const record = new NodeStepRecord("a", 1, { kind: "x", high: Infinity, low: [-Infinity], zero: -0 });
 
-  expect(record.step).toEqual({ high: Infinity, low: [-Infinity], zero: 0 });
+  expect(record.step).toEqual({ high: Infinity, kind: "x", low: [-Infinity], zero: 0 });
   expect(Object.is(record.step["zero"], 0)).toBe(true);
 });
 
 test("a node step too deep for Python is accepted", () => {
-  const record = new NodeStepRecord("a", nested(5000));
+  const record = new NodeStepRecord("a", 1, { kind: "x", ...nested(5000) });
 
   let value: unknown = record.step;
   let depth = 1;
@@ -238,17 +256,19 @@ function firstInFlight(options: { learnable?: boolean } = {}): { state: RunState
 
 test("prepareNodeStep appends in order without observers", () => {
   const { state, log } = firstInFlight();
-  const started = { event: "started", attempt: 2n };
+  const started = { kind: "tool_attempt", event: "started", attempt: 2n };
 
   const first = prepareNodeStep(state, "first", FAILED);
   expect(first.observers).toEqual([]);
-  expect(first.record).toStrictEqual(new NodeStepRecord("first", FAILED));
+  expect(first.record).toStrictEqual(new NodeStepRecord("first", 1, FAILED));
   const plan = first._plan;
   if (plan.kind !== "frontier") throw new Error(`expected a frontier plan, found ${plan.kind}`);
   expect(plan.delta).toEqual({ kind: "step", nodeId: "first", step: FAILED });
   expect(state.nodeSteps.has("first")).toBe(false);
   expect(commitPrepared(log, state, first)).toEqual([]);
-  expect(commitPrepared(log, state, prepareNodeStep(state, "first", started))).toEqual([]);
+  const second = prepareNodeStep(state, "first", started);
+  expect((second.record as NodeStepRecord).n).toBe(2);
+  expect(commitPrepared(log, state, second)).toEqual([]);
 
   expect(state.nodeSteps).toEqual(new Map([["first", [FAILED, started]]]));
   expect(Object.isFrozen(state.nodeSteps.get("first"))).toBe(true);
@@ -261,7 +281,7 @@ test("prepareNodeStep appends in order without observers", () => {
 
 test("a committed step is detached from the caller and the record", () => {
   const { state, log } = firstInFlight();
-  const step = { event: "failed", error: { type: "E", message: "m" } };
+  const step = { kind: "tool_attempt", event: "failed", error: { type: "E", message: "m" } };
 
   const prepared = prepareNodeStep(state, "first", step);
   commitPrepared(log, state, prepared);
@@ -270,7 +290,9 @@ test("a committed step is detached from the caller and the record", () => {
     ((prepared.record as NodeStepRecord).step["error"] as Record<string, unknown>)["type"] = "changed";
   }).toThrow(TypeError);
 
-  expect(state.nodeSteps.get("first")).toEqual([{ error: { message: "m", type: "E" }, event: "failed" }]);
+  expect(state.nodeSteps.get("first")).toEqual([
+    { error: { message: "m", type: "E" }, event: "failed", kind: "tool_attempt" },
+  ]);
 });
 
 test.each([
@@ -281,7 +303,7 @@ test.each([
   const { state, log } = firstInFlight();
   const before = log.nextSequence;
 
-  expectError(() => prepareNodeStep(state, nodeId, { event: "started" }), RangeError, message);
+  expectError(() => prepareNodeStep(state, nodeId, { kind: "x", event: "started" }), RangeError, message);
 
   expect(log.nextSequence).toBe(before);
   expect(state.nodeSteps).toEqual(new Map());
@@ -295,7 +317,7 @@ test("prepareNodeStep refuses a terminal state", () => {
   expect(state.inFlight.has("second")).toBe(true);
 
   expectError(
-    () => prepareNodeStep(state, "second", { event: "started" }),
+    () => prepareNodeStep(state, "second", { kind: "x", event: "started" }),
     RangeError,
     "terminal run state cannot prepare another graph transition",
   );
@@ -303,24 +325,19 @@ test("prepareNodeStep refuses a terminal state", () => {
 
 test("prepareNodeStep refuses an uninitialized state", () => {
   expectError(
-    () => prepareNodeStep(new RunState(fanoutFlow()), START_ID, { event: "started" }),
+    () => prepareNodeStep(new RunState(fanoutFlow()), START_ID, { kind: "x", event: "started" }),
     RangeError,
     "run state is not initialized",
   );
 });
 
-test("prepareNodeStep refuses a step past the nesting limit", () => {
-  const { state } = firstInFlight();
+test("prepareNodeStep accepts a step past the value nesting limit", () => {
+  const { state, log } = firstInFlight();
   const limit = Number(current().maxValueNesting);
 
-  prepareNodeStep(state, "first", nested(limit));
-  const caught = expectError(
-    () => prepareNodeStep(state, "first", nested(limit + 1)),
-    TypeCheckError,
-    `node step at ${Array(limit).fill("inner").join(".")}: value nests deeper than ${limit} levels, ` +
-      "the limit for a yian value (each record and list is a level)",
-  );
-  expect((caught as TypeCheckError).path).toEqual(Array(limit).fill("inner"));
+  // An AGENT's model_call step wraps a reply whose tool call arguments may sit at the limit.
+  commitPrepared(log, state, prepareNodeStep(state, "first", { kind: "x", ...nested(limit + 5) }));
+  expect(state.nodeSteps.get("first")).toHaveLength(1);
 });
 
 test.each<[string, unknown, new (...args: never[]) => Error, string]>([
@@ -358,7 +375,7 @@ test("a resume keeps the steps, and a resumed start counts two", () => {
 
   // A resumed node is ready again, not in flight, so it can't record a step yet.
   expectError(
-    () => prepareNodeStep(state, "first", { event: "started" }),
+    () => prepareNodeStep(state, "first", { kind: "x", event: "started" }),
     RangeError,
     "NodeStep node 'first' is not in-flight",
   );
@@ -462,9 +479,46 @@ function resumedWithSteps(options: { learnable?: boolean } = {}): { state: RunSt
   commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
-  commitPrepared(log, state, prepareNodeStep(state, "first", { event: "started", attempt: 3n }));
+  commitPrepared(log, state, prepareNodeStep(state, "first", { kind: "tool_attempt", event: "started", attempt: 3n }));
   return { state, log };
 }
+
+test("a node's step n counts its steps across its starts", () => {
+  const { log } = resumedWithSteps();
+  const steps = log.records().flatMap((envelope) => (envelope.record instanceof NodeStepRecord ? [envelope.record.n] : []));
+  expect(steps).toEqual([1, 2]);
+});
+
+test("a step whose n isn't the node's next is refused on append", () => {
+  const { state, log } = firstInFlight();
+  commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
+  const before = log.nextSequence;
+
+  for (const n of [1, 3]) {
+    expectError(
+      () => prepareRecord(state, new NodeStepRecord("first", n, FAILED)),
+      RangeError,
+      `node step n is not dense: node 'first' step ${n}, expected 2`,
+    );
+  }
+  expect(log.nextSequence).toBe(before);
+  expect(state.nodeSteps.get("first")).toEqual([FAILED]);
+});
+
+test("a step whose n isn't the node's next is refused on replay", () => {
+  const { log } = resumedWithSteps();
+  const records = log.records().map((envelope) =>
+    envelope.record instanceof NodeStepRecord && envelope.record.n === 2
+      ? new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, new NodeStepRecord("first", 3, envelope.record.step), envelope.at)
+      : envelope,
+  );
+
+  expectError(
+    () => replayRecords(new RunState(fanoutFlow()), records, { growBuilder: fragmentBuilder }),
+    RangeError,
+    "node step n is not dense: node 'first' step 3, expected 2",
+  );
+});
 
 test("a replay reproduces the steps and starts", () => {
   const { state, log } = resumedWithSteps();

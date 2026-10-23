@@ -120,12 +120,28 @@ expect:
           occurrence_path: []
           static_path: [__start__]
   - [node_started, reply]
+  - - node_step
+    - reply
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: test-model
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: Hello., type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 6dab702638505d20410036d8ae56715c914b71eb105e235b2890ec3d61cd26f2
+        response_id: null
+        usage: null
   - - pool_commit
     - reply
     - value: Hello.
   - - node_succeeded
     - reply
-    - commit: 9
+    - commit: 10
       forward_capture:
         bound_inputs: {message: hi}
         evaluated_keys: [message]
@@ -159,7 +175,7 @@ expect:
     - value: Hello.
   - - node_succeeded
     - __end__
-    - commit: 12
+    - commit: 13
       forward_capture:
         bound_inputs: {result: Hello.}
         evaluated_keys: [result]
@@ -206,7 +222,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 11
+            execution_seq: 12
             path: []
             run_id: r1
         feedback: [Keep replies brief.]
@@ -233,7 +249,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
+          execution_seq: 12
           path: []
           run_id: r1
       outcome:

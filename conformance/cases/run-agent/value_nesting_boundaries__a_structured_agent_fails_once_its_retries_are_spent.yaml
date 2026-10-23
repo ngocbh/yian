@@ -85,6 +85,38 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, agent]
+  - - node_step
+    - agent
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-4o
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"value": {"a": {"a": {"a": {"a": 1}}}}}', type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: 0628d71ac3ec31509b3fcba5b9f5fd26479eda18e8dad86f2a6cb49b96c59308
+        response_id: null
+        usage: null
+  - - node_step
+    - agent
+    - n: 2
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-4o
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"value": {"a": {"a": {"a": {"a": 2}}}}}', type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: cc88ab0055be2675f609c57884074cf1488d0875618bd3a1f2729d3eb51fa897
+        response_id: null
+        usage: null
   - - node_failed
     - agent
     - failure:

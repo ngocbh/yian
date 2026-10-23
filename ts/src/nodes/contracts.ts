@@ -1131,14 +1131,16 @@ export class HostToolCall {
  * The durable steps one start of a node reads and records, from the engine. Frozen.
  *
  * The engine passes it as `caps.steps` to a node declaring `needsSteps`. A step is a JSON object
- * the node gives meaning to; the engine appends each one to the run log and keeps it until the
- * node settles, so a resumed node reads the steps its earlier starts recorded.
+ * with a string `kind`, which the node gives meaning to; the engine appends each one to the run
+ * log and keeps it until the node settles, so a resumed node reads the steps its earlier starts
+ * recorded. Steps are numbered from 1 across the node's starts: `n`, the step's id within the node,
+ * which `record` returns.
  *
  * Example:
  * ```ts
  * if (steps !== undefined) {
  *   const attempt = steps.starts + steps.prior.length;
- *   steps.record({ event: "started", attempt: BigInt(attempt) });
+ *   steps.record({ kind: "tool_attempt", event: "started", attempt: BigInt(attempt) });
  * }
  * ```
  */
@@ -1154,10 +1156,10 @@ export class NodeSteps {
    */
   readonly prior: readonly ValueRecord[];
   /**
-   * Appends one step durably and returns once the engine has applied it. Call it from the node's
-   * own evaluation, one call at a time, before the node returns; after the evaluation ends it
-   * throws. Once the run stops it throws the node signal's reason and appends nothing, except a
-   * step passed with `{ settled: true }` while the run has no terminal result.
+   * Appends one step durably and returns its `n` once the engine has applied it. Call it from
+   * the node's own evaluation, one call at a time, before the node returns; after the evaluation
+   * ends it throws. Once the run stops it throws the node signal's reason and appends nothing,
+   * except a step passed with `{ settled: true }` while the run has no terminal result.
    *
    * The engine can't see whether a call settled before the stop, so this is the node's
    * obligation: pass `settled: true`, and emit `ToolCallFinished` after a stop, only for a call
@@ -1165,7 +1167,7 @@ export class NodeSteps {
    * `.then`. An error from `record` does not prove the step was not recorded: a stop can land
    * mid-commit.
    */
-  readonly record: (step: ValueRecord, options?: { settled?: boolean }) => void;
+  readonly record: (step: ValueRecord, options?: { settled?: boolean }) => number;
 
   /**
    * Check the field types and that the current start is counted; `prior` is copied.
@@ -1177,7 +1179,7 @@ export class NodeSteps {
   constructor(
     starts: number,
     prior: readonly ValueRecord[],
-    record: (step: ValueRecord, options?: { settled?: boolean }) => void,
+    record: (step: ValueRecord, options?: { settled?: boolean }) => number,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");

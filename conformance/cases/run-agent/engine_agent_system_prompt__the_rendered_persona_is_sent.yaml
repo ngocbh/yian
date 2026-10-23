@@ -116,26 +116,58 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, reply]
+  - - node_step
+    - reply
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: draft, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 112202a3a40c1e19e721585dc0f347141ff68ee83578433f73370cd1e06d0114
+        response_id: null
+        usage: null
   - - pool_commit
     - reply
     - value: draft
   - - node_succeeded
     - reply
-    - {commit: 9}
+    - {commit: 10}
   - [node_started, after]
+  - - node_step
+    - after
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: final, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 3f2e6dfade74abdc02f1c46c0473d69637516b5b1de3f3e9ceac764280623c18
+        response_id: null
+        usage: null
   - - pool_commit
     - after
     - value: final
   - - node_succeeded
     - after
-    - {commit: 12}
+    - {commit: 14}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: final
   - - node_succeeded
     - __end__
-    - {commit: 15}
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

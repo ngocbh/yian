@@ -1985,7 +1985,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
   ["node_started", ["node_id", []]],
-  ["node_step", ["node_id", ["step"]]],
+  ["node_step", ["node_id", ["n", "step"]]],
   ["pool_commit", ["node_id", ["key", "value"]]],
   ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
@@ -2003,6 +2003,8 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
 ]);
 /** The run start's commits whose values are times, which the trace leaves out. */
 const TIMED_KEYS: ReadonlySet<string> = new Set(["system.now", "system.today"]);
+/** The fields of a node step that are times (an AGENT's model calls and tool results). */
+const STEP_TIMES: readonly string[] = ["started_at", "first_token_at"];
 const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "defaults", "effective_llm_by_static_path", "call_time_llm", "parent",
 ]);
@@ -2134,14 +2136,20 @@ function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
     }
     if (kind === "node_step") {
       const step = payload["step"] as Case;
-      if (Object.hasOwn(step, "retry_in")) step["retry_in"] = Number(step["retry_in"]);
+      if (Object.hasOwn(step, "retry_in") && step["retry_in"] !== null) step["retry_in"] = Number(step["retry_in"]);
+      // Step times are times.
+      for (const time of STEP_TIMES) delete step[time];
       if ((get(step, "effective_llm_config") ?? null) !== null) {
         step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
       }
-      // A failed step's error type goes through the error-class table.
+      // A failed step's error class goes through the error-class table: a TOOL attempt's `type`,
+      // a failed model call's `kind` (a provider error's kind is no class and stays).
       const error = get(step, "error");
       if (step["event"] === "failed" && isMapping(error) && typeof error["type"] === "string") {
         error["type"] = ERROR_CLASSES.get(error["type"]) ?? error["type"];
+      }
+      if (step["kind"] === "model_call" && isMapping(error) && typeof error["kind"] === "string") {
+        error["kind"] = ERROR_CLASSES.get(error["kind"]) ?? error["kind"];
       }
     }
     if (kind === "backward_finished") {
@@ -2647,7 +2655,7 @@ function checkResults(
 /**
  * Return the run log text `text` as a golden log holds it: each line with every `traceback` value,
  * its time (`at`), the seeded clock values (the `value` of the `system.now` and `system.today`
- * commits), the
+ * commits), a step's times (`started_at` and `first_token_at` when set), the
  * recorded flow's folder (`flow.dir`) and the yian version (`yian_version`) replaced by
  * `<masked>`, written again with the log's own encoder. The times and the seeded values come from
  * the case's virtual clock, which starts at the real time; the folder is the case's temporary one;
@@ -2674,6 +2682,10 @@ function masked(text: string): string {
       record["at"] = "<masked>";
       const payload = record["payload"] as Case;
       if (record["kind"] === "pool_commit" && TIMED_KEYS.has(payload["key"] as string)) payload["value"] = "<masked>";
+      if (record["kind"] === "node_step") {
+        const step = payload["step"] as Case;
+        for (const time of STEP_TIMES) if ((step[time] ?? null) !== null) step[time] = "<masked>";
+      }
       if (record["kind"] === "run_started") {
         const flow = payload["flow"] as Case | null;
         if (flow !== null) flow["dir"] = "<masked>";

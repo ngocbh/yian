@@ -73,6 +73,8 @@ expect:
           type: TimeoutError
         event: failed
         retry_in: 0.5
+        kind: tool_attempt
+      n: 1
   - - run_resumed
     - null
     - num_workers: 0

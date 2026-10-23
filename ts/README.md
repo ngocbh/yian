@@ -147,7 +147,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 13) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 14) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -889,8 +889,8 @@ Node 22, and so does every unit test; a change keeps both green.
   runs an AGENT with its tools and skills (below), and `backward` (`backward.ts`, Python's
   `nodes/agent/backward.py`) makes one tool-free call of the recorded model through the
   `BackwardOptions` `models` the backward driver passes (consumer `"backward"`). Every AGENT has
-  `needsSteps`: it records a `model_attempt` step before each model retry, and a call-time agent
-  (`callTime` set) also records its `effective_llm_config`.
+  `needsSteps`: it records its model calls and tool results as steps (below), and a call-time
+  agent (`callTime` set) also records its config as an `llm_config` step.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`,
   `evaluationTrace`, `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent
@@ -919,10 +919,15 @@ Node 22, and so does every unit test; a change keeps both green.
     - ${history}          # a !list(Msg) input, Msg = {role: Literal(user, assistant), text: str}
     - user: ${message}
   ```
-- Before each wait between model-call attempts, an AGENT with `caps.steps` records a
-  `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
-  from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
-  is. Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
+- An AGENT writes its steps through `AgentSteps` (`src/nodes/agent/context.ts`), before acting
+  on them: each model call, chat or structured, as a `model_call` step once it returns (`callModel`
+  in `live.ts`; a failed attempt too, its error scrubbed as the node's failure is; a call a stop cut
+  writes nothing), and each tool result as a `tool_result` step as that call finishes, in finish
+  order (`runGroup` in `loop.ts`). A reply's media goes to `<run folder>/media/` and the step and
+  the next request hold its file form; `callModel` sends the provider the bytes inline
+  (`fileToInline`). `request_sha256` (`requestSha256`) hashes the request with the steers left
+  out. A tool call's idempotency key is `<run>/<node>/<n>/<index>`, `n` its reply's step.
+  Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
   (before, the real clock and `Math.random`). Nothing reads these steps yet, so a resumed AGENT
   restarts. Each reason the built model gives
   for leaving out replay state (`onReplayDegraded`, passed to `ModelAccess.createModel`) reaches
@@ -1134,7 +1139,9 @@ pool name (a store key, or `system.<name>`) to the seq of the accepted `pool_com
 it: set when a commit is applied, deleted with its pool entry, rebuilt by replay, so it never grows
 past the pool. A `derived` node (START, END, LOOP, CALL, MAP) evaluates with binding capture in
 every run; without a retained trace its sources come from `resolveFromPool(path, pool, producers,
-runId)`, and the route stays in memory with the outcome and is dropped after the commit. Frontier order:
+runId)`, and the route stays in memory with the outcome and is dropped after the commit. A node step
+carries `n`, the node's step count plus one (steps are kept across a resume until the node
+settles), and a step with any other `n` is refused live and on replay. Frontier order:
 START is ready after the START inputs' commit; a success walks its
   target's outgoing edges in order and appends each successor when its last edge from the target
   settles and its join is ready; a route settles its edges depth first in stored order, skips the

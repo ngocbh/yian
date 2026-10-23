@@ -1609,6 +1609,9 @@ nodes:
 output: ${answer.output}
 ```
 
+Changed (TS yian): `session` is not a memory type, so this flow is a load error; carry a
+chat's history as a LOOP field (see [SessionMemory foundation](#sessionmemory-foundation)).
+
 The host owns backends, model configuration, credentials, storage, and
 lifetime. `run_flow(..., memory=None)` leaves declarations dormant, and
 `run_flow` never constructs memory. `yian run` builds every declared
@@ -1828,8 +1831,8 @@ rejects every later `open_run()` with `<type>.closed`. A backend checks its
 process at every operation once a path is configured, so a forked child
 cannot use it even if the parent never opened it.
 
-Changed (TS yian): `EpisodicMemory`, `ReflectiveMemory` and `SessionMemory` take
-`{ storage, createParent }` in their options object; the file opens at the first operation
+Changed (TS yian): `EpisodicMemory` and `ReflectiveMemory` take
+`{ storage, createParent }` in their options object (TS yian has no `SessionMemory`); the file opens at the first operation
 (`openRun()`, `reset()`, or episodic's and reflective's `rewriteQuery()`). There is no `with`
 form (call `close()` in `finally`) and no fork check.
 
@@ -1909,12 +1912,10 @@ may contribute a transcript. A notes memory beside a session adds context
 without hiding the session.
 
 Changed (TS yian): every host memory method (`Memory.openRun({ snapshot })` and
-`reset()`, the session's `recall`, `learn`, `commit` and `close`,
-`TranscriptSource.openTurn`, and the turn's `request`, `observe`, `close` and
-`prepareHistory`) may return a value or a promise, and yian awaits it. A session
-has no `with` form: call `close()`. `openTurn(request, { signal })` resolves to an
-admitted turn, and the stop is that `AbortSignal` (there is no `check_stopped`).
-`ConversationTurn.close(error?)` replaces the context manager's exit.
+`reset()`, the session's `recall`, `learn`, `commit` and `close`) may return a value or a
+promise, and yian awaits it. A session has no `with` form: call `close()`. There are no
+transcripts: `new MemoryContent({ text })` holds only notes, and `MemoryContext` only its
+sections (no `TranscriptSource` or `ConversationTurn`).
 
 The evaluator gives agents one `MemoryContext`, containing labelled text sections
 and an optional transcript turn. This is analogous to using a session transcript
@@ -1981,6 +1982,14 @@ points); elsewhere the IDs match. A run log never spans both implementations, so
 the prefix stays `ac-memory-v3`.
 
 ## SessionMemory foundation
+
+Changed (TS yian): no session memory; carry history as a LOOP field. TS yian has no
+`SessionMemory`, no conversation contracts (`Conversation*`, `TranscriptSource`,
+`ConversationTurn`) and no history summaries: a `session` memory is a load error
+("session memory was removed; carry the history as a loop field"), an AGENT's model reads
+only its own start's messages, and the `history_summary` model-call purpose and the
+`YIAN_SESSION_*` settings are gone. Chat history is a value a LOOP carries from one turn to
+the next. The rest of this section is Python yian's.
 
 `yian.memory.session.SessionMemory` retains AGENT
 message conversations across calls to `run_flow`.
@@ -2585,11 +2594,15 @@ Runtime neither reconstructs a transcript from the run log nor fabricates result
 for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.
 
+Changed (TS yian): there is no session memory, so nothing keeps a conversation beside the
+run log; a chat's history is the value a LOOP carries, recorded as node outputs. A steer an
+AGENT read before a crash is lost: the retried AGENT doesn't see it.
+
 Changed (TS yian): before each wait between an AGENT's model-call attempts (a
 transport retry under `YIAN_MODEL_RETRIES`), the node records a `NodeStepRecord`
 step `{"model_attempt": {"call": n, "attempt": k, "status": "failed", "error":
 {"kind": ..., "message": ...}, "partial": ..., "retry_in": s}}`. `call` numbers the
-node's model calls, chat, structured and history summaries alike, from 1 in each node start; `attempt`
+node's model calls, chat and structured alike, from 1 in each node start; `attempt`
 is the attempt that failed; `error` holds the provider error's kind (`server`,
 `rate_limit`, `timeout`, ...) and its message, scrubbed of the credentials the call
 may have sent, as the node's failure is; `partial` is the `yian.message.v1`

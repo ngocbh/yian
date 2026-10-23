@@ -284,6 +284,11 @@ with `build_memories`; `run_flow` never constructs it. `yian run` uses the
 same builder, in RAM or under `--memory-root`.
 See [SessionMemory foundation](api.md#sessionmemory-foundation).
 
+Changed (TS yian): there is no session memory, so no memory holds a conversation and an
+AGENT's memory context is only its recalled notes; a `session` memory is a load error. A
+chat's history is the value a LOOP carries from turn to turn, recorded as node outputs in
+the run log.
+
 When retention is enabled, the trace keeps the actual terminal producer and
 accepted invocation contexts through graph pruning. The reverse-feedback fold
 walks those outcomes in reverse acceptance order, collecting every incoming
@@ -440,12 +445,11 @@ render capture, `steps.record`), the first such fault is what the evaluation rej
 the node settles, even if the node caught it and returned; capability promises the node
 started are awaited first. A node declaring `needsEvaluationTrace` gets a write-only
 `evaluationTrace` (`recordPrompt`, `recordInteraction`), and one declaring `needsMemoryContext`
-gets `openMemoryContext(baseSystemPrompt, renderedPrompt, compatibility)`; the memory opener the
-engine is given takes `(scope, request, { signal })` and resolves to a `MemoryContext`, and the
-evaluator awaits the admitted transcript's `close(error)` before the evaluation settles (with the
-failure's error, the signal's reason for a stop, or nothing on success). Cleanup notes travel
-on the error's `notes` and are appended to the failure's `traceback`. The steps capability and
-render capture refuse calls once the outcome is decided.
+gets `openMemoryContext(baseSystemPrompt, renderedPrompt)`; the memory opener the engine is
+given takes `(scope, recall, { signal })`, where `recall` is the node's `RecallContext`, and
+resolves to a `MemoryContext` of recalled sections. There is no transcript to close: the
+capability only refuses opens once the outcome is decided, as the steps capability and render
+capture refuse their calls.
 
 The pattern is a small set of traits and hooks around the shared run/body pair.
 Runtime may read `NodeKind` for diagnostic text, but behavior and scheduling never

@@ -15,6 +15,7 @@
     "./tools": { "bun": "./src/tools/index.ts", "types": "./dist/src/tools/index.d.ts", "default": "./dist/src/tools/index.js" },
     "./skills": { "bun": "./src/compose/skills.ts", "types": "./dist/src/compose/skills.d.ts", "default": "./dist/src/compose/skills.js" },
     "./platform": { "bun": "./src/platform.ts", "types": "./dist/src/platform.d.ts", "default": "./dist/src/platform.js" },
+    "./llm_clients": { "bun": "./src/llm_clients/index.ts", "types": "./dist/src/llm_clients/index.d.ts", "default": "./dist/src/llm_clients/index.js" },
     "./package.json": "./package.json"
   },
   "files": ["dist/src", "src", "LICENSE", "NOTICE", "README.md"],

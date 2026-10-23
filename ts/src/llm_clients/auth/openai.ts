@@ -148,7 +148,9 @@ function sameText(a: string, b: string): boolean {
 /** Return a 2xx response's body record, or throw `AuthError`. */
 function responseData(response: HttpResponse): Record<string, unknown> {
   if (!(response.status >= 200 && response.status < 300)) {
-    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status})`);
+    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status})`, {
+      status: response.status,
+    });
   }
   const { data } = response;
   if (!isRecord(data)) throw new AuthError("OpenAI authentication returned malformed data");

@@ -1,6 +1,9 @@
 /**
  * LLM clients and `LLMConfig` for AGENT nodes: yian's model seam.
  *
+ * This is the public `@ngocbh/yian/llm_clients` entry, for hosts that set up providers; the README
+ * lists its supported names, and its other exports are internal.
+ *
  * The model-access leaf: `LLMConfig` (the selection carrier) and `chatModelFromConfig` (resolve it
  * to a ready `RouteModel` on its provider's route). `provider_blocks.ts` holds the schema of each
  * provider block, the request body of the API that provider's calls reach, checked at load and
@@ -20,7 +23,24 @@
  * import it, never the reverse.
  */
 
-export { LLM_CONFIG_KEYS, LLMConfig } from "./config.ts";
+export type { AuthRequest, AuthRequestOptions, AuthState, AuthStoreOptions, Credentials } from "./auth/index.ts";
+export {
+  ApiKeyCredentials,
+  AuthError,
+  AuthStore,
+  HttpResponse,
+  OAuthCredentials,
+  OpenAIAuth,
+  ProviderSelection,
+} from "./auth/index.ts";
+export {
+  azureResourceEndpoint,
+  LLM_CONFIG_KEYS,
+  LLMConfig,
+  type LLMProvider,
+  SUPPORTED_LLM_PROVIDERS,
+} from "./config.ts";
 export { callCredentials, scrubCallCredentials } from "./connection.ts";
 export { chatModelFromConfig, defaultModelAccess, type ModelAccess } from "./factory.ts";
-export { listModels, ModelListError } from "./model_list.ts";
+export { type ListModelsOptions, listModels, ModelListError } from "./model_list.ts";
+export { type Issue, ValidationError } from "./provider_blocks.ts";

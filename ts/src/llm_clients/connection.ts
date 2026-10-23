@@ -1178,7 +1178,10 @@ export async function connectionCredentials(
       });
     } catch (error) {
       if (error instanceof AuthError) {
-        throw new AuthError(`${error.message}. Run 'yian auth ${provider}' and start a new run`, { cause: error });
+        throw new AuthError(`${error.message}. Run 'yian auth ${provider}' and start a new run`, {
+          cause: error,
+          status: error.status ?? undefined,
+        });
       }
       throw error;
     }

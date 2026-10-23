@@ -9,6 +9,8 @@
  * `scrub_key(s)` chain tests; `describe("scrub")` runs the `scrub_key(s)`
  * exception tests through `scrubError`, with `cause` for Python's chaining, `AggregateError`
  * members for exception groups, and a string member for an exception note.
+ * TS-only: host intake through `LLMConfig.fromHost`, and validation messages that never hold a
+ * value.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -55,15 +57,20 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-/** Return the error that building an `LLMConfig` from `data` throws. */
-function thrown(data: Record<string, unknown>): ValidationError {
+/** Return the error that `make` throws, which must be a `ValidationError`. */
+function refusal(make: () => unknown): ValidationError {
   try {
-    new LLMConfig(data);
+    make();
   } catch (error) {
     expect(error).toBeInstanceOf(ValidationError);
     return error as ValidationError;
   }
   throw new Error("expected a ValidationError");
+}
+
+/** Return the error that building an `LLMConfig` from `data` throws. */
+function thrown(data: Record<string, unknown>): ValidationError {
+  return refusal(() => new LLMConfig(data));
 }
 
 test("inspect, String and dumps hide the key", () => {
@@ -95,6 +102,78 @@ test.each([
       expect(error.message.replace("temparature", "")).not.toContain(String(leaf));
     }
   }
+});
+
+describe("fromHost", () => {
+  const KEY = "sk-host-key-0123456789";
+
+  test("fromHost takes a JSON config with whole numbers as ints", () => {
+    const data = { provider: "anthropic", api_key: KEY, anthropic: { max_tokens: 1024 } };
+    const config = LLMConfig.fromHost(data);
+    expect(config.blockFor("anthropic")["max_tokens"]).toBe(1024n);
+    expect(config.apiKey).toBe(KEY);
+    expect(thrown(data).issues.map((issue) => issue.type)).toContain("int_type");
+  });
+
+  test("fromHost refuses what the constructor refuses", () => {
+    const data = { provider: "nope" };
+    expect(refusal(() => LLMConfig.fromHost(data)).issues).toEqual(thrown(data).issues);
+  });
+
+  test("fromHost refuses a value that is not a yian value", () => {
+    const key = "sk-proj-SENTINEL-0123456789abcdef";
+    for (const data of [{ model: NaN }, JSON.parse('{"model": "\\ud800"}'), { api_key: `${key}\ud800` }]) {
+      let error: unknown;
+      try {
+        LLMConfig.fromHost(data);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(RangeError);
+      expect((error as Error).name).toBe("TypeCheckError");
+      expect((error as Error).message).not.toContain("SENTINEL");
+    }
+  });
+});
+
+describe("value-free validation messages", () => {
+  const K = "sk-proj-SENTINEL-0123456789abcdef";
+  const KEYED_OPENAI = { provider: "openai", api_key: K };
+  // Each config is refused and holds K as a value, never as a key.
+  const CASES: [string, Record<string, unknown>][] = [
+    ["provider", { provider: K }],
+    ["api_key beside a bad model", { model: 5, api_key: K }],
+    ["base_url userinfo", { ...KEYED_OPENAI, base_url: `https://${K}@x.example/` }],
+    ["base_url query", { ...KEYED_OPENAI, base_url: `https://x.example/?k=${K}` }],
+    ["api_key without provider", { api_key: K, base_url: "https://x.example/v1" }],
+    ["organization", { organization: K + " x" }],
+    ["project", { project: K + "\n" }],
+    ["refused header name", { headers: { Authorization: K } }],
+    ["header value", { headers: { "X-Gateway": K + "\n" } }],
+    ["reasoning effort", { openai: { reasoning: { effort: K } } }],
+    ["reasoning", { openai: { reasoning: K } }],
+    ["long safety_identifier", { openai: { safety_identifier: K.repeat(4) } }],
+    ["long metadata value", { openai: { metadata: { a: K.repeat(20) } } }],
+    ["temperature", { temperature: K }],
+    ["retired anthropic_effort", { anthropic_effort: K }],
+    ["anthropic block", { anthropic: { output_config: { effort: K } } }],
+    ["google block", { google: { generationConfig: { thinkingConfig: { thinkingLevel: K } } } }],
+    ["sandbox", { sandbox: K }],
+  ];
+
+  test.each(CASES)("validation messages and issues never hold a key-shaped value (%s)", (_label, data) => {
+    for (const make of [() => new LLMConfig(data), () => LLMConfig.fromHost(data)]) {
+      const error = refusal(make);
+      expect(error.message).not.toContain("SENTINEL");
+      expect(JSON.stringify(error.issues)).not.toContain("SENTINEL");
+    }
+  });
+
+  test("validation messages name keys as written, at any depth", () => {
+    for (const data of [{ [K]: 1 }, { openai: { [K]: 1 } }, { openai: { metadata: { [K]: 5 } } }]) {
+      expect(thrown(data).message).toContain(K);
+    }
+  });
 });
 
 /** Build `config` with this test's environment, keeping warnings quiet. */

@@ -8,6 +8,9 @@
  * guards the whole exchange with one deadline and cancellation, caps the reply, and never follows
  * redirects.
  *
+ * Also exports the option types of the store (`AuthStoreOptions`) and of `OpenAIAuth`'s injected
+ * sender (`AuthRequest`, `AuthRequestOptions`).
+ *
  * Knows about: Node's built-in modules (`node:net` for the browser callback listener,
  * `node:crypto`, the file system), `defaults.ts`, `platform.ts`'s scheduler and file lock, the
  * transport's `shortRequest` and `llm/errors.ts`'s `ProviderError`, the `typesys` and
@@ -25,5 +28,5 @@ export {
   OAuthCredentials,
   ProviderSelection,
 } from "./common.ts";
-export { OpenAIAuth } from "./openai.ts";
-export { AuthStore } from "./store.ts";
+export { type AuthRequest, type AuthRequestOptions, OpenAIAuth } from "./openai.ts";
+export { AuthStore, type AuthStoreOptions } from "./store.ts";

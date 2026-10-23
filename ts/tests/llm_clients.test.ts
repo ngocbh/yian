@@ -10,13 +10,19 @@
  * the Anthropic early-close test by the transport tests. Left out: the Ollama `max_retries`
  * kwarg test and the normalize-reply tests (LangChain), and the DeepSeek non-streaming test (TS
  * streams DeepSeek).
+ *
+ * Added here: the `@ngocbh/yian/llm_clients` entry, imported by package self-reference, which
+ * resolves through `package.json`'s "exports" as an installed copy does; with `YIAN_TEST_NODE` set
+ * to a Node binary, also on Node, built.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { Env } from "../src/defaults.ts";
 import { collect } from "../src/llm/events.ts";
@@ -26,9 +32,25 @@ import { OllamaChat } from "../src/llm/protocols/ollama_chat.ts";
 import { OpenAIChat } from "../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../src/llm/protocols/openai_responses.ts";
 import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../src/llm_clients/api_key_env.ts";
-import { AZURE_NEEDS_BASE_URL, LLMConfig, SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
+import {
+  ApiKeyCredentials,
+  AuthError,
+  HttpResponse,
+  OAuthCredentials,
+  ProviderSelection,
+} from "../src/llm_clients/auth/common.ts";
+import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
+import { AuthStore } from "../src/llm_clients/auth/store.ts";
+import {
+  AZURE_NEEDS_BASE_URL,
+  azureResourceEndpoint,
+  LLM_CONFIG_KEYS,
+  LLMConfig,
+  SUPPORTED_LLM_PROVIDERS,
+} from "../src/llm_clients/config.ts";
 import { chatModelFromConfig, DEDICATED_PROVIDERS, OPENAI_COMPATIBLE } from "../src/llm_clients/factory.ts";
 import { getKnownModels, getModelOptions, MODEL_OPTIONS } from "../src/llm_clients/model_catalog.ts";
+import { listModels, ModelListError } from "../src/llm_clients/model_list.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
 import { VALID_MODELS, validateModel } from "../src/llm_clients/validators.ts";
 import { type Send, virtualScheduler } from "../src/platform.ts";
@@ -326,3 +348,121 @@ test.each([null, "https://gateway.example/v1"])(
     expect(model.route.url()).toBe(`${baseUrl ?? "https://api.openai.com/v1"}/responses`);
   },
 );
+
+const ROOT = join(import.meta.dirname, "..");
+const BUILT = join(ROOT, "dist/src/llm_clients/index.js");
+/**
+ * The public entry. It resolves by self-reference from inside ROOT (this file, and children whose
+ * cwd is ROOT). Typed string so tsc doesn't resolve it to dist/, missing before a build.
+ */
+const ENTRY: string = "@ngocbh/yian/llm_clients";
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+describe("the @ngocbh/yian/llm_clients entry", () => {
+  test.if(process.versions.bun !== undefined)("on Bun it is the source module yian itself uses", async () => {
+    expect(realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(
+      realpathSync(join(ROOT, "src/llm_clients/index.ts")),
+    );
+    const entry = (await import(ENTRY)) as typeof import("../src/llm_clients/index.ts");
+    expect(entry.LLMConfig).toBe(LLMConfig);
+    expect(entry.LLM_CONFIG_KEYS).toBe(LLM_CONFIG_KEYS);
+    expect(entry.SUPPORTED_LLM_PROVIDERS).toBe(SUPPORTED_LLM_PROVIDERS);
+    expect(entry.ValidationError).toBe(ValidationError);
+    expect(entry.azureResourceEndpoint).toBe(azureResourceEndpoint);
+    expect(entry.listModels).toBe(listModels);
+    expect(entry.ModelListError).toBe(ModelListError);
+    expect(entry.AuthStore).toBe(AuthStore);
+    expect(entry.OpenAIAuth).toBe(OpenAIAuth);
+    expect(entry.AuthError).toBe(AuthError);
+    expect(entry.HttpResponse).toBe(HttpResponse);
+    expect(entry.OAuthCredentials).toBe(OAuthCredentials);
+    expect(entry.ApiKeyCredentials).toBe(ApiKeyCredentials);
+    expect(entry.ProviderSelection).toBe(ProviderSelection);
+  });
+
+  test.skipIf(!NODE)(
+    "on Node it resolves to the build and runs listing, validation and statuses",
+    () => {
+      const script = `
+const entry = await import(${JSON.stringify(ENTRY)});
+const names = [
+  "LLMConfig", "LLM_CONFIG_KEYS", "SUPPORTED_LLM_PROVIDERS", "ValidationError", "azureResourceEndpoint",
+  "listModels", "ModelListError", "AuthStore", "OpenAIAuth", "AuthError", "HttpResponse",
+  "OAuthCredentials", "ApiKeyCredentials", "ProviderSelection",
+];
+const types = Object.fromEntries(names.map((n) => [n, typeof entry[n]]));
+let listing = "listed";
+try {
+  await entry.listModels("openai", { apiKey: "sk-entry-test", request: async () => new entry.HttpResponse(401, null) });
+} catch (error) {
+  listing = { modelListError: error instanceof entry.ModelListError, status: error.status };
+}
+const config = entry.LLMConfig.fromHost({ provider: "anthropic", api_key: "sk-entry-test", anthropic: { max_tokens: 1024 } });
+let invalid = "accepted";
+try {
+  new entry.LLMConfig({ provider: "provider-entry-test" });
+} catch (error) {
+  invalid = { validationError: error instanceof entry.ValidationError, named: error.message.includes("provider-entry-test") };
+}
+console.log(JSON.stringify({
+  resolved: import.meta.resolve(${JSON.stringify(ENTRY)}),
+  types,
+  listing,
+  config: [config.provider, config.blockFor("anthropic").max_tokens === 1024n],
+  invalid,
+}));
+`;
+      const result = spawnSync(NODE!, ["--input-type=module", "-e", script], {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      expect(result.status, `signal: ${result.signal}\nstderr: ${result.stderr}`).toBe(0);
+      expect(result.stderr).toBe("");
+      const { resolved, types, listing, config, invalid } = JSON.parse(result.stdout);
+      expect(realpathSync(fileURLToPath(resolved))).toBe(realpathSync(BUILT));
+      expect(types).toEqual({
+        LLMConfig: "function",
+        LLM_CONFIG_KEYS: "object",
+        SUPPORTED_LLM_PROVIDERS: "object",
+        ValidationError: "function",
+        azureResourceEndpoint: "function",
+        listModels: "function",
+        ModelListError: "function",
+        AuthStore: "function",
+        OpenAIAuth: "function",
+        AuthError: "function",
+        HttpResponse: "function",
+        OAuthCredentials: "function",
+        ApiKeyCredentials: "function",
+        ProviderSelection: "function",
+      });
+      expect(listing).toEqual({ modelListError: true, status: 401 });
+      expect(config).toEqual(["anthropic", true]);
+      expect(invalid).toEqual({ validationError: true, named: false });
+    },
+    90_000,
+  );
+});

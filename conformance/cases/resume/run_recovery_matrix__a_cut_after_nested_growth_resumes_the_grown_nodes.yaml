@@ -1,9 +1,10 @@
 # From tests/engine/test_run_recovery_matrix.py::test_every_nested_growth_prefix_replays_to_the_live_state[serial-named].
 # Also ::test_recorded_nested_growth_resumes_with_exact_memory_and_trace (without its memory).
 # A run cut after a nested MAP's expansion inside a CALL resumes the grown nodes from the recorded growth.
-# Record 8 is outer/mapped's node_expanded: an expansion settles its spawner, so nothing is in flight.
+# Record 14 is outer/mapped's node_expanded: an expansion settles its spawner, so nothing is in flight.
 # The LOOP after the cut stays because the source test asserts its output.
 kind: resume
+rules: [run-log]
 flow: |
   id: recovery-matrix-growth
   name: recovery_matrix_growth
@@ -114,7 +115,7 @@ run:
   run_id: r1
   num_workers: 0
 host:
-  crash_after_record: 8
+  crash_after_record: 14
 expect:
   output:
     status: succeeded
@@ -128,20 +129,37 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, outer]
   - - node_expanded
     - outer
     - prune_ids: []
       seed: {}
   - [node_started, outer/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/__start__
     - value: {}
+  - - node_succeeded
+    - outer/__start__
+    - {commit: 11}
   - [node_started, outer/mapped]
   - - node_expanded
     - outer/mapped
@@ -162,53 +180,83 @@ expect:
         n: 0
       - 0
   - [node_started, outer/mapped/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/mapped/__start__
     - value: {}
-  - [node_started, outer/repeated#0/__start__]
   - - node_succeeded
+    - outer/mapped/__start__
+    - {commit: 19}
+  - [node_started, outer/repeated#0/__start__]
+  - - pool_commit
     - outer/repeated#0/__start__
     - value:
         exited: false
         n: 0
-  - [node_started, outer/mapped#0/__start__]
   - - node_succeeded
+    - outer/repeated#0/__start__
+    - {commit: 22}
+  - [node_started, outer/mapped#0/__start__]
+  - - pool_commit
     - outer/mapped#0/__start__
     - value:
         value: 1
-  - [node_started, outer/mapped#1/__start__]
   - - node_succeeded
+    - outer/mapped#0/__start__
+    - {commit: 25}
+  - [node_started, outer/mapped#1/__start__]
+  - - pool_commit
     - outer/mapped#1/__start__
     - value:
         value: 2
-  - [node_started, outer/repeated#0/bump]
   - - node_succeeded
+    - outer/mapped#1/__start__
+    - {commit: 28}
+  - [node_started, outer/repeated#0/bump]
+  - - pool_commit
     - outer/repeated#0/bump
     - value:
         exited: false
         n: 1
-  - [node_started, outer/mapped#0/echo]
   - - node_succeeded
+    - outer/repeated#0/bump
+    - {commit: 31}
+  - [node_started, outer/mapped#0/echo]
+  - - pool_commit
     - outer/mapped#0/echo
     - value: 1
-  - [node_started, outer/mapped#1/echo]
   - - node_succeeded
+    - outer/mapped#0/echo
+    - {commit: 34}
+  - [node_started, outer/mapped#1/echo]
+  - - pool_commit
     - outer/mapped#1/echo
     - value: 2
-  - [node_started, outer/repeated#0/__end__]
   - - node_succeeded
+    - outer/mapped#1/echo
+    - {commit: 37}
+  - [node_started, outer/repeated#0/__end__]
+  - - pool_commit
     - outer/repeated#0/__end__
     - value:
         exited: false
         n: 1
-  - [node_started, outer/mapped#0/__end__]
   - - node_succeeded
+    - outer/repeated#0/__end__
+    - {commit: 40}
+  - [node_started, outer/mapped#0/__end__]
+  - - pool_commit
     - outer/mapped#0/__end__
     - value: 1
-  - [node_started, outer/mapped#1/__end__]
   - - node_succeeded
+    - outer/mapped#0/__end__
+    - {commit: 43}
+  - [node_started, outer/mapped#1/__end__]
+  - - pool_commit
     - outer/mapped#1/__end__
     - value: 2
+  - - node_succeeded
+    - outer/mapped#1/__end__
+    - {commit: 46}
   - [node_started, outer/repeated~1]
   - - node_expanded
     - outer/repeated~1
@@ -222,52 +270,73 @@ expect:
         n: 1
       - 1
   - [node_started, outer/mapped/__end__]
+  - - pool_commit
+    - outer/mapped/__end__
+    - value: [1, 2]
+      key: outer/mapped
   - - node_succeeded
     - outer/mapped/__end__
-    - commit_target: outer/mapped
-      value: [1, 2]
+    - {commit: 51}
   - [node_started, outer/repeated#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/repeated#1/__start__
     - value:
         exited: false
         n: 1
-  - [node_started, outer/repeated#1/bump]
   - - node_succeeded
+    - outer/repeated#1/__start__
+    - {commit: 54}
+  - [node_started, outer/repeated#1/bump]
+  - - pool_commit
     - outer/repeated#1/bump
     - value:
         exited: false
         n: 2
-  - [node_started, outer/repeated#1/__end__]
   - - node_succeeded
+    - outer/repeated#1/bump
+    - {commit: 57}
+  - [node_started, outer/repeated#1/__end__]
+  - - pool_commit
     - outer/repeated#1/__end__
     - value:
         exited: false
         n: 2
-  - [node_started, outer/repeated~2]
   - - node_succeeded
+    - outer/repeated#1/__end__
+    - {commit: 60}
+  - [node_started, outer/repeated~2]
+  - - pool_commit
     - outer/repeated~2
-    - commit_target: outer/repeated
-      value:
+    - value:
         exited: false
         n: 2
-  - [node_started, outer/__end__]
+      key: outer/repeated
   - - node_succeeded
+    - outer/repeated~2
+    - {commit: 63}
+  - [node_started, outer/__end__]
+  - - pool_commit
     - outer/__end__
-    - commit_target: outer
-      value:
+    - value:
         mapped: [1, 2]
         repeated:
           exited: false
           n: 2
-  - [node_started, __end__]
+      key: outer
   - - node_succeeded
+    - outer/__end__
+    - {commit: 66}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         mapped: [1, 2]
         repeated:
           exited: false
           n: 2
+  - - node_succeeded
+    - __end__
+    - {commit: 69}
   events:
   - [RunResumed]
   - - NodeStarted

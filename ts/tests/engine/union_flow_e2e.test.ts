@@ -270,9 +270,11 @@ test.each([
   const first = await run({ decision: SELL, note: { num: 1 } }, log);
   succeeded(first);
   const [lines, end] = cutAfterD(log);
-  const record = JSON.parse(lines[end]!);
-  record.payload.value.value = forged;
-  lines[end] = JSON.stringify(record);
+  // d's output is its commit, the record before its success.
+  const record = JSON.parse(lines[end - 1]!);
+  expect(record.kind).toBe("pool_commit");
+  record.payload.value = forged;
+  lines[end - 1] = JSON.stringify(record);
   writeFileSync(log, lines.join("\n") + "\n");
 
   const error = await rejected(resumeFlow({ log, env }));

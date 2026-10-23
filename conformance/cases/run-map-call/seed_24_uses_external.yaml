@@ -1,6 +1,7 @@
 # From tests/seeds/24-uses-external.yaml.
 # A `uses:` alias calls a sibling flow file: the CALL grows the child's nodes under `say/`.
 kind: run
+rules: [run-log]
 flow: |
   # 24 — USES: call an EXTERNAL flow (Python-import style).
   #
@@ -92,16 +93,25 @@ run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: {line: "positive (+0.42): steady growth"}}
   trace:
-    - [run_started, null, {inputs: {rating: 0.42, rationale: steady growth}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {rating: 0.42, rationale: steady growth}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {rating: 0.42, rationale: steady growth}}]
+    - [pool_commit, __start__, {value: {rating: 0.42, rationale: steady growth}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, say]
     - [node_expanded, say, {seed: {rating: 0.42, rationale: steady growth}, prune_ids: []}]
     - [node_started, say/__start__]
-    - [node_succeeded, say/__start__, {value: {rating: 0.42, rationale: steady growth}}]
+    - [pool_commit, say/__start__, {value: {rating: 0.42, rationale: steady growth}}]
+    - [node_succeeded, say/__start__, {commit: 11}]
     - [node_started, say/v]
-    - [node_succeeded, say/v, {value: "positive (+0.42): steady growth"}]
+    - [pool_commit, say/v, {value: "positive (+0.42): steady growth"}]
+    - [node_succeeded, say/v, {commit: 14}]
     - [node_started, say/__end__]
-    - [node_succeeded, say/__end__, {value: "positive (+0.42): steady growth", commit_target: say}]
+    - [pool_commit, say/__end__, {value: "positive (+0.42): steady growth", key: say}]
+    - [node_succeeded, say/__end__, {commit: 17}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {line: "positive (+0.42): steady growth"}}]
+    - [pool_commit, __end__, {value: {line: "positive (+0.42): steady growth"}}]
+    - [node_succeeded, __end__, {commit: 20}]

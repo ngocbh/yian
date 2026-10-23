@@ -27,7 +27,7 @@
  * passed in (`toBe`, where Python compares a revalidated copy with `==`); each refusal pins its
  * class and full message (Python accepts either `TypeError` or `ValueError`), and the `list` row
  * passes a `Set` (Python's list for a tuple). Python's `type(record) is X` is
- * `record.constructor === X`, and its `copy.deepcopy(pool.store)` is `encodePool(state.pool)`.
+ * `record.constructor === X`, and its `copy.deepcopy(pool.store)` is `state.pool.toWire()`.
  * `test_backward_finishes_all_callbacks_before_ready_and_policy_requests` wraps the session's
  * commit with `spyOn(FakeSession.prototype, "commit")` (Python's class-level `monkeypatch`),
  * restored with `mockRestore()`.
@@ -133,7 +133,6 @@ import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
   BackwardStartedRecord,
-  encodePool,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -327,7 +326,7 @@ test("backward finishes all callbacks before Ready and policy requests", async (
     expect(built.state.backwardState.ready).not.toBeNull();
     return originalCommit.call(this, commitId, mutations);
   });
-  const forwardPool = encodePool(built.state.pool);
+  const forwardPool = built.state.pool.toWire();
   let result;
   try {
     result = await drive(built, memory);
@@ -345,7 +344,7 @@ test("backward finishes all callbacks before Ready and policy requests", async (
     expect(backend.openSnapshots).toEqual([{}]);
     expect(backend.closeCount).toBe(1);
   }
-  expect(encodePool(built.state.pool)).toEqual(forwardPool);
+  expect(built.state.pool.toWire()).toEqual(forwardPool);
   expect(built.state.trace!.nextSequence).toBe(built.state.nextSequence);
   expect(built.state.nextSequence).toBe(built.log.nextSequence);
   expect(records(built).at(-1)!.constructor).toBe(BackwardFinishedRecord);
@@ -525,10 +524,11 @@ test("a context failure keeps the completed backward without calling learners", 
   expect(failure.stage).toBe("learn");
   expect(failure.code).toBe("memory.invalid_context");
   expect(failure.memory).toBe(built.state.memories![0]!.key);
-  const context = built.state.trace!.backwardContext(new SourceRef(built.state.runId!, 1));
+  // START starts after RunStarted and the run start's two commits.
+  const context = built.state.trace!.backwardContext(new SourceRef(built.state.runId!, 3));
   expect(failure.runId).toBe(built.state.runId);
   expect(failure.nodeId).toBe(context.nodeId);
-  expect(failure.nodeStartedSeq).toBe(1);
+  expect(failure.nodeStartedSeq).toBe(3);
   expect(failure.scope).toEqual(context.scope);
   expect(failure.message).toBe("memory learn context could not be constructed for node '__start__': context too deep");
   expect(failure.cause!.message).toBe(failure.message);
@@ -575,7 +575,7 @@ test("a replayed context failure must name an accepted receiving occurrence", as
     } finally {
       spy.mockRestore();
     }
-    expect(failure.nodeStartedSeq).toBe(1);
+    expect(failure.nodeStartedSeq).toBe(3);
     let cause = failure.cause as MemoryOperationFailure;
     let fields = {
       code: failure.code,
@@ -586,12 +586,12 @@ test("a replayed context failure must name an accepted receiving occurrence", as
       memory: failure.memory,
     };
     if (change === "node") fields = { ...fields, nodeId: "other" };
-    // Seq 2 is START's success record, not an accepted occurrence start.
-    else if (change === "source") fields = { ...fields, nodeStartedSeq: 2 };
+    // Seq 4 is START's commit record, not an accepted occurrence start.
+    else if (change === "source") fields = { ...fields, nodeStartedSeq: 4 };
     // Every node's memory scope holds only "A".
     else if (change === "memory_scope") fields = { ...fields, memory: "B" };
     else if (change === "scope") {
-      const later = built.state.trace!.backwardContext(new SourceRef(built.state.runId!, 3));
+      const later = built.state.trace!.backwardContext(new SourceRef(built.state.runId!, 6));
       fields = { ...fields, scope: later.scope };
     } else if (change === "run") fields = { ...fields, runId: "other" };
     else if (change === "code") {
@@ -668,7 +668,7 @@ test("an append fault preserves the exact prefix and closes resources", async ()
     const error = new Error("append unavailable");
     const refused: RunRecord[] = [];
     const forwardResult = built.state.result;
-    const forwardPool = encodePool(built.state.pool);
+    const forwardPool = built.state.pool.toWire();
     const append = spyOn(built.log, "append").mockImplementation((record) => {
       if (record.constructor === recordType) {
         refused.push(record);
@@ -685,7 +685,7 @@ test("an append fault preserves the exact prefix and closes resources", async ()
     expect(caught).toBe(error);
     expect(refused).toHaveLength(1);
     expect(built.state.result).toBe(forwardResult);
-    expect(encodePool(built.state.pool)).toEqual(forwardPool);
+    expect(built.state.pool.toWire()).toEqual(forwardPool);
     expect(built.state.nextSequence).toBe(built.state.trace!.nextSequence);
     expect(built.state.nextSequence).toBe(built.log.nextSequence);
     expect(built.state.backwardState.finished).toBeNull();

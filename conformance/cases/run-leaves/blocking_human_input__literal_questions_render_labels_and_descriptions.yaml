@@ -2,6 +2,7 @@
 # A gate's literal questions render `${...}` in the question, and in each option's label and
 # description; the request carries the validated list.
 kind: run
+rules: [run-log]
 flow: |
   id: choose
   name: choose
@@ -42,25 +43,43 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        candidate: Vue
-        project: Atlas
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {candidate: Vue, project: Atlas}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         candidate: Vue
         project: Atlas
-  - [node_started, choose]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, choose]
+  - - pool_commit
     - choose
     - value:
         Framework: Vue
-  - [node_started, __end__]
   - - node_succeeded
+    - choose
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         Framework: Vue
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

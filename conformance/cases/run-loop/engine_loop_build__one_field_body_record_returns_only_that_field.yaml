@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: loop-single-output-record
@@ -67,13 +68,27 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, chat_loop]
   - - node_expanded
     - chat_loop
@@ -83,21 +98,30 @@ expect:
         state: init
       - 0
   - [node_started, chat_loop#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - chat_loop#0/__start__
     - value:
         n: 0
-  - [node_started, chat_loop#0/step]
   - - node_succeeded
+    - chat_loop#0/__start__
+    - {commit: 11}
+  - [node_started, chat_loop#0/step]
+  - - pool_commit
     - chat_loop#0/step
     - value:
         n: 100
-  - [node_started, chat_loop#0/__end__]
   - - node_succeeded
+    - chat_loop#0/step
+    - {commit: 14}
+  - [node_started, chat_loop#0/__end__]
+  - - pool_commit
     - chat_loop#0/__end__
     - value:
         state:
           n: 100
+  - - node_succeeded
+    - chat_loop#0/__end__
+    - {commit: 17}
   - [node_started, chat_loop~1]
   - - node_expanded
     - chat_loop~1
@@ -112,36 +136,51 @@ expect:
           n: 100
       - 1
   - [node_started, chat_loop#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - chat_loop#1/__start__
     - value:
         n: 0
-  - [node_started, chat_loop#1/step]
   - - node_succeeded
+    - chat_loop#1/__start__
+    - {commit: 22}
+  - [node_started, chat_loop#1/step]
+  - - pool_commit
     - chat_loop#1/step
     - value:
         n: 100
-  - [node_started, chat_loop#1/__end__]
   - - node_succeeded
+    - chat_loop#1/step
+    - {commit: 25}
+  - [node_started, chat_loop#1/__end__]
+  - - pool_commit
     - chat_loop#1/__end__
     - value:
         state:
           n: 100
-  - [node_started, chat_loop~2]
   - - node_succeeded
+    - chat_loop#1/__end__
+    - {commit: 28}
+  - [node_started, chat_loop~2]
+  - - pool_commit
     - chat_loop~2
-    - commit_target: chat_loop
-      value:
+    - value:
         n: 0
         state:
           n: 100
-  - [node_started, __end__]
+      key: chat_loop
   - - node_succeeded
+    - chat_loop~2
+    - {commit: 31}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         n: 0
         state:
           n: 100
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

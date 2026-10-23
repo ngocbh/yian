@@ -1,4 +1,5 @@
 kind: backward
+rules: [run-log]
 # The CODE body is the same text in TS and Python.
 flow: |
   id: code-feedback
@@ -21,64 +22,48 @@ expect:
       failure: null
       learning: null
   trace:
-    - [run_started, null, {inputs: {}, learnable: true, num_workers: 0}]
+    - [run_started, null, {learnable: true, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
     - [node_started, __start__]
-    - - node_succeeded
+    - - pool_commit
       - __start__
       - value: {}
-        forward_capture:
-          bound_inputs: {}
-          route:
-            kind: record
-          scope: {static_path: [__start__], flow_path: [], occurrence_path: [], boundary: start}
-          node_data: {input_output_paths: {}}
+    - [node_succeeded, __start__, {commit: 6, forward_capture: {bound_inputs: {}, node_data: {input_output_paths: {}}, route: {kind: record}, scope: {boundary: start, flow_path: [], occurrence_path: [], static_path: [__start__]}}}]
     - [node_started, c]
-    - - node_succeeded
+    - - pool_commit
       - c
       - value: hello
-        forward_capture:
-          bound_inputs: {}
-          route:
-            kind: record
-          scope: {static_path: [c], flow_path: [], occurrence_path: [], boundary: null}
+    - [node_succeeded, c, {commit: 9, forward_capture: {bound_inputs: {}, route: {kind: record}, scope: {boundary: null, flow_path: [], occurrence_path: [], static_path: [c]}}}]
     - [node_started, __end__]
-    - - node_succeeded
+    - - pool_commit
       - __end__
       - value: hello
-        forward_capture:
-          bound_inputs: {result: hello}
-          route:
-            kind: record
-            children:
-              - kind: source
-                source: {run_id: r1, execution_seq: 3, path: []}
-            names: [result]
-          evaluated_keys: [result]
-          scope: {static_path: [__end__], flow_path: [], occurrence_path: [], boundary: end}
-          node_data: {input_output_paths: {result: []}}
-          input_names: [result]
+    - [node_succeeded, __end__, {commit: 12, forward_capture: {bound_inputs: {result: hello}, evaluated_keys: [result], input_names: [result], node_data: {input_output_paths: {result: []}}, route: {children: [{kind: source, source: {execution_seq: 8, path: [], run_id: r1}}], kind: record, names: [result]}, scope: {boundary: end, flow_path: [], occurrence_path: [], static_path: [__end__]}}}]
     - [backward_started, null, {attempt_id: 1, feedback: shorter}]
     - - backward_ready
       - null
       - attempt_id: 1
         root_result: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
         attributed_results:
-          - source: {run_id: r1, execution_seq: 1, path: []}
+          - source: {run_id: r1, execution_seq: 5, path: []}
             feedback: []
             attribution: []
             result: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
             invoked: false
-          - source: {run_id: r1, execution_seq: 3, path: []}
+          - source: {run_id: r1, execution_seq: 8, path: []}
             feedback: [shorter]
             attribution:
-              - sender: {run_id: r1, execution_seq: 5, path: []}
+              - sender: {run_id: r1, execution_seq: 11, path: []}
                 input_name: result
                 message_index: 0
                 contribution_index: 0
                 parents: [0]
             result: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
             invoked: true
-          - source: {run_id: r1, execution_seq: 5, path: []}
+          - source: {run_id: r1, execution_seq: 11, path: []}
             feedback: [shorter]
             attribution:
               - {sender: null, input_name: null, message_index: 0, contribution_index: null, parents: []}

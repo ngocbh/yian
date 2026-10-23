@@ -2,7 +2,7 @@
 # and docs/syntax.md ("headers unique").
 # Upstream questions with a repeated header fail the gate before it asks.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: manual_ref
   name: manual_ref
@@ -41,14 +41,23 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
         qs:
-        - header: D
-          question: a
-        - header: D
-          question: b
+        - {header: D, question: a}
+        - {header: D, question: b}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         qs:
@@ -56,6 +65,9 @@ expect:
           question: a
         - header: D
           question: b
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, ask]
   - - node_failed
     - ask

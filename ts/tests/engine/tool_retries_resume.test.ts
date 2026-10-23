@@ -41,7 +41,7 @@
  *
  * Changed: `test_an_old_tool_crash_log_resumes_at_attempt_two` and
  * `test_an_old_loop_tool_crash_log_resumes_with_its_growth` resume Python's committed schema-9
- * logs; TS reads only schema 12, so each resume rejects with a `RangeError` naming Python yian,
+ * logs; TS reads only schema 13, so each resume rejects with a `RangeError` naming Python yian,
  * calls no tool and leaves the log unchanged.
  *
  * Changed (vocabulary): a TS resume also publishes `NodeAttemptResumed` for each retried node; no
@@ -199,8 +199,8 @@ test("a crash inside attempt two resumes at attempt three with one retry used", 
   const script = new Script(new TimeoutError("a"));
   const { scheduler, waited } = clock();
 
-  // Record 6 is attempt 2's outcome.
-  await crashAfter(6, () =>
+  // Record 11 is attempt 2's outcome (its commit), after the run start's five records and START's three.
+  await crashAfter(11, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
 
@@ -231,7 +231,7 @@ test("a crash inside attempt two with no retry left fails on resume", async () =
   const script = new Script(new TimeoutError("a"));
   const { scheduler } = clock();
 
-  await crashAfter(6, () =>
+  await crashAfter(11, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
 
@@ -251,8 +251,8 @@ test("a retries zero crash resumes at attempt two without steps", async () => {
   const script = new Script();
   const { scheduler, waited } = clock();
 
-  // Record 4 is attempt 1's outcome.
-  await crashAfter(4, () =>
+  // Record 9 is attempt 1's outcome (its commit), after the run start's five records and START's three.
+  await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
   const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
@@ -271,8 +271,8 @@ test("a crash during the backoff wait rewaits and resumes at attempt two", async
   const script = new Script(new TransientToolError("a", { retryAfter: 7 }));
   const { scheduler, waited } = clock();
 
-  // Record 5 is attempt 2's `started` step, after the wait.
-  await crashAfter(5, () =>
+  // Record 10 is attempt 2's `started` step, after the wait.
+  await crashAfter(10, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
   expect(steps(path)).toEqual([failed(1, "a", 7, "TransientToolError")]);
@@ -297,8 +297,8 @@ test("a crash during the second backoff rewaits the last recorded delay", async 
   );
   const { scheduler, waited } = clock();
 
-  // Record 7 is attempt 3's `started` step, after the second wait.
-  await crashAfter(7, () =>
+  // Record 12 is attempt 3's `started` step, after the second wait.
+  await crashAfter(12, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
   const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
@@ -320,12 +320,12 @@ test("two crashes rewait the recorded delay each resume", async () => {
   const script = new Script(new TransientToolError("a", { retryAfter: 7 }));
   const { scheduler, waited } = clock();
 
-  // Record 5 is attempt 2's `started` step, after the wait.
-  await crashAfter(5, () =>
+  // Record 10 is attempt 2's `started` step, after the wait.
+  await crashAfter(10, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
-  // Records 5 and 6 are `RunResumed` and the resumed start; record 7 is attempt 2's outcome.
-  await crashAfter(7, () => resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) }));
+  // Records 10 and 11 are `RunResumed` and the resumed start; record 12 is attempt 2's outcome.
+  await crashAfter(12, () => resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) }));
 
   expect(script.attempts()).toEqual([1, 2]);
   expect(waited).toEqual([7000, 7000]);
@@ -350,7 +350,7 @@ for (const [name, first, then] of [
     const script = new Script(new TimeoutError("a"));
     const { scheduler, waited } = clock();
 
-    await crashAfter(6, () =>
+    await crashAfter(11, () =>
       runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: first, ...host(scheduler) }),
     );
     script.outcomes = [new TimeoutError("c")];
@@ -370,7 +370,7 @@ test("an interrupted first attempt shows in the final message", async () => {
   const script = new Script();
   const { scheduler, waited } = clock();
 
-  await crashAfter(4, () =>
+  await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
   script.outcomes = [new TimeoutError("b"), new TimeoutError("c")];
@@ -548,9 +548,12 @@ async function liveRun(
     random: () => 1,
   });
   await engine.run();
-  // The snapshot before record k is the state after record k - 1; the first is after RunStarted.
+  // The snapshot before record k is the state after record k - 1; the first is after the run start.
   return { records: log.records(), live: [...log.before.slice(1), liveOf(state)], state };
 }
+
+/** The number of the run start's records (RunStarted and its commits): those before the first node start. */
+const runStartLength = (records: readonly RecordEnvelope[]) => records.findIndex(({ kind }) => kind === "node_started");
 
 /** The replayed state of the first `length` records. */
 const replayPrefix = (loaded: ComposedFlow, records: readonly RecordEnvelope[], length: number) =>
@@ -563,11 +566,12 @@ test("a finished log with retries replays to the live steps", async () => {
   const { records, live, state } = await liveRun(flow, script.tools());
 
   expect(state.result?.constructor.name).toBe("RunSucceeded");
-  // RunStarted is written before the engine runs; every later record is one live commit.
-  expect(live).toHaveLength(records.length - 1);
+  // The run start is written before the engine runs; every later record is one live commit.
+  const started = runStartLength(records);
+  expect(live).toHaveLength(records.length - started);
   // Every prefix replays to the live node starts and steps after that commit.
   for (const [i, expected] of live.entries()) {
-    const length = i + 2;
+    const length = started + 1 + i;
     expect(liveOf(replayPrefix(flow, records, length)), `prefix ${length}`).toEqual(expected);
   }
   expect(live.some(({ steps }) => (steps.get("call")?.length ?? 0) > 0)).toBe(true);
@@ -637,8 +641,9 @@ test("a long loop keeps no steps for finished iterations", async () => {
   expect(replayed.nodeSteps).toEqual(new Map());
   // Replay of a prefix ending inside an iteration holds that iteration's steps only.
   const stepPrefixes = records.flatMap(({ record }, i) => (record instanceof NodeStepRecord ? [i + 1] : []));
+  const started = runStartLength(records);
   for (const length of stepPrefixes.filter((_, i) => i % 10 === 0)) {
-    const { starts, steps } = live[length - 2]!;
+    const { starts, steps } = live[length - started - 1]!;
     const state = replayPrefix(flow, records, length);
     expect(state.nodeStarts).toEqual(starts);
     expect(state.nodeSteps).toEqual(steps as Map<string, readonly never[]>);

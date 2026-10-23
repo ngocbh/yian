@@ -2,6 +2,7 @@
 # Pins: on the taken route, a nested branch call's inner call is skipped with the branch call's skipped argument.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -121,17 +122,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        go: true
-        other: false
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {go: true, other: false}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         go: true
         other: false
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
@@ -141,10 +154,13 @@ expect:
     - pick
     - handle: '#else'
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
         r: null
+  - - node_succeeded
+    - __end__
+    - {commit: 13}
   events:
   - [RunStarted]
   - - NodeStarted

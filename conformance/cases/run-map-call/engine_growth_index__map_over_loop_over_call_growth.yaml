@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: map-over-loop-over-call
@@ -82,15 +83,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        xs: [1, 2]
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value:
         xs: [1, 2]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        xs: [1, 2]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, each]
   - - node_expanded
     - each
@@ -99,19 +114,28 @@ expect:
       - x: 1
       - x: 2
   - [node_started, each/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each/__start__
+    - {commit: 11}
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         x: 1
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#0/__start__
+    - {commit: 14}
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         x: 2
+  - - node_succeeded
+    - each#1/__start__
+    - {commit: 17}
   - [node_started, each#0/repeat]
   - - node_expanded
     - each#0/repeat
@@ -127,15 +151,21 @@ expect:
       - n: 2
       - 0
   - [node_started, each#0/repeat#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#0/__start__
     - value:
         n: 1
-  - [node_started, each#1/repeat#0/__start__]
   - - node_succeeded
+    - each#0/repeat#0/__start__
+    - {commit: 24}
+  - [node_started, each#1/repeat#0/__start__]
+  - - pool_commit
     - each#1/repeat#0/__start__
     - value:
         n: 2
+  - - node_succeeded
+    - each#1/repeat#0/__start__
+    - {commit: 27}
   - [node_started, each#0/repeat#0/inner]
   - - node_expanded
     - each#0/repeat#0/inner
@@ -149,43 +179,67 @@ expect:
       seed:
         n: 2
   - [node_started, each#0/repeat#0/inner/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#0/inner/__start__
     - value:
         n: 1
-  - [node_started, each#1/repeat#0/inner/__start__]
   - - node_succeeded
+    - each#0/repeat#0/inner/__start__
+    - {commit: 34}
+  - [node_started, each#1/repeat#0/inner/__start__]
+  - - pool_commit
     - each#1/repeat#0/inner/__start__
     - value:
         n: 2
-  - [node_started, each#0/repeat#0/inner/a]
   - - node_succeeded
+    - each#1/repeat#0/inner/__start__
+    - {commit: 37}
+  - [node_started, each#0/repeat#0/inner/a]
+  - - pool_commit
     - each#0/repeat#0/inner/a
     - value: 2
-  - [node_started, each#1/repeat#0/inner/a]
   - - node_succeeded
+    - each#0/repeat#0/inner/a
+    - {commit: 40}
+  - [node_started, each#1/repeat#0/inner/a]
+  - - pool_commit
     - each#1/repeat#0/inner/a
     - value: 3
+  - - node_succeeded
+    - each#1/repeat#0/inner/a
+    - {commit: 43}
   - [node_started, each#0/repeat#0/inner/__end__]
+  - - pool_commit
+    - each#0/repeat#0/inner/__end__
+    - value: 2
+      key: each#0/repeat#0/inner
   - - node_succeeded
     - each#0/repeat#0/inner/__end__
-    - commit_target: each#0/repeat#0/inner
-      value: 2
+    - {commit: 46}
   - [node_started, each#1/repeat#0/inner/__end__]
+  - - pool_commit
+    - each#1/repeat#0/inner/__end__
+    - value: 3
+      key: each#1/repeat#0/inner
   - - node_succeeded
     - each#1/repeat#0/inner/__end__
-    - commit_target: each#1/repeat#0/inner
-      value: 3
+    - {commit: 49}
   - [node_started, each#0/repeat#0/__end__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#0/__end__
     - value:
         n: 2
-  - [node_started, each#1/repeat#0/__end__]
   - - node_succeeded
+    - each#0/repeat#0/__end__
+    - {commit: 52}
+  - [node_started, each#1/repeat#0/__end__]
+  - - pool_commit
     - each#1/repeat#0/__end__
     - value:
         n: 3
+  - - node_succeeded
+    - each#1/repeat#0/__end__
+    - {commit: 55}
   - [node_started, each#0/repeat~1]
   - - node_expanded
     - each#0/repeat~1
@@ -209,15 +263,21 @@ expect:
       - n: 3
       - 1
   - [node_started, each#0/repeat#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#1/__start__
     - value:
         n: 2
-  - [node_started, each#1/repeat#1/__start__]
   - - node_succeeded
+    - each#0/repeat#1/__start__
+    - {commit: 62}
+  - [node_started, each#1/repeat#1/__start__]
+  - - pool_commit
     - each#1/repeat#1/__start__
     - value:
         n: 3
+  - - node_succeeded
+    - each#1/repeat#1/__start__
+    - {commit: 65}
   - [node_started, each#0/repeat#1/inner]
   - - node_expanded
     - each#0/repeat#1/inner
@@ -231,43 +291,67 @@ expect:
       seed:
         n: 3
   - [node_started, each#0/repeat#1/inner/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#1/inner/__start__
     - value:
         n: 2
-  - [node_started, each#1/repeat#1/inner/__start__]
   - - node_succeeded
+    - each#0/repeat#1/inner/__start__
+    - {commit: 72}
+  - [node_started, each#1/repeat#1/inner/__start__]
+  - - pool_commit
     - each#1/repeat#1/inner/__start__
     - value:
         n: 3
-  - [node_started, each#0/repeat#1/inner/a]
   - - node_succeeded
+    - each#1/repeat#1/inner/__start__
+    - {commit: 75}
+  - [node_started, each#0/repeat#1/inner/a]
+  - - pool_commit
     - each#0/repeat#1/inner/a
     - value: 3
-  - [node_started, each#1/repeat#1/inner/a]
   - - node_succeeded
+    - each#0/repeat#1/inner/a
+    - {commit: 78}
+  - [node_started, each#1/repeat#1/inner/a]
+  - - pool_commit
     - each#1/repeat#1/inner/a
     - value: 4
+  - - node_succeeded
+    - each#1/repeat#1/inner/a
+    - {commit: 81}
   - [node_started, each#0/repeat#1/inner/__end__]
+  - - pool_commit
+    - each#0/repeat#1/inner/__end__
+    - value: 3
+      key: each#0/repeat#1/inner
   - - node_succeeded
     - each#0/repeat#1/inner/__end__
-    - commit_target: each#0/repeat#1/inner
-      value: 3
+    - {commit: 84}
   - [node_started, each#1/repeat#1/inner/__end__]
+  - - pool_commit
+    - each#1/repeat#1/inner/__end__
+    - value: 4
+      key: each#1/repeat#1/inner
   - - node_succeeded
     - each#1/repeat#1/inner/__end__
-    - commit_target: each#1/repeat#1/inner
-      value: 4
+    - {commit: 87}
   - [node_started, each#0/repeat#1/__end__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#1/__end__
     - value:
         n: 3
-  - [node_started, each#1/repeat#1/__end__]
   - - node_succeeded
+    - each#0/repeat#1/__end__
+    - {commit: 90}
+  - [node_started, each#1/repeat#1/__end__]
+  - - pool_commit
     - each#1/repeat#1/__end__
     - value:
         n: 4
+  - - node_succeeded
+    - each#1/repeat#1/__end__
+    - {commit: 93}
   - [node_started, each#0/repeat~2]
   - - node_expanded
     - each#0/repeat~2
@@ -291,15 +375,21 @@ expect:
       - n: 4
       - 2
   - [node_started, each#0/repeat#2/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#2/__start__
     - value:
         n: 3
-  - [node_started, each#1/repeat#2/__start__]
   - - node_succeeded
+    - each#0/repeat#2/__start__
+    - {commit: 100}
+  - [node_started, each#1/repeat#2/__start__]
+  - - pool_commit
     - each#1/repeat#2/__start__
     - value:
         n: 4
+  - - node_succeeded
+    - each#1/repeat#2/__start__
+    - {commit: 103}
   - [node_started, each#0/repeat#2/inner]
   - - node_expanded
     - each#0/repeat#2/inner
@@ -313,78 +403,120 @@ expect:
       seed:
         n: 4
   - [node_started, each#0/repeat#2/inner/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#2/inner/__start__
     - value:
         n: 3
-  - [node_started, each#1/repeat#2/inner/__start__]
   - - node_succeeded
+    - each#0/repeat#2/inner/__start__
+    - {commit: 110}
+  - [node_started, each#1/repeat#2/inner/__start__]
+  - - pool_commit
     - each#1/repeat#2/inner/__start__
     - value:
         n: 4
-  - [node_started, each#0/repeat#2/inner/a]
   - - node_succeeded
+    - each#1/repeat#2/inner/__start__
+    - {commit: 113}
+  - [node_started, each#0/repeat#2/inner/a]
+  - - pool_commit
     - each#0/repeat#2/inner/a
     - value: 4
-  - [node_started, each#1/repeat#2/inner/a]
   - - node_succeeded
+    - each#0/repeat#2/inner/a
+    - {commit: 116}
+  - [node_started, each#1/repeat#2/inner/a]
+  - - pool_commit
     - each#1/repeat#2/inner/a
     - value: 5
+  - - node_succeeded
+    - each#1/repeat#2/inner/a
+    - {commit: 119}
   - [node_started, each#0/repeat#2/inner/__end__]
+  - - pool_commit
+    - each#0/repeat#2/inner/__end__
+    - value: 4
+      key: each#0/repeat#2/inner
   - - node_succeeded
     - each#0/repeat#2/inner/__end__
-    - commit_target: each#0/repeat#2/inner
-      value: 4
+    - {commit: 122}
   - [node_started, each#1/repeat#2/inner/__end__]
+  - - pool_commit
+    - each#1/repeat#2/inner/__end__
+    - value: 5
+      key: each#1/repeat#2/inner
   - - node_succeeded
     - each#1/repeat#2/inner/__end__
-    - commit_target: each#1/repeat#2/inner
-      value: 5
+    - {commit: 125}
   - [node_started, each#0/repeat#2/__end__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/repeat#2/__end__
     - value:
         n: 4
-  - [node_started, each#1/repeat#2/__end__]
   - - node_succeeded
+    - each#0/repeat#2/__end__
+    - {commit: 128}
+  - [node_started, each#1/repeat#2/__end__]
+  - - pool_commit
     - each#1/repeat#2/__end__
     - value:
         n: 5
+  - - node_succeeded
+    - each#1/repeat#2/__end__
+    - {commit: 131}
   - [node_started, each#0/repeat~3]
+  - - pool_commit
+    - each#0/repeat~3
+    - value:
+        n: 4
+      key: each#0/repeat
   - - node_succeeded
     - each#0/repeat~3
-    - commit_target: each#0/repeat
-      value:
-        n: 4
+    - {commit: 134}
   - [node_started, each#1/repeat~3]
+  - - pool_commit
+    - each#1/repeat~3
+    - value:
+        n: 5
+      key: each#1/repeat
   - - node_succeeded
     - each#1/repeat~3
-    - commit_target: each#1/repeat
-      value:
-        n: 5
+    - {commit: 137}
   - [node_started, each#0/__end__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/__end__
     - value:
         n: 4
-  - [node_started, each#1/__end__]
   - - node_succeeded
+    - each#0/__end__
+    - {commit: 140}
+  - [node_started, each#1/__end__]
+  - - pool_commit
     - each#1/__end__
     - value:
         n: 5
-  - [node_started, each/__end__]
   - - node_succeeded
+    - each#1/__end__
+    - {commit: 143}
+  - [node_started, each/__end__]
+  - - pool_commit
     - each/__end__
-    - commit_target: each
-      value:
+    - value:
       - n: 4
       - n: 5
-  - [node_started, __end__]
+      key: each
   - - node_succeeded
+    - each/__end__
+    - {commit: 146}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
       - n: 4
       - n: 5
+  - - node_succeeded
+    - __end__
+    - {commit: 149}
   events:
   - [RunStarted]
   - - NodeStarted

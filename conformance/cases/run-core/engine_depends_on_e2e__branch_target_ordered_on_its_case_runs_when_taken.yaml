@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: case-source
@@ -85,35 +86,56 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        score: 0.9
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {score: 0.9, topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         score: 0.9
         topic: ACME
-  - [node_started, note]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, note]
+  - - pool_commit
     - note
     - value: cautious note for ACME
+  - - node_succeeded
+    - note
+    - {commit: 9}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: pro
   - [node_started, pro]
-  - - node_succeeded
+  - - pool_commit
     - pro
     - value: 'pro: ACME'
-  - [node_started, __end__]
   - - node_succeeded
+    - pro
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         note: cautious note for ACME
         pick: 'pro: ACME'
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -1381,9 +1381,9 @@ describe("main", () => {
     expect(written.code).toBe(0);
     const golden = readFileSync(join(roots.at(-1)!, "cases", "a", "two.log.jsonl"), "utf8");
     const lines = golden.trimEnd().split("\n");
-    expect(lines).toHaveLength(9);
-    expect(lines[0]).toContain('"now":{"kind":"datetime","value":"<masked>"}');
-    expect(lines[0]).toContain('"today":{"kind":"date","value":"<masked>"}');
+    expect(lines).toHaveLength(17);
+    expect(lines[1]).toContain('"payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"<masked>"}');
+    expect(lines[3]).toContain('"payload":{"key":"system.today","kind":"date","node_id":"__start__","value":"<masked>"}');
     expect(lines.every((line) => line.startsWith('{"at":"<masked>",'))).toBe(true);
     const pinned = { "a/two.yaml": TWO_NODES, "a/two.log.jsonl": golden };
     expect(await run([], pinned, {}, kinds)).toEqual({
@@ -1391,10 +1391,10 @@ describe("main", () => {
       out: ["1 case: 1 passed, 0 failed, 0 pending"],
       err: [],
     });
-    const changed = { ...pinned, "a/two.log.jsonl": golden.replace('"seq":8', '"seq":9') };
+    const changed = { ...pinned, "a/two.log.jsonl": golden.replace('"seq":16', '"seq":17') };
     const { code, out } = await run([], changed, {}, kinds);
     expect(code).toBe(1);
-    expect(out[0]).toBe("FAIL a/two: the run log differs from two.log.jsonl at record 8");
+    expect(out[0]).toBe("FAIL a/two: the run log differs from two.log.jsonl at record 16");
   });
 
   test("refuses --write-logs without --case", async () => {
@@ -1415,9 +1415,9 @@ describe("main", () => {
     const { code, out } = await run(["--crash-sweep"], files, {}, { run: counting });
     expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
     expect(code).toBe(0);
-    expect(cuts.map((names) => names.length)).toEqual([8]);
+    expect(cuts.map((names) => names.length)).toEqual([16]);
     expect((await run([], files, {}, { run: counting })).code).toBe(0);
-    expect(cuts.map((names) => names.length)).toEqual([8, 0]);
+    expect(cuts.map((names) => names.length)).toEqual([16, 0]);
   });
 
   test("sweeps a learnable run case, whose captures name their sources' records by seq", async () => {
@@ -1449,23 +1449,35 @@ describe("main", () => {
     expect(text).toBe(FORMS.replace("kind: run\n", "kind: run\nrules: [run-log]\n"));
     // The float stays a float, the int past 2^53 exact, and the placeholder a placeholder.
     const trace = (readCase(text)["expect"] as Case)["trace"] as unknown[][];
-    expect(trace[4]).toEqual([
-      "node_succeeded",
+    expect(trace[9]).toEqual([
+      "pool_commit",
       "__end__",
       { value: { big: 9007199254740993n, f: 2, id: "<id:1>" } },
     ]);
-    expect(typeof (trace[4]![2] as { value: Case }).value["f"]).toBe("number");
+    expect(typeof (trace[9]![2] as { value: Case }).value["f"]).toBe("number");
     // Run again, it writes nothing.
     const again = await run(argv, { "a/forms.yaml": text }, {}, kinds);
     expect(again.out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
     expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
   });
 
+  test("--write-expect quotes a `?` in a flow collection, which Python's YAML reader won't take bare", async () => {
+    const asked = FORMS.replace('big: "${input.big}"}', 'big: "${input.big}", q: "why?"}')
+      .replace("output: {id: <id:1>, f: 2.0, big: 9007199254740993}", "output: {id: <id:1>, f: 2.0, big: 9007199254740993, q: \"why?\"}")
+      .replace("{value: {big: 9007199254740993, f: 2.0, id: <id:1>}}", "{value: {big: 1}}");
+    expect(asked).not.toBe(FORMS);
+    const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! });
+    expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
+    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    expect(text).toContain('q: "why?"}}]');
+    expect(text).not.toContain("q: why?");
+  });
+
   test("--write-expect changes a block entry in place, keeping its comment and style", async () => {
     const kinds = { run: RUNNERS.run! };
     const block = FORMS.replace(
-      "  - [node_succeeded, __end__, {value: {big: 9007199254740993, f: 2.0, id: <id:1>}}]\n",
-      "  - - node_succeeded\n    - __end__\n    # The output, as the flow binds it.\n" +
+      "  - [pool_commit, __end__, {value: {big: 9007199254740993, f: 2.0, id: <id:1>}}]\n",
+      "  - - pool_commit\n    - __end__\n    # The output, as the flow binds it.\n" +
         "    - value: {big: 9007199254740993, f: 2.0, id: <id:1>}\n",
     );
     expect(block).not.toBe(FORMS);
@@ -1520,16 +1532,24 @@ expect:
     output: {id: <id:1>, f: 2.0, big: 9007199254740993}
   # Without a run id, the run makes one up.
   trace:
-  - [run_started, null, {inputs: {big: 9007199254740993, n: 4}, learnable: false, num_workers: 0}]
+  - [run_started, null, {learnable: false, num_workers: 0}]
+  - [pool_commit, __start__, {key: system.now}]
+  - [pool_commit, __start__, {key: system.run_id, value: <id:1>}]
+  - [pool_commit, __start__, {key: system.today}]
+  - [pool_commit, __start__, {value: {big: 9007199254740993, n: 4}}]
   - [node_started, __start__]
-  - [node_succeeded, __start__, {value: {big: 9007199254740993, n: 4}}]
+  - [pool_commit, __start__, {value: {big: 9007199254740993, n: 4}}]
+  - [node_succeeded, __start__, {commit: 6}]
   - [node_started, __end__]
-  - [node_succeeded, __end__, {value: {big: 9007199254740993, f: 2.0, id: <id:1>}}]
+  - [pool_commit, __end__, {value: {big: 9007199254740993, f: 2.0, id: <id:1>}}]
+  - [node_succeeded, __end__, {commit: 9}]
   - [node_started, one]
-  - [node_succeeded, one, {value: 1}]
+  - [pool_commit, one, {value: 1}]
+  - [node_succeeded, one, {commit: 12}]
 `;
 
-// A serial run of two CODE nodes: nine records, so a crash sweep resumes eight cuts.
+// A serial run of two CODE nodes: 17 records, so a crash sweep makes 16 cuts, the first 4 inside the
+// run start.
 const TWO_NODES = `kind: run
 flow: |
   id: two
@@ -1544,16 +1564,26 @@ expect:
 `;
 
 describe("sourcesByRecord", () => {
-  test("names each capture source by its record's kind and node", () => {
+  test("names each capture source by its record's kind and node, and each commit by its fields", () => {
     const source = (seq: bigint) => ({ route: { kind: "source", source: { execution_seq: seq } } });
     const entries = [
       ["run_started", null],
       ["node_started", "a"],
-      ["node_succeeded", "a", { forward_capture: source(1n) }],
+      ["pool_commit", "a", { value: 2n }],
+      ["node_succeeded", "a", { commit: 2n, forward_capture: source(1n) }],
     ];
     expect(sourcesByRecord(entries)).toEqual([
-      ["node_succeeded", "a", { forward_capture: { route: { kind: "source", source: { execution_seq: "node_started a" } } } }],
+      [
+        "node_succeeded",
+        "a",
+        { commit: { value: 2n }, forward_capture: { route: { kind: "source", source: { execution_seq: "node_started a" } } } },
+      ],
     ]);
+  });
+
+  test("fails on a success naming a seq that isn't a pool_commit", () => {
+    const entries = [["node_started", "a"], ["node_succeeded", "a", { commit: 0n }]];
+    expect(() => sourcesByRecord(entries)).toThrow(new CaseFailure("a success names seq 0, which isn't a pool_commit"));
   });
 
   test("fails on a source naming a seq the log doesn't hold", () => {
@@ -1582,7 +1612,8 @@ describe("crashSweep", () => {
     const [case_, ctx] = twoNodes();
     const cuts: string[] = [];
     await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
-    expect(cuts).toHaveLength(8);
+    // 16 cuts; the 4 inside the run start are refused instead of resumed.
+    expect(cuts).toHaveLength(12);
   });
 
   test("fails a resume that drops a record", async () => {
@@ -1593,19 +1624,54 @@ describe("crashSweep", () => {
     };
     const failure = crashSweep(case_, ctx, { beforeResume: dropSecond });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 2)");
+    await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 4)");
+  });
+
+  test("a cut after a retried tool's commit resumes from the recorded steps and succeeds", async () => {
+    // The flaky tool fails twice, so its node records two steps before the commit. A cut right
+    // after the commit runs the node again, replaying those steps: only the entry the last call
+    // took goes back, not the two the replayed steps already hold.
+    const text = `kind: run
+flow: |
+  id: t
+  name: t
+  nodes:
+    call:
+      kind: tool
+      tool_id: flaky
+      retries: 2
+  output: \${call.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '1'
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    flaky:
+      parameters: {type: object, properties: {}}
+      results:
+      - raise: {class: TimeoutError, message: a}
+      - raise: {class: TimeoutError, message: b}
+      - return: ok
+  jitter: [0.0, 0.0]
+expect:
+  output: {status: succeeded, output: ok}
+`;
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    await crashSweep(case_, ctx);
   });
 
   test("fails the strong oracle when a recorded value changes before the resume", async () => {
     const [case_, ctx] = twoNodes();
     const rewrite = (log: string) => {
       const text = readFileSync(log, "utf8");
-      const recorded = '"value":{"kind":"str","value":"x"}';
+      const recorded = '"kind":"str","node_id":"a","value":"x"';
       writeFileSync(log, text.replace(recorded, recorded.replace('"x"', '"z"')));
     };
     const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failure).rejects.toThrow("output (crash sweep, cut after record 4) differs");
+    await expect(failure).rejects.toThrow("output (crash sweep, cut after record 10) differs");
   });
 });
 

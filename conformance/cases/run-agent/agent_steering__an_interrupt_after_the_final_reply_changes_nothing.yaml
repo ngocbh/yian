@@ -4,6 +4,7 @@
 # calls) has been taken, after the AGENT's last poll. It changes nothing: `chat` succeeds with
 # "chat done" and the next AGENT's request renders it ("summarize: chat done").
 kind: run
+rules: [run-log]
 flow: |
   id: steer
   name: steer
@@ -82,25 +83,48 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, chat]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - pool_commit
     - chat
     - value: chat done
-  - [node_started, after]
   - - node_succeeded
+    - chat
+    - {commit: 9}
+  - [node_started, after]
+  - - pool_commit
     - after
     - value: summary
-  - [node_started, __end__]
   - - node_succeeded
+    - after
+    - {commit: 12}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: summary
+  - - node_succeeded
+    - __end__
+    - {commit: 15}
   events:
   - [RunStarted]
   - - NodeStarted

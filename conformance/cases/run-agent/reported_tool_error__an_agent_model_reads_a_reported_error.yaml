@@ -4,6 +4,7 @@
 # model's answer is the output. The tool ran once; its ToolCallFinished has error
 # ReportedToolError and no result.
 kind: run
+rules: [run-log]
 flow: |
   id: reported
   name: reported
@@ -101,21 +102,41 @@ expect:
             source: missing
           model: test-model
           provider: openai
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, worker]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, worker]
+  - - pool_commit
     - worker
     - value: the file is missing
-  - [node_started, __end__]
   - - node_succeeded
+    - worker
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: the file is missing
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

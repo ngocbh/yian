@@ -2,6 +2,7 @@
 # A TOOL return checked against a declared union routes a CASE on its tag; the test's CODE branches
 # are value entries here.
 kind: run
+rules: [run-log]
 flow: |
   id: orders
   name: orders
@@ -53,30 +54,53 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, place]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, place]
+  - - pool_commit
     - place
     - value:
         by: owner
         partial: 2
         type: interrupted
+  - - node_succeeded
+    - place
+    - {commit: 9}
   - [node_started, route]
   - - node_routed
     - route
     - handle: on_interrupted
   - [node_started, on_interrupted]
-  - - node_succeeded
+  - - pool_commit
     - on_interrupted
     - value: stopped by owner
-  - [node_started, __end__]
   - - node_succeeded
+    - on_interrupted
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: stopped by owner
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

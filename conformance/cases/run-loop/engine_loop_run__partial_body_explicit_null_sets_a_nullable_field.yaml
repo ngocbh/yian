@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: partial-note
@@ -72,15 +73,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        note0: seed
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {note0: seed}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         note0: seed
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, loop]
   - - node_expanded
     - loop
@@ -90,22 +104,31 @@ expect:
         note: seed
       - 0
   - [node_started, loop#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#0/__start__
     - value:
         n: 0
-  - [node_started, loop#0/step]
   - - node_succeeded
+    - loop#0/__start__
+    - {commit: 11}
+  - [node_started, loop#0/step]
+  - - pool_commit
     - loop#0/step
     - value:
         n: 1
         note: null
-  - [node_started, loop#0/__end__]
   - - node_succeeded
+    - loop#0/step
+    - {commit: 14}
+  - [node_started, loop#0/__end__]
+  - - pool_commit
     - loop#0/__end__
     - value:
         n: 1
         note: null
+  - - node_succeeded
+    - loop#0/__end__
+    - {commit: 17}
   - [node_started, loop~1]
   - - node_expanded
     - loop~1
@@ -115,35 +138,50 @@ expect:
         note: null
       - 1
   - [node_started, loop#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#1/__start__
     - value:
         n: 1
-  - [node_started, loop#1/step]
   - - node_succeeded
+    - loop#1/__start__
+    - {commit: 22}
+  - [node_started, loop#1/step]
+  - - pool_commit
     - loop#1/step
     - value:
         n: 2
         note: null
-  - [node_started, loop#1/__end__]
   - - node_succeeded
+    - loop#1/step
+    - {commit: 25}
+  - [node_started, loop#1/__end__]
+  - - pool_commit
     - loop#1/__end__
     - value:
         n: 2
         note: null
-  - [node_started, loop~2]
   - - node_succeeded
+    - loop#1/__end__
+    - {commit: 28}
+  - [node_started, loop~2]
+  - - pool_commit
     - loop~2
-    - commit_target: loop
-      value:
+    - value:
         n: 2
         note: null
-  - [node_started, __end__]
+      key: loop
   - - node_succeeded
+    - loop~2
+    - {commit: 31}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         n: 2
         note: null
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

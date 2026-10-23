@@ -2,6 +2,7 @@
 # Pins: a LOOP seed `call(...)` never starts on the untaken route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -104,28 +105,47 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        go: false
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {go: false}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         go: false
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: '#else'
   - [node_started, skip_it]
-  - - node_succeeded
+  - - pool_commit
     - skip_it
     - value: skipped
-  - [node_started, __end__]
   - - node_succeeded
+    - skip_it
+    - {commit: 11}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         r: skipped
+  - - node_succeeded
+    - __end__
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted

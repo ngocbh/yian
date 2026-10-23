@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -36,27 +37,49 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        name: Ada
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {name: Ada}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         name: Ada
-  - [node_started, a]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, a]
+  - - pool_commit
     - a
     - value: 2
-  - [node_started, b]
   - - node_succeeded
+    - a
+    - {commit: 9}
+  - [node_started, b]
+  - - pool_commit
     - b
     - value: 3
-  - [node_started, items]
   - - node_succeeded
+    - b
+    - {commit: 12}
+  - [node_started, items]
+  - - pool_commit
     - items
     - value: [a, b]
+  - - node_succeeded
+    - items
+    - {commit: 15}
   - [node_started, x]
   - - node_expanded
     - x
@@ -65,44 +88,71 @@ expect:
       - v: a
       - v: b
   - [node_started, x/__start__]
-  - - node_succeeded
+  - - pool_commit
     - x/__start__
     - value: {}
-  - [node_started, x#0/__start__]
   - - node_succeeded
+    - x/__start__
+    - {commit: 20}
+  - [node_started, x#0/__start__]
+  - - pool_commit
     - x#0/__start__
     - value:
         v: a
-  - [node_started, x#1/__start__]
   - - node_succeeded
+    - x#0/__start__
+    - {commit: 23}
+  - [node_started, x#1/__start__]
+  - - pool_commit
     - x#1/__start__
     - value:
         v: b
-  - [node_started, x#0/wrap]
   - - node_succeeded
+    - x#1/__start__
+    - {commit: 26}
+  - [node_started, x#0/wrap]
+  - - pool_commit
     - x#0/wrap
     - value: got a
-  - [node_started, x#1/wrap]
   - - node_succeeded
+    - x#0/wrap
+    - {commit: 29}
+  - [node_started, x#1/wrap]
+  - - pool_commit
     - x#1/wrap
     - value: got b
-  - [node_started, x#0/__end__]
   - - node_succeeded
+    - x#1/wrap
+    - {commit: 32}
+  - [node_started, x#0/__end__]
+  - - pool_commit
     - x#0/__end__
     - value: got a
-  - [node_started, x#1/__end__]
   - - node_succeeded
+    - x#0/__end__
+    - {commit: 35}
+  - [node_started, x#1/__end__]
+  - - pool_commit
     - x#1/__end__
     - value: got b
+  - - node_succeeded
+    - x#1/__end__
+    - {commit: 38}
   - [node_started, x/__end__]
+  - - pool_commit
+    - x/__end__
+    - value: [got a, got b]
+      key: x
   - - node_succeeded
     - x/__end__
-    - commit_target: x
-      value: [got a, got b]
+    - {commit: 41}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: [got a, got b]
+  - - node_succeeded
+    - __end__
+    - {commit: 44}
   events:
   - [RunStarted]
   - - NodeStarted

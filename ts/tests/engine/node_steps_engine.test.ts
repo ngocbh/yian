@@ -48,6 +48,7 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  PoolCommitRecord,
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
@@ -216,8 +217,10 @@ test.each(WORKERS)("steps are durable before record returns (numWorkers %p)", as
     new NodeStepRecord("work", { event: "started", attempt: 1n }),
     new NodeStepRecord("work", { event: "started", attempt: 2n }),
   ]);
-  expect(work[3]).toBeInstanceOf(NodeSucceededRecord);
-  expect(work.length).toBe(4);
+  // The output's commit, then the success that accepts it.
+  expect(work[3]).toBeInstanceOf(PoolCommitRecord);
+  expect(work[4]).toBeInstanceOf(NodeSucceededRecord);
+  expect(work.length).toBe(5);
   expect(built.state.result).toBeInstanceOf(RunSucceeded);
   expect(built.state.nodeSteps.has("work")).toBe(false);
   // A step publishes no observer: the node's observers are its start and its outcome.

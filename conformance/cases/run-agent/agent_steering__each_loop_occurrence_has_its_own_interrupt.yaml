@@ -4,6 +4,7 @@
 # keeps "partial" and skips its ping call; the interrupt stays with that occurrence, so
 # `loop#1/reply` runs normally ("turn2"), and the loop continues: "s|partial|turn2".
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -88,15 +89,28 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs:
-        seed: s
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {seed: s}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         seed: s
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, loop]
   - - node_expanded
     - loop
@@ -105,19 +119,28 @@ expect:
       - transcript: s
       - 0
   - [node_started, loop#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#0/__start__
     - value:
         transcript: s
-  - [node_started, loop#0/reply]
   - - node_succeeded
+    - loop#0/__start__
+    - {commit: 11}
+  - [node_started, loop#0/reply]
+  - - pool_commit
     - loop#0/reply
     - value: partial
-  - [node_started, loop#0/__end__]
   - - node_succeeded
+    - loop#0/reply
+    - {commit: 14}
+  - [node_started, loop#0/__end__]
+  - - pool_commit
     - loop#0/__end__
     - value:
         transcript: s|partial
+  - - node_succeeded
+    - loop#0/__end__
+    - {commit: 17}
   - [node_started, loop~1]
   - - node_expanded
     - loop~1
@@ -126,29 +149,44 @@ expect:
       - transcript: s|partial
       - 1
   - [node_started, loop#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#1/__start__
     - value:
         transcript: s|partial
-  - [node_started, loop#1/reply]
   - - node_succeeded
+    - loop#1/__start__
+    - {commit: 22}
+  - [node_started, loop#1/reply]
+  - - pool_commit
     - loop#1/reply
     - value: turn2
-  - [node_started, loop#1/__end__]
   - - node_succeeded
+    - loop#1/reply
+    - {commit: 25}
+  - [node_started, loop#1/__end__]
+  - - pool_commit
     - loop#1/__end__
     - value:
         transcript: s|partial|turn2
+  - - node_succeeded
+    - loop#1/__end__
+    - {commit: 28}
   - [node_started, loop~2]
+  - - pool_commit
+    - loop~2
+    - value:
+        transcript: s|partial|turn2
+      key: loop
   - - node_succeeded
     - loop~2
-    - commit_target: loop
-      value:
-        transcript: s|partial|turn2
+    - {commit: 31}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: s|partial|turn2
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

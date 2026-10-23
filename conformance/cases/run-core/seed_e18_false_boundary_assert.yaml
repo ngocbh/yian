@@ -1,6 +1,7 @@
 # From tests/seeds/errors/e18-false-boundary-assert.yaml.
 # A false flow assert over the inputs fails START before any node runs, at the assert.
 kind: run
+rules: [run-log]
 flow: |
   # e18 — a false input-only BOUNDARY assert. RUNTIME: fails before any node runs.
   # Run with window <= 0.
@@ -48,7 +49,11 @@ expect:
       # The assert `"input.window > 0"` on line 15.
       frames: [{label: flow.yaml, range: [15, 5, 15, 23]}]
   trace:
-    - [run_started, null, {inputs: {window: -5}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {window: -5}}]
     - [node_started, __start__]
     - - node_failed
       - __start__

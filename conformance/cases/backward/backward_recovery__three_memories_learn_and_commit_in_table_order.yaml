@@ -4,6 +4,7 @@
 # learn and commit in key order, each with its own disposition in the outcome.
 # YIAN_DEFAULT_PROVIDER/MODEL: reflective and profile learners' model config comes from the defaults.
 kind: backward
+rules: [run-log]
 flow: |
   id: backward-recovery
   name: backward_recovery
@@ -105,16 +106,30 @@ expect:
         second:
           model: local-test
           provider: ollama
-      inputs:
-        topic: reefs
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: reefs}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        topic: reefs
   - - node_succeeded
     - __start__
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 6
+      forward_capture:
+        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -134,20 +149,19 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        topic: reefs
   - [node_started, first]
+  - - pool_commit
+    - first
+    - value: draft
   - - node_succeeded
     - first
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 9
+      forward_capture:
+        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
+          effective_llm_config: {model: local-test, provider: ollama}
           prompt_template: Draft ${topic}
           rendered_prompt: Draft reefs
           variable_domains: {}
@@ -156,7 +170,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [topic]
               run_id: r1
           kind: record
@@ -166,19 +180,19 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [first]
-      value: draft
   - [node_started, second]
+  - - pool_commit
+    - second
+    - value: answer
   - - node_succeeded
     - second
-    - forward_capture:
-        bound_inputs:
-          draft: draft
+    - commit: 12
+      forward_capture:
+        bound_inputs: {draft: draft}
         evaluated_keys: [draft]
         input_names: [draft]
         node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
+          effective_llm_config: {model: local-test, provider: ollama}
           prompt_template: Review ${draft}
           rendered_prompt: Review draft
           variable_domains: {}
@@ -187,7 +201,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 3
+              execution_seq: 8
               path: []
               run_id: r1
           kind: record
@@ -197,13 +211,15 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [second]
-      value: answer
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: answer
   - - node_succeeded
     - __end__
-    - forward_capture:
-        bound_inputs:
-          result: answer
+    - commit: 15
+      forward_capture:
+        bound_inputs: {result: answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -213,7 +229,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 5
+              execution_seq: 11
               path: []
               run_id: r1
           kind: record
@@ -223,7 +239,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: answer
   - - backward_started
     - null
     - attempt_id: 1
@@ -238,7 +253,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 3
+            execution_seq: 8
             path: []
             run_id: r1
         feedback:
@@ -250,7 +265,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
+          execution_seq: 5
           path: []
           run_id: r1
       - attribution:
@@ -259,7 +274,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 11
             path: []
             run_id: r1
         feedback: [draft review]
@@ -270,7 +285,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 3
+          execution_seq: 8
           path: []
           run_id: r1
       - attribution:
@@ -279,7 +294,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 14
             path: []
             run_id: r1
         feedback: [Review.]
@@ -290,7 +305,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 5
+          execution_seq: 11
           path: []
           run_id: r1
       - attribution:
@@ -307,7 +322,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 14
           path: []
           run_id: r1
       proposals:
@@ -319,7 +334,7 @@ expect:
               entry_id: <id:1>
               episode:
                 base_system_prompt: null
-                execution_seq: 1
+                execution_seq: 5
                 failure: null
                 inputs:
                   topic: reefs
@@ -339,7 +354,7 @@ expect:
               entry_id: <id:2>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 3
+                execution_seq: 8
                 failure: null
                 inputs:
                   topic: reefs
@@ -360,7 +375,7 @@ expect:
               entry_id: <id:3>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 5
+                execution_seq: 11
                 failure: null
                 inputs:
                   draft: draft
@@ -384,7 +399,7 @@ expect:
               entry_id: <id:4>
               episode:
                 base_system_prompt: null
-                execution_seq: 7
+                execution_seq: 14
                 failure: null
                 inputs:
                   result: answer
@@ -434,7 +449,7 @@ expect:
             entry_id: <id:1>
             episode:
               base_system_prompt: null
-              execution_seq: 1
+              execution_seq: 5
               failure: null
               inputs:
                 topic: reefs
@@ -454,7 +469,7 @@ expect:
             entry_id: <id:2>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 3
+              execution_seq: 8
               failure: null
               inputs:
                 topic: reefs
@@ -475,7 +490,7 @@ expect:
             entry_id: <id:3>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 5
+              execution_seq: 11
               failure: null
               inputs:
                 draft: draft
@@ -499,7 +514,7 @@ expect:
             entry_id: <id:4>
             episode:
               base_system_prompt: null
-              execution_seq: 7
+              execution_seq: 14
               failure: null
               inputs:
                 result: answer
@@ -679,10 +694,10 @@ expect:
     status: succeeded
   memory:
     A: |-
-      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":1,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":3,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"draft"}],"memory_sections":[],"occurrence_path":[],"output":"draft","owner_static_path":["first"],"prompt":"Draft reefs","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:3>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":5,"failure":null,"inputs":{"draft":"draft"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[{"memory":"C","text":"# Reviews\n"}],"occurrence_path":[],"output":"answer","owner_static_path":["second"],"prompt":"Review draft","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":7,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":8,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"draft"}],"memory_sections":[],"occurrence_path":[],"output":"draft","owner_static_path":["first"],"prompt":"Draft reefs","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:3>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":11,"failure":null,"inputs":{"draft":"draft"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[{"memory":"C","text":"# Reviews\n"}],"occurrence_path":[],"output":"answer","owner_static_path":["second"],"prompt":"Review draft","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":14,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
     B: '[topic] Name the topic.'
     C: |
       # Reviews

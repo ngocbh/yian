@@ -1,7 +1,7 @@
 # From tests/engine/test_typed_tool_node.py::test_an_unknown_variant_fails_at_the_gate.
 # A TOOL return whose tag isn't one of the declared union's fails contract.output at the TOOL node.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: orders
   name: orders
@@ -57,11 +57,25 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, place]
   - - node_failed
     - place

@@ -3,6 +3,7 @@
 # four.
 # The header names Ollama, but the flow sets no provider; the run gives OpenAI, as elsewhere.
 kind: run
+rules: [run-log]
 flow: |
   # structured-test — exercise structured AGENT output across shapes on a local Ollama model.
   # Four agents without tools, one per output shape; the flow output bundles all four so a single
@@ -105,8 +106,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {text: "Ada Lovelace, aged 36, loved mathematics."}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           person:
@@ -125,21 +125,31 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {text: 'Ada Lovelace, aged 36, loved mathematics.'}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {text: "Ada Lovelace, aged 36, loved mathematics."}}]
+    - [pool_commit, __start__, {value: {text: "Ada Lovelace, aged 36, loved mathematics."}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, person]
-    - [node_succeeded, person, {value: {name: Ada Lovelace, age: 36}}]
+    - [pool_commit, person, {value: {name: Ada Lovelace, age: 36}}]
+    - [node_succeeded, person, {commit: 9}]
     - [node_started, wordcount]
-    - [node_succeeded, wordcount, {value: 6}]
+    - [pool_commit, wordcount, {value: 6}]
+    - [node_succeeded, wordcount, {commit: 12}]
     - [node_started, sentiment]
-    - [node_succeeded, sentiment, {value: positive}]
+    - [pool_commit, sentiment, {value: positive}]
+    - [node_succeeded, sentiment, {commit: 15}]
     - [node_started, keywords]
-    - [node_succeeded, keywords, {value: [Ada Lovelace, mathematics]}]
+    - [pool_commit, keywords, {value: [Ada Lovelace, mathematics]}]
+    - [node_succeeded, keywords, {commit: 18}]
     - [node_started, __end__]
-    - - node_succeeded
+    - - pool_commit
       - __end__
       - value:
           person: {name: Ada Lovelace, age: 36}
           wordcount: 6
           sentiment: positive
           keywords: [Ada Lovelace, mathematics]
+    - [node_succeeded, __end__, {commit: 21}]

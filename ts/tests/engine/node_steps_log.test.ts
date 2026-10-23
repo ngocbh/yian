@@ -6,7 +6,7 @@
  * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
  * `Set`, an empty and a non-text node id; each with its exact error).
  *
- * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 12),
+ * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 13),
  * `test_node_step_wire_payload_rejects_invalid_shapes` (list, text, empty node id, missing step,
  * extra field; each with its exact class and message),
  * `test_node_step_wire_payload_rejects_non_finite_numbers` (`invalid run-record JSON`, caused by
@@ -79,7 +79,6 @@ import {
   prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeStep,
-  prepareNodeSucceeded,
   prepareRunResumed,
   replayRecords,
   RunState,
@@ -97,6 +96,7 @@ import {
   initializedSpawner,
   nodeFailure,
   parentFlow,
+  prepareOutput,
   routeInFlight,
 } from "./run_state_fixtures.ts";
 
@@ -139,14 +139,14 @@ test("a node step round trips under its wire kind", () => {
   expect(encodeRecord(decoded)).toBe(encoded);
   const wire = parseJson(encoded, "codec") as Record<string, unknown>;
   expect(wire["kind"]).toBe("node_step");
-  expect(wire["schema"]).toBe(12n);
+  expect(wire["schema"]).toBe(13n);
   expect(wire["payload"]).toEqual({ node_id: "a", step: FAILED });
 });
 
 test("a wire step keeps yian's infinity tag", () => {
   const text =
     '{"kind":"node_step","payload":{"node_id":"a","step":{"high":{"$float":"inf"}}},' +
-    '"run_id":"run-1","schema":12,"seq":0}';
+    '"run_id":"run-1","schema":13,"seq":0}';
   const record = decodeRecord(text).record as NodeStepRecord;
   expect(record.step).toEqual({ high: Infinity });
   expect(encodeRecord(decodeRecord(text))).toBe(text);
@@ -170,7 +170,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
 
 test("a node step wire payload rejects non-finite numbers", () => {
   const text =
-    '{"schema":12,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","step":{"retry_in":NaN}}}';
+    '{"schema":13,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","step":{"retry_in":NaN}}}';
   const caught = expectError(() => decodeRecord(text), RangeError, "invalid run-record JSON") as Error;
   expect((caught.cause as Error).constructor).toBe(JSONDecodeError);
   expect((caught.cause as Error).message).toStartWith("NaN is not JSON");
@@ -373,7 +373,7 @@ test("a success deletes the node's steps and starts", () => {
   commitPrepared(log, state, prepareNodeStarted(state, "second"));
   commitPrepared(log, state, prepareNodeStep(state, "second", FAILED));
 
-  commitPrepared(log, state, prepareNodeSucceeded(state, "first", { done: true }));
+  commitPrepared(log, state, prepareOutput(log, state, "first", { done: true }));
 
   expect(state.nodeSteps).toEqual(new Map([["second", [FAILED]]]));
   expect(state.nodeStarts).toEqual(new Map([["second", 1]]));
@@ -433,11 +433,11 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
   commitPrepared(log, state, prepareNodeStarted(state, bodyStart));
   commitPrepared(log, state, prepareNodeStep(state, bodyStart, FAILED));
   expect(state.nodeSteps).toEqual(new Map([[bodyStart, [FAILED]]]));
-  commitPrepared(log, state, prepareNodeSucceeded(state, bodyStart, {}));
+  commitPrepared(log, state, prepareOutput(log, state, bodyStart, {}));
   expect(state.nodeSteps).toEqual(new Map());
   expect(state.nodeStarts).toEqual(new Map());
   commitPrepared(log, state, prepareNodeStarted(state, bodyEnd));
-  commitPrepared(log, state, prepareNodeSucceeded(state, bodyEnd, null));
+  commitPrepared(log, state, prepareOutput(log, state, bodyEnd, null));
 
   commitPrepared(log, state, prepareNodeStarted(state, "spawn~1"));
   commitPrepared(log, state, prepareNodeStep(state, "spawn~1", FAILED));
@@ -516,7 +516,7 @@ test("a learnable run accepts a step with an empty trace delta", () => {
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, "first", { done: true }, {
+    prepareOutput(log, state, "first", { done: true }, {
       forwardCapture: forwardCapture(state.flow.nodes.get("first")!, {}),
     }),
   );
@@ -543,7 +543,7 @@ test.each(["missing-start", "orphan-steps", "zero-count", "non-object-step"] as 
   (corrupt) => {
     const { state, log } = firstInFlight();
     commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
-    const prepared = prepareNodeSucceeded(state, "first", { done: true });
+    const prepared = prepareOutput(log, state, "first", { done: true });
     if (corrupt === "missing-start") state.nodeStarts.delete("first");
     else if (corrupt === "orphan-steps") state.nodeSteps.set("second", [FAILED]);
     else if (corrupt === "zero-count") state.nodeStarts.set("first", 0);
@@ -553,7 +553,7 @@ test.each(["missing-start", "orphan-steps", "zero-count", "non-object-step"] as 
     expectError(
       () => commitPrepared(log, state, prepared),
       RangeError,
-      "node starts and steps must match the unsettled invocations",
+      "node starts, steps and pending commits must match the unsettled invocations",
     );
 
     expect(log.nextSequence).toBe(before);

@@ -3,6 +3,7 @@
 # ::test_deadline_accepts_z_short_fraction_and_space_separator, moved into the past (no clock).
 # A WAIT whose deadline has passed returns null at once, in each accepted spelling.
 kind: run
+rules: [run-log]
 flow: |
   id: waits
   name: waits
@@ -40,27 +41,56 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, aware]
-  - [node_succeeded, aware]
-  - [node_started, naive]
-  - [node_succeeded, naive]
-  - [node_started, spaced]
-  - [node_succeeded, spaced]
-  - [node_started, zulu]
-  - [node_succeeded, zulu]
-  - [node_started, __end__]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, aware]
+  - [pool_commit, aware]
+  - - node_succeeded
+    - aware
+    - {commit: 9}
+  - [node_started, naive]
+  - [pool_commit, naive]
+  - - node_succeeded
+    - naive
+    - {commit: 12}
+  - [node_started, spaced]
+  - [pool_commit, spaced]
+  - - node_succeeded
+    - spaced
+    - {commit: 15}
+  - [node_started, zulu]
+  - [pool_commit, zulu]
+  - - node_succeeded
+    - zulu
+    - {commit: 18}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         aware: null
         naive: null
         spaced: null
         zulu: null
+  - - node_succeeded
+    - __end__
+    - {commit: 21}
   events:
   - [RunStarted]
   - - NodeStarted

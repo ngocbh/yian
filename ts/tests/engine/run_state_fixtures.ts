@@ -88,12 +88,11 @@ import {
   runFlow,
 } from "../../src/run.ts";
 import {
-  decodePool,
   decodeRecord,
-  encodePool,
   encodeRecord,
   JsonlRunLog,
   MemoryRunLog,
+  type OutcomeCarriers,
   RecordEnvelope,
   type RunLog,
   type RunRecord,
@@ -101,12 +100,14 @@ import {
 } from "../../src/runtime/log.ts";
 import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   type GrowBuilder,
   type GrowthIndex,
   growthIndex,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  preparePoolCommit,
   prepareRecord,
   type PreparedTransition,
   prepareRunStarted,
@@ -427,7 +428,6 @@ export function callRedirectFlow(options: { fallback?: boolean } = {}): Compiled
 export function pool(flow: CompiledFlow, runId: string = RUN_ID): VariablePool {
   const built = new VariablePool(flow.startId);
   built.set(flow.startId, { name: "Ada", count: 2n, aliases: ["A", "B"] });
-  built.set("preseeded", { retained: true });
   built.addSystem("run_id", runId);
   built.addSystem("today", "2026-08-13");
   built.addSystem("now", "2026-08-13T12:34:56+00:00");
@@ -435,16 +435,12 @@ export function pool(flow: CompiledFlow, runId: string = RUN_ID): VariablePool {
   return built;
 }
 
-/** Return representative fresh-run data for `flow`. */
-export function startData(
-  flow: CompiledFlow,
-  options: { runId?: string; pool?: VariablePool; numWorkers?: number } = {},
-): RunStartData {
+/** Return representative fresh-run data for a flow. */
+export function startData(options: { runId?: string; numWorkers?: number } = {}): RunStartData {
   const { runId = RUN_ID, numWorkers = 3 } = options;
   return {
     runId,
     flowFingerprint: FINGERPRINT,
-    initialPool: options.pool ?? pool(flow, runId),
     startWiringOverride: { name: "${input.name}", metadata: { labels: ["one", "two"] } },
     effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test", options: { temperature: 0.2 } } },
     numWorkers,
@@ -826,7 +822,6 @@ export function learnableStarted(
   const prepared = prepareRunStarted(state, {
     runId: RUN_ID,
     flowFingerprint: FINGERPRINT,
-    initialPool,
     startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
@@ -836,6 +831,7 @@ export function learnableStarted(
     memorySnapshots: options.memorySnapshots ?? null,
   });
   commitPrepared(log, state, prepared);
+  commitInitialPool(log, state, initialPool);
   return { state, log };
 }
 
@@ -888,7 +884,6 @@ export function engine(
   const prepared = prepareRunStarted(state, {
     runId,
     flowFingerprint: FINGERPRINT,
-    initialPool,
     startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
     effectiveLlmByStaticPath,
     numWorkers,
@@ -899,6 +894,7 @@ export function engine(
     defaults,
   });
   commitPrepared(log, state, prepared);
+  commitInitialPool(log, state, initialPool);
   return new FlowEngine(state, log, { growBuilder, numWorkers, ...rest });
 }
 
@@ -1009,7 +1005,9 @@ export function feedbackEntries(context: LearnContext): readonly Readonly<Record
 export function stateSnapshot(state: RunState): Record<string, unknown> {
   return {
     flow: state.flow,
-    pool: encodePool(state.pool),
+    pool: state.pool.toWire(),
+    inputsCommitted: state.inputsCommitted,
+    pendingCommits: [...state.pendingCommits],
     nodeState: [...state.nodeState],
     edgeState: [...state.edgeState],
     ready: [...state.ready],
@@ -1105,15 +1103,31 @@ export function initializedAndStarted(
     prepareRunStarted(state, {
       runId: RUN_ID,
       flowFingerprint: FINGERPRINT,
-      initialPool,
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 2,
       learnable: options.learnable ?? false,
     }),
   );
+  commitInitialPool(log, state, initialPool);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   return { state, log };
+}
+
+/**
+ * Commit `output` as in-flight `nodeId`'s pool commit (under `options.commitAs` when given), then
+ * prepare the success that accepts it, with the other `options`.
+ */
+export function prepareOutput(
+  log: RunLog,
+  state: RunState,
+  nodeId: string,
+  output: unknown,
+  options: { commitAs?: string | null } & OutcomeCarriers = {},
+): PreparedTransition {
+  const { commitAs = null, ...carriers } = options;
+  commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs }));
+  return prepareNodeSucceeded(state, nodeId, carriers);
 }
 
 /**
@@ -1125,7 +1139,7 @@ export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: 
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, START_ID, output === undefined ? { items: ["canonical"] } : output, {
+    prepareOutput(log, state, START_ID, output === undefined ? { items: ["canonical"] } : output, {
       forwardCapture: state.learnable
         ? new ForwardCapture({}, ValueRoute.record([]), { scope: start.executionScope })
         : null,
@@ -1218,7 +1232,6 @@ function newState(node: Node, options: TraceNodeOptions): { state: RunState; log
     prepareRunStarted(state, {
       runId: RUN_ID,
       flowFingerprint: FINGERPRINT,
-      initialPool,
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 0,
@@ -1228,6 +1241,7 @@ function newState(node: Node, options: TraceNodeOptions): { state: RunState; log
       memoryStacks: recordedStacks,
     }),
   );
+  commitInitialPool(log, state, initialPool);
   return { state, log };
 }
 
@@ -1295,7 +1309,6 @@ export function replayOutcomeLog(
       prepareRunStarted(state, {
         runId: RUN_ID,
         flowFingerprint: started.flowFingerprint,
-        initialPool: decodePool(started.initialPool),
         startWiringOverride: started.startWiringOverride,
         effectiveLlmByStaticPath: started.effectiveLlmByStaticPath,
         numWorkers: started.numWorkers,
@@ -1342,14 +1355,14 @@ export function initializedSpawner(flow: CompiledFlow = parentFlow()): { state: 
     prepareRunStarted(state, {
       runId: RUN_ID,
       flowFingerprint: FINGERPRINT,
-      initialPool,
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 0,
     }),
   );
+  commitInitialPool(log, state, initialPool);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
   return { state, log };
 }
@@ -1616,6 +1629,18 @@ export function editRecordedFlow(log: string, edit: (text: string) => string): v
   writeFileSync(log, lines.join("\n"));
 }
 
+/**
+ * Return the typed wire `{kind, value}` the `pool_commit` at `seq` among `envelopes` writes, as a
+ * `node_succeeded` naming `seq` accepts it.
+ *
+ * @throws Error when the record at `seq` isn't a `pool_commit`.
+ */
+export function committedValue(envelopes: readonly RecordEnvelope[], seq: number): Record<string, unknown> {
+  const envelope = envelopes[seq];
+  if (envelope?.kind !== "pool_commit") throw new Error(`record ${seq} isn't a pool_commit`);
+  return { kind: envelope.payload["kind"], value: envelope.payload["value"] };
+}
+
 /** The process-loss marker a frozen log throws. */
 export class Crash extends Error {
   override name = "Crash";
@@ -1671,7 +1696,6 @@ export function startedRun(
     prepareRunStarted(state, {
       runId: log.runId,
       flowFingerprint: flowFingerprint(loaded.compiled),
-      initialPool: pool,
       startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
       effectiveLlmByStaticPath: effective,
       numWorkers,
@@ -1679,6 +1703,7 @@ export function startedRun(
       flow: loaded.source,
     }),
   );
+  commitInitialPool(log, state, pool);
   return state;
 }
 

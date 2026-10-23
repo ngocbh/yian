@@ -14,9 +14,9 @@
  * raises `ValueError`; ints have no digit limit (decisions 4a, 23), so in the uncoercible-input row
  * the 5000-digit `window` is accepted (a run with a good `llm_config` takes it whole) and the bad
  * `llm_config` is the reported error; names and null are written in the text form (`"nope"`,
- * `["bogus"]`, `null`; decisions 7, 43); the golden `run_started` record is TS's (schema 12, with
- * `defaults`, `call_time_llm` and a wall-clock `at`, masked like `now`; TS starts its own
- * versioned logs, decisions 8, 16).
+ * `["bogus"]`, `null`; decisions 7, 43); the golden `run_started` record is TS's (schema 13, with
+ * `defaults`, `call_time_llm` and a wall-clock `at`, masked; TS starts its own versioned logs,
+ * decisions 8, 16), and its initial pool is the run start's `pool_commit` records after it.
  *
  * Covered by `run-agent/engine_llm_config_values_run_start__a_bad_run_config_beats_a_missing_input`:
  * `test_a_missing_required_input_does_not_preempt_a_bad_llm_config`;
@@ -178,15 +178,6 @@ const GOLDEN_RUN_STARTED = {
     },
     flow: { dir: "<dir>", files: { "<flow>": { refs: {}, text: FLOW } }, root: "<flow>" },
     flow_fingerprint: "3d9b9bbd0808d27babce1bded77b3e90b642d179cc9678abcae0f4da66d4bfa7",
-    initial_pool: {
-      start_id: "__start__",
-      store: { __start__: { kind: "object", value: { topic: "ACME" } } },
-      system: {
-        now: "<now>",
-        run_id: { kind: "str", value: "golden" },
-        today: "<today>",
-      },
-    },
     learnable: false,
     memories: null,
     memory_snapshots: null,
@@ -199,7 +190,7 @@ const GOLDEN_RUN_STARTED = {
     yian_version: "0.0.0",
   },
   run_id: "golden",
-  schema: 12,
+  schema: 13,
   seq: 0,
   at: "<at>",
 };
@@ -213,12 +204,17 @@ test("a run with a default input records and returns as before", async () => {
   expect(result.output).toBe("ok");
   // START still fills the default: the model sees window=30.
   expect(JSON.stringify(model.requests[0])).toContain("hi ACME 30");
-  const started = records(log)[0]! as Record<string, any>;
-  const system = started["payload"]["initial_pool"]["system"];
-  expect(system["now"]["kind"]).toBe("datetime");
-  expect(system["today"]["kind"]).toBe("date");
-  system["now"] = "<now>";
-  system["today"] = "<today>";
+  const [started, ...commits] = records(log).slice(0, 5) as unknown as [Record<string, any>, ...Record<string, any>[]];
+  // The run start's commits follow RunStarted: the system values by key, then the START inputs.
+  const startId = "__start__";
+  expect(commits.map(({ kind, payload }) => [kind, payload["key"], payload["kind"]])).toEqual([
+    ["pool_commit", "system.now", "datetime"],
+    ["pool_commit", "system.run_id", "str"],
+    ["pool_commit", "system.today", "date"],
+    ["pool_commit", startId, "object"],
+  ]);
+  expect(commits[1]!["payload"]).toEqual({ node_id: startId, key: "system.run_id", kind: "str", value: "golden" });
+  expect(commits[3]!["payload"]).toEqual({ node_id: startId, key: startId, kind: "object", value: { topic: "ACME" } });
   expect(Number.isNaN(Date.parse(started["at"]))).toBe(false);
   started["at"] = "<at>";
   // Loaded without a folder, the flow's base folder is the current one.

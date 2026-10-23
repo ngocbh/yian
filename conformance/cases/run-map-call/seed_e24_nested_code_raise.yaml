@@ -3,7 +3,7 @@
 # The header's `--engine-trace` is a `yian run` flag; this run case doesn't use it.
 kind: run
 # A thrown error's text and the reference's length differ by language.
-rules: [code]
+rules: [code, run-log]
 flow: |
   # e24 — a CODE callable that raises INSIDE a called child (a `defs:` sub-flow).
   #
@@ -88,13 +88,19 @@ expect:
         - {label: flow.yaml, range: [27, 3, 27, 6]}
         - {label: flow.yaml, range: [20, 15, 20, 46]}
   trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: X}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [pool_commit, __start__, {value: {topic: X}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, run]
     - [node_expanded, run, {seed: {topic: X}, prune_ids: []}]
     - [node_started, run/__start__]
-    - [node_succeeded, run/__start__, {value: {topic: X}}]
+    - [pool_commit, run/__start__, {value: {topic: X}}]
+    - [node_succeeded, run/__start__, {commit: 11}]
     - [node_started, run/boom]
     - - node_failed
       - run/boom

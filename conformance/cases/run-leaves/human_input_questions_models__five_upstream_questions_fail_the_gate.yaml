@@ -2,6 +2,7 @@
 # and docs/syntax.md ("1–4 questions").
 # Five upstream questions fail the gate before it asks.
 kind: run
+rules: [run-log]
 flow: |
   id: manual_ref
   name: manual_ref
@@ -46,20 +47,26 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
         qs:
-        - header: H0
-          question: q0
-        - header: H1
-          question: q1
-        - header: H2
-          question: q2
-        - header: H3
-          question: q3
-        - header: H4
-          question: q4
+        - {header: H0, question: q0}
+        - {header: H1, question: q1}
+        - {header: H2, question: q2}
+        - {header: H3, question: q3}
+        - {header: H4, question: q4}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         qs:
@@ -73,6 +80,9 @@ expect:
           question: q3
         - header: H4
           question: q4
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, ask]
   - - node_failed
     - ask

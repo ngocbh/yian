@@ -68,13 +68,15 @@ const skipped = (result: RunResult) =>
     result.events.flatMap((e) => (e instanceof NodeSkipped && flowNode(e.nodeId) ? [e.nodeId] : [])),
   );
 
-/** Return each recorded node success in a run log, keyed by node id. */
-function succeededValues(path: string): Record<string, { value: unknown }> {
-  const values: Record<string, { value: unknown }> = {};
+/** Return each recorded node output's commit in a run log, `{kind, value}`, keyed by node id. */
+function succeededValues(path: string): Record<string, { kind: unknown; value: unknown }> {
+  const values: Record<string, { kind: unknown; value: unknown }> = {};
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line === "") continue;
     const record = JSON.parse(line);
-    if (record.kind === "node_succeeded") values[record.payload.node_id] = record.payload.value;
+    if (record.kind === "pool_commit") {
+      values[record.payload.node_id] = { kind: record.payload.kind, value: record.payload.value };
+    }
   }
   return values;
 }

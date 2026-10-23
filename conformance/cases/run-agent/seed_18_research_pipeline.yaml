@@ -2,6 +2,7 @@
 # Three reviewers fan in to a typed View; the `case ... on` its stance takes `pro_note`, the other
 # notes are skipped, and the join and the flow assert pass.
 kind: run
+rules: [run-log]
 flow: |
   # 18 — A realistic end-to-end research → decision → note pipeline.
   #
@@ -150,8 +151,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: rates, as_of: "2026-01-01"}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           fundamentals:
@@ -182,21 +182,32 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {as_of: 2026-01-01, topic: rates}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: rates, as_of: "2026-01-01"}}]
+    - [pool_commit, __start__, {value: {topic: rates, as_of: "2026-01-01"}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, fundamentals]
-    - [node_succeeded, fundamentals, {value: Rate fundamentals are stable.}]
+    - [pool_commit, fundamentals, {value: Rate fundamentals are stable.}]
+    - [node_succeeded, fundamentals, {commit: 9}]
     - [node_started, news]
-    - [node_succeeded, news, {value: "The central bank held rates [1]."}]
+    - [pool_commit, news, {value: "The central bank held rates [1]."}]
+    - [node_succeeded, news, {commit: 12}]
     - [node_started, social]
-    - [node_succeeded, social, {value: Sentiment on rates is mixed.}]
+    - [pool_commit, social, {value: Sentiment on rates is mixed.}]
+    - [node_succeeded, social, {commit: 15}]
     - [node_started, synth]
-    - [node_succeeded, synth, {value: {stance: positive, claim: Rates look stable., confidence: 0.7}}]
+    - [pool_commit, synth, {value: {stance: positive, claim: Rates look stable., confidence: 0.7}}]
+    - [node_succeeded, synth, {commit: 18}]
     - [node_started, route]
     - [node_routed, route, {handle: pro_note}]
     - [node_started, pro_note]
-    - [node_succeeded, pro_note, {value: Rates look stable for now.}]
+    - [pool_commit, pro_note, {value: Rates look stable for now.}]
+    - [node_succeeded, pro_note, {commit: 23}]
     - [node_started, __end__]
-    - - node_succeeded
+    - - pool_commit
       - __end__
       - value: {stance: positive, confidence: 0.7, note: Rates look stable for now.}
+    - [node_succeeded, __end__, {commit: 26}]

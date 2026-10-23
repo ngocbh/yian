@@ -3,6 +3,7 @@
 # join returns its text; `revise_plan` is skipped and gets no model call.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 kind: run
+rules: [run-log]
 flow: |
   # human-approval — a deterministic human gate with the HUMAN_INPUT node.
   #
@@ -102,8 +103,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {task: Plan a team offsite}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           draft:
@@ -118,15 +118,24 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {task: Plan a team offsite}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {task: Plan a team offsite}}]
+    - [pool_commit, __start__, {value: {task: Plan a team offsite}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, draft]
-    - [node_succeeded, draft, {value: "1. Pick a date. 2. Book a venue. 3. Send invites."}]
+    - [pool_commit, draft, {value: "1. Pick a date. 2. Book a venue. 3. Send invites."}]
+    - [node_succeeded, draft, {commit: 9}]
     - [node_started, approve]
-    - [node_succeeded, approve, {value: approve}]
+    - [pool_commit, approve, {value: approve}]
+    - [node_succeeded, approve, {commit: 12}]
     - [node_started, gate]
     - [node_routed, gate, {handle: kickoff}]
     - [node_started, kickoff]
-    - [node_succeeded, kickoff, {value: "The offsite plan is approved: let's pick a date!"}]
+    - [pool_commit, kickoff, {value: "The offsite plan is approved: let's pick a date!"}]
+    - [node_succeeded, kickoff, {commit: 17}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: "The offsite plan is approved: let's pick a date!"}]
+    - [pool_commit, __end__, {value: "The offsite plan is approved: let's pick a date!"}]
+    - [node_succeeded, __end__, {commit: 20}]

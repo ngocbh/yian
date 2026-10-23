@@ -5,7 +5,6 @@
  * `test_historical_start_prepares_recorded_schema_bytes`,
  * `test_prepare_run_started_requires_an_exact_nonnegative_worker_count` (3 rows),
  * `test_prepare_run_started_requires_a_pristine_state_with_a_start_node`,
- * `test_prepare_run_started_rejects_pool_identity_and_start_priming_mismatches`,
  * `test_prepare_run_started_validates_the_public_envelope_contract` (3 rows),
  * `test_commit_prepared_appends_before_applying_the_total_plan`,
  * `test_commit_prepared_append_failure_leaves_state_and_observers_untouched`,
@@ -52,9 +51,17 @@
  *
  * TS-only, for record times: an append result without a time breaks the append protocol.
  *
+ * Changed for schema 13, where `RunStarted` records no pool and the run start's commits follow it
+ * (`commitInitialPool`): `test_prepare_run_started_rejects_pool_identity_and_start_priming_mismatches`
+ * becomes the commits' checks (a pool of another START or storing another value, a `system.run_id`
+ * of another run, START inputs that aren't a record or come first, a key of neither form, another
+ * node, a system value twice, a node start before the START inputs); the complete-state test
+ * checks the pool, the START input and the ready START after the commits; the no-alias test leaves
+ * out the pool and the START input, which `RunStarted` no longer installs.
+ *
  * Not ported:
  * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema
- *   parameter, since schema 12 is the only one.
+ *   parameter, since schema 13 is the only one.
  * - TS types: the `1.0` row of the worker-count test (`1.0` is `1`), and the `ready-container`,
  *   `in-flight-container`, `node-state-container` (dict subclass) and `node-disposition-type`
  *   (`NodeState.UNKNOWN` is the text `"unknown"`) rows of the stale-mutation test.
@@ -70,19 +77,23 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
   decodeRecord,
-  encodePool,
   encodeRecord,
   MemoryRunLog,
   NodeStartedRecord,
+  PoolCommitRecord,
   RecordEnvelope,
   type RunRecord,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   PreparedTransition,
   prepareExpanded,
+  prepareInitialCommit,
+  prepareNodeStarted,
+  prepareRecord,
   prepareRunStarted,
   prepareRunStopped,
   replayRecords,
@@ -151,7 +162,7 @@ test("run state starts pristine around the owned graph", () => {
 test("historical start prepares recorded schema bytes", () => {
   const state = new RunState(flow());
   const before = stateSnapshot(state);
-  const prepared = prepareRunStarted(state, startData(state.flow));
+  const prepared = prepareRunStarted(state, startData());
   const expected = new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 0, prepared.record);
   expect(prepared._plan.envelopeJson).toBe(encodeRecord(expected));
   expect(decodeRecord(prepared._plan.envelopeJson).schema).toBe(SCHEMA_VERSION);
@@ -168,7 +179,7 @@ test.each([
   const before = stateSnapshot(state);
 
   expectError(
-    () => prepareRunStarted(state, startData(owned, { numWorkers: numWorkers as number })),
+    () => prepareRunStarted(state, startData({ numWorkers: numWorkers as number })),
     cls,
     /^num_workers must be a non-negative integer$/,
   );
@@ -182,7 +193,7 @@ test("prepareRunStarted requires a pristine state with a START node", () => {
   state.ready.push("work");
 
   expectError(
-    () => prepareRunStarted(state, startData(owned)),
+    () => prepareRunStarted(state, startData()),
     RangeError,
     /^RunStarted requires a pristine RunState at sequence 0$/,
   );
@@ -191,55 +202,130 @@ test("prepareRunStarted requires a pristine state with a START node", () => {
   missingStart.nodes.delete(missingStart.startId);
   const missingState = new RunState(missingStart);
   expectError(
-    () => prepareRunStarted(missingState, startData(owned)),
+    () => prepareRunStarted(missingState, startData()),
     RangeError,
     /^flow START node '__start__' is missing$/,
   );
 });
 
-test("prepareRunStarted rejects pool identity and START priming mismatches", () => {
-  const owned = flow();
+/** Return a state of the fixture flow and its log, after `RunStarted` and before its commits. */
+function runStartedOnly(): { state: RunState; log: MemoryRunLog } {
+  const state = new RunState(flow());
+  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
+  commitPrepared(log, state, prepareRunStarted(state, startData()));
+  return { state, log };
+}
 
-  const wrongStart = pool(owned);
-  (wrongStart as { startId: string }).startId = "other";
-  expectError(
-    () => prepareRunStarted(new RunState(owned), startData(owned, { pool: wrongStart })),
-    RangeError,
-    /^initial pool start_id mismatch: expected '__start__', found 'other'$/,
-  );
+test.each([
+  [
+    "a pool of another START",
+    (state: RunState, log: MemoryRunLog) => {
+      const wrong = pool(state.flow);
+      (wrong as { startId: string }).startId = "other";
+      commitInitialPool(log, state, wrong);
+    },
+    "the initial pool must store only the START inputs, under '__start__'",
+  ],
+  [
+    "a pool storing another value",
+    (state: RunState, log: MemoryRunLog) => {
+      const wrong = pool(state.flow);
+      wrong.set("preseeded", { retained: true });
+      commitInitialPool(log, state, wrong);
+    },
+    "the initial pool must store only the START inputs, under '__start__'",
+  ],
+  [
+    "a system.run_id of another run",
+    (state: RunState, log: MemoryRunLog) => commitInitialPool(log, state, pool(state.flow, "different")),
+    "system.run_id must equal the run id",
+  ],
+  [
+    "START inputs that aren't a record",
+    (state: RunState, log: MemoryRunLog) => {
+      const scalar = pool(state.flow);
+      scalar.set(state.flow.startId, "not a record");
+      commitInitialPool(log, state, scalar);
+    },
+    "the START inputs' pool_commit must hold a record",
+  ],
+  [
+    "START inputs before system.run_id",
+    (state: RunState) => prepareInitialCommit(state, START_ID, {}),
+    "the run start commits system.run_id, equal to the run id, before the START inputs",
+  ],
+  [
+    "a key of neither form",
+    (state: RunState) => prepareInitialCommit(state, "work", {}),
+    "a run-start pool_commit key must be system.<name> or the START '__start__', got 'work'",
+  ],
+  [
+    "an empty system name",
+    (state: RunState) => prepareInitialCommit(state, "system.", 1n),
+    "a run-start pool_commit key must be system.<name> or the START '__start__', got 'system.'",
+  ],
+  [
+    "another node",
+    (state: RunState) => prepareRecord(state, new PoolCommitRecord("work", "system.x", { kind: "int", value: 1n })),
+    "a run-start pool_commit must name the START '__start__', not 'work'",
+  ],
+  [
+    "a system value committed twice",
+    (state: RunState, log: MemoryRunLog) => {
+      commitPrepared(log, state, prepareInitialCommit(state, "system.tenant", "a"));
+      prepareInitialCommit(state, "system.tenant", "b");
+    },
+    "the run start commits 'system.tenant' twice",
+  ],
+  [
+    "a node start before the START inputs",
+    (state: RunState) => prepareNodeStarted(state, START_ID),
+    "the run start is incomplete: only its pool_commit records may follow RunStarted",
+  ],
+] as const)("the run start's commits check the run's identity and the START inputs: %s (TS-only)", (_name, act, message) => {
+  const { state, log } = runStartedOnly();
+  expectError(() => act(state, log), RangeError, new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+});
 
-  const wrongRun = pool(owned, "different");
-  expectError(
-    () => prepareRunStarted(new RunState(owned), startData(owned, { pool: wrongRun })),
-    RangeError,
-    /^initial pool system\.run_id must equal RunStartData\.run_id$/,
-  );
+test("the run start's last commit, the START inputs, makes START ready (TS-only)", () => {
+  const { state, log } = runStartedOnly();
+  expect(state.ready).toEqual([]);
+  expect(state.inputsCommitted).toBe(false);
 
-  const scalarStart = pool(owned);
-  scalarStart.set(owned.startId, "not a record");
+  commitInitialPool(log, state, pool(state.flow));
+
+  expect(log.records().slice(1).map(({ record }) => (record as PoolCommitRecord).key)).toEqual([
+    "system.now",
+    "system.run_id",
+    "system.tenant",
+    "system.today",
+    START_ID,
+  ]);
+  expect(state.inputsCommitted).toBe(true);
+  expect(state.ready).toEqual([START_ID]);
   expectError(
-    () => prepareRunStarted(new RunState(owned), startData(owned, { pool: scalarStart })),
+    () => prepareInitialCommit(state, "system.late", 1n),
     RangeError,
-    /^initial pool primed START value must be a dict$/,
+    /^pool_commit node '__start__' is not in flight$/,
   );
 });
 
 test.each([
   [
     "a fingerprint that isn't a digest",
-    (owned: CompiledFlow) => ({ ...startData(owned), flowFingerprint: "not-a-digest" }),
+    (owned: CompiledFlow) => ({ ...startData(), flowFingerprint: "not-a-digest" }),
     RangeError,
     /^flow_fingerprint must be 64 lowercase hex digits$/,
   ],
   [
     "an empty run id",
-    (owned: CompiledFlow) => startData(owned, { runId: "" }),
+    (owned: CompiledFlow) => startData({ runId: "" }),
     RangeError,
     /^run-record envelope run_id must be a non-empty string$/,
   ],
   [
     "an agent configuration that isn't an object",
-    (owned: CompiledFlow) => ({ ...startData(owned), effectiveLlmByStaticPath: { agent: "bad" } }),
+    (owned: CompiledFlow) => ({ ...startData(), effectiveLlmByStaticPath: { agent: "bad" } }),
     TypeError,
     /^effective_llm_by_static_path value for 'agent' must be a mapping$/,
   ],
@@ -253,7 +339,7 @@ test.each([
 test("the private plan contains no mutable transition payload", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const plan = prepared._plan;
 
   expect(plan.originatingState).toBe(state);
@@ -297,7 +383,7 @@ test.each(["schema", "numeric payload"])(
     }
 
     const state = new RunState(flow());
-    const data = startData(state.flow);
+    const data = startData();
     data.startWiringOverride = { ...data.startWiringOverride, numeric: 1n };
     const prepared = prepareRunStarted(state, data);
     const before = stateSnapshot(state);
@@ -311,8 +397,7 @@ test.each(["schema", "numeric payload"])(
 test("RunStarted preparation is immutable and commit restores the complete state", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const given = pool(owned);
-  const data = startData(owned, { pool: given });
+  const data = startData();
   const before = stateSnapshot(state);
 
   const prepared = prepareRunStarted(state, data);
@@ -327,8 +412,6 @@ test("RunStarted preparation is immutable and commit restores the complete state
   }).toThrow(TypeError);
 
   // Preparation owns canonical copies rather than keeping caller-owned containers.
-  given.set(owned.startId, { name: "mutated" });
-  given.addSystem("today", "never");
   ((data.startWiringOverride["metadata"] as Record<string, unknown>)["labels"] as string[]).push("mutated");
   (data.effectiveLlmByStaticPath["agent"]!["options"] as Record<string, unknown>)["temperature"] = 1.0;
 
@@ -341,15 +424,20 @@ test("RunStarted preparation is immutable and commit restores the complete state
   expect(state.flowFingerprint).toBe(FINGERPRINT);
   expect(state.nextSequence).toBe(1);
   expect(state.numWorkers).toBe(3);
+  expect(state.ready).toEqual([]);
+
+  // The run start's commits own canonical copies too.
+  const given = pool(owned);
+  commitInitialPool(log, state, given);
+  given.set(owned.startId, { name: "mutated" });
+  given.addSystem("today", "never");
   expect(state.pool).not.toBe(given);
   expect(state.pool.startId).toBe(owned.startId);
   expect(state.pool.get(owned.startId)).toEqual({ name: "Ada", count: 2n, aliases: ["A", "B"] });
-  expect(state.pool.get("preseeded")).toEqual({ retained: true });
   expect(state.pool.resolve("system", ["run_id"])).toBe(RUN_ID);
   expect(state.pool.resolve("system", ["today"])).toBe("2026-08-13");
   expect(state.pool.resolve("system", ["now"])).toBe("2026-08-13T12:34:56+00:00");
   expect(state.pool.resolve("system", ["tenant"])).toBe("tests");
-  expect(encodePool(state.pool)).toEqual((prepared.record as RunStartedRecord).initialPool);
   expect(state.input).toEqual({ name: "Ada", count: 2n, aliases: ["A", "B"] });
   expect(state.wiringOverrides).toEqual(
     new Map([[owned.startId, { name: "${input.name}", metadata: { labels: ["one", "two"] } }]]),
@@ -387,7 +475,7 @@ class InspectingLog extends MemoryRunLog {
 test("commitPrepared appends before applying the total plan", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const log = new InspectingLog(state);
 
   const observers = commitPrepared(log, state, prepared);
@@ -400,7 +488,7 @@ test("commitPrepared appends before applying the total plan", () => {
 test("commitPrepared append failure leaves state and observers untouched", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const before = stateSnapshot(state);
 
   expectError(() => commitPrepared(new FailingLog(RUN_ID), state, prepared), Error, /^disk full$/);
@@ -412,7 +500,7 @@ test("commitPrepared append failure leaves state and observers untouched", () =>
 test("commitPrepared rejects a changed public prepared record", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const record = prepared.record as RunStartedRecord;
   const forged = new PreparedTransition(
     withWiring(record, { ...record.startWiringOverride, name: "changed" }),
@@ -434,7 +522,7 @@ test("commitPrepared rejects a different pristine state before append", () => {
   const owned = flow();
   const originatingState = new RunState(owned);
   const otherState = new RunState(owned);
-  const prepared = prepareRunStarted(originatingState, startData(owned));
+  const prepared = prepareRunStarted(originatingState, startData());
   const log = new MemoryRunLog(RUN_ID);
   const before = stateSnapshot(otherState);
 
@@ -469,7 +557,7 @@ test.each([
 ] as const)("commitPrepared rejects flow or boundary replacement before append: %s", (_name, replace) => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   replace(state);
   const log = new MemoryRunLog(RUN_ID);
 
@@ -493,7 +581,7 @@ test.each([
 ] as const)("commitPrepared rejects every stale state mutation before append: %s", (_name, mutate) => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   mutate(state);
   const before = stateSnapshot(state);
   const log = new MemoryRunLog(RUN_ID);
@@ -511,34 +599,27 @@ test.each([
 test("committed state doesn't alias old containers or prepared payloads", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const record = prepared.record as RunStartedRecord;
   const oldReady = state.ready;
-  const oldPool = state.pool;
   const oldInFlight = state.inFlight;
   const oldNodeState = state.nodeState;
   const oldEdgeState = state.edgeState;
   const oldDepth = state.depth;
   const oldWiring = state.wiringOverrides;
-  const oldInput = state.input;
   const oldEffective = state.effectiveLlmByStaticPath;
 
   commitPrepared(new MemoryRunLog(RUN_ID), state, prepared);
   const committed = stateSnapshot(state);
 
   oldReady.push("old-ready");
-  oldPool.addSystem("old", true);
   oldInFlight.add("old-flight");
   oldNodeState.set("work", NodeState.TAKEN);
   oldEdgeState.set("start-work", NodeState.TAKEN);
   oldDepth.set("work", 9);
   oldWiring.set("work", { x: 1n });
-  oldInput["old"] = true;
   oldEffective["old"] = { model: "wrong" };
   // The prepared record is deep-frozen, so its payload can't be changed at all.
-  expect(() => {
-    delete (record.initialPool.system as Record<string, unknown>)["run_id"];
-  }).toThrow(TypeError);
   expect(() => {
     ((record.startWiringOverride["metadata"] as Record<string, unknown>)["labels"] as string[]).push("wrong");
   }).toThrow(TypeError);
@@ -548,13 +629,11 @@ test("committed state doesn't alias old containers or prepared payloads", () => 
 
   expect(stateSnapshot(state)).toEqual(committed);
   expect(state.ready).not.toBe(oldReady);
-  expect(state.pool).not.toBe(oldPool);
   expect(state.inFlight).not.toBe(oldInFlight);
   expect(state.nodeState).not.toBe(oldNodeState);
   expect(state.edgeState).not.toBe(oldEdgeState);
   expect(state.depth).not.toBe(oldDepth);
   expect(state.wiringOverrides).not.toBe(oldWiring);
-  expect(state.input).not.toBe(oldInput);
   expect(state.effectiveLlmByStaticPath).not.toBe(oldEffective);
 });
 
@@ -566,7 +645,7 @@ test.each([
 ] as const)("commitPrepared rejects state and log identity mismatches before append: %s", (mismatch, message) => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const log = new MemoryRunLog(mismatch === "log run id" ? "other" : RUN_ID);
   if (mismatch === "log sequence") log.append(new NodeStartedRecord("already-there"));
   else if (mismatch === "state sequence") state.nextSequence = 1;
@@ -588,7 +667,7 @@ test.each([
 ] as const)("commitPrepared rejects a custom log return mismatch without applying: %s", (_name, result) => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const before = stateSnapshot(state);
 
   expectError(() => commitPrepared(new ReturningLog(result), state, prepared), RangeError, APPEND_MISMATCH);
@@ -607,7 +686,7 @@ class UntimedReturnLog extends MemoryRunLog {
 test("commitPrepared rejects an append result without a time, since a log stamps every record", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const before = stateSnapshot(state);
 
   expectError(() => commitPrepared(new UntimedReturnLog(RUN_ID), state, prepared), RangeError, APPEND_MISMATCH);
@@ -626,7 +705,7 @@ class RetainingMismatchedLog extends MemoryRunLog {
 test("a mismatched append return leaves the advanced log as recovery authority", () => {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const before = stateSnapshot(state);
   const log = new RetainingMismatchedLog(RUN_ID, { clock: FIXED_CLOCK });
 
@@ -693,7 +772,7 @@ test("replay checks its arguments' types before the state is pristine", () => {
 function handBuilt(kind: "backward" | "growth", traceDelta: TraceDelta | null): [RunState, PreparedTransition] {
   const owned = flow();
   const state = new RunState(owned);
-  const prepared = prepareRunStarted(state, startData(owned));
+  const prepared = prepareRunStarted(state, startData());
   const extra =
     kind === "backward"
       ? { originatingBackwardState: state.backwardState, nextBackwardState: state.backwardState }
@@ -741,7 +820,7 @@ test.each([
   mutate(state);
 
   expectError(
-    () => prepareRunStarted(state, startData(owned)),
+    () => prepareRunStarted(state, startData()),
     RangeError,
     /^RunStarted requires a pristine RunState at sequence 0$/,
   );

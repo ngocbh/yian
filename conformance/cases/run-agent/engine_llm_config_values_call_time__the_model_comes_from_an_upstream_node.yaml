@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -44,17 +45,34 @@ expect:
     - call_time_llm:
         agents:
           chat: {}
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, pick]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, pick]
+  - - pool_commit
     - pick
     - value: gpt-picked
+  - - node_succeeded
+    - pick
+    - {commit: 9}
   - [node_started, chat]
   - - node_step
     - chat
@@ -68,13 +86,19 @@ expect:
           openai:
             temperature: 0.5
           provider: openai
-  - - node_succeeded
+  - - pool_commit
     - chat
     - value: ok
-  - [node_started, __end__]
   - - node_succeeded
+    - chat
+    - {commit: 13}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: ok
+  - - node_succeeded
+    - __end__
+    - {commit: 16}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -90,13 +114,13 @@ expect:
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: gpt-picked
       node_id: chat
       provider: openai
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: gpt-picked
       node_id: chat
       provider: openai
@@ -113,12 +137,12 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: false
     key: text
     node_id: chat
   - chunk: ''
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: true
     key: text
     node_id: chat

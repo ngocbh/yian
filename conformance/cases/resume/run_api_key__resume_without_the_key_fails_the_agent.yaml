@@ -2,10 +2,11 @@
 # A resume without the host key fails the agent at its model call with `provider.auth` instead of reading the
 # environment's key; no model is called on resume.
 # env: VLLM_API_KEY is set, as in the test, to show the resume doesn't fall back to it.
-# Record 3 is agent's node_started: its first model call runs, its result is refused.
+# Record 8 is agent's node_started: its first model call runs, its result is refused.
 # events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the
 # trace still pins the resume.
 kind: resume
+rules: [run-log]
 flow: |
   id: keyed
   name: keyed
@@ -31,7 +32,7 @@ host:
           parts:
           - type: text
             text: ok
-  crash_after_record: 3
+  crash_after_record: 8
 expect:
   output:
     status: failed
@@ -52,11 +53,25 @@ expect:
           provider: vllm
       learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, agent]
   - - run_resumed
     - null

@@ -1,6 +1,7 @@
 # From tests/engine/test_tool_context_run.py::test_each_loop_iteration_gets_its_own_call_id.
 # A TOOL node in a LOOP body gets one call id per iteration: <run id>/loop#<i>/place.
 kind: run
+rules: [run-log]
 flow: |
   id: loop_ctx
   name: loop_ctx
@@ -46,11 +47,25 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: run-7f3a}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, loop]
   - - node_expanded
     - loop
@@ -59,19 +74,28 @@ expect:
       - count: 0
       - 0
   - [node_started, loop#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#0/__start__
     - value:
         count: 0
-  - [node_started, loop#0/__end__]
   - - node_succeeded
+    - loop#0/__start__
+    - {commit: 11}
+  - [node_started, loop#0/__end__]
+  - - pool_commit
     - loop#0/__end__
     - value:
         count: 1
-  - [node_started, loop#0/place]
   - - node_succeeded
+    - loop#0/__end__
+    - {commit: 14}
+  - [node_started, loop#0/place]
+  - - pool_commit
     - loop#0/place
     - value: p0
+  - - node_succeeded
+    - loop#0/place
+    - {commit: 17}
   - [node_started, loop~1]
   - - node_expanded
     - loop~1
@@ -80,19 +104,28 @@ expect:
       - count: 1
       - 1
   - [node_started, loop#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#1/__start__
     - value:
         count: 1
-  - [node_started, loop#1/__end__]
   - - node_succeeded
+    - loop#1/__start__
+    - {commit: 22}
+  - [node_started, loop#1/__end__]
+  - - pool_commit
     - loop#1/__end__
     - value:
         count: 2
-  - [node_started, loop#1/place]
   - - node_succeeded
+    - loop#1/__end__
+    - {commit: 25}
+  - [node_started, loop#1/place]
+  - - pool_commit
     - loop#1/place
     - value: p1
+  - - node_succeeded
+    - loop#1/place
+    - {commit: 28}
   - [node_started, loop~2]
   - - node_expanded
     - loop~2
@@ -101,30 +134,45 @@ expect:
       - count: 2
       - 2
   - [node_started, loop#2/__start__]
-  - - node_succeeded
+  - - pool_commit
     - loop#2/__start__
     - value:
         count: 2
-  - [node_started, loop#2/__end__]
   - - node_succeeded
+    - loop#2/__start__
+    - {commit: 33}
+  - [node_started, loop#2/__end__]
+  - - pool_commit
     - loop#2/__end__
     - value:
         count: 3
-  - [node_started, loop#2/place]
   - - node_succeeded
+    - loop#2/__end__
+    - {commit: 36}
+  - [node_started, loop#2/place]
+  - - pool_commit
     - loop#2/place
     - value: p2
+  - - node_succeeded
+    - loop#2/place
+    - {commit: 39}
   - [node_started, loop~3]
+  - - pool_commit
+    - loop~3
+    - value:
+        count: 3
+      key: loop
   - - node_succeeded
     - loop~3
-    - commit_target: loop
-      value:
-        count: 3
+    - {commit: 42}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
         count: 3
+  - - node_succeeded
+    - __end__
+    - {commit: 45}
   events:
   - [RunStarted]
   - - NodeStarted

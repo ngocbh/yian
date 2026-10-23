@@ -145,8 +145,8 @@ test("tool calling agent in loop retries whole node after process loss", async (
     [toolCall("ping", {}, "turn-1"), textReply("turn1"), toolCall("ping", {}, "turn-2-before-crash"), textReply("lost")],
     CONFIG,
   );
-  // Record 18 is the second turn's `loop#1/reply` success.
-  await crashAfter(18, async () =>
+  // Record 28 is the second turn's `loop#1/reply` output (its commit).
+  await crashAfter(28, async () =>
     runFlow(await loadConformanceFlow(FLOW), { seed: "s" }, {
       log: path,
       runId: "agent-loop-recovery",

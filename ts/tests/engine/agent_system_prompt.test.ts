@@ -226,10 +226,11 @@ nodes:
 output: \${after.output}
 `;
 const INPUTS = { name: "Ada", title: "CTO", message: "How are we doing?" };
-// The records before `reply`'s success and before `after`'s: RunStarted, START's start and
-// success, then each agent's start.
-const BEFORE_REPLY_SUCCESS = 4;
-const BEFORE_AFTER_SUCCESS = 6;
+// The records before `reply`'s output and before `after`'s: the run start (RunStarted and four
+// commits), START's start, commit and success, then each agent's start (and `reply`'s commit and
+// success before `after`'s start).
+const BEFORE_REPLY_SUCCESS = 9;
+const BEFORE_AFTER_SUCCESS = 12;
 
 /** Load the chat flow with `template` as `reply`'s system prompt. */
 function chatFlow(template: string = TEMPLATE) {

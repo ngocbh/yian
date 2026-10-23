@@ -2,7 +2,7 @@
 # A tagged gate input (`!int`) over an untyped value "three" fails binding.type before the gate asks;
 # an `!Any` flow input stands in for the test's untyped CODE source.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: tagged_gate
   name: tagged_gate
@@ -38,13 +38,26 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        n: three
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {n: three}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         n: three
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, ask]
   - - node_failed
     - ask

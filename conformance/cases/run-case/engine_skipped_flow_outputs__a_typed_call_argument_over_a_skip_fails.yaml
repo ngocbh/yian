@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: f
   name: f
@@ -69,15 +69,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        approve: false
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {approve: false}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         approve: false
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, c1]
   - - node_expanded
     - c1
@@ -85,24 +98,33 @@ expect:
       seed:
         approve: false
   - [node_started, c1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - c1/__start__
     - value:
         approve: false
+  - - node_succeeded
+    - c1/__start__
+    - {commit: 11}
   - [node_started, c1/gate]
   - - node_routed
     - c1/gate
     - handle: '#else'
   - [node_started, c1/__end__]
+  - - pool_commit
+    - c1/__end__
+    - value:
+        order: null
+      key: c1
   - - node_succeeded
     - c1/__end__
-    - commit_target: c1
-      value:
-        order: null
+    - {commit: 16}
   - [node_started, c1/rejected]
-  - - node_succeeded
+  - - pool_commit
     - c1/rejected
     - value: no
+  - - node_succeeded
+    - c1/rejected
+    - {commit: 19}
   - [node_started, c2]
   - - node_failed
     - c2

@@ -1980,16 +1980,14 @@ type TraceRow = readonly [string | null, readonly string[]];
 const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   [
     "run_started",
-    [
-      null,
-      ["inputs", "learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"],
-    ],
+    [null, ["learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"]],
   ],
   ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
   ["node_started", ["node_id", []]],
   ["node_step", ["node_id", ["step"]]],
-  ["node_succeeded", ["node_id", ["value", "commit_target", "forward_capture"]]],
+  ["pool_commit", ["node_id", ["key", "value"]]],
+  ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
   ["node_expanded", ["spawner_id", ["seed", "prune_ids", "forward_capture"]]],
   ["node_failed", ["failure", ["failure", "forward_capture"]]],
@@ -2003,6 +2001,8 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["backward_ready", [null, ["attempt_id", "root_result", "attributed_results", "proposals"]]],
   ["backward_finished", [null, ["attempt_id", "outcome", "attributed_results"]]],
 ]);
+/** The run start's commits whose values are times, which the trace leaves out. */
+const TIMED_KEYS: ReadonlySet<string> = new Set(["system.now", "system.today"]);
 const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "defaults", "effective_llm_by_static_path", "call_time_llm", "parent",
 ]);
@@ -2105,8 +2105,6 @@ function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
     let node = nodeField === null ? null : (payload[nodeField] ?? null);
     if (kind === "node_failed") node = (node as Case)["node_id"] ?? null;
     if (kind === "run_started") {
-      const pool = payload["initial_pool"] as Case;
-      payload["inputs"] = ((pool["store"] as Case)[pool["start_id"] as string] as Case)["value"]!;
       const effective = payload["effective_llm_by_static_path"] as Case;
       payload["effective_llm_by_static_path"] = Object.fromEntries(
         Object.entries(effective).map(([path, config]) => [path, llm(config as Case)]),
@@ -2122,9 +2120,10 @@ function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
         };
       }
     }
-    if (kind === "node_succeeded") {
-      payload["value"] = (payload["value"] as Case)["value"]!;
-      if (payload["commit_target"] === node) delete payload["commit_target"];
+    if (kind === "pool_commit") {
+      if (payload["key"] === node) delete payload["key"];
+      // The run start's clock values are times.
+      else if (TIMED_KEYS.has(payload["key"] as string)) delete payload["value"];
     }
     const key = FAILURE_FIELDS.get(kind);
     if (key !== undefined && (payload[key] ?? null) !== null) {
@@ -2196,9 +2195,16 @@ function pooled(results: Record<string, unknown>): Record<string, unknown> {
     return (node ?? null) as string | null;
   };
   const toolCalls = results["tool_calls"] as Record<string, Case[]>;
+  // A success's `commit` is the seq of the `pool_commit` just before it in its node's group, a seq
+  // that depends on how the parallel nodes interleave, so a grouped trace leaves it out.
+  const trace = (results["trace"] as Value[][]).map((entry) => {
+    if (entry[0] !== "node_succeeded" || entry[2] === undefined) return entry;
+    const { commit: _commit, ...rest } = entry[2] as Case;
+    return Object.keys(rest).length > 0 ? [entry[0], entry[1], rest] : [entry[0], entry[1]];
+  });
   return {
     ...results,
-    trace: grouped(results["trace"] as Value[][], (entry) => entry[1] as string | null),
+    trace: grouped(trace, (entry) => entry[1] as string | null),
     events: grouped(results["events"] as Value[][], eventNode),
     stream: grouped(results["stream"] as Case[], (chunk) => (get(chunk, "node_id") ?? null) as string | null),
     tool_calls: Object.fromEntries(
@@ -2640,7 +2646,8 @@ function checkResults(
 
 /**
  * Return the run log text `text` as a golden log holds it: each line with every `traceback` value,
- * its time (`at`), the seeded clock values (`initial_pool.system`'s `now` and `today`), the
+ * its time (`at`), the seeded clock values (the `value` of the `system.now` and `system.today`
+ * commits), the
  * recorded flow's folder (`flow.dir`) and the yian version (`yian_version`) replaced by
  * `<masked>`, written again with the log's own encoder. The times and the seeded values come from
  * the case's virtual clock, which starts at the real time; the folder is the case's temporary one;
@@ -2665,10 +2672,9 @@ function masked(text: string): string {
       }
       mask(record);
       record["at"] = "<masked>";
+      const payload = record["payload"] as Case;
+      if (record["kind"] === "pool_commit" && TIMED_KEYS.has(payload["key"] as string)) payload["value"] = "<masked>";
       if (record["kind"] === "run_started") {
-        const system = ((record["payload"] as Case)["initial_pool"] as Case)["system"] as Case;
-        for (const name of ["now", "today"]) (system[name] as Case)["value"] = "<masked>";
-        const payload = record["payload"] as Case;
         const flow = payload["flow"] as Case | null;
         if (flow !== null) flow["dir"] = "<masked>";
         payload["yian_version"] = "<masked>";
@@ -2752,8 +2758,11 @@ async function checkInvariants(
   const replay = (count: number) =>
     withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes.slice(0, count))));
   // A terminal result is never undone, so checking the prefix before the last run record covers
-  // every record after it.
-  if (lastRun > 0 && replay(lastRun).result !== null) fail(`record ${lastRun} follows the terminal outcome`);
+  // every record after it. A prefix inside the run start (through the START inputs' commit, the
+  // first whose key is its node) can't be replayed, and holds no outcome.
+  const inputsCommit = envelopes.findIndex(({ kind, payload }) => kind === "pool_commit" && payload["key"] === payload["node_id"]);
+  if (inputsCommit === -1) return;
+  if (lastRun > inputsCommit && replay(lastRun).result !== null) fail(`record ${lastRun} follows the terminal outcome`);
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
@@ -2817,9 +2826,9 @@ const OUTCOMES: ReadonlySet<string> = new Set([
 
 /**
  * Return the node outcome entries of a run log's trace `entries`, each capture source's
- * `execution_seq` replaced by the kind and node of the record it names: a learnable run's captures
- * name a source's record by its seq, and a resume adds records, so a crash sweep compares the
- * record instead.
+ * `execution_seq` replaced by the kind and node of the record it names, and each success's
+ * `commit` by the trace fields of the `pool_commit` it names: captures and successes name records
+ * by seq, and a resume adds records, so a crash sweep compares the records instead.
  */
 export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   const rename = (value: unknown): void => {
@@ -2840,6 +2849,13 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   };
   const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
   rename(kept);
+  for (const [kind, , payload] of kept) {
+    if (kind !== "node_succeeded") continue;
+    const commit = (payload as Case)["commit"] as bigint;
+    const named = entries[Number(commit)];
+    if (named?.[0] !== "pool_commit") throw new CaseFailure(`a success names seq ${commit}, which isn't a pool_commit`);
+    (payload as Case)["commit"] = named[2] ?? {};
+  }
   return kept;
 }
 
@@ -2860,9 +2876,11 @@ function sweepable(case_: Case): boolean {
 
 /**
  * Run a `run` case's crash sweep. An uncut run writes N records; then, for each k in 0..N-2, a run
- * on a fresh host is cut after record k, the script entries it took after the cut are put back,
- * the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
- * the run is resumed. The resume must end with a result whose invariants hold. With no
+ * on a fresh host is cut after record k, the script entries it took after the cut are put back (a
+ * cut right after a node's commit puts back from the node's last record before it, since the node
+ * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
+ * the run is resumed. A cut inside the run start (before the START inputs' commit) must instead be
+ * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
  * also holds: the same output, and the same node outcome entries in the trace, in order, with a
  * capture's source named by its record's kind and node rather than its seq.
@@ -2895,7 +2913,13 @@ export async function crashSweep(
     return sourcesByRecord(trace(lines, flow));
   };
   const expected = outcomes(uncutLog);
-  const count = readRunLog(uncutLog).length;
+  const uncutRecords = readRunLog(uncutLog);
+  const count = uncutRecords.length;
+  // The run start's last record is the START inputs' commit, the first whose key is its node.
+  const inputsCommit = uncutRecords.findIndex(({ kind, record }) => {
+    const { nodeId, key } = record as { nodeId?: string; key?: string };
+    return kind === "pool_commit" && key === nodeId;
+  });
   for (let k = 0; k <= count - 2; k += 1) {
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
@@ -2904,7 +2928,22 @@ export async function crashSweep(
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
     await cutAt(k, cut, at);
-    scripted.putBack(k);
+    // A node's commit and its success are written with nothing awaited between them, so a cut
+    // right after a commit is a crash before the success: the node runs again and takes its
+    // script entries again. Entries taken up to the node's last record before the commit stay,
+    // since the resume replays that record's steps.
+    scripted.putBack(k > inputsCommit && uncutRecords[k]!.kind === "pool_commit" ? k - 1 : k);
+    if (k < inputsCommit) {
+      // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed.
+      const before = readFileSync(log);
+      const refused = await settle(() => resumeFlow(hooks));
+      const message = `run log ${log} ends inside its run start; start the run again`;
+      if (!(refused instanceof RangeError) || refused.message !== message) {
+        throw new CaseFailure(`the resume didn't refuse the incomplete run start${at}\n${failureText(refused)}`);
+      }
+      if (!readFileSync(log).equals(before)) throw new CaseFailure(`the refused resume changed the log${at}`);
+      continue;
+    }
     const reopen = { env, tools: scripted.tools, models: scripted.models };
     await checkInvariants(flow, log, reopen, null, at);
     beforeResume(log);
@@ -2919,6 +2958,9 @@ export async function crashSweep(
     if (strong) {
       compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });
       compare(`node outcomes${at}`, outcomes(log), expected);
+    } else if (resumed.status !== uncut.status) {
+      // Without the strong oracle, a resume still ends as the uncut run did.
+      throw new CaseFailure(`the resume ${resumed.status}, the uncut run ${uncut.status}${at}`);
     }
     await checkInvariants(flow, log, reopen, resumed, at);
   }
@@ -3062,6 +3104,26 @@ function section(text: string, key: string): [number, number] | undefined {
 }
 
 /**
+ * Quote each text in a flow collection under `node` that holds a `?`. The writer leaves it bare,
+ * as YAML 1.2 allows, but PyYAML ends the text there, so the Python runner couldn't read the case.
+ */
+function quoteQuestionMarks(node: unknown): void {
+  visit(node as Parameters<typeof visit>[0], {
+    Collection(_, collection) {
+      if (!collection.flow) return;
+      const parts = isMap(collection)
+        ? collection.items.flatMap((pair) => [pair.key, pair.value])
+        : collection.items;
+      for (const part of parts) {
+        if (isScalar(part) && typeof part.value === "string" && part.value.includes("?")) {
+          part.type = "QUOTE_DOUBLE";
+        }
+      }
+    },
+  });
+}
+
+/**
  * Return the case file `text` with each result in `results` written into `expect` in case form
  * (as `updated` changes it), and `run-log` added to its `rules`; a new `rules` goes right after
  * `kind`. Only the lines of `rules` and `expect` change: they are cut from the whole file written
@@ -3095,6 +3157,7 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
   } else if (!rules.items.some((item) => isScalar(item) && item.value === "run-log")) {
     rules.add("run-log");
   }
+  quoteQuestionMarks(doc.get("expect"));
   const written = doc.toString(options(indentSeq));
   let result = text;
   for (const key of ["expect", "rules"]) {

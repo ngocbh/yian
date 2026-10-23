@@ -167,8 +167,8 @@ test("a resumed tool node sees the same call id and the new context", async () =
   const db = new Db();
   const db2 = new Db();
 
-  // Record 4 is the TOOL's outcome.
-  await crashAfter(4, () =>
+  // Record 9 is the TOOL's outcome (its commit), after the run start's five records and START's three.
+  await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, tools: { place: recorder(seen) }, context: db, runId: "run-7f3a", env: hostEnv(dir) }),
   );
   const resumed = await resumeFlow({ log: path, tools: { place: recorder(seen) }, context: db2, env: hostEnv(dir) });
@@ -187,7 +187,7 @@ test("resume without context gives undefined", async () => {
   const flow = await loadFlow(TOOL_FLOW);
   const seen: ToolContext[] = [];
 
-  await crashAfter(4, () =>
+  await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, tools: { place: recorder(seen) }, context: new Db(), env: hostEnv(dir) }),
   );
   const resumed = await resumeFlow({ log: path, tools: { place: recorder(seen) }, env: hostEnv(dir) });

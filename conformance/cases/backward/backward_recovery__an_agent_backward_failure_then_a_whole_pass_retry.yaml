@@ -3,6 +3,7 @@
 # (backward.result, at that AGENT), discarding the partial results; the next call is a whole new
 # pass that calls every AGENT again, with the next attempt id.
 kind: backward
+rules: [run-log]
 flow: |
   id: backward-recovery
   name: backward_recovery
@@ -88,16 +89,30 @@ expect:
         second:
           model: local-test
           provider: ollama
-      inputs:
-        topic: reefs
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: reefs}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        topic: reefs
   - - node_succeeded
     - __start__
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 6
+      forward_capture:
+        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -117,20 +132,19 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        topic: reefs
   - [node_started, first]
+  - - pool_commit
+    - first
+    - value: draft
   - - node_succeeded
     - first
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 9
+      forward_capture:
+        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
+          effective_llm_config: {model: local-test, provider: ollama}
           prompt_template: Draft ${topic}
           rendered_prompt: Draft reefs
           variable_domains: {}
@@ -139,7 +153,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [topic]
               run_id: r1
           kind: record
@@ -149,19 +163,19 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [first]
-      value: draft
   - [node_started, second]
+  - - pool_commit
+    - second
+    - value: answer
   - - node_succeeded
     - second
-    - forward_capture:
-        bound_inputs:
-          draft: draft
+    - commit: 12
+      forward_capture:
+        bound_inputs: {draft: draft}
         evaluated_keys: [draft]
         input_names: [draft]
         node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
+          effective_llm_config: {model: local-test, provider: ollama}
           prompt_template: Review ${draft}
           rendered_prompt: Review draft
           variable_domains: {}
@@ -170,7 +184,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 3
+              execution_seq: 8
               path: []
               run_id: r1
           kind: record
@@ -180,13 +194,15 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [second]
-      value: answer
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: answer
   - - node_succeeded
     - __end__
-    - forward_capture:
-        bound_inputs:
-          result: answer
+    - commit: 15
+      forward_capture:
+        bound_inputs: {result: answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -196,7 +212,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 5
+              execution_seq: 11
               path: []
               run_id: r1
           kind: record
@@ -206,7 +222,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: answer
   - - backward_started
     - null
     - attempt_id: 1
@@ -222,7 +237,7 @@ expect:
           memory: null
           message: input_feedback selects undeclared input 'foreign'
           node_id: first
-          node_started_seq: 3
+          node_started_seq: 8
           run_id: r1
           scope:
             boundary: null
@@ -247,7 +262,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 3
+            execution_seq: 8
             path: []
             run_id: r1
         feedback:
@@ -259,7 +274,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
+          execution_seq: 5
           path: []
           run_id: r1
       - attribution:
@@ -268,7 +283,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 11
             path: []
             run_id: r1
         feedback: [fresh draft]
@@ -279,7 +294,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 3
+          execution_seq: 8
           path: []
           run_id: r1
       - attribution:
@@ -288,7 +303,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 14
             path: []
             run_id: r1
         feedback: [Second review.]
@@ -299,7 +314,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 5
+          execution_seq: 11
           path: []
           run_id: r1
       - attribution:
@@ -316,7 +331,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 14
           path: []
           run_id: r1
       proposals: []
@@ -415,7 +430,7 @@ expect:
       memory: null
       message: input_feedback selects undeclared input 'foreign'
       node_id: first
-      node_started_seq: 3
+      node_started_seq: 8
       run_id: r1
       scope:
         boundary: null

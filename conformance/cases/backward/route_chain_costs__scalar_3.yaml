@@ -3,6 +3,7 @@
 # Pins: feedback on a CALL whose argument adds `input.x` three times reaches the flow input as one
 # message per operand.
 kind: backward
+rules: [run-log]
 flow: |
   id: bw
   name: bw
@@ -38,14 +39,28 @@ expect:
     - null
     - learnable: true
       num_workers: 0
-      inputs:
-        x: 1
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {x: 1}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        x: 1
   - - node_succeeded
     - __start__
-    - forward_capture:
-        bound_inputs:
-          x: 1
+    - commit: 6
+      forward_capture:
+        bound_inputs: {x: 1}
         evaluated_keys: [x]
         input_names: [x]
         node_data:
@@ -65,8 +80,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        x: 1
   - [node_started, outer]
   - - node_expanded
     - outer
@@ -80,17 +93,17 @@ expect:
           - children:
             - kind: source
               source:
-                execution_seq: 1
+                execution_seq: 5
                 path: [x]
                 run_id: r1
             - kind: source
               source:
-                execution_seq: 1
+                execution_seq: 5
                 path: [x]
                 run_id: r1
             - kind: source
               source:
-                execution_seq: 1
+                execution_seq: 5
                 path: [x]
                 run_id: r1
             kind: scalar
@@ -106,19 +119,22 @@ expect:
       seed:
         v: 3
   - [node_started, outer/__start__]
+  - - pool_commit
+    - outer/__start__
+    - value:
+        v: 3
   - - node_succeeded
     - outer/__start__
-    - forward_capture:
-        bound_inputs:
-          v: 3
+    - commit: 11
+      forward_capture:
+        bound_inputs: {v: 3}
         input_names: [v]
         node_data:
           input_output_paths:
             v: [v]
         route:
           children:
-          - kind: literal
-            value_json: 3
+          - {kind: literal, value_json: 3}
           kind: record
           names: [v]
         scope:
@@ -129,15 +145,16 @@ expect:
             kind: call
             static_path: [outer]
           static_path: [outer, __start__]
-      value:
-        v: 3
   - [node_started, outer/__end__]
+  - - pool_commit
+    - outer/__end__
+    - value: 3
+      key: outer
   - - node_succeeded
     - outer/__end__
-    - commit_target: outer
+    - commit: 14
       forward_capture:
-        bound_inputs:
-          result: 3
+        bound_inputs: {result: 3}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -147,7 +164,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 5
+              execution_seq: 10
               path: [v]
               run_id: r1
           kind: record
@@ -160,13 +177,15 @@ expect:
             kind: call
             static_path: [outer]
           static_path: [outer, __end__]
-      value: 3
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: 3
   - - node_succeeded
     - __end__
-    - forward_capture:
-        bound_inputs:
-          result: 3
+    - commit: 17
+      forward_capture:
+        bound_inputs: {result: 3}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -176,7 +195,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 7
+              execution_seq: 13
               path: []
               run_id: r1
           kind: record
@@ -186,7 +205,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: 3
   - - backward_started
     - null
     - attempt_id: 1
@@ -201,7 +219,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 10
             path: []
             run_id: r1
         - contribution_index: 1
@@ -209,7 +227,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 10
             path: []
             run_id: r1
         - contribution_index: 2
@@ -217,7 +235,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 10
             path: []
             run_id: r1
         feedback:
@@ -231,7 +249,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
+          execution_seq: 5
           path: []
           run_id: r1
       - attribution: []
@@ -242,7 +260,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 3
+          execution_seq: 8
           path: []
           run_id: r1
       - attribution:
@@ -251,7 +269,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 13
             path: []
             run_id: r1
         feedback:
@@ -263,7 +281,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 5
+          execution_seq: 10
           path: []
           run_id: r1
       - attribution:
@@ -272,7 +290,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 9
+            execution_seq: 16
             path: []
             run_id: r1
         feedback: [good]
@@ -283,7 +301,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -300,7 +318,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 9
+          execution_seq: 16
           path: []
           run_id: r1
       proposals: []

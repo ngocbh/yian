@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |2
 
   id: bool_flag
@@ -31,10 +31,20 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        flag: ture
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {flag: ture}
   - [node_started, __start__]
   - - node_failed
     - __start__

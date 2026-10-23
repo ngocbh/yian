@@ -133,10 +133,13 @@ for (const numWorkers of [0, 8]) {
       // node stays unfinished in the log.
       expect(error).toBe(stop.signal.reason);
       expect((ended - stoppedAt) / 1000).toBeLessThan(STOP_WITHIN);
-      // START succeeded; `call` started and never finished.
+      // The run start (RunStarted and four commits); START succeeded; `call` started and never
+      // finished.
       expect(readRunLog(log).map((envelope) => envelope.kind)).toEqual([
         "run_started",
+        ...Array(4).fill("pool_commit"),
         "node_started",
+        "pool_commit",
         "node_succeeded",
         "node_started",
         "run_stopped",

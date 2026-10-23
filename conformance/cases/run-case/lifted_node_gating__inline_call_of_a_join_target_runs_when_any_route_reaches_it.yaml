@@ -2,6 +2,7 @@
 # Pins: a call lifted from a host two CASEs route to runs when the second one reaches it.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -89,17 +90,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        go: false
-        other: true
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {go: false, other: true}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         go: false
         other: true
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, c1]
   - - node_routed
     - c1
@@ -115,28 +128,43 @@ expect:
       seed:
         tag: publish
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         tag: publish
-  - [node_started, __call_0/fx]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 15}
+  - [node_started, __call_0/fx]
+  - - pool_commit
     - __call_0/fx
     - value: publish
+  - - node_succeeded
+    - __call_0/fx
+    - {commit: 18}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: publish
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: publish
+    - {commit: 21}
   - [node_started, publish]
-  - - node_succeeded
+  - - pool_commit
     - publish
     - value: published publish
-  - [node_started, __end__]
   - - node_succeeded
+    - publish
+    - {commit: 24}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         r: published publish
+  - - node_succeeded
+    - __end__
+    - {commit: 27}
   events:
   - [RunStarted]
   - - NodeStarted

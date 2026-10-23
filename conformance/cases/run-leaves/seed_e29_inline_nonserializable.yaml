@@ -2,7 +2,7 @@
 # An inline CODE return holding a non-yian value fails `contract.output` at its `output:`.
 kind: run
 # The non-yian value and its message differ by language.
-rules: [code]
+rules: [code, run-log]
 flow: |
   # e29 — an inline CODE body returns a value with a non-JSON member nested inside (a bare
   # object in a dict). RUNTIME: the output boundary rejects it, as it does for any node
@@ -53,9 +53,14 @@ expect:
       # The declared type `object` on line 14.
       frames: [{label: flow.yaml, range: [14, 13, 14, 19]}]
   trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: X}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [pool_commit, __start__, {value: {topic: X}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, bad]
     - - node_failed
       - bad

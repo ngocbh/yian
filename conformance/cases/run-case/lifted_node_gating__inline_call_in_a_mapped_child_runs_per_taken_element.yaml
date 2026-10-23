@@ -2,6 +2,7 @@
 # Pins: in a MAP over a child flow, the child's lifted call runs only for the element on its route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -111,17 +112,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        go: true
-        other: false
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {go: true, other: false}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         go: true
         other: false
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, m]
   - - node_expanded
     - m
@@ -130,19 +143,28 @@ expect:
       - go: true
       - go: false
   - [node_started, m/__start__]
-  - - node_succeeded
+  - - pool_commit
     - m/__start__
     - value: {}
-  - [node_started, m#0/__start__]
   - - node_succeeded
+    - m/__start__
+    - {commit: 11}
+  - [node_started, m#0/__start__]
+  - - pool_commit
     - m#0/__start__
     - value:
         go: true
-  - [node_started, m#1/__start__]
   - - node_succeeded
+    - m#0/__start__
+    - {commit: 14}
+  - [node_started, m#1/__start__]
+  - - pool_commit
     - m#1/__start__
     - value:
         go: false
+  - - node_succeeded
+    - m#1/__start__
+    - {commit: 17}
   - [node_started, m#0/gate]
   - - node_routed
     - m#0/gate
@@ -158,45 +180,72 @@ expect:
       seed:
         tag: child
   - [node_started, m#1/skip_it]
-  - - node_succeeded
+  - - pool_commit
     - m#1/skip_it
     - value: skipped
-  - [node_started, m#0/__call_0/__start__]
   - - node_succeeded
+    - m#1/skip_it
+    - {commit: 26}
+  - [node_started, m#0/__call_0/__start__]
+  - - pool_commit
     - m#0/__call_0/__start__
     - value:
         tag: child
-  - [node_started, m#1/__end__]
   - - node_succeeded
+    - m#0/__call_0/__start__
+    - {commit: 29}
+  - [node_started, m#1/__end__]
+  - - pool_commit
     - m#1/__end__
     - value: skipped
-  - [node_started, m#0/__call_0/fx]
   - - node_succeeded
+    - m#1/__end__
+    - {commit: 32}
+  - [node_started, m#0/__call_0/fx]
+  - - pool_commit
     - m#0/__call_0/fx
     - value: child
+  - - node_succeeded
+    - m#0/__call_0/fx
+    - {commit: 35}
   - [node_started, m#0/__call_0/__end__]
+  - - pool_commit
+    - m#0/__call_0/__end__
+    - value: child
+      key: m#0/__call_0
   - - node_succeeded
     - m#0/__call_0/__end__
-    - commit_target: m#0/__call_0
-      value: child
+    - {commit: 38}
   - [node_started, m#0/publish]
-  - - node_succeeded
+  - - pool_commit
     - m#0/publish
     - value: child
-  - [node_started, m#0/__end__]
   - - node_succeeded
+    - m#0/publish
+    - {commit: 41}
+  - [node_started, m#0/__end__]
+  - - pool_commit
     - m#0/__end__
     - value: child
+  - - node_succeeded
+    - m#0/__end__
+    - {commit: 44}
   - [node_started, m/__end__]
+  - - pool_commit
+    - m/__end__
+    - value: [child, skipped]
+      key: m
   - - node_succeeded
     - m/__end__
-    - commit_target: m
-      value: [child, skipped]
+    - {commit: 47}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
         r: [child, skipped]
+  - - node_succeeded
+    - __end__
+    - {commit: 50}
   events:
   - [RunStarted]
   - - NodeStarted

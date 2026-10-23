@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: loop-omitted
@@ -66,17 +67,30 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        cfg:
-          limit: 2
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        cfg: {limit: 2}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         cfg:
           limit: 2
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, repeat]
   - - node_expanded
     - repeat
@@ -87,21 +101,30 @@ expect:
         n: 0
       - 0
   - [node_started, repeat#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - repeat#0/__start__
     - value:
         cfg:
           limit: 2
         n: 0
-  - [node_started, repeat#0/inc]
   - - node_succeeded
+    - repeat#0/__start__
+    - {commit: 11}
+  - [node_started, repeat#0/inc]
+  - - pool_commit
     - repeat#0/inc
     - value: 1
-  - [node_started, repeat#0/__end__]
   - - node_succeeded
+    - repeat#0/inc
+    - {commit: 14}
+  - [node_started, repeat#0/__end__]
+  - - pool_commit
     - repeat#0/__end__
     - value:
         n: 1
+  - - node_succeeded
+    - repeat#0/__end__
+    - {commit: 17}
   - [node_started, repeat~1]
   - - node_expanded
     - repeat~1
@@ -112,36 +135,51 @@ expect:
         n: 1
       - 1
   - [node_started, repeat#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - repeat#1/__start__
     - value:
         cfg:
           limit: 2
         n: 1
-  - [node_started, repeat#1/inc]
   - - node_succeeded
+    - repeat#1/__start__
+    - {commit: 22}
+  - [node_started, repeat#1/inc]
+  - - pool_commit
     - repeat#1/inc
     - value: 2
-  - [node_started, repeat#1/__end__]
   - - node_succeeded
+    - repeat#1/inc
+    - {commit: 25}
+  - [node_started, repeat#1/__end__]
+  - - pool_commit
     - repeat#1/__end__
     - value:
         n: 2
-  - [node_started, repeat~2]
   - - node_succeeded
+    - repeat#1/__end__
+    - {commit: 28}
+  - [node_started, repeat~2]
+  - - pool_commit
     - repeat~2
-    - commit_target: repeat
-      value:
+    - value:
         cfg:
           limit: 2
         n: 2
-  - [node_started, __end__]
+      key: repeat
   - - node_succeeded
+    - repeat~2
+    - {commit: 31}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         cfg:
           limit: 2
         n: 2
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

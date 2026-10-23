@@ -87,9 +87,7 @@ import {
   BackwardStartedRecord,
   canonicalSeed,
   canonicalTyped,
-  decodePool,
   decodeRecord,
-  encodePool,
   encodeRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -101,6 +99,7 @@ import {
   NodeStepRecord,
   NodeSucceededRecord,
   type OutcomeCarriers,
+  PoolCommitRecord,
   RecordEnvelope,
   type FlowSource,
   type RecordedSkill,
@@ -123,6 +122,7 @@ import {
   selectSeedRoute,
   SourceEntry,
   sameSourceEntry,
+  SYSTEM_PREFIX,
   TraceDelta,
   TraceOccurrence,
   TraceTerminal,
@@ -330,6 +330,16 @@ export class RunState {
   numWorkers = 0;
   /** The canonical caller-supplied START priming record, kept across START's commit. */
   input: JsonObject = {};
+  /**
+   * Whether the run start is complete: its last commit, the START inputs', is applied. Until then
+   * only the run start's commits may follow `RunStarted`, and no node is ready.
+   */
+  inputsCommitted = false;
+  /**
+   * The output commit of each in-flight node that no success has accepted yet. The node's
+   * `NodeSucceeded` applies it to the pool; a resume drops it, and the node writes a new one.
+   */
+  pendingCommits = new Map<string, PendingCommit>();
   /** Run-resolved agent configuration by stable static node path. */
   effectiveLlmByStaticPath: Record<string, JsonObject> = {};
   /**
@@ -391,14 +401,25 @@ export class RunState {
   }
 }
 
-/** The fully resolved inputs `prepareRunStarted` builds the first authoritative record from. */
+/** A node's output commit waiting for the node's success. */
+export interface PendingCommit {
+  /** The seq of the `PoolCommitRecord`. */
+  readonly seq: number;
+  /** The pool key the value is written under. */
+  readonly key: string;
+  /** The value's canonical typed wire text. */
+  readonly valueJson: string;
+}
+
+/**
+ * The fully resolved configuration `prepareRunStarted` builds the first authoritative record from.
+ * The run's inputs and system values follow it as commits (`prepareInitialCommit`).
+ */
 export interface RunStartData {
-  /** The non-empty identity the pool, the state and the enclosing log share. */
+  /** The non-empty identity the state and the enclosing log share. */
   runId: string;
   /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
   flowFingerprint: string;
-  /** The complete pool, including the system values and the primed START record. */
-  initialPool: VariablePool;
   /** START's narrowed per-run wiring. */
   startWiringOverride: Readonly<Record<string, unknown>>;
   /** The complete resolved agent configuration by stable static path. */
@@ -479,6 +500,18 @@ interface NodeStepDelta {
 interface RunStoppedDelta {
   readonly kind: "stopped";
   readonly nodeIds: readonly string[];
+}
+
+/**
+ * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
+ * `valueJson` is the value's canonical typed wire text.
+ */
+interface CommitPlan extends PlanAnchors {
+  readonly kind: "commit";
+  readonly nodeId: string;
+  readonly key: string;
+  readonly valueJson: string;
+  readonly initial: boolean;
 }
 
 /** One dispatch, resume, step or stop. */
@@ -588,7 +621,7 @@ interface BackwardPlan extends PlanAnchors {
 }
 
 /** Every plan kind a `PreparedTransition` carries. */
-type PreparedPlan = RunStartedPlan | FrontierPlan | SuccessPlan | RoutePlan | FailurePlan | GrowthPlan | BackwardPlan;
+type PreparedPlan = RunStartedPlan | CommitPlan | FrontierPlan | SuccessPlan | RoutePlan | FailurePlan | GrowthPlan | BackwardPlan;
 
 /**
  * One canonical record plus its already validated total state-change plan. Frozen.
@@ -688,15 +721,16 @@ export class HistoricalLogCursor implements RunLog {
 }
 
 /**
- * Prepare canonical initialization without mutating `state`.
+ * Prepare canonical initialization without mutating `state`. The run start then commits the
+ * system values and the START inputs (`prepareInitialCommit`); no node is ready before.
  *
  * @param state A pristine state whose private graph holds its synthesized START node.
- * @param data The complete pool, identity, configuration and worker count of the run.
+ * @param data The identity, configuration and worker count of the run.
  * @returns The canonical `RunStartedRecord`, its frozen total plan and its observer.
  * @throws TypeError when `state` isn't exactly a `RunState`, or the worker count isn't a safe
  *   integer.
- * @throws RangeError when the state isn't pristine, identity disagrees across the inputs, START
- *   is missing or unprimed, or a field breaks the public run-record wire contract.
+ * @throws RangeError when the state isn't pristine, START is missing, or a field breaks the
+ *   public run-record wire contract.
  */
 export function prepareRunStarted(state: RunState, data: RunStartData): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareRunStarted expects a RunState");
@@ -706,22 +740,9 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
   if (!Number.isSafeInteger(data.numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
   if (data.numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
 
-  // Encode then decode before any identity check, so live initialization and replay both reason
-  // about the same strict durable pool representation.
-  const canonicalPool = decodePool(encodePool(data.initialPool));
-  if (canonicalPool.startId !== startId) {
-    throw new RangeError(
-      `initial pool start_id mismatch: expected ${reprText(startId)}, found ${reprText(canonicalPool.startId)}`,
-    );
-  }
-  if (canonicalPool.resolve("system", ["run_id"]) !== data.runId) {
-    throw new RangeError("initial pool system.run_id must equal RunStartData.run_id");
-  }
-  if (!isRecord(canonicalPool.get(startId))) throw new RangeError("initial pool primed START value must be a dict");
 
   const candidate = new RunStartedRecord({
     flowFingerprint: data.flowFingerprint,
-    initialPool: encodePool(canonicalPool),
     startWiringOverride: data.startWiringOverride,
     effectiveLlmByStaticPath: data.effectiveLlmByStaticPath,
     numWorkers: data.numWorkers,
@@ -801,29 +822,75 @@ export function prepareNodeStep(state: RunState, nodeId: string, step: unknown):
 }
 
 /**
- * Prepare one canonical output commit and its newly ready successors.
+ * Prepare one commit of the run start: a system value (`key` `system.<name>`) or, last, the START
+ * inputs (`key` the START's id). It applies at once, and the START inputs' commit makes START
+ * ready.
  *
- * @param state An initialized nonterminal state with `nodeId` in flight.
+ * @param state An initialized state whose run start is incomplete.
+ * @param key `system.<name>`, or the START's id.
+ * @param value The value; the START inputs must be a record.
+ * @returns The canonical `PoolCommitRecord`, which names the START, and its plan, with no
+ *   observers.
+ * @throws TypeError when `state` or `key` has the wrong type.
+ * @throws RangeError when the run start is complete, `key` is neither form, the system value is
+ *   already committed, `system.run_id` isn't the run id, or the START inputs aren't a record or
+ *   come before `system.run_id`.
+ * @throws TypeCheckError when `value` isn't a yian value.
+ */
+export function prepareInitialCommit(state: RunState, key: string, value: unknown): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareInitialCommit expects a RunState");
+  if (typeof key !== "string") throw new TypeError("key must be a string");
+  const [wire] = canonicalTyped(value, null);
+  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, key, wire));
+}
+
+/**
+ * Commit the run start's commits from `pool`, right after `RunStarted`: its system values in key
+ * order, then its START inputs.
+ *
+ * @param log The run's log, which holds `RunStarted` and nothing after it.
+ * @param state The state `RunStarted` initialized.
+ * @param pool The run's pool: the system values, and the START inputs as its only stored value.
+ * @throws RangeError when the pool's START isn't the flow's, it stores another value, or a commit
+ *   is refused (see `prepareInitialCommit`).
+ */
+export function commitInitialPool(log: RunLog, state: RunState, pool: VariablePool): void {
+  const startId = state.flow.startId;
+  if (pool.startId !== startId || [...pool.store.keys()].some((key) => key !== startId)) {
+    throw new RangeError(`the initial pool must store only the START inputs, under ${reprText(startId)}`);
+  }
+  for (const name of [...pool.system.keys()].sort(compareCodeUnits)) {
+    commitPrepared(log, state, prepareInitialCommit(state, `${SYSTEM_PREFIX}${name}`, pool.system.get(name)));
+  }
+  commitPrepared(log, state, prepareInitialCommit(state, startId, pool.store.get(startId) ?? null));
+}
+
+/**
+ * Prepare one in-flight node's output commit. It waits on the node until the node's success
+ * (`prepareNodeSucceeded`) accepts it.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and no pending commit.
  * @param nodeId The exact id of the executing node that produced `output`.
  * @param output The yian value (or `TypedValue`) to check against the effective target's output
  *   type; the checks and the stored value read it as given.
  * @param options.commitAs The explicit commit target; `null` (the default) falls back to the
  *   executing node's baked target, then to `nodeId` itself.
- * @param options.evidence Frozen visible evidence captured during this exact evaluation.
- * @param options.forwardCapture The canonical binding capture, required exactly when learning.
- * @returns The canonical `NodeSucceededRecord` and a detached append-before-apply plan.
- * @throws TypeError when a carrier has the wrong type or the target's contract is malformed.
- * @throws RangeError when the state, the executing node or its baked target is invalid.
+ * @returns The canonical `PoolCommitRecord` and a detached append-before-apply plan, with no
+ *   observers.
+ * @throws TypeError when `state` or `nodeId` has the wrong type, or the target's contract is
+ *   malformed.
+ * @throws RangeError when the state, the executing node or its baked target is invalid, or the
+ *   node already has a pending commit.
  * @throws NodeDataError when `commitAs` or `output` is rejected: the output nests too deep,
  *   violates its target's type, or isn't a yian value. `original` holds the value layer's error.
  */
-export function prepareNodeSucceeded(
+export function preparePoolCommit(
   state: RunState,
   nodeId: string,
   output: unknown,
-  options: { commitAs?: string | null } & OutcomeCarriers = {},
+  options: { commitAs?: string | null } = {},
 ): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
+  if (!isExactly(state, RunState)) throw new TypeError("preparePoolCommit expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
   const commitAs: unknown = options.commitAs ?? null;
   if (commitAs !== null && typeof commitAs !== "string") {
@@ -831,7 +898,7 @@ export function prepareNodeSucceeded(
   }
   if (commitAs === "") throw new NodeDataError(new RangeError("commit_as must be non-empty when supplied"));
   requireInitializedNonterminal(state);
-  requireSucceedingNode(state, nodeId);
+  requireCommittingNode(state, nodeId);
 
   const node = state.flow.nodes.get(nodeId)!;
   const nodeTarget: unknown = node.commitAs;
@@ -846,25 +913,46 @@ export function prepareNodeSucceeded(
   }
   const declaredType = nodeOutputType(targetNode);
   const outputContract = targetNode.outputContract;
-  // Replay (`validateSuccessValue`) skips the nesting check on purpose, so logs recorded before
-  // the limit still replay.
+  // Replay (`validateNodeCommit`) skips the nesting check on purpose, so logs recorded before the
+  // limit still replay.
   const enclosingLevels = node.commitsInputRecord ? -1 : 0;
   let valueWire: TypedWire;
-  let typed: TypedValue;
   try {
     rejectDeepNesting(output, "output", { enclosingLevels });
-    [valueWire, typed] = canonicalOutputValue(output, outputContract, declaredType);
+    [valueWire] = canonicalOutputValue(output, outputContract, declaredType);
   } catch (error) {
     const path = error instanceof TypeCheckError ? error.path : [];
     throw new NodeDataError(error, outputContractOrigin(outputContract, path));
   }
+  return prepareCommitTransition(state, new PoolCommitRecord(nodeId, target, valueWire), false);
+}
+
+/**
+ * Prepare accepting an in-flight node's pending commit and its newly ready successors.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and its commit pending.
+ * @param nodeId The exact id of the executing node.
+ * @param options.evidence Frozen visible evidence captured during this exact evaluation.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @returns The canonical `NodeSucceededRecord`, naming the commit's seq, and a detached
+ *   append-before-apply plan.
+ * @throws TypeError when a carrier has the wrong type.
+ * @throws RangeError when the state or the executing node is invalid, or the node has no pending
+ *   commit.
+ */
+export function prepareNodeSucceeded(state: RunState, nodeId: string, options: OutcomeCarriers = {}): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  requireInitializedNonterminal(state);
+  requireSucceedingNode(state, nodeId);
+  const pending = state.pendingCommits.get(nodeId);
+  if (pending === undefined) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
   return prepareSuccessTransition(
     state,
-    new NodeSucceededRecord(nodeId, target, valueWire, {
+    new NodeSucceededRecord(nodeId, pending.seq, {
       evidence: options.evidence ?? null,
       forwardCapture: options.forwardCapture ?? null,
     }),
-    typed,
   );
 }
 
@@ -1011,9 +1099,17 @@ export function prepareRecord(
 
   requireInitializedNonterminal(state);
 
+  if (isExactly(record, PoolCommitRecord)) {
+    if (state.inputsCommitted) validateNodeCommit(state, record);
+    else validateInitialCommit(state, record);
+    return prepareCommitTransition(state, record, !state.inputsCommitted);
+  }
+  if (!state.inputsCommitted) {
+    throw new RangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
+  }
   if (isExactly(record, NodeSucceededRecord)) {
-    const typed = validateSuccessValue(state, record);
-    return prepareSuccessTransition(state, record, typed);
+    validateSuccessCommit(state, record);
+    return prepareSuccessTransition(state, record);
   }
   if (isExactly(record, NodeRoutedRecord)) {
     validateRouteRecord(state, record);
@@ -1087,10 +1183,40 @@ export function prepareRecord(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
+/** Freeze one commit's plan and its canonical public record; `initial` for a run-start commit. */
+function prepareCommitTransition(state: RunState, record: PoolCommitRecord, initial: boolean): PreparedTransition {
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, PoolCommitRecord)) throw new TypeError("pool-commit envelope decoded to a different record kind");
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: CommitPlan = Object.freeze({
+    kind: "commit",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope, { initialCommit: initial }),
+    nodeId: canonical.nodeId,
+    key: canonical.key,
+    valueJson: logJson(canonical.value),
+    initial,
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
+}
+
 /** Freeze one fully validated success delta and its canonical public record. */
-function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord, typed: TypedValue): PreparedTransition {
+function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord): PreparedTransition {
   validateNodeEvidence(state, record.nodeId, record.evidence);
-  const delta = prepareSuccessDelta(state, record, typed);
+  // The caller checked that the record names the node's pending commit.
+  const delta = prepareSuccessDelta(state, record, state.pendingCommits.get(record.nodeId)!);
   const terminal = prepareTerminalDelta(state, {
     completingNodeId: delta.nodeId,
     newlyReadyIds: delta.newlyReadyIds,
@@ -1128,6 +1254,7 @@ function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord, 
       terminalOutputJson: terminal?.outputJson ?? null,
       terminalFailure: terminal?.failure ?? null,
       writerFiles: files,
+      committed: { key: delta.commitTarget, valueJson: delta.valueJson },
     }),
     delta,
     terminal,
@@ -1433,6 +1560,7 @@ function prepareBackwardTransition(state: RunState, record: RunRecord): Prepared
 /** Every plan kind `commitPrepared` dispatches. */
 const PLAN_KINDS: ReadonlySet<string> = new Set([
   "runStarted",
+  "commit",
   "frontier",
   "success",
   "route",
@@ -1471,6 +1599,9 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
     case "runStarted":
       observers = commitRunStarted(log, state, prepared);
       break;
+    case "commit":
+      observers = commitPoolCommit(log, state, prepared);
+      break;
     case "frontier":
       observers = commitFrontier(log, state, prepared);
       break;
@@ -1505,13 +1636,14 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
 function prepareRecordTrace(
   state: RunState,
   envelope: RecordEnvelope,
-  options: Omit<PrepareTraceOptions, "rootEndId" | "rootInputNames"> = {},
+  options: Omit<PrepareTraceOptions, "rootStartId" | "rootEndId" | "rootInputNames"> = {},
 ): TraceDelta | null {
   const record = envelope.record;
   const nodeId = outcomeNodeId(record);
   const started = isExactly(record, RunStartedRecord);
   return prepareTrace(state.trace, envelope, nodeId === null ? null : (state.flow.nodes.get(nodeId) ?? null), {
     ...options,
+    rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
   });
@@ -1601,12 +1733,12 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
       !Array.isArray(installed) ||
       installed.length !== 2 ||
       typeof installed[0] !== "string" ||
-      installed[0] !== record.commitTarget
+      installed[0] !== plan.delta.commitTarget
     ) {
       throw new RangeError("physical trace writer disagrees with the accepted output target");
     }
     writer = new SourceEntry(source, prepared.expectedSequence, plan.delta.valueJson, plan.files);
-    if (record.commitTarget === state.flow.endId) rootWriter = writer;
+    if (plan.delta.commitTarget === state.flow.endId) rootWriter = writer;
   } else if (delta.writer !== null) {
     throw new RangeError("only an accepted output can install a physical trace writer");
   }
@@ -1724,7 +1856,6 @@ export function replayRecords(
   const prepared = prepareRunStarted(state, {
     runId: first.runId,
     flowFingerprint: start.flowFingerprint,
-    initialPool: decodePool(start.initialPool),
     startWiringOverride: start.startWiringOverride,
     effectiveLlmByStaticPath: start.effectiveLlmByStaticPath,
     numWorkers: start.numWorkers,
@@ -1776,6 +1907,42 @@ function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransi
   appendAndVerify(log, prepared);
   applyRunStarted(state, apply);
   return apply.observers;
+}
+
+/**
+ * Validate, append and apply one pool commit: a run-start commit writes the pool at once (the
+ * START inputs' also make START ready); a node's waits on the node for its success.
+ */
+function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "commit") throw new TypeError("pool-commit commit requires a commit plan");
+  if (!isExactly(prepared.record, PoolCommitRecord)) throw new TypeError("commit plan requires a PoolCommitRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  if (plan.initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
+  if ((state.trace === null) !== (plan.traceDelta === null)) {
+    throw new RangeError("pool-commit trace delta disagrees with recorded learning");
+  }
+  const value = decodeTyped(plan.valueJson);
+  const startInputs = plan.initial && plan.key === plan.startId;
+  const input = startInputs ? (canonicalSeed(value.toObject())[1] as JsonObject) : null;
+
+  appendAndVerify(log, prepared);
+  if (!plan.initial) {
+    const pending: PendingCommit = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.valueJson };
+    state.pendingCommits.set(plan.nodeId, Object.freeze(pending));
+  } else if (input === null) {
+    state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value);
+  } else {
+    state.pool.store.set(plan.key, value);
+    state.input = input;
+    state.ready = [plan.startId];
+    state.inputsCommitted = true;
+  }
+  state.nextSequence = prepared.expectedSequence + 1;
+  return [];
 }
 
 /** Validate, append and apply one sparse dispatch, recovery, step or stop delta. */
@@ -1844,6 +2011,8 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       }
       state.inFlight.clear();
       state.acceptedStarts.clear();
+      // A retried node runs again and writes a new commit; its orphan stays in the log, unread.
+      state.pendingCommits.clear();
       state.numWorkers = delta.numWorkers;
       break;
     case "step":
@@ -1873,13 +2042,14 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   requireOutcomeTraceScope(state, prepared);
   requireOutcomeTraceTerminal(state, prepared);
   const delta = plan.delta;
-  if (!(record.nodeId === delta.nodeId && record.commitTarget === delta.commitTarget)) {
+  if (record.nodeId !== delta.nodeId || state.pendingCommits.get(record.nodeId)?.seq !== record.commit) {
     throw new RangeError("success record and prevalidated delta disagree");
   }
   const apply = materializeSuccess(plan);
 
   appendAndVerify(log, prepared);
   state.pool.store.set(delta.commitTarget, apply.value);
+  state.pendingCommits.delete(delta.nodeId);
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const edgeId of delta.outgoingEdgeIds) state.edgeState.set(edgeId, NodeState.TAKEN);
   for (const nodeId of delta.edgeHeads) dropUnknownIncoming(state, nodeId);
@@ -2007,6 +2177,7 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
     delta.occurrence,
     delta.handler,
     delta.writer,
+    delta.systemValue,
     delta.consumedConnection,
     delta.boundaryUpdate,
     delta.rootStartSource,
@@ -2070,6 +2241,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     delta.occurrence,
     delta.handler,
     delta.writer,
+    delta.systemValue,
     delta.consumedConnection,
     delta.boundaryUpdate,
     delta.rootStartSource,
@@ -2222,6 +2394,7 @@ function requireInitialized(state: RunState): void {
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
+    isExactly(state.pendingCommits, Map) &&
     isExactly(state.interruptedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
@@ -2256,9 +2429,10 @@ function requireInitialized(state: RunState): void {
     [...state.nodeSteps.keys()].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
     [...state.nodeSteps.values()].some(
       (steps) => !Array.isArray(steps) || steps.length === 0 || steps.some((step) => !isRecord(step)),
-    )
+    ) ||
+    [...state.pendingCommits.keys()].some((nodeId) => !state.inFlight.has(nodeId))
   ) {
-    throw new RangeError("node starts and steps must match the unsettled invocations");
+    throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
   if (
     [...state.interruptedAttempts].some(
@@ -2430,6 +2604,24 @@ function forgetNodeSteps(state: RunState, nodeId: string): void {
   state.nodeSteps.delete(nodeId);
 }
 
+/** Require an existing unknown node in the in-flight frontier, with no pending commit. */
+function requireCommittingNode(state: RunState, nodeId: string): void {
+  if (!state.flow.nodes.has(nodeId) || state.nodeState.get(nodeId) !== NodeState.UNKNOWN || !state.inFlight.has(nodeId)) {
+    throw new RangeError(`pool_commit node ${reprText(nodeId)} is not in flight`);
+  }
+  const pending = state.pendingCommits.get(nodeId);
+  if (pending !== undefined) {
+    throw new RangeError(`pool_commit node ${reprText(nodeId)} already has a pending commit at seq ${pending.seq}`);
+  }
+}
+
+/** Reject an outcome other than success for a node whose commit only its success accepts. */
+function requireNoPendingCommit(state: RunState, nodeId: string, kind: string): void {
+  if (state.pendingCommits.has(nodeId)) {
+    throw new RangeError(`${kind} node ${reprText(nodeId)} has a pending pool_commit only its success accepts`);
+  }
+}
+
 /** Require an existing unknown node in the in-flight frontier. */
 function requireSucceedingNode(state: RunState, nodeId: string): void {
   if (!state.flow.nodes.has(nodeId)) {
@@ -2451,6 +2643,7 @@ function requireRoutingNode(state: RunState, nodeId: string): void {
     throw new RangeError(`NodeRouted node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeRouted node ${reprText(nodeId)} is not in-flight`);
+  requireNoPendingCommit(state, nodeId, "NodeRouted");
 }
 
 /** Require an existing unknown node in the ordered in-flight frontier. */
@@ -2463,6 +2656,7 @@ function requireFailingNode(state: RunState, nodeId: string): void {
     throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
+  requireNoPendingCommit(state, nodeId, "NodeFailed");
 }
 
 /** Require an existing unknown spawner in the ordered in-flight frontier. */
@@ -2475,6 +2669,7 @@ function requireExpandingNode(state: RunState, nodeId: string): void {
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not in-flight`);
   if (node.isSpawner !== true) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
+  requireNoPendingCommit(state, nodeId, "NodeExpanded");
 }
 
 /** Validate a durable expansion's exact carriers and its executing spawner. */
@@ -3302,35 +3497,77 @@ function validateFailureRecord(state: RunState, record: NodeFailedRecord): void 
   validateNodeEvidence(state, nodeId, record.evidence);
 }
 
-/** Validate one replayed value against its explicit commit target exactly once. */
-function validateSuccessValue(state: RunState, record: NodeSucceededRecord): TypedValue {
-  if (typeof record.nodeId !== "string") throw new TypeError("NodeSucceededRecord node_id must be a string");
-  if (typeof record.commitTarget !== "string") {
-    throw new TypeError("NodeSucceededRecord commit_target must be a string");
+/**
+ * Validate one run-start commit: a system value, or the START inputs after `system.run_id`.
+ *
+ * @throws RangeError when it names another node than the START, its key is neither form, the
+ *   system value is already committed, `system.run_id` isn't the run id, or the START inputs
+ *   aren't a record or come before `system.run_id`.
+ */
+function validateInitialCommit(state: RunState, record: PoolCommitRecord): void {
+  const startId = state.flow.startId;
+  const { key } = record;
+  if (record.nodeId !== startId) {
+    throw new RangeError(`a run-start pool_commit must name the START ${reprText(startId)}, not ${reprText(record.nodeId)}`);
   }
-  requireSucceedingNode(state, record.nodeId);
-  const targetNode = state.flow.nodes.get(record.commitTarget);
+  const value = TypedValue.fromWire(record.value).toObject();
+  if (key === startId) {
+    if (state.pool.resolve("system", ["run_id"]) !== state.runId) {
+      throw new RangeError("the run start commits system.run_id, equal to the run id, before the START inputs");
+    }
+    if (!isRecord(value)) throw new RangeError("the START inputs' pool_commit must hold a record");
+    return;
+  }
+  const name = key.startsWith(SYSTEM_PREFIX) ? key.slice(SYSTEM_PREFIX.length) : "";
+  if (!name) {
+    throw new RangeError(
+      `a run-start pool_commit key must be system.<name> or the START ${reprText(startId)}, got ${reprText(key)}`,
+    );
+  }
+  if (state.pool.system.has(name)) throw new RangeError(`the run start commits ${reprText(key)} twice`);
+  if (name === "run_id" && value !== state.runId) throw new RangeError("system.run_id must equal the run id");
+}
+
+/**
+ * Validate one replayed node commit against its target exactly once.
+ *
+ * @throws RangeError when the node isn't in flight or already has a pending commit, the target
+ *   doesn't exist, or the value isn't canonical for it.
+ */
+function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
+  requireCommittingNode(state, record.nodeId);
+  const targetNode = state.flow.nodes.get(record.key);
   if (targetNode === undefined) {
-    throw new RangeError(`success commit target ${reprText(record.commitTarget)} does not exist in the flow`);
+    throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
   }
-  let typed: TypedValue;
-  try {
-    typed = TypedValue.fromWire(record.value);
-  } catch (error) {
-    if (!(error instanceof RangeError)) throw error;
-    throw new RangeError("NodeSucceededRecord value is not a typed value", { cause: error });
-  }
-  const [wire, decoded] = canonicalOutputValue(typed, targetNode.outputContract, nodeOutputType(targetNode));
+  const typed = TypedValue.fromWire(record.value);
+  const [wire] = canonicalOutputValue(typed, targetNode.outputContract, nodeOutputType(targetNode));
   if (logJson(wire) !== logJson(record.value)) {
-    throw new RangeError("NodeSucceededRecord value is not canonical for its target");
+    throw new RangeError("PoolCommitRecord value is not canonical for its target");
   }
-  return decoded;
+}
+
+/**
+ * Require a replayed success to name its node's pending commit.
+ *
+ * @throws RangeError when the node isn't in flight, or `commit` isn't the seq of its pending
+ *   commit.
+ */
+function validateSuccessCommit(state: RunState, record: NodeSucceededRecord): void {
+  requireSucceedingNode(state, record.nodeId);
+  const pending = state.pendingCommits.get(record.nodeId);
+  if (pending?.seq !== record.commit) {
+    throw new RangeError(
+      `node_succeeded of ${reprText(record.nodeId)} names commit ${record.commit}, ` +
+        `not its pending pool_commit ${pending === undefined ? "(none)" : pending.seq}`,
+    );
+  }
 }
 
 /** Validate the touched topology and freeze one sparse successful-output delta. */
-function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed: TypedValue): SuccessDelta {
+function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pending: PendingCommit): SuccessDelta {
   if (!isExactly(state.pool.store, Map)) throw new RangeError("success requires an exact variable-pool store");
-  const target = record.commitTarget;
+  const target = pending.key;
   const outgoingEdgeIds: string[] = [];
   const edgeHeads: string[] = [];
   const newlyReadyIds: string[] = [];
@@ -3391,7 +3628,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, typed
   return Object.freeze({
     nodeId: record.nodeId,
     commitTarget: target,
-    valueJson: logJson(typed.toWire()),
+    valueJson: pending.valueJson,
     outgoingEdgeIds: Object.freeze(outgoingEdgeIds),
     edgeHeads: Object.freeze(edgeHeads),
     newlyReadyIds: Object.freeze(newlyReadyIds),
@@ -4044,6 +4281,7 @@ function requirePristine(state: RunState): void {
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
+    isExactly(state.pendingCommits, Map) &&
     isExactly(state.interruptedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
@@ -4070,6 +4308,8 @@ function requirePristine(state: RunState): void {
     state.acceptedStarts.size === 0 &&
     state.nodeStarts.size === 0 &&
     state.nodeSteps.size === 0 &&
+    state.pendingCommits.size === 0 &&
+    state.inputsCommitted === false &&
     state.interruptedAttempts.size === 0 &&
     state.lastStopSequence === null &&
     state.result === null &&
@@ -4127,7 +4367,6 @@ function requireOriginatingFlow(state: RunState, plan: PreparedPlan): void {
 
 /** The detached values one initialization installs, all built before the durable append. */
 interface RunStartedApply {
-  pool: VariablePool;
   nodeState: Map<string, NodeState>;
   edgeState: Map<string, NodeState>;
   ready: string[];
@@ -4141,7 +4380,6 @@ interface RunStartedApply {
   flowFingerprint: string;
   nextSequence: number;
   numWorkers: number;
-  input: JsonObject;
   effectiveLlmByStaticPath: Record<string, JsonObject>;
   callTimeLlm: JsonObject | null;
   memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
@@ -4168,30 +4406,20 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     throw new RangeError("immutable RunStarted plan does not match its transition");
   }
 
-  const pool = decodePool(record.initialPool);
   const startId = plan.startId;
-  if (pool.startId !== startId) throw new RangeError("immutable RunStarted pool start_id mismatch");
-  if (pool.resolve("system", ["run_id"]) !== envelope.runId) {
-    throw new RangeError("immutable RunStarted pool system.run_id mismatch");
-  }
-  const primedStart = pool.get(startId);
-  if (!isRecord(primedStart)) throw new RangeError("immutable RunStarted pool START value must be a dict");
-
   const wiring = canonicalSeed(record.startWiringOverride)[1];
   const effective = canonicalSeed(record.effectiveLlmByStaticPath)[1];
-  const input = canonicalSeed(primedStart)[1];
   if (!isRecord(wiring)) throw new TypeError("canonical START wiring is not a dict");
   if (!isRecord(effective)) throw new TypeError("canonical effective LLM map is not a dict");
-  if (!isRecord(input)) throw new TypeError("canonical START input is not a dict");
 
   const backwardState = new RuntimeBackwardState(
     record.memories === null ? [] : record.memories.map((spec) => spec.key),
   );
   return {
-    pool,
     nodeState: new Map(state.nodeState),
     edgeState: new Map(state.edgeState),
-    ready: [startId],
+    // START becomes ready with the run start's last commit, its inputs.
+    ready: [],
     inFlight: new Set(),
     acceptedStarts: new Map(),
     terminalUnreachableFailure: null,
@@ -4202,7 +4430,6 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     flowFingerprint: record.flowFingerprint,
     nextSequence: envelope.seq + 1,
     numWorkers: record.numWorkers,
-    input: input as JsonObject,
     effectiveLlmByStaticPath: effective as Record<string, JsonObject>,
     callTimeLlm: record.callTimeLlm === null ? null : (canonicalSeed(record.callTimeLlm)[1] as JsonObject),
     memorySnapshots: record.memorySnapshots,
@@ -4224,7 +4451,6 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
 
 /** Install the already detached values with total replacement assignments only. */
 function applyRunStarted(state: RunState, apply: RunStartedApply): void {
-  state.pool = apply.pool;
   state.nodeState = apply.nodeState;
   // The constructor's `unknownIncoming` stays valid: RunStarted requires the all-UNKNOWN edge
   // states it was seeded from.
@@ -4240,7 +4466,6 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.runId = apply.runId;
   state.flowFingerprint = apply.flowFingerprint;
   state.numWorkers = apply.numWorkers;
-  state.input = apply.input;
   state.effectiveLlmByStaticPath = apply.effectiveLlmByStaticPath;
   state.callTimeLlm = apply.callTimeLlm;
   state.memorySnapshots = apply.memorySnapshots;

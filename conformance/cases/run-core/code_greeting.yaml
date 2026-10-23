@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: code-greeting
   name: code_greeting
@@ -32,13 +33,20 @@ run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: hi Ada}
   trace:
-    - [run_started, null, {inputs: {name: Ada}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {name: Ada}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {name: Ada}}]
+    - [pool_commit, __start__, {value: {name: Ada}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, greet]
-    - [node_succeeded, greet, {value: hi Ada}]
+    - [pool_commit, greet, {value: hi Ada}]
+    - [node_succeeded, greet, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: hi Ada}]
+    - [pool_commit, __end__, {value: hi Ada}]
+    - [node_succeeded, __end__, {commit: 12}]
   events:
     - [RunStarted]
     - [NodeStarted, {node_id: __start__}]

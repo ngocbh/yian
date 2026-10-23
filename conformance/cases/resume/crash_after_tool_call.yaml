@@ -1,4 +1,5 @@
 kind: resume
+rules: [run-log]
 flow: |
   id: crash-after-tool-call
   name: crash_after_tool_call
@@ -34,8 +35,8 @@ host:
         - return: F1
   human:
     ok: ["yes"]
-  # Record 3 is fetch's node_started: the tool runs, then its node_succeeded is refused.
-  crash_after_record: 3
+  # Record 8 is fetch's node_started: the tool runs, then its pool_commit is refused.
+  crash_after_record: 8
 expect:
   output:
     status: succeeded
@@ -53,14 +54,22 @@ expect:
         attempt: 1
         node: ok
   trace:
-    - [run_started, null, {inputs: {q: x}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {q: x}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {q: x}}]
+    - [pool_commit, __start__, {value: {q: x}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, fetch]
     - [run_resumed, null, {retry_node_ids: [fetch], num_workers: 0}]
     - [node_started, fetch]
-    - [node_succeeded, fetch, {value: F1}]
+    - [pool_commit, fetch, {value: F1}]
+    - [node_succeeded, fetch, {commit: 11}]
     - [node_started, ok]
-    - [node_succeeded, ok, {value: "yes"}]
+    - [pool_commit, ok, {value: "yes"}]
+    - [node_succeeded, ok, {commit: 14}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {found: F1, answer: "yes"}}]
+    - [pool_commit, __end__, {value: {found: F1, answer: "yes"}}]
+    - [node_succeeded, __end__, {commit: 17}]

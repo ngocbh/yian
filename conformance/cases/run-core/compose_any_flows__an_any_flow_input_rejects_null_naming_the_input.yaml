@@ -1,6 +1,6 @@
 # hand TS expect: The null value is shown in the text form in TS (rules: messages).
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: p
   name: p
@@ -30,10 +30,20 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        v: null
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {v: null}
   - [node_started, __start__]
   - - node_failed
     - __start__

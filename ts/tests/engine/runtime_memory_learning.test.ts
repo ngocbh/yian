@@ -69,8 +69,13 @@
  *   assigned on a `copyGraph` copy, the replayed trace's `backwardHandlers` shadowed on the
  *   instance) and `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`
  *   (2 rows; `declaredVariables` replaced on the node).
- * - `test_owner_context_root_fallback_uses_only_actual_source_zero_fields` (2 rows): on a local
- *   `startOnlyRun`, its flow's readonly `endId` assigned through a cast.
+ * - `test_owner_context_root_fallback_uses_only_actual_source_zero_fields`: only the row where START
+ *   is also the end, on a local `startOnlyRun`, its flow's readonly `endId` assigned through a
+ *   cast. A run start commits only the system values and the START inputs, so END can't hold a
+ *   preseeded result.
+ * - `test_episode_outcome_projects_a_success_value`: the committed value is passed in, as the
+ *   success names its `pool_commit`; `test_episode_refuses_a_success_without_a_typed_value` isn't
+ *   ported, since the value no longer comes from the success record.
  * - `test_owner_context_authority_errors_are_not_context_construction_failures`: each refusal pins
  *   its class and message; a `Set` stands in for Python's list table and stacks; the trace's
  *   `lookupSource` is patched on the instance, and its `Error` (Python's `KeyError`) escapes
@@ -84,7 +89,7 @@
  *   spy is restored in `finally`.
  * - `test_root_feedback_context_failure_names_no_node` and
  *   `test_root_fallback_failure_names_no_node_end_to_end` (one test): `_freeze_feedback` can't be
- *   patched and TS has no memory JSON nesting bound, so on `startOnlyRun(true)` a spy on
+ *   patched and TS has no memory JSON nesting bound, so on `startOnlyRun()` a spy on
  *   `LearnContext.fromFrozen` throws a `RangeError` on the root-fallback call (the second, after
  *   START's occurrence) and passes the others to the original; the driven failure names no node.
  *   The spy is restored in `finally`.
@@ -153,12 +158,14 @@ import {
 import * as learning from "../../src/runtime/learning.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  preparePoolCommit,
   prepareRunStarted,
   replayRecords,
   RunState,
@@ -169,13 +176,14 @@ import {
   engine,
   feedbackEntries,
   FINGERPRINT,
-  FuncNode,
   forwardCapture,
   fragmentBuilder,
+  FuncNode,
   graph,
   noGrowth,
   ownerEngine,
   POLICY,
+  prepareOutput,
   RecordingBackwardNode,
   RUN_ID,
   stacks,
@@ -351,16 +359,17 @@ test("failure JSON refuses a value that isn't exactly a Failure and revalidates 
 test("causal route episode retains the accepted failure", () => {
   const failure = new Failure({ code: "graph.terminal_unreachable", message: "No terminal route.", nodeId: "agent" });
   const record = new NodeRoutedRecord("agent", "go", { evidence: evidence(scope()), terminalFailure: failure });
-  const [status, output, failurePayload] = learning.episodeOutcome(record);
+  const [status, output, failurePayload] = learning.episodeOutcome(record, null);
   expect(status).toBe(MemoryEpisodeStatus.FAILED);
   expect(output).toBeNull();
   expect(failurePayload!.code).toBe(failure.code);
 });
 
 test("route and growth projection use closed source-neutral envelopes", () => {
-  const [, route] = learning.episodeOutcome(new NodeRoutedRecord("agent", "yes"));
+  const [, route] = learning.episodeOutcome(new NodeRoutedRecord("agent", "yes"), null);
   const [, growth] = learning.episodeOutcome(
     new NodeExpandedRecord("agent", { value: [1n, 2n] }, ["a", "z"], "b".repeat(64)),
+    null,
   );
 
   expect(route).toEqual({ kind: "route", handle: "yes" });
@@ -368,32 +377,23 @@ test("route and growth projection use closed source-neutral envelopes", () => {
 });
 
 test("an episode projects a success's canonical value and a failed record's failure JSON", () => {
-  const record = new NodeSucceededRecord("agent", "agent", { kind: "object", value: { b: 1n, a: 2.5 } });
-  const succeeded = learning.episodeOutcome(record);
+  const record = new NodeSucceededRecord("agent", 1);
+  const succeeded = learning.episodeOutcome(record, { b: 1n, a: 2.5 });
   expect(succeeded).toEqual([MemoryEpisodeStatus.SUCCEEDED, { a: 2.5, b: 1n }, null]);
   expect(Object.keys(succeeded[1] as object)).toEqual(["a", "b"]);
 
   const failure = new Failure({ code: "node.execute", message: "Failed.", nodeId: "agent" });
-  expect(learning.episodeOutcome(new NodeFailedRecord(failure))).toEqual([
+  expect(learning.episodeOutcome(new NodeFailedRecord(failure), null)).toEqual([
     MemoryEpisodeStatus.FAILED,
     null,
     failure.toJSON(),
   ]);
 
   expectError(
-    () => learning.episodeOutcome(new NodeStartedRecord("agent") as unknown as OutcomeRecord),
+    () => learning.episodeOutcome(new NodeStartedRecord("agent") as unknown as OutcomeRecord, null),
     TypeError,
     "unsupported graph outcome for episode projection",
   );
-});
-
-test("an episode refuses a success without a canonical typed value", () => {
-  // A constructed record always holds a typed wire, so the record is forged through its prototype.
-  const forged = Object.assign(Object.create(NodeSucceededRecord.prototype) as NodeSucceededRecord, {
-    nodeId: "agent",
-    value: { kind: "int" },
-  });
-  expectError(() => learning.episodeOutcome(forged), RangeError, "successful record has no canonical typed value");
 });
 
 test("owner context projects a synthetic source-free failure only to the root flow", async () => {
@@ -476,7 +476,7 @@ function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: Memo
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, node.id, { answer: 7n }, {
+    prepareOutput(log, state, node.id, { answer: 7n }, {
       evidence: evidence(memoryScope),
       forwardCapture: forwardCapture(node, { question: "q" }),
     }),
@@ -485,7 +485,7 @@ function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: Memo
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, END_ID, null, { forwardCapture: forwardCapture(state.flow.nodes.get(END_ID)!, {}) }),
+    prepareOutput(log, state, END_ID, null, { forwardCapture: forwardCapture(state.flow.nodes.get(END_ID)!, {}) }),
   );
   expect(state.result).toBeInstanceOf(RunSucceeded);
   const table = [...memoryScope.memories].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT]));
@@ -550,7 +550,7 @@ test.each([
   const outcomeSequence = state.nextSequence;
   const carriers = { evidence: evidence(node.memoryScope), forwardCapture: forwardCapture(node, { question: "q" }) };
   const prepared = {
-    success: () => prepareNodeSucceeded(state, node.id, { answer: 7n }, carriers),
+    success: () => prepareOutput(log, state, node.id, { answer: 7n }, carriers),
     route: () => prepareNodeRouted(state, node.id, "go", carriers),
     failure: () =>
       prepareNodeFailed(state, new Failure({ code: "node.execute", message: "Failed.", nodeId: node.id }), carriers),
@@ -602,59 +602,66 @@ test("a failure episode uses the full canonical durable failure JSON", async () 
   expect(episodes[0]!.output).toBeNull();
 });
 
+/** Return `node`'s run as `startTraceNode` builds it, with `"done"` committed as its pending output. */
+function committedTraceNode(node: Node, options: Parameters<typeof startTraceNode>[1]): ReturnType<typeof startTraceNode> {
+  const built = startTraceNode(node, options);
+  commitPrepared(built.log, built.state, preparePoolCommit(built.state, node.id, "done"));
+  return built;
+}
+
 test.each([
   ["memory disabled", false],
   ["memory enabled", true],
 ])("evidence is rejected when learning is not enabled: %s", (_label, enabled) => {
   const node = new TraceNode("agent");
   node.memoryScope = scope(node.id);
-  const { state } = startTraceNode(node, { keys: enabled ? node.memoryScope.memories : null, learnable: false });
+  const { state } = committedTraceNode(node, { keys: enabled ? node.memoryScope.memories : null, learnable: false });
 
   expectError(
-    () => prepareNodeSucceeded(state, node.id, "done", { evidence: evidence(node.memoryScope) }),
+    () => prepareNodeSucceeded(state, node.id, { evidence: evidence(node.memoryScope) }),
     RangeError,
     "node 'agent' is ineligible for evaluation evidence",
   );
-  expect((prepareNodeSucceeded(state, node.id, "done").record as NodeSucceededRecord).evidence).toBeNull();
+  expect((prepareNodeSucceeded(state, node.id).record as NodeSucceededRecord).evidence).toBeNull();
 });
 
 test("learning requires evidence and rejects an ineligible or unrecorded scope", () => {
   const node = new TraceNode("agent");
   node.memoryScope = scope(node.id);
-  const { state } = startTraceNode(node, { keys: keys(), learnable: true });
+  const { state } = committedTraceNode(node, { keys: keys(), learnable: true });
   expectError(
-    () => prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) }),
+    () => prepareNodeSucceeded(state, node.id, { forwardCapture: forwardCapture(node, {}) }),
     RangeError,
     "eligible node 'agent' requires evaluation evidence while learning",
   );
 
   const ordinary = new FuncNode("ordinary", () => "done");
   ordinary.memoryScope = scope(ordinary.id);
-  const { state: ordinaryState } = startTraceNode(ordinary, { keys: keys(), learnable: true });
+  const { state: ordinaryState } = committedTraceNode(ordinary, { keys: keys(), learnable: true });
   expectError(
     () =>
-      prepareNodeSucceeded(ordinaryState, ordinary.id, "done", {
+      prepareNodeSucceeded(ordinaryState, ordinary.id, {
         evidence: evidence(ordinary.memoryScope),
         forwardCapture: forwardCapture(ordinary, { question: "q" }),
       }),
     RangeError,
     "node 'ordinary' is ineligible for evaluation evidence",
   );
-  const accepted = prepareNodeSucceeded(ordinaryState, ordinary.id, "done", {
+  const accepted = prepareNodeSucceeded(ordinaryState, ordinary.id, {
     forwardCapture: forwardCapture(ordinary, {}),
   });
   expect((accepted.record as NodeSucceededRecord).evidence).toBeNull();
 
   const mismatched = new TraceNode("agent");
   mismatched.memoryScope = scope(mismatched.id);
-  const { state: mismatchedState } = startTraceNode(mismatched, {
+  const { state: mismatchedState } = committedTraceNode(mismatched, {
     keys: keys(),
     learnable: true,
     stacks: [new MemoryStack(["flow", "agent"], ["outer"])],
   });
   expectError(
     () =>
-      prepareNodeSucceeded(mismatchedState, mismatched.id, "done", {
+      prepareNodeSucceeded(mismatchedState, mismatched.id, {
         evidence: evidence(mismatched.memoryScope),
         forwardCapture: forwardCapture(mismatched, { question: "q" }),
       }),
@@ -666,11 +673,11 @@ test("learning requires evidence and rejects an ineligible or unrecorded scope",
 test("learning rejects a scope without a recorded stack", () => {
   const node = new TraceNode("agent");
   node.memoryScope = scope(node.id);
-  const { state } = startTraceNode(node, { keys: keys(), learnable: true, stacks: [] });
+  const { state } = committedTraceNode(node, { keys: keys(), learnable: true, stacks: [] });
 
   expectError(
     () =>
-      prepareNodeSucceeded(state, node.id, "done", {
+      prepareNodeSucceeded(state, node.id, {
         evidence: evidence(node.memoryScope),
         forwardCapture: forwardCapture(node, { question: "q" }),
       }),
@@ -681,16 +688,16 @@ test("learning rejects a scope without a recorded stack", () => {
 
 test("an empty enabled table retains scope-free evidence without episodes", () => {
   const node = new TraceNode("agent");
-  const { state } = startTraceNode(node, { keys: [], learnable: true });
+  const { state } = committedTraceNode(node, { keys: [], learnable: true });
 
-  const prepared = prepareNodeSucceeded(state, node.id, "done", {
+  const prepared = prepareNodeSucceeded(state, node.id, {
     evidence: evidence(null),
     forwardCapture: forwardCapture(node, { question: "q" }),
   });
   expect((prepared.record as NodeSucceededRecord).evidence!.scope).toBeNull();
   expectError(
     () =>
-      prepareNodeSucceeded(state, node.id, "done", {
+      prepareNodeSucceeded(state, node.id, {
         evidence: evidence(scope(node.id)),
         forwardCapture: forwardCapture(node, { question: "q" }),
       }),
@@ -702,10 +709,10 @@ test("an empty enabled table retains scope-free evidence without episodes", () =
 test.each(["outer", "local"])("learning rejects a trace scope that omits a recorded memory: keeps %s", (retained) => {
   const node = new TraceNode("agent");
   node.memoryScope = scope(node.id, { memories: [retained] });
-  const { state } = startTraceNode(node, { keys: keys(), learnable: true, stacks: stacks(scope(node.id)) });
+  const { state } = committedTraceNode(node, { keys: keys(), learnable: true, stacks: stacks(scope(node.id)) });
 
   expectError(
-    () => prepareNodeSucceeded(state, node.id, "done", { forwardCapture: forwardCapture(node, {}) }),
+    () => prepareNodeSucceeded(state, node.id, { forwardCapture: forwardCapture(node, {}) }),
     RangeError,
     "node 'agent' memory scope must carry its exact recorded memory stack",
   );
@@ -719,7 +726,7 @@ test("a replay rejects an eligible node scope that differs from its recorded sta
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, node.id, "done", {
+    prepareOutput(log, state, node.id, "done", {
       evidence: evidence(node.memoryScope),
       forwardCapture: forwardCapture(node, { question: "q" }),
     }),
@@ -743,7 +750,7 @@ test("a graph outcome uses constant memory roots and an indexed scope", () => {
   const { state, log } = startTraceNode(node, { keys: memoryKeys, learnable: true, stacks: recorded });
   const roots = [state.memories, state.memoryStacks, state.memorySnapshots];
 
-  const prepared = prepareNodeSucceeded(state, node.id, "done", {
+  const prepared = prepareOutput(log, state, node.id, "done", {
     evidence: evidence(node.memoryScope),
     forwardCapture: forwardCapture(node, { question: "q" }),
   });
@@ -786,7 +793,7 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
     commitPrepared(
       log,
       state,
-      prepareNodeSucceeded(state, nodeId, value, {
+      prepareOutput(log, state, nodeId, value, {
         evidence: nodeEvidence,
         forwardCapture: forwardCapture(state.flow.nodes.get(nodeId)!, nodeEvidence?.boundInputs ?? {}),
       }),
@@ -1023,10 +1030,10 @@ test("owner context root default is owned once by the accepted start", async () 
 });
 
 /**
- * Run a flow of only START, memory key `POLICY` on its scope; when START is also the end, root
- * input feedback falls back to the root. Without it, END holds a preseeded result.
+ * Run a flow of only START, memory key `POLICY` on its scope, START also the end, so root input
+ * feedback falls back to the root.
  */
-async function startOnlyRun(sameBoundary: boolean): Promise<{
+async function startOnlyRun(): Promise<{
   state: RunState;
   log: MemoryRunLog;
   memories: MemorySpec[];
@@ -1039,10 +1046,9 @@ async function startOnlyRun(sameBoundary: boolean): Promise<{
   start.memoryScope = new MemoryScope([START_ID], { memories: [POLICY] });
   const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
   // `endId` is readonly and fixed by the constructor.
-  (flow as { endId: string }).endId = sameBoundary ? START_ID : END_ID;
+  (flow as { endId: string }).endId = START_ID;
   const initialPool = new VariablePool(START_ID);
   initialPool.set(START_ID, { topic: "reef", undeclared: "extra" });
-  if (!sameBoundary) initialPool.set(END_ID, "preseeded result");
   initialPool.addSystem("run_id", RUN_ID);
   const state = new RunState(flow);
   const log = new MemoryRunLog(RUN_ID);
@@ -1051,7 +1057,6 @@ async function startOnlyRun(sameBoundary: boolean): Promise<{
   commitPrepared(log, state, prepareRunStarted(state, {
     runId: RUN_ID,
     flowFingerprint: FINGERPRINT,
-    initialPool,
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
@@ -1060,24 +1065,20 @@ async function startOnlyRun(sameBoundary: boolean): Promise<{
     memoryStacks: recorded,
     memorySnapshots: [new MemorySnapshotEnvelope(POLICY, {})],
   }));
+  commitInitialPool(log, state, initialPool);
   await new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 }).run();
   return { state, log, memories, stacks: recorded };
 }
 
-test.each([false, true])(
-  "owner context root fallback uses only actual source-zero fields (same boundary: %p)",
-  async (sameBoundary) => {
-    const { state, memories, stacks: recorded } = await startOnlyRun(sameBoundary);
-    const [root, results] = await computeBackward(state.trace!, "review");
-    const [context] = learning.projectOwnerContexts(state.trace!, memories, recorded, "review", root, results);
-    expect(results.every((item) => !item.invoked)).toBe(true);
-    expect(context!.episodes).toHaveLength(1);
-    expect(feedbackEntries(context!).map((entry) => [entry.target_name, entry.value])).toEqual(
-      sameBoundary ? [["topic", "review"]] : [],
-    );
-    expect(feedbackEntries(context!).every((entry) => entry.root && entry.execution_seq === null)).toBe(true);
-  },
-);
+test("owner context root fallback uses only actual source-zero fields", async () => {
+  const { state, memories, stacks: recorded } = await startOnlyRun();
+  const [root, results] = await computeBackward(state.trace!, "review");
+  const [context] = learning.projectOwnerContexts(state.trace!, memories, recorded, "review", root, results);
+  expect(results.every((item) => !item.invoked)).toBe(true);
+  expect(context!.episodes).toHaveLength(1);
+  expect(feedbackEntries(context!).map((entry) => [entry.target_name, entry.value])).toEqual([["topic", "review"]]);
+  expect(feedbackEntries(context!).every((entry) => entry.root && entry.execution_seq === null)).toBe(true);
+});
 
 test("an owner context error identifies the receiver without changing forward acceptance", async () => {
   const node = passthroughWork({ x: "leaf" });
@@ -1120,7 +1121,7 @@ test("an owner context error identifies the receiver without changing forward ac
 });
 
 test("a root fallback context failure names no node", async () => {
-  const { state, log, memories } = await startOnlyRun(true);
+  const { state, log, memories } = await startOnlyRun();
   // The second call checks the root fallback: the first checks START's occurrence.
   const original = new RangeError("boom");
   const fromFrozen = LearnContext.fromFrozen;

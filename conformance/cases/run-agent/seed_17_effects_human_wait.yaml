@@ -5,6 +5,7 @@
 # its default, `cancel`.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 kind: run
+rules: [run-log]
 flow: |
   # 17 — Effects: HUMAN_INPUT + WAIT.
   #
@@ -168,8 +169,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: rates, settle_at: "2026-01-01"}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           propose:
@@ -180,18 +180,28 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {settle_at: 2026-01-01, topic: rates}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: rates, settle_at: "2026-01-01"}}]
+    - [pool_commit, __start__, {value: {topic: rates, settle_at: "2026-01-01"}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, propose]
-    - [node_succeeded, propose, {value: Review the rate outlook on Friday.}]
+    - [pool_commit, propose, {value: Review the rate outlook on Friday.}]
+    - [node_succeeded, propose, {commit: 9}]
     - [node_started, approve]
-    - [node_succeeded, approve, {value: approve}]
+    - [pool_commit, approve, {value: approve}]
+    - [node_succeeded, approve, {commit: 12}]
     - [node_started, gate]
     - [node_routed, gate, {handle: settle}]
     - [node_started, settle]
     # A WAIT's value is null: the null value is left out, and so is the empty payload.
-    - [node_succeeded, settle]
+    - [pool_commit, settle]
+    - [node_succeeded, settle, {commit: 17}]
     - [node_started, confirm]
-    - [node_succeeded, confirm, {value: cancel}]
+    - [pool_commit, confirm, {value: cancel}]
+    - [node_succeeded, confirm, {commit: 20}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: cancel}]
+    - [pool_commit, __end__, {value: cancel}]
+    - [node_succeeded, __end__, {commit: 23}]

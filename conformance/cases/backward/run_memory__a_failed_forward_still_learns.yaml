@@ -7,7 +7,7 @@
 # (as in run-map-call/seed_e24_nested_code_raise), and its throwing line `  throw new Error('forward failed')` ends at
 # column 42; Python's "forward failed" and column 47 are in python_expect.
 kind: backward
-rules: [code]
+rules: [code, run-log]
 flow: |
   id: failure
   name: failure
@@ -65,24 +65,37 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: true
+    - learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs: {}
         node_data:
           input_output_paths: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: start
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value: {}
   - [node_started, work]
   - - node_failed
     - work
@@ -118,7 +131,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
+          execution_seq: 5
           path: []
           run_id: r1
       - attribution:
@@ -134,7 +147,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 3
+          execution_seq: 8
           path: []
           run_id: r1
       proposals:

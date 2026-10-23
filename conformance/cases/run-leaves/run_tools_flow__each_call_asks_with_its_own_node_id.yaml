@@ -1,6 +1,7 @@
 # From tests/engine/test_run_tools_flow.py::test_each_map_item_and_call_asks_with_its_own_node_id[call].
 # A HUMAN_INPUT in a called child asks with the CALL occurrence's id (c1/ask, c2/ask).
 kind: run
+rules: [run-log]
 flow: |
   id: call_ask
   name: call_ask
@@ -37,51 +38,86 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, c1]
   - - node_expanded
     - c1
     - prune_ids: []
       seed: {}
   - [node_started, c1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - c1/__start__
     - value: {}
-  - [node_started, c1/ask]
   - - node_succeeded
+    - c1/__start__
+    - {commit: 11}
+  - [node_started, c1/ask]
+  - - pool_commit
     - c1/ask
     - value: first
+  - - node_succeeded
+    - c1/ask
+    - {commit: 14}
   - [node_started, c1/__end__]
+  - - pool_commit
+    - c1/__end__
+    - value: first
+      key: c1
   - - node_succeeded
     - c1/__end__
-    - commit_target: c1
-      value: first
+    - {commit: 17}
   - [node_started, c2]
   - - node_expanded
     - c2
     - prune_ids: []
       seed: {}
   - [node_started, c2/__start__]
-  - - node_succeeded
+  - - pool_commit
     - c2/__start__
     - value: {}
-  - [node_started, c2/ask]
   - - node_succeeded
+    - c2/__start__
+    - {commit: 22}
+  - [node_started, c2/ask]
+  - - pool_commit
     - c2/ask
     - value: second
+  - - node_succeeded
+    - c2/ask
+    - {commit: 25}
   - [node_started, c2/__end__]
+  - - pool_commit
+    - c2/__end__
+    - value: second
+      key: c2
   - - node_succeeded
     - c2/__end__
-    - commit_target: c2
-      value: second
+    - {commit: 28}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: second
+  - - node_succeeded
+    - __end__
+    - {commit: 31}
   events:
   - [RunStarted]
   - - NodeStarted

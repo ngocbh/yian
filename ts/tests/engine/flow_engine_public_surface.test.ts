@@ -122,7 +122,8 @@ test("mismatched state and log are rejected before execution", async () => {
   const run = new FlowEngine(state, other, { growBuilder: noGrowth, numWorkers: 0 }).run();
   expect(await refused(run, RangeError)).toBe("run-state/log run_id mismatch: state 'run-123', log 'another-run'");
   expect(probe).toEqual([]);
-  expect(log.nextSequence).toBe(1);
+  // RunStarted and the run start's two commits.
+  expect(log.nextSequence).toBe(3);
   expect(other.nextSequence).toBe(0);
 });
 
@@ -131,10 +132,10 @@ test("mismatched durable sequence is rejected before execution", async () => {
   const { state, log } = engine(actionFlow());
   log.append(new NodeStartedRecord("unapplied"));
   const run = new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 }).run();
-  expect(await refused(run, RangeError)).toBe("run-state/log sequence mismatch: state 1, log 2");
+  expect(await refused(run, RangeError)).toBe("run-state/log sequence mismatch: state 3, log 4");
   expect(probe).toEqual([]);
-  expect(state.nextSequence).toBe(1);
-  expect(log.nextSequence).toBe(2);
+  expect(state.nextSequence).toBe(3);
+  expect(log.nextSequence).toBe(4);
 });
 
 test("mismatched durable worker count is rejected before execution", async () => {
@@ -144,8 +145,8 @@ test("mismatched durable worker count is rejected before execution", async () =>
   expect(await refused(run, RangeError)).toBe("run-state/engine worker mismatch: state 1, engine 0");
   expect(probe).toEqual([]);
   expect(state.numWorkers).toBe(1);
-  expect(state.nextSequence).toBe(1);
-  expect(log.nextSequence).toBe(1);
+  expect(state.nextSequence).toBe(3);
+  expect(log.nextSequence).toBe(3);
 });
 
 test("the constructor checks its arguments", () => {
@@ -207,7 +208,7 @@ test("unfinished starts must be requeued before execution", async () => {
     "FlowEngine requires unfinished starts to be requeued with RunResumed before execution",
   );
   expect(probe).toEqual([]);
-  expect(log.nextSequence).toBe(2);
+  expect(log.nextSequence).toBe(4);
 });
 
 /** Return `START -> twice -> END`, where `twice` doubles the input `x`. */
@@ -239,8 +240,9 @@ test("static run yields only new post durable observers", async () => {
     NodeSucceeded,
     RunSucceeded,
   ]);
-  // Each node's observers follow its record: the start's is the second record, its outcome's the third.
-  expect(callbacks.slice(0, 2).map(([, sequence]) => sequence)).toEqual([2, 3]);
+  // Each node's observers follow its record: after the run start's three records, START's start is
+  // the fourth record, and its success the sixth, after its commit.
+  expect(callbacks.slice(0, 2).map(([, sequence]) => sequence)).toEqual([4, 6]);
   expect((events.at(-1) as RunSucceeded).output).toBe(8n);
   expect(built.state.result).toEqual(events.at(-1) as RunSucceeded);
 });
@@ -275,7 +277,8 @@ test("stream chunks are callback only and never durable", async () => {
   ]);
   expect(events.some((event) => event instanceof StreamChunk)).toBe(false);
   expect(built.log.records().some((envelope) => envelope.record instanceof StreamChunk)).toBe(false);
-  expect(built.log.nextSequence).toBe(7);
+  // The run start's three records, then three successes of three records each.
+  expect(built.log.nextSequence).toBe(12);
   expect(built.state.result).toEqual(events.at(-1) as RunSucceeded);
   expect(events.at(-1)).toEqual(new RunSucceeded({ output: "hello" }));
 });

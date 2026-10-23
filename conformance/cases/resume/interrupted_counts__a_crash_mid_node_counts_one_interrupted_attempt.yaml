@@ -1,7 +1,8 @@
 # TS-only (decision 20): a resume after a crash mid-node publishes NodeAttemptResumed with the node's
 # interrupted count, 1 for one start no stop covered.
-# Record 3 is fetch's node_started: the tool runs, then its node_succeeded is refused, so attempt 2 runs on resume.
+# Record 8 is fetch's node_started: the tool runs, then its pool_commit is refused, so attempt 2 runs on resume.
 kind: resume
+rules: [run-log]
 python_skip: TS-only (decision 20)
 flow: |
   id: fetch-once
@@ -19,19 +20,26 @@ host:
       results:
       - return: F1
       - return: F1
-  crash_after_record: 3
+  crash_after_record: 8
 expect:
   output: {status: succeeded, output: F1}
   trace:
-  - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+  - [run_started, null, {learnable: false, num_workers: 0}]
+  - [pool_commit, __start__, {key: system.now}]
+  - [pool_commit, __start__, {key: system.run_id, value: r1}]
+  - [pool_commit, __start__, {key: system.today}]
+  - [pool_commit, __start__, {value: {}}]
   - [node_started, __start__]
-  - [node_succeeded, __start__, {value: {}}]
+  - [pool_commit, __start__, {value: {}}]
+  - [node_succeeded, __start__, {commit: 6}]
   - [node_started, fetch]
   - [run_resumed, null, {num_workers: 0, retry_node_ids: [fetch]}]
   - [node_started, fetch]
-  - [node_succeeded, fetch, {value: F1}]
+  - [pool_commit, fetch, {value: F1}]
+  - [node_succeeded, fetch, {commit: 11}]
   - [node_started, __end__]
-  - [node_succeeded, __end__, {value: F1}]
+  - [pool_commit, __end__, {value: F1}]
+  - [node_succeeded, __end__, {commit: 14}]
   events:
   - [RunResumed]
   - [NodeAttemptResumed, {node_id: fetch, interrupted: 1}]

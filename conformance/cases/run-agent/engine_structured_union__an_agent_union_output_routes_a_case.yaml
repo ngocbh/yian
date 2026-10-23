@@ -1,6 +1,6 @@
 # env: YIAN_DEFAULT_MODEL/PROVIDER kept: the flow names no model, and without them the run fails before its model call.
 kind: run
-rules: [llm]
+rules: [llm, run-log]
 flow: |2
 
   id: decide
@@ -188,35 +188,58 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, a]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, a]
+  - - pool_commit
     - a
     - value:
         action: buy
         qty: 3
+  - - node_succeeded
+    - a
+    - {commit: 9}
   - [node_started, route]
   - - node_routed
     - route
     - handle: place_buy
   - [node_started, place_buy]
-  - - node_succeeded
+  - - pool_commit
     - place_buy
     - value: buy 3
-  - [node_started, __end__]
   - - node_succeeded
+    - place_buy
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         decision:
           action: buy
           qty: 3
         trade: buy 3
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -227,13 +250,13 @@ expect:
   - - NodeStarted
     - node_id: a
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: gpt-5.5
       node_id: a
       provider: openai
       purpose: structured_native
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: gpt-5.5
       node_id: a
       provider: openai

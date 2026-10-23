@@ -2,10 +2,11 @@
 # Also tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[human_input].
 # A HUMAN_INPUT that started before the crash is retried and asked again; the consumer binds the answer given
 # on resume against its declared type. `use` returns its input (the test doubles it).
-# Record 3 is ask's node_started: the first answer is given, its result is refused.
+# Record 8 is ask's node_started: the first answer is given, its result is refused.
 # hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
+rules: [run-log]
 flow: |
   id: typed-gate-replay
   name: typed_gate_replay
@@ -26,7 +27,7 @@ run:
 host:
   human:
     ask: [1, 3]
-  crash_after_record: 3
+  crash_after_record: 8
 expect:
   output:
     status: succeeded
@@ -36,28 +37,51 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, ask]
   - - run_resumed
     - null
     - num_workers: 0
       retry_node_ids: [ask]
   - [node_started, ask]
-  - - node_succeeded
+  - - pool_commit
     - ask
     - value: 3
-  - [node_started, use]
   - - node_succeeded
+    - ask
+    - {commit: 11}
+  - [node_started, use]
+  - - pool_commit
     - use
     - value: 3
-  - [node_started, __end__]
   - - node_succeeded
+    - use
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: 3
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   tool_calls:
     ask_user:
     - args:

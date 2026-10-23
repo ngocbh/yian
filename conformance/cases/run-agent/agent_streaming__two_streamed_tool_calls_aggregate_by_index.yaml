@@ -5,6 +5,7 @@
 # ToolCallStarted/Finished pair under the one exchange. The tool-only reply streams only its
 # final "" chunk; the second reply streams "both", " fine", then its final chunk.
 kind: run
+rules: [run-log]
 flow: |
   id: stream
   name: stream
@@ -73,21 +74,41 @@ expect:
             source: environment
           model: claude-test
           provider: anthropic
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, writer]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, writer]
+  - - pool_commit
     - writer
     - value: both fine
-  - [node_started, __end__]
   - - node_succeeded
+    - writer
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: both fine
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

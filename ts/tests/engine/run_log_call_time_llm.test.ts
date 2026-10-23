@@ -10,14 +10,14 @@
  * field is `null`; a NaN refusal's `cause` is the value layer's `TypeCheckError`.
  *
  * Changed:
- * - `test_the_schema_stays_nine`: TS writes schema 12, so the constant and the encoded line's
- *   `schema` are 10.
+ * - `test_the_schema_stays_nine`: TS writes schema 13, so the constant and the encoded line's
+ *   `schema` are 13.
  * - The NaN row's message is the value layer's (`RunStarted call_time_llm: NaN is not a yian
  *   value`), where Python's canonical JSON copy says `non-finite numbers are not valid canonical
  *   JSON`.
- * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 12 always writes both
- *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":12`.
- * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 12 (no call-time agents), so
+ * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 13 always writes both
+ *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":13`.
+ * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 13 (no call-time agents), so
  *   its row is dropped; the other 10 rows are pinned with the record's class and message (a part of
  *   the wrong JSON type is a `TypeError`, where Python's pydantic raises `ValueError`).
  *
@@ -30,7 +30,6 @@ import { expect, test } from "bun:test";
 
 import {
   decodeRecord,
-  encodePool,
   encodeRecord,
   MemoryRunLog,
   RecordEnvelope,
@@ -38,7 +37,7 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, type PreparedTransition, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
-import { TypeCheckError, VariablePool } from "../../src/typesys/index.ts";
+import { TypeCheckError } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { flow } from "./run_state_fixtures.ts";
 
@@ -77,12 +76,8 @@ const CALL_TIME = {
 
 /** Return a run-start record with the given call-time LLM record. */
 function record(callTimeLlm?: unknown): RunStartedRecord {
-  const pool = new VariablePool("start");
-  pool.set("start", { name: "Ada" });
-  pool.addSystem("run_id", "r1");
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(pool),
     startWiringOverride: { name: "${input.name}" },
     effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test" } },
     numWorkers: 2,
@@ -100,15 +95,14 @@ const GOLDEN =
   '{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{"agent":' +
   '{"model":"gpt-test","provider":"openai"}},"flow":null,"flow_fingerprint":"' +
   "a".repeat(64) +
-  '","initial_pool":{"start_id":"start","store":{"start":{"kind":"object","value":' +
-  '{"name":"Ada"}}},"system":{"run_id":{"kind":"str","value":"r1"}}},"learnable":false,' +
+  '","learnable":false,' +
   '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},' +
   '"start_wiring_override":{"name":"${input.name}"},"tools":{},"yian_version":"0.0.0"},"run_id":"r1",' +
-  '"schema":12,"seq":0}';
+  '"schema":13,"seq":0}';
 
-test("the schema is twelve", () => {
-  expect(SCHEMA_VERSION).toBe(12);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(12n);
+test("the schema is thirteen", () => {
+  expect(SCHEMA_VERSION).toBe(13);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(13n);
 });
 
 test("call_time_llm round trips", () => {
@@ -207,13 +201,9 @@ test("a NaN in the record keeps the value layer's error as its cause", () => {
 
 /** Prepare the start of run `r1` over `state` with an empty START record and `callTimeLlm`. */
 function start(state: RunState, callTimeLlm: Record<string, unknown> | null): PreparedTransition {
-  const pool = new VariablePool(state.flow.startId);
-  pool.set(state.flow.startId, {});
-  pool.addSystem("run_id", "r1");
   return prepareRunStarted(state, {
     runId: "r1",
     flowFingerprint: "a".repeat(64),
-    initialPool: pool,
     startWiringOverride: {},
     effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test" } },
     numWorkers: 1,

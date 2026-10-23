@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: inline-outer-assert
   name: inline_outer_assert
@@ -32,26 +33,46 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, composite]
   - - node_expanded
     - composite
     - prune_ids: []
       seed: {}
   - [node_started, composite/__start__]
-  - - node_succeeded
+  - - pool_commit
     - composite/__start__
     - value: {}
-  - [node_started, composite/inner]
   - - node_succeeded
+    - composite/__start__
+    - {commit: 11}
+  - [node_started, composite/inner]
+  - - pool_commit
     - composite/inner
     - value: 1
+  - - node_succeeded
+    - composite/inner
+    - {commit: 14}
   - [node_started, composite/__end__]
   - - node_failed
     - composite/__end__

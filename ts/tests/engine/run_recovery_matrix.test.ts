@@ -36,7 +36,7 @@
  *   the sleep `evalNode` asks the scheduler for, whose clock reads 12:00:04 then 12:00:07 and
  *   moves past each sleep, which returns at once.
  * - `test_recorded_nested_growth_resumes_with_exact_memory_and_trace`: the prefix is the first 25
- *   lines of a live learnable TS run (schema 12 is the only TS schema) whose memory keys are served
+ *   lines of a live learnable TS run (schema 13 is the only TS schema) whose memory keys are served
  *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
  *
  * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
@@ -88,10 +88,10 @@ import {
   type RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   PreparedTransition,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   prepareRunResumed,
   prepareRunStarted,
   replayRecords,
@@ -106,6 +106,7 @@ import {
   expectUnchanged,
   FuncNode,
   NO_ENV,
+  prepareOutput,
   reducerSnapshot,
   replayTraceSnapshot,
   snapshot,
@@ -512,13 +513,19 @@ async function liveRun(
   return { state, log, observers };
 }
 
-/** Expect every prefix of `log` to replay to the live snapshot after it. */
+/**
+ * Expect every prefix of `log` past its run start to replay to the live snapshot after it. The run
+ * start (RunStarted and its commits) is written before the first snapshot, and a prefix inside it
+ * can't be replayed.
+ */
 function expectEveryPrefixReplays(loaded: ComposedFlow, log: CapturingLog): void {
   const envelopes = log.records();
-  expect(log.snapshots).toHaveLength(envelopes.length);
+  const started = envelopes.length - log.snapshots.length + 1;
+  expect(envelopes[started - 1]!.kind).toBe("pool_commit");
+  expect(envelopes[started]!.kind).toBe("node_started");
   log.snapshots.forEach((expected, index) => {
-    const recovered = replayRunLog(loaded, MemoryRunLog.fromRecords(envelopes.slice(0, index + 1)));
-    expect(matrixSnapshot(recovered), `prefix ${index + 1}/${envelopes.length}`).toEqual(expected);
+    const recovered = replayRunLog(loaded, MemoryRunLog.fromRecords(envelopes.slice(0, started + index)));
+    expect(matrixSnapshot(recovered), `prefix ${started + index}/${envelopes.length}`).toEqual(expected);
   });
 }
 
@@ -726,9 +733,14 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       env,
     });
     expect(fresh.status).toBe("succeeded");
-    // Records 0-24: through outer/mapped#1/echo's NodeSucceeded, as Python's recorded prefix.
-    const length = 25;
-    const lines = readFileSync(path, "utf8").split("\n").slice(0, length);
+    // Through outer/mapped#1/echo's NodeSucceeded, as Python's recorded prefix.
+    const all = readFileSync(path, "utf8").split("\n").slice(0, -1);
+    const length =
+      all.findIndex((line) => {
+        const { kind, payload } = decodeRecord(line);
+        return kind === "node_succeeded" && payload["node_id"] === "outer/mapped#1/echo";
+      }) + 1;
+    const lines = all.slice(0, length);
     expect(decodeRecord(lines.at(-1)!).payload["node_id"]).toBe("outer/mapped#1/echo");
     const prefix = `${lines.join("\n")}\n`;
     writeFileSync(path, prefix);
@@ -790,9 +802,9 @@ test("test_resume_prepends_ordered_effect_retries_before_existing_ready_work", a
   const loaded = await load(ORDERED_EFFECTS);
   const { state, log } = newStartedRun(loaded, 2);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "release"));
-  commitPrepared(log, state, prepareNodeSucceeded(state, "release", "ready"));
+  commitPrepared(log, state, prepareOutput(log, state, "release", "ready"));
   expect(state.ready).toEqual(["wait", "agent", "human", "later"]);
 
   const retryOrder = ["wait", "agent", "human"];
@@ -867,7 +879,6 @@ function agentStarted(
     prepareRunStarted(state, {
       runId: "run",
       flowFingerprint: "a".repeat(64),
-      initialPool: pool,
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 0,
@@ -877,9 +888,10 @@ function agentStarted(
       memorySnapshots: enabled ? [new MemorySnapshotEnvelope("notes", {})] : null,
     }),
   );
+  commitInitialPool(log, state, pool);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   const forwardCapture = state.learnable ? new ForwardCapture({}, ValueRoute.record([])) : null;
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}, { forwardCapture }));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}, { forwardCapture }));
   commitPrepared(log, state, prepareNodeStarted(state, "agent"));
   return { state, log };
 }

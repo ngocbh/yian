@@ -1,6 +1,7 @@
 # From examples/debate.yaml.
 # A four-AGENT diamond: `frame` feeds both sides, and `verdict` reads both; the flow returns it.
 kind: run
+rules: [run-log]
 flow: |
   # debate — frame a question, argue both sides IN PARALLEL, then decide.
   #
@@ -98,8 +99,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {question: "Should a small team adopt a monorepo?"}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           frame:
@@ -118,19 +118,29 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {question: "Should a small team adopt a monorepo?"}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {question: "Should a small team adopt a monorepo?"}}]
+    - [pool_commit, __start__, {value: {question: "Should a small team adopt a monorepo?"}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, frame]
-    - [node_succeeded, frame, {value: "Monorepo or many repos; criteria: tooling cost, coupling."}]
+    - [pool_commit, frame, {value: "Monorepo or many repos; criteria: tooling cost, coupling."}]
+    - [node_succeeded, frame, {commit: 9}]
     - [node_started, for_case]
-    - [node_succeeded, for_case, {value: One repo shares tooling and keeps changes atomic.}]
+    - [pool_commit, for_case, {value: One repo shares tooling and keeps changes atomic.}]
+    - [node_succeeded, for_case, {commit: 12}]
     - [node_started, against_case]
-    - [node_succeeded, against_case, {value: Separate repos keep teams decoupled.}]
+    - [pool_commit, against_case, {value: Separate repos keep teams decoupled.}]
+    - [node_succeeded, against_case, {commit: 15}]
     - [node_started, verdict]
-    - - node_succeeded
+    - - pool_commit
       - verdict
       - value: "Adopt a monorepo: shared tooling saves a small team the most time."
+    - [node_succeeded, verdict, {commit: 18}]
     - [node_started, __end__]
-    - - node_succeeded
+    - - pool_commit
       - __end__
       - value: "Adopt a monorepo: shared tooling saves a small team the most time."
+    - [node_succeeded, __end__, {commit: 21}]

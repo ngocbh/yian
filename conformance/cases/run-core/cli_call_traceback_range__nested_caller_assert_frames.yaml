@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: nested-assert-parent
   name: nested_assert_parent
@@ -86,13 +87,27 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, outer]
   - - node_expanded
     - outer
@@ -100,10 +115,13 @@ expect:
       seed:
         v: 60
   - [node_started, outer/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/__start__
     - value:
         v: 60
+  - - node_succeeded
+    - outer/__start__
+    - {commit: 11}
   - [node_started, outer/via]
   - - node_expanded
     - outer/via
@@ -111,14 +129,20 @@ expect:
       seed:
         v: 60
   - [node_started, outer/via/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/via/__start__
     - value:
         v: 60
-  - [node_started, outer/via/x]
   - - node_succeeded
+    - outer/via/__start__
+    - {commit: 16}
+  - [node_started, outer/via/x]
+  - - pool_commit
     - outer/via/x
     - value: 120
+  - - node_succeeded
+    - outer/via/x
+    - {commit: 19}
   - [node_started, outer/via/__end__]
   - - node_failed
     - outer/via/__end__

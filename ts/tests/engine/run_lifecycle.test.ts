@@ -120,6 +120,7 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  PoolCommitRecord,
   readRunLog,
   type RecordEnvelope,
   type RunRecord,
@@ -127,12 +128,21 @@ import {
   RunStartedRecord,
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
+import { commitPrepared, prepareNodeStarted } from "../../src/runtime/state.ts";
 import { TransientToolError } from "../../src/tools/errors.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, progressOf, rejected, requiredEndFlow, startedRun, textReply } from "./run_state_fixtures.ts";
+import {
+  committedValue,
+  crashAfter,
+  prepareOutput,
+  progressOf,
+  rejected,
+  requiredEndFlow,
+  startedRun,
+  textReply,
+} from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
@@ -419,7 +429,7 @@ function writeNonterminalPrefix(
   try {
     const state = startedRun(loaded, log, { inputs, numWorkers: options.numWorkers, effective: options.effective });
     commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-    commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, structuredClone(inputs)));
+    commitPrepared(log, state, prepareOutput(log, state, START_ID, structuredClone(inputs)));
     for (const nodeId of options.started) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
     return log.nextSequence;
   } finally {
@@ -535,11 +545,11 @@ test("test_nullable_specialized_list_survives_durable_run_and_terminal_resume", 
 
   expect(fresh.status).toBe("succeeded");
   expect(fresh.output).toEqual([1n, null, 3n]);
-  const success = durableRecords(path).find(
-    (record) => record instanceof NodeSucceededRecord && record.nodeId === "lifecycle_nullable_list",
+  const commit = durableRecords(path).find(
+    (record) => record instanceof PoolCommitRecord && record.nodeId === "lifecycle_nullable_list",
   );
-  expect(success).toEqual(
-    new NodeSucceededRecord("lifecycle_nullable_list", "lifecycle_nullable_list", {
+  expect(commit).toEqual(
+    new PoolCommitRecord("lifecycle_nullable_list", "lifecycle_nullable_list", {
       kind: "list[int]",
       value: [1n, null, 3n],
     } as never),
@@ -743,7 +753,11 @@ test("test_outcome_append_failure_leaves_started_work_recoverable_and_closes", a
   expect(error).toBe(expected);
   expect(calls).toBe(1);
   const records = fake.records().map((envelope) => envelope.record);
-  expect(records.at(-1)).toEqual(new NodeStartedRecord("work"));
+  // The output's commit is written; the success that accepts it isn't, so work reruns on resume.
+  expect(records.slice(-2)).toEqual([
+    new NodeStartedRecord("work"),
+    new PoolCommitRecord("work", "work", { kind: "str", value: "done" }),
+  ]);
   expect(records.some((record) => record instanceof NodeSucceededRecord && record.nodeId === "work")).toBe(false);
   expect(seen.some((event) => event instanceof NodeStarted && event.nodeId === "work")).toBe(true);
   expect(seen.some((event) => event instanceof NodeSucceeded && event.nodeId === "work")).toBe(false);
@@ -956,11 +970,12 @@ test("test_host_interruption_drains_then_durable_resume_retries_to_terminal", as
 test("a resume after a crash publishes RunResumed and NodeAttemptResumed with the counts", async () => {
   const path = join(dir, "crash.jsonl");
   const flow = await load(ACTION_FLOW);
-  // Records 0-3 are RunStarted, START's two and work's NodeStarted: work's outcome is refused.
-  await crashAfter(4, () => run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 0 }));
+  // Records 0-8 are the run start (RunStarted and four commits), START's three and work's
+  // NodeStarted: work's outcome is refused.
+  await crashAfter(9, () => run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 0 }));
   // RunResumed and work's second NodeStarted are kept; its outcome is refused again.
   const first: RunEvent[] = [];
-  await crashAfter(6, () => resume(flow, { log: path, onEvent: (event) => first.push(event) }));
+  await crashAfter(11, () => resume(flow, { log: path, onEvent: (event) => first.push(event) }));
   expect(first.slice(0, 2)).toEqual([new RunResumed(), new NodeAttemptResumed({ nodeId: "work", interrupted: 1 })]);
 
   const seen: RunEvent[] = [];
@@ -1001,9 +1016,9 @@ output: \${call.output}
     },
   });
   const options = { tools: { flaky }, scheduler: virtualScheduler(0), random: () => 1 };
-  // Records 0-4 are RunStarted, START's two, call's NodeStarted and its `failed` step: the
-  // `started` step of attempt 2 is refused.
-  await crashAfter(5, () => run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 0, ...options }));
+  // Records 0-9 are the run start (RunStarted and four commits), START's three, call's NodeStarted
+  // and its `failed` step: the `started` step of attempt 2 is refused.
+  await crashAfter(10, () => run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 0, ...options }));
   expect(attempts).toEqual([1]);
 
   const result = await resume(flow, { log: path, ...options });
@@ -1164,8 +1179,9 @@ output: \${both.output}
 
 /** The node outcomes of the log at `path`: kind, node and value (or route handle), in order. */
 function nodeOutcomes(path: string): unknown[] {
-  return readRunLog(path).flatMap(({ kind, payload }) => {
-    if (kind === "node_succeeded") return [[kind, payload["node_id"], payload["value"]]];
+  const envelopes = readRunLog(path);
+  return envelopes.flatMap(({ kind, payload }) => {
+    if (kind === "node_succeeded") return [[kind, payload["node_id"], committedValue(envelopes, Number(payload["commit"]))]];
     if (kind === "node_routed") return [[kind, payload["node_id"], payload["handle"]]];
     if (kind !== "node_failed") return [];
     const failure = payload["failure"] as Readonly<Record<string, unknown>>;

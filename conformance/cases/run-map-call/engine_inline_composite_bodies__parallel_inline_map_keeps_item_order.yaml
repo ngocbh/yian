@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: inline-map-typed-records
   name: inline_map_typed_records
@@ -65,18 +66,10 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        rows:
-        - name: third
-          position: 3
-        - name: first
-          position: 1
-        - name: second
-          position: 2
-      learnable: false
+    - learnable: false
       num_workers: 4
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
       - name: third
@@ -91,8 +84,26 @@ expect:
         row:
           name: second
           position: 2
-  - [node_started, __start__]
   - - node_succeeded
+    - __end__
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        rows:
+        - {name: third, position: 3}
+        - {name: first, position: 1}
+        - {name: second, position: 2}
+  - [node_started, __start__]
+  - - pool_commit
     - __start__
     - value:
         rows:
@@ -102,6 +113,8 @@ expect:
           position: 1
         - name: second
           position: 2
+  - - node_succeeded
+    - __start__
   - [node_started, each]
   - - node_expanded
     - each
@@ -120,82 +133,99 @@ expect:
           name: second
           position: 2
   - [node_started, each#0/__end__]
-  - - node_succeeded
+  - - pool_commit
     - each#0/__end__
     - value:
         name: third
         row:
           name: third
           position: 3
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each#0/__end__
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         name: third
         row:
           name: third
           position: 3
-  - [node_started, each#0/render]
   - - node_succeeded
+    - each#0/__start__
+  - [node_started, each#0/render]
+  - - pool_commit
     - each#0/render
     - value:
         name: third
         row:
           name: third
           position: 3
-  - [node_started, each#1/__end__]
   - - node_succeeded
+    - each#0/render
+  - [node_started, each#1/__end__]
+  - - pool_commit
     - each#1/__end__
     - value:
         name: first
         row:
           name: first
           position: 1
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#1/__end__
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         name: first
         row:
           name: first
           position: 1
-  - [node_started, each#1/render]
   - - node_succeeded
+    - each#1/__start__
+  - [node_started, each#1/render]
+  - - pool_commit
     - each#1/render
     - value:
         name: first
         row:
           name: first
           position: 1
-  - [node_started, each#2/__end__]
   - - node_succeeded
+    - each#1/render
+  - [node_started, each#2/__end__]
+  - - pool_commit
     - each#2/__end__
     - value:
         name: second
         row:
           name: second
           position: 2
-  - [node_started, each#2/__start__]
   - - node_succeeded
+    - each#2/__end__
+  - [node_started, each#2/__start__]
+  - - pool_commit
     - each#2/__start__
     - value:
         name: second
         row:
           name: second
           position: 2
-  - [node_started, each#2/render]
   - - node_succeeded
+    - each#2/__start__
+  - [node_started, each#2/render]
+  - - pool_commit
     - each#2/render
     - value:
         name: second
         row:
           name: second
           position: 2
-  - [node_started, each/__end__]
   - - node_succeeded
+    - each#2/render
+  - [node_started, each/__end__]
+  - - pool_commit
     - each/__end__
-    - commit_target: each
-      value:
+    - value:
       - name: third
         row:
           name: third
@@ -208,12 +238,17 @@ expect:
         row:
           name: second
           position: 2
-  - [node_started, each/__start__]
+      key: each
   - - node_succeeded
+    - each/__end__
+  - [node_started, each/__start__]
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, prepare]
   - - node_succeeded
+    - each/__start__
+  - [node_started, prepare]
+  - - pool_commit
     - prepare
     - value:
       - name: third
@@ -222,6 +257,8 @@ expect:
         position: 1
       - name: second
         position: 2
+  - - node_succeeded
+    - prepare
   events:
   - [RunStarted]
   - - RunSucceeded

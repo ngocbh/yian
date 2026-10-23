@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -37,27 +38,46 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        choice: b
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {choice: b}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         choice: b
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: pb
   - [node_started, pb]
-  - - node_succeeded
+  - - pool_commit
     - pb
     - value: B
-  - [node_started, __end__]
   - - node_succeeded
+    - pb
+    - {commit: 11}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: B
+  - - node_succeeded
+    - __end__
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted

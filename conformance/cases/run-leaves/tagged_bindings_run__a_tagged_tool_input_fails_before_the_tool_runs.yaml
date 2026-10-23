@@ -2,7 +2,7 @@
 # A tagged TOOL input (`!int`) over an untyped value "5" fails binding.type before the tool runs;
 # an `!Any` flow input stands in for the test's untyped CODE source.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: tagged_tool
   name: tagged_tool
@@ -45,13 +45,26 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        n: '5'
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {n: '5'}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         n: '5'
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, place]
   - - node_failed
     - place

@@ -4,6 +4,7 @@
 # Pins: backward calls every AGENT occurrence once, the LOOP's earlier (pruned) iterations too, and
 # returns the first iterations' input feedback to each MAP item's position.
 kind: backward
+rules: [run-log]
 flow: |
   id: nested-agent-history
   name: nested_agent_history
@@ -137,14 +138,30 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs:
-        values: [ten, twenty]
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        values: [ten, twenty]
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        values: [ten, twenty]
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs:
           values: [ten, twenty]
         evaluated_keys: [values]
@@ -166,8 +183,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        values: [ten, twenty]
   - [node_started, many]
   - - node_expanded
     - many
@@ -186,7 +201,7 @@ expect:
               - children:
                 - kind: source
                   source:
-                    execution_seq: 1
+                    execution_seq: 5
                     path: [values, 0]
                     run_id: r1
                 kind: selected
@@ -203,7 +218,7 @@ expect:
               - children:
                 - kind: source
                   source:
-                    execution_seq: 1
+                    execution_seq: 5
                     path: [values, 1]
                     run_id: r1
                 kind: selected
@@ -215,7 +230,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [values]
               run_id: r1
           kind: record
@@ -230,34 +245,39 @@ expect:
       - n: ten
       - n: twenty
   - [node_started, many/__start__]
+  - - pool_commit
+    - many/__start__
+    - value: {}
   - - node_succeeded
     - many/__start__
-    - forward_capture:
+    - commit: 11
+      forward_capture:
         bound_inputs: {}
         node_data:
           input_output_paths: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: null
           flow_path: []
           occurrence_path: []
           static_path: [many]
-      value: {}
   - [node_started, many#0/__start__]
+  - - pool_commit
+    - many#0/__start__
+    - value:
+        n: ten
   - - node_succeeded
     - many#0/__start__
-    - forward_capture:
-        bound_inputs:
-          n: ten
+    - commit: 14
+      forward_capture:
+        bound_inputs: {n: ten}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: ten
+          - {kind: literal, value_json: ten}
           kind: record
           names: [n]
         scope:
@@ -268,22 +288,23 @@ expect:
             kind: map_item
             static_path: [many]
           static_path: [many, __start__]
-      value:
-        n: ten
   - [node_started, many#1/__start__]
+  - - pool_commit
+    - many#1/__start__
+    - value:
+        n: twenty
   - - node_succeeded
     - many#1/__start__
-    - forward_capture:
-        bound_inputs:
-          n: twenty
+    - commit: 17
+      forward_capture:
+        bound_inputs: {n: twenty}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: twenty
+          - {kind: literal, value_json: twenty}
           kind: record
           names: [n]
         scope:
@@ -294,8 +315,6 @@ expect:
             kind: map_item
             static_path: [many]
           static_path: [many, __start__]
-      value:
-        n: twenty
   - [node_started, many#0/loop]
   - - node_expanded
     - many#0/loop
@@ -311,7 +330,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 7
+              execution_seq: 13
               path: [n]
               run_id: r1
           kind: record
@@ -346,7 +365,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 9
+              execution_seq: 16
               path: [n]
               run_id: r1
           kind: record
@@ -367,19 +386,22 @@ expect:
       - n: twenty
       - 0
   - [node_started, many#0/loop#0/__start__]
+  - - pool_commit
+    - many#0/loop#0/__start__
+    - value:
+        n: ten
   - - node_succeeded
     - many#0/loop#0/__start__
-    - forward_capture:
-        bound_inputs:
-          n: ten
+    - commit: 24
+      forward_capture:
+        bound_inputs: {n: ten}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: ten
+          - {kind: literal, value_json: ten}
           kind: record
           names: [n]
         scope:
@@ -393,22 +415,23 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __start__]
-      value:
-        n: ten
   - [node_started, many#1/loop#0/__start__]
+  - - pool_commit
+    - many#1/loop#0/__start__
+    - value:
+        n: twenty
   - - node_succeeded
     - many#1/loop#0/__start__
-    - forward_capture:
-        bound_inputs:
-          n: twenty
+    - commit: 27
+      forward_capture:
+        bound_inputs: {n: twenty}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: twenty
+          - {kind: literal, value_json: twenty}
           kind: record
           names: [n]
         scope:
@@ -422,8 +445,6 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __start__]
-      value:
-        n: twenty
   - [node_started, many#0/loop#0/invoke]
   - - node_expanded
     - many#0/loop#0/invoke
@@ -436,7 +457,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 15
+              execution_seq: 23
               path: [n]
               run_id: r1
           kind: record
@@ -467,7 +488,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 17
+              execution_seq: 26
               path: [n]
               run_id: r1
           kind: record
@@ -487,19 +508,22 @@ expect:
       seed:
         n: twenty
   - [node_started, many#0/loop#0/invoke/__start__]
+  - - pool_commit
+    - many#0/loop#0/invoke/__start__
+    - value:
+        n: ten
   - - node_succeeded
     - many#0/loop#0/invoke/__start__
-    - forward_capture:
-        bound_inputs:
-          n: ten
+    - commit: 34
+      forward_capture:
+        bound_inputs: {n: ten}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: ten
+          - {kind: literal, value_json: ten}
           kind: record
           names: [n]
         scope:
@@ -516,22 +540,23 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __start__]
-      value:
-        n: ten
   - [node_started, many#1/loop#0/invoke/__start__]
+  - - pool_commit
+    - many#1/loop#0/invoke/__start__
+    - value:
+        n: twenty
   - - node_succeeded
     - many#1/loop#0/invoke/__start__
-    - forward_capture:
-        bound_inputs:
-          n: twenty
+    - commit: 37
+      forward_capture:
+        bound_inputs: {n: twenty}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: twenty
+          - {kind: literal, value_json: twenty}
           kind: record
           names: [n]
         scope:
@@ -548,22 +573,20 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __start__]
-      value:
-        n: twenty
   - [node_started, many#0/loop#0/invoke/author]
+  - - pool_commit
+    - many#0/loop#0/invoke/author
+    - value: one
   - - node_succeeded
     - many#0/loop#0/invoke/author
-    - forward_capture:
-        bound_inputs:
-          n: ten
+    - commit: 40
+      forward_capture:
+        bound_inputs: {n: ten}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
           effective_llm_config:
-            _connection:
-              endpoint: https://api.openai.com/v1
-              method: api_key
-              source: missing
+            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
             model: gpt-5.5
             provider: openai
           prompt_template: 'concise: ${n}'
@@ -574,7 +597,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 23
+              execution_seq: 33
               path: [n]
               run_id: r1
           kind: record
@@ -593,21 +616,20 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
-      value: one
   - [node_started, many#1/loop#0/invoke/author]
+  - - pool_commit
+    - many#1/loop#0/invoke/author
+    - value: one
   - - node_succeeded
     - many#1/loop#0/invoke/author
-    - forward_capture:
-        bound_inputs:
-          n: twenty
+    - commit: 43
+      forward_capture:
+        bound_inputs: {n: twenty}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
           effective_llm_config:
-            _connection:
-              endpoint: https://api.openai.com/v1
-              method: api_key
-              source: missing
+            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
             model: gpt-5.5
             provider: openai
           prompt_template: 'concise: ${n}'
@@ -618,7 +640,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 25
+              execution_seq: 36
               path: [n]
               run_id: r1
           kind: record
@@ -637,14 +659,16 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
-      value: one
   - [node_started, many#0/loop#0/invoke/__end__]
+  - - pool_commit
+    - many#0/loop#0/invoke/__end__
+    - value: one
+      key: many#0/loop#0/invoke
   - - node_succeeded
     - many#0/loop#0/invoke/__end__
-    - commit_target: many#0/loop#0/invoke
+    - commit: 46
       forward_capture:
-        bound_inputs:
-          result: one
+        bound_inputs: {result: one}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -654,7 +678,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 27
+              execution_seq: 39
               path: []
               run_id: r1
           kind: record
@@ -673,14 +697,16 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __end__]
-      value: one
   - [node_started, many#1/loop#0/invoke/__end__]
+  - - pool_commit
+    - many#1/loop#0/invoke/__end__
+    - value: one
+      key: many#1/loop#0/invoke
   - - node_succeeded
     - many#1/loop#0/invoke/__end__
-    - commit_target: many#1/loop#0/invoke
+    - commit: 49
       forward_capture:
-        bound_inputs:
-          result: one
+        bound_inputs: {result: one}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -690,7 +716,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 29
+              execution_seq: 42
               path: []
               run_id: r1
           kind: record
@@ -709,13 +735,16 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __end__]
-      value: one
   - [node_started, many#0/loop#0/__end__]
+  - - pool_commit
+    - many#0/loop#0/__end__
+    - value:
+        n: one
   - - node_succeeded
     - many#0/loop#0/__end__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 52
+      forward_capture:
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
@@ -725,7 +754,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 31
+              execution_seq: 45
               path: []
               run_id: r1
           kind: record
@@ -741,14 +770,16 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __end__]
-      value:
-        n: one
   - [node_started, many#1/loop#0/__end__]
+  - - pool_commit
+    - many#1/loop#0/__end__
+    - value:
+        n: one
   - - node_succeeded
     - many#1/loop#0/__end__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 55
+      forward_capture:
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
@@ -758,7 +789,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 33
+              execution_seq: 48
               path: []
               run_id: r1
           kind: record
@@ -774,8 +805,6 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __end__]
-      value:
-        n: one
   - [node_started, many#0/loop~1]
   - - node_expanded
     - many#0/loop~1
@@ -791,7 +820,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 35
+              execution_seq: 51
               path: [n]
               run_id: r1
           kind: record
@@ -830,7 +859,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 37
+              execution_seq: 54
               path: [n]
               run_id: r1
           kind: record
@@ -855,19 +884,22 @@ expect:
       - n: one
       - 1
   - [node_started, many#0/loop#1/__start__]
+  - - pool_commit
+    - many#0/loop#1/__start__
+    - value:
+        n: one
   - - node_succeeded
     - many#0/loop#1/__start__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 62
+      forward_capture:
+        bound_inputs: {n: one}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: one
+          - {kind: literal, value_json: one}
           kind: record
           names: [n]
         scope:
@@ -881,22 +913,23 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __start__]
-      value:
-        n: one
   - [node_started, many#1/loop#1/__start__]
+  - - pool_commit
+    - many#1/loop#1/__start__
+    - value:
+        n: one
   - - node_succeeded
     - many#1/loop#1/__start__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 65
+      forward_capture:
+        bound_inputs: {n: one}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: one
+          - {kind: literal, value_json: one}
           kind: record
           names: [n]
         scope:
@@ -910,8 +943,6 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __start__]
-      value:
-        n: one
   - [node_started, many#0/loop#1/invoke]
   - - node_expanded
     - many#0/loop#1/invoke
@@ -924,7 +955,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 43
+              execution_seq: 61
               path: [n]
               run_id: r1
           kind: record
@@ -955,7 +986,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 45
+              execution_seq: 64
               path: [n]
               run_id: r1
           kind: record
@@ -975,19 +1006,22 @@ expect:
       seed:
         n: one
   - [node_started, many#0/loop#1/invoke/__start__]
+  - - pool_commit
+    - many#0/loop#1/invoke/__start__
+    - value:
+        n: one
   - - node_succeeded
     - many#0/loop#1/invoke/__start__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 72
+      forward_capture:
+        bound_inputs: {n: one}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: one
+          - {kind: literal, value_json: one}
           kind: record
           names: [n]
         scope:
@@ -1004,22 +1038,23 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __start__]
-      value:
-        n: one
   - [node_started, many#1/loop#1/invoke/__start__]
+  - - pool_commit
+    - many#1/loop#1/invoke/__start__
+    - value:
+        n: one
   - - node_succeeded
     - many#1/loop#1/invoke/__start__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 75
+      forward_capture:
+        bound_inputs: {n: one}
         input_names: [n]
         node_data:
           input_output_paths:
             n: [n]
         route:
           children:
-          - kind: literal
-            value_json: one
+          - {kind: literal, value_json: one}
           kind: record
           names: [n]
         scope:
@@ -1036,22 +1071,20 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __start__]
-      value:
-        n: one
   - [node_started, many#0/loop#1/invoke/author]
+  - - pool_commit
+    - many#0/loop#1/invoke/author
+    - value: one
   - - node_succeeded
     - many#0/loop#1/invoke/author
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 78
+      forward_capture:
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
           effective_llm_config:
-            _connection:
-              endpoint: https://api.openai.com/v1
-              method: api_key
-              source: missing
+            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
             model: gpt-5.5
             provider: openai
           prompt_template: 'concise: ${n}'
@@ -1062,7 +1095,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 51
+              execution_seq: 71
               path: [n]
               run_id: r1
           kind: record
@@ -1081,21 +1114,20 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
-      value: one
   - [node_started, many#1/loop#1/invoke/author]
+  - - pool_commit
+    - many#1/loop#1/invoke/author
+    - value: one
   - - node_succeeded
     - many#1/loop#1/invoke/author
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 81
+      forward_capture:
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
           effective_llm_config:
-            _connection:
-              endpoint: https://api.openai.com/v1
-              method: api_key
-              source: missing
+            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
             model: gpt-5.5
             provider: openai
           prompt_template: 'concise: ${n}'
@@ -1106,7 +1138,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 53
+              execution_seq: 74
               path: [n]
               run_id: r1
           kind: record
@@ -1125,14 +1157,16 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
-      value: one
   - [node_started, many#0/loop#1/invoke/__end__]
+  - - pool_commit
+    - many#0/loop#1/invoke/__end__
+    - value: one
+      key: many#0/loop#1/invoke
   - - node_succeeded
     - many#0/loop#1/invoke/__end__
-    - commit_target: many#0/loop#1/invoke
+    - commit: 84
       forward_capture:
-        bound_inputs:
-          result: one
+        bound_inputs: {result: one}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -1142,7 +1176,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 55
+              execution_seq: 77
               path: []
               run_id: r1
           kind: record
@@ -1161,14 +1195,16 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __end__]
-      value: one
   - [node_started, many#1/loop#1/invoke/__end__]
+  - - pool_commit
+    - many#1/loop#1/invoke/__end__
+    - value: one
+      key: many#1/loop#1/invoke
   - - node_succeeded
     - many#1/loop#1/invoke/__end__
-    - commit_target: many#1/loop#1/invoke
+    - commit: 87
       forward_capture:
-        bound_inputs:
-          result: one
+        bound_inputs: {result: one}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -1178,7 +1214,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 57
+              execution_seq: 80
               path: []
               run_id: r1
           kind: record
@@ -1197,13 +1233,16 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, __end__]
-      value: one
   - [node_started, many#0/loop#1/__end__]
+  - - pool_commit
+    - many#0/loop#1/__end__
+    - value:
+        n: one
   - - node_succeeded
     - many#0/loop#1/__end__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 90
+      forward_capture:
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
@@ -1213,7 +1252,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 59
+              execution_seq: 83
               path: []
               run_id: r1
           kind: record
@@ -1229,14 +1268,16 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __end__]
-      value:
-        n: one
   - [node_started, many#1/loop#1/__end__]
+  - - pool_commit
+    - many#1/loop#1/__end__
+    - value:
+        n: one
   - - node_succeeded
     - many#1/loop#1/__end__
-    - forward_capture:
-        bound_inputs:
-          n: one
+    - commit: 93
+      forward_capture:
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
@@ -1246,7 +1287,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 61
+              execution_seq: 86
               path: []
               run_id: r1
           kind: record
@@ -1262,15 +1303,17 @@ expect:
             kind: loop_body
             static_path: [many, loop]
           static_path: [many, loop, __end__]
-      value:
-        n: one
   - [node_started, many#0/loop~2]
+  - - pool_commit
+    - many#0/loop~2
+    - value:
+        n: one
+      key: many#0/loop
   - - node_succeeded
     - many#0/loop~2
-    - commit_target: many#0/loop
+    - commit: 96
       forward_capture:
-        bound_inputs:
-          n: one
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
@@ -1280,7 +1323,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 63
+              execution_seq: 89
               path: [n]
               run_id: r1
           kind: record
@@ -1296,15 +1339,17 @@ expect:
             kind: loop_driver
             static_path: [many, loop]
           static_path: [many, loop]
-      value:
-        n: one
   - [node_started, many#1/loop~2]
+  - - pool_commit
+    - many#1/loop~2
+    - value:
+        n: one
+      key: many#1/loop
   - - node_succeeded
     - many#1/loop~2
-    - commit_target: many#1/loop
+    - commit: 99
       forward_capture:
-        bound_inputs:
-          n: one
+        bound_inputs: {n: one}
         evaluated_keys: [n]
         input_names: [n]
         node_data:
@@ -1314,7 +1359,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 65
+              execution_seq: 92
               path: [n]
               run_id: r1
           kind: record
@@ -1330,14 +1375,15 @@ expect:
             kind: loop_driver
             static_path: [many, loop]
           static_path: [many, loop]
-      value:
-        n: one
   - [node_started, many#0/__end__]
+  - - pool_commit
+    - many#0/__end__
+    - value: one
   - - node_succeeded
     - many#0/__end__
-    - forward_capture:
-        bound_inputs:
-          result: one
+    - commit: 102
+      forward_capture:
+        bound_inputs: {result: one}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -1347,7 +1393,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 67
+              execution_seq: 95
               path: [n]
               run_id: r1
           kind: record
@@ -1360,13 +1406,15 @@ expect:
             kind: map_item
             static_path: [many]
           static_path: [many, __end__]
-      value: one
   - [node_started, many#1/__end__]
+  - - pool_commit
+    - many#1/__end__
+    - value: one
   - - node_succeeded
     - many#1/__end__
-    - forward_capture:
-        bound_inputs:
-          result: one
+    - commit: 105
+      forward_capture:
+        bound_inputs: {result: one}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -1376,7 +1424,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 69
+              execution_seq: 98
               path: [n]
               run_id: r1
           kind: record
@@ -1389,15 +1437,16 @@ expect:
             kind: map_item
             static_path: [many]
           static_path: [many, __end__]
-      value: one
   - [node_started, many/__end__]
+  - - pool_commit
+    - many/__end__
+    - value: [one, one]
+      key: many
   - - node_succeeded
     - many/__end__
-    - commit_target: many
+    - commit: 108
       forward_capture:
-        bound_inputs:
-          e0: one
-          e1: one
+        bound_inputs: {e0: one, e1: one}
         evaluated_keys: [e0, e1]
         input_names: [e0, e1]
         node_data:
@@ -1408,12 +1457,12 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 71
+              execution_seq: 101
               path: []
               run_id: r1
           - kind: source
             source:
-              execution_seq: 73
+              execution_seq: 104
               path: []
               run_id: r1
           kind: record
@@ -1423,11 +1472,14 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [many]
-      value: [one, one]
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: [one, one]
   - - node_succeeded
     - __end__
-    - forward_capture:
+    - commit: 111
+      forward_capture:
         bound_inputs:
           result: [one, one]
         evaluated_keys: [result]
@@ -1439,7 +1491,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 75
+              execution_seq: 107
               path: []
               run_id: r1
           kind: record
@@ -1449,7 +1501,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: [one, one]
   - - backward_started
     - null
     - attempt_id: 1
@@ -1464,7 +1515,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 13
             path: []
             run_id: r1
         - contribution_index: 0
@@ -1472,7 +1523,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 9
+            execution_seq: 16
             path: []
             run_id: r1
         feedback:
@@ -1487,71 +1538,18 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 3
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
           execution_seq: 5
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 15
-            path: []
-            run_id: r1
-        feedback:
-        - n: Refine n.
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            n: [Refine n.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 17
-            path: []
-            run_id: r1
-        feedback:
-        - n: Refine n.
-        invoked: true
-        result:
-          input_feedback:
-            n: [Refine n.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 9
+          execution_seq: 8
           path: []
           run_id: r1
       - attribution: []
@@ -1562,18 +1560,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 13
+          execution_seq: 10
           path: []
           run_id: r1
       - attribution:
@@ -1594,7 +1581,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 15
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -1603,7 +1590,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 25
+            execution_seq: 26
             path: []
             run_id: r1
         feedback:
@@ -1615,7 +1602,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 17
+          execution_seq: 16
           path: []
           run_id: r1
       - attribution: []
@@ -1646,7 +1633,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 27
+            execution_seq: 33
             path: []
             run_id: r1
         feedback:
@@ -1667,7 +1654,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 29
+            execution_seq: 36
             path: []
             run_id: r1
         feedback:
@@ -1679,63 +1666,25 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 25
+          execution_seq: 26
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 31
-            path: []
-            run_id: r1
-        feedback: [Refine n.]
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            n: [Refine n.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 27
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 33
-            path: []
-            run_id: r1
-        feedback: [Refine n.]
-        invoked: true
-        result:
-          input_feedback:
-            n: [Refine n.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
           execution_seq: 29
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 35
-            path: []
-            run_id: r1
-        feedback: [Refine n.]
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            result: [Refine n.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
@@ -1748,14 +1697,14 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 37
+            execution_seq: 39
             path: []
             run_id: r1
-        feedback: [Refine n.]
+        feedback: [{n: Refine n.}]
         invoked: true
         result:
           input_feedback:
-            result: [Refine n.]
+            n: [Refine n.]
           self_feedback: []
           variable_feedback: {}
         source:
@@ -1768,11 +1717,10 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 43
+            execution_seq: 42
             path: []
             run_id: r1
-        feedback:
-        - n: Refine n.
+        feedback: [{n: Refine n.}]
         invoked: true
         result:
           input_feedback:
@@ -1780,12 +1728,12 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 35
+          execution_seq: 36
           path: []
           run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: n
+          input_name: result
           message_index: 0
           parents: [0]
           sender:
@@ -1793,50 +1741,28 @@ expect:
             path: []
             run_id: r1
         feedback:
-        - n: Refine n.
+        - Refine n.
         invoked: true
         result:
           input_feedback:
             n: [Refine n.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 37
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
           execution_seq: 39
           path: []
           run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 41
-          path: []
-          run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: n
+          input_name: result
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 51
+            execution_seq: 48
             path: []
             run_id: r1
         feedback:
-        - n: Refine n.
+        - Refine n.
         invoked: true
         result:
           input_feedback:
@@ -1844,50 +1770,29 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 43
+          execution_seq: 42
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 53
-            path: []
-            run_id: r1
-        feedback:
-        - n: Refine n.
+      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 51, path: [], run_id: r1}}]
+        feedback: [Refine n.]
         invoked: true
         result:
-          input_feedback:
-            n: [Refine n.]
+          input_feedback: {result: [Refine n.]}
           self_feedback: []
           variable_feedback: {}
         source:
           execution_seq: 45
           path: []
           run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
+      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 54, path: [], run_id: r1}}]
+        feedback: [Refine n.]
+        invoked: true
         result:
-          input_feedback: {}
+          input_feedback: {result: [Refine n.]}
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 47
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 49
+          execution_seq: 48
           path: []
           run_id: r1
       - attribution:
@@ -1896,7 +1801,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 55
+            execution_seq: 61
             path: []
             run_id: r1
         feedback:
@@ -1917,7 +1822,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 57
+            execution_seq: 64
             path: []
             run_id: r1
         feedback:
@@ -1929,63 +1834,25 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 53
+          execution_seq: 54
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 59
-            path: []
-            run_id: r1
-        feedback: [Review every iteration.]
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            n: [Refine n.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 55
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 61
-            path: []
-            run_id: r1
-        feedback: [Review every iteration.]
-        invoked: true
-        result:
-          input_feedback:
-            n: [Refine n.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
           execution_seq: 57
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 63
-            path: []
-            run_id: r1
-        feedback: [Review every iteration.]
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            result: [Review every iteration.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
@@ -1998,14 +1865,15 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 65
+            execution_seq: 71
             path: []
             run_id: r1
-        feedback: [Review every iteration.]
+        feedback:
+        - n: Refine n.
         invoked: true
         result:
           input_feedback:
-            result: [Review every iteration.]
+            n: [Refine n.]
           self_feedback: []
           variable_feedback: {}
         source:
@@ -2018,78 +1886,37 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 67
+            execution_seq: 74
             path: []
             run_id: r1
         feedback:
-        - n: Review every iteration.
+        - n: Refine n.
         invoked: true
         result:
           input_feedback:
-            n: [Review every iteration.]
+            n: [Refine n.]
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 63
+          execution_seq: 64
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 69
-            path: []
-            run_id: r1
-        feedback:
-        - n: Review every iteration.
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            n: [Review every iteration.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 65
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 71
-            path: []
-            run_id: r1
-        feedback:
-        - n: Review every iteration.
-        invoked: true
-        result:
-          input_feedback:
-            n: [Review every iteration.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
           execution_seq: 67
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 73
-            path: []
-            run_id: r1
-        feedback:
-        - n: Review every iteration.
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            n: [Review every iteration.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
@@ -2098,18 +1925,18 @@ expect:
           run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: e0
+          input_name: n
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 75
+            execution_seq: 77
             path: []
             run_id: r1
-        feedback: [Review every iteration.]
+        feedback: [{n: Refine n.}]
         invoked: true
         result:
           input_feedback:
-            result: [Review every iteration.]
+            n: [Refine n.]
           self_feedback: []
           variable_feedback: {}
         source:
@@ -2118,11 +1945,195 @@ expect:
           run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: e1
+          input_name: n
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 75
+            execution_seq: 80
+            path: []
+            run_id: r1
+        feedback: [{n: Refine n.}]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 74
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 83
+            path: []
+            run_id: r1
+        feedback:
+        - Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 77
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 86
+            path: []
+            run_id: r1
+        feedback:
+        - Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            n: [Refine n.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 80
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 89
+            path: []
+            run_id: r1
+        feedback:
+        - Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 83
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 92
+            path: []
+            run_id: r1
+        feedback:
+        - Review every iteration.
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 86
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 95
+            path: []
+            run_id: r1
+        feedback: [{n: Review every iteration.}]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 89
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 98
+            path: []
+            run_id: r1
+        feedback: [{n: Review every iteration.}]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 92
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 101
+            path: []
+            run_id: r1
+        feedback: [{n: Review every iteration.}]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 95
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 104
+            path: []
+            run_id: r1
+        feedback: [{n: Review every iteration.}]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 98
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e0
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 107
             path: []
             run_id: r1
         feedback: [Review every iteration.]
@@ -2133,7 +2144,27 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 73
+          execution_seq: 101
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e1
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 107
+            path: []
+            run_id: r1
+        feedback: [Review every iteration.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 104
           path: []
           run_id: r1
       - attribution:
@@ -2142,7 +2173,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 77
+            execution_seq: 110
             path: []
             run_id: r1
         feedback: [Review every iteration.]
@@ -2154,7 +2185,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 75
+          execution_seq: 107
           path: []
           run_id: r1
       - attribution:
@@ -2171,7 +2202,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 77
+          execution_seq: 110
           path: []
           run_id: r1
       proposals: []

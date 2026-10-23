@@ -4,7 +4,7 @@
 # ask_user from node `ask` (its question is the gate's prompt), and the answer is the gate's
 # output: {r: {DB: Postgres}}.
 kind: run
-rules: [llm]
+rules: [llm, run-log]
 flow: |
   id: t
   name: t
@@ -66,21 +66,34 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs:
-        go: true
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {go: true}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         go: true
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, router]
   - - node_routed
     - router
     - handle: ask
   - [node_started, ask__compose]
-  - - node_succeeded
+  - - pool_commit
     - ask__compose
     - value:
       - header: DB
@@ -89,17 +102,26 @@ expect:
         - description: Relational.
           label: Postgres
         question: Which database?
-  - [node_started, ask]
   - - node_succeeded
+    - ask__compose
+    - {commit: 11}
+  - [node_started, ask]
+  - - pool_commit
     - ask
     - value:
         DB: Postgres
-  - [node_started, __end__]
   - - node_succeeded
+    - ask
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         r:
           DB: Postgres
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

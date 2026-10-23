@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: nested-inline-composites
   name: nested_inline_composites
@@ -118,15 +119,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        items: [3, 1, 2]
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value:
         items: [3, 1, 2]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        items: [3, 1, 2]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, outer_call]
   - - node_expanded
     - outer_call
@@ -142,16 +157,22 @@ expect:
         n: 0
       - 0
   - [node_started, outer_call/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer_call/__start__
     - value:
         items: [3, 1, 2]
-  - [node_started, outer_loop#0/__start__]
   - - node_succeeded
+    - outer_call/__start__
+    - {commit: 13}
+  - [node_started, outer_loop#0/__start__]
+  - - pool_commit
     - outer_loop#0/__start__
     - value:
         exited: false
         n: 0
+  - - node_succeeded
+    - outer_loop#0/__start__
+    - {commit: 16}
   - [node_started, outer_call/inner]
   - - node_expanded
     - outer_call/inner
@@ -168,78 +189,123 @@ expect:
         exited: false
         n: 0
   - [node_started, outer_call/inner/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer_call/inner/__start__
     - value: {}
-  - [node_started, outer_loop#0/inner/__start__]
   - - node_succeeded
+    - outer_call/inner/__start__
+    - {commit: 23}
+  - [node_started, outer_loop#0/inner/__start__]
+  - - pool_commit
     - outer_loop#0/inner/__start__
     - value:
         exited: false
         n: 0
-  - [node_started, outer_call/inner#0/__start__]
   - - node_succeeded
+    - outer_loop#0/inner/__start__
+    - {commit: 26}
+  - [node_started, outer_call/inner#0/__start__]
+  - - pool_commit
     - outer_call/inner#0/__start__
     - value:
         value: 3
-  - [node_started, outer_call/inner#1/__start__]
   - - node_succeeded
+    - outer_call/inner#0/__start__
+    - {commit: 29}
+  - [node_started, outer_call/inner#1/__start__]
+  - - pool_commit
     - outer_call/inner#1/__start__
     - value:
         value: 1
-  - [node_started, outer_call/inner#2/__start__]
   - - node_succeeded
+    - outer_call/inner#1/__start__
+    - {commit: 32}
+  - [node_started, outer_call/inner#2/__start__]
+  - - pool_commit
     - outer_call/inner#2/__start__
     - value:
         value: 2
-  - [node_started, outer_loop#0/inner/bump]
   - - node_succeeded
+    - outer_call/inner#2/__start__
+    - {commit: 35}
+  - [node_started, outer_loop#0/inner/bump]
+  - - pool_commit
     - outer_loop#0/inner/bump
     - value:
         exited: false
         n: 1
-  - [node_started, outer_call/inner#0/echo]
   - - node_succeeded
+    - outer_loop#0/inner/bump
+    - {commit: 38}
+  - [node_started, outer_call/inner#0/echo]
+  - - pool_commit
     - outer_call/inner#0/echo
     - value: 3
-  - [node_started, outer_call/inner#1/echo]
   - - node_succeeded
+    - outer_call/inner#0/echo
+    - {commit: 41}
+  - [node_started, outer_call/inner#1/echo]
+  - - pool_commit
     - outer_call/inner#1/echo
     - value: 1
-  - [node_started, outer_call/inner#2/echo]
   - - node_succeeded
+    - outer_call/inner#1/echo
+    - {commit: 44}
+  - [node_started, outer_call/inner#2/echo]
+  - - pool_commit
     - outer_call/inner#2/echo
     - value: 2
-  - [node_started, outer_loop#0/inner/__end__]
   - - node_succeeded
+    - outer_call/inner#2/echo
+    - {commit: 47}
+  - [node_started, outer_loop#0/inner/__end__]
+  - - pool_commit
     - outer_loop#0/inner/__end__
-    - commit_target: outer_loop#0/inner
-      value:
+    - value:
         exited: false
         n: 1
-  - [node_started, outer_call/inner#0/__end__]
+      key: outer_loop#0/inner
   - - node_succeeded
+    - outer_loop#0/inner/__end__
+    - {commit: 50}
+  - [node_started, outer_call/inner#0/__end__]
+  - - pool_commit
     - outer_call/inner#0/__end__
     - value: 3
-  - [node_started, outer_call/inner#1/__end__]
   - - node_succeeded
+    - outer_call/inner#0/__end__
+    - {commit: 53}
+  - [node_started, outer_call/inner#1/__end__]
+  - - pool_commit
     - outer_call/inner#1/__end__
     - value: 1
-  - [node_started, outer_call/inner#2/__end__]
   - - node_succeeded
+    - outer_call/inner#1/__end__
+    - {commit: 56}
+  - [node_started, outer_call/inner#2/__end__]
+  - - pool_commit
     - outer_call/inner#2/__end__
     - value: 2
-  - [node_started, outer_loop#0/__end__]
   - - node_succeeded
+    - outer_call/inner#2/__end__
+    - {commit: 59}
+  - [node_started, outer_loop#0/__end__]
+  - - pool_commit
     - outer_loop#0/__end__
     - value:
         exited: false
         n: 1
+  - - node_succeeded
+    - outer_loop#0/__end__
+    - {commit: 62}
   - [node_started, outer_call/inner/__end__]
+  - - pool_commit
+    - outer_call/inner/__end__
+    - value: [3, 1, 2]
+      key: outer_call/inner
   - - node_succeeded
     - outer_call/inner/__end__
-    - commit_target: outer_call/inner
-      value: [3, 1, 2]
+    - {commit: 65}
   - [node_started, outer_loop~1]
   - - node_expanded
     - outer_loop~1
@@ -253,16 +319,22 @@ expect:
         n: 1
       - 1
   - [node_started, outer_call/__end__]
+  - - pool_commit
+    - outer_call/__end__
+    - value: [3, 1, 2]
+      key: outer_call
   - - node_succeeded
     - outer_call/__end__
-    - commit_target: outer_call
-      value: [3, 1, 2]
+    - {commit: 70}
   - [node_started, outer_loop#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer_loop#1/__start__
     - value:
         exited: false
         n: 1
+  - - node_succeeded
+    - outer_loop#1/__start__
+    - {commit: 73}
   - [node_started, outer_loop#1/inner]
   - - node_expanded
     - outer_loop#1/inner
@@ -271,45 +343,63 @@ expect:
         exited: false
         n: 1
   - [node_started, outer_loop#1/inner/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer_loop#1/inner/__start__
     - value:
         exited: false
         n: 1
-  - [node_started, outer_loop#1/inner/bump]
   - - node_succeeded
+    - outer_loop#1/inner/__start__
+    - {commit: 78}
+  - [node_started, outer_loop#1/inner/bump]
+  - - pool_commit
     - outer_loop#1/inner/bump
     - value:
         exited: false
         n: 2
-  - [node_started, outer_loop#1/inner/__end__]
   - - node_succeeded
+    - outer_loop#1/inner/bump
+    - {commit: 81}
+  - [node_started, outer_loop#1/inner/__end__]
+  - - pool_commit
     - outer_loop#1/inner/__end__
-    - commit_target: outer_loop#1/inner
-      value:
+    - value:
         exited: false
         n: 2
-  - [node_started, outer_loop#1/__end__]
+      key: outer_loop#1/inner
   - - node_succeeded
+    - outer_loop#1/inner/__end__
+    - {commit: 84}
+  - [node_started, outer_loop#1/__end__]
+  - - pool_commit
     - outer_loop#1/__end__
     - value:
         exited: false
         n: 2
-  - [node_started, outer_loop~2]
   - - node_succeeded
+    - outer_loop#1/__end__
+    - {commit: 87}
+  - [node_started, outer_loop~2]
+  - - pool_commit
     - outer_loop~2
-    - commit_target: outer_loop
-      value:
+    - value:
         exited: false
         n: 2
-  - [node_started, __end__]
+      key: outer_loop
   - - node_succeeded
+    - outer_loop~2
+    - {commit: 90}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         looped:
           exited: false
           n: 2
         mapped: [3, 1, 2]
+  - - node_succeeded
+    - __end__
+    - {commit: 93}
   events:
   - [RunStarted]
   - - NodeStarted

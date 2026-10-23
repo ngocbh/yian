@@ -3,6 +3,7 @@
 # iteration, 0.9 stops it, and the loop commits the carried record under `polish`.
 # The header's "need a provider to RUN" is met by scripted replies.
 kind: run
+rules: [run-log]
 flow: |
   # 28 — loop + the new expression grammar.
   #
@@ -83,24 +84,31 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {seed: a rough draft}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           polish/critic:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {seed: a rough draft}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {seed: a rough draft}}]
+    - [pool_commit, __start__, {value: {seed: a rough draft}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, polish]
     - [node_expanded, polish, {seed: [{draft: a rough draft, score: 0.0}, 0], prune_ids: []}]
     - [node_started, "polish#0/__start__"]
-    - [node_succeeded, "polish#0/__start__", {value: {draft: a rough draft, score: 0.0}}]
+    - [pool_commit, "polish#0/__start__", {value: {draft: a rough draft, score: 0.0}}]
+    - [node_succeeded, polish#0/__start__, {commit: 11}]
     - [node_started, "polish#0/critic"]
-    - [node_succeeded, "polish#0/critic", {value: {draft: a better draft, score: 0.6}}]
+    - [pool_commit, "polish#0/critic", {value: {draft: a better draft, score: 0.6}}]
+    - [node_succeeded, polish#0/critic, {commit: 14}]
     - [node_started, "polish#0/__end__"]
-    - [node_succeeded, "polish#0/__end__", {value: {draft: a better draft, score: 0.6}}]
+    - [pool_commit, "polish#0/__end__", {value: {draft: a better draft, score: 0.6}}]
+    - [node_succeeded, polish#0/__end__, {commit: 17}]
     # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
     # `prune_ids`; see src/yian/nodes/loop/node.py.
     - [node_started, polish~1]
@@ -109,13 +117,18 @@ expect:
       - seed: [{draft: a better draft, score: 0.6}, 1]
         prune_ids: ["polish#0/__end__", "polish#0/__start__", "polish#0/critic", polish~1]
     - [node_started, "polish#1/__start__"]
-    - [node_succeeded, "polish#1/__start__", {value: {draft: a better draft, score: 0.6}}]
+    - [pool_commit, "polish#1/__start__", {value: {draft: a better draft, score: 0.6}}]
+    - [node_succeeded, polish#1/__start__, {commit: 22}]
     - [node_started, "polish#1/critic"]
-    - [node_succeeded, "polish#1/critic", {value: {draft: a polished draft, score: 0.9}}]
+    - [pool_commit, "polish#1/critic", {value: {draft: a polished draft, score: 0.9}}]
+    - [node_succeeded, polish#1/critic, {commit: 25}]
     - [node_started, "polish#1/__end__"]
-    - [node_succeeded, "polish#1/__end__", {value: {draft: a polished draft, score: 0.9}}]
+    - [pool_commit, "polish#1/__end__", {value: {draft: a polished draft, score: 0.9}}]
+    - [node_succeeded, polish#1/__end__, {commit: 28}]
     - [node_started, polish~2]
     # The stopping driver commits the carried record under the loop's own id.
-    - [node_succeeded, polish~2, {value: {draft: a polished draft, score: 0.9}, commit_target: polish}]
+    - [pool_commit, polish~2, {value: {draft: a polished draft, score: 0.9}, key: polish}]
+    - [node_succeeded, polish~2, {commit: 31}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: a polished draft}]
+    - [pool_commit, __end__, {value: a polished draft}]
+    - [node_succeeded, __end__, {commit: 34}]

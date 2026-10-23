@@ -1275,7 +1275,7 @@ describe("model_attempt steps through the engine", () => {
     const agent = new AgentNode("chat", { prompt: "hi", llmConfig: NATIVE });
     const built = agentEngine(agent, serving(new ScriptedModel([failure, textReply("ok")], NATIVE)));
     expect((await built.run()).at(-1)).toEqual(new RunSucceeded({ output: "ok" }));
-    expect(chatRecords(built)).toEqual(["NodeStartedRecord", ATTEMPT, "NodeSucceededRecord"]);
+    expect(chatRecords(built)).toEqual(["NodeStartedRecord", ATTEMPT, "PoolCommitRecord", "NodeSucceededRecord"]);
   });
 
   test("a resumed call-time agent restarts past its model_attempt step and numbers its calls from 1 again", async () => {
@@ -1308,6 +1308,12 @@ describe("model_attempt steps through the engine", () => {
     });
     expect((await resumed.run()).at(-1)).toEqual(new RunSucceeded({ output: "done" }));
     // The new start records its config again and numbers its calls from 1 again.
-    expect(chatRecords(resumed).slice(3)).toEqual(["NodeStartedRecord", config, ATTEMPT, "NodeSucceededRecord"]);
+    expect(chatRecords(resumed).slice(3)).toEqual([
+      "NodeStartedRecord",
+      config,
+      ATTEMPT,
+      "PoolCommitRecord",
+      "NodeSucceededRecord",
+    ]);
   });
 });

@@ -48,7 +48,6 @@ import { type RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.t
 import {
   commitPrepared,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   prepareRunResumed,
   prepareRunStopped,
 } from "../../src/runtime/state.ts";
@@ -61,6 +60,7 @@ import {
   graph,
   ownerEngine,
   POLICY,
+  prepareOutput,
   RecordNode,
   rejected,
 } from "./run_state_fixtures.ts";
@@ -445,7 +445,7 @@ test("nothing ready before a terminal result is nonterminal quiescence", async (
   const error = await rejected(built.run());
   expect(error).toEqual(new Error("FlowEngine reached nonterminal quiescence"));
   expect(built.signal.aborted).toBe(true);
-  expect(built.log.nextSequence).toBe(1);
+  expect(built.log.nextSequence).toBe(3);
 });
 
 // --- NodeAttemptResumed ---
@@ -499,7 +499,7 @@ test("resumedAttemptEvents counts two crashes as two interrupted attempts", () =
 test("resumedAttemptEvents follows the record's retryNodeIds", () => {
   const { state, log } = resumable();
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "b"));
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
   commitPrepared(log, state, prepareNodeStarted(state, "b"));

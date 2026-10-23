@@ -2,6 +2,7 @@
 # Pins: a defaulted (`:-`) host input only makes the lifted call wait: it runs after the skip.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -86,15 +87,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        other: false
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {other: false}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         other: false
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, pick]
   - - node_routed
     - pick
@@ -106,28 +120,43 @@ expect:
       seed:
         tag: draft
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         tag: draft
-  - [node_started, __call_0/fx]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 13}
+  - [node_started, __call_0/fx]
+  - - pool_commit
     - __call_0/fx
     - value: draft
+  - - node_succeeded
+    - __call_0/fx
+    - {commit: 16}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: draft
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: draft
+    - {commit: 19}
   - [node_started, publish]
-  - - node_succeeded
+  - - pool_commit
     - publish
     - value: draftnone
-  - [node_started, __end__]
   - - node_succeeded
+    - publish
+    - {commit: 22}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         r: draftnone
+  - - node_succeeded
+    - __end__
+    - {commit: 25}
   events:
   - [RunStarted]
   - - NodeStarted

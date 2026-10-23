@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: tool-failure-before-agent
   name: tool_failure_before_agent
@@ -51,8 +52,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {x: a}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           write:
@@ -60,8 +60,13 @@ expect:
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
         call_time_llm: {agents: {review: {}}}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {x: a}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {x: a}}]
+    - [pool_commit, __start__, {value: {x: a}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, check]
     - - node_failed
       - check

@@ -2,7 +2,7 @@
 # A CASE `when:` calling `upper` on a skipped branch's null fails the gate. TS fails
 # condition.evaluate and Python node.execute.
 kind: run
-rules: [failure-codes]
+rules: [failure-codes, run-log]
 flow: |2
 
   id: when_escape
@@ -111,25 +111,40 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        score: 0.2
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {score: 0.2, topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         score: 0.2
         topic: ACME
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: '#else'
   - [node_started, con]
-  - - node_succeeded
+  - - pool_commit
     - con
     - value: 'con: ACME'
+  - - node_succeeded
+    - con
+    - {commit: 11}
   - [node_started, gate2]
   - - node_failed
     - gate2

@@ -84,7 +84,6 @@ import { evidencePayload } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -98,6 +97,7 @@ import {
   graph,
   NO_ENV,
   noGrowth,
+  prepareOutput,
   rejected,
   serving,
   traceSnapshot,
@@ -126,7 +126,7 @@ test("the backward context allows absent node data without changing the record",
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, START_ID, {}, { forwardCapture: forwardCapture(state.flow.nodes.get(START_ID)!, {}) }),
+    prepareOutput(log, state, START_ID, {}, { forwardCapture: forwardCapture(state.flow.nodes.get(START_ID)!, {}) }),
   );
 
   const trace = state.trace!;

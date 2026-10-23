@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: partial-in-call
@@ -106,13 +107,27 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, mapped]
   - - node_expanded
     - mapped
@@ -127,24 +142,36 @@ expect:
       seed:
         tag: kept
   - [node_started, mapped/__start__]
-  - - node_succeeded
+  - - pool_commit
     - mapped/__start__
     - value: {}
-  - [node_started, outer/__start__]
   - - node_succeeded
+    - mapped/__start__
+    - {commit: 13}
+  - [node_started, outer/__start__]
+  - - pool_commit
     - outer/__start__
     - value:
         tag: kept
-  - [node_started, mapped#0/__start__]
   - - node_succeeded
+    - outer/__start__
+    - {commit: 16}
+  - [node_started, mapped#0/__start__]
+  - - pool_commit
     - mapped#0/__start__
     - value:
         tag: a
-  - [node_started, mapped#1/__start__]
   - - node_succeeded
+    - mapped#0/__start__
+    - {commit: 19}
+  - [node_started, mapped#1/__start__]
+  - - pool_commit
     - mapped#1/__start__
     - value:
         tag: b
+  - - node_succeeded
+    - mapped#1/__start__
+    - {commit: 22}
   - [node_started, outer/loop]
   - - node_expanded
     - outer/loop
@@ -170,50 +197,77 @@ expect:
         tag: b
       - 0
   - [node_started, outer/loop#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/loop#0/__start__
     - value:
         n: 0
-  - [node_started, mapped#0/loop#0/__start__]
   - - node_succeeded
+    - outer/loop#0/__start__
+    - {commit: 31}
+  - [node_started, mapped#0/loop#0/__start__]
+  - - pool_commit
     - mapped#0/loop#0/__start__
     - value:
         n: 0
-  - [node_started, mapped#1/loop#0/__start__]
   - - node_succeeded
+    - mapped#0/loop#0/__start__
+    - {commit: 34}
+  - [node_started, mapped#1/loop#0/__start__]
+  - - pool_commit
     - mapped#1/loop#0/__start__
     - value:
         n: 0
-  - [node_started, outer/loop#0/step]
   - - node_succeeded
+    - mapped#1/loop#0/__start__
+    - {commit: 37}
+  - [node_started, outer/loop#0/step]
+  - - pool_commit
     - outer/loop#0/step
     - value:
         n: 1
-  - [node_started, mapped#0/loop#0/step]
   - - node_succeeded
+    - outer/loop#0/step
+    - {commit: 40}
+  - [node_started, mapped#0/loop#0/step]
+  - - pool_commit
     - mapped#0/loop#0/step
     - value:
         n: 1
-  - [node_started, mapped#1/loop#0/step]
   - - node_succeeded
+    - mapped#0/loop#0/step
+    - {commit: 43}
+  - [node_started, mapped#1/loop#0/step]
+  - - pool_commit
     - mapped#1/loop#0/step
     - value:
         n: 1
-  - [node_started, outer/loop#0/__end__]
   - - node_succeeded
+    - mapped#1/loop#0/step
+    - {commit: 46}
+  - [node_started, outer/loop#0/__end__]
+  - - pool_commit
     - outer/loop#0/__end__
     - value:
         n: 1
-  - [node_started, mapped#0/loop#0/__end__]
   - - node_succeeded
+    - outer/loop#0/__end__
+    - {commit: 49}
+  - [node_started, mapped#0/loop#0/__end__]
+  - - pool_commit
     - mapped#0/loop#0/__end__
     - value:
         n: 1
-  - [node_started, mapped#1/loop#0/__end__]
   - - node_succeeded
+    - mapped#0/loop#0/__end__
+    - {commit: 52}
+  - [node_started, mapped#1/loop#0/__end__]
+  - - pool_commit
     - mapped#1/loop#0/__end__
     - value:
         n: 1
+  - - node_succeeded
+    - mapped#1/loop#0/__end__
+    - {commit: 55}
   - [node_started, outer/loop~1]
   - - node_expanded
     - outer/loop~1
@@ -251,101 +305,149 @@ expect:
         tag: b
       - 1
   - [node_started, outer/loop#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/loop#1/__start__
     - value:
         n: 1
-  - [node_started, mapped#0/loop#1/__start__]
   - - node_succeeded
+    - outer/loop#1/__start__
+    - {commit: 64}
+  - [node_started, mapped#0/loop#1/__start__]
+  - - pool_commit
     - mapped#0/loop#1/__start__
     - value:
         n: 1
-  - [node_started, mapped#1/loop#1/__start__]
   - - node_succeeded
+    - mapped#0/loop#1/__start__
+    - {commit: 67}
+  - [node_started, mapped#1/loop#1/__start__]
+  - - pool_commit
     - mapped#1/loop#1/__start__
     - value:
         n: 1
-  - [node_started, outer/loop#1/step]
   - - node_succeeded
+    - mapped#1/loop#1/__start__
+    - {commit: 70}
+  - [node_started, outer/loop#1/step]
+  - - pool_commit
     - outer/loop#1/step
     - value:
         n: 2
-  - [node_started, mapped#0/loop#1/step]
   - - node_succeeded
+    - outer/loop#1/step
+    - {commit: 73}
+  - [node_started, mapped#0/loop#1/step]
+  - - pool_commit
     - mapped#0/loop#1/step
     - value:
         n: 2
-  - [node_started, mapped#1/loop#1/step]
   - - node_succeeded
+    - mapped#0/loop#1/step
+    - {commit: 76}
+  - [node_started, mapped#1/loop#1/step]
+  - - pool_commit
     - mapped#1/loop#1/step
     - value:
         n: 2
-  - [node_started, outer/loop#1/__end__]
   - - node_succeeded
+    - mapped#1/loop#1/step
+    - {commit: 79}
+  - [node_started, outer/loop#1/__end__]
+  - - pool_commit
     - outer/loop#1/__end__
     - value:
         n: 2
-  - [node_started, mapped#0/loop#1/__end__]
   - - node_succeeded
+    - outer/loop#1/__end__
+    - {commit: 82}
+  - [node_started, mapped#0/loop#1/__end__]
+  - - pool_commit
     - mapped#0/loop#1/__end__
     - value:
         n: 2
-  - [node_started, mapped#1/loop#1/__end__]
   - - node_succeeded
+    - mapped#0/loop#1/__end__
+    - {commit: 85}
+  - [node_started, mapped#1/loop#1/__end__]
+  - - pool_commit
     - mapped#1/loop#1/__end__
     - value:
         n: 2
+  - - node_succeeded
+    - mapped#1/loop#1/__end__
+    - {commit: 88}
   - [node_started, outer/loop~2]
+  - - pool_commit
+    - outer/loop~2
+    - value:
+        n: 2
+        tag: kept
+      key: outer/loop
   - - node_succeeded
     - outer/loop~2
-    - commit_target: outer/loop
-      value:
-        n: 2
-        tag: kept
+    - {commit: 91}
   - [node_started, mapped#0/loop~2]
-  - - node_succeeded
+  - - pool_commit
     - mapped#0/loop~2
-    - commit_target: mapped#0/loop
-      value:
+    - value:
         n: 2
         tag: a
-  - [node_started, mapped#1/loop~2]
+      key: mapped#0/loop
   - - node_succeeded
+    - mapped#0/loop~2
+    - {commit: 94}
+  - [node_started, mapped#1/loop~2]
+  - - pool_commit
     - mapped#1/loop~2
-    - commit_target: mapped#1/loop
-      value:
+    - value:
         n: 2
         tag: b
-  - [node_started, outer/__end__]
+      key: mapped#1/loop
   - - node_succeeded
+    - mapped#1/loop~2
+    - {commit: 97}
+  - [node_started, outer/__end__]
+  - - pool_commit
     - outer/__end__
-    - commit_target: outer
-      value:
+    - value:
         n: 2
         tag: kept
-  - [node_started, mapped#0/__end__]
+      key: outer
   - - node_succeeded
+    - outer/__end__
+    - {commit: 100}
+  - [node_started, mapped#0/__end__]
+  - - pool_commit
     - mapped#0/__end__
     - value:
         n: 2
         tag: a
-  - [node_started, mapped#1/__end__]
   - - node_succeeded
+    - mapped#0/__end__
+    - {commit: 103}
+  - [node_started, mapped#1/__end__]
+  - - pool_commit
     - mapped#1/__end__
     - value:
         n: 2
         tag: b
-  - [node_started, mapped/__end__]
   - - node_succeeded
+    - mapped#1/__end__
+    - {commit: 106}
+  - [node_started, mapped/__end__]
+  - - pool_commit
     - mapped/__end__
-    - commit_target: mapped
-      value:
+    - value:
       - n: 2
         tag: a
       - n: 2
         tag: b
-  - [node_started, __end__]
+      key: mapped
   - - node_succeeded
+    - mapped/__end__
+    - {commit: 109}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         mapped:
@@ -356,6 +458,9 @@ expect:
         outer:
           n: 2
           tag: kept
+  - - node_succeeded
+    - __end__
+    - {commit: 112}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -3,7 +3,7 @@
 # run-map-call/seed_e24_nested_code_raise), and the TS `code:` scalar spans columns 11-73; Python's message and
 # columns 11-31 are in python_expect.
 kind: backward
-rules: [code]
+rules: [code, run-log]
 flow: |
   id: f
   name: f
@@ -61,24 +61,37 @@ expect:
         agents:
           chat:
             provider: openai
-      inputs: {}
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs: {}
         node_data:
           input_output_paths: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: start
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value: {}
   - [node_started, pick]
   - - node_failed
     - pick

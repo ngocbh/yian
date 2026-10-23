@@ -37,10 +37,16 @@ import { Parameter, PartialRecordContract, ValueContract } from "../../src/nodes
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
-import { commitPrepared, NodeDataError, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
+import { commitPrepared, NodeDataError, prepareNodeStarted } from "../../src/runtime/state.ts";
 import { Type, TypeCheckError, type Value, ValueKind } from "../../src/typesys/index.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { commitStartSuccess, FuncNode, initializedAndStarted, thrownBy } from "./run_state_fixtures.ts";
+import {
+  commitStartSuccess,
+  FuncNode,
+  initializedAndStarted,
+  prepareOutput,
+  thrownBy,
+} from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -191,15 +197,15 @@ test.each<[string, Value]>([
 ])("a long int in a partial record output names the limit (%s)", (_id, output) => {
   const { state, log } = partialRecordWorking();
 
-  commitPrepared(log, state, prepareNodeSucceeded(state, "work", output));
+  commitPrepared(log, state, prepareOutput(log, state, "work", output));
 
   expect(state.pool.get("work")).toEqual(output);
 });
 
 test("a long int in a partial record output names the limit (mistyped-field)", () => {
-  const { state } = partialRecordWorking();
+  const { state, log } = partialRecordWorking();
 
-  const caught = thrownBy(() => prepareNodeSucceeded(state, "work", { items: [1n], label: BIG, note: "x" }));
+  const caught = thrownBy(() => prepareOutput(log, state, "work", { items: [1n], label: BIG, note: "x" }));
 
   expect(caught).toBeInstanceOf(NodeDataError);
   const original = (caught as NodeDataError).original as TypeCheckError;

@@ -4,6 +4,7 @@
 # the float input `weight` written `1.0`. The entry_id is a literal hash, not a placeholder,
 # because a model request is compared exactly, without placeholders.
 kind: run
+rules: [run-log]
 flow: |
   id: episodic-history
   name: episodic_history
@@ -60,7 +61,7 @@ host:
                 You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
 
                 Memory context (canonical JSON; sections are ordered from outer workflow to local agent):
-                {"order":"outer-to-local","sections":[{"index":1,"memory":"episodic","text":"{\"entry_id\":\"f917ea78ddef070bd304628d93aad0a209eb7fc7f93062b8899df432edd33681\",\"episode\":{\"base_system_prompt\":\"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.\",\"execution_seq\":3,\"failure\":null,\"inputs\":{\"topic\":\"queue ordering\",\"weight\":1.0},\"interactions\":[{\"kind\":\"model_text\",\"text\":\"Use a queue to preserve arrival order.\"}],\"memory_sections\":[],\"occurrence_path\":[],\"output\":\"Use a queue to preserve arrival order.\",\"owner_static_path\":[\"answer\"],\"prompt\":\"Explain queue ordering.\",\"run_id\":\"r1\",\"status\":\"succeeded\"}}"}]}
+                {"order":"outer-to-local","sections":[{"index":1,"memory":"episodic","text":"{\"entry_id\":\"4e4cedab5de472183200b64622729b09e4af049c24c3b79eed80a517424f45a3\",\"episode\":{\"base_system_prompt\":\"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.\",\"execution_seq\":8,\"failure\":null,\"inputs\":{\"topic\":\"queue ordering\",\"weight\":1.0},\"interactions\":[{\"kind\":\"model_text\",\"text\":\"Use a queue to preserve arrival order.\"}],\"memory_sections\":[],\"occurrence_path\":[],\"output\":\"Use a queue to preserve arrival order.\",\"owner_static_path\":[\"answer\"],\"prompt\":\"Explain queue ordering.\",\"run_id\":\"r1\",\"status\":\"succeeded\"}}"}]}
           - format: yian.message.v1
             role: user
             parts:
@@ -81,20 +82,39 @@ expect:
             source: missing
           model: test-model
           provider: openai
-      inputs:
-        topic: queue ordering
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r2}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: queue ordering}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         topic: queue ordering
-  - [node_started, answer]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, answer]
+  - - pool_commit
     - answer
     - value: Use a queue again.
-  - [node_started, __end__]
   - - node_succeeded
+    - answer
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: Use a queue again.
+  - - node_succeeded
+    - __end__
+    - {commit: 12}

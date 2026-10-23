@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: usu
@@ -70,13 +71,27 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, repeat]
   - - node_expanded
     - repeat
@@ -86,23 +101,32 @@ expect:
         seen: null
       - 0
   - [node_started, repeat#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - repeat#0/__start__
     - value:
         n: 0
         seen: null
-  - [node_started, repeat#0/bump]
   - - node_succeeded
+    - repeat#0/__start__
+    - {commit: 11}
+  - [node_started, repeat#0/bump]
+  - - pool_commit
     - repeat#0/bump
     - value:
         n: 1
         seen: [a]
-  - [node_started, repeat#0/__end__]
   - - node_succeeded
+    - repeat#0/bump
+    - {commit: 14}
+  - [node_started, repeat#0/__end__]
+  - - pool_commit
     - repeat#0/__end__
     - value:
         n: 1
         seen: [a]
+  - - node_succeeded
+    - repeat#0/__end__
+    - {commit: 17}
   - [node_started, repeat~1]
   - - node_expanded
     - repeat~1
@@ -112,36 +136,51 @@ expect:
         seen: [a]
       - 1
   - [node_started, repeat#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - repeat#1/__start__
     - value:
         n: 1
         seen: [a]
-  - [node_started, repeat#1/bump]
   - - node_succeeded
+    - repeat#1/__start__
+    - {commit: 22}
+  - [node_started, repeat#1/bump]
+  - - pool_commit
     - repeat#1/bump
     - value:
         n: 2
         seen: [a, b]
-  - [node_started, repeat#1/__end__]
   - - node_succeeded
+    - repeat#1/bump
+    - {commit: 25}
+  - [node_started, repeat#1/__end__]
+  - - pool_commit
     - repeat#1/__end__
     - value:
         n: 2
         seen: [a, b]
-  - [node_started, repeat~2]
   - - node_succeeded
+    - repeat#1/__end__
+    - {commit: 28}
+  - [node_started, repeat~2]
+  - - pool_commit
     - repeat~2
-    - commit_target: repeat
-      value:
+    - value:
         n: 2
         seen: [a, b]
-  - [node_started, __end__]
+      key: repeat
   - - node_succeeded
+    - repeat~2
+    - {commit: 31}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         n: 2
         seen: [a, b]
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

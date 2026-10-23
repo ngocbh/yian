@@ -1,6 +1,6 @@
 # hand TS expect (rules curated by hand): `code` is left out of rules; the frame and message are about flow structure, not the CODE body.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: unions
   name: unions
@@ -38,17 +38,30 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        decision:
-          qty: 2
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        decision: {qty: 2}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         decision:
           qty: 2
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, d]
   - - node_failed
     - d

@@ -2,7 +2,7 @@
 # A CASE `when:` inside a called child that fails to evaluate fails the gate, located at the call
 # and at the child's arm. TS fails condition.evaluate and Python node.execute.
 kind: run
-rules: [failure-codes]
+rules: [failure-codes, run-log]
 flow: |
   id: named-case-origin
   name: named-case-origin
@@ -56,26 +56,46 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, invoke]
   - - node_expanded
     - invoke
     - prune_ids: []
       seed: {}
   - [node_started, invoke/__start__]
-  - - node_succeeded
+  - - pool_commit
     - invoke/__start__
     - value: {}
-  - [node_started, invoke/zero]
   - - node_succeeded
+    - invoke/__start__
+    - {commit: 11}
+  - [node_started, invoke/zero]
+  - - pool_commit
     - invoke/zero
     - value: 0
+  - - node_succeeded
+    - invoke/zero
+    - {commit: 14}
   - [node_started, invoke/gate]
   - - node_failed
     - invoke/gate

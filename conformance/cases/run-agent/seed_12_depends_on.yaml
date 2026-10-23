@@ -3,7 +3,7 @@
 # The seed's `fetch` output doesn't declare `news`, which `fetch_facts` returns; records are closed.
 kind: run
 # The message shows the unknown field names as a list value: JSON text in TS, a repr in Python.
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   # 12 — Explicit run-ordering with depends_on / runs_after.
   #
@@ -115,18 +115,23 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: rates}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           note:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: rates}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: rates}}]
+    - [pool_commit, __start__, {value: {topic: rates}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, warm_cache]
-    - [node_succeeded, warm_cache, {value: true}]
+    - [pool_commit, warm_cache, {value: true}]
+    - [node_succeeded, warm_cache, {commit: 9}]
     - [node_started, fetch]
     - - node_failed
       - fetch

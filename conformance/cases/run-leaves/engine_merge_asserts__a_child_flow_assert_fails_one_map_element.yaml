@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: c2mapv
@@ -80,15 +81,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        seeds: [5, -5, 7]
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value:
         seeds: [5, -5, 7]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        seeds: [5, -5, 7]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, fan]
   - - node_expanded
     - fan
@@ -98,44 +113,68 @@ expect:
       - seed: -5
       - seed: 7
   - [node_started, fan/__start__]
-  - - node_succeeded
+  - - pool_commit
     - fan/__start__
     - value: {}
-  - [node_started, fan#0/__start__]
   - - node_succeeded
+    - fan/__start__
+    - {commit: 11}
+  - [node_started, fan#0/__start__]
+  - - pool_commit
     - fan#0/__start__
     - value:
         seed: 5
-  - [node_started, fan#1/__start__]
   - - node_succeeded
+    - fan#0/__start__
+    - {commit: 14}
+  - [node_started, fan#1/__start__]
+  - - pool_commit
     - fan#1/__start__
     - value:
         seed: -5
-  - [node_started, fan#2/__start__]
   - - node_succeeded
+    - fan#1/__start__
+    - {commit: 17}
+  - [node_started, fan#2/__start__]
+  - - pool_commit
     - fan#2/__start__
     - value:
         seed: 7
-  - [node_started, fan#0/emit]
   - - node_succeeded
+    - fan#2/__start__
+    - {commit: 20}
+  - [node_started, fan#0/emit]
+  - - pool_commit
     - fan#0/emit
     - value:
         n: 6
-  - [node_started, fan#1/emit]
   - - node_succeeded
+    - fan#0/emit
+    - {commit: 23}
+  - [node_started, fan#1/emit]
+  - - pool_commit
     - fan#1/emit
     - value:
         n: -4
-  - [node_started, fan#2/emit]
   - - node_succeeded
+    - fan#1/emit
+    - {commit: 26}
+  - [node_started, fan#2/emit]
+  - - pool_commit
     - fan#2/emit
     - value:
         n: 8
-  - [node_started, fan#0/__end__]
   - - node_succeeded
+    - fan#2/emit
+    - {commit: 29}
+  - [node_started, fan#0/__end__]
+  - - pool_commit
     - fan#0/__end__
     - value:
         n: 6
+  - - node_succeeded
+    - fan#0/__end__
+    - {commit: 32}
   - [node_started, fan#1/__end__]
   - - node_failed
     - fan#1/__end__

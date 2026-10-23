@@ -1,6 +1,7 @@
 # From examples/hello.yaml.
 # The compact flow's one AGENT, named by the flow id, greets the input; the flow returns its text.
 kind: run
+rules: [run-log]
 flow: |
   # hello — the smallest agent flow, written in COMPACT form: the flow IS one node,
   # so there is no `nodes:` map and no `output: ${greet.output}` wiring step. The flow
@@ -39,17 +40,23 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {name: Ada}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           hello:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {name: Ada}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {name: Ada}}]
+    - [pool_commit, __start__, {value: {name: Ada}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, hello]
-    - [node_succeeded, hello, {value: "Hello, Ada, it's lovely to meet you!"}]
+    - [pool_commit, hello, {value: "Hello, Ada, it's lovely to meet you!"}]
+    - [node_succeeded, hello, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: "Hello, Ada, it's lovely to meet you!"}]
+    - [pool_commit, __end__, {value: "Hello, Ada, it's lovely to meet you!"}]
+    - [node_succeeded, __end__, {commit: 12}]

@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: cvi
@@ -113,29 +114,47 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        seed: 0.9
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {seed: 0.9, topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         seed: 0.9
         topic: ACME
-  - [node_started, s]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, s]
+  - - pool_commit
     - s
     - value: 0.9
+  - - node_succeeded
+    - s
+    - {commit: 9}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: pro
   - [node_started, pro]
-  - - node_succeeded
+  - - pool_commit
     - pro
     - value: pro case for ACME
+  - - node_succeeded
+    - pro
+    - {commit: 14}
   - [node_started, __call_0]
   - - node_expanded
     - __call_0
@@ -143,27 +162,42 @@ expect:
       seed:
         v: pro case for ACME
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         v: pro case for ACME
-  - [node_started, __call_0/x]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 19}
+  - [node_started, __call_0/x]
+  - - pool_commit
     - __call_0/x
     - value: pro case for ACME
+  - - node_succeeded
+    - __call_0/x
+    - {commit: 22}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: pro case for ACME
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: pro case for ACME
+    - {commit: 25}
   - [node_started, wrap]
-  - - node_succeeded
+  - - pool_commit
     - wrap
     - value: pro case for ACME
-  - [node_started, __end__]
   - - node_succeeded
+    - wrap
+    - {commit: 28}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: pro case for ACME
+  - - node_succeeded
+    - __end__
+    - {commit: 31}
   events:
   - [RunStarted]
   - - NodeStarted

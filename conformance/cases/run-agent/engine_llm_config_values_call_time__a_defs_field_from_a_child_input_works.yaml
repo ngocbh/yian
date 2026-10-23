@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -46,13 +47,27 @@ expect:
     - call_time_llm:
         agents:
           a/chat: {}
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, a]
   - - node_expanded
     - a
@@ -60,10 +75,13 @@ expect:
       seed:
         m: def-model
   - [node_started, a/__start__]
-  - - node_succeeded
+  - - pool_commit
     - a/__start__
     - value:
         m: def-model
+  - - node_succeeded
+    - a/__start__
+    - {commit: 11}
   - [node_started, a/chat]
   - - node_step
     - a/chat
@@ -75,18 +93,27 @@ expect:
             source: missing
           model: def-model
           provider: openai
-  - - node_succeeded
+  - - pool_commit
     - a/chat
     - value: ok
+  - - node_succeeded
+    - a/chat
+    - {commit: 15}
   - [node_started, a/__end__]
+  - - pool_commit
+    - a/__end__
+    - value: ok
+      key: a
   - - node_succeeded
     - a/__end__
-    - commit_target: a
-      value: ok
+    - {commit: 18}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: ok
+  - - node_succeeded
+    - __end__
+    - {commit: 21}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -111,13 +138,13 @@ expect:
   - - NodeStarted
     - node_id: a/chat
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: def-model
       node_id: a/chat
       provider: openai
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: def-model
       node_id: a/chat
       provider: openai
@@ -140,12 +167,12 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: false
     key: text
     node_id: a/chat
   - chunk: ''
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: true
     key: text
     node_id: a/chat

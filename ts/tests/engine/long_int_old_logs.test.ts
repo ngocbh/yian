@@ -1,7 +1,7 @@
 /**
  * A port of `tests/engine/test_long_int_old_logs.py`: a run log edited to hold a 5000-digit int,
- * in three places: a `run_started` initial pool, a CODE node's `node_succeeded` value, and a
- * route's `value_json` text. Each log is written by a run here and then edited, as in Python.
+ * in three places: the START inputs' `pool_commit` (Python's `run_started` initial pool), a CODE
+ * node's `pool_commit` value (Python's `node_succeeded` value), and a route's `value_json` text. Each log is written by a run here and then edited, as in Python.
  *
  * Ported: `test_resume_fails_clearly_and_leaves_the_log`, `test_replay_read_fails_clearly`,
  * `test_decode_record_fails_clearly` and `test_cli_resume_fails_clearly`, each over the three logs,
@@ -37,8 +37,8 @@ import {
   decodeRecord,
   JsonlRunLog,
   NodeSucceededRecord,
+  PoolCommitRecord,
   type RunRecord,
-  RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import type { Value } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -114,29 +114,29 @@ async function written(flow: string, inputs: Record<string, unknown>, learnable 
   return [path, readFileSync(path, "utf8")];
 }
 
-/** Return an edited log whose RunStarted record holds the long int. */
+/** Return an edited log whose START inputs' commit, the run start's last record, holds the long int. */
 async function oldStartedLog(): Promise<OldLog> {
   const [path, text] = await written(STARTED_FLOW, { n: BigInt(SENTINEL) });
   const lines = text.split("\n");
-  expect(lines[0]).toContain('"kind":"run_started"');
-  expect(lines[0]).toContain(`"n":${SENTINEL}`);
-  lines[0] = lines[0]!.replace(SENTINEL, D);
+  expect(lines[4]).toContain('"kind":"pool_commit"');
+  expect(lines[4]).toContain(`"n":${SENTINEL}`);
+  lines[4] = lines[4]!.replace(SENTINEL, D);
   writeFileSync(path, lines.join("\n"));
   const read = (record: RunRecord) =>
-    record instanceof RunStartedRecord
-      ? (record.initialPool.store["__start__"]!.value as Record<string, unknown>)["n"]
+    record instanceof PoolCommitRecord && record.key === "__start__"
+      ? (record.value.value as Record<string, unknown>)["n"]
       : undefined;
   return { flow: STARTED_FLOW, path, output: "done", read };
 }
 
-/** Return an edited log whose CODE node NodeSucceeded holds the long int. */
+/** Return an edited log whose CODE node's commit holds the long int. */
 async function oldCodeLog(): Promise<OldLog> {
   const [path, text] = await written(CODE_FLOW, { t: "a" });
-  const recorded = `"node_id":"c","value":{"kind":"int","value":${SENTINEL}}`;
+  const recorded = `"kind":"int","node_id":"c","value":${SENTINEL}`;
   expect(text.split(recorded)).toHaveLength(2);
   writeFileSync(path, text.replace(recorded, recorded.replace(SENTINEL, D)));
   const read = (record: RunRecord) =>
-    record instanceof NodeSucceededRecord && record.nodeId === "c" ? record.value.value : undefined;
+    record instanceof PoolCommitRecord && record.nodeId === "c" ? record.value.value : undefined;
   return { flow: CODE_FLOW, path, output: BigInt(SENTINEL), read };
 }
 
@@ -156,8 +156,8 @@ async function oldRouteLog(): Promise<OldLog> {
 }
 
 const OLD_LOGS = [
-  ["run_started", oldStartedLog, BigInt(D)],
-  ["code_node_succeeded", oldCodeLog, BigInt(D)],
+  ["start_inputs_commit", oldStartedLog, BigInt(D)],
+  ["code_node_commit", oldCodeLog, BigInt(D)],
   ["route_value_json", oldRouteLog, D],
 ] as const;
 

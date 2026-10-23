@@ -2,6 +2,7 @@
 # The model calls `ask_user` once, the human's answer returns as the tool result, and the model's
 # next reply ends the loop; the flow returns that text.
 kind: run
+rules: [run-log]
 flow: |
   # ask-user — a model-chosen clarifying question via the blocking ask_user tool.
   #
@@ -74,20 +75,26 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {request: Book me a table for dinner}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           assistant:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {request: Book me a table for dinner}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {request: Book me a table for dinner}}]
+    - [pool_commit, __start__, {value: {request: Book me a table for dinner}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, assistant]
-    - [node_succeeded, assistant, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
+    - [pool_commit, assistant, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
+    - [node_succeeded, assistant, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
+    - [pool_commit, __end__, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
+    - [node_succeeded, __end__, {commit: 12}]
   # A model-requested call sets only `question` and `options` (docs/api.md, Blocking human
   # interaction); the other request fields are null and left out. <id:1> is the first model
   # call's exchange id.

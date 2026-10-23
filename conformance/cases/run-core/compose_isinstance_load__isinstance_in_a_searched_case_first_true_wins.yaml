@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: p
   name: p
@@ -51,37 +52,58 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        order:
-          action: sell
-          price: 1.5
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        order: {action: sell, price: 1.5}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         order:
           action: sell
           price: 1.5
-  - [node_started, d]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, d]
+  - - pool_commit
     - d
     - value:
         action: sell
         price: 1.5
+  - - node_succeeded
+    - d
+    - {commit: 9}
   - [node_started, route]
   - - node_routed
     - route
     - handle: o
   - [node_started, o]
-  - - node_succeeded
+  - - pool_commit
     - o
     - value: order
-  - [node_started, __end__]
   - - node_succeeded
+    - o
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: order
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

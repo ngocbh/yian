@@ -19,7 +19,7 @@
  * from records, since TS has no `_RECORDED_ROUTE` golden fixture.
  *
  * Changed (TS yian):
- * - The log half of `test_default_run_log_is_unchanged`: schema 12 always writes `defaults`, so
+ * - The log half of `test_default_run_log_is_unchanged`: schema 13 always writes `defaults`, so
  *   an all-default run writes `"defaults":{}` and reads it back as `{}` (Python omits the field
  *   for byte compatibility within schema 9).
  * - `test_decode_rejects_a_bad_recorded_value`: each row with its class and message; the string,
@@ -48,7 +48,7 @@
  * `test_replay_takes_a_recorded_node_budget_from_the_record`.
  *
  * Changed: the stripped-log half of `test_old_log_resumes_as_all_defaults`. Schema 10 requires
- * `defaults` in `run_started` and TS reads only schema 12, so the decoder refuses a record without
+ * `defaults` in `run_started` and TS reads only schema 13, so the decoder refuses a record without
  * it (`invalid run_started payload fields; missing=["defaults"]`) where Python reads an absent
  * field as all defaults; the row pins that refusal, which leaves the log unchanged.
  */
@@ -81,13 +81,11 @@ import { rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 import {
   decodeRecord,
-  encodePool,
   encodeRecord,
   RecordEnvelope,
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { VariablePool } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -109,11 +107,10 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   expect((caught as Error).message).toBe(message);
 }
 
-/** Return a run-start record with an empty pool and the given recorded defaults. */
+/** Return a run-start record with the given recorded defaults. */
 function runStarted(defaults?: unknown): RunStartedRecord {
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(new VariablePool("start")),
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
@@ -280,7 +277,8 @@ function rewriteRunStarted(path: string, edit: (payload: Record<string, unknown>
 async function interruptedRun(path: string, env = envWith()): Promise<void> {
   const result = await runFlow(await loadFlow(TWO_STEPS), {}, { log: path, env });
   expect(result.status).toBe("succeeded");
-  writeFileSync(path, linesOf(path).slice(0, 3).join(""));
+  // The run start (RunStarted and four commits), then START's start, commit and success.
+  writeFileSync(path, linesOf(path).slice(0, 8).join(""));
 }
 
 test("the default run log writes empty defaults (run)", async () => {

@@ -3,6 +3,7 @@
 # The header's `review/approve` is stale: the CALL node `gate` namespaces the leaf, `gate/approve`.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 kind: run
+rules: [run-log]
 flow: |
   # 25 — Nested interaction: a HUMAN_INPUT inside a called child.
   #
@@ -108,18 +109,28 @@ host:
 expect:
   output: {status: succeeded, output: approve}
   trace:
-    - [run_started, null, {inputs: {action: deploy}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {action: deploy}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {action: deploy}}]
+    - [pool_commit, __start__, {value: {action: deploy}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, gate]
     - [node_expanded, gate, {seed: {action: deploy}, prune_ids: []}]
     - [node_started, gate/__start__]
-    - [node_succeeded, gate/__start__, {value: {action: deploy}}]
+    - [pool_commit, gate/__start__, {value: {action: deploy}}]
+    - [node_succeeded, gate/__start__, {commit: 11}]
     - [node_started, gate/approve]
-    - [node_succeeded, gate/approve, {value: approve}]
+    - [pool_commit, gate/approve, {value: approve}]
+    - [node_succeeded, gate/approve, {commit: 14}]
     - [node_started, gate/record]
-    - [node_succeeded, gate/record, {value: approve}]
+    - [pool_commit, gate/record, {value: approve}]
+    - [node_succeeded, gate/record, {commit: 17}]
     - [node_started, gate/__end__]
-    - [node_succeeded, gate/__end__, {value: approve, commit_target: gate}]
+    - [pool_commit, gate/__end__, {value: approve, key: gate}]
+    - [node_succeeded, gate/__end__, {commit: 20}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: approve}]
+    - [pool_commit, __end__, {value: approve}]
+    - [node_succeeded, __end__, {commit: 23}]

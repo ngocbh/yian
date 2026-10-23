@@ -2304,12 +2304,13 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 12, and readers accept only schema 12. The schema
+Changed (TS yian): records use schema 13, and readers accept only schema 13. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 or 11 log (TS
-yian's, from before record times, or before `RunStarted` held the flow files) with "run log
-schema N predates schema 12 and is not supported", and any other schema with "unsupported
-run-record schema: N" (a float token shows as `12.0`); the "predates" message for schemas 7
+schema 9 was written by Python yian; resume it with Python yian", a schema 10, 11 or 12 log
+(TS yian's, from before record times, before `RunStarted` held the flow files, or before pool
+writes were `pool_commit` records) with "run log schema N predates schema 13 and is not
+supported", and any other schema with "unsupported run-record schema: N" (a float token shows
+as `13.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2353,6 +2354,36 @@ as one the engine prepares; `encodeRecord` writes such an envelope without `at`,
 line without `at`. A clock reading that isn't a finite time in those years fails the append
 with a `RangeError` before anything is written, without poisoning the log. Python yian's
 schema 9 records hold no time.
+
+Changed (TS yian): every write to the variable pool is its own record, `PoolCommitRecord`
+(`pool_commit`), with the flat payload `{node_id, key, kind, value}`: `key` is the pool key the
+value goes under (Python's `commit_target`: the node itself, or for a CALL's child END and a
+stopping LOOP driver, their spawner), and `kind`/`value` are the typed value's wire form, so int
+and float, `Any` and files stay apart. `NodeSucceededRecord` holds no value: its payload is
+`{node_id, commit, evidence, forward_capture}`, where `commit` is the seq of the node's
+`pool_commit` it accepts. `RunStartedRecord` holds no `initial_pool`: the run start is
+`run_started`, then a `pool_commit` per system value (`system.now`, `system.run_id`,
+`system.today`, in key order, keyed `system.<name>`, a name no node id can take), then the START
+inputs (`key` = `node_id` = the START's id), all naming the START. These initial commits apply
+at once, and START is ready only after the last.
+
+- Write order: a node's `pool_commit`, then its `node_succeeded`. Any commit other than the run
+  start's waits on its node until that node's success names its seq; then it is applied to the
+  pool. A success naming another seq, and a `pool_commit` for a node that isn't running, is a
+  `RangeError`, live and on replay.
+- An orphan commit (a crash between the two records) is ignored: the resume's `RunResumed`
+  retries its node, which runs again and writes a new commit at a new seq. The orphan line stays
+  in the log, unread. LangGraph saves a step's writes before the checkpoint that applies them but
+  keeps a crashed step's pending writes; yian drops them, since the success is what accepts the
+  commit.
+- A log that ends inside its run start (before the START inputs' commit) can't be resumed, since
+  it doesn't hold the run's inputs yet: `resumeFlow` refuses it with "run log PATH ends inside its
+  run start; start the run again" and leaves it as it is (`replayRunLog` too; `inspectRun`
+  without the flow reads it as `interrupted` with nothing in flight).
+- `runRecordOffsets(path)` (from `yian/run`) returns the byte offset where each record's line
+  starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
+  Read the record at seq `k`, such as the commit a success names, with
+  `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
 
 Temporal stamps every history event with an `eventTime`, LangGraph every checkpoint with a
 `ts`, and Codex and Claude Code each session record with a `timestamp` of the same form; yian's
@@ -2752,7 +2783,7 @@ lock or writes the file, so the writer is never blocked. It yields one entry per
 | `runId` | the run id the record names |
 | `at` | when the log appended it, as `RecordEnvelope.at`, such as `2026-10-20T14:02:11.123Z` (also with `payloads: false`) |
 | `kind` | its wire kind, such as `node_started` |
-| `nodeId` | the node it is about (a node's start, step, success or route, a growth's spawner, a failure's node), or `null` |
+| `nodeId` | the node it is about (a node's start, step, pool commit, success or route, a growth's spawner, a failure's node), or `null` |
 | `envelope` | the validated `RecordEnvelope`, or `null` with `payloads: false` |
 
 ```ts
@@ -2789,7 +2820,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 12); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 13); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

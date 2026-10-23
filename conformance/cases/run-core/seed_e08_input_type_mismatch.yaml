@@ -3,7 +3,7 @@
 # The header's `build_segment_with_type` names a Python function.
 kind: run
 # The message quotes the input's value: JSON text in TS, a repr in Python.
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   # e08 — Flow input fails type enforcement at the boundary.
   # EXPECT: RUNTIME RunFailed at the input boundary — `window` is declared `int`, but the
@@ -54,14 +54,25 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: X, window: soon}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           note:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - - pool_commit
+      - __start__
+      - {key: system.now}
+    - - pool_commit
+      - __start__
+      - {key: system.run_id, value: r1}
+    - - pool_commit
+      - __start__
+      - {key: system.today}
+    - - pool_commit
+      - __start__
+      - value: {topic: X, window: soon}
     - [node_started, __start__]
     - - node_failed
       - __start__

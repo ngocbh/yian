@@ -222,10 +222,19 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 12, with a `RunStoppedRecord`, every payload field
-required, the time each record was appended (`at`), and a `RunStartedRecord` that holds the
-flow files, the skills and tool specs the AGENTs grant, the yian version and the parent run; see
+Changed (TS yian): records use schema 13, with a `RunStoppedRecord`, every payload field
+required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
+flow files, the skills and tool specs the AGENTs grant, the yian version and the parent run, and
+a `PoolCommitRecord` for every write to the variable pool; see
 [Authoritative run logs](api.md#authoritative-run-logs).
+
+Changed (TS yian): a node's output is a `pool_commit` written before the `node_succeeded` that
+names its seq, and the reducer applies it to the pool only when that success is accepted. A
+crash between the two leaves an orphan commit: the resume retries the node, which runs again and
+writes a new commit; the orphan stays in the log, unread. The run's inputs and system values are
+`pool_commit`s right after `run_started`, applied at once; START is ready only after the START
+inputs' commit, so a log that ends before it holds no inputs yet and isn't resumable
+(`resumeFlow` refuses it and leaves it as it is).
 
 `RunStartedRecord` holds the complete effective model map of the agents resolved at
 run start. An agent whose `llm_config` reads a value known only when it runs (see

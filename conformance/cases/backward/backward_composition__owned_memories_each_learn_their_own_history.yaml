@@ -4,6 +4,7 @@
 # each learn the episodes of their own scope: local only the AGENT's, inner the child's nodes,
 # outer everything; one AGENT backward call serves all three.
 kind: backward
+rules: [run-log]
 flow: |
   id: owned-composition
   name: owned_composition
@@ -88,16 +89,30 @@ expect:
         unused/author:
           model: local-test
           provider: ollama
-      inputs:
-        topic: reefs
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: reefs}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        topic: reefs
   - - node_succeeded
     - __start__
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 6
+      forward_capture:
+        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -117,8 +132,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        topic: reefs
   - [node_started, gate]
   - - node_routed
     - gate
@@ -144,7 +157,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [topic]
               run_id: r1
           kind: record
@@ -158,19 +171,22 @@ expect:
       seed:
         topic: reefs
   - [node_started, invoke/__start__]
+  - - pool_commit
+    - invoke/__start__
+    - value:
+        topic: reefs
   - - node_succeeded
     - invoke/__start__
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 13
+      forward_capture:
+        bound_inputs: {topic: reefs}
         input_names: [topic]
         node_data:
           input_output_paths:
             topic: [topic]
         route:
           children:
-          - kind: literal
-            value_json: reefs
+          - {kind: literal, value_json: reefs}
           kind: record
           names: [topic]
         scope:
@@ -181,31 +197,28 @@ expect:
             kind: call
             static_path: [invoke]
           static_path: [invoke, __start__]
-      value:
-        topic: reefs
   - [node_started, invoke/author]
+  - - pool_commit
+    - invoke/author
+    - value: answer
   - - node_succeeded
     - invoke/author
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
+    - commit: 16
+      forward_capture:
+        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
+          effective_llm_config: {model: local-test, provider: ollama}
           prompt_template: '${topic}: ${tone}'
           rendered_prompt: 'reefs: concise'
-          variable_domains:
-            tone: str
-          variables:
-            tone: concise
+          variable_domains: {tone: str}
+          variables: {tone: concise}
         route:
           children:
           - kind: source
             source:
-              execution_seq: 7
+              execution_seq: 12
               path: [topic]
               run_id: r1
           kind: record
@@ -219,14 +232,16 @@ expect:
             static_path: [invoke]
           static_path: [invoke, author]
         variable_names: [tone]
-      value: answer
   - [node_started, invoke/work]
+  - - pool_commit
+    - invoke/work
+    - value: 7
   - - node_succeeded
     - invoke/work
-    - forward_capture:
+    - commit: 19
+      forward_capture:
         bound_inputs: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: null
           flow_path: [invoke]
@@ -235,14 +250,16 @@ expect:
             kind: call
             static_path: [invoke]
           static_path: [invoke, work]
-      value: 7
   - [node_started, invoke/__end__]
+  - - pool_commit
+    - invoke/__end__
+    - value: answer
+      key: invoke
   - - node_succeeded
     - invoke/__end__
-    - commit_target: invoke
+    - commit: 22
       forward_capture:
-        bound_inputs:
-          result: answer
+        bound_inputs: {result: answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -252,7 +269,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 9
+              execution_seq: 15
               path: []
               run_id: r1
           kind: record
@@ -265,13 +282,15 @@ expect:
             kind: call
             static_path: [invoke]
           static_path: [invoke, __end__]
-      value: answer
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: answer
   - - node_succeeded
     - __end__
-    - forward_capture:
-        bound_inputs:
-          result: answer
+    - commit: 25
+      forward_capture:
+        bound_inputs: {result: answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -282,7 +301,7 @@ expect:
           - children:
             - kind: source
               source:
-                execution_seq: 13
+                execution_seq: 21
                 path: []
                 run_id: r1
             kind: selected
@@ -293,7 +312,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: answer
   - - backward_started
     - null
     - attempt_id: 1
@@ -308,7 +326,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 12
             path: []
             run_id: r1
         feedback:
@@ -320,29 +338,29 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 3
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
           execution_seq: 5
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 8
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 10
           path: []
           run_id: r1
       - attribution:
@@ -351,7 +369,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 9
+            execution_seq: 15
             path: []
             run_id: r1
         feedback:
@@ -363,7 +381,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 12
           path: []
           run_id: r1
       - attribution:
@@ -372,7 +390,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 13
+            execution_seq: 21
             path: []
             run_id: r1
         feedback: [Review answer.]
@@ -384,7 +402,7 @@ expect:
           variable_feedback:
             tone: [Stay concise., Be precise.]
         source:
-          execution_seq: 9
+          execution_seq: 15
           path: []
           run_id: r1
       - attribution: []
@@ -395,7 +413,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
+          execution_seq: 18
           path: []
           run_id: r1
       - attribution:
@@ -404,7 +422,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 15
+            execution_seq: 24
             path: []
             run_id: r1
         feedback: [Review answer.]
@@ -415,7 +433,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 13
+          execution_seq: 21
           path: []
           run_id: r1
       - attribution:
@@ -432,7 +450,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 15
+          execution_seq: 24
           path: []
           run_id: r1
       proposals:
@@ -444,7 +462,7 @@ expect:
               entry_id: <id:1>
               episode:
                 base_system_prompt: null
-                execution_seq: 7
+                execution_seq: 12
                 failure: null
                 inputs:
                   topic: reefs
@@ -464,7 +482,7 @@ expect:
               entry_id: <id:2>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 9
+                execution_seq: 15
                 failure: null
                 inputs:
                   topic: reefs
@@ -485,7 +503,7 @@ expect:
               entry_id: <id:3>
               episode:
                 base_system_prompt: null
-                execution_seq: 11
+                execution_seq: 18
                 failure: null
                 inputs: {}
                 interactions: []
@@ -503,7 +521,7 @@ expect:
               entry_id: <id:4>
               episode:
                 base_system_prompt: null
-                execution_seq: 13
+                execution_seq: 21
                 failure: null
                 inputs:
                   result: answer
@@ -524,7 +542,7 @@ expect:
               entry_id: <id:5>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 9
+                execution_seq: 15
                 failure: null
                 inputs:
                   topic: reefs
@@ -547,7 +565,7 @@ expect:
               entry_id: <id:6>
               episode:
                 base_system_prompt: null
-                execution_seq: 1
+                execution_seq: 5
                 failure: null
                 inputs:
                   topic: reefs
@@ -567,7 +585,7 @@ expect:
               entry_id: <id:7>
               episode:
                 base_system_prompt: null
-                execution_seq: 3
+                execution_seq: 8
                 failure: null
                 inputs: {}
                 interactions: []
@@ -587,7 +605,7 @@ expect:
               entry_id: <id:8>
               episode:
                 base_system_prompt: null
-                execution_seq: 5
+                execution_seq: 10
                 failure: null
                 inputs:
                   topic: reefs
@@ -610,7 +628,7 @@ expect:
               entry_id: <id:9>
               episode:
                 base_system_prompt: null
-                execution_seq: 7
+                execution_seq: 12
                 failure: null
                 inputs:
                   topic: reefs
@@ -630,7 +648,7 @@ expect:
               entry_id: <id:10>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 9
+                execution_seq: 15
                 failure: null
                 inputs:
                   topic: reefs
@@ -651,7 +669,7 @@ expect:
               entry_id: <id:11>
               episode:
                 base_system_prompt: null
-                execution_seq: 11
+                execution_seq: 18
                 failure: null
                 inputs: {}
                 interactions: []
@@ -669,7 +687,7 @@ expect:
               entry_id: <id:12>
               episode:
                 base_system_prompt: null
-                execution_seq: 13
+                execution_seq: 21
                 failure: null
                 inputs:
                   result: answer
@@ -688,7 +706,7 @@ expect:
               entry_id: <id:13>
               episode:
                 base_system_prompt: null
-                execution_seq: 15
+                execution_seq: 24
                 failure: null
                 inputs:
                   result: answer
@@ -718,7 +736,7 @@ expect:
             entry_id: <id:1>
             episode:
               base_system_prompt: null
-              execution_seq: 7
+              execution_seq: 12
               failure: null
               inputs:
                 topic: reefs
@@ -738,7 +756,7 @@ expect:
             entry_id: <id:2>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 9
+              execution_seq: 15
               failure: null
               inputs:
                 topic: reefs
@@ -759,7 +777,7 @@ expect:
             entry_id: <id:3>
             episode:
               base_system_prompt: null
-              execution_seq: 11
+              execution_seq: 18
               failure: null
               inputs: {}
               interactions: []
@@ -777,7 +795,7 @@ expect:
             entry_id: <id:4>
             episode:
               base_system_prompt: null
-              execution_seq: 13
+              execution_seq: 21
               failure: null
               inputs:
                 result: answer
@@ -807,7 +825,7 @@ expect:
             entry_id: <id:5>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 9
+              execution_seq: 15
               failure: null
               inputs:
                 topic: reefs
@@ -839,7 +857,7 @@ expect:
             entry_id: <id:6>
             episode:
               base_system_prompt: null
-              execution_seq: 1
+              execution_seq: 5
               failure: null
               inputs:
                 topic: reefs
@@ -859,7 +877,7 @@ expect:
             entry_id: <id:7>
             episode:
               base_system_prompt: null
-              execution_seq: 3
+              execution_seq: 8
               failure: null
               inputs: {}
               interactions: []
@@ -879,7 +897,7 @@ expect:
             entry_id: <id:8>
             episode:
               base_system_prompt: null
-              execution_seq: 5
+              execution_seq: 10
               failure: null
               inputs:
                 topic: reefs
@@ -902,7 +920,7 @@ expect:
             entry_id: <id:9>
             episode:
               base_system_prompt: null
-              execution_seq: 7
+              execution_seq: 12
               failure: null
               inputs:
                 topic: reefs
@@ -922,7 +940,7 @@ expect:
             entry_id: <id:10>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 9
+              execution_seq: 15
               failure: null
               inputs:
                 topic: reefs
@@ -943,7 +961,7 @@ expect:
             entry_id: <id:11>
             episode:
               base_system_prompt: null
-              execution_seq: 11
+              execution_seq: 18
               failure: null
               inputs: {}
               interactions: []
@@ -961,7 +979,7 @@ expect:
             entry_id: <id:12>
             episode:
               base_system_prompt: null
-              execution_seq: 13
+              execution_seq: 21
               failure: null
               inputs:
                 result: answer
@@ -980,7 +998,7 @@ expect:
             entry_id: <id:13>
             episode:
               base_system_prompt: null
-              execution_seq: 15
+              execution_seq: 24
               failure: null
               inputs:
                 result: answer
@@ -1127,17 +1145,17 @@ expect:
     status: succeeded
   memory:
     inner: |-
-      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":7,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["invoke","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":9,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","author"],"prompt":"reefs: concise","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:3>","episode":{"base_system_prompt":null,"execution_seq":11,"failure":null,"inputs":{},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":7,"owner_static_path":["invoke","work"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":13,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-    local: '{"entry_id":"<id:5>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":9,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","author"],"prompt":"reefs: concise","run_id":"r1","status":"succeeded"}}'
+      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":12,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["invoke","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":15,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","author"],"prompt":"reefs: concise","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:3>","episode":{"base_system_prompt":null,"execution_seq":18,"failure":null,"inputs":{},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":7,"owner_static_path":["invoke","work"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":21,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+    local: '{"entry_id":"<id:5>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":15,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","author"],"prompt":"reefs: concise","run_id":"r1","status":"succeeded"}}'
     outer: |-
-      {"entry_id":"<id:6>","episode":{"base_system_prompt":null,"execution_seq":1,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:7>","episode":{"base_system_prompt":null,"execution_seq":3,"failure":null,"inputs":{},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"handle":"invoke","kind":"route"},"owner_static_path":["gate"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:8>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"kind":"grow","prune_ids":[],"seed":{"topic":"reefs"}},"owner_static_path":["invoke"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:9>","episode":{"base_system_prompt":null,"execution_seq":7,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["invoke","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:10>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":9,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","author"],"prompt":"reefs: concise","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:11>","episode":{"base_system_prompt":null,"execution_seq":11,"failure":null,"inputs":{},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":7,"owner_static_path":["invoke","work"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:12>","episode":{"base_system_prompt":null,"execution_seq":13,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:13>","episode":{"base_system_prompt":null,"execution_seq":15,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:6>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:7>","episode":{"base_system_prompt":null,"execution_seq":8,"failure":null,"inputs":{},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"handle":"invoke","kind":"route"},"owner_static_path":["gate"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:8>","episode":{"base_system_prompt":null,"execution_seq":10,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"kind":"grow","prune_ids":[],"seed":{"topic":"reefs"}},"owner_static_path":["invoke"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:9>","episode":{"base_system_prompt":null,"execution_seq":12,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["invoke","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:10>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":15,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","author"],"prompt":"reefs: concise","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:11>","episode":{"base_system_prompt":null,"execution_seq":18,"failure":null,"inputs":{},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":7,"owner_static_path":["invoke","work"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:12>","episode":{"base_system_prompt":null,"execution_seq":21,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["invoke","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:13>","episode":{"base_system_prompt":null,"execution_seq":24,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}

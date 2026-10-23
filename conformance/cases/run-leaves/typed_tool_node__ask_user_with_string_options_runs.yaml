@@ -2,6 +2,7 @@
 # A TOOL node may call `ask_user` with `question` and `options`; options text that isn't a JSON list
 # is one label.
 kind: run
+rules: [run-log]
 flow: |
   id: asking
   name: asking
@@ -28,19 +29,39 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, ask]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, ask]
+  - - pool_commit
     - ask
     - value: answered Proceed?
-  - [node_started, __end__]
   - - node_succeeded
+    - ask
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: answered Proceed?
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

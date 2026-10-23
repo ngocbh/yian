@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: shadow
@@ -50,15 +51,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        x: null
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {x: null}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         x: null
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, go]
   - - node_expanded
     - go
@@ -66,18 +80,30 @@ expect:
       seed:
         topic: null
   - [node_started, go/__start__]
-  - - node_succeeded
+  - - pool_commit
     - go/__start__
     - value:
         topic: null
+  - - node_succeeded
+    - go/__start__
+    - {commit: 11}
   - [node_started, go/child]
-  - [node_succeeded, go/child]
+  - [pool_commit, go/child]
+  - - node_succeeded
+    - go/child
+    - {commit: 14}
   - [node_started, go/__end__]
+  - - pool_commit
+    - go/__end__
+    - key: go
   - - node_succeeded
     - go/__end__
-    - commit_target: go
+    - {commit: 17}
   - [node_started, __end__]
-  - [node_succeeded, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 20}
   events:
   - [RunStarted]
   - - NodeStarted

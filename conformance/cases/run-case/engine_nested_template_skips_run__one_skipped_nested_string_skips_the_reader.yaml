@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: nested_skips
   name: nested_skips
@@ -41,28 +42,47 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        approve: true
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {approve: true}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         approve: true
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: order
   - [node_started, order]
-  - - node_succeeded
+  - - pool_commit
     - order
     - value: filled
-  - [node_started, __end__]
   - - node_succeeded
+    - order
+    - {commit: 11}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         c: null
+  - - node_succeeded
+    - __end__
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted

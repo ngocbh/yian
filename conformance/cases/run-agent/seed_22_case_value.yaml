@@ -2,6 +2,7 @@
 # A score of 0.6 takes the `positive` branch; `${gate.output}` returns its reply, and `cautious`
 # is skipped.
 kind: run
+rules: [run-log]
 flow: |
   # 22 — A `case` as a VALUE: ${<case>.output} = the taken branch's value.
   #
@@ -77,8 +78,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: rates}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           score:
@@ -93,13 +93,21 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: rates}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: rates}}]
+    - [pool_commit, __start__, {value: {topic: rates}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, score]
-    - [node_succeeded, score, {value: 0.6}]
+    - [pool_commit, score, {value: 0.6}]
+    - [node_succeeded, score, {commit: 9}]
     - [node_started, gate]
     - [node_routed, gate, {handle: positive}]
     - [node_started, positive]
-    - [node_succeeded, positive, {value: Rates may ease. Demand holds. Credit is steady.}]
+    - [pool_commit, positive, {value: Rates may ease. Demand holds. Credit is steady.}]
+    - [node_succeeded, positive, {commit: 14}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: Rates may ease. Demand holds. Credit is steady.}]
+    - [pool_commit, __end__, {value: Rates may ease. Demand holds. Credit is steady.}]
+    - [node_succeeded, __end__, {commit: 17}]

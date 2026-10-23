@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: nested
@@ -84,15 +85,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         topic: ACME
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, go]
   - - node_expanded
     - go
@@ -100,10 +114,13 @@ expect:
       seed:
         topic: ACME
   - [node_started, go/__start__]
-  - - node_succeeded
+  - - pool_commit
     - go/__start__
     - value:
         topic: ACME
+  - - node_succeeded
+    - go/__start__
+    - {commit: 11}
   - [node_started, go/inner_call]
   - - node_expanded
     - go/inner_call
@@ -111,30 +128,45 @@ expect:
       seed:
         topic: ACME
   - [node_started, go/inner_call/__start__]
-  - - node_succeeded
+  - - pool_commit
     - go/inner_call/__start__
     - value:
         topic: ACME
-  - [node_started, go/inner_call/x]
   - - node_succeeded
+    - go/inner_call/__start__
+    - {commit: 16}
+  - [node_started, go/inner_call/x]
+  - - pool_commit
     - go/inner_call/x
     - value:
         n: 4
         report: report for ACME
+  - - node_succeeded
+    - go/inner_call/x
+    - {commit: 19}
   - [node_started, go/inner_call/__end__]
+  - - pool_commit
+    - go/inner_call/__end__
+    - value: report for ACME
+      key: go/inner_call
   - - node_succeeded
     - go/inner_call/__end__
-    - commit_target: go/inner_call
-      value: report for ACME
+    - {commit: 22}
   - [node_started, go/__end__]
+  - - pool_commit
+    - go/__end__
+    - value: report for ACME
+      key: go
   - - node_succeeded
     - go/__end__
-    - commit_target: go
-      value: report for ACME
+    - {commit: 25}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: report for ACME
+  - - node_succeeded
+    - __end__
+    - {commit: 28}
   events:
   - [RunStarted]
   - - NodeStarted

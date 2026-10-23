@@ -1,6 +1,6 @@
 # env keeps the model defaults: the run resolves the AGENT's provider and model before the node binds its inputs.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |2
 
   id: tagged_agent
@@ -43,17 +43,34 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, src]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, src]
+  - - pool_commit
     - src
     - value: three
+  - - node_succeeded
+    - src
+    - {commit: 9}
   - [node_started, ask]
   - - node_failed
     - ask

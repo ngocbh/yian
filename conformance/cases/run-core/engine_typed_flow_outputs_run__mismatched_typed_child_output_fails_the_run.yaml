@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |2
 
   id: typed_parent
@@ -34,26 +34,46 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, use]
   - - node_expanded
     - use
     - prune_ids: []
       seed: {}
   - [node_started, use/__start__]
-  - - node_succeeded
+  - - pool_commit
     - use/__start__
     - value: {}
-  - [node_started, use/n]
   - - node_succeeded
+    - use/__start__
+    - {commit: 11}
+  - [node_started, use/n]
+  - - pool_commit
     - use/n
     - value: x
+  - - node_succeeded
+    - use/n
+    - {commit: 14}
   - [node_started, use/__end__]
   - - node_failed
     - use/__end__

@@ -187,9 +187,9 @@ output:
   for (const [i, line] of lines.entries()) {
     const record = JSON.parse(line);
     const payload = record.payload;
-    if (record.kind === "node_succeeded" && payload.node_id === "__end__") {
-      expect(payload.value).toEqual({ kind: "object", value: { total: 5 } });
-      payload.value.value.total = "five";
+    if (record.kind === "pool_commit" && payload.node_id === "__end__") {
+      expect(payload).toEqual({ node_id: "__end__", key: "__end__", kind: "object", value: { total: 5 } });
+      payload.value.total = "five";
       lines[i] = JSON.stringify(record);
       edited++;
     }

@@ -270,8 +270,9 @@ nodes:
     output: str
 output: \${reply.output}
 `;
-// The records before `reply`'s success: RunStarted, START's start and success, `reply`'s start.
-const BEFORE_REPLY_SUCCESS = 4;
+// The records before `reply`'s output: the run start (RunStarted and four commits), START's start,
+// commit and success, `reply`'s start.
+const BEFORE_REPLY_SUCCESS = 9;
 
 /** Run `fn` and return the `runDir` of each AGENT run context it built, in order. */
 async function runDirs(fn: () => Promise<unknown>): Promise<(string | null | undefined)[]> {

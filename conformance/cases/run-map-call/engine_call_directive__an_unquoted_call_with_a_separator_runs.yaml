@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: spaced
   name: spaced
@@ -54,13 +55,27 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, __call_0]
   - - node_expanded
     - __call_0
@@ -68,27 +83,42 @@ expect:
       seed:
         topic: a = b
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         topic: a = b
-  - [node_started, __call_0/e]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 11}
+  - [node_started, __call_0/e]
+  - - pool_commit
     - __call_0/e
     - value: a = b
+  - - node_succeeded
+    - __call_0/e
+    - {commit: 14}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: a = b
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: a = b
+    - {commit: 17}
   - [node_started, use]
-  - - node_succeeded
+  - - pool_commit
     - use
     - value: a = b
-  - [node_started, __end__]
   - - node_succeeded
+    - use
+    - {commit: 20}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: a = b
+  - - node_succeeded
+    - __end__
+    - {commit: 23}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -331,7 +331,8 @@ test("nothing ready and nothing in flight before a terminal result is nontermina
   const error = await rejected(built.run());
   expect(error).toEqual(new Error("FlowEngine reached nonterminal quiescence"));
   expect(built.signal.aborted).toBe(true);
-  expect(built.log.nextSequence).toBe(1);
+  // Only the run start: RunStarted and its two commits.
+  expect(built.log.nextSequence).toBe(3);
 });
 
 test.each([0, 8])("10,000 ready leaves each run once (%i workers)", async (numWorkers) => {

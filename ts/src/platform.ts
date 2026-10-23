@@ -40,9 +40,9 @@ export type SqliteValue = null | number | string | Uint8Array;
 export type SqliteRow = Record<string, SqliteValue>;
 
 /**
- * A prepared statement taking positional `?` parameters. A missing positional
- * parameter throws on Bun but binds NULL on Node; the wrapper doesn't normalize that
- * programming error.
+ * A prepared statement taking positional `?` parameters. Passing some but too few
+ * throws on Bun but binds NULL on Node (passing none binds NULL on both); the wrapper
+ * doesn't normalize that programming error.
  */
 export interface SqliteStatement {
   /** Return every result row, in order. */

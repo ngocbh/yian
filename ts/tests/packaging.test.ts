@@ -4,14 +4,15 @@
 // becomes the `engines` check and `test_mcp_extra_pins_the_mcp_sdk` the MCP SDK's optional peer.
 // Added here: the npm fields (`files`, `bin`, `exports`, `prepack`, `publishConfig`), exact
 // dependency pins, and the names each entry point exports, Python's `yian.__all__`, `yian.run`,
-// `yian.tools` and `yian.skills`; and `LICENSES`, the text `yian --licenses` prints, against
-// `NOTICE`, Bun's license and the license files of the packages the binaries bundle, and of the
-// packages copied into their `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes
-// `src/cli/licenses.ts` instead, taking Bun's license from the file `YIAN_BUN_LICENSE` names and the
-// copied packages' from the npm packages extracted under `YIAN_VENDORED_LICENSES`, or else each from
-// the current `LICENSES`. With `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the
-// file also runs that binary: `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`,
-// `check`, an MCP server, and a cwd `.env` and `bunfig.toml` it must ignore.
+// `yian.tools` and `yian.skills` (`./platform`, the lock and SQLite helpers for hosts, has no Python
+// counterpart); and `LICENSES`, the text `yian --licenses` prints, against `NOTICE`, Bun's license
+// and the license files of the packages the binaries bundle, and of the packages copied into their
+// `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's
+// license from the file `YIAN_BUN_LICENSE` names and the copied packages' from the npm packages
+// extracted under `YIAN_VENDORED_LICENSES`, or else each from the current `LICENSES`. With
+// `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the file also runs that binary:
+// `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a
+// cwd `.env` and `bunfig.toml` it must ignore.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
@@ -35,6 +36,15 @@ import { pathToFileURL } from "node:url";
 import { LICENSES } from "../src/cli/licenses.ts";
 import type { MarkdownStore } from "../src/index.ts";
 import { AuthStore } from "../src/llm_clients/auth/index.ts";
+import type {
+  FileLock,
+  FileLockReason,
+  Sqlite,
+  SqliteParam,
+  SqliteRow,
+  SqliteStatement,
+  SqliteValue,
+} from "../src/platform.ts";
 import type { Steering } from "../src/run.ts";
 import { stdioOptions } from "./engine/mcp_helpers.ts";
 
@@ -48,6 +58,7 @@ const ENTRIES: Record<string, string> = {
   "./run": "run",
   "./tools": "tools/index",
   "./skills": "compose/skills",
+  "./platform": "platform",
 };
 
 /** The runtime names each export path must carry. */
@@ -100,6 +111,7 @@ const NAMES: Record<string, string[]> = {
     "McpTransportError",
   ],
   "./skills": ["loadSkills", "loadSkillDir", "defaultSkillRoots", "Skill", "SkillError"],
+  "./platform": ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode"],
 };
 
 /** Every file below `directory`, relative to `ROOT`. */
@@ -175,7 +187,17 @@ describe("entry points", () => {
 
   test("the type-only names are exported", () => {
     // The check is `bun run typecheck`: the imports above fail to compile without the names.
-    const names = [] as [Steering?, MarkdownStore?];
+    const names = [] as [
+      Steering?,
+      MarkdownStore?,
+      FileLock?,
+      FileLockReason?,
+      Sqlite?,
+      SqliteStatement?,
+      SqliteParam?,
+      SqliteValue?,
+      SqliteRow?,
+    ];
     expect(names).toEqual([]);
   });
 });

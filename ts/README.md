@@ -89,10 +89,10 @@ console.log(result.status, result.output); // succeeded total: 7.5
 
 ## Entry points
 
-Only the names below are the supported surface. The other exports, all on `/run` (`hostInputs`,
+Only the names below are the supported surface. The other exports on `/run` (`hostInputs`,
 `runStartInputs`, `runStartLlm`, `LlmConfigsCheck`, `checkRecordedLlmFields`, `skillGrants`,
-`replayRunLog`, `replayCompiledRunLog`), are internal: they serve the CLI and yian's own code, and
-may change without notice.
+`replayRunLog`, `replayCompiledRunLog`) and on `/platform` are internal: they serve the CLI and
+yian's own code, and may change without notice.
 
 | Import | Names |
 |---|---|
@@ -100,11 +100,13 @@ may change without notice.
 | `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
+| `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `ResumeFlowOptions`, `RunInspection`,
 `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `ToolEntry`, `AskUserHandler`,
 `AskUserRequest`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`,
-`StandardIssue`, `StandardResult`, `ToolErrorKind` and `MarkdownStore` are types only.
+`StandardIssue`, `StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`,
+`Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue` and `SqliteRow` are types only.
 
 ## Differences from Python yian
 
@@ -423,6 +425,59 @@ function `${...}` expressions can call; each `default` goes through host intake.
   `models` (the model builder AGENT nodes use) are for tests and conformance: virtual time, fixed
   jitter and scripted models. Hosts leave them unset.
 
+## File locks and SQLite
+
+`@ngocbh/yian/platform` gives hosts the exclusive file lock and the SQLite wrapper yian uses itself.
+
+```ts
+import { openSqlite, waitForLock } from "@ngocbh/yian/platform";
+
+using lock = await waitForLock("/srv/app/app.lock", { timeoutMs: 5000, private: true });
+const db = openSqlite("/srv/app/app.sqlite");
+db.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)");
+db.prepare("INSERT OR REPLACE INTO kv VALUES (?, ?)").run("a", "1");
+db.close();
+```
+
+The lock is a SQLite exclusive transaction on a 0-byte file, created with mode 0600 when missing (an
+existing file keeps its mode). The kernel frees it when the process dies; the file is never
+unlinked, and no sibling file appears. Bun and Node processes see each other's locks. It is POSIX
+only (`private` reads `process.getuid()`). Never open a lock file any other way: on Node, closing
+any descriptor of a locked file drops the process's lock.
+
+- `lockFile(path, { private })` takes the lock without waiting and returns a `FileLock`: call
+  `release()`, or hold it with `using`. The lock isn't re-entrant: a second `lockFile` in the
+  holding process is busy too. OS errors (`ENOENT` for a missing directory) and SQLite errors
+  (`SQLITE_NOTADB` for a foreign file) propagate unchanged; any other failure throws
+  `FileLockError`, whose `reason` is:
+  - `"busy"`: the lock is held. Busy can also show up briefly while another contender or an
+    `isLocked` probe is mid-attempt, so to ask "is another daemon running?", call `waitForLock`
+    with a small `timeoutMs`.
+  - `"unsafe"`: the path isn't a regular file, or, with `private`, has more than one link.
+  - `"not-private"`: with `private`, the file isn't owned by this user, or has group or other mode
+    bits set.
+  - `"changed"`: the path was replaced or removed while locking.
+- `waitForLock(path, { timeoutMs, signal, private })` retries every 100 ms until its sleeps add up
+  to `timeoutMs` (default `Infinity`), then rejects with `FileLockError` `"busy"`; `0` tries once.
+  An abort rejects with `signal.reason`, a `NaN` or negative `timeoutMs` with `RangeError`, and any
+  other `lockFile` failure propagates at once.
+- `isLocked(path)` says whether another connection holds the lock. A missing path, a non-regular
+  file and a foreign (non-SQLite) file are `false`, and nothing is created. Any other open failure
+  (no read permission, say) throws, so a held lock is never reported free. Like busy, `true` can
+  show up briefly while a `lockFile` call is mid-attempt.
+
+`openSqlite(path, { readonly })` opens a database file (creating it unless `readonly`) through
+`bun:sqlite` or `node:sqlite`. A `Sqlite` has `exec(sql)`, `prepare(sql)` (cached per SQL text) and
+`close()` (a second call does nothing); a `SqliteStatement` has `all`, `get` (`undefined` for no
+row) and `run`. Parameters are positional `?`s: a safe-integer `number` binds as INTEGER, any other
+`number` as REAL. Integers read back as `number`, and one outside the safe range throws
+`RangeError`.
+
+Foreign keys are off and double-quoted string literals are accepted, as in Python's sqlite3. Two
+runtime differences remain: passing some but too few positional parameters throws on Bun but binds
+NULL on Node (passing none binds NULL on both), and the drivers' error objects differ, so read the
+extended result code with `sqliteErrorCode(error)` (`& 0xff` for the primary code).
+
 ## CLI
 
 The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
@@ -494,11 +549,11 @@ Node 22, and so does every unit test; a change keeps both green.
   `sqliteErrorCode`), the exclusive file lock (`lockFile`, `waitForLock`, `isLocked`), time
   (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`) and HTTP (`safeFetch`
   over an injectable `Send`, which never follows a redirect, throws `RedirectError` for a 3xx
-  and sends `USER_AGENT`; every request goes through it). Never open a lock file
-  any other way: on Node, closing any descriptor of a locked file drops the process's lock. Code
-  that waits takes an injected `Scheduler`, so tests and conformance run on `virtualScheduler`.
-  `stripTypes` strips a CODE body's types with amaro on both runtimes, keeping every line
-  number, and returns text: the caller builds the function.
+  and sends `USER_AGENT`; every request goes through it). The lock and SQLite names are public
+  through `@ngocbh/yian/platform` (see [File locks and SQLite](#file-locks-and-sqlite)), so their
+  behavior is API. Code that waits takes an injected `Scheduler`, so tests and conformance run on
+  `virtualScheduler`. `stripTypes` strips a CODE body's types with amaro on both runtimes, keeping
+  every line number, and returns text: the caller builds the function.
 - Host values enter through `fromHost`; values reaching `buildValueAs` are yian values.
 - A value becomes text with `writeAsText` (the text form) or `writeAsJson` (`render_as_json`),
   never `String()` or `JSON.stringify`; messages show values with `valueRepr`.

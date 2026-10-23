@@ -11,7 +11,9 @@
  * `warnings.warn` and `warnings.catch_warnings` the CLI collects yian's warnings with.
  * Child processes check the lock across processes, as `log.py`'s `_lock_exclusive`
  * and the storage and auth stores' multiprocess tests do, and, with
- * `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
+ * `YIAN_TEST_NODE` set to a Node binary, the built output on Node. The entry tests import
+ * `@ngocbh/yian/platform` by package self-reference, which resolves through `package.json`'s
+ * "exports" as an installed copy does.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
@@ -22,7 +24,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   type FileLock,
@@ -861,6 +863,11 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
 const BUILT = path.join(ROOT, "dist/src/platform.js");
 const BUILT_URL = pathToFileURL(BUILT).href;
+/**
+ * The public entry. It resolves by self-reference from inside ROOT (this file, and children whose
+ * cwd is ROOT). Typed string so tsc doesn't resolve it to dist/, missing before a build.
+ */
+const ENTRY: string = "@ngocbh/yian/platform";
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
@@ -1112,18 +1119,22 @@ async function nextLine(holder: Holder): Promise<string> {
 /**
  * Start a child that locks `p`, and resolve once it prints `locked`. `"bun"` runs the
  * source on this Bun, `"node"` the build on `NODE`, `"bwrap"` the Bun child in its own
- * pid namespace. With `selfCheck`, the child first retries `lockFile(p)` and probes
- * `isLocked(p)` itself. Stdin line `release` releases the lock (the child answers
- * `released`); stdin EOF ends the child, so a crashed test leaves no orphan.
+ * pid namespace; `specifier`, when given, is the module the child imports instead. With
+ * `selfCheck`, the child first retries `lockFile(p)` and probes `isLocked(p)` itself.
+ * Stdin line `release` releases the lock (the child answers `released`); stdin EOF ends
+ * the child, so a crashed test leaves no orphan.
  */
 async function spawnHolder(
   kind: "bun" | "node" | "bwrap",
   p: string,
-  { selfCheck = false }: { selfCheck?: boolean } = {},
+  {
+    selfCheck = false,
+    specifier = kind === "node" ? BUILT_URL : SOURCE_URL,
+  }: { selfCheck?: boolean; specifier?: string } = {},
 ): Promise<Holder> {
   // Plain JavaScript without `using`, which Node 22 can't parse.
   const script = `
-const { FileLockError, isLocked, lockFile } = await import(${JSON.stringify(kind === "node" ? BUILT_URL : SOURCE_URL)});
+const { FileLockError, isLocked, lockFile } = await import(${JSON.stringify(specifier)});
 const { createInterface } = await import("node:readline");
 const p = ${JSON.stringify(p)};
 const lock = lockFile(p);
@@ -1349,6 +1360,71 @@ console.log(JSON.stringify({ isLocked: locked, lock }));
       await kill(holder);
       hold(file);
       expect(fs.readdirSync(dir)).toEqual(["db.sqlite"]);
+    },
+    SPAWNED_MS,
+  );
+});
+
+describe("the @ngocbh/yian/platform entry", () => {
+  test.if(process.versions.bun !== undefined)("on Bun it is the source module yian itself uses", async () => {
+    expect(fs.realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(
+      fs.realpathSync(path.join(ROOT, "src/platform.ts")),
+    );
+    const entry = (await import(ENTRY)) as typeof import("../../src/platform.ts");
+    expect(entry.lockFile).toBe(lockFile);
+    expect(entry.waitForLock).toBe(waitForLock);
+    expect(entry.isLocked).toBe(isLocked);
+    expect(entry.openSqlite).toBe(openSqlite);
+    expect(entry.FileLockError).toBe(FileLockError);
+    expect(entry.sqliteErrorCode).toBe(sqliteErrorCode);
+  });
+
+  test.if(process.versions.bun !== undefined)(
+    "a Bun child importing the entry holds the lock against this process until it releases",
+    async () => {
+      const holder = await spawnHolder("bun", file, { specifier: ENTRY });
+      expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+      expect(isLocked(file)).toBe(true);
+      holder.child.stdin!.write("release\n");
+      expect(await nextLine(holder)).toBe("released");
+      hold(file);
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!NODE)(
+    "on Node it resolves to the build and carries the lock and SQLite names",
+    () => {
+      const script = `
+const entry = await import(${JSON.stringify(ENTRY)});
+const names = ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode"];
+const types = Object.fromEntries(names.map((n) => [n, typeof entry[n]]));
+console.log(JSON.stringify({ resolved: import.meta.resolve(${JSON.stringify(ENTRY)}), types }));
+`;
+      const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { cwd: ROOT, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toBe("");
+      const { resolved, types } = JSON.parse(result.stdout);
+      expect(fs.realpathSync(fileURLToPath(resolved))).toBe(fs.realpathSync(BUILT));
+      expect(types).toEqual({
+        lockFile: "function",
+        waitForLock: "function",
+        isLocked: "function",
+        FileLockError: "function",
+        openSqlite: "function",
+        sqliteErrorCode: "function",
+      });
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!NODE)(
+    "a Node child importing the entry holds the lock against Bun until killed",
+    async () => {
+      const holder = await spawnHolder("node", file, { specifier: ENTRY });
+      expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+      await kill(holder);
+      hold(file);
     },
     SPAWNED_MS,
   );

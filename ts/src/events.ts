@@ -260,17 +260,13 @@ export class TokenUsage {
 }
 
 /** Why an AGENT node calls its model. */
-export type ModelCallPurpose =
-  | "chat"
-  | "structured_native"
-  | "structured_fallback"
-  | "history_summary";
+export type ModelCallPurpose = "chat" | "structured_native" | "structured_fallback";
 
 /**
  * An AGENT node is about to call its model.
  *
- * `purpose` is `"chat"`, `"structured_native"`, `"structured_fallback"`, or
- * `"history_summary"`. `provider` and `model` echo the effective config.
+ * `purpose` is `"chat"`, `"structured_native"` or `"structured_fallback"`. `provider` and `model`
+ * echo the effective config.
  */
 export class ModelCallStarted {
   readonly type = "ModelCallStarted" as const;

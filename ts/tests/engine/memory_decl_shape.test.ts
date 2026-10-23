@@ -18,7 +18,8 @@
  * table, so it holds each allowlisted key's minimum and checks that the minimum loads and the
  * minimum minus one is refused. `test_non_finite_config_is_rejected` adds `Infinity`. Python's
  * `ValueError` is `RangeError`. The setup error's list-for-tuple `related` row passes a `Set`
- * (TS has only arrays) and checks the error's `name`.
+ * (TS has only arrays) and checks the error's `name`. TS yian has no session memory: its rows are
+ * gone, and a `session` type is refused by name.
  *
  * Not ported: the backend halves of `test_builtin_config_values_at_their_limits_load_and_build` and
  * `test_builtin_config_rules_match_the_backends` (the built-in backends aren't ported).
@@ -178,7 +179,6 @@ test("the built-in allowlist is a static table", () => {
     new Map([
       ["episodic", ["max_episodes", "recall_limit"]],
       ["reflective", ["max_items", "recall_limit"]],
-      ["session", ["history_budget_chars", "recent_turns"]],
       ["profile", ["input_budget_chars", "max_chars"]],
     ]),
   );
@@ -192,7 +192,8 @@ test("built-in types accept only allowlisted keys", () => {
     RangeError,
     'episodic memory config has unknown key(s) ["max_items"] (allowed: max_episodes, recall_limit)',
   );
-  expect(() => decl("chat", "session", { budget: 1n })).toThrow("allowed: history_budget_chars, recent_turns");
+  // TS yian has no session memory; its type is refused by name.
+  expectError(() => decl("chat", "session", {}), RangeError, "session memory was removed; carry the history as a loop field");
   expect(() => decl("notes", "episodic", { max_items: 5n, b: 1n })).toThrow(
     'unknown key(s) ["b","max_items"]',
   );
@@ -205,9 +206,6 @@ test.each<[string, Record<string, unknown>, typeof TypeError | typeof RangeError
   ["reflective", { max_items: "ten" }, TypeError, 'max_items must be an integer or null, got "ten"'],
   ["reflective", { max_items: 1.5 }, TypeError, "max_items must be an integer or null, got 1.5"],
   ["reflective", { recall_limit: true }, TypeError, "recall_limit must be an integer or null, got true"],
-  ["session", { recent_turns: -1n }, RangeError, "recent_turns must be an integer of at least 0, got -1"],
-  ["session", { history_budget_chars: 0n }, RangeError, "history_budget_chars must be an integer of at least 1, got 0"],
-  ["session", { recent_turns: null }, TypeError, "recent_turns must be an integer, got null"],
   ["profile", { max_chars: 0n }, RangeError, "max_chars must be an integer of at least 1, got 0"],
   ["profile", { input_budget_chars: null }, TypeError, "input_budget_chars must be an integer, got null"],
   ["reflective", { max_items: [1n] }, TypeError, "max_items must be an integer or null, got [1]"],
@@ -223,7 +221,6 @@ test.each<[string, Record<string, unknown>, typeof TypeError | typeof RangeError
 test.each<[string, Record<string, unknown>]>([
   ["episodic", { max_episodes: 1n, recall_limit: null }],
   ["reflective", { max_items: null, recall_limit: 1n }],
-  ["session", { history_budget_chars: 1n, recent_turns: 0n }],
   ["profile", { max_chars: 1n, input_budget_chars: 1n }],
 ])("%s config at its limits loads", (typeName, config) => {
   checkMemoryDeclaration("notes", typeName, config);
@@ -233,7 +230,6 @@ test.each<[string, Record<string, unknown>]>([
 const RULES: Record<string, Record<string, [bigint, boolean]>> = {
   episodic: { max_episodes: [1n, true], recall_limit: [1n, true] },
   reflective: { max_items: [1n, true], recall_limit: [1n, true] },
-  session: { history_budget_chars: [1n, false], recent_turns: [0n, false] },
   profile: { max_chars: [1n, false], input_budget_chars: [1n, false] },
 };
 

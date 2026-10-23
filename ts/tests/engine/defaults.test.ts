@@ -324,7 +324,11 @@ describe("docs/defaults.md", () => {
     const skipped = rows.findIndex((row) => row[0] === "`YIAN_MAX_INT_DIGITS`");
     expect(rows[skipped - 1]?.[0]).toBe("`YIAN_MAX_SKIP_WORLDS`");
     rows.splice(skipped, 1);
-    expect(rows).toEqual(ENTRIES.filter((entry) => !TS_ONLY.includes(entry.name)).map(expectedRow));
+    // TS yian has no session memory, so it has no session settings.
+    const session = ["`YIAN_SESSION_HISTORY_BUDGET_CHARS`", "`YIAN_SESSION_RECENT_TURNS`"];
+    const shared = rows.filter((row) => !session.includes(row[0]!));
+    expect(rows.length - shared.length).toBe(session.length);
+    expect(shared).toEqual(ENTRIES.filter((entry) => !TS_ONLY.includes(entry.name)).map(expectedRow));
   });
 
   test("the TS yian table lists the TS-only entries in order", () => {

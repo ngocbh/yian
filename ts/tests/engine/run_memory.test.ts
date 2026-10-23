@@ -4,8 +4,8 @@
  *
  * Ported, through `runFlow` and `resumeFlow`:
  * `test_memory_context_opener_uses_same_runtime_on_fresh_and_resume` (fresh and resume ×
- * `num_workers` 0 and 2 × `learnable` false and true),
- * `test_conversation_completes_before_dispatcher_output_contract_acceptance` (2 rows),
+ * `num_workers` 0 and 2 × `learnable` false and true; the AGENT recalls notes from a `FakeMemory`,
+ * since TS yian has no session memory to open a turn in),
  * `test_authored_policy_is_dormant_when_memory_is_none`,
  * `test_recall_only_records_snapshot_without_evidence_or_learning`,
  * `test_unfinished_primary_resume_uses_static_layout_after_map_growth`,
@@ -21,8 +21,8 @@
  * `test_code_node_occurrences_are_episodes_of_the_flow_key` and
  * `test_backward_rejects_a_tampered_recorded_stack_set_before_learning` (2 rows).
  *
- * Changed: `AgentNode.prototype.forward` is spied on, where Python patches `AgentNode.forward`;
- * the turn's request is its private `turnRequest`. `runFlow` builds its `FlowEngine` itself, so the
+ * Changed: `AgentNode.prototype.forward` is spied on, where Python patches `AgentNode.forward`.
+ * `runFlow` builds its `FlowEngine` itself, so the
  * runtimes `MemoryRuntime.open` returns (spied on) stand in for the openers Python's patched
  * `FlowEngine` receives, and TS has no `memory_recall` option to refuse. The flow's int output is
  * `7n`. A tampered `RunStartedRecord` is rebuilt from its fields (Python's `dataclasses.replace`);
@@ -30,6 +30,9 @@
  * TypeScript throwing an `Error` (Python raises `RuntimeError`). The settled resume of
  * `test_precommit_failure_requires_an_explicit_whole_pass_retry` passes an empty object as the
  * ignored memory (Python's `object()`).
+ *
+ * Not ported: `test_conversation_completes_before_dispatcher_output_contract_acceptance` (TS yian
+ * has no session memory).
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -41,7 +44,6 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeExpanded, NodeStarted, RunStarted } from "../../src/events.ts";
 import {
-  ConversationItem,
   DeclSite,
   type JsonObject,
   type Memory,
@@ -50,7 +52,6 @@ import {
   MemorySpec,
   MemoryStack,
 } from "../../src/memory/contracts.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
@@ -69,7 +70,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { type Mutable, rejected, snapshot } from "./session_fakes.ts";
+import { rejected } from "./run_state_fixtures.ts";
 
 const FLOW = `id: memory-run
 name: memory_run
@@ -148,11 +149,6 @@ function records(path: string): RunRecord[] {
   }
 }
 
-/** The conversation `memory` holds now. */
-function history(memory: SessionMemory): Mutable {
-  return snapshot(memory)["conversation"];
-}
-
 /** An `onEvent` that throws `message` at the first event `stop` accepts. */
 function stopAt(stop: (event: unknown) => boolean, message = "host stop"): (event: unknown) => void {
   return (event) => {
@@ -165,8 +161,8 @@ for (const resume of [false, true]) {
     for (const learnable of [false, true]) {
       const name = `resume ${resume}, numWorkers ${numWorkers}, learnable ${learnable}`;
       test(`memory context opener uses same runtime on fresh and resume (${name})`, async () => {
-        const path = join(dir, "conversation.jsonl");
-        const memory = new SessionMemory();
+        const path = join(dir, "recall.jsonl");
+        const memory = new FakeMemory({ recallText: "notes" });
         const registry = new Map([["test", memory]]);
         const entered: (readonly string[])[] = [];
         const runtimes: MemoryRuntime[] = [];
@@ -177,10 +173,8 @@ for (const resume of [false, true]) {
           return runtime;
         });
         const forward = spyOn(AgentNode.prototype, "forward").mockImplementation(async (_inputs, caps) => {
-          const turn = (await caps!.openMemoryContext!("system", "prompt", { format: "test-v1" })).transcript!;
-          entered.push((turn as Mutable).turnRequest.consumerStaticPath);
-          const ordinal = await turn.request("model", { input: "test" });
-          await turn.observe(ordinal, "completed", { items: [new ConversationItem("reply", "test-v1", { value: 7 })] });
+          const context = await caps!.openMemoryContext!("system", "prompt");
+          entered.push(context.sections.map((section) => `${section.memory}: ${section.text}`));
           return new Output(7n);
         });
         try {
@@ -206,37 +200,13 @@ for (const resume of [false, true]) {
           forward.mockRestore();
           opening.mockRestore();
         }
-        expect(entered).toEqual([["work"]]);
+        expect(entered).toEqual([["test: notes"]]);
+        expect(memory.recallContexts.map((context) => context!.consumerStaticPath)).toEqual([["work"]]);
         expect(runtimes).toHaveLength(resume ? 2 : 1);
         expect(runtimes.every((runtime) => runtime.closed)).toBe(true);
-        expect(records(path).some((record) => record.constructor.name.startsWith("Conversation"))).toBe(false);
-        expect(history(memory).closed_invocations.at(-1).status).toBe("completed");
-        expect(history(memory).items[0].payload).toEqual({ value: 7 });
       });
     }
   }
-}
-
-for (const numWorkers of [0, 2]) {
-  test(`conversation completes before dispatcher output contract acceptance (numWorkers ${numWorkers})`, async () => {
-    const memory = new SessionMemory();
-    const forward = spyOn(AgentNode.prototype, "forward").mockImplementation(async (_inputs, caps) => {
-      await caps!.openMemoryContext!("system", "prompt", {});
-      return new Output("not an integer");
-    });
-    try {
-      const result = await runFlow(await loadFlow(AGENT_FLOW), {}, {
-        log: join(dir, "rejected.jsonl"),
-        memory: new Map([["test", memory]]),
-        numWorkers,
-      });
-      expect(result.status).toBe("failed");
-      expect(result.failure!.code).toBe("contract.output");
-    } finally {
-      forward.mockRestore();
-    }
-    expect(history(memory).closed_invocations.at(-1).status).toBe("completed");
-  });
 }
 
 test("authored policy is dormant when memory is none", async () => {

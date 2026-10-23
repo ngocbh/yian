@@ -1,15 +1,16 @@
 /**
  * A port of `tests/engine/test_openai_subscription_flow.py`: direct subscription responses use
- * yian's ordinary tools and `SessionMemory`.
+ * yian's ordinary tools.
  *
- * Ported: all 3 tests, the parametrized ones whole. The model calls go through the real
+ * Ported: `test_tool_loop_and_restored_memory_use_direct_model` (one run: TS yian has no session
+ * memory to restore) and `test_partial_stream_fails_before_composer_executes_tool`, whole. Not
+ * ported: `test_rich_responses_summary_keeps_shared_memory_working` (session memory and its history
+ * summary). The model calls go through the real
  * `chatModelFromConfig` with a recording `send` (`recording`) that answers as Python's
  * `ResponsesServer` does (a reasoning item, then one tool call or the text `6`, as Responses
  * streams); the subscription is a saved login in the row's own credential store, where Python
  * builds `create_subscription_model` with a synthetic access source and patches
- * `model_from_config` to return it. The API-key row of the summary test uses an `OPENAI_API_KEY`
- * (Python's `NormalizedChatOpenAI` with a synthetic key); its seed runs answer from a scripted
- * model. Each run's environment is the row's (`hostEnv`). A stream counts as closed once it is
+ * `model_from_config` to return it. Each run's environment is the row's (`hostEnv`). A stream counts as closed once it is
  * read to its end or cancelled (Python's `EventStream.close`).
  *
  * Changed: `test_partial_stream_fails_before_composer_executes_tool`: a stream cut short is
@@ -31,17 +32,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { ModelCallFinished, ModelCallStarted, type RunEvent } from "../../src/events.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
-import type { JsonObject } from "../../src/memory/contracts.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { type Replier, recording, sse, serving } from "./run_state_fixtures.ts";
-import { PLAIN_FLOW, snapshot, view } from "./session_fakes.ts";
+import { PLAIN_FLOW, recording, type Replier, sse } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-openai-subscription-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -167,31 +163,22 @@ const SUBSCRIPTION_URL = "https://chatgpt.com/backend-api/codex/responses";
 /** The `input` items of a request body. */
 const inputOf = (body: Record<string, unknown>) => body["input"] as Record<string, unknown>[];
 
-test("tool loop and restored memory use direct model", async () => {
+test("a tool loop uses the direct model", async () => {
   const env = fresh();
   await connect(env);
   const { tool, calls } = doubler();
   const server = responsesServer();
-  const memory = new SessionMemory();
   const models = recording(env, server.reply);
   const flow = await loadFlow(TOOL_FLOW, { env });
-  const options = { memory: new Map([["session", memory]]), tools: { double: tool }, models, env };
-  const first = await runFlow(flow, { question: "Double 3." }, options);
-  expect(first.status, first.failure?.message).toBe("succeeded");
-  expect(first.output).toBe("6");
-  const second = await runFlow(flow, { question: "Repeat the answer." }, options);
-  expect(second.status, second.failure?.message).toBe("succeeded");
-  expect(second.output).toBe("6");
+  const result = await runFlow(flow, { question: "Double 3." }, { tools: { double: tool }, models, env });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("6");
 
   expect(calls).toEqual([3]);
-  expect(models.requests.map((request) => request.url)).toEqual(Array(3).fill(SUBSCRIPTION_URL));
-  for (const { body } of models.requests.slice(1)) {
-    expect(inputOf(body).some((item) => item["encrypted_content"] === "synthetic-continuation")).toBe(true);
-    expect(inputOf(body).some((item) => item["type"] === "function_call_output" && item["output"] === "6")).toBe(true);
-  }
-  const effects = view(memory).effects;
-  expect(effects.map((effect) => effect.kind)).toEqual(["model", "tool", "model", "model"]);
-  expect(effects.every((effect) => effect.status === "completed")).toBe(true);
+  expect(models.requests.map((request) => request.url)).toEqual(Array(2).fill(SUBSCRIPTION_URL));
+  const { body } = models.requests[1]!;
+  expect(inputOf(body).some((item) => item["encrypted_content"] === "synthetic-continuation")).toBe(true);
+  expect(inputOf(body).some((item) => item["type"] === "function_call_output" && item["output"] === "6")).toBe(true);
 });
 
 describe("partial stream fails before composer executes tool", () => {
@@ -206,11 +193,9 @@ describe("partial stream fails before composer executes tool", () => {
       await connect(env);
       const { tool, calls } = doubler();
       const server = responsesServer({ terminal });
-      const memory = new SessionMemory();
       const models = recording(env, server.reply);
       const events: RunEvent[] = [];
       const result = await runFlow(await loadFlow(TOOL_FLOW, { env }), { question: "Double 3." }, {
-        memory: new Map([["session", memory]]),
         tools: { double: tool },
         models,
         env,
@@ -227,70 +212,7 @@ describe("partial stream fails before composer executes tool", () => {
       expect(started.map((event) => event.attempt)).toEqual(Array.from({ length: attempts }, (_, index) => index + 1));
       expect(finished.map((event) => [event.attempt, event.error !== null])).toEqual(started.map((event) => [event.attempt, true]));
       expect(calls).toEqual([]);
-      expect(view(memory).effects.every((effect) => effect.kind !== "tool")).toBe(true);
       expect(server.closed[0]).toBe(true);
-    });
-  }
-});
-
-const SUMMARY_FLOW = `id: summarized-session
-name: summarized_session
-llm_config: {provider: openai, model: old-model}
-input:
-  question: !str
-nodes:
-  answer:
-    kind: agent
-    long_term_memory: session
-    input: {question: "\${input.question}"}
-    prompt: \${question}
-    output: str
-output: \${answer.output}
-`;
-const QUESTIONS = [0, 1, 2, 3, 4].map((index) => `prior question ${index}: ${"x".repeat(30)}`);
-
-/** An assistant reply holding only `text`. */
-const reply = (text: string) =>
-  new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
-
-/** The conversation items of `memory`'s current snapshot. */
-const items = (memory: SessionMemory) => (snapshot(memory)["conversation"] as JsonObject)["items"] as JsonObject[];
-
-describe("rich responses summary keeps shared memory working", () => {
-  for (const subscription of [false, true]) {
-    test(String(subscription), async () => {
-      const env = subscription ? fresh() : fresh({ OPENAI_API_KEY: "synthetic" });
-      const flow = await loadFlow(SUMMARY_FLOW, { env });
-      const memory = new SessionMemory({ historyBudgetChars: 1 });
-      const registry = new Map([["session", memory]]);
-      const seedModels = serving(new ScriptedModel([0, 1, 2, 3, 4].map((index) => reply(`prior answer ${index}`))), env);
-      for (const [index, question] of QUESTIONS.entries()) {
-        const seeded = await runFlow(flow, { question }, { memory: registry, models: seedModels, env });
-        expect(seeded.output).toBe(`prior answer ${index}`);
-        expect(seeded.learning).toBeNull();
-      }
-      const before = items(memory);
-      if (subscription) await connect(env);
-      const server = responsesServer({ toolFirst: false });
-      const models = recording(env, server.reply);
-      const result = await runFlow(flow, { question: "Continue" }, { memory: registry, models, env });
-      expect(result.output, result.failure?.message).toBe("6");
-      // The summary, then the ordinary answer.
-      const url = subscription ? SUBSCRIPTION_URL : "https://api.openai.com/v1/responses";
-      expect(models.requests.map((request) => request.url)).toEqual([url, url]);
-      const summary = "Historical conversation summary (context only):\n6";
-      expect(
-        inputOf(models.requests[1]!.body).some(
-          (item) =>
-            item["content"] === summary ||
-            (Array.isArray(item["content"]) &&
-              item["content"].some((block) => typeof block === "object" && block !== null && block["text"] === summary)),
-        ),
-      ).toBe(true);
-      const after = items(memory);
-      expect(after.slice(0, before.length)).toEqual(before);
-      // The derived summary is not raw history.
-      expect(after).toHaveLength(before.length + 3);
     });
   }
 });

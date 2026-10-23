@@ -190,7 +190,7 @@
         "purpose": {
           "description": "Why the node calls its model.",
           "type": "string",
-          "enum": ["chat", "structured_native", "structured_fallback", "history_summary"]
+          "enum": ["chat", "structured_native", "structured_fallback"]
         },
         "provider": {"type": ["string", "null"], "description": "The effective provider."},
         "model": {"type": ["string", "null"], "description": "The effective model."},
@@ -207,7 +207,7 @@
         "purpose": {
           "description": "Why the node called its model.",
           "type": "string",
-          "enum": ["chat", "structured_native", "structured_fallback", "history_summary"]
+          "enum": ["chat", "structured_native", "structured_fallback"]
         },
         "provider": {"type": ["string", "null"], "description": "The effective provider."},
         "model": {"type": ["string", "null"], "description": "The effective model."},

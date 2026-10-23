@@ -158,23 +158,9 @@ const RULES: Rule[] = [
       file: "memory/contracts.ts",
       bad: [
         ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index"],
-        ...["memory/episodic", "memory/session", "memory/conversation", "memory/index"],
+        ...["memory/episodic", "memory/reflective", "memory/profile", "memory/index"],
       ],
       good: ["diagnostics", "defaults"],
-    },
-  },
-  {
-    name: "memory/conversation.ts imports only memory/contracts and typesys/json",
-    files: only("memory/conversation.ts"),
-    allow: ["memory/contracts", "typesys/json"],
-    why: "lower memory imports undeclared dependencies",
-    samples: {
-      file: "memory/conversation.ts",
-      bad: [
-        ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index", "diagnostics"],
-        ...["memory/episodic", "memory/session", "memory/index", "typesys", "typesys/index", "typesys/values"],
-      ],
-      good: ["memory/contracts", "typesys/json"],
     },
   },
   {
@@ -205,7 +191,7 @@ const RULES: Rule[] = [
     forbid: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
     why: "memory must not import runtime, compose, compile, run, memory_host, cli, or the package root",
     samples: {
-      file: "memory/session.ts",
+      file: "memory/episodic.ts",
       bad: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
       good: ["memory/contracts", "memory/index", "diagnostics"],
     },
@@ -593,14 +579,13 @@ describe("layer rule snippets", () => {
   });
 
   test("an allowed import never exempts another on the same line", () => {
-    const conversation = RULES.find((r) => r.name === "memory/conversation.ts imports only memory/contracts and typesys/json")!;
     const contracts = RULES.find((r) => r.name === "memory/contracts.ts imports only diagnostics and defaults")!;
     const check = (rule: Rule, path: string, text: string) =>
       ruleViolations(rule, [{ path, text }]).map((v) => v.slice(v.lastIndexOf(" -> ") + 4));
-    const shared = 'import { a } from "./contracts.ts"; import { b } from "./session.ts";';
-    expect(check(conversation, "memory/conversation.ts", shared)).toEqual(["memory/session"]);
-    const facade = 'import "./index.ts"; export * from "./contracts.ts";';
-    expect(check(conversation, "memory/conversation.ts", facade)).toEqual(["memory/index"]);
+    const shared = 'import { a } from "../diagnostics.ts"; import { b } from "./episodic.ts";';
+    expect(check(contracts, "memory/contracts.ts", shared)).toEqual(["memory/episodic"]);
+    const facade = 'import "./index.ts"; export * from "../defaults.ts";';
+    expect(check(contracts, "memory/contracts.ts", facade)).toEqual(["memory/index"]);
     const root = 'import "../index.ts"; import { f } from "../diagnostics.ts";';
     expect(check(contracts, "memory/contracts.ts", root)).toEqual(["index"]);
   });
@@ -616,8 +601,8 @@ describe("layer rule snippets", () => {
   test("the package's own name is the root facade", () => {
     const rule = RULES.find((r) => r.name === "memory never imports engine, host or cli layers")!;
     const text = 'import { run } from "@ngocbh/yian";';
-    expect(ruleViolations(rule, [{ path: "memory/session.ts", text }])).toEqual([
-      'memory/session.ts:1: import { run } from "@ngocbh/yian"; -> index',
+    expect(ruleViolations(rule, [{ path: "memory/episodic.ts", text }])).toEqual([
+      'memory/episodic.ts:1: import { run } from "@ngocbh/yian"; -> index',
     ]);
   });
 

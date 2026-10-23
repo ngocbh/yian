@@ -2,7 +2,6 @@
 # Also ::test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply (a reply streams as one chunk).
 # An interrupt set once model call 1 has finished keeps that reply's text as the output and runs
 # none of its two tool calls: each is reported as a ToolCallFinished with error `interrupted`.
-# (The tests' session-effect asserts need host.memory; the events show the skipped calls.)
 kind: run
 flow: |
   id: steer

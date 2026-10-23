@@ -59,8 +59,9 @@
  * `test_custom_type_points_to_the_python_api` (resume row), `test_flags_are_accepted_with_resume`,
  * `test_resume_opens_memory_only_when_the_record_needs_it` (4 rows) and
  * `test_resume_accepts_one_def_called_from_two_nodes`. Changed there: the recorded runs are
- * `runFlow` calls with the offline model and the command's env; the opens are counted on
- * `SessionMemory.prototype.openRun` (Python wraps the built-in constructors), the holder opening
+ * `runFlow` calls with the offline model and the command's env; the AGENT's memory is episodic
+ * (Python's is session memory, which TS yian doesn't have), and the opens are counted on
+ * `EpisodicMemory.prototype.openRun` (Python wraps the built-in constructors), the holder opening
  * its file before the count starts; Python's patched key checks aren't needed, xAI's key being set.
  *
  * Not ported: `test_no_memory_flow_imports_no_concrete_backend` (TS imports the backends
@@ -105,7 +106,6 @@ import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent, RunStarted } from "../../src/events.ts";
 import { DeclSite, MemoryDecl, MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { buildMemories } from "../../src/memory_host.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
@@ -150,9 +150,9 @@ function codeFlow(memories: readonly MemoryDecl[], flowId: string | null = "cli-
   );
 }
 
-/** A flow whose AGENT node declares `chat` as session memory (Python's `_SESSION_FLOW`). */
-function sessionFlow(): ComposedFlow {
-  const chat = new MemoryDecl("chat", "session", {}, new DeclSite([], ["root"], "work"));
+/** A flow whose AGENT node declares `chat` as episodic memory (Python's `_SESSION_FLOW`, on session memory). */
+function agentFlow(): ComposedFlow {
+  const chat = new MemoryDecl("chat", "episodic", {}, new DeclSite([], ["root"], "work"));
   const body = new AgentNode("work", { prompt: "hello", memories: [chat] });
   return new ComposedFlow(new CompiledFlow(graph(body), [], { flowId: "cli-memory", memories: [] }));
 }
@@ -254,7 +254,7 @@ test("memory storage for a custom key is a bad parameter", async () => {
     "--memory-storage",
   );
   expect(error.message).toBe(
-    "key 'vec' has custom type 'vector'; the CLI stores only built-in types (episodic, profile, reflective, session)",
+    "key 'vec' has custom type 'vector'; the CLI stores only built-in types (episodic, profile, reflective)",
   );
 });
 
@@ -273,7 +273,7 @@ test("custom type points to the TS API", async () => {
   const message = await setupMessage(() => buildCliMemories(flow, { root: undefined, storageOptions: [] }));
   expect(message).toBe(
     'this flow declares custom memory type(s) for ["idx","vec"]; yian run builds only built-in types ' +
-      "(episodic, profile, reflective, session). Use the API: buildMemories(flow, { factories }) or " +
+      "(episodic, profile, reflective). Use the API: buildMemories(flow, { factories }) or " +
       "{ supplied }, then runFlow(flow, inputs, { memory }).",
   );
 });
@@ -318,18 +318,6 @@ test.each([
 
 /** Return a flow declaring memory `policy` of type `policy` with YAML `config` (Python's `_configured`). */
 function configured(policy: string, config: string): string {
-  if (policy === "session") {
-    return `id: cli-memory
-name: cli_memory
-nodes:
-  work:
-    kind: agent
-    long_term_memory: {session: {type: session, config: ${config}}}
-    prompt: hello
-    output: str
-output: \${work.output}
-`;
-  }
   return `id: cli-memory
 name: cli_memory
 long_term_memory: {${policy}: {type: ${policy}, config: ${config}}}
@@ -345,7 +333,7 @@ output: \${work.output}
 test.each([
   ["episodic", "{bogus: 1}", 'episodic memory config has unknown key(s) ["bogus"]'],
   ["reflective", "{llm_config: {model: x}}", 'unknown key(s) ["llm_config"]'],
-  ["session", "{storage: x.sqlite}", "config key 'storage' is not allowed"],
+  ["episodic", "{storage: x.sqlite}", "config key 'storage' is not allowed"],
 ] as const)("YAML config outside the allowlist fails at load (%s)", async (policy, config, detail) => {
   const error = await caught(() => loadFlow(configured(policy, config)));
   expect(error).toBeInstanceOf(LoadError);
@@ -355,7 +343,6 @@ test.each([
 test.each([
   ["reflective", "{max_items: 0}", "max_items", RangeError],
   ["episodic", "{recall_limit: two}", "recall_limit", TypeError],
-  ["session", "{recent_turns: -1}", "recent_turns", RangeError],
 ] as const)("rejected YAML config is a load error naming the key (%s)", async (policy, config, detail, cause) => {
   const error = await caught(() => loadFlow(configured(policy, config)));
   expect(error).toBeInstanceOf(LoadError);
@@ -363,9 +350,9 @@ test.each([
   expect(((error as LoadError).cause as Error).constructor).toBe(cause);
 });
 
-describe.each(["episodic", "reflective", "session"] as const)("CLI builds %s memory", (type) => {
-  const key = type === "session" ? "chat" : "notes";
-  const flow = () => (type === "session" ? sessionFlow() : codeFlow([decl("notes", type)]));
+describe.each(["episodic", "reflective", "agent"] as const)("CLI builds %s memory", (type) => {
+  const key = type === "agent" ? "chat" : "notes";
+  const flow = () => (type === "agent" ? agentFlow() : codeFlow([decl("notes", type)]));
 
   /** Build with `options`, open and close one session of `key`, and close the registry. */
   async function openOnce(options: { root: string | undefined; storageOptions: readonly string[] }) {
@@ -479,13 +466,13 @@ function codeFlowText(memory: string | null = "{notes: episodic}", flowId = "cli
   );
 }
 
-/** Python's `_SESSION_FLOW`: an AGENT node with `chat` session memory. */
-const SESSION_FLOW = `id: cli-memory
+/** Python's `_SESSION_FLOW`: an AGENT node with `chat` memory, episodic here. */
+const AGENT_FLOW = `id: cli-memory
 name: cli_memory
 nodes:
   work:
     kind: agent
-    long_term_memory: {chat: session}
+    long_term_memory: {chat: episodic}
     prompt: hello
     output: str
 output: \${work.output}
@@ -686,10 +673,10 @@ describe("yian run", () => {
     expect(existsSync(result.log)).toBe(false);
   });
 
-  describe.each(["episodic", "reflective", "session"] as const)("activates declared %s memory", (type) => {
+  describe.each(["episodic", "reflective", "agent"] as const)("activates declared %s memory", (type) => {
     test.each([false, true])("without learning (durable %p)", async (durable) => {
-      const key = type === "session" ? "chat" : "notes";
-      const flow = flowFile(type === "session" ? SESSION_FLOW : codeFlowText(`{notes: ${type}}`));
+      const key = type === "agent" ? "chat" : "notes";
+      const flow = flowFile(type === "agent" ? AGENT_FLOW : codeFlowText(`{notes: ${type}}`));
       const path = join(tmp, "memory.sqlite");
       const options = durable ? [`${key}=${path}`] : [];
       const result = await runCli(flow, ...options.flatMap((option) => ["--memory-storage", option]));
@@ -737,7 +724,7 @@ describe("yian run", () => {
 
   test("open failure closes every backend and creates no directory", async () => {
     const flow = flowFile(
-      SESSION_FLOW.replace("name: cli_memory\n", "name: cli_memory\nlong_term_memory: {archive: episodic}\n"),
+      AGENT_FLOW.replace("name: cli_memory\n", "name: cli_memory\nlong_term_memory: {archive: episodic}\n"),
     );
     // Run setup opens memories in sorted key order: archive opens (and creates its file), then
     // chat fails because its parent directory is missing.
@@ -834,15 +821,15 @@ describe("yian run --resume", () => {
 
   describe.each([false, true])("resume opens memory only when the record needs it (terminal %p)", (terminal) => {
     test.each([false, true])("enabled %p", async (enabled) => {
-      const flow = flowFile(SESSION_FLOW);
+      const flow = flowFile(AGENT_FLOW);
       const log = join(tmp, "run.jsonl");
       const memoryPath = join(tmp, "memory.sqlite");
-      const loaded = await loadFlow(SESSION_FLOW);
+      const loaded = await loadFlow(AGENT_FLOW);
       const primary = new Error("stop before work");
       const stop = (event: RunEvent) => {
         if (!terminal && event instanceof NodeStarted && event.nodeId === "work") throw primary;
       };
-      const backend = new SessionMemory();
+      const backend = new EpisodicMemory();
       const send = globalThis.fetch;
       globalThis.fetch = offlineModel as unknown as typeof fetch;
       try {
@@ -860,21 +847,21 @@ describe("yian run --resume", () => {
       const opened: string[] = [];
       // An occupied store must not matter to terminal or historically dormant recovery; opening a
       // run takes the file.
-      const holder = terminal || !enabled ? new SessionMemory({ storage: memoryPath }) : null;
+      const holder = terminal || !enabled ? new EpisodicMemory({ storage: memoryPath }) : null;
       holder?.openRun().close();
-      const openRun = SessionMemory.prototype.openRun;
-      SessionMemory.prototype.openRun = function (this: SessionMemory, ...args) {
-        opened.push("session");
+      const openRun = EpisodicMemory.prototype.openRun;
+      EpisodicMemory.prototype.openRun = function (this: EpisodicMemory, ...args) {
+        opened.push("chat");
         return openRun.apply(this, args);
       };
       let result;
       try {
         result = await resumeCli(flow, log, "--memory-storage", `chat=${memoryPath}`);
       } finally {
-        SessionMemory.prototype.openRun = openRun;
+        EpisodicMemory.prototype.openRun = openRun;
         holder?.close();
       }
-      expect(opened).toEqual(terminal || !enabled ? [] : ["session"]);
+      expect(opened).toEqual(terminal || !enabled ? [] : ["chat"]);
       expect(result.code, result.stderr).toBe(0);
       const after = readFileSync(log);
       expect(after.subarray(0, before.length)).toEqual(before);

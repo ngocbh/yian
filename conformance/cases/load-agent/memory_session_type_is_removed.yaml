@@ -1,0 +1,22 @@
+# TS yian has no session memory: a `session` memory, on an AGENT or a flow, is a load error that
+# says to carry the history as a LOOP field.
+python_skip: Python yian keeps session memory
+kind: load
+flow: |
+  id: chat
+  name: chat
+  nodes:
+    ask:
+      kind: agent
+      long_term_memory: {history: session}
+      prompt: hi
+      output: str
+  output: ${ask.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'long_term_memory ''history'': session memory was removed; carry the history as a loop field'
+      frames:
+      - label: flow.yaml
+        range: [6, 23, 6, 41]

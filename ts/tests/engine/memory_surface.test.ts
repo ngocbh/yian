@@ -258,7 +258,7 @@ describe("loadFlow", () => {
         "  ask:\n" +
         "    kind: agent\n" +
         "    long_term_memory:\n" +
-        "      chat: session\n" +
+        "      chat: notes\n" +
         "      facts: {type: episodic, config: {recall_limit: 2}}\n" +
         "    prompt: hi\n" +
         "    output: str\n" +
@@ -267,7 +267,7 @@ describe("loadFlow", () => {
     const site = new DeclSite([], ["root"], "ask");
     const memories = (loaded.compiled.nodes.get("ask") as AgentNode).memories;
     expect(shape(memories)).toEqual([
-      ["chat", "session", {}, site],
+      ["chat", "notes", {}, site],
       ["facts", "episodic", { recall_limit: 2n }, site],
     ]);
     const resolver = loaded.originResolver!;

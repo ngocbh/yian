@@ -7,7 +7,7 @@
  * lexical owner, AGENT node) where it was written. Compile resolves the declarations into a key
  * table of `MemorySpec` entries and one `MemoryStack` of keys, outermost first, for each node
  * placement. The run log records both, so replay and backward read keys instead of deriving them
- * again. A session memory has one owning AGENT and holds one conversation.
+ * again.
  *
  * `contracts.ts` owns that vocabulary: the memory JSON snapshot types, the per-declaration shape
  * check (`checkMemoryDeclaration`, with `MEMORY_IDENTIFIER_PATTERN` and
@@ -19,25 +19,22 @@
  * (`EvaluationEvidence`, `MemorySection`, and the `VisibleInteraction` carriers
  * `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
  * `ToolResultInteraction`), the learning inputs (`MemoryEpisode` with its
- * `MemoryEpisodeStatus`, and `LearnContext`), the recall carriers (`RecallContext`,
- * `MemoryContextRequest`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`, and the engine's
- * `EvaluationTrace`), and the session conversation contracts: the frozen checkpoints and views
- * (`ConversationInvocation` through `ConversationClosed`, with `ConversationCheckpoint`) and the
- * host interfaces `TranscriptSource` and `ConversationTurn`. Python's `CheckStopped` has no
- * counterpart: `openTurn` takes an `AbortSignal`. The declaration origin traversal and rewrite,
- * the mutation batch check `validateMutations` and the feedback snapshot `freezeFeedback` aren't
- * re-exported (Python keeps them out of `__all__`), nor are the `same*` value comparisons; their
- * callers import `contracts.ts`.
+ * `MemoryEpisodeStatus`, and `LearnContext`), and the recall carriers (`RecallContext`,
+ * `MemoryContent`, `MemoryContext`, `MemoryRecallError`, and the engine's `EvaluationTrace`).
+ * TS yian has no session memory and no conversation contracts: chat history is a LOOP-carried
+ * value. The declaration origin traversal and rewrite, the mutation batch check
+ * `validateMutations` and the feedback snapshot `freezeFeedback` aren't re-exported (Python keeps
+ * them out of `__all__`), nor are the `same*` value comparisons; their callers import
+ * `contracts.ts`.
  *
- * `conversation.ts` owns the pure conversation fold, strict codecs and digests; `summary.ts` owns
- * whole-turn selection and summary prefix proofs. `storage/sqlite.ts` and `storage/markdown.ts`
- * are the storage adapters below the backends. The facade re-exports none of these modules, as
- * Python's `memory/__init__.py` doesn't import them. `episodic.ts`, `reflective.ts`, `session.ts`
- * and `profile.ts` hold `EpisodicMemory`, `ReflectiveMemory`, `SessionMemory` and `ProfileMemory`.
+ * `storage/sqlite.ts` and `storage/markdown.ts` are the storage adapters below the backends. The
+ * facade re-exports none of these modules, as Python's `memory/__init__.py` doesn't import them.
+ * `episodic.ts`, `reflective.ts` and `profile.ts` hold `EpisodicMemory`, `ReflectiveMemory` and
+ * `ProfileMemory`.
  *
- * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `conversation.ts` and
- * `summary.ts` also know `typesys`; `storage/` also knows `platform` and `typesys`; the backends
- * `episodic.ts`, `session.ts`, `reflective.ts` and `profile.ts` also know `typesys`;
+ * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `storage/` also knows
+ * `platform` and `typesys`; the backends `episodic.ts`, `reflective.ts` and `profile.ts` also know
+ * `typesys`;
  * `reflective.ts` and `profile.ts` also know `llm` and `llm_clients`; `profile.ts` also knows
  * `reflective.ts`, `storage/markdown.ts` and `storage/sqlite.ts`.
  * Never imports (this facade and `contracts.ts`): `nodes`, `compile`, `compose`, `runtime`, `run`,
@@ -45,11 +42,6 @@
  */
 
 export type {
-  ConversationCheckpoint,
-  ConversationEffectKind,
-  ConversationEffectStatus,
-  ConversationTurn,
-  ConversationTurnStatus,
   EvaluationTrace,
   JsonObject,
   JsonScalar,
@@ -59,24 +51,11 @@ export type {
   Memory,
   MemorySession,
   PolicyCommitStatus,
-  TranscriptSource,
   VisibleInteraction,
 } from "./contracts.ts";
 export {
   BUILTIN_MEMORY_CONFIG_KEYS,
   checkMemoryDeclaration,
-  ConversationAdmitted,
-  ConversationApplied,
-  ConversationClosed,
-  ConversationCompletion,
-  ConversationEffectObserved,
-  ConversationEffectRequested,
-  ConversationEffectState,
-  ConversationInvocation,
-  ConversationItem,
-  ConversationRequest,
-  ConversationStamp,
-  ConversationView,
   DeclSite,
   EvaluationEvidence,
   isMemory,
@@ -86,7 +65,6 @@ export {
   MEMORY_IDENTIFIER_PATTERN,
   MemoryContent,
   MemoryContext,
-  MemoryContextRequest,
   MemoryDecl,
   MemoryEpisode,
   MemoryEpisodeStatus,

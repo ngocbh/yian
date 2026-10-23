@@ -35,8 +35,7 @@ import { NodeStartedRecord, NodeSucceededRecord, readRunLog, RunResumedRecord } 
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
-import { NO_ENV } from "./session_fakes.ts";
+import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-in-loop-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

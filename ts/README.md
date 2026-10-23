@@ -745,16 +745,12 @@ Node 22, and so does every unit test; a change keeps both green.
   model errors fail with their `provider.*` code, spent `retries:` corrections with
   `agent.output_invalid`. With tools or skills it runs the tool loop: consecutive calls whose tool
   is concurrency-safe (`isConcurrencySafe`, and `load_skill`) run together as a group, and an
-  unsafe call runs alone. With a memory transcript (`src/nodes/agent/memory.ts`, Python's
-  `nodes/agent/memory.py`) it prepares prior context first (`prepareHistory`, summaries through
-  the AGENT's model with purpose `history_summary`), then records each model call's new input and
-  reply (`invokeModel`) and each tool call (`requestTool` before it starts; a group's started calls
-  observed in call order once the group settles), skipped calls and interrupts. Stored messages
-  are `yian.message.v1` items `{exchange_id, message}`; memory faults surface as
-  `CapabilityFault`.
+  unsafe call runs alone. Changed (TS yian): there is no memory transcript, so the model reads only
+  this start's messages and nothing is recorded into a memory (Python's `nodes/agent/memory.py`
+  records each call into a session memory's turn and summarizes old turns).
 - Before each wait between model-call attempts, an AGENT with `caps.steps` records a
   `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
-  from 1 per node start, chat, structured and history summaries alike, and the error is scrubbed as the node's failure
+  from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
   is. Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
   (before, the real clock and `Math.random`). Nothing reads these steps yet, so a resumed AGENT
   restarts. Each reason the built model gives
@@ -787,12 +783,15 @@ Node 22, and so does every unit test; a change keeps both green.
   the `title` stays raw; a clashing key is `<key>__1`, `<key>__2` (pydantic writes a
   module-qualified name); identical schemas share one def; fields starting with `_` are kept
   (pydantic drops them).
-- `compatibility(config)` in `src/nodes/agent/memory.ts` gives the provider and message format,
-  `yian.message.v1` (Python's is `yian.langchain-message.v1`). TS yian never reads a Python memory
-  store.
 
 ### Memory
 
+- Changed (TS yian): no session memory; carry history as a LOOP field. A `session` memory, on a
+  flow or an AGENT, is a load error ("session memory was removed; carry the history as a loop
+  field"), and so is a `MemoryDecl` of type `session` built in code. An AGENT's model reads only
+  its own start's messages: the system prompt with the recalled memory sections, the prompt, then
+  its steers, replies and tool results. There is no memory transcript, no `history_summary` model
+  call and no `YIAN_SESSION_*` setting.
 - `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
   `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
@@ -800,9 +799,9 @@ Node 22, and so does every unit test; a change keeps both green.
   (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`), and the
   evidence carriers (`EvaluationEvidence`, `MemorySection`, `ModelTextInteraction`,
   `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`), and the learning
-  inputs (`MemoryEpisodeStatus`, `MemoryEpisode`, `LearnContext`), the recall carriers
-  (`RecallContext`, `MemoryContextRequest`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`)
-  and the session conversation contracts (`Conversation*`, `TranscriptSource`, `ConversationTurn`).
+  inputs (`MemoryEpisodeStatus`, `MemoryEpisode`, `LearnContext`) and the recall carriers
+  (`RecallContext`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`). A `MemoryContent` holds
+  only notes, and a `MemoryContext` only its sections.
   `src/memory/index.ts` re-exports the public names; the mutation batch check `validateMutations`
   and the feedback snapshot `freezeFeedback` are exported from `memory/contracts.ts` only, as
   Python keeps `_validate_mutations` and `_freeze_feedback` private.
@@ -827,23 +826,11 @@ Node 22, and so does every unit test; a change keeps both green.
   `5n`.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`). Every method of a host memory interface (`Memory`,
-  `MemorySession`, `TranscriptSource`, `ConversationTurn`, `MarkdownStore.read/write`) may return a
-  value or a promise, and yian always awaits it, as for tools; property reads (`snapshot`, `view`),
-  `ConversationTurn.interrupt()` and the engine's `EvaluationTrace` stay synchronous. A session has
-  no `with` form: the caller calls `close()` in `finally`.
-- `TranscriptSource.openTurn(request, { signal })` resolves to an admitted turn (Python's
-  `open_turn` and `__enter__`); the stop is that `AbortSignal` (no `CheckStopped`), and
-  `ConversationTurn.close(error?)` replaces `__exit__`.
-- `src/memory/conversation.ts` holds the conversation fold and its codecs and digests;
-  `src/memory/summary.ts` holds whole-turn selection and the summary prefix proof. Neither is
-  re-exported by `memory/index.ts`, as Python's `memory/__init__.py` doesn't import them.
-- Changed: conversation JSON and `RecallContext.inputs` follow the value number rule (NaN refused,
-  `±Infinity` kept, `-0` read as `0`); Python refuses non-finite numbers in conversation JSON.
-- Conversation counters are safe-integer `number`s; wire JSON writes them as ints (`bigint`s) and
-  the decoders check them.
-- Conversation and summary digests are SHA-256 of `logJson` text. They equal Python's for ints and
-  text and differ only for floats, astral key order and records shaped like the codec's
-  `$float`/`$record` tags; TS stores are read only by TS.
+  `MemorySession`, `MarkdownStore.read/write`) may return a value or a promise, and yian always
+  awaits it, as for tools; the `snapshot` read and the engine's `EvaluationTrace` stay
+  synchronous. A run session has no `with` form: the caller calls `close()` in `finally`.
+- Changed: `RecallContext.inputs` follows the value number rule (NaN refused, `±Infinity` kept,
+  `-0` read as `0`).
 - `src/memory/storage/sqlite.ts` holds `SQLiteStorage`, the single-owner SQLite state file, opened
   through `platform.ts`'s `openSqlite`. Changed: the envelope is version 3 (Python's is 2), so a
   Python file fails `storage.version`; `±Infinity` is kept with the codec's `$float` tag; there is
@@ -862,15 +849,6 @@ Node 22, and so does every unit test; a change keeps both green.
   promise; recall text and entry ids use yian's canonical JSON (`logJson`); an episode holding
   `±Infinity` fails `learn` as `episodic.invalid_context`; there is no `with` form (call `close()`
   in `finally`) and no fork check.
-- `src/memory/session.ts` holds `SessionMemory`, its run handle `Session` and its `Turn`, with
-  optional SQLite storage opened at the first operation. Changed: the constructor takes an options
-  object (`historyBudgetChars`, `recentTurns`, `storage`, `createParent`) whose settings are
-  integral `number`s or `bigint`s; `openTurn` (which waits
-  for the FIFO lease) and `prepareHistory` are async, everything else is synchronous; a stop is
-  an `AbortSignal`; `close(error?)` never rethrows `error`, and appends a stop or cleanup failure
-  to `error.notes`; snapshots are deep-frozen; `-0` equals `0` in a compatibility descriptor; there
-  is no `with` form (call `close()` in `finally`) and no fork check; a waiter sees a poisoned
-  store at its next wake-up, not by polling.
 - `src/memory/reflective.ts` holds `ReflectiveMemory`, which keeps atomic lessons and asks one
   structured model call to propose lesson mutations. Changed: the constructor takes an options
   object (`llmConfig`, `maxItems`, `recallLimit`, `storage`, `createParent`, `env`, `createModel`,
@@ -1032,9 +1010,8 @@ Node 22, and so does every unit test; a change keeps both green.
   after `RunResumed`.
 - `src/runtime/memory_runtime.ts` holds `MemoryRuntime`: `open` validates the table, origins,
   registry and snapshots, opens one session per key in key order and captures the snapshots;
-  `openContext(scope, request, { signal })` recalls each scope key outer to local, keeps non-empty
-  sections, admits at most one transcript from a conversation-eligible key, checks the signal, and
-  resolves to the context whose transcript the caller closes; `proposeLearning`/`commitLearning`;
+  `openContext(scope, recall, { signal })` recalls each scope key outer to local, keeps non-empty
+  sections, checks the signal, and resolves to the context; `proposeLearning`/`commitLearning`;
   `openContext`, `proposeLearning` and `commitLearning` refuse a closed runtime ("memory runtime is
   closed"); `close()` closes in reverse key order once, noting close failures on a pending error
   (`notes`), and a later call waits for the first and never throws.

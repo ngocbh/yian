@@ -18,20 +18,14 @@
  * tool rows): TS has one stop, the signal's reason, with no initiating or derived kind; a call the
  * stop fails emits no finished event and the node rejects with the reason.
  *
- * Ported the same way through `FlowEngine` with a `SessionMemory` (`runSessionFlow`), the session
- * rows of `test_a_stop_during_a_failing_model_call_stops_the_run`,
- * `test_a_stop_during_a_failing_tool_call_stops_the_run` and
- * `test_a_host_callback_fault_escapes_a_pending_stop`, and the interrupted-effect records of
- * `test_a_stop_during_a_failing_structured_call_stops_the_run`: the stop's reason carries no notes
- * (Python's `_contexts` chain has no TS form). The host-callback row runs through `evalNode` with
- * the runtime's opener instead, since the engine stops a run with the first of the host's stop and
- * its sink's error, and the sink aborts the stop first.
- *
  * TS-only: a stop that cuts a tool's argument check short (its validator aborts the stop, then
  * throws) is the node's rejection, with no tool brackets and no recorded tool call.
  *
  * Not ported: `test_a_stop_wins_over_a_malformed_native_carrier` (TS has no LangChain structured
- * carrier).
+ * carrier); the session rows of `test_a_stop_during_a_failing_model_call_stops_the_run`,
+ * `test_a_stop_during_a_failing_tool_call_stops_the_run`,
+ * `test_a_stop_during_a_failing_structured_call_stops_the_run` and
+ * `test_a_host_callback_fault_escapes_a_pending_stop` (TS yian has no session memory).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -41,21 +35,13 @@ import { ModelCallFinished, ModelCallStarted, ToolCallFinished, ToolCallStarted 
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  ConversationInvocation,
-  type ConversationView,
-  type EvaluationTrace,
-  MemoryScope,
-  type VisibleInteraction,
-} from "../../src/memory/contracts.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
+import { type EvaluationTrace, type VisibleInteraction } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
-import { NO_ENV, runSessionFlow, sessionFlow, view, withSessionOpener } from "./session_fakes.ts";
+import { drive, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -241,93 +227,4 @@ test("a stop failing a tool call is the node's rejection, with no finished event
   const outcome = evaluate(lookupModel(), { node: toolAgent(), tools, signal: stop.signal, emitEvent });
   expect(await rejected(outcome)).toBe(stop.signal.reason);
   expect(events).toEqual(["ModelCallStarted", "ModelCallFinished", "ToolCallStarted"]);
-});
-
-// The session rows: the AGENT of `sessionFlow` through `FlowEngine` with a `SessionMemory`.
-
-/**
- * Run `sessionFlow(flowOptions)` over `model` with a fresh `SessionMemory` and the other engine
- * options; return what the run rejects with and the memory's conversation.
- */
-async function stoppedSession(
-  model: ChatModel,
-  flowOptions: Parameters<typeof sessionFlow>[0],
-  options: Parameters<typeof runSessionFlow>[2],
-) {
-  const memory = new SessionMemory();
-  const error = await rejected(
-    runSessionFlow(sessionFlow(flowOptions), memory, { inputs: { question: "q" }, models: serving(model), ...options }),
-  );
-  return { error, view: view(memory) };
-}
-
-/** The status of each effect of `stored` and the failure code of its last. */
-const outcome = (stored: ConversationView) => ({
-  statuses: stored.effects.map((effect) => effect.status),
-  code: stored.effects.at(-1)!.failure?.code,
-  closed: stored.closedInvocations.at(-1)!.status,
-});
-
-test("a stop during a failing model call stops the run and records the call interrupted", async () => {
-  const stop = new AbortController();
-  const model = failing(new Error("provider boom"), () => stop.abort(new Error("stopped")));
-  const { error, view: stored } = await stoppedSession(model, {}, { signal: stop.signal });
-  expect(error).toBe(stop.signal.reason);
-  expect(error).not.toHaveProperty("notes");
-  expect(outcome(stored)).toEqual({ statuses: ["interrupted"], code: "api.model.interrupted", closed: "interrupted" });
-});
-
-test("a stop during a failing tool call stops the run and records the call interrupted", async () => {
-  const stop = new AbortController();
-  const tools = lookupTools(() => {
-    stop.abort(new Error("stopped"));
-    throw new Error("tool boom");
-  });
-  const options = { tools, signal: stop.signal };
-  const { error, view: stored } = await stoppedSession(lookupModel(), { tools: ["lookup"] }, options);
-  expect(error).toBe(stop.signal.reason);
-  expect(error).not.toHaveProperty("notes");
-  expect(outcome(stored)).toEqual({
-    statuses: ["completed", "interrupted"],
-    code: "api.tool.interrupted",
-    closed: "interrupted",
-  });
-});
-
-test("a stop during a failing structured call stops the run and records the call interrupted", async () => {
-  const stop = new AbortController();
-  const model = failing(new Error("provider boom"), () => stop.abort(new Error("stopped")), PROMPTED);
-  const flowOptions = { llmConfig: PROMPTED, retries: 2, output: Type.scalar(ValueKind.INTEGER) };
-  const { error, view: stored } = await stoppedSession(model, flowOptions, { signal: stop.signal });
-  expect(error).toBe(stop.signal.reason);
-  expect(error).not.toHaveProperty("notes");
-  expect(outcome(stored)).toEqual({ statuses: ["interrupted"], code: "api.model.interrupted", closed: "interrupted" });
-});
-
-test("a host callback fault escapes a pending stop in a session, the call recorded failed", async () => {
-  const stop = new AbortController();
-  const fault = new RangeError("sink boom");
-  const emitEvent = (event: unknown) => {
-    if (event instanceof ModelCallStarted) {
-      stop.abort(new Error("stopped"));
-      throw fault;
-    }
-  };
-  const memory = new SessionMemory();
-  const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG });
-  node.memoryScope = new MemoryScope(["writer"], { memories: ["session"] });
-  const model = new ScriptedModel([textReply("fine")], CONFIG);
-  // Through the evaluator, not the engine: the engine would stop the run with the host's stop,
-  // which comes first.
-  const running = withSessionOpener(memory, "writer", (memoryContextOpener) =>
-    evaluate(model, {
-      node,
-      signal: stop.signal,
-      emitEvent,
-      memoryContextOpener,
-      memoryInvocation: new ConversationInvocation("run", 1),
-    }),
-  );
-  expect(await rejected(running)).toBe(fault);
-  expect(outcome(view(memory))).toEqual({ statuses: ["failed"], code: "api.model.failed", closed: "interrupted" });
 });

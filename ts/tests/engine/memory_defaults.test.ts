@@ -2,8 +2,6 @@
  * Memory defaults come from `defaults.ts`: a port of `tests/engine/test_memory_defaults.py`.
  *
  * Ported: `test_episodic_limits_default_from_the_environment`,
- * `test_session_memory_settings_default_from_the_environment` (the settings are read through the
- * memory's private members, as Python reads `_history_budget_chars`),
  * `test_reflective_limits_default_from_the_environment`,
  * `test_reflection_lesson_material_follows_its_budget`,
  * `test_reflection_episode_material_follows_its_budget` and
@@ -20,7 +18,8 @@
  * Not ported: `test_memory_nesting_bound_follows_the_value_nesting_limit` (TS has no memory nesting
  * limit); `test_reflection_limit_material_follows_its_budget` (the `{"max_items": N}` material can't
  * reach the 256 floor, and an ESM call can't be spied on; `reflective_memory.test.ts`'s
- * `boundedJsonMaterial` test checks the cut at the floor).
+ * `boundedJsonMaterial` test checks the cut at the floor);
+ * `test_session_memory_settings_default_from_the_environment` (TS yian has no session memory).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -41,7 +40,6 @@ import {
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import { ProfileMemory } from "../../src/memory/profile.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 
 let home: string;
@@ -94,18 +92,6 @@ test("episodic limits default from the environment", () => {
   const recorded = snapshotOf(new EpisodicMemory({ maxEpisodes: 7, recallLimit: 5 }));
   expect(recorded.config).toEqual({ max_episodes: 7n, recall_limit: 5n });
   expect(snapshotOf(new EpisodicMemory(), recorded).config).toEqual({ max_episodes: 7n, recall_limit: 5n });
-});
-
-test("session memory settings default from the environment", () => {
-  const env = new Map([
-    ["YIAN_SESSION_HISTORY_BUDGET_CHARS", "10"],
-    ["YIAN_SESSION_RECENT_TURNS", "1"],
-  ]);
-  reload((name) => env.get(name));
-  const memory = new SessionMemory();
-  expect([memory["historyBudgetChars"], memory["recentTurns"]]).toEqual([10, 1]);
-  const explicit = new SessionMemory({ historyBudgetChars: 20, recentTurns: 3 });
-  expect([explicit["historyBudgetChars"], explicit["recentTurns"]]).toEqual([20, 3]);
 });
 
 test("reflective limits default from the environment", () => {

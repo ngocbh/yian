@@ -2,20 +2,20 @@
  * A port of `tests/engine/test_openai_connection_recovery.py`: the recorded OpenAI connection
  * identity governs resume and delayed backward.
  *
- * Ported: every test but the one already ported below. The model calls go through the real
- * `chatModelFromConfig` with a recording `send` that answers one Responses stream (`recording`),
- * where Python routes the OpenAI clients to `ResponsesServer`; the session rows' earlier runs
- * answer from a scripted model (`serving`), where Python patches `model_from_config`. Each row has
- * its own environment (`hostEnv`) and so its own credential store, which logins are saved to.
+ * Ported: every test but those below. The model calls go through the real `chatModelFromConfig`
+ * with a recording `send` that answers one Responses stream (`recording`), where Python routes the
+ * OpenAI clients to `ResponsesServer`; the old run row answers from a scripted model (`serving`),
+ * where Python patches `model_from_config`. Each row has its own environment (`hostEnv`) and so
+ * its own credential store, which logins are saved to.
  *
  * Adapted: a record from before connections were recorded is a run log without `_connection`; the
  * rows build it by deleting `_connection` from the run's own log, where
  * `test_old_api_run_resumes_shared_message_history` patches Python's `connection_snapshot` to
  * record none. That row's patched snapshot, which fails the test when the resume reads it, is a
  * store file holding `not json`, which fails any read of it (a fresh run of the flow reads it and
- * fails). Session memory keeps no connection, so
- * `test_fresh_connected_run_reuses_pre_cutover_api_message_history`'s seed run needs no patched
- * snapshot.
+ * fails). TS yian has no session memory, so that row checks the resume, not a shared history.
+ *
+ * Not ported: `test_fresh_connected_run_reuses_pre_cutover_api_message_history` (session memory).
  *
  * Already ported: `test_old_backward_config_gets_api_semantics_before_factory`, in
  * `agent_backward.test.ts` (TS pins an old record without I/O, so no saved login is involved).
@@ -33,7 +33,6 @@ import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { resumeFlow, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { recording, rejected, responsesText, serving, textReply } from "./run_state_fixtures.ts";
@@ -47,9 +46,6 @@ nodes:
   agent: {kind: agent, prompt: hi, llm_config: {provider: openai, model: gpt-5.5}}
 output: \${agent.output}
 `;
-
-/** `FLOW` with the agent keeping session memory. */
-const SESSION_FLOW = FLOW.replace("{kind: agent,", "{kind: agent, long_term_memory: session,");
 
 let files = 0;
 
@@ -136,52 +132,20 @@ test("backward refuses changed selected connection", async () => {
   expect(models.requests).toHaveLength(1);
 });
 
-test("old api run resumes shared message history", async () => {
+test("an old api run resumes with the legacy connection", async () => {
   const { env, auth, path } = fresh();
-  const flow = await loadFlow(SESSION_FLOW, { env });
-  const memory = new Map([["session", new SessionMemory()]]);
+  const flow = await loadFlow(FLOW, { env });
   const model = new ScriptedModel([textReply("reply"), textReply("reply")]);
   const models = serving(model, env);
-  expect((await runFlow(flow, {}, { memory, models, env })).status).toBe("succeeded");
-  await interrupt(flow, path, { memory, models, env });
+  expect((await runFlow(flow, {}, { models, env })).status).toBe("succeeded");
+  await interrupt(flow, path, { models, env });
   dropConnection(path);
   // A store no read survives, which a fresh run reads: the resume fails if it reads a selection.
   writeFileSync(auth, "not json", { mode: 0o600 });
-  const other = new Map([["session", new SessionMemory()]]);
-  const reading = await rejected(runFlow(flow, {}, { memory: other, models, env }));
+  const reading = await rejected(runFlow(flow, {}, { models, env }));
   expect((reading as Error).message).toContain("Credential storage is malformed");
-  const resumed = await resumeFlow(flow, { log: path, memory, models, env });
+  const resumed = await resumeFlow(flow, { log: path, models, env });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(model.requests.at(-1)!.messages.map((message) => message.text()).slice(-3)).toEqual(["hi", "reply", "hi"]);
+  expect(model.requests.at(-1)!.messages.map((message) => message.text()).slice(1)).toEqual(["hi"]);
   expect((models.configs.at(-1)!["_connection"] as Record<string, unknown>)["source"]).toBe("legacy_environment");
-});
-
-test("fresh connected run reuses pre cutover api message history", async () => {
-  const { env } = fresh();
-  const flow = await loadFlow(SESSION_FLOW, { env });
-  const memory = new Map([["session", new SessionMemory()]]);
-  const seed = serving(new ScriptedModel([textReply("old API reply")]), env);
-  expect((await runFlow(flow, {}, { memory, models: seed, env })).status).toBe("succeeded");
-  const models = recording(env, responsesText("6"));
-  // Each explicit reconnect changes the stored credential identity. Both new runs retain
-  // ordinary compatible history without a memory migration.
-  for (let round = 0; round < 2; round++) {
-    await connect(env);
-    const result = await runFlow(flow, {}, { memory, models, env });
-    expect(result.status, result.failure?.message).toBe("succeeded");
-    expect(result.output).toBe("6");
-  }
-  expect(models.requests.map((sent) => sent.url)).toEqual(
-    Array(2).fill("https://chatgpt.com/backend-api/codex/responses"),
-  );
-  for (const { body } of models.requests) {
-    const input = body["input"] as Record<string, any>[];
-    expect(
-      input.some(
-        (item) =>
-          item["role"] === "assistant" &&
-          (item["content"] ?? []).some((block: Record<string, unknown>) => block["text"] === "old API reply"),
-      ),
-    ).toBe(true);
-  }
 });

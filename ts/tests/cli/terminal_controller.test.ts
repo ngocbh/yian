@@ -23,7 +23,7 @@ import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { NO_ENV } from "../engine/session_fakes.ts";
+import { NO_ENV } from "../engine/run_state_fixtures.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;

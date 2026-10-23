@@ -268,7 +268,7 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
-import { ConversationInvocation, EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
+import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
@@ -362,33 +362,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
-import {
-  aborted,
-  BlockingNode,
-  BranchNode,
-  childFlow,
-  commitStartSuccess,
-  engine,
-  expectUnchanged,
-  FailNode,
-  flow,
-  forwardCapture,
-  fragmentBuilder,
-  FuncNode,
-  graph,
-  initializedAndStarted,
-  learnableStarted,
-  noGrowth,
-  rejected,
-  replayTraceSnapshot,
-  RUN_ID,
-  snapshot,
-  startTraceNode,
-  terminalSkipRouteFlow,
-  textReply,
-  traceSnapshot,
-} from "./run_state_fixtures.ts";
-import { NO_ENV } from "./session_fakes.ts";
+import { aborted, BlockingNode, BranchNode, childFlow, commitStartSuccess, engine, expectUnchanged, FailNode, flow, forwardCapture, fragmentBuilder, FuncNode, graph, initializedAndStarted, learnableStarted, NO_ENV, noGrowth, rejected, replayTraceSnapshot, RUN_ID, snapshot, startTraceNode, terminalSkipRouteFlow, textReply, traceSnapshot } from "./run_state_fixtures.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -3881,7 +3855,6 @@ function evaluateStarted(state: RunState, nodeId: string): Promise<EvaluatedOutc
     captureBindings: true,
     effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
     sourceResolver: (path) => trace.resolve(path),
-    memoryInvocation: new ConversationInvocation(RUN_ID, state.acceptedStarts.get(nodeId)!),
   });
 }
 

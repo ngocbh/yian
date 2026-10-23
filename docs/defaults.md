@@ -194,6 +194,9 @@ limit](typing.md#integer-size-limit).
 
 Changed (TS yian): `YIAN_MAX_INT_DIGITS` doesn't exist; ints have no size limit.
 
+Changed (TS yian): `YIAN_SESSION_HISTORY_BUDGET_CHARS` and `YIAN_SESSION_RECENT_TURNS`
+don't exist; TS yian has no session memory.
+
 ## TS yian only
 
 These entries exist only in TS yian; Python yian neither reads nor records them.

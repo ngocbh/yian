@@ -106,7 +106,6 @@ import {
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import { ProfileMemory } from "../../src/memory/profile.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { buildMemories, MemoryRegistry } from "../../src/memory_host.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
@@ -466,26 +465,20 @@ test("overlapping close calls close each object once and share the first failure
 });
 
 test("builtins are constructed from declared config", async () => {
-  const flow = hostFlow(
-    [decl("lessons", "reflective"), decl("notes", "episodic", { max_episodes: 5n }), decl("about", "profile")],
-    { agentMemories: [new MemoryDecl("chat", "session", { recent_turns: 2n }, new DeclSite([], ["root"], "ask"))] },
-  );
+  const flow = hostFlow([
+    decl("lessons", "reflective"),
+    decl("notes", "episodic", { max_episodes: 5n }),
+    decl("about", "profile"),
+  ]);
   const registry = await buildMemories(flow);
   try {
-    expect([...registry.keys()]).toEqual(["about", "chat", "lessons", "notes"]);
+    expect([...registry.keys()]).toEqual(["about", "lessons", "notes"]);
     expect(registry.get("notes")!.constructor).toBe(EpisodicMemory);
     expect(registry.get("lessons")!.constructor).toBe(ReflectiveMemory);
-    expect(registry.get("chat")!.constructor).toBe(SessionMemory);
     expect(registry.get("about")!.constructor).toBe(ProfileMemory);
-    expect(Object.fromEntries(registry.types)).toEqual({
-      about: "profile",
-      chat: "session",
-      lessons: "reflective",
-      notes: "episodic",
-    });
+    expect(Object.fromEntries(registry.types)).toEqual({ about: "profile", lessons: "reflective", notes: "episodic" });
     // The YAML keys reach the constructors in camelCase.
     expect(field(registry.get("notes"), "requested")).toEqual([5, null]);
-    expect(field(registry.get("chat"), "recentTurns")).toBe(2);
   } finally {
     await registry[Symbol.asyncDispose]();
   }

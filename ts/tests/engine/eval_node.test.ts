@@ -82,7 +82,6 @@ import { RunSucceeded } from "../../src/events.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
 import { Message, replayRecord, Request, TextPart } from "../../src/llm/messages.ts";
 import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/factory.ts";
-import { ConversationInvocation } from "../../src/memory/contracts.ts";
 import {
   AssertionStageError,
   BindingStageError,
@@ -459,11 +458,6 @@ describe("evalNode checks its arguments", () => {
     ["steps", { steps: { starts: 1, prior: [], record() {} } }, new TypeError("steps must be a NodeSteps or null")],
     ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
     [
-      "memory_invocation",
-      { memoryInvocation: { runId: "r", startSequence: 1 } },
-      new TypeError("memory_invocation must be a ConversationInvocation or null"),
-    ],
-    [
       "effective_llm_by_static_path",
       { effectiveLlmByStaticPath: new Map() },
       new TypeError("effective_llm_by_static_path must be a record or null"),
@@ -491,7 +485,6 @@ describe("evalNode checks its arguments", () => {
       captureBindings: false,
       emitStream: () => {},
       emitEvent: () => {},
-      memoryInvocation: new ConversationInvocation("run", 1),
       skills: new Map(),
       tools: new ToolSet(),
       steps: new NodeSteps(1, [], () => {}),

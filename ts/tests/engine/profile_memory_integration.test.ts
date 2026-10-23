@@ -5,7 +5,8 @@
  * Ported, through `runFlow`: `test_sibling_agents_recall_one_shared_profile_document`; through
  * `runFlow` and `RunResult.backward`: `test_recall_learn_and_commit_through_a_public_run`,
  * `test_nested_declarations_of_one_key_show_and_rewrite_the_document_once`,
- * `test_profile_notes_and_a_session_transcript_share_one_agent_context`,
+ * `test_profile_notes_and_a_session_transcript_share_one_agent_context` (profile only: TS yian has
+ * no session memory),
  * `test_human_edit_during_learning_fails_the_commit_without_a_model` and
  * `test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document`; through `resumeFlow` too:
  * `test_resume_reopens_the_recorded_version_for_backward` and
@@ -31,10 +32,9 @@ import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { JsonObject } from "../../src/memory/contracts.ts";
 import { ProfileMemory } from "../../src/memory/profile.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { JsonlRunLog, MemoryCommitFailedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
-import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "./session_fakes.ts";
+import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "./run_state_fixtures.ts";
 
 const CHAT = `id: chat
 name: chat
@@ -109,7 +109,6 @@ input:
 nodes:
   reply:
     kind: agent
-    long_term_memory: session
     input:
       message: \${input.message}
     prompt: \${message}
@@ -242,12 +241,9 @@ test("sibling agents recall one shared profile document", async () => {
   }
 });
 
-test("profile notes and a session transcript share one agent context", async () => {
+test("profile notes reach the agent context of every run", async () => {
   const profileMemory = await profile();
-  const memory = new Map<string, ProfileMemory | SessionMemory>([
-    ["profile", profileMemory],
-    ["session", new SessionMemory()],
-  ]);
+  const memory = new Map([["profile", profileMemory]]);
   const flow = await loadFlow(OFFICE);
   expect((await runWith(flow, { message: "hello" }, memory, chat(["First reply."], 0), { env })).status).toBe(
     "succeeded",
@@ -255,7 +251,7 @@ test("profile notes and a session transcript share one agent context", async () 
   const model = chat(["Second reply."]);
   const result = await runWith(flow, { message: "again" }, memory, model, { learnable: true, env });
   expect(model.requests[0]!.messages[0]!.text().split("Works on reefs.")).toHaveLength(2);
-  expect(sentTexts(model, 0)).toEqual(["hello", "First reply.", "again"]);
+  expect(sentTexts(model, 0)).toEqual(["again"]);
   learner = new Learner("# Ada\n- Works on reefs.\n- Brief.");
   const outcome = await result.backward("Be brief.");
   expect(outcome.failure).toBeNull();

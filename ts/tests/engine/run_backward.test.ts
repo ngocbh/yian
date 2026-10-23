@@ -111,8 +111,7 @@ import { TypeCheckError } from "../../src/typesys/values.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory, FakeSession } from "./memory_fakes.ts";
-import { rejected, serving, textReply } from "./run_state_fixtures.ts";
-import { backwardReply } from "./session_fakes.ts";
+import { backwardReply, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 const IDENTITY = "id: identity\nname: identity\ninput:\n  text: !str\nnodes: {}\noutput: ${input.text}\n";
 const WITH_MEMORY = IDENTITY.replace("name: identity", "name: identity\nlong_term_memory: test");

@@ -33,7 +33,7 @@ import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../src/platform.ts";
 import { parseJson } from "../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
-import { NO_ENV } from "./engine/session_fakes.ts";
+import { NO_ENV } from "./engine/run_state_fixtures.ts";
 
 const PLATFORM_URL = pathToFileURL(join(import.meta.dirname, "..", "src", "platform.ts")).href;
 

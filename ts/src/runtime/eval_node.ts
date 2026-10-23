@@ -24,12 +24,10 @@ import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnost
 import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import {
-  ConversationInvocation,
   EvaluationEvidence,
   type EvaluationTrace,
   type JsonObject,
   MemoryContext,
-  MemoryContextRequest,
   MemoryRecallError,
   MemoryScope,
   MemorySection,
@@ -128,8 +126,7 @@ function capabilityFault(error: unknown): CapabilityFault {
 /**
  * @internal Append the note `text()` to `error`'s own `notes` array, creating it when absent
  * (Python's `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a
- * throwing `text`, is ignored. Local copy of `memory/session.ts`'s `addNote`; the engine notes a
- * refused stop record with it.
+ * throwing `text`, is ignored. The engine notes a refused stop record with it.
  */
 export function addNote(error: unknown, text: () => string): void {
   try {
@@ -463,13 +460,12 @@ function newEvaluationTrace(node: Node, captureEvidence: boolean): EvaluationTra
 }
 
 /**
- * Host-injected admission of notes and an optional structured transcript: selects one memory
- * context for a scoped node's `request`, under the node's `signal`. The evaluator closes the
- * context's transcript when the evaluation ends.
+ * Host-injected admission of recalled notes: selects one memory context for a scoped node's
+ * `recall`, under the node's `signal`.
  */
 export type MemoryContextOpener = (
   scope: MemoryScope,
-  request: MemoryContextRequest,
+  recall: RecallContext,
   options: { signal: AbortSignal },
 ) => Promise<MemoryContext>;
 
@@ -494,14 +490,8 @@ function validateMemorySections(scope: MemoryScope, sections: readonly MemorySec
 interface MemoryContextCapability {
   /** The node's `openMemoryContext`. */
   readonly open: NonNullable<NodeCaps["openMemoryContext"]>;
-  /**
-   * End the lifetime: later opens reject, and the admitted transcript closes with `ending.error`,
-   * or as a normal return when `ending` is `null`. Await it once the opener's promise settled.
-   *
-   * @throws The transcript's close failure after a normal return; after an error, the failure is
-   *   a note on that error instead.
-   */
-  close(ending: { error: unknown } | null): Promise<void>;
+  /** End the lifetime: later opens reject. */
+  close(): void;
 }
 
 /**
@@ -517,16 +507,14 @@ interface MemoryContextCapability {
 function memoryContextCapability(options: {
   scope: MemoryScope | null;
   opener: MemoryContextOpener | null;
-  invocation: ConversationInvocation | null;
   signal: AbortSignal;
   canonicalInputs: JsonObject | null;
   onFault: (fault: CapabilityFault) => void;
   pending: Promise<unknown>[];
 }): MemoryContextCapability {
-  const { scope, opener, invocation, signal, canonicalInputs, onFault, pending } = options;
+  const { scope, opener, signal, canonicalInputs, onFault, pending } = options;
   let closed = false;
   let used = false;
-  let admitted: MemoryContext | null = null;
 
   /**
    * Open the context once.
@@ -535,30 +523,23 @@ function memoryContextCapability(options: {
    *   throws it.
    * @throws CapabilityFault carrying a repeated open or any other opener fault.
    */
-  const enter = async (
-    baseSystemPrompt: string,
-    renderedPrompt: string,
-    compatibility: JsonObject,
-  ): Promise<MemoryContext> => {
+  const enter = async (baseSystemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
     try {
       if (used) throw new Error("memory context capability was already entered");
       used = true;
       if (scope === null || scope.memories.length === 0) return new MemoryContext();
       if (canonicalInputs === null) throw new MemoryRecallError("memory recall context is invalid");
-      let request: MemoryContextRequest;
+      let recall: RecallContext;
       try {
-        const recall = new RecallContext(baseSystemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
-        request = new MemoryContextRequest(recall, invocation, compatibility);
+        recall = new RecallContext(baseSystemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         throw new MemoryRecallError("memory recall context is invalid", { cause: error });
       }
       // The evaluator refuses a scoped node without an opener before the node runs.
-      const context: unknown = await opener!(scope, request, { signal });
+      const context: unknown = await opener!(scope, recall, { signal });
       try {
         if (!isExactly(context, MemoryContext)) throw new TypeError("memory context must be an exact MemoryContext");
-        // Admitted before its sections are checked, so a refused context still closes.
-        admitted = context;
         validateMemorySections(scope, context.sections);
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
@@ -573,38 +554,23 @@ function memoryContextCapability(options: {
     }
   };
 
-  const open = (baseSystemPrompt: string, renderedPrompt: string, compatibility: JsonObject) => {
+  const open = (baseSystemPrompt: string, renderedPrompt: string) => {
     const opened: Promise<MemoryContext> = closed
       ? Promise.reject(new Error("memory context capability is closed"))
-      : enter(baseSystemPrompt, renderedPrompt, compatibility);
+      : enter(baseSystemPrompt, renderedPrompt);
     // A node may drop the promise: its rejection must not go unhandled, and the evaluator awaits
-    // it, so a fault still reaches `onFault` and an admitted transcript still closes.
+    // it, so a fault still reaches `onFault`.
     opened.catch(() => {});
     if (!closed) pending.push(opened);
     return opened;
   };
 
-  const close = async (ending: { error: unknown } | null): Promise<void> => {
-    closed = true;
-    const transcript = admitted?.transcript ?? null;
-    if (transcript === null) return;
-    // The turn reads `undefined` as a normal return, so a thrown `undefined` needs a stand-in.
-    let error = ending?.error;
-    if (ending !== null && error === undefined) error = new Error(markerMessage(undefined));
-    try {
-      await transcript.close(error);
-    } catch (cleanup) {
-      if (ending === null) throw cleanup;
-      if (cleanup !== error) {
-        addNote(error, () => {
-          const name = cleanup instanceof Error ? cleanup.name : jsTypeName(cleanup);
-          return `Memory context cleanup failed: ${name}: ${markerMessage(cleanup)}`;
-        });
-      }
-    }
+  return {
+    open,
+    close: () => {
+      closed = true;
+    },
   };
-
-  return { open, close };
 }
 
 /** The optional inputs of one `evalNode` call; each defaults to `null` or `false`. */
@@ -638,8 +604,6 @@ export interface EvalNodeOptions {
    * `caps.openMemoryContext`; required when the node's scope has memories.
    */
   memoryContextOpener?: MemoryContextOpener | null;
-  /** The accepted node-start identity, needed only to admit a transcript. */
-  memoryInvocation?: ConversationInvocation | null;
   /** The run's host-supplied skills, delivered only to a node declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /** The paired value and source lookup used while capturing bindings. */
@@ -685,8 +649,6 @@ export interface EvalNodeOptions {
  * @throws TypeError when a node declaring `needsMemoryContext`, or `needsEvaluationTrace` while
  *   capturing evidence, has a `memoryScope` that isn't exactly a `MemoryScope`; Error when a
  *   memory context node's scope has memories and no opener was injected.
- * @throws The memory transcript's close failure after the node succeeded; after a failure or
- *   host error it is a note on that error.
  * @throws TypeError, RangeError or the value's own error when evidence capture can't canonicalize
  *   the visible bound inputs of an unscoped node; the body hasn't run.
  * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
@@ -712,7 +674,6 @@ export async function evalNode(
     captureEvidence = false,
     captureBindings = false,
     memoryContextOpener = null,
-    memoryInvocation = null,
     skills = null,
     sourceResolver = null,
     effectiveLlmByStaticPath = null,
@@ -744,9 +705,6 @@ export async function evalNode(
   if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
   if (steps !== null && !isExactly(steps, NodeSteps)) throw new TypeError("steps must be a NodeSteps or null");
   if (onFault !== null && typeof onFault !== "function") throw new TypeError("on_fault must be callable or null");
-  if (memoryInvocation !== null && !isExactly(memoryInvocation, ConversationInvocation)) {
-    throw new TypeError("memory_invocation must be a ConversationInvocation or null");
-  }
   // Read once, so a node replacing its scope while it runs doesn't change what it recalls.
   const memoryScope = node.needsMemoryContext === true ? node.memoryScope : null;
   if (memoryScope !== null && !isExactly(memoryScope, MemoryScope)) {
@@ -868,7 +826,6 @@ export async function evalNode(
       trace,
       memoryScope,
       memoryContextOpener,
-      memoryInvocation,
       sourceResolver,
       emitStream,
       emitEvent,
@@ -909,7 +866,6 @@ async function evaluateNode(
     /** The memory scope of a node declaring `needsMemoryContext`, else `null`. */
     memoryScope: MemoryScope | null;
     memoryContextOpener: MemoryContextOpener | null;
-    memoryInvocation: ConversationInvocation | null;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
@@ -924,7 +880,7 @@ async function evaluateNode(
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
     context;
-  const { memoryScope, memoryContextOpener, memoryInvocation } = context;
+  const { memoryScope, memoryContextOpener } = context;
   const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
@@ -1018,7 +974,6 @@ async function evaluateNode(
   const memory = memoryContextCapability({
     scope: memoryScope,
     opener: memoryContextOpener,
-    invocation: memoryInvocation,
     signal,
     canonicalInputs,
     onFault,
@@ -1118,39 +1073,29 @@ async function evaluateNode(
     rejection = { error };
   }
   // The captures stay open while the evaluator waits, so a node's dropped code may start another
-  // capability call meanwhile; one wait would miss it, and a late open's transcript would be
-  // admitted after `memory.close` and never closed, and its fault never checked.
+  // capability call meanwhile; one wait would miss it, and a late open's fault would never be
+  // checked.
   for (let settled = 0; settled < pending.length; ) {
     const batch = pending.slice(settled);
     settled = pending.length;
     await Promise.allSettled(batch);
   }
   closed = true;
+  memory.close();
   closeCaptures();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
   // the node returned or rejected with.
-  let ending: { error: unknown } | null = null;
-  if (faults.first !== null) ending = { error: faults.first.original };
-  else if (rejection !== null && signal.aborted) ending = { error: signal.reason };
-  if (ending !== null) {
-    await memory.close(ending);
-    throw ending.error;
-  }
+  if (faults.first !== null) throw faults.first.original;
+  if (rejection !== null && signal.aborted) throw signal.reason;
   if (rejection !== null) {
     const { error } = rejection;
     // A template default that fails to bind leaves no usable input record.
     if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
-    // The memory context sees the real failure, not the evaluator's stage marker.
-    await memory.close({ error: stageOriginal(error) });
     return stageFailure(node, error, usesBaseTemplate);
   }
   const contractError = resultContractError(node, result);
-  if (contractError !== null) {
-    await memory.close({ error: contractError });
-    return evaluationFailure(node, "contract.node_result", contractError);
-  }
-  await memory.close(null);
+  if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);
   return result as NodeResult;
 }
 
@@ -1167,17 +1112,6 @@ function resultContractError(node: Node, result: unknown): Error | null {
     );
   }
   return null;
-}
-
-/** Return the original a stage marker or fault carries, else `error` itself. */
-function stageOriginal(error: unknown): unknown {
-  return error instanceof DeferredBindingFault ||
-    error instanceof CapabilityFault ||
-    error instanceof BindingStageError ||
-    error instanceof AssertionStageError ||
-    error instanceof NodeBodyError
-    ? error.original
-    : error;
 }
 
 /**

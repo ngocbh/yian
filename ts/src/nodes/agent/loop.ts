@@ -4,9 +4,6 @@
  * Without tools or skills the loop makes a single model call (structured when the output type
  * needs it); with them it runs the tool loop until the model answers.
  *
- * An optional memory-owned turn retains actual exchanges. Restored provider context never drives
- * tool dispatch, and its synthetic missing-result repairs are not saved.
- *
  * A reply's tool calls run in groups (design 6.9): consecutive calls that are safe to run together
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
  * calls finish in. Python runs them one at a time, which is what a reply without safe tools gets.
@@ -15,13 +12,7 @@
  * interrupt between effects or before a later chunk of a streamed reply, returning its latest
  * reply's text (a cut reply's text so far); an interrupt never aborts a running tool call.
  *
- * Here: prior context comes from the memory transcript, which records each model call's new input
- * and reply, each tool call that runs (requested right before it starts, observed in call order
- * once its group settles), each call a host interrupt skipped, and a granted call whose argument
- * check failed.
- *
- * Knows about:   diagnostics, events, llm, memory contracts, nodes/base, skills, tools, typesys,
- *                peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, nodes/base, skills, tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -38,7 +29,6 @@ import {
   ToolResultPart,
   ToolSpec,
 } from "../../llm/messages.ts";
-import type { ConversationTurn } from "../../memory/contracts.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
@@ -65,22 +55,7 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import {
-  currentHistoryMessages,
-  interruptTurn,
-  invokeModel,
-  invokeToolEffect,
-  observeToolGroup,
-  prepareHistory,
-  recordSkippedTool,
-  reportedText,
-  requestTool,
-  type StartedTool,
-  systemPromptWithMemory,
-  type ToolEffectIdentity,
-  type ToolOutcome,
-  toolText,
-} from "./memory.ts";
+import { reportedText, systemPromptWithMemory, toolText } from "./memory.ts";
 import { generateStructured, typeToSchema, userMessage } from "./structured.ts";
 import { recordModelText, recordToolCall, recordToolResult, textOf } from "./text.ts";
 
@@ -93,15 +68,8 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * `ReplayDegraded`. Model calls are numbered from 1 in call order; with `ctx.steps`, each retry
  * of call `n` first records a `model_attempt` step for it (`retrySettings`).
  *
- * With a memory transcript, prior context is prepared once (`prepareHistory`; a summary call takes
- * the next call number) and goes between the system prompt and the prompt. Each model call stores
- * only its new input (the system prompt and the prompt first, then each iteration's steers) and its
- * reply; a final structured call after tools reads the current turn back from the transcript. Each
- * tool call is requested right before it starts and observed once its group settles, in call order:
- * a result or reported error `completed` (a reported error `interrupted` under a stop), a failed
- * call `failed` (`interrupted` under a stop). Each call a host interrupt skips is recorded with
- * `SKIPPED_TOOL_RESULT`, a granted call whose argument check failed is recorded failed, and an
- * interrupt asks the turn to close `interrupted`.
+ * The model reads the system prompt (with the recalled memory sections), the prompt, then each
+ * iteration's steers, replies and tool results; a final structured call after tools reads them all.
  *
  * @returns The checked structured value, or the final reply's visible text; after a host
  *   interrupt, the latest reply's visible text (`""` before any).
@@ -112,10 +80,9 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * @throws Whatever building or calling the model throws (marked by `markModelFailure`), a stop's
  *   reason, a tool's own error other than a reported one, a failed argument check, a result
  *   `toolText` refuses, or `generateStructured`'s `OutputInvalidError`. The host inbox's faults
- *   and the transcript's (`CapabilityFault`s) pass through.
+ *   pass through.
  */
 export async function runAgent(ctx: AgentRunContext): Promise<Output> {
-  const transcript = ctx.memoryContext.transcript;
   const systemPrompt = systemPromptWithMemory(ctx.baseSystemPrompt, ctx.memoryContext.sections);
   const system = new Message({ role: "system", parts: [new TextPart(systemPrompt)] });
   const user = userMessage(ctx.prompt);
@@ -142,14 +109,10 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   }
   ctx.sent = () => (model instanceof RouteModel ? model.route.auth.credentials() : []);
   checkStopped(ctx);
-  // Every model call of this start, summary, chat or structured, takes the next call number.
+  // Every model call of this start, chat or structured, takes the next call number.
   let modelCalls = 0;
   const nextCall = () => retrySettings(ctx, ++modelCalls);
-  const prior = await prepareHistory(transcript, model, { signal: ctx.signal, live, retry: nextCall });
-  const messages = [system, ...prior, user];
-  // The prior context is already in the transcript; the next model call stores only what this
-  // start adds.
-  let newMessages = [system, user];
+  const messages = [system, user];
   ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.prompt, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
   const structuredOptions = {
@@ -158,14 +121,12 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     signal: ctx.signal,
     evaluationTrace: ctx.evaluationTrace,
     retry: nextCall,
-    transcript,
   };
   const toolset = ctx.toolset ?? new ToolSet();
   // A granted id may name a host-filled group; grants are checked by tool name.
   const granted = toolset.expand(ctx.tools);
   if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) {
-    const options = { ...structuredOptions, newMessages };
-    return new Output(await generateStructured(model, messages, ctx.outputType!, options));
+    return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
   }
 
   // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
@@ -180,52 +141,36 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
 
   while (true) {
     checkStopped(ctx);
-    if (interrupt?.aborted) return interrupted(transcript, reply);
-    // Steers join only here, never between a reply's tool calls and their results, and ride in
-    // `newMessages` so the next model request stores them.
+    if (interrupt?.aborted) return interrupted(reply);
+    // Steers join only here, never between a reply's tool calls and their results.
     const steers = await drainSteers(ctx);
     // A stop during the drain wins; its steers are never sent.
     checkStopped(ctx);
     // So does an interrupt that lands while an async drain settles: no model call follows it.
-    if (interrupt?.aborted) return interrupted(transcript, reply);
-    for (const steer of steers) {
-      const message = userMessage(steer);
-      messages.push(message);
-      newMessages.push(message);
-    }
+    if (interrupt?.aborted) return interrupted(reply);
+    for (const steer of steers) messages.push(userMessage(steer));
     const exchangeId = newExchangeId();
     let response: Response;
     try {
-      // `invokeModel` checks the stop after the call: a stop that lands during it wins over its
-      // reply.
-      response = await invokeModel(
-        transcript,
-        () =>
-          callModel(live, model, new Request({ messages, tools: bound }), {
-            purpose: "chat",
-            exchangeId,
-            signal: ctx.signal,
-            interrupt,
-            retry: nextCall(),
-          }),
-        {
-          newMessages,
-          signal: ctx.signal,
-          exchangeId,
-          purpose: "chat",
-          checkReply: (checked) => rejectInvalidArguments(checked.message),
-        },
-      );
+      response = await callModel(live, model, new Request({ messages, tools: bound }), {
+        purpose: "chat",
+        exchangeId,
+        signal: ctx.signal,
+        interrupt,
+        retry: nextCall(),
+      });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.
       if (error instanceof ReplyInterrupted) {
         // A stop that lands after the cut, before this catch runs, still wins.
         checkStopped(ctx);
-        return interrupted(transcript, error.reply);
+        return interrupted(error.reply);
       }
       throw error;
     }
-    newMessages = [];
+    // A stop that lands during the call wins over its reply.
+    checkStopped(ctx);
+    rejectInvalidArguments(response.message);
     reply = response.message;
     iterations += 1;
     messages.push(reply);
@@ -237,12 +182,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       const text = textOf(reply);
       recordModelText(ctx.evaluationTrace, text);
       if (schema !== null) {
-        // With a transcript, the turn so far is read back, so an unpairable reply becomes inert
-        // text.
-        const current = await currentHistoryMessages(transcript, { fallback: messages.slice(1), signal: ctx.signal });
-        const conversation = [system, ...prior, ...current];
-        const options = { ...structuredOptions, newMessages: [] };
-        return new Output(await generateStructured(model, conversation, ctx.outputType!, options));
+        return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
       }
       return new Output(text);
     }
@@ -257,17 +197,13 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     }
 
     if (await runToolCalls({ ctx, toolset, granted, skills, live, exchangeId, messages, calls, interrupt })) {
-      return interrupted(transcript, reply);
+      return interrupted(reply);
     }
   }
 }
 
-/**
- * End an interrupted loop successfully with the latest reply's visible text (`""` before any),
- * asking the turn to close `interrupted` (`interruptTurn`).
- */
-async function interrupted(transcript: ConversationTurn | null, reply: Message | null): Promise<Output> {
-  await interruptTurn(transcript);
+/** End an interrupted loop successfully with the latest reply's visible text (`""` before any). */
+function interrupted(reply: Message | null): Output {
   return new Output(reply === null ? "" : textOf(reply));
 }
 
@@ -286,6 +222,15 @@ interface ToolTurn {
   readonly calls: readonly ToolCallPart[];
   /** The host's interrupt signal, or `undefined` for an agent that isn't steerable. */
   readonly interrupt: AbortSignal | undefined;
+}
+
+/** How one tool call ended: it returned `value` (a `ReportedToolError` when `reported`), or threw `error`. */
+type ToolOutcome = { readonly value: unknown; readonly reported: boolean } | { readonly error: unknown };
+
+/** One started call of a group and how it ended. */
+interface SettledCall {
+  readonly call: ToolCallPart;
+  readonly outcome: ToolOutcome;
 }
 
 /** One call whose check passed, ready to start. */
@@ -314,7 +259,7 @@ type CallCheck =
  *
  * @returns Whether a host interrupt skipped the remaining calls.
  * @throws A stop's reason, the first failing call's error, a result `toolText` refuses, the
- *   ungranted `AgentLoopError`, a failed argument check, or the transcript's `CapabilityFault`.
+ *   ungranted `AgentLoopError`, or a failed argument check.
  */
 async function runToolCalls(turn: ToolTurn): Promise<boolean> {
   let group: PlannedCall[] = [];
@@ -341,23 +286,14 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
 }
 
 /**
- * Report the calls from call `start` on as skipped by a host interrupt, in call order: each is
- * recorded in the transcript with `SKIPPED_TOOL_RESULT` (`recordSkippedTool`), then its skipped
- * events are published. None of them runs or leaves evidence.
+ * Report the calls from call `start` on as skipped by a host interrupt, in call order, by
+ * publishing their skipped events. None of them runs or leaves evidence.
  *
  * @returns `true`, for the caller to return.
- * @throws CapabilityFault when recording a skipped call fails; a stop the turn throws passes
- *   through.
  */
-async function skipFrom(turn: ToolTurn, start: number): Promise<true> {
+function skipFrom(turn: ToolTurn, start: number): true {
   for (const [index, call] of turn.calls.entries()) {
-    if (index < start) continue;
-    const transcript = turn.ctx.memoryContext.transcript;
-    // Without a transcript nothing is awaited, so a reply's skipped events stay together.
-    if (transcript !== null) {
-      await recordSkippedTool(transcript, { ...effectOf(turn, call, index), signal: nodeSignal(turn) });
-    }
-    observeSkippedToolCall(turn.live, identityOf(turn, call, index));
+    if (index >= start) observeSkippedToolCall(turn.live, identityOf(turn, call, index));
   }
   return true;
 }
@@ -408,13 +344,11 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
  *
  * As for a call about to start, a stop wins first, then a host interrupt skips it and every later
  * call. Otherwise the call's evidence is recorded; a granted call whose arguments failed gets the
- * brackets and transcript record of a call that threw (requested, then observed `failed`, or
- * `interrupted` under a stop), since Python checks them inside the call, and an ungranted one gets
- * none.
+ * brackets of a call that threw, since Python checks them inside the call, and an ungranted one
+ * gets none.
  *
  * @returns `true` when a host interrupt skipped the call.
- * @throws The failed check's error, except as `invokeToolEffect` replaces it with the stop or a
- *   `CapabilityFault`.
+ * @throws The failed check's error, or what publishing its brackets throws.
  */
 async function failCall(
   turn: ToolTurn,
@@ -427,16 +361,11 @@ async function failCall(
   if (turn.interrupt?.aborted) return skipFrom(turn, index);
   recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
   if (failed.granted) {
-    const signal = nodeSignal(turn);
-    await invokeToolEffect(
-      ctx.memoryContext.transcript,
-      () =>
-        observeToolCall(live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
-          signal,
-          text: (value) => toolText(call.name, value),
-        }),
-      { ...effectOf(turn, call, index), signal },
-    );
+    // Rejects with the failed check's error once its brackets are published.
+    await observeToolCall(live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
+      signal: nodeSignal(turn),
+      text: (value) => toolText(call.name, value),
+    });
   }
   throw failed.error;
 }
@@ -450,19 +379,13 @@ async function failCall(
  * first failure is thrown with nothing of the group committed. A stop, then a host interrupt, is
  * checked before the group starts; the interrupt skips from the group's first call.
  *
- * With a memory transcript, each call is requested right before it starts, and a request that
- * fails is the group's failure in time. Once the group settles, every started call is observed in
- * call order (`observeToolGroup`), so a finished sibling of a failing call stays `completed` with
- * its result. An observation fault is thrown unless a stop is pending or an earlier call (in call
- * order) failed or couldn't be represented; then the group ends as without the fault. A result
- * `toolText` refuses is thrown when committing, as without a transcript, only when no call failed.
+ * A result `toolText` refuses is thrown when committing, only when no call failed.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
  */
 async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<boolean> {
   if (group.length === 0) return false;
   const { ctx, live } = turn;
-  const transcript = ctx.memoryContext.transcript;
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, group[0]!.index);
   const signal = nodeSignal(turn);
@@ -479,23 +402,10 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
   };
   try {
     for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
-    const settling: Promise<StartedTool>[] = [];
+    const settling: Promise<SettledCall>[] = [];
     for (const planned of group) {
       if (controller.signal.aborted) break;
       const { call, index } = planned;
-      const effect = effectOf(turn, call, index);
-      let ordinal = 0;
-      if (transcript) {
-        try {
-          ordinal = await requestTool(transcript, { ...effect, signal });
-        } catch (error) {
-          fail(error);
-          break;
-        }
-        // A sibling that failed while the request was stored keeps this call from starting; its
-        // effect stays `pending`, which the node's failed turn allows.
-        if (controller.signal.aborted) break;
-      }
       let started = false;
       const running = observeToolCall(
         live,
@@ -514,22 +424,22 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
           return { error };
         },
       );
-      settling.push(outcome.then((ended) => ({ ...effect, ordinal, outcome: ended })));
+      settling.push(outcome.then((ended) => ({ call, outcome: ended })));
       // `observeToolCall` calls `invoke` synchronously unless publishing the started event threw;
       // its rejection is seen only later, so the next call must not start in the meantime.
       if (!started) break;
     }
     const settled = await Promise.all(settling);
-    if (transcript) await observeToolGroup(transcript, settled, signal);
     // A stop pending when the calls settle wins over the first failure and over their results.
     checkNodeStopped(turn);
     if (failure !== null) throw failure.error;
-    for (const { name, toolCallId, outcome } of settled) {
+    for (const { call, outcome } of settled) {
       // No outcome is an error: a failure was thrown above.
       const { value, reported } = outcome as Extract<ToolOutcome, { value: unknown }>;
+      const { id: callId, name } = call;
       const content = reported ? reportedText(name, value) : toolText(name, value);
       recordToolResult(ctx.evaluationTrace, name, content);
-      const part = new ToolResultPart({ callId: toolCallId, name, content, isError: reported });
+      const part = new ToolResultPart({ callId, name, content, isError: reported });
       turn.messages.push(new Message({ role: "tool", parts: [part] }));
     }
   } finally {
@@ -552,12 +462,6 @@ function checkNodeStopped(turn: ToolTurn): void {
 function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCallIdentity {
   const { id: toolCallId, name } = call;
   return { exchangeId: turn.exchangeId, callIndex: index, toolCallId, name, arguments: call.arguments! };
-}
-
-/** One call's identity on its transcript record: its bracket identity, the exchange id renamed. */
-function effectOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolEffectIdentity {
-  const { exchangeId, ...identity } = identityOf(turn, call, index);
-  return { ...identity, modelExchangeId: exchangeId };
 }
 
 /**

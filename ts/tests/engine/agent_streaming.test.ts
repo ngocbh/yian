@@ -18,7 +18,7 @@
  * the node) is a reply the assembler refuses (a stream without its `Finish`, a `ProviderError` of
  * kind `incomplete`); a `ScriptedModel` stands in for Python's scripted LangChain chat.
  * `test_refused_credentials_with_both_sinks_fail_provider_auth` runs `PLAIN_FLOW` through `loadFlow`
- * and `runFlow` (`runWith`) with session memory, for the before-any-text and mid-stream refusals
+ * and `runFlow` (`runWith`), without session memory, for the before-any-text and mid-stream refusals
  * (a `ProviderError` of kind `auth`, reported as `ProviderError` where Python's reads
  * `AuthenticationError`); its client-without-stream row is not ported (every `ChatModel`
  * streams).
@@ -28,9 +28,9 @@
  * `test_tool_calling_agent_streams_each_exchange_between_its_observers` and
  * `test_two_streamed_tool_calls_aggregate_by_index`.
  *
- * Ported through `FlowEngine` with a `SessionMemory` (`runSessionFlow`):
- * `test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one` (every call streams, so
- * there is no stream/invoke mode to check; the first run's chunks are checked instead) and
+ * Ported through `FlowEngine` (`runAgentFlow`), without the session memory TS yian doesn't have, so
+ * only the streams and events are checked: `test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one`
+ * (every call streams, so there is no stream/invoke mode to check; one run's chunks are checked) and
  * `test_mid_stream_failure_in_a_session_turn_retains_a_failed_model_effect` (the dropped connection a
  * `ProviderError`, reported as such).
  *
@@ -54,14 +54,12 @@ import {
   RunSucceeded,
   StreamChunk,
   TokenUsage,
-  ToolCallFinished,
   ToolCallStarted,
 } from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { Finish, type Event, TextDelta, ToolCallDelta, UsageReport } from "../../src/llm/events.ts";
-import { Message, Request, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
+import { Message, Request, TextPart, ToolCallPart, ToolResultPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -69,18 +67,17 @@ import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/bas
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { drive, rejected, serving } from "./run_state_fixtures.ts";
 import {
-  effectsOf,
+  agentFlow,
+  drive,
   NO_ENV,
+  PLAIN_CONFIG,
   PLAIN_FLOW,
-  runSessionFlow,
+  rejected,
+  runAgentFlow,
   runWith,
-  SESSION_CONFIG,
-  sessionFlow,
-  storedReplies,
-  view,
-} from "./session_fakes.ts";
+  serving,
+} from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -327,8 +324,8 @@ test.each([
   const result = await runWith(
     await loadFlow(PLAIN_FLOW),
     { question: "q1" },
-    new SessionMemory(),
-    new ScriptedModel([script()], SESSION_CONFIG),
+    null,
+    new ScriptedModel([script()], PLAIN_CONFIG),
     { onStream: (item) => void chunks.push(item), onEvent: (event) => void events.push(event) },
   );
   expect(result.status).toBe("failed");
@@ -411,38 +408,32 @@ test("two streamed tool calls aggregate by index", async () => {
   ]);
 });
 
-// The session rows: the AGENT of `sessionFlow` through `FlowEngine` with a `SessionMemory`.
+// One AGENT run through `FlowEngine`.
 
-test("a streamed tool exchange is retained and restored like an invoked one", async () => {
-  const memory = new SessionMemory();
-  const chat = model(streamedCalls("", [["a", "call-1"]]), streamed("one"), streamed("two"));
-  const flow = sessionFlow({ tools: ["lookup"] });
-  const options = { tools: lookupTools(), models: serving(chat) };
+test("a streamed tool exchange streams each reply's text", async () => {
+  const chat = model(streamedCalls("", [["a", "call-1"]]), streamed("one"));
   const chunks: StreamChunk[] = [];
-  const first = await runSessionFlow(flow, memory, {
-    ...options,
-    runId: "first",
+  const result = await runAgentFlow(agentFlow({ tools: ["lookup"] }), {
+    tools: lookupTools(),
+    models: serving(chat),
     inputs: { question: "q1" },
     onStream: (item) => void chunks.push(item),
   });
-  expect(first).toEqual(new RunSucceeded({ output: "one" }));
+  expect(result).toEqual(new RunSucceeded({ output: "one" }));
   expect(chunks.filter((item) => item.chunk !== "").map((item) => item.chunk)).toEqual(["one"]);
-  const second = await runSessionFlow(flow, memory, { ...options, runId: "second", inputs: { question: "q2" } });
-  expect(second).toEqual(new RunSucceeded({ output: "two" }));
-  const stored = view(memory);
-  expect(stored.effects.map((effect) => effect.kind)).toEqual(["model", "tool", "model", "model"]);
-  expect(stored.effects.every((effect) => effect.status === "completed")).toBe(true);
-  const replies = storedReplies(memory);
-  expect(replies[0]!.parts.filter((part) => part instanceof ToolCallPart).map((part) => part.name)).toEqual(["lookup"]);
-  expect(replies.map((message) => message.text())).toEqual(["", "one", "two"]);
+  expect(chat.requests).toHaveLength(2);
+  // The second request carries the assembled tool call and its result.
+  const [, , assistant, tool] = chat.requests[1]!.messages;
+  const call = assistant!.parts.find((part) => part instanceof ToolCallPart) as ToolCallPart;
+  expect([call.id, call.name, call.arguments]).toEqual(["call-1", "lookup", { topic: "a" }]);
+  expect(tool!.parts).toEqual([new ToolResultPart({ callId: "call-1", name: "lookup", content: "found:a", isError: false })]);
 });
 
-test("a mid-stream failure in a session turn retains a failed model effect", async () => {
-  const memory = new SessionMemory();
+test("a mid-stream failure sends no final chunk and reports the error", async () => {
   const chat = model([new TextDelta(0, "partial"), new ProviderError("connection", "reset")]);
   const chunks: StreamChunk[] = [];
   const events: unknown[] = [];
-  const result = await runSessionFlow(sessionFlow(), memory, {
+  const result = await runAgentFlow(agentFlow(), {
     inputs: { question: "q1" },
     models: serving(chat),
     onStream: (item) => void chunks.push(item),
@@ -453,6 +444,4 @@ test("a mid-stream failure in a session turn retains a failed model effect", asy
   expect(events.filter((event) => event instanceof ModelCallFinished).map((event) => event.error)).toEqual([
     "ProviderError",
   ]);
-  expect(effectsOf(memory)).toEqual([["model", "failed"]]);
-  expect(storedReplies(memory)).toEqual([]);
 });

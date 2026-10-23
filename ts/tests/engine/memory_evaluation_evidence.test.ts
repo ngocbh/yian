@@ -82,7 +82,6 @@ import {
   EvaluationEvidence,
   type EvaluationTrace,
   MemoryContext,
-  type MemoryContextRequest,
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
   MemoryScope,
@@ -93,6 +92,7 @@ import {
   MemoryRecallError,
   ModelTextInteraction,
   ModelValueInteraction,
+  type RecallContext,
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/index.ts";
@@ -116,22 +116,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, TypeCheckError, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
-import {
-  aborted,
-  commitStartSuccess,
-  engine,
-  forwardCapture,
-  FuncNode,
-  graph,
-  learnableStarted,
-  nodeFlow,
-  noGrowth,
-  rejected,
-  serving,
-  stacks,
-  textReply,
-} from "./run_state_fixtures.ts";
-import { NO_ENV } from "./session_fakes.ts";
+import { aborted, commitStartSuccess, engine, forwardCapture, FuncNode, graph, learnableStarted, NO_ENV, nodeFlow, noGrowth, rejected, serving, stacks, textReply } from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
@@ -548,10 +533,10 @@ describe("through AGENT", () => {
       node.params = [new Parameter("topic")];
       node.memoryScope = scope(node.id);
       const section = new MemorySection(node.memoryScope.memories[0]!, "Relevant memory.");
-      const recallCalls: MemoryContextRequest[] = [];
+      const recallCalls: RecallContext[] = [];
       const factoryCalls: Record<string, unknown>[] = [];
-      const recall: MemoryContextOpener = async (_scope, request) => {
-        recallCalls.push(request);
+      const recall: MemoryContextOpener = async (_scope, context) => {
+        recallCalls.push(context);
         if (stage === "recall") throw new MemoryRecallError("recall failed");
         return new MemoryContext({ sections: [section] });
       };

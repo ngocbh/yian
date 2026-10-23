@@ -266,13 +266,14 @@ inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: str
 
 `resumeFlow` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
 `onEvent`, `onStream`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
-`codeRoot`, `scheduler`, `random` and `models`, plus `apiKey` and `headers` for a run started with
-`llmConfig.api_key`. It runs the flow `RunStarted` recorded, compiled from the recorded flow
-files; `flow` is only for a run whose flow was built in code (`RunStarted.flow` is `null`).
+`scheduler`, `random` and `models`, plus `loadFlow`'s `codeRoot`, and `apiKey` and `headers` for
+a run started with `llmConfig.api_key`. It runs the flow `RunStarted` recorded, compiled from the
+recorded flow files; `flow` is only for a run whose flow was built in code (`RunStarted.flow` is
+`null`).
 `loadRecordedFlow` compiles a log's recorded flow the same way, for a host that needs it first;
 both follow each recorded file's `refs` to the files it uses, never the disk.
 With `codeRoot`, both refuse a recorded CODE reference whose file's real path is now outside
-it, as `loadFlow` does, with `LoadError` before anything is appended.
+it, as `loadFlow` does, with `LoadError`; `resumeFlow` refuses before it appends anything.
 The specs of the tools and skills the AGENTs grant are recorded, and an unfinished run's must
 match the ones passed; tool implementations, memory and context aren't recorded: pass the ones
 the run had. A log another yian version started resumes with a warning. See [Durable recovery

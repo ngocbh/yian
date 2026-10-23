@@ -4,7 +4,8 @@
 // becomes the `engines` check and `test_mcp_extra_pins_the_mcp_sdk` the MCP SDK's optional peer.
 // Added here: the npm fields (`files`, `bin`, `exports`, `prepack`, `publishConfig`), exact
 // dependency pins, and the names each entry point exports, Python's `yian.__all__`, `yian.run`,
-// `yian.tools` and `yian.skills` (`./platform`, the lock and SQLite helpers for hosts, has no Python
+// `yian.tools`, `yian.skills`, and `yian.llm_clients` with `yian.llm_clients.auth` (one
+// `./llm_clients` entry; `./platform`, the lock and SQLite helpers for hosts, has no Python
 // counterpart); and `LICENSES`, the text `yian --licenses` prints, against `NOTICE`, Bun's license
 // and the license files of the packages the binaries bundle, and of the packages copied into their
 // `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's
@@ -37,6 +38,15 @@ import { LICENSES } from "../src/cli/licenses.ts";
 import type { MarkdownStore } from "../src/index.ts";
 import { AuthStore } from "../src/llm_clients/auth/index.ts";
 import type {
+  AuthRequest,
+  AuthRequestOptions,
+  AuthState,
+  AuthStoreOptions,
+  Credentials,
+  ListModelsOptions,
+  LLMProvider,
+} from "../src/llm_clients/index.ts";
+import type {
   FileLock,
   FileLockReason,
   Sqlite,
@@ -59,6 +69,7 @@ const ENTRIES: Record<string, string> = {
   "./tools": "tools/index",
   "./skills": "compose/skills",
   "./platform": "platform",
+  "./llm_clients": "llm_clients/index",
 };
 
 /** The runtime names each export path must carry. */
@@ -112,6 +123,22 @@ const NAMES: Record<string, string[]> = {
   ],
   "./skills": ["loadSkills", "loadSkillDir", "defaultSkillRoots", "Skill", "SkillError"],
   "./platform": ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode"],
+  "./llm_clients": [
+    "LLMConfig",
+    "LLM_CONFIG_KEYS",
+    "SUPPORTED_LLM_PROVIDERS",
+    "ValidationError",
+    "azureResourceEndpoint",
+    "listModels",
+    "ModelListError",
+    "AuthStore",
+    "OpenAIAuth",
+    "AuthError",
+    "HttpResponse",
+    "OAuthCredentials",
+    "ApiKeyCredentials",
+    "ProviderSelection",
+  ],
 };
 
 /** Every file below `directory`, relative to `ROOT`. */
@@ -197,6 +224,13 @@ describe("entry points", () => {
       SqliteParam?,
       SqliteValue?,
       SqliteRow?,
+      LLMProvider?,
+      ListModelsOptions?,
+      AuthRequest?,
+      AuthRequestOptions?,
+      AuthStoreOptions?,
+      Credentials?,
+      AuthState?,
     ];
     expect(names).toEqual([]);
   });

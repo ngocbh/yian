@@ -1,6 +1,9 @@
 /**
  * Provider credentials, private selection storage, and explicit login effects.
  *
+ * Also exports the option types of the store (`AuthStoreOptions`) and of `OpenAIAuth`'s injected
+ * sender (`AuthRequest`, `AuthRequestOptions`).
+ *
  * This model-access leaf stages credentials before selection is committed. The store owns atomic
  * credential/default updates and refresh serialization; OpenAI services own authentication HTTP
  * and browser callback lifetimes. Neither owns a model, agent loop, conversation, CLI prompt, or
@@ -25,5 +28,5 @@ export {
   OAuthCredentials,
   ProviderSelection,
 } from "./common.ts";
-export { OpenAIAuth } from "./openai.ts";
-export { AuthStore } from "./store.ts";
+export { type AuthRequest, type AuthRequestOptions, OpenAIAuth } from "./openai.ts";
+export { AuthStore, type AuthStoreOptions } from "./store.ts";

@@ -1675,7 +1675,7 @@ export function startedRun(
       effectiveLlmByStaticPath: effective,
       numWorkers,
       // As a real run of `loaded` records it, so resume compiles it.
-      flow: loaded.source === null ? null : { ...loaded.source, files: Object.fromEntries(loaded.source.files) },
+      flow: loaded.source,
     }),
   );
   return state;

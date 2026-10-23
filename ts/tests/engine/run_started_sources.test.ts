@@ -91,7 +91,7 @@ function sourceOf(flow: ComposedFlow) {
   const source = flow.source;
   if (source === null) return null;
   const { path, dir, searchPaths, files } = source;
-  return { path, dir, searchPaths, files: Object.fromEntries(files) };
+  return { path, dir, searchPaths, files: { ...files } };
 }
 
 for (const [name, shape] of Object.entries(SHAPES)) {
@@ -117,7 +117,7 @@ for (const [name, shape] of Object.entries(SHAPES)) {
     const { path, dir: real, searchPaths, files } = loaded.source!;
     rmSync(dir, { recursive: true });
 
-    const again = await loadFlow(files.get(path)!, {
+    const again = await loadFlow(files[path]!, {
       sourceLabel: path,
       baseDir: real,
       searchPaths: searchPaths.map((item) => join(real, item)),
@@ -185,6 +185,19 @@ test("a host child resume couldn't find where the host found it leaves the root 
   const childResolver = async () => {
     const path = join(dir, "other", "child.yaml");
     return loadFlow(readFileSync(path, "utf8"), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
+  };
+
+  expect((await loadFlow(ROOT, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" })).source).toBeNull();
+});
+
+test("a host child that searched beyond its own folder leaves the root without a source", async () => {
+  const dir = freshDir("wide");
+  writeTree(dir, { "lib/child.yaml": caller("child", "grand", "grand"), "shared/grand.yaml": GRAND });
+  // Resume searches only the child's folder, where `grand` isn't.
+  const childResolver = async (ref: string) => {
+    const path = join(dir, `${ref}.yaml`);
+    const searchPaths = [dirname(path), join(dir, "shared")];
+    return loadFlow(readFileSync(path, "utf8"), { searchPaths, sourceLabel: basename(path) });
   };
 
   expect((await loadFlow(ROOT, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" })).source).toBeNull();
@@ -423,6 +436,13 @@ test("a log of another yian version resumes with a warning naming both versions"
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain("0.0.0-other");
   expect(warnings[0]).toContain(`yian ${VERSION}`);
+
+  // Reading the finished log back resumes nothing, so it warns of nothing.
+  await withWarnings(
+    (message) => warnings.push(message),
+    () => resumeFlow({ log, env: hostEnv(logs) }),
+  );
+  expect(warnings).toHaveLength(1);
 });
 
 test("a run of a flow built in code resumes only with that flow passed in", async () => {

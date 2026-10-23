@@ -708,10 +708,11 @@ A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.json
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
 case, with its backward records), pinned byte for byte. Before
 the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
-(`initial_pool.system`'s `now` and `today`) and the recorded flow's folder (`run_started`'s
-`flow.dir`) are replaced by `"<masked>"`, since the times come from the virtual clock, which starts
-at the real time, and the folder is the case's temporary one; each line is then written again with
-the log's own encoder, which gives back the line as written. When the TS log format changes, regenerate the
+(`initial_pool.system`'s `now` and `today`), the recorded flow's folder (`run_started`'s
+`flow.dir`) and the yian version (`yian_version`) are replaced by `"<masked>"`, since the times
+come from the virtual clock, which starts at the real time, the folder is the case's temporary one,
+and the version changes with each release; each line is then written again with the log's own
+encoder, which gives back the line as written. When the TS log format changes, regenerate the
 golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
 change. Bun and Node write the same bytes. A golden log goes
 with a serial case that sets `run.run_id`, makes no random ids (no memory; an AGENT case only when

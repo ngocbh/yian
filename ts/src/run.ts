@@ -984,10 +984,9 @@ async function startRun(
 
 /** Return the flow files `RunStarted` records for `flow`, or `null` for a flow built in code. */
 function recordedFlow(flow: ComposedFlow): RecordedFlow | null {
-  const source = flow.source;
-  if (source === null) return null;
-  const { path, dir, searchPaths, files } = source;
-  return { path, dir, searchPaths, files: Object.fromEntries(files) };
+  if (flow.source === null) return null;
+  const { path, dir, searchPaths, files } = flow.source;
+  return { path, dir, searchPaths, files };
 }
 
 /**
@@ -1112,9 +1111,9 @@ export interface ResumeFlowOptions {
  * from disk (`loadRecordedFlow`), and a flow built in code is the `flow` option. Its fingerprint
  * must match the recorded one. The recorded history is replayed silently on a private copy of the
  * flow; recovery never reads the ambient model defaults, mints a new identity or takes new inputs
- * or configuration. A log another yian version started is resumed with a warning naming both
- * versions. A finished log returns its result with no events, opening no server and no memory.
- * Otherwise the host's specs of the tools and skills the AGENTs grant must be the recorded ones,
+ * or configuration. A finished log returns its result with no events, opening no server and no
+ * memory. Otherwise a log another yian version started is resumed with a warning naming both
+ * versions, and the host's specs of the tools and skills the AGENTs grant must be the recorded ones,
  * checked once the servers are open; then the starts the log left unfinished are retried first,
  * in their recorded order, after one `RunResumed` observer and one `NodeAttemptResumed` per
  * retried node.
@@ -1185,9 +1184,6 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
       const flow = await resumedFlow(log, start, hostFlow);
-      if (start.yianVersion !== VERSION) {
-        warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
-      }
       const state = replayRunLog(flow, authority, { apiKey, headers });
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
@@ -1209,6 +1205,9 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
           clock,
         });
       if (state.result !== null) return resultFromState(state, log, [], retain());
+      if (start.yianVersion !== VERSION) {
+        warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
+      }
       // The checks that need no tools come before any server starts.
       checkConditions(flow.compiled);
       checkTemplates(flow.compiled);
@@ -1306,9 +1305,8 @@ function startRecord(envelopes: readonly RecordEnvelope[]): RunStartedRecord {
 async function compileRecordedFlow(start: RunStartedRecord): Promise<ComposedFlow | null> {
   const recorded = start.flow;
   if (recorded === null) return null;
-  const { path, dir, searchPaths } = recorded;
-  const files = new Map(Object.entries(recorded.files));
-  return loadFlow(files.get(path)!, {
+  const { path, dir, searchPaths, files } = recorded;
+  return loadFlow(files[path]!, {
     sourceLabel: path,
     baseDir: dir,
     searchPaths: searchPaths.map((item) => resolve(dir, item)),

@@ -315,19 +315,19 @@ export function diskFiles(): SourceFiles {
  * paths relative to it. A path resolves against `dir`; `dir` itself and each key exist, and
  * anything else rejects with ENOENT, so the loader searches them as it searched the disk.
  */
-export function recordedFiles(dir: string, files: ReadonlyMap<string, string>): SourceFiles {
+export function recordedFiles(dir: string, files: Readonly<Record<string, string>>): SourceFiles {
   const missing = (path: string) =>
     Object.assign(new Error(`ENOENT: no recorded flow file, realpath '${path}'`), { code: "ENOENT" });
   return {
     realpath: async (path) => {
       const abs = resolvePath(dir, path);
-      if (abs === dir || files.has(relative(dir, abs))) return abs;
+      if (abs === dir || Object.hasOwn(files, relative(dir, abs))) return abs;
       throw missing(path);
     },
     read: async (real) => {
-      const text = files.get(relative(dir, real));
-      if (text === undefined) throw missing(real);
-      return text;
+      const key = relative(dir, real);
+      if (!Object.hasOwn(files, key)) throw missing(real);
+      return files[key]!;
     },
   };
 }
@@ -711,7 +711,8 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
  *
  * With a host resolver (`children` not `null`), resume loads the recorded files with the default
  * resolver searching the root's folder, so each child must be a loaded flow whose root file is
- * `<folder>/<path>.yaml`; otherwise, or when two files would share a key, the root has no source.
+ * `<folder>/<path>.yaml` and which searched only its own folder; otherwise, or when two files would
+ * share a key, the root has no source.
  */
 async function flowSource(
   ctx: LoadCtx,
@@ -737,14 +738,23 @@ async function flowSource(
     paths = ["."];
     for (const [path, child] of children) {
       if (!(child instanceof ComposedFlow) || child.source === null) return null;
-      const { dir: childDir, path: childPath, files: childFiles } = child.source;
+      const { dir: childDir, path: childPath, searchPaths: childSearch, files: childFiles } = child.source;
       if (resolvePath(childDir, childPath) !== resolvePath(dir, `${path}.yaml`)) return null;
-      for (const [key, body] of childFiles) if (!add(relative(dir, resolvePath(childDir, key)), body)) return null;
+      if (childSearch.length !== 1 || childSearch[0] !== ".") return null;
+      for (const [key, body] of Object.entries(childFiles)) {
+        if (!add(relative(dir, resolvePath(childDir, key)), body)) return null;
+      }
     }
   } else if (searchPaths !== null) {
     for (const path of searchPaths) paths.push(relative(dir, await realOr(ctx.files, resolvePath(path))) || ".");
   }
-  return Object.freeze({ path: sourceLabel, dir, searchPaths: Object.freeze(paths), files });
+  // `Object.fromEntries` defines own data properties, so a `__proto__` key stays a key.
+  return Object.freeze({
+    path: sourceLabel,
+    dir,
+    searchPaths: Object.freeze(paths),
+    files: Object.freeze(Object.fromEntries(files)),
+  });
 }
 
 /** Return `path`'s real path through `files`, or `path` itself when it doesn't exist there. */

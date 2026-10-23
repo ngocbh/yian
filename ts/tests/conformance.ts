@@ -2640,10 +2640,11 @@ function checkResults(
 
 /**
  * Return the run log text `text` as a golden log holds it: each line with every `traceback` value,
- * its time (`at`), the seeded clock values (`initial_pool.system`'s `now` and `today`) and the
- * recorded flow's folder (`flow.dir`) replaced by `<masked>`, written again with the log's own
- * encoder. The times and the seeded values come from the case's virtual clock, which starts at the
- * real time; the folder is the case's temporary one.
+ * its time (`at`), the seeded clock values (`initial_pool.system`'s `now` and `today`), the
+ * recorded flow's folder (`flow.dir`) and the yian version (`yian_version`) replaced by
+ * `<masked>`, written again with the log's own encoder. The times and the seeded values come from
+ * the case's virtual clock, which starts at the real time; the folder is the case's temporary one;
+ * the version changes with each release.
  */
 function masked(text: string): string {
   const lines = text.split("\n").filter((line) => line !== "");
@@ -2667,8 +2668,10 @@ function masked(text: string): string {
       if (record["kind"] === "run_started") {
         const system = ((record["payload"] as Case)["initial_pool"] as Case)["system"] as Case;
         for (const name of ["now", "today"]) (system[name] as Case)["value"] = "<masked>";
-        const flow = (record["payload"] as Case)["flow"] as Case | null;
+        const payload = record["payload"] as Case;
+        const flow = payload["flow"] as Case | null;
         if (flow !== null) flow["dir"] = "<masked>";
+        payload["yian_version"] = "<masked>";
       }
       return `${logJson(record)}\n`;
     })

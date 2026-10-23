@@ -254,7 +254,7 @@ export interface FlowSource {
   /** The folders searched for `uses:` targets, in order. */
   readonly searchPaths: readonly string[];
   /** The text of each flow file the loader read, by path. */
-  readonly files: ReadonlyMap<string, string>;
+  readonly files: Readonly<Record<string, string>>;
 }
 
 /**

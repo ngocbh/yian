@@ -1,12 +1,12 @@
-{"at":"<masked>","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow_fingerprint":"5b596ce4adb69b20b3ab2688b46f396732b53f31109721450c64d22d68ec8902","initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},"system":{"now":{"kind":"datetime","value":"<masked>"},"run_id":{"kind":"str","value":"r1"},"today":{"kind":"date","value":"<masked>"}}},"learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},"run_id":"r1","schema":11,"seq":0}
-{"at":"<masked>","kind":"node_started","payload":{"node_id":"__start__"},"run_id":"r1","schema":11,"seq":1}
-{"at":"<masked>","kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"r1","schema":11,"seq":2}
-{"at":"<masked>","kind":"node_started","payload":{"node_id":"call"},"run_id":"r1","schema":11,"seq":3}
-{"at":"<masked>","kind":"node_step","payload":{"node_id":"call","step":{"attempt":1,"error":{"message":"a","type":"TransientToolError"},"event":"failed","retry_in":0.25}},"run_id":"r1","schema":11,"seq":4}
-{"at":"<masked>","kind":"node_step","payload":{"node_id":"call","step":{"attempt":2,"event":"started"}},"run_id":"r1","schema":11,"seq":5}
-{"at":"<masked>","kind":"node_step","payload":{"node_id":"call","step":{"attempt":2,"error":{"message":"b","type":"TransientToolError"},"event":"failed","retry_in":0.1}},"run_id":"r1","schema":11,"seq":6}
-{"at":"<masked>","kind":"run_resumed","payload":{"num_workers":0,"retry_node_ids":["call"]},"run_id":"r1","schema":11,"seq":7}
-{"at":"<masked>","kind":"node_started","payload":{"node_id":"call"},"run_id":"r1","schema":11,"seq":8}
-{"at":"<masked>","kind":"node_succeeded","payload":{"commit_target":"call","evidence":null,"forward_capture":null,"node_id":"call","value":{"kind":"str","value":"ok"}},"run_id":"r1","schema":11,"seq":9}
-{"at":"<masked>","kind":"node_started","payload":{"node_id":"__end__"},"run_id":"r1","schema":11,"seq":10}
-{"at":"<masked>","kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,"forward_capture":null,"node_id":"__end__","value":{"kind":"str","value":"ok"}},"run_id":"r1","schema":11,"seq":11}
+{"at":"<masked>","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow":{"dir":"<masked>","files":{"flow.yaml":"id: t\nname: t\nnodes:\n  call:\n    kind: tool\n    tool_id: x\n    retries: 3\noutput: ${call.output}\n"},"path":"flow.yaml","search_paths":["."]},"flow_fingerprint":"5b596ce4adb69b20b3ab2688b46f396732b53f31109721450c64d22d68ec8902","initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},"system":{"now":{"kind":"datetime","value":"<masked>"},"run_id":{"kind":"str","value":"r1"},"today":{"kind":"date","value":"<masked>"}}},"learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"parent":null,"skills":{},"start_wiring_override":{},"tools":{},"yian_version":"0.0.0"},"run_id":"r1","schema":12,"seq":0}
+{"at":"<masked>","kind":"node_started","payload":{"node_id":"__start__"},"run_id":"r1","schema":12,"seq":1}
+{"at":"<masked>","kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"r1","schema":12,"seq":2}
+{"at":"<masked>","kind":"node_started","payload":{"node_id":"call"},"run_id":"r1","schema":12,"seq":3}
+{"at":"<masked>","kind":"node_step","payload":{"node_id":"call","step":{"attempt":1,"error":{"message":"a","type":"TransientToolError"},"event":"failed","retry_in":0.25}},"run_id":"r1","schema":12,"seq":4}
+{"at":"<masked>","kind":"node_step","payload":{"node_id":"call","step":{"attempt":2,"event":"started"}},"run_id":"r1","schema":12,"seq":5}
+{"at":"<masked>","kind":"node_step","payload":{"node_id":"call","step":{"attempt":2,"error":{"message":"b","type":"TransientToolError"},"event":"failed","retry_in":0.1}},"run_id":"r1","schema":12,"seq":6}
+{"at":"<masked>","kind":"run_resumed","payload":{"num_workers":0,"retry_node_ids":["call"]},"run_id":"r1","schema":12,"seq":7}
+{"at":"<masked>","kind":"node_started","payload":{"node_id":"call"},"run_id":"r1","schema":12,"seq":8}
+{"at":"<masked>","kind":"node_succeeded","payload":{"commit_target":"call","evidence":null,"forward_capture":null,"node_id":"call","value":{"kind":"str","value":"ok"}},"run_id":"r1","schema":12,"seq":9}
+{"at":"<masked>","kind":"node_started","payload":{"node_id":"__end__"},"run_id":"r1","schema":12,"seq":10}
+{"at":"<masked>","kind":"node_succeeded","payload":{"commit_target":"__end__","evidence":null,"forward_capture":null,"node_id":"__end__","value":{"kind":"str","value":"ok"}},"run_id":"r1","schema":12,"seq":11}

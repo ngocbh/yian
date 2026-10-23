@@ -2296,16 +2296,31 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 11, and readers accept only schema 11. The schema
+Changed (TS yian): records use schema 12, and readers accept only schema 12. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 log (TS
-yian's, from before record times) with "run log schema 10 predates schema 11 and is not
-supported", and any other schema with "unsupported run-record schema: N" (a float token
-shows as `11.0`); the "predates" message for schemas 7 and 8 is gone. All are a
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 or 11 log (TS
+yian's, from before record times, or before `RunStarted` held the flow files) with "run log
+schema N predates schema 12 and is not supported", and any other schema with "unsupported
+run-record schema: N" (a float token shows as `12.0`); the "predates" message for schemas 7
+and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
-damaged one. yian isn't released yet, so there is no migration: finish or drop a schema 10
+damaged one. yian isn't released yet, so there is no migration: finish or drop an older
 run with the yian version that wrote it.
+
+Changed (TS yian): `RunStartedRecord` records what the run needs to rebuild it, once:
+`flow`, the text of the flow file and of every `uses:` file the loader read,
+`{path, dir, search_paths, files}` (`dir` is the real absolute base folder; `path`, the
+search paths and the keys of `files` are relative to it, with `..` for a `system.paths`
+folder outside it), or `null` for a flow built in code; `skills`, each skill an AGENT
+grants, `{<name>: {description, instructions}}`; `tools`, each tool an AGENT grants, groups
+expanded, `{<name>: {description, parameters}}`; `yian_version`, the version that started the
+run; and `parent`, `{run_id, node}` for a run the host started from another run (a child run
+or a learning pass, `runFlow`'s `parent` option; `node` is `null` when no one node did), else
+`null`. A CALL, MAP or LOOP splices its child into the same run, so a subflow has no `parent`.
+`flow_fingerprint` stays. A memory key table entry no longer holds `conversation_eligible`.
+Codex's `session_meta` (the base instructions and tools, once, on the first line) and
+DeepSeek Harness's request header are the counterparts.
 
 Changed (TS yian): every record carries `at`, when the log appended it: a UTC RFC 3339
 time with milliseconds, such as `"at":"2026-10-20T14:02:11.123Z"` (the form of
@@ -2738,7 +2753,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 11); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 12); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

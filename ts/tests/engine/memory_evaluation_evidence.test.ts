@@ -149,7 +149,7 @@ function learningConfiguration(...nodes: Node[]): {
   const scopes = nodes.flatMap((node) => (node.memoryScope instanceof MemoryScope ? [node.memoryScope] : []));
   const keys = [...new Set(scopes.flatMap((item) => item.memories))].sort();
   return {
-    memories: keys.map((key) => new MemorySpec(key, key, {}, [new DeclSite([], ["root"])], false)),
+    memories: keys.map((key) => new MemorySpec(key, key, {}, [new DeclSite([], ["root"])])),
     memoryStacks: stacks(...scopes),
     memorySnapshots: keys.map((key) => new MemorySnapshotEnvelope(key, {})),
   };

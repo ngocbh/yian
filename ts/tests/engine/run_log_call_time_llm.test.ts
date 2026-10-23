@@ -10,14 +10,14 @@
  * field is `null`; a NaN refusal's `cause` is the value layer's `TypeCheckError`.
  *
  * Changed:
- * - `test_the_schema_stays_nine`: TS writes schema 11, so the constant and the encoded line's
+ * - `test_the_schema_stays_nine`: TS writes schema 12, so the constant and the encoded line's
  *   `schema` are 10.
  * - The NaN row's message is the value layer's (`RunStarted call_time_llm: NaN is not a yian
  *   value`), where Python's canonical JSON copy says `non-finite numbers are not valid canonical
  *   JSON`.
- * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 11 always writes both
- *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":11`.
- * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 11 (no call-time agents), so
+ * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 12 always writes both
+ *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":12`.
+ * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 12 (no call-time agents), so
  *   its row is dropped; the other 10 rows are pinned with the record's class and message (a part of
  *   the wrong JSON type is a `TypeError`, where Python's pydantic raises `ValueError`).
  *
@@ -98,16 +98,17 @@ function encode(record: RunStartedRecord): string {
 // A run without call-time agents writes `call_time_llm` as null.
 const GOLDEN =
   '{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{"agent":' +
-  '{"model":"gpt-test","provider":"openai"}},"flow_fingerprint":"' +
+  '{"model":"gpt-test","provider":"openai"}},"flow":null,"flow_fingerprint":"' +
   "a".repeat(64) +
   '","initial_pool":{"start_id":"start","store":{"start":{"kind":"object","value":' +
   '{"name":"Ada"}}},"system":{"run_id":{"kind":"str","value":"r1"}}},"learnable":false,' +
-  '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,' +
-  '"start_wiring_override":{"name":"${input.name}"}},"run_id":"r1","schema":11,"seq":0}';
+  '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},' +
+  '"start_wiring_override":{"name":"${input.name}"},"tools":{},"yian_version":"0.0.0"},"run_id":"r1",' +
+  '"schema":12,"seq":0}';
 
-test("the schema is ten", () => {
-  expect(SCHEMA_VERSION).toBe(11);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(11n);
+test("the schema is twelve", () => {
+  expect(SCHEMA_VERSION).toBe(12);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(12n);
 });
 
 test("call_time_llm round trips", () => {

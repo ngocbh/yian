@@ -16,7 +16,9 @@
  * `test_memory_content_validates_explicit_transcript_sources`, and `MemoryContext`'s section
  * checks.
  *
- * Changed: sites sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
+ * Changed: a spec has no `conversation_eligible` flag (session memory is gone), so the eligibility
+ * rows of `test_memory_spec_requires_sorted_owners_and_derived_eligibility` are dropped. Sites
+ * sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
  * message names `DeclSite.compare`), and equal sites compare 0. A declaration's config is its
  * deep-frozen snapshot, so assigning to it throws `TypeError` (Python returns a fresh copy). The
  * declarations are frozen, so the origin rewrite returns rebuilt declarations and leaves the inputs
@@ -259,45 +261,36 @@ test("origin traversal requires an array of exact declarations", () => {
   }
 });
 
-// test_memory_spec_requires_sorted_owners_and_derived_eligibility
-test("a spec requires sorted owners and derived eligibility", () => {
+// test_memory_spec_requires_sorted_owners_and_derived_eligibility, without the eligibility flag
+test("a spec requires sorted owners", () => {
   const agent = new DeclSite([], ["root"], "ask");
   const flow = new DeclSite([], ["root"]);
-  const spec = new MemorySpec("chat", "episodic", {}, [agent], true);
-  expect(spec.conversationEligible).toBe(true);
+  const spec = new MemorySpec("chat", "episodic", {}, [agent]);
   expect(Object.isFrozen(spec.owners)).toBe(true);
-  expect(new MemorySpec("notes", "episodic", {}, [flow, agent], false).owners).toEqual([flow, agent]);
-  const eligibility = "conversation_eligible must be true exactly for one AGENT owner";
-  expectError(() => new MemorySpec("chat", "episodic", {}, [flow], true), RangeError, eligibility);
-  expectError(() => new MemorySpec("chat", "episodic", {}, [agent], false), RangeError, eligibility);
+  expect(new MemorySpec("notes", "episodic", {}, [flow, agent]).owners).toEqual([flow, agent]);
   const order = "owners must be sorted and unique by DeclSite.compare";
-  expectError(() => new MemorySpec("notes", "episodic", {}, [agent, flow], false), RangeError, order);
-  expectError(() => new MemorySpec("notes", "episodic", {}, [flow, flow], false), RangeError, order);
-  expectError(() => new MemorySpec("notes", "episodic", {}, [], false), RangeError, "owners must be non-empty");
+  expectError(() => new MemorySpec("notes", "episodic", {}, [agent, flow]), RangeError, order);
+  expectError(() => new MemorySpec("notes", "episodic", {}, [flow, flow]), RangeError, order);
+  expectError(() => new MemorySpec("notes", "episodic", {}, []), RangeError, "owners must be non-empty");
+  expectError(() => new MemorySpec("", "t", {}, [flow]), RangeError, "key must be non-empty");
+  expectError(() => new MemorySpec("k", 1n as never, {}, [flow]), TypeError, "type must be a string");
   expectError(
-    () => new MemorySpec("notes", "episodic", {}, [agent], 1 as never),
-    TypeError,
-    "conversation_eligible must be a boolean",
-  );
-  expectError(() => new MemorySpec("", "t", {}, [flow], false), RangeError, "key must be non-empty");
-  expectError(() => new MemorySpec("k", 1n as never, {}, [flow], false), TypeError, "type must be a string");
-  expectError(
-    () => new MemorySpec("k", "t", { api_key: 1n }, [flow], false),
+    () => new MemorySpec("k", "t", { api_key: 1n }, [flow]),
     RangeError,
     "config contains forbidden private key 'api_key'",
   );
   expectError(
-    () => new MemorySpec("k", "t", [] as never, [flow], false),
+    () => new MemorySpec("k", "t", [] as never, [flow]),
     TypeError,
     "config must be an exact JSON object",
   );
   expectError(
-    () => new MemorySpec("k", "t", {}, new Set([flow]) as never, false),
+    () => new MemorySpec("k", "t", {}, new Set([flow]) as never),
     TypeError,
     "owners must be an array",
   );
   expectError(
-    () => new MemorySpec("k", "t", {}, [{}] as never, false),
+    () => new MemorySpec("k", "t", {}, [{}] as never),
     TypeError,
     "owners items must be DeclSite values",
   );
@@ -305,7 +298,7 @@ test("a spec requires sorted owners and derived eligibility", () => {
 
 test("a compiled spec takes a scoped key and keys the declaration check refuses", () => {
   const owners = [new DeclSite(["lib"], ["root"])];
-  const spec = new MemorySpec("lib.notes", "episodic", { storage: 1n, bogus: 2n }, owners, false);
+  const spec = new MemorySpec("lib.notes", "episodic", { storage: 1n, bogus: 2n }, owners);
   expect(spec.key).toBe("lib.notes");
   expect(spec.config).toEqual({ bogus: 2n, storage: 1n });
   expect(Object.keys(spec.config)).toEqual(["bogus", "storage"]);

@@ -133,8 +133,9 @@ test("only the final log-only runtime and run API remain", () => {
     scheduler: true,
     random: true,
     models: true,
+    parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(17);
+  expect(Object.keys(options)).toHaveLength(18);
   expect(run.runFlow.length).toBe(2);
   const resumeOptions: Record<keyof run.ResumeFlowOptions, true> = {
     log: true,

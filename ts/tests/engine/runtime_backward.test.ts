@@ -1778,9 +1778,9 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
 
 // TS-only: owner learn contexts, over `chainTrace()` with memory key `notes` on `p`.
 
-const EMPTY_SPEC = new MemorySpec("empty", "empty", {}, [new DeclSite([], ["def", "unused"])], false);
-const NOTES_SPEC = new MemorySpec("notes", "notes", {}, [new DeclSite([], ["def", "p"])], false);
-const OUTER_SPEC = new MemorySpec("outer", "outer", {}, [new DeclSite([], ["root"])], false);
+const EMPTY_SPEC = new MemorySpec("empty", "empty", {}, [new DeclSite([], ["def", "unused"])]);
+const NOTES_SPEC = new MemorySpec("notes", "notes", {}, [new DeclSite([], ["def", "p"])]);
+const OUTER_SPEC = new MemorySpec("outer", "outer", {}, [new DeclSite([], ["root"])]);
 const OWNER_TABLE = [EMPTY_SPEC, NOTES_SPEC, OUTER_SPEC];
 const P_STACK = new MemoryStack(["p"], ["notes"]);
 const OWNER_ROOT = new BackwardResult({ inputFeedback: { x: ["Raise v.", "Check w."] } });

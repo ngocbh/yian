@@ -13,7 +13,15 @@ import { afterAll, expect, test } from "bun:test";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { loadFlow, recordedFiles } from "../../src/compose/loader.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { VERSION } from "../../src/platform.ts";
+import { type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { Skill } from "../../src/skills/catalog.ts";
+import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { handChild } from "./../compose/declarations.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { NO_ENV, textReply } from "./run_state_fixtures.ts";
 
 // Not resolved: on macOS the temp folder sits under the /var -> /private/var symlink.
 const tmp = mkdtempSync(join(tmpdir(), "yian-run-started-sources-"));
@@ -179,4 +187,106 @@ test("a host child resume couldn't find where the host found it leaves the root 
   };
 
   expect((await loadFlow(ROOT, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" })).source).toBeNull();
+});
+
+// ---------- the run start ----------
+
+const logs = mkdtempSync(join(tmpdir(), "yian-run-started-logs-"));
+afterAll(() => rmSync(logs, { recursive: true, force: true }));
+let logCount = 0;
+/** A fresh log path, outside the flow folders. */
+const freshLog = () => join(logs, `run-${++logCount}.jsonl`);
+
+/** The tool `name` the flows call: it answers `<name>:<q>`, or runs `action`. */
+const lookup = (name = "lookup", description = "Look a word up.", action?: () => void): FunctionTool =>
+  tool({
+    name,
+    description,
+    parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+    execute: (args) => {
+      action?.();
+      return `${name}:${args.q}`;
+    },
+  });
+
+/** The skill `s`, with `instructions`. */
+const skill = (instructions = "Be brief.") =>
+  new Map([["s", new Skill({ name: "s", description: "Answer briefly.", instructions })]]);
+
+const AGENT_FLOW = `
+id: agent_flow
+name: agent_flow
+llm_config: {provider: openai, model: gpt-test}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [t]
+    skills: [s]
+output: \${agent.output}
+`;
+
+/** The models of an AGENT run: each answers "done" at once. */
+const models = {
+  env: NO_ENV,
+  createModel: () => new ScriptedModel([textReply("done")], { provider: "openai", model: "gpt-test" }),
+};
+
+/** Run `flow` on `inputs` into a fresh log with the tool `lookup`; return the log. */
+async function runInto(
+  flow: Parameters<typeof runFlow>[0],
+  options: RunFlowOptions = {},
+  inputs: Record<string, unknown> = { q: "x" },
+): Promise<string> {
+  const log = freshLog();
+  const result = await runFlow(flow, inputs, { log, env: hostEnv(logs), tools: { lookup: lookup() }, ...options });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return log;
+}
+
+/** The `run_started` record of the log at `log`. */
+const started = (log: string) => readRunLog(log)[0]!.record as RunStartedRecord;
+
+test("run_started records the flow files, the yian version and no parent", async () => {
+  const dir = freshDir("start");
+  writeTree(dir, SHAPES["two levels"]!.files);
+
+  const record = started(await runInto(await loadRoot(dir)));
+
+  expect(record.flow).toEqual({
+    path: "flow.yaml",
+    dir: realpathSync(dir),
+    searchPaths: ["."],
+    files: SHAPES["two levels"]!.keys,
+  });
+  expect(record.yianVersion).toBe(VERSION);
+  expect(record.parent).toBeNull();
+  // A TOOL node's tool is not one an AGENT grants.
+  expect(record.tools).toEqual({});
+  expect(record.skills).toEqual({});
+});
+
+test("run_started records the parent the host names", async () => {
+  const dir = freshDir("parent");
+  writeTree(dir, SHAPES["one level"]!.files);
+  const flow = await loadRoot(dir);
+
+  expect(started(await runInto(flow, { parent: { runId: "p", node: "n" } })).parent).toEqual({ runId: "p", node: "n" });
+  expect(started(await runInto(flow, { parent: { runId: "p" } })).parent).toEqual({ runId: "p", node: null });
+});
+
+test("run_started records the tools and skills the AGENTs grant", async () => {
+  const flow = await loadFlow(AGENT_FLOW);
+  const t = lookup("t", "Look it up.");
+
+  const record = started(await runInto(flow, { tools: { t }, skills: skill(), models }, {}));
+
+  expect(record.tools).toEqual({ t: { description: "Look it up.", parameters: t.parametersJsonSchema } });
+  expect(record.skills).toEqual({ s: { description: "Answer briefly.", instructions: "Be brief." } });
+});
+
+test("run_started records no flow for a flow built in code", async () => {
+  const record = started(await runInto(new ComposedFlow((await loadFlow(leaf("solo"))).compiled)));
+
+  expect(record.flow).toBeNull();
 });

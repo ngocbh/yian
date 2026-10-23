@@ -41,7 +41,7 @@
  *
  * Changed: `test_an_old_tool_crash_log_resumes_at_attempt_two` and
  * `test_an_old_loop_tool_crash_log_resumes_with_its_growth` resume Python's committed schema-9
- * logs; TS reads only schema 11, so each resume rejects with a `RangeError` naming Python yian,
+ * logs; TS reads only schema 12, so each resume rejects with a `RangeError` naming Python yian,
  * calls no tool and leaves the log unchanged.
  *
  * Changed (vocabulary): a TS resume also publishes `NodeAttemptResumed` for each retried node; no

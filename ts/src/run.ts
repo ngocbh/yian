@@ -98,7 +98,7 @@ import {
   sameItems,
   sameOptional,
 } from "./nodes/contracts.ts";
-import { realScheduler, type Scheduler } from "./platform.ts";
+import { realScheduler, type Scheduler, VERSION } from "./platform.ts";
 import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine, resumedAttemptEvents } from "./runtime/engine.ts";
@@ -117,6 +117,9 @@ import {
   NodeStartedRecord,
   NodeSucceededRecord,
   readRunLog,
+  type RecordedFlow,
+  type RecordedSkill,
+  type RecordedTool,
   type RecordEnvelope,
   type RunLog,
   RunResumedRecord,
@@ -512,6 +515,12 @@ export interface RunFlowOptions {
   random?: (() => number) | null;
   /** For tests: the model builder AGENT nodes use (default `defaultModelAccess(env)`). */
   models?: ModelAccess | null;
+  /**
+   * The run that started this one, recorded in `RunStarted`: a host-started child run or a
+   * learning pass, and the parent's node that started it when one did. `null` (the default) when
+   * none did.
+   */
+  parent?: { runId: string; node?: string | null } | null;
 }
 
 /**
@@ -914,6 +923,11 @@ async function startRun(
       memories: layout?.memories ?? null,
       memoryStacks: layout?.stacks ?? null,
       defaults: nonDefaults(runDefaults),
+      flow: recordedFlow(flow),
+      skills: recordedSkills(flow.compiled, skills),
+      tools: recordedTools(flow.compiled, runTools),
+      yianVersion: VERSION,
+      parent: options.parent == null ? null : { runId: options.parent.runId, node: options.parent.node ?? null },
     });
 
     // Taken once, so a later directory change can't move the log.
@@ -964,6 +978,42 @@ async function startRun(
   } finally {
     await closeRunResources(memoryRuntime, authority, primary);
   }
+}
+
+/** Return the flow files `RunStarted` records for `flow`, or `null` for a flow built in code. */
+function recordedFlow(flow: ComposedFlow): RecordedFlow | null {
+  const source = flow.source;
+  if (source === null) return null;
+  const { path, dir, searchPaths, files } = source;
+  return { path, dir, searchPaths, files: Object.fromEntries(files) };
+}
+
+/**
+ * Return each tool an AGENT of `flow` grants, groups expanded, as the model is told about it.
+ *
+ * @throws RangeError when a grant names a tool `tools` lacks (`checkToolGrants` reports it first).
+ */
+function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, RecordedTool> {
+  const recorded = new Map<string, RecordedTool>();
+  for (const [, node] of staticNodes(flow)) {
+    for (const tool of tools.resolve(tools.expand(node.grantedTools()))) {
+      recorded.set(tool.name, { description: tool.description, parameters: tool.parametersJsonSchema });
+    }
+  }
+  // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.fromEntries(recorded);
+}
+
+/** Return each skill an AGENT of `flow` grants from `skills`, by name. */
+function recordedSkills(flow: CompiledFlow, skills: ReadonlyMap<string, Skill> | null): Record<string, RecordedSkill> {
+  const recorded = new Map<string, RecordedSkill>();
+  for (const [, grants] of skillGrants(flow)) {
+    for (const name of grants === "all" ? [...(skills?.keys() ?? [])] : grants) {
+      const skill = skills?.get(name);
+      if (skill !== undefined) recorded.set(name, { description: skill.description, instructions: skill.instructions });
+    }
+  }
+  return Object.fromEntries(recorded);
 }
 
 /**

@@ -1221,7 +1221,7 @@ test("learn contexts over aliased and copied feedback are equal", () => {
 test("the learner receives the exact LearnContext", async () => {
   const memory = new FakeMemory();
   const runtime = await MemoryRuntime.open({
-    memories: [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])], false)],
+    memories: [new MemorySpec("notes", "notes", {}, [new DeclSite([], ["root"])])],
     origins: new Map([["notes", null]]),
     memory: new Map([["notes", memory]]),
   });
@@ -1657,7 +1657,7 @@ test("sameMemorySpec compares key, type, config, owners and eligibility by value
     config: JsonObject = { limit: 3, tags: ["a"] },
     owners: DeclSite[] = [site(), site("tool")],
     eligible = false,
-  ) => new MemorySpec(key, type, config, owners, eligible);
+  ) => new MemorySpec(key, type, config, owners);
   expect(sameMemorySpec(spec(), spec())).toBe(true);
   expect(sameMemorySpec(spec("other"), spec())).toBe(false);
   expect(sameMemorySpec(spec(undefined, "episodic"), spec())).toBe(false);

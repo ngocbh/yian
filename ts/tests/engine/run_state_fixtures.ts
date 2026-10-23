@@ -1169,7 +1169,7 @@ const ROOT_SITE = new DeclSite([], ["root"]);
 
 /** Return the sorted key table for `keys`, all owned by the root flow. */
 function table(keys: readonly string[]): MemorySpec[] {
-  return [...keys].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT_SITE], false));
+  return [...keys].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT_SITE]));
 }
 
 /** Return the recorded stacks of `scopes`, one per static path, sorted by locator. */

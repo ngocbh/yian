@@ -405,7 +405,7 @@ test("run started records the resolved memory table and stacks", async () => {
   expect(result.status).toBe("succeeded");
   const start = records(path)[0] as RunStartedRecord;
   expect(start.memories).toEqual([
-    new MemorySpec("test", "test", {} as JsonObject, [new DeclSite([], ["root"], null)], false),
+    new MemorySpec("test", "test", {} as JsonObject, [new DeclSite([], ["root"], null)]),
   ]);
   expect(start.memoryStacks!.map((stack) => stack.locator)).toContainEqual(["work"]);
   expect(start.memoryStacks!.every((stack) => stack.memories.length === 1 && stack.memories[0] === "test")).toBe(true);
@@ -428,7 +428,7 @@ for (const tampered of ["stacks", "table"] as const) {
     } else {
       expect(record.memories).toHaveLength(1);
       const [spec] = record.memories!;
-      const edited = new MemorySpec(spec!.key, spec!.type, { recall_limit: 1n }, spec!.owners, false);
+      const edited = new MemorySpec(spec!.key, spec!.type, { recall_limit: 1n }, spec!.owners);
       changed = new RunStartedRecord({ ...record, memories: [edited] });
     }
     lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed, envelope.at));

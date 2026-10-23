@@ -460,7 +460,7 @@ const AGENT = new DeclSite([], ["root"], "agent");
 
 /** Return one key-table entry; an AGENT owner makes it conversation-eligible. */
 function spec(key = "reflective", config: JsonObject = {}, owner: DeclSite = AGENT): MemorySpec {
-  return new MemorySpec(key, key, config, [owner], owner.node !== null);
+  return new MemorySpec(key, key, config, [owner]);
 }
 
 /** Return a run-start record with an empty pool and the given memory fields. */
@@ -571,9 +571,9 @@ test("run started records a key table and stacks", () => {
   stacks.pop();
   snapshots.pop();
 
-  expect(record.memories!.map((item) => [item.key, item.config, item.conversationEligible])).toEqual([
-    ["profile", { mode: "flow" }, false],
-    ["reflective", { mode: "agent" }, true],
+  expect(record.memories!.map((item) => [item.key, item.config])).toEqual([
+    ["profile", { mode: "flow" }],
+    ["reflective", { mode: "agent" }],
   ]);
   expect(record.memories![0]).toBe(memories[0]!);
   expect(record.memoryStacks!.map((stack) => [stack.locator, stack.memories])).toEqual([
@@ -597,7 +597,7 @@ test.each<[string, Pick<RunStartedFields, "memories" | "memoryStacks" | "memoryS
   ],
   [
     "a MemorySpec subclass",
-    { memories: [new SubSpec("notes", "notes", {}, [ROOT], false)], memoryStacks: [], memorySnapshots: [] },
+    { memories: [new SubSpec("notes", "notes", {}, [ROOT])], memoryStacks: [], memorySnapshots: [] },
     "memories items must be MemorySpec values",
   ],
   [
@@ -819,14 +819,12 @@ test("run started writes its key table and stacks on the wire", () => {
       type: "profile",
       config: { mode: "flow" },
       owners: [{ scope: [], owner: ["root"], node: null }],
-      conversation_eligible: false,
     },
     {
       key: "reflective",
       type: "reflective",
       config: { mode: "agent" },
       owners: [{ scope: [], owner: ["root"], node: "agent" }],
-      conversation_eligible: true,
     },
   ]);
   expect(wire.payload.memory_stacks).toEqual([{ locator: ["agent"], memories: ["profile", "reflective"] }]);
@@ -1040,10 +1038,10 @@ test.each<[string, (payload: Record<string, any>) => void, ErrorClass, string]>(
     `${MEMORY_LABEL} owners item node must be a string or null`,
   ],
   [
-    "a non-boolean eligibility flag",
-    (payload) => (payload.memories[0].conversation_eligible = null),
-    TypeError,
-    `${MEMORY_LABEL} conversation_eligible must be a boolean`,
+    "a retired eligibility flag",
+    (payload) => (payload.memories[0].conversation_eligible = false),
+    RangeError,
+    `invalid ${MEMORY_LABEL} fields; missing=[], extra=["conversation_eligible"]`,
   ],
   [
     "a snapshot that isn't an object",

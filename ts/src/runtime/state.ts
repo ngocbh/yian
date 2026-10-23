@@ -102,7 +102,11 @@ import {
   NodeSucceededRecord,
   type OutcomeCarriers,
   RecordEnvelope,
+  type RecordedFlow,
+  type RecordedSkill,
+  type RecordedTool,
   type RunLog,
+  type RunParent,
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
@@ -419,6 +423,16 @@ export interface RunStartData {
    * `null` (the default) when there are none.
    */
   callTimeLlm?: Readonly<Record<string, unknown>> | null;
+  /** The flow files the run compiled; `null` (the default) for a flow built in code. */
+  flow?: RecordedFlow | null;
+  /** Each skill an AGENT grants, by name; defaults to `{}`. */
+  skills?: Readonly<Record<string, RecordedSkill>>;
+  /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
+  tools?: Readonly<Record<string, RecordedTool>>;
+  /** The yian version that starts the run; defaults to this one's. */
+  yianVersion?: string;
+  /** The run that started this one; `null` (the default) when none did. */
+  parent?: RunParent | null;
 }
 
 /**
@@ -717,6 +731,11 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     memoryStacks: data.memoryStacks ?? null,
     defaults: data.defaults ?? {},
     callTimeLlm: data.callTimeLlm ?? null,
+    flow: data.flow ?? null,
+    skills: data.skills ?? {},
+    tools: data.tools ?? {},
+    yianVersion: data.yianVersion,
+    parent: data.parent ?? null,
   });
   // The public envelope codec is the sole payload authority. Decode its canonical text at once,
   // so the prepared record is exactly what either log will retain.
@@ -1715,6 +1734,11 @@ export function replayRecords(
     memoryStacks: start.memoryStacks,
     defaults: start.defaults,
     callTimeLlm: start.callTimeLlm,
+    flow: start.flow,
+    skills: start.skills,
+    tools: start.tools,
+    yianVersion: start.yianVersion,
+    parent: start.parent,
   });
   commitPrepared(cursor, state, prepared);
 

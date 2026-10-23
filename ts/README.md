@@ -140,7 +140,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `AuthError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 11) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 12) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -902,7 +902,7 @@ Node 22, and so does every unit test; a change keeps both green.
   never `bigint`.
 - A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
 - `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
-  `decodeRecord`, schema 11), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
+  `decodeRecord`, schema 12), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
   `encodePool`, `decodePool`), and the payload helpers later runtime modules share
   (`routePayload`, `routeFromPayload`, `executionScopePayload`, `evidencePayload`). Records and
   envelopes are frozen: a record's JSON values are deep-frozen canonical copies made once by its

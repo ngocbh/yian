@@ -88,7 +88,8 @@ nodes:
 output: \${worker.output}
 `;
 
-const AGENT_CALL_ID = /^run-7f3a\/worker\/([0-9a-f]{32})\/([01])$/;
+// `<run>/<node>/<n>/<index>`: `n` is the reply's `model_call` step, `index` the call's place in it.
+const AGENT_CALL_ID = /^run-7f3a\/worker\/\d+\/\d+$/;
 
 let logs = 0;
 /** A fresh log path. */
@@ -239,16 +240,8 @@ function expectAgentCalls(seen: ToolContext[], db: Db): void {
     expect(ctx.attempt).toBe(1);
     expect(ctx.runId).toBe("run-7f3a");
   }
-  const matches = seen.map((ctx) => AGENT_CALL_ID.exec(ctx.callId));
-  expect(matches.every((match) => match !== null), seen.map((ctx) => ctx.callId).join(", ")).toBe(true);
-  const [[, firstExchange, firstIndex], [, secondExchange, secondIndex], [, thirdExchange]] = matches as [
-    RegExpExecArray,
-    RegExpExecArray,
-    RegExpExecArray,
-  ];
-  expect(firstExchange).toBe(secondExchange!);
-  expect([firstIndex, secondIndex]).toEqual(["0", "1"]);
-  expect(thirdExchange).not.toBe(firstExchange!);
+  // The first reply is step 1 and its results steps 2 and 3, so the second reply is step 4.
+  expect(seen.map((ctx) => ctx.callId)).toEqual(["run-7f3a/worker/1/0", "run-7f3a/worker/1/1", "run-7f3a/worker/4/0"]);
   expect(new Set(seen.map((ctx) => ctx.callId)).size).toBe(3);
 }
 

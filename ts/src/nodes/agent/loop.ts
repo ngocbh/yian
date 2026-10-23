@@ -8,11 +8,16 @@
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
  * calls finish in. Python runs them one at a time, which is what a reply without safe tools gets.
  *
+ * Each model call is written as a `model_call` step before anything acts on its reply, and each
+ * tool result as a `tool_result` step as soon as that call finishes, before the next model call
+ * (`AgentSteps`).
+ *
  * A steerable agent reads the host's steers at the top of each iteration and stops at a host
  * interrupt between effects or before a later chunk of a streamed reply, returning its latest
  * reply's text (a cut reply's text so far); an interrupt never aborts a running tool call.
  *
- * Knows about:   diagnostics, events, llm, nodes/base, skills, tools, typesys, peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
+ *                tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -20,6 +25,7 @@ import { reprText } from "../../diagnostics.ts";
 import { ReplayDegraded } from "../../events.ts";
 import { type ChatModel, parseArguments } from "../../llm/events.ts";
 import { RouteModel } from "../../llm/executor.ts";
+import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import {
   Message,
   Request,
@@ -29,6 +35,7 @@ import {
   ToolResultPart,
   ToolSpec,
 } from "../../llm/messages.ts";
+import { realScheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
@@ -38,10 +45,13 @@ import { Output } from "../base.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
+  AgentSteps,
   checkStopped,
   drainSteers,
   interruptSignal,
+  requestSha256,
   retrySettings,
+  sentCredentials,
   ToolIterationLimitError,
 } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
@@ -55,7 +65,7 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { reportedText, systemPromptWithMemory, toolText } from "./memory.ts";
+import { reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
 import { generateStructured, typeToSchema, userMessage } from "./structured.ts";
 import { recordModelText, recordToolCall, recordToolResult, textOf } from "./text.ts";
 
@@ -65,8 +75,9 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * Makes one model call without tools or skills, otherwise runs the tool loop until the model
  * answers. Sets `ctx.sent` to the built model's route credentials once the model is built. Each
  * reason the model gives for leaving out replay state reaches `ctx.emitEvent` once, as
- * `ReplayDegraded`. Model calls are numbered from 1 in call order; with `ctx.steps`, each retry
- * of call `n` first records a `model_attempt` step for it (`retrySettings`).
+ * `ReplayDegraded`. With `ctx.steps`, each model call and failed attempt is recorded as a
+ * `model_call` step and each tool result as a `tool_result` step, a failed attempt's error
+ * scrubbed of every credential the call may have sent.
  *
  * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
  * then each iteration's steers, replies and tool results; a final structured call after tools
@@ -109,9 +120,13 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   }
   ctx.sent = () => (model instanceof RouteModel ? model.route.auth.credentials() : []);
   checkStopped(ctx);
-  // Every model call of this start, chat or structured, takes the next call number.
-  let modelCalls = 0;
-  const nextCall = () => retrySettings(ctx, ++modelCalls);
+  const steps = new AgentSteps(
+    ctx.steps,
+    () => (ctx.scheduler ?? realScheduler).now(),
+    ctx.runDir ?? null,
+    (error) => scrubCallCredentials(error, ctx.llmConfig, { env: ctx.models.env, sent: sentCredentials(ctx) }),
+  );
+  const retry = retrySettings(ctx);
   const messages = [system, ...ctx.messages];
   ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.promptText, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
@@ -120,7 +135,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     live,
     signal: ctx.signal,
     evaluationTrace: ctx.evaluationTrace,
-    retry: nextCall,
+    retry,
+    steps,
   };
   const toolset = ctx.toolset ?? new ToolSet();
   // A granted id may name a host-filled group; grants are checked by tool name.
@@ -138,6 +154,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   const interrupt = interruptSignal(ctx);
   let iterations = 0;
   let reply: Message | null = null;
+  // The steers this start sent, which the request digest leaves out.
+  const steered = new Set<Message>();
 
   while (true) {
     checkStopped(ctx);
@@ -148,16 +166,22 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     checkStopped(ctx);
     // So does an interrupt that lands while an async drain settles: no model call follows it.
     if (interrupt?.aborted) return interrupted(reply);
-    for (const steer of steers) messages.push(userMessage(steer));
+    for (const steer of steers) {
+      const message = userMessage(steer);
+      steered.add(message);
+      messages.push(message);
+    }
     const exchangeId = newExchangeId();
+    const request = new Request({ messages, tools: bound });
     let response: Response;
     try {
-      response = await callModel(live, model, new Request({ messages, tools: bound }), {
+      response = await callModel(live, model, request, {
         purpose: "chat",
         exchangeId,
         signal: ctx.signal,
         interrupt,
-        retry: nextCall(),
+        retry,
+        record: { steps, digest: requestSha256(request, steered) },
       });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.
@@ -168,6 +192,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       }
       throw error;
     }
+    // The reply's step is the last one written: failed attempts come before it.
+    const n = steps.nextN() - 1;
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
     rejectInvalidArguments(response.message);
@@ -196,7 +222,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       );
     }
 
-    if (await runToolCalls({ ctx, toolset, granted, skills, live, exchangeId, messages, calls, interrupt })) {
+    if (await runToolCalls({ ctx, toolset, granted, skills, live, exchangeId, n, steps, messages, calls, interrupt })) {
       return interrupted(reply);
     }
   }
@@ -216,6 +242,10 @@ interface ToolTurn {
   readonly skills: ReadonlyMap<string, Skill>;
   readonly live: LiveSinks | null;
   readonly exchangeId: string;
+  /** The `n` of the reply's `model_call` step, which each call's idempotency key holds. */
+  readonly n: number;
+  /** Where each call's `tool_result` step is written. */
+  readonly steps: AgentSteps;
   /** The model's messages; each committed result is appended. */
   readonly messages: Message[];
   /** The reply's runnable tool calls, in call order. */
@@ -224,8 +254,11 @@ interface ToolTurn {
   readonly interrupt: AbortSignal | undefined;
 }
 
-/** How one tool call ended: it returned `value` (a `ReportedToolError` when `reported`), or threw `error`. */
-type ToolOutcome = { readonly value: unknown; readonly reported: boolean } | { readonly error: unknown };
+/**
+ * How one tool call ended: the model reads `content` (a reported error's text when `reported`), or
+ * it threw `error`, or its result had no text.
+ */
+type ToolOutcome = { readonly content: string; readonly reported: boolean } | { readonly error: unknown };
 
 /** One started call of a group and how it ended. */
 interface SettledCall {
@@ -286,14 +319,23 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
 }
 
 /**
- * Report the calls from call `start` on as skipped by a host interrupt, in call order, by
- * publishing their skipped events. None of them runs or leaves evidence.
+ * Report the calls from call `start` on as skipped by a host interrupt, in call order: each gets a
+ * `skipped` `tool_result` step (`SKIPPED_TOOL_RESULT`, an error) and its skipped events. None of
+ * them runs or leaves evidence.
  *
  * @returns `true`, for the caller to return.
  */
 function skipFrom(turn: ToolTurn, start: number): true {
   for (const [index, call] of turn.calls.entries()) {
-    if (index >= start) observeSkippedToolCall(turn.live, identityOf(turn, call, index));
+    if (index < start) continue;
+    turn.steps.toolResult({
+      callId: call.id,
+      startedAt: null,
+      output: SKIPPED_TOOL_RESULT,
+      isError: true,
+      closed: "skipped",
+    });
+    observeSkippedToolCall(turn.live, identityOf(turn, call, index));
   }
   return true;
 }
@@ -330,11 +372,10 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     }
     return { error, granted: true };
   }
-  // Unlike a TOOL node's id, this one is not stable across resume: a resumed AGENT asks its model
-  // again, and reusing an id for a possibly different call would let an idempotency key dedupe the
-  // wrong side effect. Outside a run (no run id) the tool set gives each call a fresh id.
+  // The key names the reply's `model_call` step and the call's place in it. Outside a run (no run
+  // id) the tool set gives each call a fresh id.
   const runId = toolset.runId;
-  const callId = runId ? `${runId}/${ctx.nodeId}/${turn.exchangeId}/${index}` : undefined;
+  const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
   return { planned: { call, index, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
@@ -374,12 +415,12 @@ async function failCall(
  * Run one group's calls together and commit their results in call order.
  *
  * The calls share one child signal of the node's. Each starts in call order; the first to fail
- * (in time; a `ReportedToolError` is the call's error result, not a failure) aborts the group's
- * signal, and no further call starts. Every started call is awaited; then a stop wins, else the
- * first failure is thrown with nothing of the group committed. A stop, then a host interrupt, is
- * checked before the group starts; the interrupt skips from the group's first call.
- *
- * A result `toolText` refuses is thrown when committing, only when no call failed.
+ * (in time; a `ReportedToolError` is the call's error result, not a failure; a result `toolText`
+ * refuses is a failure) aborts the group's signal, and no further call starts. As each call
+ * finishes with a result, its text is computed and written as a `tool_result` step at once, in
+ * finish order, unless the node has stopped by then. Every started call is awaited; then a stop
+ * wins, else the first failure is thrown with nothing of the group committed. A stop, then a host
+ * interrupt, is checked before the group starts; the interrupt skips from the group's first call.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
  */
@@ -400,6 +441,23 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     failure ??= { error };
     controller.abort(error);
   };
+  /**
+   * Take the text the model reads for one call's result and write its step, as the call finishes;
+   * a result with no text, or a write that throws, fails the group.
+   */
+  const settle = (call: ToolCallPart, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
+    try {
+      const content = reported ? reportedText(call.name, value) : toolText(call.name, value);
+      // Once the node stopped, the stop may be what ended the call, so its result isn't written.
+      if (!signal?.aborted) {
+        turn.steps.toolResult({ callId: call.id, startedAt, output: content, isError: reported }, { settled: true });
+      }
+      return { content, reported };
+    } catch (error) {
+      fail(error);
+      return { error };
+    }
+  };
   try {
     for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
     const settling: Promise<SettledCall>[] = [];
@@ -407,19 +465,21 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
       if (controller.signal.aborted) break;
       const { call, index } = planned;
       let started = false;
+      let startedAt = 0;
       const running = observeToolCall(
         live,
         () => {
           started = true;
+          startedAt = turn.steps.now();
           return planned.invoke(controller.signal);
         },
         identityOf(turn, call, index),
         { signal, text: (value) => toolText(call.name, value) },
       );
       const outcome = running.then(
-        (value): ToolOutcome => ({ value, reported: false }),
+        (value): ToolOutcome => settle(call, startedAt, value, false),
         (error): ToolOutcome => {
-          if (isReportedToolError(error)) return { value: error, reported: true };
+          if (isReportedToolError(error)) return settle(call, startedAt, error, true);
           fail(error);
           return { error };
         },
@@ -435,9 +495,8 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     if (failure !== null) throw failure.error;
     for (const { call, outcome } of settled) {
       // No outcome is an error: a failure was thrown above.
-      const { value, reported } = outcome as Extract<ToolOutcome, { value: unknown }>;
+      const { content, reported } = outcome as Extract<ToolOutcome, { content: string }>;
       const { id: callId, name } = call;
-      const content = reported ? reportedText(name, value) : toolText(name, value);
       recordToolResult(ctx.evaluationTrace, name, content);
       const part = new ToolResultPart({ callId, name, content, isError: reported });
       turn.messages.push(new Message({ role: "tool", parts: [part] }));

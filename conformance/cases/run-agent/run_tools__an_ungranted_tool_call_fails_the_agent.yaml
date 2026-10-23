@@ -85,6 +85,25 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, agent]
+  - - node_step
+    - agent
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {text: x}
+            id: call-1
+            name: shout
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: d3a6341473d5e7c672e605fbc57f782737f3dbd896ba6f07a1c850505c0d9ea2
+        response_id: null
+        usage: null
   - - node_failed
     - agent
     - failure:

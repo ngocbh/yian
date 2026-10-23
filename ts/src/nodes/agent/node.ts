@@ -227,8 +227,8 @@ export class AgentNode extends Node {
   override readonly needsSkills: boolean = true;
   override readonly needsModels: boolean = true;
   /**
-   * Every agent records a `model_attempt` step before each model retry; a call-time agent also
-   * records and reads back its `effective_llm_config`.
+   * Every agent records its model calls and tool results as steps; a call-time agent also records
+   * and reads back its config as an `llm_config` step.
    */
   override readonly needsSteps: boolean = true;
   /** The prompt template, or a list of messages and splices. */
@@ -730,8 +730,9 @@ export class AgentNode extends Node {
    * header values joined when it is marked for the host key; any other agent uses its run's
    * `llmConfig`. Before anything renders, a call-time agent checks the bound config against the
    * one an earlier start recorded in its steps, then records it as a step,
-   * `{kind: "llm_config", effective_llm_config: <config>}`, which holds no key or header value. Each model retry is
-   * first recorded as a `model_attempt` step; a later start restarts the agent and ignores them.
+   * `{kind: "llm_config", effective_llm_config: <config>}`, which holds no key or header value.
+   * Each model call is recorded as a `model_call` step and each tool result as a `tool_result`
+   * step (`runAgent`); a later start restarts the agent and doesn't read them.
    *
    * The model is built through `caps.models`, else `defaultModelAccess()`. Every error from the
    * loop has the credentials the call sent scrubbed before it leaves.

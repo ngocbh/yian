@@ -88,19 +88,35 @@ expect:
           provider: openai
         kind: llm_config
       n: 1
+  - - node_step
+    - chat
+    - n: 2
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-picked
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: ok, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7ab958c0188bf3acf07b5575f5269d33d88bda758a5461de755905f02f23cab6
+        response_id: null
+        usage: null
   - - pool_commit
     - chat
     - value: ok
   - - node_succeeded
     - chat
-    - {commit: 13}
+    - {commit: 14}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: ok
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -1,6 +1,6 @@
 /**
  * How an AGENT uses memory: recalled notes framed into the system prompt, and the text the model
- * reads for a tool result or a reported tool error.
+ * reads for a tool result, a reported tool error or a skipped call.
  *
  * Python's `nodes/agent/memory.py` also records model and tool effects into a session memory's
  * transcript and projects that history for the model; TS yian has no session memory, so an
@@ -37,6 +37,9 @@ export function systemPromptWithMemory(base: string, sections: readonly MemorySe
     canonicalJson(payload)
   );
 }
+
+/** The result the model reads for a tool call a host interrupt skipped. */
+export const SKIPPED_TOOL_RESULT = "Not run: interrupted by the user.";
 
 /**
  * Return a tool result as the text the model reads: text as itself, any other value in the text

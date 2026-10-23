@@ -93,6 +93,22 @@ expect:
     - router
     - handle: ask
   - [node_started, ask__compose]
+  - - node_step
+    - ask__compose
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: "{\"items\": [{\"question\": \"Which database?\", \"header\": \"DB\", \"options\": [{\"label\": \"Postgres\", \"description\": \"Relational.\"}], \"multi_select\": false}]}", type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: 9c651b277a4fff05846391b1c43a6aac0a54382876c0af724af55cb400ea107c
+        response_id: null
+        usage: null
   - - pool_commit
     - ask__compose
     - value:
@@ -104,7 +120,7 @@ expect:
         question: Which database?
   - - node_succeeded
     - ask__compose
-    - {commit: 11}
+    - {commit: 12}
   - [node_started, ask]
   - - pool_commit
     - ask
@@ -112,7 +128,7 @@ expect:
         DB: Postgres
   - - node_succeeded
     - ask
-    - {commit: 14}
+    - {commit: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -121,7 +137,7 @@ expect:
           DB: Postgres
   - - node_succeeded
     - __end__
-    - {commit: 17}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted

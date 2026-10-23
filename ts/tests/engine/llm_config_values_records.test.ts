@@ -108,10 +108,14 @@ function records(path: string): { kind: string; payload: Record<string, any> }[]
     .map((line) => JSON.parse(line));
 }
 
-/** The steps `nodeId` recorded. */
+/** Whether `record` is an `llm_config` step: the config a call-time agent recorded. */
+const isConfigStep = (record: { kind: string; payload: Record<string, any> }) =>
+  record.kind === "node_step" && record.payload["step"]["kind"] === "llm_config";
+
+/** The `llm_config` steps `nodeId` recorded. */
 function steps(path: string, nodeId = "chat"): Record<string, any>[] {
   return records(path)
-    .filter((record) => record.kind === "node_step" && record.payload["node_id"] === nodeId)
+    .filter((record) => isConfigStep(record) && record.payload["node_id"] === nodeId)
     .map((record) => record.payload["step"]);
 }
 
@@ -136,7 +140,7 @@ test("each call time start logs its config without secrets", async () => {
   expect(models.configs.map((built) => built["model"])).toEqual(["gpt-picked"]);
 });
 
-test("an agent resolved at run start logs no step", async () => {
+test("an agent resolved at run start logs no llm_config step", async () => {
   const text = `id: f
 name: f
 input: {m: !str }
@@ -150,7 +154,7 @@ output: \${chat.output}
   const log = fresh("run.jsonl");
   const flow = await loadFlow(text, { env });
   expect((await runFlow(flow, { m: "gpt-x" }, { log, env, models: fakeModel().models })).status).toBe("succeeded");
-  expect(records(log).filter((record) => record.kind === "node_step")).toEqual([]);
+  expect(records(log).filter(isConfigStep)).toEqual([]);
 });
 
 /**
@@ -189,7 +193,7 @@ test("resume refuses a recorded config that differs", async () => {
   const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
   for (const [index, line] of lines.entries()) {
     const record = JSON.parse(line);
-    if (record.kind === "node_step") {
+    if (isConfigStep(record)) {
       record.payload.step.effective_llm_config.model = "gpt-tampered";
       lines[index] = JSON.stringify(record);
     }
@@ -546,10 +550,10 @@ async function crashedInSecondCall(): Promise<string> {
   return log;
 }
 
-/** The payloads of the log's steps. */
+/** The payloads of the log's `llm_config` steps. */
 const instanceSteps = (log: string) =>
   records(log)
-    .filter((record) => record.kind === "node_step")
+    .filter(isConfigStep)
     .map((record) => record.payload);
 
 test("resume recomputes the config of each defs call instance", async () => {
@@ -577,7 +581,7 @@ test("resume refuses a defs call instance whose recorded config differs", async 
   let edited = 0;
   for (const [index, line] of lines.entries()) {
     const record = JSON.parse(line);
-    const step = record.kind === "node_step" ? record.payload.step : null;
+    const step = isConfigStep(record) ? record.payload.step : null;
     if (step && step.effective_llm_config.model === "ok") {
       step.effective_llm_config.model = "gpt-tampered";
       lines[index] = JSON.stringify(record);

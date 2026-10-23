@@ -847,21 +847,19 @@ export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTra
  *
  * @param state An initialized nonterminal state in which `nodeId` is in flight.
  * @param nodeId The exact id of the in-flight node recording the step.
- * @param step A JSON object with a string `kind`, nested no deeper than the value nesting limit;
- *   only the node gives it meaning.
+ * @param step A JSON object with a string `kind`, at any depth; only the node gives it meaning.
  * @returns The canonical `NodeStepRecord` and a detached append-before-apply plan, with no
  *   observers.
  * @throws TypeError when `state`, `nodeId` or `step` has the wrong type, or `step` has no kind.
  * @throws RangeError when the state is uninitialized or terminal, or `nodeId` isn't in flight.
- * @throws TypeCheckError when `step` nests too deep or isn't a JSON value.
+ * @throws TypeCheckError when `step` isn't a JSON value.
  */
 export function prepareNodeStep(state: RunState, nodeId: string, step: unknown): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeStep expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
   if (!isRecord(step)) throw new TypeError("node step must be a JSON object");
-  // Live steps only, like live outputs: replay folds recorded steps without the process limit,
-  // so a log stays readable under a different limit.
-  rejectDeepNesting(step, "node step");
+  // No nesting limit: a step is node detail, not a yian value, and an AGENT's model call step holds
+  // a reply whose tool call arguments may themselves sit at the limit.
   // Steps outlive a resume, so `n` keeps counting across the node's starts.
   const n = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
   return prepareRecord(state, new NodeStepRecord(nodeId, n, step));

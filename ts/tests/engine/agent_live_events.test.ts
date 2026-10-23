@@ -44,14 +44,15 @@
  * signal has aborted (success or failure), and without an event sink emits nothing and returns the
  * result; `observeSkippedToolCall` emits started, then finished with `error: "interrupted"`; a
  * call a host interrupt cut reports `ModelCallFinished` with the usage received before the cut
- * and no error, and isn't marked. `model_attempt` steps, through the node with steps, one model
- * retry, a recording scheduler and a draw of 1: a retried call records one step before the failed
- * attempt's `ModelCallFinished{error}` (call and attempt `1n`, the error's kind and message,
- * `partial` `null`, `retry_in` the wait the scheduler got, from the backoff the draw gave); a step
- * holds the partial reply's JSON; the second call of a tool loop records call `2n`, and so does
- * the final structured pass after a chat reply; a key echoed in the error is scrubbed; without
- * steps nothing is recorded and the call still retries; a
- * `steps.record` fault ends the call as a host fault, unretried, with no finished event after it.
+ * and no error, and isn't marked. `model_call` steps, through the node with steps, one model
+ * retry, a recording scheduler and a draw of 1: a retried call writes a failed step before the
+ * failed attempt's `ModelCallFinished{error}` (the error's kind and message, `output` `null`,
+ * `retry_in` the wait the scheduler got, from the backoff the draw gave), and the reply's step
+ * before its own `ModelCallFinished`; a failed step holds the partial reply's JSON; a tool loop
+ * writes its calls and results in order, and so does the final structured pass after a chat
+ * reply; a key echoed in the error is scrubbed; without steps nothing is recorded and the call
+ * still retries; a `steps.record` fault ends the call as a host fault, unretried, with no finished
+ * event after it.
  * `ReplayDegraded`: the reasons a built model signals over a two-turn tool loop reach the event
  * sink once per reason.
  */
@@ -650,7 +651,7 @@ test("two tool calls in one reply get their own indexed brackets", async () => {
   expect(new Set(brackets.map((event) => event.exchangeId))).toEqual(new Set([(observed[0] as ModelCallStarted).exchangeId]));
 });
 
-// ---------- model_attempt steps ----------
+// ---------- model_call steps ----------
 
 /** A virtual scheduler recording each sleep it is asked for, in milliseconds. */
 function recordingScheduler(): { scheduler: Scheduler; sleeps: number[] } {
@@ -702,16 +703,24 @@ async function withSteps(
   return { outcome, log, sleeps };
 }
 
-/** What `log` holds, an event by its type and error, a step as it is. */
+/** What `log` holds, an event by its type and error, a step by its kind and, when it failed, its error's kind. */
 function shape(log: readonly unknown[]): unknown[] {
-  return log.map((item) =>
-    item instanceof ModelCallStarted || item instanceof ModelCallFinished
-      ? [item.type, item instanceof ModelCallFinished ? item.error : null]
-      : item,
-  );
+  return log.map((item) => {
+    if (item instanceof ModelCallStarted || item instanceof ModelCallFinished) {
+      return [item.type, item instanceof ModelCallFinished ? item.error : null];
+    }
+    const step = item as ValueRecord;
+    const error = step["error"] as ValueRecord | undefined;
+    return error === undefined ? String(step["kind"]) : `${String(step["kind"])} failed ${String(error["kind"])}`;
+  });
 }
 
-test("a retried model call records one model_attempt step before its failed attempt's finished event", async () => {
+/** The steps among `log` (its plain records; events are class instances), in order. */
+function stepsOf(log: readonly unknown[]): ValueRecord[] {
+  return log.filter((item): item is ValueRecord => Object.getPrototypeOf(item) === Object.prototype);
+}
+
+test("a retried model call writes a failed step before its failed attempt's finished event", async () => {
   const failure = new ProviderError("server", "boom", { status: 500 });
   const { outcome, log, sleeps } = await withSteps(model(failure, reply("ok")));
   expect((outcome as Output).value).toBe("ok");
@@ -719,60 +728,55 @@ test("a retried model call records one model_attempt step before its failed atte
   expect(sleeps).toEqual([375]);
   expect(shape(log)).toEqual([
     ["ModelCallStarted", null],
-    {
-      kind: "model_attempt",
-      model_attempt: {
-        call: 1n,
-        attempt: 1n,
-        status: "failed",
-        error: { kind: "server", message: "boom" },
-        partial: null,
-        retry_in: 0.375,
-      },
-    },
+    "model_call failed server",
     ["ModelCallFinished", "ProviderError"],
     ["ModelCallStarted", null],
+    "model_call",
     ["ModelCallFinished", null],
   ]);
+  expect(stepsOf(log)[0]).toMatchObject({
+    error: { kind: "server", message: "boom" },
+    output: null,
+    usage: null,
+    retry_in: 0.375,
+  });
 });
 
-test("a model_attempt step holds what arrived before the failure", async () => {
+test("a failed model_call step holds what arrived before the failure", async () => {
   const cut = [new TextDelta(0, "half"), new ProviderError("incomplete", "stream ended", { retryable: true })];
   const { log } = await withSteps(model(cut, reply("ok")));
-  const step = log.find((item) => !(item instanceof ModelCallStarted || item instanceof ModelCallFinished)) as ValueRecord;
-  const partial = new Message({ role: "assistant", parts: [new TextPart("half")] }).toJSON();
-  expect((step["model_attempt"] as ValueRecord)["partial"]).toEqual(partial);
-  expect((step["model_attempt"] as ValueRecord)["error"]).toEqual({ kind: "incomplete", message: "stream ended" });
+  const step = stepsOf(log)[0]!;
+  expect(step["output"]).toEqual(new Message({ role: "assistant", parts: [new TextPart("half")] }).toJSON());
+  expect(step["error"]).toEqual({ kind: "incomplete", message: "stream ended" });
 });
 
-test("the second model call of a tool loop records call 2", async () => {
+test("a tool loop writes its model calls and tool results in order", async () => {
   const failure = new ProviderError("rate_limit", "slow down", { status: 429 });
   const chat = model(callReply("", [["acme", "call-1"]]), failure, reply("acme is fine"));
   const { outcome, log } = await withSteps(chat, { tools: lookupTools() });
   expect((outcome as Output).value).toBe("acme is fine");
-  const steps = log.filter((item) => !(item instanceof ModelCallStarted || item instanceof ModelCallFinished)) as ValueRecord[];
-  const attempts = steps.filter((step) => "model_attempt" in step).map((step) => step["model_attempt"] as ValueRecord);
-  expect(attempts.map((step) => [step["call"], step["attempt"]])).toEqual([[2n, 1n]]);
+  expect(shape(stepsOf(log))).toEqual(["model_call", "tool_result", "model_call failed rate_limit", "model_call"]);
+  expect(stepsOf(log)[1]).toMatchObject({ call_id: "call-1", is_error: false });
 });
 
-test("the final structured pass after a chat reply records call 2", async () => {
+test("the final structured pass after a chat reply writes its calls after the chat call", async () => {
   const failure = new ProviderError("server", "boom", { status: 500 });
   const chat = model(reply("about four"), failure, reply('{"value": 4}'));
   const { outcome, log } = await withSteps(chat, { tools: lookupTools(), output: INT });
   expect((outcome as Output).value).toBe(4n);
-  const attempts = log
-    .filter((item): item is ValueRecord => !(item instanceof ModelCallStarted || item instanceof ModelCallFinished))
-    .map((step) => step["model_attempt"] as ValueRecord);
-  expect(attempts.map((step) => [step["call"], step["attempt"]])).toEqual([[2n, 1n]]);
+  const steps = stepsOf(log);
+  expect(shape(steps)).toEqual(["model_call", "model_call failed server", "model_call"]);
+  expect(steps[0]!["purpose"]).toBe("chat");
+  expect(steps[1]!["purpose"]).toBe(steps[2]!["purpose"]);
+  expect(steps[1]!["purpose"]).not.toBe("chat");
 });
 
-test("a key echoed in a retried error is scrubbed in its model_attempt step", async () => {
+test("a key echoed in a retried error is scrubbed in its failed model_call step", async () => {
   const key = "sk-sentinel-500-zqxw";
   const llmConfig = { provider: "vllm", model: "m", api_key: key };
   const chat = new ScriptedModel([new ProviderError("server", `upstream saw ${key}`, { status: 500 }), reply("ok")], llmConfig);
   const { log } = await withSteps(chat, { llmConfig });
-  const step = log.find((item) => !(item instanceof ModelCallStarted || item instanceof ModelCallFinished)) as ValueRecord;
-  expect((step["model_attempt"] as ValueRecord)["error"]).toEqual({ kind: "server", message: "upstream saw [REDACTED]" });
+  expect(stepsOf(log)[0]!["error"]).toEqual({ kind: "server", message: "upstream saw [REDACTED]" });
 });
 
 test("without a steps capability nothing is recorded and the call still retries", async () => {

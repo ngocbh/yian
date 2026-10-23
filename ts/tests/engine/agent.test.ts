@@ -71,10 +71,10 @@
  * before any model is built; a reply calling a tool at a cap of one model turn fails with
  * `agent.max_tool_iterations`; without `models` the node builds through `defaultModelAccess` (an
  * unknown provider's `ValidationError`, no network); a failing credentials read doesn't replace the
- * error being scrubbed. Through `FlowEngine` with a run log: a retried model call's `model_attempt`
- * step comes before the node's outcome; a resumed call-time agent (state replayed from the log, a
- * fresh engine) restarts past its `model_attempt` step, records its `effective_llm_config` again,
- * and numbers its calls from 1 again.
+ * error being scrubbed. Through `FlowEngine` with a run log: a retried model call's failed and
+ * successful `model_call` steps come before the node's outcome; a resumed call-time agent (state
+ * replayed from the log, a fresh engine) restarts after its steps, records its `llm_config` step
+ * again, and numbers its new steps after the first start's.
  *
  * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
  * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
@@ -1146,7 +1146,7 @@ describe("forward", () => {
     expect([request.toolChoice, request.parallelToolCalls]).toEqual([null, null]);
   });
 
-  test("a call's id is <run>/<node>/<exchange>/<index> on a run-bound tool set, fresh on an unbound one", async () => {
+  test("a call's id is <run>/<node>/<n>/<index> on a run-bound tool set, fresh on an unbound one", async () => {
     const contexts: ToolContext[] = [];
     const noop = fakeTool("noop", (_args, ctx) => {
       contexts.push(ctx);
@@ -1159,10 +1159,10 @@ describe("forward", () => {
       tools: new ToolSet({ noop }).forRun("r1"),
       emitEvent,
     });
-    const exchange = (events.find((event) => event instanceof ModelCallStarted) as ModelCallStarted).exchangeId;
+    // `n` is the reply's `model_call` step: the first step here.
     expect(contexts.map((ctx) => [ctx.callId, ctx.node, ctx.attempt, ctx.runId])).toEqual([
-      [`r1/n/${exchange}/0`, "n", 1, "r1"],
-      [`r1/n/${exchange}/1`, "n", 1, "r1"],
+      ["r1/n/1/0", "n", 1, "r1"],
+      ["r1/n/1/1", "n", 1, "r1"],
     ]);
     contexts.length = 0;
     await evaluate(toolAgent(["noop"]), new ScriptedModel(replies(), NATIVE), { tools: new ToolSet({ noop }) });
@@ -1207,7 +1207,10 @@ describe("forward", () => {
     const bound = structuredClone(BOUND);
     const result = await callTimeAgent().run({ [LLM_CONFIG_KEY]: bound }, { steps, models });
     expect((result as Output).value).toBe("ok");
-    expect(recorded).toEqual([{ kind: "llm_config", effective_llm_config: BOUND }]);
+    // The config step, then the model call's.
+    expect(recorded[0]).toEqual({ kind: "llm_config", effective_llm_config: BOUND });
+    expect((recorded[1] as Record<string, unknown>)["kind"]).toBe("model_call");
+    expect(recorded).toHaveLength(2);
     expect((recorded[0] as Record<string, unknown>)["effective_llm_config"]).not.toBe(bound);
     expect(models.configs).toEqual([{ ...BOUND, api_key: "sk-host" }]);
   });
@@ -1230,11 +1233,12 @@ describe("forward", () => {
     // An equal config, even one with its keys in another order, records again.
     const same = { model: "gpt-older", [HOST_KEY_MARKER]: true, provider: "openai" };
     await callTimeAgent().run({ [LLM_CONFIG_KEY]: same }, { steps, models });
-    expect(recorded).toEqual([{ kind: "llm_config", effective_llm_config: same }]);
+    expect(recorded[0]).toEqual({ kind: "llm_config", effective_llm_config: same });
+    expect((recorded[1] as Record<string, unknown>)["kind"]).toBe("model_call");
   });
 });
 
-describe("model_attempt steps through the engine", () => {
+describe("model_call steps through the engine", () => {
   const NATIVE = { provider: "openai", model: "gpt-5.5" };
 
   /** The callback error that stops a run. */
@@ -1255,37 +1259,47 @@ describe("model_attempt steps through the engine", () => {
     return engine(flow, { models, scheduler: virtualScheduler(), random: () => 1, ...options });
   }
 
-  /** The kinds of `built`'s records about `chat`, a step as its payload. */
-  function chatRecords(built: FlowEngine): unknown[] {
+  /** The kinds of `built`'s records about `chat`, a step as `<kind> <n>`. */
+  function chatRecords(built: FlowEngine): string[] {
     return built.log
       .records()
       .map((envelope) => envelope.record)
       .filter((record) => (record as { nodeId?: string }).nodeId === "chat")
-      .map((record) => (record instanceof NodeStepRecord ? record.step : record.constructor.name));
+      .map((record) => (record instanceof NodeStepRecord ? `${record.step["kind"]} ${record.n}` : record.constructor.name));
   }
 
-  const ATTEMPT = {
-    kind: "model_attempt",
-    model_attempt: {
-      call: 1n,
-      attempt: 1n,
-      status: "failed",
-      error: { kind: "server", message: "boom" },
-      partial: null,
-      retry_in: 0.375,
-    },
-  };
+  /** The steps of `built`'s log about `chat`, in order. */
+  function chatSteps(built: FlowEngine): Readonly<Record<string, unknown>>[] {
+    return built.log
+      .records()
+      .map((envelope) => envelope.record)
+      .filter((record): record is NodeStepRecord => record instanceof NodeStepRecord && record.nodeId === "chat")
+      .map((record) => record.step);
+  }
 
-  test("the run log holds the model_attempt step before the node's outcome", async () => {
+  /** What a failed attempt's `model_call` step records of the `boom` failure, a draw of 1 given. */
+  const FAILED = { error: { kind: "server", message: "boom" }, output: null, usage: null, retry_in: 0.375 };
+
+  test("the run log holds the failed and the successful model_call before the node's outcome", async () => {
     install({ ...BUILTIN, modelRetries: 1 });
     const failure = new ProviderError("server", "boom", { status: 500 });
     const agent = new AgentNode("chat", { prompt: "hi", llmConfig: NATIVE });
     const built = agentEngine(agent, serving(new ScriptedModel([failure, textReply("ok")], NATIVE)));
     expect((await built.run()).at(-1)).toEqual(new RunSucceeded({ output: "ok" }));
-    expect(chatRecords(built)).toEqual(["NodeStartedRecord", ATTEMPT, "PoolCommitRecord", "NodeSucceededRecord"]);
+    expect(chatRecords(built)).toEqual([
+      "NodeStartedRecord",
+      "model_call 1",
+      "model_call 2",
+      "PoolCommitRecord",
+      "NodeSucceededRecord",
+    ]);
+    const [failed, succeeded] = chatSteps(built);
+    expect(failed).toMatchObject(FAILED);
+    expect(succeeded).toMatchObject({ finish: "stop", output: textReply("ok").message.toJSON() });
+    expect(failed!["request_sha256"]).toBe(succeeded!["request_sha256"]);
   });
 
-  test("a resumed call-time agent restarts past its model_attempt step and numbers its calls from 1 again", async () => {
+  test("a resumed call-time agent restarts after its steps and numbers its new steps after them", async () => {
     install({ ...BUILTIN, modelRetries: 1 });
     const failure = () => new ProviderError("server", "boom", { status: 500 });
     const agent = new AgentNode("chat", { prompt: "hi" });
@@ -1300,9 +1314,10 @@ describe("model_attempt steps through the engine", () => {
       },
     });
     expect(await rejected(first.run())).toBe(CRASH);
-    const [, config] = chatRecords(first) as [unknown, Record<string, Record<string, unknown>>];
-    expect(chatRecords(first)).toEqual(["NodeStartedRecord", config, ATTEMPT]);
+    expect(chatRecords(first)).toEqual(["NodeStartedRecord", "llm_config 1", "model_call 2"]);
+    const [config, failed] = chatSteps(first) as [Record<string, Record<string, unknown>>, Record<string, unknown>];
     expect([config["effective_llm_config"]!["model"], config["effective_llm_config"]![HOST_KEY_MARKER]]).toEqual(["gpt-5.5", true]);
+    expect(failed).toMatchObject(FAILED);
 
     const state = replayRecords(new RunState(copyGraph(first.state.flow)), first.log.records(), { growBuilder: noGrowth });
     commitPrepared(first.log, state, prepareRunResumed(state, { numWorkers: 0 }));
@@ -1314,13 +1329,15 @@ describe("model_attempt steps through the engine", () => {
       random: () => 1,
     });
     expect((await resumed.run()).at(-1)).toEqual(new RunSucceeded({ output: "done" }));
-    // The new start records its config again and numbers its calls from 1 again.
+    // The new start records its config again, then its calls, numbered after the first start's steps.
     expect(chatRecords(resumed).slice(3)).toEqual([
       "NodeStartedRecord",
-      config,
-      ATTEMPT,
+      "llm_config 3",
+      "model_call 4",
+      "model_call 5",
       "PoolCommitRecord",
       "NodeSucceededRecord",
     ]);
+    expect(chatSteps(resumed)[2]).toEqual(config);
   });
 });

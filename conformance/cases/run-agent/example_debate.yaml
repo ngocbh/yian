@@ -126,21 +126,25 @@ expect:
     - [pool_commit, __start__, {value: {question: "Should a small team adopt a monorepo?"}}]
     - [node_succeeded, __start__, {commit: 6}]
     - [node_started, frame]
+    - [node_step, frame, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: 'Monorepo or many repos; criteria: tooling cost, coupling.', type: text}], role: assistant}, purpose: chat, request_sha256: c92d67f6f9712fc245394a30fa8a2471a0e27d9e430cb3e34094cd5242d5b443, response_id: null, usage: null}}]
     - [pool_commit, frame, {value: "Monorepo or many repos; criteria: tooling cost, coupling."}]
-    - [node_succeeded, frame, {commit: 9}]
+    - [node_succeeded, frame, {commit: 10}]
     - [node_started, for_case]
+    - [node_step, for_case, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: One repo shares tooling and keeps changes atomic., type: text}], role: assistant}, purpose: chat, request_sha256: b037aaef52a6a311769bb44b31bae46998be1729a660d56a3f5e2bca442e1f82, response_id: null, usage: null}}]
     - [pool_commit, for_case, {value: One repo shares tooling and keeps changes atomic.}]
-    - [node_succeeded, for_case, {commit: 12}]
+    - [node_succeeded, for_case, {commit: 14}]
     - [node_started, against_case]
+    - [node_step, against_case, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Separate repos keep teams decoupled., type: text}], role: assistant}, purpose: chat, request_sha256: 1bbe1a0067d42d215a7459af0fc1943667afc382570014ad9a7f4c46a4e92b6a, response_id: null, usage: null}}]
     - [pool_commit, against_case, {value: Separate repos keep teams decoupled.}]
-    - [node_succeeded, against_case, {commit: 15}]
+    - [node_succeeded, against_case, {commit: 18}]
     - [node_started, verdict]
+    - [node_step, verdict, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: 'Adopt a monorepo: shared tooling saves a small team the most time.', type: text}], role: assistant}, purpose: chat, request_sha256: 802a1ea1832bb2e2f9bd87104d6954a628521893d286657eca1dc3847f87ce3e, response_id: null, usage: null}}]
     - - pool_commit
       - verdict
       - value: "Adopt a monorepo: shared tooling saves a small team the most time."
-    - [node_succeeded, verdict, {commit: 18}]
+    - [node_succeeded, verdict, {commit: 22}]
     - [node_started, __end__]
     - - pool_commit
       - __end__
       - value: "Adopt a monorepo: shared tooling saves a small team the most time."
-    - [node_succeeded, __end__, {commit: 21}]
+    - [node_succeeded, __end__, {commit: 25}]

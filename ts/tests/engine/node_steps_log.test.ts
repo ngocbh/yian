@@ -14,7 +14,6 @@
  *
  * Ported, the reducer tests: `test_prepare_node_step_requires_an_in_flight_node` (3 rows),
  * `test_prepare_node_step_rejects_an_uninitialized_state`,
- * `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`,
  * `test_node_starts_count_started_records`, `test_resume_keeps_steps_and_a_resumed_start_counts_two`,
  * `test_success_deletes_the_nodes_steps_and_starts`, `test_prepare_node_step_rejects_a_terminal_state`,
  * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
@@ -42,6 +41,9 @@
  *   `±Infinity` (a TS yian value).
  * - `test_node_step_too_deep_for_python_is_a_value_error`: a 5000-deep step is accepted (the TS
  *   codec is iterative).
+ * - `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`: a live step past the limit is
+ *   accepted. A step is node detail, not a yian value, and an AGENT's `model_call` step holds a
+ *   reply whose tool call arguments may themselves sit at the limit.
  * - `test_prepare_node_step_appends_in_order_without_observers`: the plan's delta is checked by
  *   its `kind` and fields, not its class name; a node's steps are a frozen array, not a tuple.
  * - `test_committed_step_is_detached_from_the_caller_and_the_record`: the record's step is
@@ -329,18 +331,13 @@ test("prepareNodeStep refuses an uninitialized state", () => {
   );
 });
 
-test("prepareNodeStep refuses a step past the nesting limit", () => {
-  const { state } = firstInFlight();
+test("prepareNodeStep accepts a step past the value nesting limit", () => {
+  const { state, log } = firstInFlight();
   const limit = Number(current().maxValueNesting);
 
-  prepareNodeStep(state, "first", { kind: "x", ...nested(limit) });
-  const caught = expectError(
-    () => prepareNodeStep(state, "first", { kind: "x", ...nested(limit + 1) }),
-    TypeCheckError,
-    `node step at ${Array(limit).fill("inner").join(".")}: value nests deeper than ${limit} levels, ` +
-      "the limit for a yian value (each record and list is a level)",
-  );
-  expect((caught as TypeCheckError).path).toEqual(Array(limit).fill("inner"));
+  // An AGENT's model_call step wraps a reply whose tool call arguments may sit at the limit.
+  commitPrepared(log, state, prepareNodeStep(state, "first", { kind: "x", ...nested(limit + 5) }));
+  expect(state.nodeSteps.get("first")).toHaveLength(1);
 });
 
 test.each<[string, unknown, new (...args: never[]) => Error, string]>([

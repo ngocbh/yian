@@ -31,7 +31,7 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
-import { NodeStartedRecord, NodeSucceededRecord, readRunLog, RunResumedRecord } from "../../src/runtime/log.ts";
+import { NodeStartedRecord, NodeStepRecord, NodeSucceededRecord, readRunLog, RunResumedRecord } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -145,8 +145,8 @@ test("tool calling agent in loop retries whole node after process loss", async (
     [toolCall("ping", {}, "turn-1"), textReply("turn1"), toolCall("ping", {}, "turn-2-before-crash"), textReply("lost")],
     CONFIG,
   );
-  // Record 28 is the second turn's `loop#1/reply` output (its commit).
-  await crashAfter(28, async () =>
+  // Record 34 is the second turn's `loop#1/reply` output (its commit), after its three steps.
+  await crashAfter(34, async () =>
     runFlow(await loadConformanceFlow(FLOW), { seed: "s" }, {
       log: path,
       runId: "agent-loop-recovery",
@@ -158,10 +158,15 @@ test("tool calling agent in loop retries whole node after process loss", async (
   );
 
   const prefix = readRunLog(path).map((envelope) => envelope.record);
-  const last = prefix.at(-1);
-  expect(last).toBeInstanceOf(NodeStartedRecord);
+  const last = prefix.findLast((record) => record instanceof NodeStartedRecord);
   const retryId = (last as NodeStartedRecord).nodeId;
   expect(retryId).toBe("loop#1/reply");
+  // The lost start's model call, tool result and final model call were written before the crash.
+  expect(prefix.slice(-3).map((record) => [(record as NodeStepRecord).nodeId, (record as NodeStepRecord).step["kind"]])).toEqual([
+    [retryId, "model_call"],
+    [retryId, "tool_result"],
+    [retryId, "model_call"],
+  ]);
   expect(prefix.filter((r) => r instanceof NodeSucceededRecord && r.nodeId.endsWith("/reply")).length).toBe(1);
   expect(seen).toEqual([{}, {}]);
 

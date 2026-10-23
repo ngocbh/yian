@@ -87,11 +87,44 @@ expect:
     - [pool_commit, news, {value: ["ACME opens a plant", "ACME beats estimates"]}]
     - [node_succeeded, news, {commit: 9}]
     - [node_started, summarize]
+    - [
+        node_step,
+        summarize,
+        {
+            n: 1,
+            step:
+              {
+                finish: null,
+                kind: model_call,
+                model: gpt-5.5,
+                output:
+                  {
+                    format: yian.message.v1,
+                    parts:
+                      [
+                        {
+                            text: '- Growth [0]
+
+                              - Earnings [1]
+
+                              - Outlook [0][1]',
+                            type: text
+                          }
+                      ],
+                    role: assistant
+                  },
+                purpose: chat,
+                request_sha256: f39d069f85105f80b2c619b76439d4a9a72cce0d3a609e61a9b6be0d50d41bd1,
+                response_id: null,
+                usage: null
+              }
+          }
+      ]
     - [pool_commit, summarize, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
-    - [node_succeeded, summarize, {commit: 12}]
+    - [node_succeeded, summarize, {commit: 13}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
-    - [node_succeeded, __end__, {commit: 15}]
+    - [node_succeeded, __end__, {commit: 16}]
   # A TOOL node's call id is <run>/<node>.
   tool_calls:
     get_facts:

@@ -124,19 +124,35 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, answer]
+  - - node_step
+    - answer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: a2, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: e7ffd48ec6ab8faa6fd88d82ca1c1a29c358863358820dc776ecee29f3cd55b1
+        response_id: null
+        usage: null
   - - pool_commit
     - answer
     - value: a2
   - - node_succeeded
     - answer
-    - {commit: 9}
+    - {commit: 10}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: a2
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 13}
   events:
   - [RunStarted]
   - - NodeStarted

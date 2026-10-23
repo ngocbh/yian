@@ -210,6 +210,22 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, a]
+  - - node_step
+    - a
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"value": {"action": "buy", "qty": 3}}', type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: 635b683bb7c724b47ca48060deab070436ea3793ad7499ff471c50564ff5a3ab
+        response_id: null
+        usage: null
   - - pool_commit
     - a
     - value:
@@ -217,7 +233,7 @@ expect:
         qty: 3
   - - node_succeeded
     - a
-    - {commit: 9}
+    - {commit: 10}
   - [node_started, route]
   - - node_routed
     - route
@@ -228,7 +244,7 @@ expect:
     - value: buy 3
   - - node_succeeded
     - place_buy
-    - {commit: 14}
+    - {commit: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -239,7 +255,7 @@ expect:
         trade: buy 3
   - - node_succeeded
     - __end__
-    - {commit: 17}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted

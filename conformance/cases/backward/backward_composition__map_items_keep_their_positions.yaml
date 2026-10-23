@@ -267,12 +267,28 @@ expect:
             static_path: [each]
           static_path: [each, __start__]
   - [node_started, each#0/answer]
+  - - node_step
+    - each#0/answer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: local-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: same, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: c53e8e1b4c5952d40677221ca92899a450e09c7cad1542a0fcbf3d603c36bd0c
+        response_id: null
+        usage: null
   - - pool_commit
     - each#0/answer
     - value: same
   - - node_succeeded
     - each#0/answer
-    - commit: 20
+    - commit: 21
       forward_capture:
         bound_inputs: {value: same}
         evaluated_keys: [value]
@@ -301,12 +317,28 @@ expect:
             static_path: [each]
           static_path: [each, answer]
   - [node_started, each#1/answer]
+  - - node_step
+    - each#1/answer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: local-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: same, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: c53e8e1b4c5952d40677221ca92899a450e09c7cad1542a0fcbf3d603c36bd0c
+        response_id: null
+        usage: null
   - - pool_commit
     - each#1/answer
     - value: same
   - - node_succeeded
     - each#1/answer
-    - commit: 23
+    - commit: 25
       forward_capture:
         bound_inputs: {value: same}
         evaluated_keys: [value]
@@ -340,7 +372,7 @@ expect:
     - value: same
   - - node_succeeded
     - each#0/__end__
-    - commit: 26
+    - commit: 28
       forward_capture:
         bound_inputs: {result: same}
         evaluated_keys: [result]
@@ -371,7 +403,7 @@ expect:
     - value: same
   - - node_succeeded
     - each#1/__end__
-    - commit: 29
+    - commit: 31
       forward_capture:
         bound_inputs: {result: same}
         evaluated_keys: [result]
@@ -383,7 +415,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 22
+              execution_seq: 23
               path: []
               run_id: r1
           kind: record
@@ -403,7 +435,7 @@ expect:
       key: each
   - - node_succeeded
     - each/__end__
-    - commit: 32
+    - commit: 34
       forward_capture:
         bound_inputs: {e0: same, e1: same}
         evaluated_keys: [e0, e1]
@@ -416,12 +448,12 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 25
+              execution_seq: 27
               path: []
               run_id: r1
           - kind: source
             source:
-              execution_seq: 28
+              execution_seq: 30
               path: []
               run_id: r1
           kind: record
@@ -437,7 +469,7 @@ expect:
     - value: [same, same]
   - - node_succeeded
     - __end__
-    - commit: 35
+    - commit: 37
       forward_capture:
         bound_inputs:
           result: [same, same]
@@ -450,7 +482,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 31
+              execution_seq: 33
               path: []
               run_id: r1
           kind: record
@@ -549,7 +581,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 22
+            execution_seq: 23
             path: []
             run_id: r1
         feedback:
@@ -570,7 +602,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 25
+            execution_seq: 27
             path: []
             run_id: r1
         feedback: [Review every item.]
@@ -590,7 +622,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 28
+            execution_seq: 30
             path: []
             run_id: r1
         feedback: [Review every item.]
@@ -601,7 +633,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 22
+          execution_seq: 23
           path: []
           run_id: r1
       - attribution:
@@ -610,7 +642,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 31
+            execution_seq: 33
             path: []
             run_id: r1
         feedback: [Review every item.]
@@ -621,7 +653,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 25
+          execution_seq: 27
           path: []
           run_id: r1
       - attribution:
@@ -630,7 +662,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 31
+            execution_seq: 33
             path: []
             run_id: r1
         feedback: [Review every item.]
@@ -641,7 +673,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 28
+          execution_seq: 30
           path: []
           run_id: r1
       - attribution:
@@ -650,7 +682,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 34
+            execution_seq: 36
             path: []
             run_id: r1
         feedback: [Review every item.]
@@ -662,7 +694,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 31
+          execution_seq: 33
           path: []
           run_id: r1
       - attribution:
@@ -679,7 +711,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 34
+          execution_seq: 36
           path: []
           run_id: r1
       proposals: []
@@ -774,7 +806,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 22
+            execution_seq: 23
             path: []
             run_id: r1
         feedback:
@@ -806,7 +838,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 28
+            execution_seq: 30
             path: []
             run_id: r1
         feedback: ['']
@@ -817,7 +849,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 22
+          execution_seq: 23
           path: []
           run_id: r1
       - attribution: []
@@ -828,7 +860,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 25
+          execution_seq: 27
           path: []
           run_id: r1
       - attribution:
@@ -837,7 +869,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 31
+            execution_seq: 33
             path: []
             run_id: r1
         feedback: ['']
@@ -848,7 +880,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 28
+          execution_seq: 30
           path: []
           run_id: r1
       - attribution:
@@ -857,7 +889,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 34
+            execution_seq: 36
             path: []
             run_id: r1
         feedback:
@@ -869,7 +901,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 31
+          execution_seq: 33
           path: []
           run_id: r1
       - attribution:
@@ -888,7 +920,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 34
+          execution_seq: 36
           path: []
           run_id: r1
       proposals: []

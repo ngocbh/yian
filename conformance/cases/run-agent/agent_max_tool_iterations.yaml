@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: agent-max-tool-iterations
   name: agent_max_tool_iterations
@@ -45,4 +46,4 @@ expect:
   # <run>/<node>/<exchange>/<index>.
   tool_calls:
     lookup:
-      - {args: {q: x}, call_id: r1/research/<id:1>/0, attempt: 1, node: research}
+      - {args: {q: x}, call_id: r1/research/1/0, attempt: 1, node: research}

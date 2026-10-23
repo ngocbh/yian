@@ -142,19 +142,66 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {topic: a}
+            id: call-a
+            name: lookup
+            type: tool_call
+          - arguments: {topic: b}
+            id: call-b
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: 987d1b022a6cc1e1143ec13d000eb0a9b95aa885fbf1ac0ede3384aa68a12422
+        response_id: null
+        usage: null
+  - - node_step
+    - writer
+    - n: 2
+      step: {call_id: call-a, is_error: false, kind: tool_result, output: found:a}
+  - - node_step
+    - writer
+    - n: 3
+      step: {call_id: call-b, is_error: false, kind: tool_result, output: found:b}
+  - - node_step
+    - writer
+    - n: 4
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: both found, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7ea3408eeaa5919739af61e023e8d31d2dd49d8da28aadfe8eec1da8238b829b
+        response_id: null
+        usage: null
   - - pool_commit
     - writer
     - value: both found
   - - node_succeeded
     - writer
-    - {commit: 9}
+    - {commit: 13}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: both found
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 16}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -249,10 +296,10 @@ expect:
     - args:
         topic: a
       attempt: 1
-      call_id: r1/writer/<id:1>/0
+      call_id: r1/writer/1/0
       node: writer
     - args:
         topic: b
       attempt: 1
-      call_id: r1/writer/<id:1>/1
+      call_id: r1/writer/1/1
       node: writer

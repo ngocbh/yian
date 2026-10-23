@@ -78,19 +78,35 @@ expect:
     - num_workers: 0
       retry_node_ids: [effect]
   - [node_started, effect]
+  - - node_step
+    - effect
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: offline-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: again, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 9bfee6afd58473c17d4b7e536e44cb61a2cc84a84303be6a0a4b19f4f0bebb06
+        response_id: null
+        usage: null
   - - pool_commit
     - effect
     - value: again
   - - node_succeeded
     - effect
-    - {commit: 11}
+    - {commit: 12}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: again
   - - node_succeeded
     - __end__
-    - {commit: 14}
+    - {commit: 15}
   stream:
   - chunk: again
     exchange_id: <id:1>

@@ -91,6 +91,22 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-4o
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"qty": 3, "price": 9.5}', type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: 9cf0bb529e705608d80d757fed4b3cf0cdbb8d0c9d3fd9e2ca74830123387a13
+        response_id: null
+        usage: null
   - - pool_commit
     - writer
     - value:
@@ -98,7 +114,7 @@ expect:
         qty: 3
   - - node_succeeded
     - writer
-    - {commit: 9}
+    - {commit: 10}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -107,7 +123,7 @@ expect:
         qty: 3
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 13}
   events:
   - [RunStarted]
   - - NodeStarted

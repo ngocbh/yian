@@ -2306,13 +2306,13 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 13, and readers accept only schema 13. The schema
+Changed (TS yian): records use schema 14, and readers accept only schema 14. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10, 11 or 12 log
-(TS yian's, from before record times, before `RunStarted` held the flow files, or before pool
-writes were `pool_commit` records) with "run log schema N predates schema 13 and is not
-supported", and any other schema with "unsupported run-record schema: N" (a float token shows
-as `13.0`); the "predates" message for schemas 7
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 13 log
+(TS yian's, from before record times, before `RunStarted` held the flow files, before pool
+writes were `pool_commit` records, or before node steps were numbered) with "run log schema N
+predates schema 14 and is not supported", and any other schema with "unsupported run-record
+schema: N" (a float token shows as `14.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2465,6 +2465,42 @@ log, serial or with 8 workers, while Bun pays about 52 µs per record, about 3 s
     feedback, memory snapshots and learning proposals, and failure tracebacks. The
     runtime does not redact or encrypt them. Put durable logs on an
     access-controlled path; do not commit or publish them.
+
+Changed (TS yian): a `NodeStepRecord` is `{node_id, n, step}`. `n` numbers the node's steps
+from 1 across its starts (a resumed node's steps continue after its earlier starts'), so
+`node_id` + `n` names a step; a record whose `n` isn't the node's next is refused on append and
+on replay. Each `step` is a JSON object with a string `kind`:
+
+- `tool_attempt`: a TOOL's retry, `{event: "failed" | "started", attempt, ...}` (see
+  [Durable recovery](#durable-recovery-with-resume_flow)).
+- `llm_config`: a call-time AGENT's resolved config, `{effective_llm_config}`.
+- `model_call`: an AGENT's model call, written once the call returns and before anything acts
+  on its reply (before its tool calls run, and before an invalid reply fails the node):
+  `purpose` (`chat`, `structured_native` or `structured_fallback`), `model`, `request_sha256`,
+  `started_at` and `first_token_at` (record times; `first_token_at` is `null` before the first
+  event), `output` (the reply as a `yian.message.v1` message), `response_id`, `finish` (the
+  provider's finish reason, or `interrupted` for a reply a host interrupt cut) and `usage`
+  (`{input_tokens, output_tokens, cache_read_tokens, reasoning_tokens}`, a count `null` when
+  unreported; `null` without usage). A failed attempt is a `model_call` too, written whether or
+  not it is retried, with `output` (what arrived, or `null`), `usage` (what the provider
+  reported before the failure, or `null`), `error` (`{kind, message}`: a provider error's kind,
+  such as `rate_limit`, else the error's class; the message scrubbed of every credential the call
+  may have sent) and `retry_in` (the wait in seconds before the retry, `null` when it isn't
+  retried) in place of `response_id` and `finish`. A call a stop or abort cut writes nothing.
+  `request_sha256` is the SHA-256 of the request's messages, tools, tool choice, parallel tool
+  calls and output format, as `logJson` text, with the steers the AGENT read left out. Media
+  in a reply is never inline: its bytes are stored as `media/<sha256>.<ext>` beside the run's
+  log, `output` holds the file reference, and the request (and its digest) holds that form;
+  only the request sent to the provider has the bytes inline.
+- `tool_result`: one tool call's result, written as that call finishes (calls run together
+  write in finish order; the next request still lists results in call order) and before the
+  next model call: `call_id` (the id of the reply's `tool_call` part), `started_at`, `output`
+  and `is_error` (exactly the text and flag the model reads), and `closed: "skipped"` for a call
+  a host interrupt skipped (`started_at` `null`, `output` `"Not run: interrupted by the user."`,
+  `is_error` true). A call that threw, or whose result has no text, writes no result.
+
+A tool call's idempotency key (`ToolContext.callId`) is `<run id>/<node>/<n>/<index>`, `n` the
+reply's `model_call` step.
 
 ## Durable recovery with `resume_flow`
 
@@ -2686,19 +2722,9 @@ Changed (TS yian): there is no session memory, so nothing keeps a conversation b
 run log; a chat's history is the value a LOOP carries, recorded as node outputs. A steer an
 AGENT read before a crash is lost: the retried AGENT doesn't see it.
 
-Changed (TS yian): before each wait between an AGENT's model-call attempts (a
-transport retry under `YIAN_MODEL_RETRIES`), the node records a `NodeStepRecord`
-step `{"model_attempt": {"call": n, "attempt": k, "status": "failed", "error":
-{"kind": ..., "message": ...}, "partial": ..., "retry_in": s}}`. `call` numbers the
-node's model calls, chat and structured alike, from 1 in each node start; `attempt`
-is the attempt that failed; `error` holds the provider error's kind (`server`,
-`rate_limit`, `timeout`, ...) and its message, scrubbed of the credentials the call
-may have sent, as the node's failure is; `partial` is the `yian.message.v1`
-assistant message of what arrived before the failure, or `null` before the first
-event; and `retry_in` is the wait in seconds. A call that succeeds at once writes no
-step. The partial message never joins the model's history or the node's output. A
-resumed AGENT doesn't read these steps yet: it restarts, as above, and numbers its
-calls from 1 again.
+Changed (TS yian): an AGENT records each model call and each tool result as a node step (see
+[Authoritative run logs](#authoritative-run-logs)). A resumed AGENT doesn't read these steps
+yet: it restarts, as above, and its new steps are numbered after them.
 
 After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last
@@ -2826,7 +2852,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 13); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 14); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

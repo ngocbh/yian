@@ -76,7 +76,7 @@ import { ModelCallFinished } from "../../src/events.ts";
 import { NoAuth } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import type { EventStream } from "../../src/llm/events.ts";
-import { type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
+import { RouteModel } from "../../src/llm/executor.ts";
 import {
   Message,
   type Part,
@@ -97,9 +97,11 @@ import {
   isContractPath,
   OutputInvalidError,
 } from "../../src/nodes/agent/structured.ts";
+import { AgentSteps } from "../../src/nodes/agent/context.ts";
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
+import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { Type, TypeCheckError, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { PLAIN_FLOW, runWith } from "./run_state_fixtures.ts";
@@ -193,18 +195,23 @@ test("a provider error propagates uncorrected (Changed)", async () => {
   expect(model.requests).toHaveLength(1);
 });
 
-test("each structured attempt takes its own retry settings, so its transport retry knows its call", async () => {
+test("each structured call is written as a model_call step, a transport retry as a failed one first", async () => {
   install({ ...BUILTIN, modelRetries: 1 });
   const failure = new ProviderError("server", "upstream failed", { status: 500 });
   const model = scripted([text("bad json"), failure, text('{"value": 42}')]);
-  const retried: [number, number][] = [];
-  let calls = 0;
-  const retry = () => {
-    const call = ++calls;
-    return { scheduler: virtualScheduler(), onRetry: (info: RetryInfo) => void retried.push([call, info.attempt]) };
-  };
-  expect(await generateStructured(model, [], INT, { retries: 1, retry })).toBe(42n);
-  expect(retried).toEqual([[2, 1]]);
+  const recorded: ValueRecord[] = [];
+  const steps = new AgentSteps(new NodeSteps(1, [], (step) => void recorded.push(step)), () => 0, null, (error) => error);
+  const retry = { scheduler: virtualScheduler() };
+  expect(await generateStructured(model, [], INT, { retries: 1, retry, steps })).toBe(42n);
+  expect(recorded.map((step) => ("error" in step ? `failed ${(step["error"] as ValueRecord)["kind"]}` : "ok"))).toEqual([
+    "ok",
+    "failed server",
+    "ok",
+  ]);
+  // The correction makes the second call's request differ from the first; its retry repeats it.
+  const digests = recorded.map((step) => step["request_sha256"]);
+  expect(digests[1]).toBe(digests[2]);
+  expect(digests[0]).not.toBe(digests[1]);
   expect(model.requests).toHaveLength(3);
 });
 

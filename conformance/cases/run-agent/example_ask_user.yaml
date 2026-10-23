@@ -90,17 +90,20 @@ expect:
     - [pool_commit, __start__, {value: {request: Book me a table for dinner}}]
     - [node_succeeded, __start__, {commit: 6}]
     - [node_started, assistant]
+    - [node_step, assistant, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {options: [2 at 7 pm, 4 at 8 pm], question: "How many people, and at what time?"}, id: c1, name: ask_user, type: tool_call}], role: assistant}, purpose: chat, request_sha256: f83c506890a340140a33f0bfca980293a44c3a49bf2cd0390633936d1903c06b, response_id: null, usage: null}}]
+    - [node_step, assistant, {n: 2, step: {call_id: c1, is_error: false, kind: tool_result, output: 2 people at 7 pm}}]
+    - [node_step, assistant, {n: 3, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Book a table for 2 at 7 pm through the restaurant's site., type: text}], role: assistant}, purpose: chat, request_sha256: c2413beeb77d6cbaa180167212a7c7170c2d925b58fe6e429f7fdde1af01d013, response_id: null, usage: null}}]
     - [pool_commit, assistant, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
-    - [node_succeeded, assistant, {commit: 9}]
+    - [node_succeeded, assistant, {commit: 12}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
-    - [node_succeeded, __end__, {commit: 12}]
+    - [node_succeeded, __end__, {commit: 15}]
   # A model-requested call sets only `question` and `options` (docs/api.md, Blocking human
   # interaction); the other request fields are null and left out. <id:1> is the first model
   # call's exchange id.
   tool_calls:
     ask_user:
       - args: {question: "How many people, and at what time?", options: [2 at 7 pm, 4 at 8 pm]}
-        call_id: r1/assistant/<id:1>/0
+        call_id: r1/assistant/1/0
         attempt: 1
         node: assistant

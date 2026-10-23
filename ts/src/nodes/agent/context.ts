@@ -1,8 +1,9 @@
 /**
- * Process-local context for one AGENT invocation, and the run files its replies' media go to.
+ * Process-local context for one AGENT invocation, the steps it records, and the run files its
+ * replies' media go to.
  *
- * Knows about:   llm executor types, llm messages, llm_clients (connection, factory), memory
- *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys and
+ * Knows about:   events, llm errors, llm messages, llm_clients factory, memory contracts,
+ *                nodes/base, nodes/contracts, platform, skills, tools, typesys, node's crypto and
  *                node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
@@ -12,15 +13,16 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unli
 import { readFile, realpath } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
-import type { RetryInfo } from "../../llm/executor.ts";
-import { MediaPart, Message, type Part, Request } from "../../llm/messages.ts";
-import { scrubCallCredentials } from "../../llm_clients/connection.ts";
+import type { ModelCallPurpose } from "../../events.ts";
+import { ProviderError } from "../../llm/errors.ts";
+import { MediaPart, Message, NamedTool, type Part, Request, type Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { EvaluationTrace, MemoryContext } from "../../memory/contracts.ts";
 import type { Scheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
-import { FileRef, type Type } from "../../typesys/values.ts";
+import { type JsonObject, logJson } from "../../typesys/json.ts";
+import { FileRef, type Type, type ValueRecord } from "../../typesys/values.ts";
 import type { NodeCaps, Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 
@@ -98,40 +100,245 @@ export function sentCredentials(ctx: AgentRunContext): readonly string[] {
   }
 }
 
-/** How one model call retries: the clock and jitter of its waits, and what runs before each wait. */
+/** How one model call retries: the clock and jitter of its waits. */
 export interface RetrySettings {
   readonly scheduler?: Scheduler;
   readonly random?: () => number;
-  readonly onRetry?: (retry: RetryInfo) => void;
+}
+
+/** Return the retry settings of `ctx`'s model calls. */
+export function retrySettings(ctx: AgentRunContext): RetrySettings {
+  return { scheduler: ctx.scheduler, random: ctx.random };
+}
+
+/** The token counts a model call step records. */
+type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "reasoningTokens">;
+
+/** What a `model_call` step records of a call whose reply arrived. Times are epoch milliseconds. */
+export interface ModelCallFields {
+  readonly purpose: ModelCallPurpose;
+  readonly model: string;
+  /** The request's digest (`requestSha256`). */
+  readonly requestSha256: string;
+  /** When the call's last attempt started. */
+  readonly startedAt: number;
+  /** When that attempt's first event arrived; `null` before one did. */
+  readonly firstTokenAt: number | null;
+  /** The reply, its media in file form (`inlineToFile`). */
+  readonly output: Message;
+  readonly responseId: string | null;
+  /** The provider's finish reason, or `interrupted` for a reply a host interrupt cut. */
+  readonly finish: string | null;
+  readonly usage: UsageCounts | null;
+}
+
+/** What a `model_call` step records of a failed attempt. Times are epoch milliseconds. */
+export interface FailedCallFields {
+  readonly purpose: ModelCallPurpose;
+  readonly model: string;
+  readonly requestSha256: string;
+  readonly startedAt: number;
+  readonly firstTokenAt: number | null;
+  /** What arrived before the failure, or `null` before anything did. */
+  readonly output: Message | null;
+  /** The usage the provider reported before the failure, or `null`. */
+  readonly usage: UsageCounts | null;
+  /** Seconds until the retry, or `null` when the call is not retried. */
+  readonly retryIn: number | null;
+}
+
+/** What a `tool_result` step records of one tool call. */
+export interface ToolResultFields {
+  /** The id of the call's `tool_call` part. */
+  readonly callId: string;
+  /** When the call started (epoch milliseconds); `null` for a call that never ran. */
+  readonly startedAt: number | null;
+  /** The text the model reads, exactly as its `ToolResultPart` holds it. */
+  readonly output: string;
+  readonly isError: boolean;
+  /** Set only on a result yian wrote in place of running the call. */
+  readonly closed?: "skipped" | "interrupted";
 }
 
 /**
- * Return the retry settings of model call `call` (1-based within this start) of an invocation.
- *
- * With steps, `onRetry` records `{model_attempt: {call, attempt, status: "failed", error: {kind,
- * message}, partial, retry_in}}` for the failed attempt, with the error scrubbed of every
- * credential the call may have sent. `partial` is the `yian.message.v1` JSON of what arrived, or
- * `null` before the first event; `retry_in` is the wait in seconds. A resumed AGENT restarts and
- * never reads these steps.
+ * Writes one AGENT start's steps through the engine's `NodeSteps`, each as a JSON object with a
+ * `kind`: `model_call` for a model call that returned or an attempt that failed, `tool_result`
+ * for a tool call's result. Without engine steps (direct loop tests) it records nothing but still
+ * numbers the steps.
  */
-export function retrySettings(ctx: AgentRunContext, call: number): RetrySettings {
-  const { steps, scheduler, random } = ctx;
-  if (steps === undefined) return { scheduler, random };
-  const onRetry = (retry: RetryInfo): void => {
-    const error = scrubCallCredentials(retry.error, ctx.llmConfig, { env: ctx.models.env, sent: sentCredentials(ctx) });
-    steps.record({
-      kind: "model_attempt",
-      model_attempt: {
-        call: BigInt(call),
-        attempt: BigInt(retry.attempt),
-        status: "failed",
-        error: { kind: error.kind, message: error.message },
-        partial: retry.partial?.toJSON() ?? null,
-        retry_in: retry.retryIn,
+export class AgentSteps {
+  /** The run's folder, where reply media is stored; `null` without a log. */
+  readonly runDir: string | null;
+  readonly #steps: NodeSteps | undefined;
+  readonly #clock: () => number;
+  readonly #scrub: (error: unknown) => unknown;
+  #count = 0;
+
+  /**
+   * @param steps This start's engine steps, or `undefined` to record nothing.
+   * @param clock Epoch milliseconds, read for each recorded time.
+   * @param runDir The run's folder, or `null`.
+   * @param scrub Returns an error with every credential the call may have sent redacted.
+   */
+  constructor(
+    steps: NodeSteps | undefined,
+    clock: () => number,
+    runDir: string | null,
+    scrub: (error: unknown) => unknown,
+  ) {
+    this.#steps = steps;
+    this.#clock = clock;
+    this.runDir = runDir;
+    this.#scrub = scrub;
+  }
+
+  /** Return the clock's reading, in epoch milliseconds. */
+  now(): number {
+    return this.#clock();
+  }
+
+  /** Return the `n` the next step gets. */
+  nextN(): number {
+    return this.#steps?.nextN() ?? this.#count + 1;
+  }
+
+  /**
+   * Write a call whose reply arrived as a `model_call` step: `purpose`, `model`,
+   * `request_sha256`, `started_at`, `first_token_at`, `output` (`yian.message.v1`), `response_id`,
+   * `finish` and `usage`.
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  modelCall(call: ModelCallFields, options?: { settled?: boolean }): number {
+    return this.#record(
+      {
+        ...this.#callStep(call),
+        output: call.output.toJSON(),
+        response_id: call.responseId,
+        finish: call.finish,
+        usage: usageStep(call.usage),
       },
-    });
+      options,
+    );
+  }
+
+  /**
+   * Write a failed attempt as a `model_call` step: the fields `modelCall` writes up to
+   * `first_token_at`, `output` (what arrived, media stored as run files; `null` when nothing did
+   * or it can't be stored), `usage`, `error` (`{kind, message}`: a `ProviderError`'s kind, else
+   * the error's name; the message scrubbed) and `retry_in`.
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  failedModelCall(call: FailedCallFields, error: unknown, options?: { settled?: boolean }): number {
+    let output: JsonObject | null = null;
+    try {
+      output = call.output === null ? null : inlineToFile(call.output, this.runDir).toJSON();
+    } catch {
+      // Media that can't be stored must not replace the call's own error.
+    }
+    return this.#record(
+      {
+        ...this.#callStep(call),
+        output,
+        usage: usageStep(call.usage),
+        error: errorStep(this.#scrub(error)),
+        retry_in: call.retryIn,
+      },
+      options,
+    );
+  }
+
+  /**
+   * Write a tool call's result as a `tool_result` step: `call_id`, `started_at`, `output`,
+   * `is_error`, and `closed` when given.
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  toolResult(result: ToolResultFields, options?: { settled?: boolean }): number {
+    const step: ValueRecord = {
+      kind: "tool_result",
+      call_id: result.callId,
+      started_at: result.startedAt === null ? null : recordTime(result.startedAt),
+      output: result.output,
+      is_error: result.isError,
+    };
+    if (result.closed !== undefined) step["closed"] = result.closed;
+    return this.#record(step, options);
+  }
+
+  /** The fields every `model_call` step starts with. */
+  #callStep(call: ModelCallFields | FailedCallFields): ValueRecord {
+    return {
+      kind: "model_call",
+      purpose: call.purpose,
+      model: call.model,
+      request_sha256: call.requestSha256,
+      started_at: recordTime(call.startedAt),
+      first_token_at: call.firstTokenAt === null ? null : recordTime(call.firstTokenAt),
+    };
+  }
+
+  #record(step: ValueRecord, options: { settled?: boolean } | undefined): number {
+    if (this.#steps === undefined) return ++this.#count;
+    return this.#steps.record(step, options);
+  }
+}
+
+/** Return epoch milliseconds `ms` as a record time, such as `2026-10-20T14:02:11.123Z`. */
+function recordTime(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
+/** Return the recorded token counts of `usage` (ints; `null` where unreported), or `null`. */
+function usageStep(usage: UsageCounts | null): ValueRecord | null {
+  if (usage === null) return null;
+  const count = (value: number | null) => (value === null ? null : BigInt(value));
+  return {
+    input_tokens: count(usage.inputTokens),
+    output_tokens: count(usage.outputTokens),
+    cache_read_tokens: count(usage.cacheReadTokens),
+    reasoning_tokens: count(usage.reasoningTokens),
   };
-  return { scheduler, random, onRetry };
+}
+
+/** Return a failed call's recorded error: its kind and message, lone surrogates as `?`. */
+function errorStep(error: unknown): { kind: string; message: string } {
+  const kind = error instanceof ProviderError ? error.kind : error instanceof Error ? error.name : typeof error;
+  const message = error instanceof Error ? error.message : String(error);
+  return { kind: clean(kind), message: clean(message) };
+}
+
+/** Return `text` with each lone surrogate replaced by `?`, so it can be written as JSON. */
+function clean(text: string): string {
+  return text.replace(/\p{Cs}/gu, "?");
+}
+
+/**
+ * Return the digest a `model_call` step records for `request`: the SHA-256 of the `logJson` text
+ * (canonical layout; ints of any size, so a long int argument hashes) of its messages (`steers`
+ * left out, by identity), tools, tool choice, parallel tool calls and output format. Media is
+ * hashed in the form the request holds it, the file form for a reply.
+ */
+export function requestSha256(request: Request, steers: ReadonlySet<Message>): string {
+  const choice = request.toolChoice;
+  const format = request.outputFormat;
+  const json = {
+    messages: request.messages.filter((message) => !steers.has(message)).map((message) => message.toJSON()),
+    tools: request.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    })),
+    tool_choice: choice instanceof NamedTool ? { name: choice.name } : choice,
+    parallel_tool_calls: request.parallelToolCalls,
+    output_format: format === null ? null : { name: format.name, schema: format.schema, strict: format.strict },
+  };
+  return createHash("sha256").update(logJson(json), "utf8").digest("hex");
 }
 
 /** Unwind before starting another external effect once the host stopped the invocation. */

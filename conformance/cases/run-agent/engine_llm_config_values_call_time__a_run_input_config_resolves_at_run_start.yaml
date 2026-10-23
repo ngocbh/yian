@@ -74,19 +74,35 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-x
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: ok, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7ab958c0188bf3acf07b5575f5269d33d88bda758a5461de755905f02f23cab6
+        response_id: null
+        usage: null
   - - pool_commit
     - chat
     - value: ok
   - - node_succeeded
     - chat
-    - {commit: 9}
+    - {commit: 10}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: ok
   - - node_succeeded
     - __end__
-    - {commit: 12}
+    - {commit: 13}
   events:
   - [RunStarted]
   - - NodeStarted

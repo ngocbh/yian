@@ -319,10 +319,10 @@ Changed (TS yian): `read(version?)` returns `[text, version]`, and
 with a promise and `InMemoryMarkdownStore` answers at once; a host store may do either, and
 yian awaits. An unknown version, or stored text that isn't UTF-8, throws `RangeError`. Storage
 that can't be reached throws a Node system error, an `Error` with a string `code`: `ENOENT` for
-a missing parent directory, `EIO` when the lock fails. An error other than a `RangeError`, a
-`TypeError`, a Node system error or `MarkdownVersionMismatch` passes through profile memory
-unchanged; on restore, a `RangeError`, a `TypeError` or a Node system error becomes
-`profile.snapshot_unavailable`. Bad provenance throws `TypeError` or
+a missing parent directory, `EIO` when the lock fails. Profile memory maps a `RangeError`, a Node
+system error and `MarkdownVersionMismatch`, and on restore a `TypeError` too; any other error
+passes through it unchanged. On restore, a `RangeError`, a `TypeError` or a Node system error
+becomes `profile.snapshot_unavailable`. Bad provenance throws `TypeError` or
 `RangeError` naming `provenance`, and nothing is written. The document, the kept versions
 (`.<name>.versions/<sha256>.md`), and the write log are byte-compatible with Python yian's,
 so a profile directory written by Python opens in TS and continues. Each log line is exactly

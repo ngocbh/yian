@@ -1,0 +1,23 @@
+# A loop inside a loop's body, counting to four. The golden log pins the nested expansion.
+kind: run
+rules: [run-log]
+flow: |
+  id: nested
+  name: nested
+  defs:
+    bump_body:
+      input: {n: !int}
+      nodes:
+        bump: {kind: code, input: {n: "${input.n}"}, output: {n: int}, code: "return {n: inputs.n + 1}"}
+      output: {n: "${bump.output.n}"}
+    outer_body:
+      input: {n: !int}
+      nodes:
+        inner: {kind: loop, call: bump_body, input: {n: "${input.n}"}, times: 2}
+      output: {n: "${inner.output.n}"}
+  nodes:
+    outer: {kind: loop, call: outer_body, input: {n: 0}, times: 2}
+  output: ${outer.output.n}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: 4}

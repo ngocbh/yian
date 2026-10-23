@@ -593,6 +593,11 @@ For example:
 - In TOOL steps, `retry_in` is a float, and a `failed` step's error type goes through the
   error-class table.
 
+**Python reference.** The trace rules at tag `conformance-trace-python` are the last ones both
+implementations share. After that the TS trace shows the TS log as written; a shared case whose
+expectation changes is regenerated with `--write-expect` and gets `rules: [run-log]`, which the
+Python runner skips.
+
 **Placeholders.** Ids an implementation makes up are replaced by `<id:1>`, `<id:2>`, ...: a run id
 the case didn't give, and the values of `exchange_id`, `commit_id`, `mutation_id` and `note_id`
 fields. (This list grows only by fields no committed case holds yet.) The generated run id is the
@@ -638,6 +643,7 @@ A case lists in `rules` the TS-era rules its expectation depends on (design #736
 | `llm` | how the TS LLM layer builds requests |
 | `code` | TS CODE bodies and their failures |
 | `failure-codes` | decision 36's TS-only failure codes |
+| `run-log` | the TS run log redesign: the trace shows the TS log as written |
 
 ## Groups
 
@@ -694,7 +700,8 @@ outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only).
 also cuts each serial `run` case that expects `output`, isn't `pending`, and has no `host.models`,
 `host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it, and
 checks the invariants, plus the output and node outcomes when the case has no `host.human` or
-`host.jitter` and its tool scripts only return.
+`host.jitter` and its tool scripts only return. A resume adds records, so in those outcomes a
+capture source's `execution_seq` is compared by the kind and node of the record it names.
 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
@@ -705,7 +712,25 @@ the virtual clock, which starts at the real time; each line is then written agai
 own encoder, which gives back the line as written. When the TS log format changes, regenerate the
 golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
 change. Bun and Node write the same bytes. A golden log goes
-with a serial case that sets `run.run_id`, makes no random ids (no AGENT or memory), and holds no
-file paths; the error texts in it are a stub's or the runner's own (the stop's `conformance stop`).
+with a serial case that sets `run.run_id`, makes no random ids (no memory; an AGENT case only when
+its scripted replies give every tool call id), and holds no file paths; the error texts in it are
+a stub's or the runner's own (the stop's `conformance stop`).
 `--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`,
 `resume` and `backward` case instead of comparing it. The Python runner ignores golden logs.
+
+```bash
+cd ts && bun tests/conformance.ts --write-expect --group run-core      # regenerate a group's expectations
+cd ts && bun tests/conformance.ts --write-expect --case run-core/x     # or one case's
+```
+
+`--write-expect` reruns each selected `run`, `resume` and `backward` case and, for each of
+`trace`, `events`, `stream` and `tool_calls` that the case already has and whose computed value
+differs, writes the computed value back into `expect`, then adds `run-log` to `rules` (a new `rules`
+goes right after `kind`). It prints a `wrote <id>: <keys>` line for each case it changes. Values
+are written in the codec form above, after placeholders, so a float keeps its fraction (`2.0`), an
+int stays exact at any size, and a made-up id stays `<id:N>`. Only the lines of `rules` and
+`expect` change, and in them the parts that already held their value keep their text, comments
+included. It never writes `output`, `raises`, `flow` or `host`, or any other key: a case whose
+`output` or `raises` differs (or that fails another way) is reported as a failure and left as it
+is, and a `pending` case is never written. Review the diff like a golden log: every changed line
+holds only the change that made the expectation differ.

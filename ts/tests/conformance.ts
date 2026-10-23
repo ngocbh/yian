@@ -28,8 +28,8 @@ import { constants, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
-import type { YAMLMap } from "yaml";
+import { Document, isCollection, isMap, isNode, isScalar, isSeq, parseDocument, visit } from "yaml";
+import type { Node as YamlNode, YAMLMap } from "yaml";
 
 import {
   expressionTrees,
@@ -222,7 +222,7 @@ const ATTEMPT_LEFT_OUT_AT_1: ReadonlySet<string> = new Set([
 ]);
 const RULES: ReadonlySet<string> = new Set([
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
-  "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes",
+  "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes", "run-log",
 ]);
 // Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number
 // checks.
@@ -276,16 +276,14 @@ function isZero(value: Value | undefined): boolean {
   return value === 0n || value === 0 || value === false;
 }
 
+/** How a case file is parsed: YAML 1.2 core, ints as `bigint`, duplicate keys left to `checkKeys`. */
+const CASE_YAML = { version: "1.2", schema: "core", intAsBigInt: true, uniqueKeys: false } as const;
+
 /**
  * Return the case file `text` as YAML 1.2 core, untagged, with only text keys, each once.
  */
 export function readCase(text: string): Case {
-  const doc = parseDocument(text, {
-    version: "1.2",
-    schema: "core",
-    intAsBigInt: true,
-    uniqueKeys: false,
-  });
+  const doc = parseDocument(text, CASE_YAML);
   const error = doc.errors[0];
   if (error !== undefined) throw new Error(error.message);
   // YAML readers disagree on tags (`! 12` is text to some, `!!timestamp` a date), so a case
@@ -1135,6 +1133,11 @@ export interface CaseContext {
   golden?: string;
   /** Whether `--write-logs` asks a `run`, `resume` or `backward` case to write its golden log. */
   writeLogs?: boolean;
+  /**
+   * With `--write-expect`, where a `run`, `resume` or `backward` case puts each `REWRITTEN` result
+   * that differs from its `expect`, by name, instead of failing on it.
+   */
+  rewrites?: Map<string, unknown>;
 }
 
 /** Return the `Env` that reads the case's environment; a name that is not an own key is unset. */
@@ -1224,7 +1227,7 @@ async function runCase(
   case_: Case,
   kinds: Partial<Record<Kind, KindRunner>>,
   fixturesDir: string,
-  options: Pick<CaseContext, "crashSweep" | "golden" | "writeLogs"> = {},
+  options: Pick<CaseContext, "crashSweep" | "golden" | "writeLogs" | "rewrites"> = {},
 ): Promise<string | undefined> {
   for (const [section, key] of RESERVED) {
     if (Object.hasOwn(get(case_, section, {}) as Case, key)) {
@@ -1248,7 +1251,7 @@ async function runCase(
 
 const USAGE =
   "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-  "[--diagnostic-code CODE] [--crash-sweep] [--write-logs]";
+  "[--diagnostic-code CODE] [--crash-sweep] [--write-logs] [--write-expect]";
 
 /** What `main` reads cases from, runs them with and writes lines to. */
 export interface MainOptions {
@@ -1267,7 +1270,8 @@ export interface MainOptions {
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
  * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`,
  * which needs `--case`, writes each selected `run`, `resume` and `backward` case's golden log
- * (`goldenLog`).
+ * (`goldenLog`); `--write-expect` writes back each such passing case's `REWRITTEN` results that
+ * differ (`rewriteCase`) and reports a `wrote` line for it.
  */
 export async function main(
   argv: readonly string[],
@@ -1286,6 +1290,7 @@ export async function main(
   let flags: Partial<Record<"group" | "kind" | "case" | "rules" | "diagnostic-code", string[]>> & {
     "crash-sweep"?: boolean;
     "write-logs"?: boolean;
+    "write-expect"?: boolean;
   };
   try {
     flags = parseArgs({
@@ -1295,6 +1300,7 @@ export async function main(
         group: option, kind: option, case: option, rules: option, "diagnostic-code": option,
         "crash-sweep": { type: "boolean" },
         "write-logs": { type: "boolean" },
+        "write-expect": { type: "boolean" },
       },
     }).values;
   } catch {
@@ -1355,11 +1361,26 @@ export async function main(
     if ("unreadable" in entry) {
       failure = entry.unreadable;
     } else {
+      // A pending case's expectation is the one it should come to meet, so it is never written.
+      const rewrites =
+        flags["write-expect"] === true && !Object.hasOwn(entry.case_, "pending")
+          ? new Map<string, unknown>()
+          : undefined;
       failure = await runCase(entry.case_, kinds, fixturesDir, {
         crashSweep: flags["crash-sweep"] === true,
         golden: join(casesDir, `${entry.id}.log.jsonl`),
         writeLogs: flags["write-logs"] === true,
+        rewrites,
       });
+      if (failure === undefined && rewrites !== undefined && rewrites.size > 0) {
+        const path = join(casesDir, `${entry.id}.yaml`);
+        try {
+          writeFileSync(path, rewriteCase(readFileSync(path, "utf8"), rewrites));
+          write(`wrote ${entry.id}: ${[...rewrites.keys()].join(", ")}`);
+        } catch (error) {
+          failure = `--write-expect can't write expect back: ${failureText(error)}`;
+        }
+      }
       if (Object.hasOwn(entry.case_, "pending")) {
         if (failure !== undefined) {
           pending += 1;
@@ -2583,11 +2604,21 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   return { ...actual, ...caught, left };
 }
 
+/** The results `--write-expect` writes back. */
+const REWRITTEN: readonly string[] = ["trace", "events", "stream", "tool_calls"];
+/** The results that compare numbers by value: a run's events, stream and tool calls. */
+const BY_VALUE: ReadonlySet<string> = new Set(["events", "stream", "tool_calls"]);
+
 /**
  * Throw a `CaseFailure` unless the results in `actual` are the ones `expect` holds: the raised
- * error, or the output, which compares numbers by value for a success.
+ * error, or the output, which compares numbers by value for a success. With `rewrites`, each
+ * `REWRITTEN` result that differs goes there by name instead of failing.
  */
-function checkResults(expect: Case, actual: Record<string, unknown>): void {
+function checkResults(
+  expect: Case,
+  actual: Record<string, unknown>,
+  rewrites?: Map<string, unknown>,
+): void {
   if (Object.hasOwn(expect, "raises") && !Object.hasOwn(actual, "raises")) {
     const expected = str(get(expect["raises"] as Case, "class"));
     throw new CaseFailure(`expected ${expected} to be raised, but nothing was`);
@@ -2600,10 +2631,15 @@ function checkResults(expect: Case, actual: Record<string, unknown>): void {
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
   }
-  for (const name of ["trace", "events", "stream", "tool_calls", "backward", "memory"]) {
-    // Only a run's events, stream and tool calls compare numbers by value; the trace keeps kinds.
-    const byValue = ["events", "stream", "tool_calls"].includes(name);
-    if (Object.hasOwn(expect, name)) compare(name, actual[name], expect[name], { byValue });
+  for (const name of [...REWRITTEN, "backward", "memory"]) {
+    if (!Object.hasOwn(expect, name)) continue;
+    // The trace keeps kinds.
+    const byValue = BY_VALUE.has(name);
+    if (rewrites !== undefined && REWRITTEN.includes(name)) {
+      if (!same(actual[name], expect[name], { byValue })) rewrites.set(name, actual[name]);
+    } else {
+      compare(name, actual[name], expect[name], { byValue });
+    }
   }
   // Last: a leftover entry usually follows from a divergence the comparisons show.
   const left = actual["left"] as string[];
@@ -2782,6 +2818,34 @@ const OUTCOMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Return the node outcome entries of a run log's trace `entries`, each capture source's
+ * `execution_seq` replaced by the kind and node of the record it names: a learnable run's captures
+ * name a source's record by its seq, and a resume adds records, so a crash sweep compares the
+ * record instead.
+ */
+export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
+  const rename = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(rename);
+    if (!isMapping(value)) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "execution_seq" && typeof item === "bigint") {
+        // The trace has one entry per log line, and a record's seq is its line index.
+        const entry = entries[Number(item)];
+        if (entry === undefined) {
+          throw new CaseFailure(`a capture source names seq ${item}, which the log doesn't hold`);
+        }
+        value[key] = `${String(entry[0])} ${String(entry[1])}`;
+      } else {
+        rename(item);
+      }
+    }
+  };
+  const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
+  rename(kept);
+  return kept;
+}
+
+/**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
  * `pending`, with no `host.models`, `host.steering`, `host.memory` or `host.stop`.
  */
@@ -2802,7 +2866,8 @@ function sweepable(case_: Case): boolean {
  * the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
  * the run is resumed. The resume must end with a result whose invariants hold. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
- * also holds: the same output, and the same node outcome entries in the trace, in order.
+ * also holds: the same output, and the same node outcome entries in the trace, in order, with a
+ * capture's source named by its record's kind and node rather than its seq.
  */
 export async function crashSweep(
   case_: Case,
@@ -2829,7 +2894,7 @@ export async function crashSweep(
   const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
-    return trace(lines, flow).filter(([kind]) => OUTCOMES.has(kind as string));
+    return sourcesByRecord(trace(lines, flow));
   };
   const expected = outcomes(uncutLog);
   const count = readRunLog(uncutLog).length;
@@ -2864,11 +2929,186 @@ export async function crashSweep(
 /**
  * Run a `run` or `resume` case (whose first run `actualRun` cuts or stops and resumes): run the
  * flow and compare its results with `expect`; with `--crash-sweep`, an eligible case's crash sweep
- * (`crashSweep`) runs after.
+ * (`crashSweep`) runs after. With `ctx.rewrites`, the `REWRITTEN` results that differ go there
+ * instead of failing the case.
  */
 async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
-  checkResults(case_["expect"] as Case, await actualRun(case_, ctx));
+  checkResults(case_["expect"] as Case, await actualRun(case_, ctx), ctx.rewrites);
   if (ctx.crashSweep === true && sweepable(case_)) await crashSweep(case_, ctx);
+}
+
+// ---- --write-expect ----
+
+/** Return `value` in a case file's codec form: the inverse of `decode`. */
+function encode(value: Value): Value {
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    if (Number.isNaN(value)) throw new Error("NaN has no case form");
+    return { $float: value > 0 ? "inf" : "-inf" };
+  }
+  if (Array.isArray(value)) return value.map(encode);
+  if (!isMapping(value)) return value;
+  const record = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encode(item)]));
+  return codecMapping(value) ? { $record: record } : record;
+}
+
+/** Return whether `decode` reads the mapping `value` as something else: a `$float` or `$record`. */
+function codecMapping(value: Value): boolean {
+  if (!isMapping(value)) return false;
+  const names = Object.keys(value);
+  if (names.length !== 1) return false;
+  return names[0] === "$record" || (names[0] === "$float" && ["inf", "-inf"].includes(value["$float"] as string));
+}
+
+/**
+ * Return a new node holding `value` in case form: a float always with a fraction, and a
+ * collection in flow style when `flow` says so or it holds only scalars.
+ */
+function caseNode(doc: Document, value: Value, flow = false): YamlNode {
+  const node = doc.createNode(encode(value)) as YamlNode;
+  visit(node, {
+    Scalar(_, scalar) {
+      if (typeof scalar.value === "number") scalar.minFractionDigits = 1;
+    },
+    Map(_, map) {
+      map.flow = flow || map.items.every((pair) => isScalar(pair.value));
+    },
+    Seq(_, seq) {
+      seq.flow = flow || seq.items.every((item) => isScalar(item));
+    },
+  });
+  return node;
+}
+
+/** Return the case value a node holds, as `prepare` reads it; `null` for no node. */
+function held(doc: Document, node: unknown): Value {
+  return isNode(node) ? decode(node.toJS(doc, { maxAliasCount: -1 }) as Value) : null;
+}
+
+/**
+ * Return `node` changed to hold `value`, as `same` with `flags` reads it. Parts that already hold
+ * their value keep their nodes, so their style and comments stay: a mapping keeps its keys, in
+ * order, and a list the longest run of items that match in order. Other parts are new nodes.
+ */
+function updated(doc: Document, node: unknown, value: Value, flags: SameFlags): unknown {
+  if (same(held(doc, node), value, flags)) return node;
+  const raw = isNode(node) ? (node.toJS(doc, { maxAliasCount: -1 }) as Value) : null;
+  if (isMap(node) && isMapping(value) && !codecMapping(raw) && !codecMapping(value)) {
+    const keyOf = (pair: { key: unknown }) => (isScalar(pair.key) ? pair.key.value : pair.key);
+    node.items = node.items.filter((pair) => Object.hasOwn(value, keyOf(pair) as string));
+    for (const [name, item] of Object.entries(value)) {
+      const pair = node.items.find((old) => keyOf(old) === name);
+      if (pair === undefined) node.items.push(doc.createPair(name, caseNode(doc, item)));
+      else pair.value = updated(doc, pair.value, item, flags);
+    }
+    return node;
+  }
+  if (isSeq(node) && Array.isArray(value)) {
+    const olds = node.items;
+    const values = olds.map((old) => held(doc, old));
+    // `kept[i][j]`: how many items of `olds` from `i` match items of `value` from `j`, in order.
+    const kept = olds.map(() => new Array<number>(value.length + 1).fill(0));
+    kept.push(new Array<number>(value.length + 1).fill(0));
+    for (let i = olds.length - 1; i >= 0; i -= 1) {
+      for (let j = value.length - 1; j >= 0; j -= 1) {
+        kept[i]![j] = same(values[i], value[j], flags)
+          ? kept[i + 1]![j + 1]! + 1
+          : Math.max(kept[i + 1]![j]!, kept[i]![j + 1]!);
+      }
+    }
+    // A new item is in flow style when an old item is a flow collection holding a collection.
+    const flow = olds.some(
+      (old) =>
+        isCollection(old) &&
+        old.flow &&
+        old.items.some((inner) => isCollection(isMap(old) ? (inner as { value: unknown }).value : inner)),
+    );
+    const items: unknown[] = [];
+    let gone: unknown[] = [];
+    let i = 0;
+    let j = 0;
+    while (i < olds.length || j < value.length) {
+      if (i < olds.length && j < value.length && same(values[i], value[j], flags)) {
+        items.push(olds[i]);
+        gone = [];
+        i += 1;
+        j += 1;
+      } else if (j < value.length && (i === olds.length || kept[i]![j + 1]! > kept[i + 1]![j]!)) {
+        // Between two matches, old items are dropped first, so a new item takes the place of a
+        // dropped one, if any, and keeps what of its text still holds.
+        const old = gone.shift();
+        items.push(old === undefined ? caseNode(doc, value[j]!, flow) : updated(doc, old, value[j]!, flags));
+        j += 1;
+      } else {
+        gone.push(olds[i]);
+        i += 1;
+      }
+    }
+    node.items = items;
+    return node;
+  }
+  return caseNode(doc, value);
+}
+
+/**
+ * Return the `[start, end)` offsets in `text` of its top-level `key` and value: from the start of
+ * the key's line to the end of the value's last line. `undefined` when it has no such key.
+ */
+function section(text: string, key: string): [number, number] | undefined {
+  const pair = (parseDocument(text, CASE_YAML).contents as YAMLMap).items.find(
+    (item) => isScalar(item.key) && item.key.value === key,
+  );
+  if (pair === undefined) return undefined;
+  const start = text.lastIndexOf("\n", (pair.key as YamlNode).range![0] - 1) + 1;
+  const newline = text.indexOf("\n", (pair.value as YamlNode).range![1] - 1);
+  return [start, newline === -1 ? text.length : newline + 1];
+}
+
+/**
+ * Return the case file `text` with each result in `results` written into `expect` in case form
+ * (as `updated` changes it), and `run-log` added to its `rules`; a new `rules` goes right after
+ * `kind`. Only the lines of `rules` and `expect` change: they are cut from the whole file written
+ * again and put in place of the old ones, because the writer spells some other text (block scalar
+ * headers, for one) unlike the case.
+ */
+function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): string {
+  const doc = parseDocument(text, CASE_YAML);
+  const options = (indentSeq: boolean) => ({
+    lineWidth: 0, indentSeq, flowCollectionPadding: false, singleQuote: true, doubleQuotedAsJSON: true,
+  });
+  const cut = (written: string, key: string) => {
+    const [start, end] = section(written, key)!;
+    return written.slice(start, end);
+  };
+  // Cases indent a list under a key one way or the other; keep the way `expect` has.
+  const indentSeq = [false, true].find(
+    (indent) => cut(doc.toString(options(indent)), "expect") === cut(text, "expect"),
+  );
+  if (indentSeq === undefined) throw new CaseFailure("the writer doesn't reproduce its text");
+  for (const pair of (doc.get("expect") as YAMLMap).items) {
+    const name = (pair.key as { value: string }).value;
+    const value = results.get(name) as Value | undefined;
+    if (value !== undefined) pair.value = updated(doc, pair.value, value, { byValue: BY_VALUE.has(name) });
+  }
+  const rules = doc.get("rules");
+  if (!isSeq(rules)) {
+    const top = doc.contents as YAMLMap;
+    const kind = top.items.findIndex((pair) => isScalar(pair.key) && pair.key.value === "kind");
+    top.items.splice(kind + 1, 0, doc.createPair("rules", caseNode(doc, ["run-log"])));
+  } else if (!rules.items.some((item) => isScalar(item) && item.value === "run-log")) {
+    rules.add("run-log");
+  }
+  const written = doc.toString(options(indentSeq));
+  let result = text;
+  for (const key of ["expect", "rules"]) {
+    // A new key goes right after `kind`, which is one line.
+    const after = result.indexOf("\n", section(result, "kind")![0]) + 1;
+    const [start, end] = section(result, key) ?? [after, after];
+    result = result.slice(0, start) + cut(written, key) + result.slice(end);
+  }
+  if (!same(readCase(result), readCase(written))) {
+    throw new Error("rewriting the case changed more than its rules and expect");
+  }
+  return result;
 }
 
 // ---- resume ----

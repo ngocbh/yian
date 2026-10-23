@@ -1,0 +1,24 @@
+# A learnable loop whose body CALLs another def. The golden log pins the captures and seed
+# routes through a LOOP and a CALL.
+kind: run
+rules: [run-log]
+flow: |
+  id: count
+  name: count
+  defs:
+    add1:
+      input: {x: !int}
+      nodes:
+        inc: {kind: code, input: {x: "${input.x}"}, output: {y: int}, code: "return {y: inputs.x + 1}"}
+      output: {y: "${inc.output.y}"}
+    body:
+      input: {x: !int}
+      nodes:
+        step: {kind: call, call: add1, input: {x: "${input.x}"}}
+      output: {x: "${step.output.y}"}
+  nodes:
+    count: {kind: loop, call: body, input: {x: 0}, times: 2}
+  output: ${count.output.x}
+run: {run_id: r1, num_workers: 0, learnable: true}
+expect:
+  output: {status: succeeded, output: 2}

@@ -404,16 +404,17 @@ console.log(store.selection()?.model);
 ```
 
 - `LLMConfig.fromHost(data)` checks a JSON `llm_config` through the host intake `runFlow` uses
-  and throws `ValidationError` (a `RangeError` with `issues`). Its messages never hold a value, but
-  they name record keys as written, at any depth (an unknown key, a block field, a header name),
-  so a host that must not echo input names shows its own fixed text. `LLM_CONFIG_KEYS` holds the
-  top-level keys.
+  and throws `ValidationError` (a `RangeError` with `issues`), or `TypeCheckError` (a `RangeError`,
+  not exported) for a value that isn't a yian value, such as NaN. Its messages never hold a value,
+  but they name record keys as written, at any depth (an unknown key, a block field, a header
+  name), so a host that must not echo input names shows its own fixed text. `LLM_CONFIG_KEYS`
+  holds the top-level keys.
 - `listModels(provider, { apiKey, baseUrl, timeout, headers, organization, project, signal,
   scheduler, request })` resolves to the model ids the provider's host offers, sorted and without
   duplicates, or `null` for `azure`, which has no listing. It reads no environment, so a host can
-  try a key before it saves it. Every failure is a `ModelListError` with a short fixed message
-  (`HTTP 401`, `timed out`, ...) and no `cause`; its `status` is the HTTP status of an `HTTP
-  <status>` failure, else `null`.
+  try a key before it saves it. A `signal` stop rejects with `signal.reason`; every other failure
+  is a `ModelListError` with a short fixed message (`HTTP 401`, `timed out`, ...) and no `cause`;
+  its `status` is the HTTP status of an `HTTP <status>` failure, else `null`.
 - `new AuthStore(path?, options?)` is the private saved-login file: `path`, else `YIAN_AUTH_FILE`,
   else `~/.config/yian/auth.json` (under `XDG_CONFIG_HOME` when set). `selection(provider?)`
   returns the provider's nonsecret `ProviderSelection`, or the default's, or `null`; `read()`
@@ -425,8 +426,8 @@ console.log(store.selection()?.model);
   subscription: `deviceLogin(displayCode, { timeoutMs })` and `browserLogin(openUrl, {
   awaitCallback, timeoutMs })` resolve to `OAuthCredentials`, `refresh(credentials)` renews them,
   and `subscriptionModels(credentials, { clientVersion })` lists the subscription's models. A
-  failure throws `AuthError`, whose `status` is the HTTP status of a failed authentication request,
-  else `null`.
+  failed request or login throws `AuthError`, whose `status` is the HTTP status of a failed
+  authentication request, else `null`.
 - One `AuthRequest`, `(method, url, { headers, timeoutMs, jsonBody, form, signal })` resolving to an
   `HttpResponse(status, data)`, serves as both `OpenAIAuth`'s and `listModels`' `request`
   (`listModels` also passes `bodyLimit` and `scheduler`). Unset, both use yian's sender, which

@@ -428,6 +428,8 @@ console.log(store.selection()?.model);
   organization, project, makeDefault })` commits an `ApiKeyCredentials`, an `OAuthCredentials` or
   `null` together with its selection. `credentials(provider, credentialId, { refresh })` returns
   the saved credentials, refreshing an expiring subscription token under the store's lock.
+  `delete()` removes the whole store under that lock, so it waits for a refresh in flight, and
+  keeps the lock file; with no store it does nothing.
 - `new OpenAIAuth({ request, scheduler, signal, requestTimeoutMs })` signs in to a ChatGPT
   subscription: `deviceLogin(displayCode, { timeoutMs })` and `browserLogin(openUrl, {
   awaitCallback, timeoutMs })` resolve to `OAuthCredentials`, `refresh(credentials)` renews them,

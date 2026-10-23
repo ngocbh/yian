@@ -551,7 +551,10 @@ Most are just the functional model (above) made enforceable:
   values and START inputs right after `run_started` (applied at once; a log cut
   before the START inputs isn't resumable), and a node's output before the
   `node_succeeded` that names its seq; the success applies it, and a resume drops
-  an orphan commit so the node reruns.
+  an orphan commit so the node reruns. `RunState.producers` maps each pool name
+  to the seq of the accepted `pool_commit` that last wrote it (pruned with the
+  pool, rebuilt by replay); a `derived` node (START, END, LOOP, CALL, MAP) gets an
+  in-memory input route from it in a run with no retained trace.
 - **Defaults are read once and recorded** — every predefined default and limit is an
   entry in `yian.defaults` (`docs/defaults.md`), overridable by `YIAN_<NAME>`.
   `current()` reads the environment once per process; the CLI callback, `load_flow`,

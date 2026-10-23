@@ -33,7 +33,7 @@ import {
   RunSucceeded,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { SourceRef, sameSource } from "../expr/lineage.ts";
+import { ResolvedValue, SourceRef, sameSource } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
   EvaluationEvidence,
@@ -64,6 +64,7 @@ import {
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
+  fieldOf,
   isRecord,
   jsTypeName,
   normalizeTypedFiles,
@@ -415,6 +416,50 @@ export interface PendingCommit {
   readonly key: string;
   /** The value's canonical typed wire text. */
   readonly valueJson: string;
+}
+
+/**
+ * Pair one lookup's value and presence in `pool` with the commit that wrote it, as
+ * `RetainedTrace.resolve` pairs them from the retained trace, but with the seq of the name's
+ * accepted `PoolCommitRecord` (`producers`) as its source, so a run without a trace can build a
+ * node's input route.
+ *
+ * `<id>.output...` reads `<id>`, `input...` the START's value and `system.<key>` a system value;
+ * anything else is a miss.
+ *
+ * @throws ExpressionError when a dotted segment of `path` is empty.
+ */
+export function resolveFromPool(
+  path: string,
+  pool: VariablePool,
+  producers: ReadonlyMap<string, number>,
+  runId: string,
+): ResolvedValue {
+  const parts = path.trim().split(".");
+  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
+  const [head, ...rest] = parts as [string, ...string[]];
+  let name: string;
+  let projection: string[];
+  let typed: TypedValue | undefined;
+  if (pool.store.has(head) && rest[0] === "output") {
+    [name, projection, typed] = [head, rest.slice(1), pool.store.get(head)];
+  } else if (head === "input" && rest.length) {
+    [name, projection, typed] = [pool.startId, rest, pool.store.get(pool.startId)];
+  } else if (head === "system" && rest.length) {
+    // A system value is read whole, as the trace and the pool read it.
+    [name, projection, typed] = [`${SYSTEM_PREFIX}${rest[0]}`, [], pool.system.get(rest[0]!)];
+  } else {
+    return new ResolvedValue(null, false);
+  }
+  if (typed === undefined) return new ResolvedValue(null, false);
+  let value = typed.toObject();
+  for (const part of projection) {
+    const [present, next] = fieldOf(value, part);
+    if (!present) return new ResolvedValue(null, false);
+    value = next;
+  }
+  const seq = producers.get(name);
+  return new ResolvedValue(value, true, seq === undefined ? null : new SourceRef(runId, seq, projection));
 }
 
 /**

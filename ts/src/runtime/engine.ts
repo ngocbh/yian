@@ -20,6 +20,7 @@ import { type Failure, type FailureCode, type OriginRef, reprText } from "../dia
 import { NodeAttemptResumed, type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
+import type { SourceResolver } from "../nodes/binding.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
@@ -50,6 +51,7 @@ import {
   preparePoolCommit,
   prepareRunStopped,
   RunState,
+  resolveFromPool,
 } from "./state.ts";
 import { captureBindings } from "./trace.ts";
 
@@ -515,6 +517,17 @@ export class FlowEngine {
   async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream } = this;
     const trace = state.trace;
+    const node = state.flow.nodes.get(nodeId)!;
+    // A derived node's input route names the commits its binding read in every run; without a
+    // trace it comes from the pool and the producer index, stays in memory with the outcome and
+    // is dropped after the commit.
+    const derived = node.derived;
+    const sourceResolver: SourceResolver | null =
+      trace !== null
+        ? (path) => trace.resolve(path)
+        : derived
+          ? (path) => resolveFromPool(path, state.pool, state.producers, state.runId!)
+          : null;
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
     // signal die with the node instead of piling up on the long-lived run signal.
     const runSignal = this.#controller.signal;
@@ -523,15 +536,15 @@ export class FlowEngine {
     const relay = (): void => nodeController.abort(runSignal.reason);
     runSignal.addEventListener("abort", relay, { once: true });
     try {
-      return await evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
+      return await evalNode(node, state.flow, state.pool, {
         wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
         signal: nodeController.signal,
         emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
         emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
         captureEvidence: state.learnable,
-        captureBindings: state.learnable,
+        captureBindings: state.learnable || derived,
         effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
-        sourceResolver: trace === null ? null : (path) => trace.resolve(path),
+        sourceResolver,
         memoryContextOpener: this.memoryContextOpener,
         tools: this.tools,
         skills: this.skills,

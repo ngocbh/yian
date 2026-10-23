@@ -17,8 +17,10 @@ import { join } from "node:path";
 import { buildGrow } from "../../src/compile/expand.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { SourceRef } from "../../src/expr/lineage.ts";
+import { RunSucceeded } from "../../src/events.ts";
+import type { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
+import { type BindingCapture, BindingCollector } from "../../src/nodes/binding.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
@@ -26,7 +28,13 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { replayRunLog, runFlow } from "../../src/run.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
-import { MemoryRunLog, readRunLog, type RecordEnvelope, type RunRecord } from "../../src/runtime/log.ts";
+import {
+  MemoryRunLog,
+  NodeStartedRecord,
+  readRunLog,
+  type RecordEnvelope,
+  type RunRecord,
+} from "../../src/runtime/log.ts";
 import type { RunState } from "../../src/runtime/state.ts";
 import { crashAfter, NO_ENV, startedRun } from "./run_state_fixtures.ts";
 
@@ -254,7 +262,7 @@ test.each([
   expect(live.size).toBe(records.length - first);
   for (const [seq, expected] of live) {
     const replayed = replayRunLog(loaded, MemoryRunLog.fromRecords(records.slice(0, seq + 1)));
-    expect([seq, entries(replayed)]).toEqual([seq, expected]);
+    expect<unknown>([seq, entries(replayed)]).toEqual([seq, expected]);
   }
 }, 60_000);
 
@@ -276,7 +284,7 @@ output: \${count.output.x}
 test("a 200-iteration non-learnable loop keeps no trace and a bounded index", async () => {
   const { state, records, live } = await liveRun(counter(200), { look: (state) => state.producers.size });
   expect(state.trace).toBeNull();
-  expect(state.result?.output).toBe(200n);
+  expect(state.result).toEqual(new RunSucceeded({ output: 200n }));
   // The index after each body expansion, in iteration order.
   const sizes = records
     .filter(({ kind, payload }) => kind === "node_expanded" && /^count(~\d+)?$/.test(payload["spawner_id"] as string))
@@ -285,3 +293,173 @@ test("a 200-iteration non-learnable loop keeps no trace and a bounded index", as
   expect(sizes[199]).toBe(sizes[9]!);
   expect(state.producers.size).toBe(state.pool.store.size + state.pool.system.size);
 }, 60_000);
+
+/** A loop inside a loop's body, counting to four. */
+const NESTED = `
+id: nested
+name: nested
+defs:
+  bump_body:
+    input: {n: !int}
+    nodes:
+      bump: {kind: code, input: {n: "\${input.n}"}, output: {n: int}, code: "return {n: inputs.n + 1}"}
+    output: {n: "\${bump.output.n}"}
+  outer_body:
+    input: {n: !int}
+    nodes:
+      inner: {kind: loop, call: bump_body, input: {n: "\${input.n}"}, times: 2}
+    output: {n: "\${inner.output.n}"}
+nodes:
+  outer: {kind: loop, call: outer_body, input: {n: 0}, times: 2}
+output: \${outer.output.n}
+`;
+
+/** A chat loop whose turn END appends to the history with \`+\` and to the log with a template. */
+const CHAT = `
+id: chat
+name: chat
+typedefs:
+  Msg: {role: str, text: str}
+defs:
+  turn:
+    input: {history: !list(Msg), log: !str}
+    nodes:
+      ask: {kind: code, input: {log: "\${input.log}"}, output: str, code: "return 'q'"}
+      reply: {kind: code, input: {history: "\${input.history}", message: "\${ask.output}"}, output: str, code: "return 'a'"}
+    output:
+      history: \${input.history + [Msg(role="user", text=ask.output), Msg(role="assistant", text=reply.output)]}
+      log: "\${input.log}\\nUser: \${ask.output}\\nAssistant: \${reply.output}"
+nodes:
+  chat: {kind: loop, call: turn, input: {history: [], log: ""}, times: 3}
+output: \${chat.output.log}
+`;
+
+/** The source leaves of `route`, its children and its snapshot. */
+function leaves(route: ValueRoute, found: SourceRef[] = []): SourceRef[] {
+  if (route.source !== null) found.push(route.source);
+  for (const child of route.children) leaves(child, found);
+  if (route.snapshot !== null) leaves(route.snapshot, found);
+  return found;
+}
+
+/** The source leaves of a binding capture's route and of each per-item capture's. */
+const captureLeaves = (capture: BindingCapture): SourceRef[] => [
+  ...leaves(capture.route),
+  ...capture.items.flatMap(([, item]) => captureLeaves(item)),
+];
+
+/** One node evaluation that captured its bindings, and the producer index when it ran. */
+interface Captured {
+  nodeId: string;
+  derived: boolean;
+  capture: BindingCapture;
+  producers: ReadonlyMap<string, number>;
+}
+
+/**
+ * Run `text` serially, collecting every evaluation's binding capture by node, and the derived
+ * nodes started, in start order.
+ */
+async function capturedRun(
+  text: string,
+  options: { inputs?: Record<string, unknown>; learnable?: boolean } = {},
+): Promise<{ captured: Captured[]; derivedStarts: string[]; records: readonly RecordEnvelope[]; state: RunState }> {
+  const loaded = await load(text);
+  const log = new MemoryRunLog("r1");
+  const state = startedRun(loaded, log, options);
+  const derivedStarts: string[] = [];
+  const append = log.append.bind(log);
+  log.append = (record: RunRecord) => {
+    if (record instanceof NodeStartedRecord && state.flow.nodes.get(record.nodeId)!.derived) {
+      derivedStarts.push(record.nodeId);
+    }
+    return append(record);
+  };
+  const captured: Captured[] = [];
+  const freeze = BindingCollector.prototype.freeze;
+  let depth = 0;
+  // Each evaluation freezes its collector once, and a MAP's per-item collectors inside it.
+  const spy = spyOn(BindingCollector.prototype, "freeze").mockImplementation(function (this: BindingCollector) {
+    depth += 1;
+    try {
+      const capture = freeze.call(this);
+      if (depth === 1) {
+        // A serial run evaluates one node at a time, the one in flight.
+        const [nodeId] = state.inFlight;
+        const node = state.flow.nodes.get(nodeId!)!;
+        captured.push({ nodeId: nodeId!, derived: node.derived, capture, producers: new Map(state.producers) });
+      }
+      return capture;
+    } finally {
+      depth -= 1;
+    }
+  });
+  try {
+    await new FlowEngine(state, log, { growBuilder: buildGrow, numWorkers: 0 }).run();
+  } finally {
+    spy.mockRestore();
+  }
+  expect(state.result).toBeInstanceOf(RunSucceeded);
+  return { captured, derivedStarts, records: log.records(), state };
+}
+
+/** The pool name a non-learnable leaf names: the key of the commit at its seq. */
+const commitName = (records: readonly RecordEnvelope[], leaf: SourceRef): string => {
+  expect(records[leaf.executionSeq]!.kind).toBe("pool_commit");
+  return records[leaf.executionSeq]!.payload["key"] as string;
+};
+
+/**
+ * The pool name a learnable leaf names: the key of the commit its node's success accepted after
+ * the start at its seq; seq zero is the run's inputs, under the START's id.
+ */
+const startName = (records: readonly RecordEnvelope[], leaf: SourceRef): string => {
+  if (leaf.executionSeq === 0) return StartNode.ID;
+  const started = records[leaf.executionSeq]!;
+  expect(started.kind).toBe("node_started");
+  const success = records.find(
+    ({ kind, seq, payload }) =>
+      kind === "node_succeeded" && seq > started.seq && payload["node_id"] === started.payload["node_id"],
+  )!;
+  return records[Number(success.payload["commit"])]!.payload["key"] as string;
+};
+
+/** Each captured node's sorted read names, by node id in evaluation order. */
+const readNames = (captured: readonly Captured[], name: (leaf: SourceRef) => string) =>
+  captured.map(({ nodeId, capture }) => [nodeId, [...new Set(captureLeaves(capture).map(name))].sort()] as const);
+
+test.each([
+  ["a CALL in a loop", CALL_IN_LOOP, {}],
+  ["a MAP", DOUBLES, { xs: [1n, 2n, 3n] }],
+  ["a nested loop", NESTED, {}],
+  ["a chat appending with + and a template", CHAT, {}],
+] as const)("a derived node's in-memory route names the commits its binding read: %s", async (_label, text, inputs) => {
+  const plain = await capturedRun(text, { inputs });
+  expect(plain.state.trace).toBeNull();
+  // Only derived nodes capture, each once per start.
+  expect(plain.captured.every(({ derived }) => derived)).toBe(true);
+  expect(plain.captured.map(({ nodeId }) => nodeId)).toEqual(plain.derivedStarts);
+  expect(plain.captured.length).toBeGreaterThan(3);
+  for (const { capture, producers } of plain.captured) {
+    for (const leaf of captureLeaves(capture)) {
+      expect(leaf.runId).toBe("r1");
+      expect(producers.get(commitName(plain.records, leaf))).toBe(leaf.executionSeq);
+    }
+  }
+  const learnable = await capturedRun(text, { inputs, learnable: true });
+  const learned = learnable.captured.filter(({ derived }) => derived);
+  expect(readNames(plain.captured, (leaf) => commitName(plain.records, leaf))).toEqual(
+    readNames(learned, (leaf) => startName(learnable.records, leaf)),
+  );
+}, 60_000);
+
+test("a derived node's route names exactly the pool names its binding reads", async () => {
+  const { captured, records } = await capturedRun(CALL_IN_LOOP);
+  const names = new Map(readNames(captured, (leaf) => commitName(records, leaf)));
+  expect(names.get(StartNode.ID)).toEqual([]);
+  expect(names.get("count")).toEqual([]);
+  expect(names.get("count#0/step")).toEqual(["count#0/__start__"]);
+  expect(names.get("count#0/step/__end__")).toEqual(["count#0/step/inc"]);
+  expect(names.get("count#0/__end__")).toEqual(["count#0/step"]);
+  expect(names.get("count~1")).toEqual(["count#0/__end__"]);
+});

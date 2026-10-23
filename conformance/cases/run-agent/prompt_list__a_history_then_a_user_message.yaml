@@ -43,7 +43,7 @@ flow: |
 inputs:
   history:
   - {role: user, text: Hi}
-  - {role: assistant, text: Hello! How can I help?}
+  - {role: assistant, text: 'Hello! How can I help?'}
   message: What is 2 + 2?
 run: {run_id: r1, num_workers: 0}
 host:
@@ -84,6 +84,6 @@ expect:
     output:
       history:
       - {role: user, text: Hi}
-      - {role: assistant, text: Hello! How can I help?}
-      - {role: user, text: What is 2 + 2?}
+      - {role: assistant, text: 'Hello! How can I help?'}
+      - {role: user, text: 'What is 2 + 2?'}
       - {role: assistant, text: '4'}

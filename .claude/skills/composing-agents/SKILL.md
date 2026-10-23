@@ -563,7 +563,8 @@ unforced tool instead, and still validates and retries the reply. A range such a
 and is still checked on the reply. Use a downstream `code`
 node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
-otherwise it is a load error at the value.
+otherwise it is a load error at the value. TS yian only: it may also be a list of messages
+(see the chat pattern under `loop`).
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
 call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
 load error.

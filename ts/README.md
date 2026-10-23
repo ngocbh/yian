@@ -449,6 +449,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/cli.md]: https://github.com/ngocbh/yian/blob/main/docs/cli.md
 [docs/defaults.md]: https://github.com/ngocbh/yian/blob/main/docs/defaults.md
 [docs/syntax.md]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md
+[docs/syntax.md#a-list-prompt]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md#a-list-prompt
 [docs/syntax.md#code--tool--the-other-leaves]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md#code--tool--the-other-leaves
 [docs/typing.md#two-constructors-infer-vs-check]: https://github.com/ngocbh/yian/blob/main/docs/typing.md#two-constructors-infer-vs-check
 [docs/typing.md#variablepool--the-runs-typed-value-store]: https://github.com/ngocbh/yian/blob/main/docs/typing.md#variablepool--the-runs-typed-value-store
@@ -750,6 +751,19 @@ Node 22, and so does every unit test; a change keeps both green.
   unsafe call runs alone. Changed (TS yian): there is no memory transcript, so the model reads only
   this start's messages and nothing is recorded into a memory (Python's `nodes/agent/memory.py`
   records each call into a session memory's turn and summarizes old turns).
+- Changed (TS yian): an AGENT `prompt:` may be a list of messages (see [A list
+  prompt][docs/syntax.md#a-list-prompt]). `AgentNode.prompt` is the template text or a
+  `PromptItem[]` (`{role: "user" | "assistant", text}` or `{splice: <name>}`); compose reads the
+  list and ranges each item at `siteKey("field", "prompt[<i>]")`. `forward` renders it into
+  `AgentRunContext.messages` (a text prompt is one user message) and `promptText`, the last
+  message's text, which recall and evidence read; the loop sends `[system, ...ctx.messages]`. A
+  chat carries its history as a LOOP field and splices it before the new user message:
+
+  ```yaml
+  prompt:
+    - ${history}          # a !list(Msg) input, Msg = {role: Literal(user, assistant), text: str}
+    - user: ${message}
+  ```
 - Before each wait between model-call attempts, an AGENT with `caps.steps` records a
   `model_attempt` step (`retrySettings` in `src/nodes/agent/context.ts`): its calls are numbered
   from 1 per node start, chat and structured alike, and the error is scrubbed as the node's failure
@@ -791,8 +805,9 @@ Node 22, and so does every unit test; a change keeps both green.
 - Changed (TS yian): no session memory; carry history as a LOOP field. A `session` memory, on a
   flow or an AGENT, is a load error ("session memory was removed; carry the history as a loop
   field"), and so is a `MemoryDecl` of type `session` built in code. An AGENT's model reads only
-  its own start's messages: the system prompt with the recalled memory sections, the prompt, then
-  its steers, replies and tool results. There is no memory transcript, no `history_summary` model
+  its own start's messages: the system prompt with the recalled memory sections, the prompt's
+  messages (a list prompt can splice the carried history), then its steers, replies and tool
+  results. There is no memory transcript, no `history_summary` model
   call and no `YIAN_SESSION_*` setting.
 - `src/memory/contracts.ts` holds the memory identities that compile records (`DeclSite`,
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check

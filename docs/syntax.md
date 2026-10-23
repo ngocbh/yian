@@ -1674,8 +1674,8 @@ classify:
     Answer with exactly one of: positive, neutral, negative.
 ```
 
-`prompt:` must be text. A value YAML reads as a number, boolean, date, list, or
-mapping is a load error at that value; quote it:
+`prompt:` must be text or a list of messages (see [A list prompt](#a-list-prompt)). A value
+YAML reads as a number, boolean, date, or mapping is a load error at that value; quote it:
 
 ```
 node 'classify' (kind=agent): `prompt:` must be text, but YAML read it as an integer; put it in quotes
@@ -1841,6 +1841,62 @@ extract:
 
 A node can pin its own provider/model; otherwise the process defaults snapshotted
 when the run initializes apply (see [Installation](installation.md)).
+
+#### A list prompt
+
+Changed (TS yian): an AGENT `prompt:` may be a list of messages. A chat flow sends its history
+as real turns, so a user can't forge an assistant turn by typing one, and providers can cache
+the conversation prefix:
+
+```yaml
+typedefs:
+  Msg:
+    role: Literal(user, assistant)
+    text: str
+defs:
+  respond:
+    input:
+      history: !list(Msg)
+      message: !str
+    nodes:
+      reply:
+        kind: agent
+        input:
+          history: ${input.history}
+          message: ${input.message}
+        output: str
+        system_prompt: You are a helpful conversational assistant.
+        prompt:
+          - ${history}          # a message or a list of messages, spliced in order
+          - user: ${message}    # one message; its text is a template, as a text prompt
+    output:
+      history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+```
+
+The node outputs only the new turn; the def's output binding appends both turns to the
+history, so a LOOP can carry it.
+
+- Each item is either `${name}` alone, naming one of the node's inputs or variables, or a
+  one-key `user:` or `assistant:` mapping whose text is a template with the same rules as a text
+  `prompt:`.
+- A message is any record with `role` (`user` or `assistant`) and `text` (`str`). The flow
+  declares the type; yian has no built-in one. Only `role` and `text` are sent; other fields are
+  ignored. Messages hold text only, not tool calls or media.
+- The request is the system message, then the rendered list in order. A text `prompt:` means a
+  one-item list, `[user: <text>]`, and sends the same request as before.
+- These are load errors, each at its item: an item of another shape ("a prompt list item is
+  `${name}` or `user:`/`assistant:` text"), a `system:` item (use `system_prompt:`), a last item
+  that is an `assistant:` message, a `${name}` naming no input or variable, and a `${name}`
+  whose declared type can't hold messages (it must be a record with `role` and `text: str`, a
+  list of those, `object`, `list(object)` or `Any`). An empty list is a load error at
+  `prompt:`.
+- At run time the node fails, before any model call, when a spliced value isn't a message or a
+  list of messages, or the rendered list is empty or doesn't end with a `user` message.
+- Memory recall and evidence read the last message's text as the prompt. The render capture
+  (and so AGENT backward) holds the list as JSON text: the authored items as the template, the
+  `{role, text}` messages as the rendered prompt.
+- A list prompt goes into the flow's identity as its item list; a text prompt's identity is
+  unchanged.
 
 #### `llm_config` — the model-selection cascade
 

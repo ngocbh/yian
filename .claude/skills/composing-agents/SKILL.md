@@ -1199,6 +1199,32 @@ node and transcript fold return the same record. The body's output is
 Typed exit is flow-owned — a host must not intercept it — while terminal EOF may be
 normalized to `/exit`. See [`templates/chat.yaml`](templates/chat.yaml).
 
+TS yian only: carry the history as a list of messages and send it as real turns with a list
+`prompt:` (see [A list prompt](../../../docs/syntax.md#a-list-prompt)). The AGENT outputs only
+the new reply; the def's output binding appends both turns, so a user can't forge an
+`Assistant:` turn and the provider can cache the prefix:
+```yaml
+typedefs:
+  Msg: {role: "Literal(user, assistant)", text: str}   # any record with role and text: str
+defs:
+  respond:
+    input: {history: !list(Msg), message: !str}
+    nodes:
+      reply:
+        kind: agent
+        input: {history: "${input.history}", message: "${input.message}"}
+        output: str
+        system_prompt: You are a helpful conversational assistant.
+        prompt:
+          - ${history}          # a message or a list of messages, spliced in order
+          - user: ${message}    # one message; text is a template (`assistant:` too, not last)
+    output:
+      history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+```
+A `system:` item, a last `assistant:` item, an empty list, or a spliced input whose type
+can't hold messages (`str`) fails at load; a spliced value that isn't messages, or a rendered
+list not ending with `user`, fails the node.
+
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:
 [x]` also **co-skips** the dependent if `x` skipped; `runs_after: [x]` orders only

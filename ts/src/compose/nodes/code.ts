@@ -179,6 +179,8 @@ export interface CodeCheckOptions {
   seen?: Set<object>;
   /** Checks one child flow of a node; `visit` checks it in place. `visit` when absent. */
   child?: (flow: CheckedFlow, visit: (flow: CheckedFlow) => Promise<void>) => Promise<void>;
+  /** The real path a CODE reference's file must resolve inside; `null` or absent confines nothing. */
+  codeRoot?: string | null;
 }
 
 /**
@@ -193,7 +195,7 @@ export interface CodeCheckOptions {
 export async function checkCodeNode(node: CodeNode, options: CodeCheckOptions): Promise<void> {
   const { diagnostics, resolveOrigin } = options;
   try {
-    await node.check();
+    await node.check({ codeRoot: options.codeRoot ?? null });
   } catch (error) {
     const origin = selectInlineCodeOrigin(error instanceof TypeStripError ? error.line : null, {
       codeOrigin: node.codeOrigin,

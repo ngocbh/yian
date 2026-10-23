@@ -2,6 +2,9 @@
  * TS-only: a loaded flow keeps the text of every flow file the loader read, and `run_started`
  * records it, with the skills, the tool specs, the yian version and the parent run; resume
  * compiles the recorded flow, never the files on disk.
+ *
+ * TS-only too: `loadFlowSource` with `codeRoot` checks every recorded file's CODE references, a
+ * host child's included, against it.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -20,7 +23,7 @@ import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { mcpServer } from "../../src/tools/mcp.ts";
-import { handChild } from "./../compose/declarations.ts";
+import { handChild, loadErrorAsync } from "./../compose/declarations.ts";
 import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
 import { crashAfter, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
@@ -322,6 +325,63 @@ test("a flow built in code, or loaded over one, has no source", async () => {
     baseDir: dir,
   });
   expect(over.source).toBeNull();
+});
+
+/** A flow `id` taking `q` whose CODE node runs `ref`. */
+const codeFlow = (id: string, ref: string) =>
+  `id: ${id}\nname: ${id}\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ${ref}\n` +
+  "    input:\n      q: ${input.q}\n    output: str\noutput: ${up.output}\n";
+
+test("loadFlowSource with codeRoot refuses a recorded file whose CODE reference resolves outside it", async () => {
+  const dir = freshDir("code-root");
+  const other = freshDir("code-out");
+  writeTree(other, { "h.ts": UP });
+  symlinkSync(join(other, "h.ts"), join(dir, "link.ts"));
+  const loaded = await loadFlow(codeFlow("root", "./link.ts:up"), {
+    baseDir: dir,
+    searchPaths: [dir],
+    sourceLabel: "flow.yaml",
+  });
+
+  const error = await loadErrorAsync(loadFlowSource(loaded.source!, { codeRoot: dir }));
+  expect(error.message).toEndWith(`outside the code root '${realpathSync(dir)}'`);
+  expect((await loadFlowSource(loaded.source!, { codeRoot: tmp })).compiled.flowId).toBe("root");
+});
+
+test("loadFlowSource with codeRoot checks a recorded child file outside flow.dir", async () => {
+  const dir = freshDir("code-root");
+  const other = freshDir("code-out");
+  writeTree(other, { "child.yaml": codeFlow("child", "./h.ts:up"), "h.ts": UP });
+  const ref = `../${basename(other)}/child`;
+  const loaded = await loadFlow(caller("root", "child", ref), {
+    baseDir: dir,
+    searchPaths: [dir],
+    sourceLabel: "flow.yaml",
+  });
+  const source = loaded.source!;
+  expect(Object.keys(source.files).sort()).toEqual([`${ref}.yaml`, "flow.yaml"]);
+
+  const error = await loadErrorAsync(loadFlowSource(source, { codeRoot: dir }));
+  expect(error.message).toEndWith(`outside the code root '${realpathSync(dir)}'`);
+  expect((await loadFlowSource(source, { codeRoot: tmp })).compiled.flowId).toBe("root");
+});
+
+test("a host child loads with codeRoot on disk, but its recorded file is checked by loadFlowSource", async () => {
+  const dir = freshDir("code-root");
+  const other = freshDir("code-out");
+  writeTree(other, { "child.yaml": codeFlow("child", "./h.ts:up"), "h.ts": UP });
+  const childResolver = async () =>
+    loadFlow(readFileSync(join(other, "child.yaml"), "utf8"), { baseDir: other, sourceLabel: "child.yaml" });
+
+  const loaded = await loadFlow(caller("root", "child", "child"), {
+    childResolver,
+    baseDir: dir,
+    sourceLabel: "flow.yaml",
+    codeRoot: dir,
+  });
+
+  const error = await loadErrorAsync(loadFlowSource(loaded.source!, { codeRoot: dir }));
+  expect(error.message).toEndWith(`outside the code root '${realpathSync(dir)}'`);
 });
 
 // ---------- the run start ----------

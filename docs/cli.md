@@ -158,7 +158,7 @@ including under `--quiet`. The file becomes authoritative once runtime
 initialization durably commits `RunStarted`:
 
 ```console
-# fresh log: ~/.yian/runs/<run_id>.jsonl
+# fresh log: ~/.yian/runs/<run_id>.jsonl (TS yian: <run_id>/log.jsonl)
 yian run flow.yaml --input topic=climate
 
 # choose another new path (it must not already exist)

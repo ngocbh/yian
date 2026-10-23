@@ -2822,10 +2822,10 @@ place.
 Changed (TS yian): a run gets a folder of its own. Fresh `yian run FLOW` writes
 `~/.yian/runs/<run_id>/log.jsonl`, making the run's folder with mode `0700`. A library
 host gets the same layout under its own runs folder from `runLogPath(runsDir, runId)`
-(`@ngocbh/yian/run`), which makes `<runsDir>/<runId>` and returns its `log.jsonl`
-path. A run's folder is the folder that holds its log, and the files the run writes
-beside the log (today its lock file) go only there, so a host that passes a `log`
-path of its own keeps one run per folder.
+(`@ngocbh/yian/run`), which makes the new folder `<runsDir>/<runId>` (an existing one
+is refused) and returns its `log.jsonl` path. A run's folder is the folder that holds its log, and the files the run writes
+beside the log (today its lock file) go only there. A host that passes a `log` path
+of its own must keep one run per folder; Yian doesn't check it.
 
 ## Blocking human interaction
 

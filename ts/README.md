@@ -199,9 +199,10 @@ error.
 Each run gets a folder of its own: a run's folder is the folder that holds its `log`, and the files
 the run writes beside the log (today the writer's lock, `<log>.lock`) go only there. Pass
 `log: runLogPath(runsDir, runId)` with the same `runId` to get `<runsDir>/<runId>/log.jsonl`;
-`runLogPath` makes the run's folder with mode 0700 (the runs folder too, when missing), creates no
-file, and throws a `RangeError` for a run id that isn't one folder name. A host that passes a log
-path of its own keeps one run per folder. The CLI uses `~/.yian/runs`.
+`runLogPath` makes the new run folder with mode 0700 (the runs folder too, when missing), creates
+no file, throws `EEXIST` when anything already holds the run folder's path, and throws a
+`RangeError` for a run id that isn't one folder name. A host that passes a `log` path of its own
+must keep one run per folder; Yian doesn't check it. The CLI uses `~/.yian/runs`.
 
 ### `RunResult`
 

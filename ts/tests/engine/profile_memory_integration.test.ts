@@ -20,8 +20,8 @@
  * after its write, a host failure that rejects `backward` (Python raises `SystemExit`).
  *
  * New (TS only): a host `MarkdownStore` whose versions are git blob ids, through the package root's
- * `ProfileMemory`: the round trip, the `run_started` snapshot, where resume reads the recorded
- * version, and a store that dropped it.
+ * `ProfileMemory`: the round trip, the `run_started` snapshot, the read of the recorded version
+ * by a resumed run's backward, and a store that dropped it.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -496,7 +496,7 @@ test("the run started snapshot is a reference and a hash, never the text", async
   expect(first).not.toContain("Works on reefs");
 });
 
-test("a resumed finished runs backward asks the host store for the recorded blob version", async () => {
+test("backward after resuming a finished run asks the host store for the recorded blob version", async () => {
   const store = new BlobStore();
   await store.write(SEED, { baseVersion: store.current });
   const flow = await loadFlow(CHAT);

@@ -165,7 +165,7 @@ test.each(OLD_LOGS)("resume fails clearly and leaves the log (%s)", async (_id, 
   const { flow, path, output } = await makeLog();
   const before = readFileSync(path);
 
-  const result = await resumeFlow(await loadFlow(flow, { env }), { log: path, env });
+  const result = await resumeFlow({ log: path, env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");

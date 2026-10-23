@@ -24,7 +24,10 @@
  * `RangeError` where Python raises `ValueError`, and the missing-group message lists the run's
  * groups as JSON text (`["toolbox","workspace"]`, decision 7).
  *
- * Changed: `test_bad_tools_fail_before_the_log_is_created`: TS tools are `FunctionTool`s, tool
+ * Changed: `test_resume_uses_the_group_contents_passed_to_resume`: the run records the specs of
+ * the tools its AGENTs grant, so a resume whose group holds another tool is refused, and the
+ * resume uses a tool of the same spec that acts differently (Python resumes with another tool).
+ * `test_bad_tools_fail_before_the_log_is_created`: TS tools are `FunctionTool`s, tool
  * groups (arrays of them) and the `ask_user` handler (a function), so a list, a non-function
  * `ask_user` entry and an empty key are each refused with a `TypeError` before the log exists, as
  * in Python, and a bare function under any other key is refused too.
@@ -215,7 +218,7 @@ test("resumeFlow asks through the handler passed to resume", async () => {
   );
   expect(error).toBe(stop);
 
-  const resumed = await resumeFlow(flow, {
+  const resumed = await resumeFlow({
     log: path,
     env: hostEnv(dir),
     tools: { whoami: fixed("whoami", () => "unused"), ask_user: answerWithQuestion },
@@ -395,14 +398,20 @@ test("resume uses the group contents passed to resume", async () => {
   expect(error).toBe(stop);
 
   const refused = await rejected(
-    resumeFlow(flow, { log: path, env: hostEnv(dir), models: chats, tools: { workspace: [], company: [] } }),
+    resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: { workspace: [], company: [] } }),
   );
   expect(refused).toBeInstanceOf(RangeError);
   expect((refused as Error).message).toContain("unknown tool or group 'toolbox'");
-  const resumed = await resumeFlow(flow, { log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("new")]) });
+  // The recorded tool specs are the run's, so a group holding another tool is refused too.
+  const other = await rejected(
+    resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("new")]) }),
+  );
+  expect(other).toBeInstanceOf(RangeError);
+  expect((other as Error).message).toBe("resume refused: tools.new isn't recorded; the run started without it");
+  const resumed = await resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("old")]) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(resumed.output).toBe('new:x via ["new","ws","co"]');
+  expect(resumed.output).toBe('old:x via ["old","ws","co"]');
 });
 
 const NESTED_GROUPS_FLOW = `

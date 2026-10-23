@@ -201,7 +201,7 @@ test("resuming a record with a set retired key fails before appending", async ()
   recordTemperature(log);
   const before = readFileSync(log);
 
-  const error = await rejected(resumeFlow(await loadFlow(FLOW), { log, env }));
+  const error = await rejected(resumeFlow({ log, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   const message = (error as RangeError).message;
@@ -225,7 +225,7 @@ test("a finished record with a set retired key still replays", async () => {
   recordTemperature(log);
   const before = readFileSync(log);
 
-  const replayed = await resumeFlow(await loadFlow(FLOW), { log, env });
+  const replayed = await resumeFlow({ log, env });
 
   expect(replayed.status).toBe("succeeded");
   expect(readFileSync(log).equals(before)).toBe(true);

@@ -63,7 +63,7 @@ async function run(text: string): Promise<RunResult> {
   const flow = await loadFlow(text, { env });
   const log = join(dir, `run-${runs++}.jsonl`);
   const result = await runFlow(flow, { n: 4999n }, { env, log });
-  const resumed = await resumeFlow(flow, { log, env });
+  const resumed = await resumeFlow({ log, env });
   expect(resumed.status).toBe(result.status);
   if (result.failure !== null) expect(resumed.failure!.message).toBe(result.failure.message);
   else expect(resumed.output).toEqual(result.output);

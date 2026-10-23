@@ -210,7 +210,7 @@ test("resuming a completed any run returns the same output", async () => {
   const first = await straightRun(path);
   const before = readFileSync(path);
 
-  const resumed = await resumeFlow(await loadFlow(ANY_FLOW, { env }), { log: path, env, tools: { ask_user: answer } });
+  const resumed = await resumeFlow({ log: path, env, tools: { ask_user: answer } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");
@@ -238,7 +238,7 @@ test("a node after resume reads replayed any values unchanged", async () => {
   expect(caught).toBe(interruption);
   expect(committed(path)).toStrictEqual(committed(straight));
 
-  const resumed = await resumeFlow(await loadFlow(ANY_FLOW, { env }), { log: path, env, tools: { ask_user: answer } });
+  const resumed = await resumeFlow({ log: path, env, tools: { ask_user: answer } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");

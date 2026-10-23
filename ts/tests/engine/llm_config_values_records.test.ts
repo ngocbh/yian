@@ -97,7 +97,7 @@ async function run(text: string, options: RunFlowOptions = {}) {
 /** Resume `log` of `text` in the file's environment. */
 async function resume(text: string, log: string, options: Omit<ResumeFlowOptions, "log"> = {}) {
   const runEnv = options.env ?? env;
-  return resumeFlow(await loadFlow(text, { env: runEnv }), { ...options, log, env: runEnv });
+  return resumeFlow({ ...options, log, env: runEnv });
 }
 
 /** The records of the JSONL log at `path`. */

@@ -262,7 +262,7 @@ test("a host stop leaves the run resumable", async () => {
   );
   expect(error).toBe(stop);
 
-  const resumed = await resumeFlow(flow, { log: path, env, tools: { place_order: returning(7) } });
+  const resumed = await resumeFlow({ log: path, env, tools: { place_order: returning(7) } });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe(7n);
@@ -580,7 +580,7 @@ test("resume rejects an unknown tool id before appending", async () => {
   expect(error).toBe(stop);
   const before = readFileSync(path);
 
-  const message = await refused(resumeFlow(flow, { log: path, env, tools: {} }));
+  const message = await refused(resumeFlow({ log: path, env, tools: {} }));
 
   expect(message).toEndWith(
     "TOOL node 'place' names tool 'place_order', which isn't in this run's tools; known tools: []",
@@ -954,12 +954,12 @@ test("resume checks tool types before appending", async () => {
   const lines = readFileSync(path, "utf8");
 
   const message = await refused(
-    resumeFlow(flow, { log: path, env, tools: { first_step: firstStep, place_order: placeStr } }),
+    resumeFlow({ log: path, env, tools: { first_step: firstStep, place_order: placeStr } }),
   );
   expect(message).toMatch(/input 'qty'.*takes str, but the binding is 5 \(int\)$/);
   expect(readFileSync(path, "utf8")).toBe(lines);
 
-  const resumed = await resumeFlow(flow, { log: path, env, tools: { first_step: firstStep, place_order: placeInt } });
+  const resumed = await resumeFlow({ log: path, env, tools: { first_step: firstStep, place_order: placeInt } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("placed 5");
 });
@@ -970,7 +970,7 @@ test("a finished run resumes without the tool type check", async () => {
   const finished = await runFlow(flow, {}, { log: path, env, tools: { first_step: firstStep, place_order: placeInt } });
   expect(finished.status, finished.failure?.message).toBe("succeeded");
 
-  const replayed = await resumeFlow(flow, { log: path, env, tools: { first_step: firstStep, place_order: placeStr } });
+  const replayed = await resumeFlow({ log: path, env, tools: { first_step: firstStep, place_order: placeStr } });
 
   expect(replayed.status, replayed.failure?.message).toBe("succeeded");
   expect(replayed.output).toBe("placed 5");

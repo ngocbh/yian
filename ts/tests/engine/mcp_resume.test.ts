@@ -87,7 +87,7 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
 
 /** `resumeFlow` in `hostEnv(dir)`. */
 function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow(flow, { env: hostEnv(dir), ...options });
+  return resumeFlow({ env: hostEnv(dir), ...options });
 }
 
 /** An unopened fake server over stdio, its pid appended to a fresh marker file. */

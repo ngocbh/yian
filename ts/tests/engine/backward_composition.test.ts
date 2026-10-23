@@ -99,7 +99,7 @@ const run = (flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
   runFlow(flow, inputs, { env, ...options });
 
 /** `resumeFlow` in the file's env. */
-const resume = (flow: ComposedFlow, options: ResumeFlowOptions) => resumeFlow(flow, { env, ...options });
+const resume = (flow: ComposedFlow, options: ResumeFlowOptions) => resumeFlow({ env, ...options });
 
 /** An AGENT backward reply: Python's `_reply`, empty channels unless `channels` sets them. */
 function feedbackReply(channels: Record<string, unknown> = {}): Response {

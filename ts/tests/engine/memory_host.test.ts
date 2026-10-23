@@ -1079,7 +1079,7 @@ function stopAfterStart(event: unknown): void {
 /** `resumeFlow` in an environment holding only the test's credential store. */
 function resume(flow: ComposedFlow, log: string, memory: unknown) {
   const env = new Map([["YIAN_AUTH_FILE", path.join(tmp, "auth.json")]]);
-  return resumeFlow(flow, { log, memory: memory as Map<string, Memory>, env: (name) => env.get(name) });
+  return resumeFlow({ log, memory: memory as Map<string, Memory>, env: (name) => env.get(name) });
 }
 
 test("resume checks registry types too", async () => {

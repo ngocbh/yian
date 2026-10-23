@@ -2528,7 +2528,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       events.length = 0;
       chunks.length = 0;
       const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
-      start = (memory) => resumeFlow(flow, { ...resumeArguments, ...hooks, memory });
+      start = (memory) => resumeFlow({ ...resumeArguments, ...hooks, memory });
     }
   }
   let outcomes: Value[] = [];
@@ -2799,7 +2799,7 @@ async function checkInvariants(
     compare(`interrupted counts${at}`, counted, expected.interruptedAttempts);
   }
   const before = readFileSync(log);
-  const reopened = await resumeFlow(flow, { log, ...options });
+  const reopened = await resumeFlow({ log, ...options });
   if (!readFileSync(log).equals(before)) fail("resuming the finished log changed it");
   if (reopened.status !== finished) {
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
@@ -2909,7 +2909,7 @@ export async function crashSweep(
     try {
       // The cut run's `context`, which the log doesn't hold, as a `resume` case passes it again.
       const context = args.context === undefined ? {} : { context: args.context };
-      resumed = await resumeFlow(flow, { ...hooks, ...context });
+      resumed = await resumeFlow({ ...hooks, ...context });
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }

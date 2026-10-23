@@ -161,7 +161,8 @@
  *
  * Ported through `loadFlow`, `runFlow` and `resumeFlow`:
  * `test_resume_rejects_a_flow_with_an_edited_literal`, the mismatch a `RangeError` where Python
- * raises a `ValueError`.
+ * raises a `ValueError`; resume compiles the flow the run recorded, so the literal is edited in
+ * the recorded text (Python passes the edited flow).
  *
  * Not ported: `test_flow_fingerprint_distinguishes_yaml_literal_types`,
  * `test_flow_fingerprint_supports_binary_nonfinite_and_non_string_mapping_keys` and
@@ -219,6 +220,7 @@ import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
+import { editRecordedFlow } from "./run_state_fixtures.ts";
 
 const HEX = /^[0-9a-f]{64}$/;
 
@@ -2807,8 +2809,10 @@ test.each([
     const log = join(dir, "run.jsonl");
     await runFlow(await loadFlow(resumeLiteralFlow(before[0], before[1])), {}, { log, numWorkers: 0 });
     truncateAfterNodeSuccess(log, "first");
+    // Resume compiles the recorded flow, so the edit is to the recorded text.
+    editRecordedFlow(log, () => resumeLiteralFlow(after[0], after[1]));
 
-    const resumed = resumeFlow(await loadFlow(resumeLiteralFlow(after[0], after[1])), { log, numWorkers: 0 });
+    const resumed = resumeFlow({ log, numWorkers: 0 });
     await expect(resumed).rejects.toThrow(RangeError);
     await expect(resumed).rejects.toThrow("flow fingerprint mismatch");
   } finally {

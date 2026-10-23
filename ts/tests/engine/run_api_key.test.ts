@@ -149,7 +149,7 @@ test("resume sends the key passed again and records none of it", async () => {
   const path = join(fresh(), "run.jsonl");
   await interruptedRun(path, VLLM);
   const models = recording(env, chatText("ok"));
-  const result = await resumeFlow(await loadFlow(FLOW, { env }), {
+  const result = await resumeFlow({
     log: path,
     onEvent: (event) => void events.push(event),
     apiKey: SENTINEL,
@@ -171,7 +171,7 @@ describe("resume without the key fails instead of reading the environment", () =
     await interruptedRun(path, llmConfig);
     const keyed = envWith({ [name]: "sk-environment-key" });
     const models = recording(keyed, chatText("ok"));
-    const result = await resumeFlow(await loadFlow(FLOW, { env: keyed }), { log: path, models, env: keyed });
+    const result = await resumeFlow({ log: path, models, env: keyed });
     expect(result.status).toBe("failed");
     expect(result.failure!.message).toContain("api_key");
     expect(models.requests).toEqual([]);
@@ -185,7 +185,7 @@ test("resume ignores a key for a run started without one", async () => {
   const keyed = envWith({ VLLM_API_KEY: "sk-environment-key" });
   await interruptedRun(path, { provider: "vllm", model: "served-model" }, keyed);
   const models = recording(keyed, chatText("ok"));
-  const result = await resumeFlow(await loadFlow(FLOW, { env: keyed }), {
+  const result = await resumeFlow({
     log: path,
     onEvent: (event) => void events.push(event),
     apiKey: SENTINEL,
@@ -243,7 +243,7 @@ describe("a key that marks no agent does not block replay", () => {
     expect(result.status, result.failure?.message).toBe("succeeded");
     const retained = await result.backward("Be brief.");
     expect(retained.status, retained.failure?.message).toBe("succeeded");
-    const recovered = await resumeFlow(await loadFlow(source, { env }), { log: path, onEvent, apiKey: SENTINEL, models, env });
+    const recovered = await resumeFlow({ log: path, onEvent, apiKey: SENTINEL, models, env });
     expect(recovered.status, recovered.failure?.message).toBe("succeeded");
     const outcome = await recovered.backward("Be brief.");
     expect(outcome.status, outcome.failure?.message).toBe("succeeded");
@@ -275,7 +275,7 @@ test("backward sends the key and records none of it", async () => {
     [SENTINEL, null],
     [null, SENTINEL],
   ]) {
-    const recovered = await resumeFlow(await loadFlow(FLOW, { env }), { log: path, onEvent, apiKey, models, env });
+    const recovered = await resumeFlow({ log: path, onEvent, apiKey, models, env });
     const outcome = await recovered.backward("Be brief.", { apiKey: key });
     expect(outcome.status, outcome.failure?.message).toBe("succeeded");
     expectHidden(path, [recovered, outcome], [SENTINEL]);
@@ -294,7 +294,7 @@ test("backward without the key fails clearly", async () => {
   await runFlow(await loadFlow(FLOW, { env }), {}, { log: path, onEvent, learnable: true, llmConfig: VLLM, models, env });
   const keyed = envWith({ VLLM_API_KEY: "sk-environment-key" });
   const keyedModels = recording(keyed, chatText(NO_FEEDBACK));
-  const recovered = await resumeFlow(await loadFlow(FLOW, { env: keyed }), {
+  const recovered = await resumeFlow({
     log: path,
     onEvent,
     models: keyedModels,
@@ -382,7 +382,7 @@ test("an empty key is rejected", async () => {
   expect(error.message).toContain("api_key");
   const path = join(fresh(), "run.jsonl");
   await interruptedRun(path, VLLM, keyed);
-  error = (await rejected(resumeFlow(await loadFlow(FLOW, { env: keyed }), { log: path, apiKey: "", env: keyed }))) as Error;
+  error = (await rejected(resumeFlow({ log: path, apiKey: "", env: keyed }))) as Error;
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toContain("api_key");
 });
@@ -640,7 +640,7 @@ describe("grown agents resume with the key and record none of it", () => {
     expect((error as Error).message).toContain("grown body");
     const keyed = envWith({ VLLM_API_KEY: "sk-environment-key" });
     const models = recording(keyed, recordCalls());
-    const result = await resumeFlow(await loadFlow(source, { env: keyed }), {
+    const result = await resumeFlow({
       log: path,
       onEvent: (event) => void events.push(event),
       apiKey: SENTINEL,
@@ -669,14 +669,14 @@ describe("grown agents backward with the key and record none of it", () => {
       env,
     });
     expect(result.status, result.failure?.message).toBe("succeeded");
-    const recovered = await resumeFlow(await loadFlow(source, { env }), { log: path, onEvent, apiKey: SENTINEL, models, env });
+    const recovered = await resumeFlow({ log: path, onEvent, apiKey: SENTINEL, models, env });
     const outcome = await recovered.backward("Review.");
     expect(outcome.status, outcome.failure?.message).toBe("succeeded");
     // Without the key, the grown agents fail instead of reading the environment.
     const keyed = envWith({ VLLM_API_KEY: "sk-environment-key" });
     const keyedModels = recording(keyed, recordCalls(chatText(NO_FEEDBACK)));
     const keyless = await (
-      await resumeFlow(await loadFlow(source, { env: keyed }), { log: path, models: keyedModels, env: keyed })
+      await resumeFlow({ log: path, models: keyedModels, env: keyed })
     ).backward("Review.");
     expect(keyless.status).toBe("failed");
     expect(keyedModels.requests).toEqual([]);

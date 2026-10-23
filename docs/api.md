@@ -2501,6 +2501,23 @@ the log is locked. `env` is the environment the resume reads connections, creden
 are for tests, as for `runFlow`. Header names that aren't the recorded ones, a negative
 `numWorkers` and an invalid log prefix raise `RangeError`, not `ValueError`.
 
+Changed (TS yian): `resumeFlow({ log, flow, ... })` takes no flow argument. It compiles the
+flow files `RunStarted` recorded, never the files on disk now, so an edited flow file means a
+new run; the fingerprint is still checked, against the compiled recorded flow. The load reads
+the recorded text through `recordedFiles(dir, files)`, a `SourceFiles` reader `loadFlow` takes
+as `files` (the disk's is `diskFiles()`); a CODE reference's file is not recorded and must
+still be there. `loadRecordedFlow(log, env)` (from `yian/run`) compiles a log's recorded flow
+the same way without locking it, for a host that needs the flow before it resumes (the CLI
+reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
+resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`
+for a run with recorded files raises `RangeError`. For an unfinished run, once the MCP servers
+are open and before anything is appended, the description and parameters of each tool an AGENT
+grants, and the description and instructions of each granted skill, must be the recorded ones:
+a difference, a missing one or an added one raises `RangeError`
+(`resume refused: tools.lookup description differs from the recorded one`); a finished log
+isn't checked. A log another yian version started resumes with a warning naming both versions,
+through `warn`.
+
 Recovery locks the existing file before reading it and validates the complete
 record prefix; a file whose complete lines are not a valid run log is rejected and
 left unchanged. Only then does it durably truncate any bytes after its final

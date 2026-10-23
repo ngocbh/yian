@@ -1476,8 +1476,8 @@ async function runLogged(name: string, text: string, options: RunFlowOptions = {
 }
 
 /** Resume the log at `path` over `text` in `hostEnv`. */
-async function resumeText(text: string, path: string, options: Omit<Parameters<typeof resumeFlow>[1], "log"> = {}) {
-  return resumeFlow(await loadConformanceFlow(text), { log: path, env: hostEnv(dir), ...options });
+async function resumeText(text: string, path: string, options: Omit<Parameters<typeof resumeFlow>[0], "log"> = {}) {
+  return resumeFlow({ log: path, env: hostEnv(dir), ...options });
 }
 
 test("resuming a run with a typed list of files succeeds", async () => {

@@ -238,7 +238,7 @@ test("test_log_resume_restores_into_a_private_graph", async () => {
 
   const fresh = await loadFlow(BLOCKING_CALL);
   const original = graphSnapshot(fresh.compiled);
-  const resumed = await resumeFlow(fresh, { log: path, env: hostEnv(dir), tools: { ask_user: () => "yes" } });
+  const resumed = await resumeFlow({ log: path, env: hostEnv(dir), tools: { ask_user: () => "yes" } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");

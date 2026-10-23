@@ -137,7 +137,7 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
 
 /** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
 function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow(flow, { env: hostEnv(dir), ...options });
+  return resumeFlow({ env: hostEnv(dir), ...options });
 }
 
 /** A `Map` serving the memory key `test` with `backend`. */
@@ -909,7 +909,7 @@ const backend = new FakeMemory(${phase === "learn" ? "{ learnOutcomes: [block] }
 ${phase === "commit" ? "FakeSession.prototype.commit = block;" : ""}
 const flow = await loadFlow(${JSON.stringify(WITH_MEMORY)});
 const env = (name) => (name === "YIAN_AUTH_FILE" ? auth : undefined);
-const resumed = await resumeFlow(flow, { log: ${JSON.stringify(path)}, memory: new Map([["test", backend]]), env });
+const resumed = await resumeFlow({ log: ${JSON.stringify(path)}, memory: new Map([["test", backend]]), env });
 await resumed.backward("Second review.");
 `,
       );

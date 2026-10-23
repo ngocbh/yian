@@ -167,7 +167,7 @@ test("tool calling agent in loop retries whole node after process loss", async (
 
   const recoveredModel = new ScriptedModel([toolCall("ping", {}, "turn-2-retry"), textReply("turn2")], CONFIG);
   const recoveredEvents: RunEvent[] = [];
-  const recovered = await resumeFlow(await loadConformanceFlow(FLOW), {
+  const recovered = await resumeFlow({
     log: path,
     tools,
     onEvent: (event) => void recoveredEvents.push(event),
@@ -196,7 +196,7 @@ test("tool calling agent in loop retries whole node after process loss", async (
   };
   const before = readFileSync(path);
   const terminalEvents: RunEvent[] = [];
-  const terminal = await resumeFlow(await loadConformanceFlow(FLOW), {
+  const terminal = await resumeFlow({
     log: path,
     tools,
     onEvent: (event) => void terminalEvents.push(event),

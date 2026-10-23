@@ -1013,7 +1013,7 @@ test("replay accepts a value recorded before the limit", async () => {
   lines[0] = encodeRecord(decodeRecord(JSON.stringify(envelope))) + "\n";
   writeFileSync(path, lines.join(""));
 
-  const replayed = await resumeFlow(await loadConformanceFlow(text), { log: path, env: hostEnv(dir) });
+  const replayed = await resumeFlow({ log: path, env: hostEnv(dir) });
 
   expect(replayed.status).toBe("succeeded");
   expect(replayed.failure).toBeNull();

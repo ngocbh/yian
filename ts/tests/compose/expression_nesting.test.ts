@@ -229,7 +229,7 @@ test(
     );
     expect(result.status).toBe("succeeded");
     expect(result.output).toEqual(Array(LEARNABLE_CHAIN).fill("v"));
-    const replayed = await resumeFlow(flow, { env, log: path, memory: new Map([["test", backend]]) });
+    const replayed = await resumeFlow({ env, log: path, memory: new Map([["test", backend]]) });
     expect(replayed.status).toBe("succeeded");
     expect(replayed.output).toEqual(result.output);
   },

@@ -171,7 +171,7 @@ test("a resumed tool node sees the same call id and the new context", async () =
   await crashAfter(4, () =>
     runFlow(flow, {}, { log: path, tools: { place: recorder(seen) }, context: db, runId: "run-7f3a", env: hostEnv(dir) }),
   );
-  const resumed = await resumeFlow(flow, { log: path, tools: { place: recorder(seen) }, context: db2, env: hostEnv(dir) });
+  const resumed = await resumeFlow({ log: path, tools: { place: recorder(seen) }, context: db2, env: hostEnv(dir) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   const [first, second] = seen;
@@ -190,7 +190,7 @@ test("resume without context gives undefined", async () => {
   await crashAfter(4, () =>
     runFlow(flow, {}, { log: path, tools: { place: recorder(seen) }, context: new Db(), env: hostEnv(dir) }),
   );
-  const resumed = await resumeFlow(flow, { log: path, tools: { place: recorder(seen) }, env: hostEnv(dir) });
+  const resumed = await resumeFlow({ log: path, tools: { place: recorder(seen) }, env: hostEnv(dir) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(seen[1]!.context).toBeUndefined();

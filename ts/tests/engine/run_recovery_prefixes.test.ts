@@ -506,7 +506,7 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
     });
     let result: RunResult;
     try {
-      result = await resumeFlow(flow, { log: path, env });
+      result = await resumeFlow({ log: path, env });
     } finally {
       forward.mockRestore();
     }
@@ -536,7 +536,7 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
     expect(replayed.learnable).toBe(false);
     expect(replayed.trace).toBeNull();
     const complete = readFileSync(path, "utf8");
-    const inspected = await resumeFlow(flow, { log: path, env });
+    const inspected = await resumeFlow({ log: path, env });
     expect(inspected.output).toBe(result.output);
     expect(inspected.events).toEqual([]);
     expect(readFileSync(path, "utf8")).toBe(complete);
@@ -651,7 +651,7 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
     expect(progressOf(inspectRun(path, { flow, env }))).toEqual(expected);
 
     const seen: RunEvent[] = [];
-    const result = await resumeFlow(flow, { log: path, env, onEvent: (event) => seen.push(event) });
+    const result = await resumeFlow({ log: path, env, onEvent: (event) => seen.push(event) });
     expect(result.status).toBe("succeeded");
     expect(seen.slice(0, 3)).toEqual([
       new RunResumed(),

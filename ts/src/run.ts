@@ -53,6 +53,7 @@ import { type CompiledFlow, copyGraph, END_ID, type Flow } from "./compile/model
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
+import { loadFlow, recordedFiles } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
@@ -98,7 +99,7 @@ import {
   sameItems,
   sameOptional,
 } from "./nodes/contracts.ts";
-import { realScheduler, type Scheduler, VERSION } from "./platform.ts";
+import { realScheduler, type Scheduler, VERSION, warn } from "./platform.ts";
 import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine, resumedAttemptEvents } from "./runtime/engine.ts";
@@ -139,6 +140,7 @@ import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
+import { logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
 import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
 import {
@@ -1033,6 +1035,12 @@ export interface ResumeFlowOptions {
   /** The existing JSONL run log to lock, repair to its last complete line, check and replay. */
   log: string;
   /**
+   * The flow of a run whose flow was built in code (`RunStarted.flow` is `null`), whose
+   * fingerprint must match the recorded one. A run with recorded flow files compiles them and
+   * refuses this.
+   */
+  flow?: ComposedFlow | null;
+  /**
    * The non-negative worker bound of the new segment; `null` (the default) keeps the last recorded
    * one.
    */
@@ -1052,13 +1060,17 @@ export interface ResumeFlowOptions {
    */
   memory?: ReadonlyMap<string, Memory> | null;
   /**
-   * The tools the resumed segment sees, with `runFlow`'s rules. Tools are not recorded, so pass the
-   * ones the run used (`ask_user` included). An unopened `McpServer` is opened only when the run is
-   * unfinished, after the log is replayed, and closed when the resume ends; a finished log opens
-   * none.
+   * The tools the resumed segment sees, with `runFlow`'s rules. Only the specs of the tools AGENTs
+   * grant are recorded, so pass the tools the run used (`ask_user` included); for an unfinished
+   * run, each granted tool's description and parameters must be the recorded ones. An unopened
+   * `McpServer` is opened only when the run is unfinished, after the log is replayed, and closed
+   * when the resume ends; a finished log opens none.
    */
   tools?: Readonly<Record<string, ToolEntry>> | null;
-  /** The skills the run was given; an unfinished run of a flow that grants skills needs them. */
+  /**
+   * The skills the run was given; an unfinished run of a flow that grants skills needs them, each
+   * granted one with its recorded description and instructions.
+   */
   skills?: ReadonlyMap<string, Skill> | null;
   /** The host inbox for AGENT nodes authored `steerable: true`. */
   steering?: Steering | null;
@@ -1096,25 +1108,32 @@ export interface ResumeFlowOptions {
 /**
  * Recover a durable run, or read a finished one, without backward work.
  *
- * The recorded history is replayed silently on a private copy of `flow`; recovery never reads the
- * ambient model defaults, mints a new identity or takes new inputs or configuration. A finished
- * log returns its result with no events, opening no server and no memory. Otherwise the starts
- * the log left unfinished are retried first, in their recorded order, after one `RunResumed`
- * observer and one `NodeAttemptResumed` per retried node.
+ * The run's flow is the one `RunStarted` recorded: its flow files are compiled again, never read
+ * from disk (`loadRecordedFlow`), and a flow built in code is the `flow` option. Its fingerprint
+ * must match the recorded one. The recorded history is replayed silently on a private copy of the
+ * flow; recovery never reads the ambient model defaults, mints a new identity or takes new inputs
+ * or configuration. A log another yian version started is resumed with a warning naming both
+ * versions. A finished log returns its result with no events, opening no server and no memory.
+ * Otherwise the host's specs of the tools and skills the AGENTs grant must be the recorded ones,
+ * checked once the servers are open; then the starts the log left unfinished are retried first,
+ * in their recorded order, after one `RunResumed` observer and one `NodeAttemptResumed` per
+ * retried node.
  *
- * @param flow The loaded flow whose fingerprint must match the log's `RunStarted`.
  * @param options See `ResumeFlowOptions`.
  * @returns The recorded terminal result, or the terminal result of the resumed segment with its
  *   post-durable observers.
- * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, a `tools`
+ * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`, a `tools`
  *   entry is malformed, `skills`, `steering`, `scheduler`, `random` or `models` is malformed, a
  *   worker count isn't an integer, or a recorded carrier has the wrong type.
  * @throws ExpressionError as `runFlow`, for an unfinished run.
- * @throws RangeError when the log's prefix is invalid, the flow fingerprint differs, the worker
- *   count is negative, `apiKey` or `headers` is refused or their header names aren't the recorded
+ * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
+ *   `flow` was passed, or its flow files were recorded and one was, the flow fingerprint differs,
+ *   the worker count is negative, `apiKey` or `headers` is refused or their header names aren't the recorded
  *   ones (the message never echoes a value), a recorded agent config has an invalid field, the
  *   recorded memory table doesn't match the flow, or, for an unfinished run, a tool or skill
- *   check of `runFlow` fails, a `tools` server was opened by another run in progress, or a started
+ *   check of `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
+ *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
+ *   was opened by another run in progress, or a started
  *   call-time agent resolves to another config than the one it recorded (`node '<path>'
  *   llm_config: recorded config differs from the recomputed one; ...`), before its model call.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
@@ -1126,18 +1145,21 @@ export interface ResumeFlowOptions {
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
+ * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone).
  * @throws The signal's reason when it aborts.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the lock, repair, append, sync or
  *   close error of the log.
  */
-export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions): Promise<RunResult> {
+export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
   // here, before the log is opened.
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { log, tools = null, steering = null, context, signal = null } = options;
-    if (!(flow instanceof ComposedFlow)) throw new TypeError("resumeFlow expects a ComposedFlow");
+    const { log, tools = null, steering = null, context, signal = null, flow: hostFlow = null } = options;
+    if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
+      throw new TypeError("resumeFlow flow must be a ComposedFlow or null");
+    }
     if (signal !== null && !(signal instanceof AbortSignal)) {
       throw new TypeError("signal must be an AbortSignal or null");
     }
@@ -1159,6 +1181,13 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
     let runServers: McpServer[] = [];
     let primary: { error: unknown } | null = null;
     try {
+      const start = startRecord([...authority]);
+      // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
+      checkRecorded(start.defaults);
+      const flow = await resumedFlow(log, start, hostFlow);
+      if (start.yianVersion !== VERSION) {
+        warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
+      }
       const state = replayRunLog(flow, authority, { apiKey, headers });
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
@@ -1204,6 +1233,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       const runTools = new ToolSet(tools, { context });
       checkToolGrants(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
+      checkRecordedHostText(start, recordedTools(flow.compiled, runTools), recordedSkills(flow.compiled, skills));
 
       if (state.memories !== null) {
         checkRegistryTypes(memory!, state.memories);
@@ -1253,6 +1283,116 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       await closeRunResources(memoryRuntime, authority, primary);
     }
   });
+}
+
+/**
+ * Return the `RunStarted` record that opens `envelopes`.
+ *
+ * @throws RangeError when there is none, or the first record is another kind.
+ */
+function startRecord(envelopes: readonly RecordEnvelope[]): RunStartedRecord {
+  if (envelopes.length === 0) throw new RangeError("cannot replay an empty run log");
+  const first = envelopes[0]!.record;
+  if (!(first instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+  return first;
+}
+
+/**
+ * Compile the flow files `start` recorded as the loader first read them, under the `YIAN_*` values
+ * in effect, or return `null` for a flow built in code.
+ *
+ * @throws LoadError when the files no longer load.
+ */
+async function compileRecordedFlow(start: RunStartedRecord): Promise<ComposedFlow | null> {
+  const recorded = start.flow;
+  if (recorded === null) return null;
+  const { path, dir, searchPaths } = recorded;
+  const files = new Map(Object.entries(recorded.files));
+  return loadFlow(files.get(path)!, {
+    sourceLabel: path,
+    baseDir: dir,
+    searchPaths: searchPaths.map((item) => resolve(dir, item)),
+    files: recordedFiles(dir, files),
+  });
+}
+
+/**
+ * Return the flow a resume of the log at `log` runs: the recorded one, or for a flow built in
+ * code, the host's.
+ *
+ * @throws RangeError when the run's flow was built in code and `hostFlow` is `null`, or its files
+ *   were recorded and `hostFlow` isn't `null`.
+ */
+async function resumedFlow(
+  log: string,
+  start: RunStartedRecord,
+  hostFlow: ComposedFlow | null,
+): Promise<ComposedFlow> {
+  if (start.flow === null) {
+    if (hostFlow === null) {
+      throw new RangeError(`run log ${log}: this run's flow was built in code; resume it with resumeFlow({log, flow})`);
+    }
+    return hostFlow;
+  }
+  if (hostFlow !== null) {
+    throw new RangeError(`run log ${log} holds its flow files, which resume compiles; leave out flow`);
+  }
+  return (await compileRecordedFlow(start))!;
+}
+
+/**
+ * Compile the flow the run log at `log` recorded, as `resumeFlow` does: its flow files as the
+ * loader first read them, never the files on disk now, under `env`'s `YIAN_*` values. The log is
+ * read without its lock.
+ *
+ * @param log The JSONL run log.
+ * @param env The environment the load reads the `YIAN_*` values from (default `processEnv`).
+ * @returns The recorded flow, or `null` when the run's flow was built in code.
+ * @throws RangeError when the log holds no record or doesn't start with `RunStarted`, besides
+ *   `iterRunRecords`' errors.
+ * @throws LoadError when the files no longer load (a CODE reference's file gone).
+ * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
+ */
+export async function loadRecordedFlow(log: string, env: Env = processEnv): Promise<ComposedFlow | null> {
+  const envelopes: RecordEnvelope[] = [];
+  // Only the first record is read.
+  for (const entry of iterRunRecords(log)) {
+    envelopes.push(entry.envelope);
+    break;
+  }
+  const start = startRecord(envelopes);
+  return withEnv(env, () => compileRecordedFlow(start));
+}
+
+/**
+ * Check the host's specs of the granted tools and skills against the ones `start` recorded.
+ *
+ * @throws RangeError naming the first tool or skill, by name, that is missing, added, or has a
+ *   field that differs.
+ */
+function checkRecordedHostText(
+  start: RunStartedRecord,
+  tools: Readonly<Record<string, RecordedTool>>,
+  skills: Readonly<Record<string, RecordedSkill>>,
+): void {
+  for (const [kind, recorded, current] of [
+    ["tools", start.tools, tools],
+    ["skills", start.skills, skills],
+  ] as const) {
+    const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
+    for (const name of names) {
+      const subject = `resume refused: ${kind}.${name}`;
+      if (!Object.hasOwn(current, name)) throw new RangeError(`${subject} is recorded, but this run's ${kind} lack it`);
+      if (!Object.hasOwn(recorded, name)) throw new RangeError(`${subject} isn't recorded; the run started without it`);
+      const was = recorded[name] as unknown as Record<string, unknown>;
+      const now = current[name] as unknown as Record<string, unknown>;
+      for (const field of Object.keys(was)) {
+        if (logJson(was[field]) !== logJson(now[field])) {
+          throw new RangeError(`${subject} ${field} differs from the recorded one`);
+        }
+      }
+    }
+  }
 }
 
 /**

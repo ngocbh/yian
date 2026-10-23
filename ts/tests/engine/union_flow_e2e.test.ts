@@ -245,7 +245,7 @@ test("replaying a finished run reproduces the union branch", async () => {
   const first = await run({ decision: SELL, note: { text: "hi" } }, log);
   succeeded(first);
 
-  const replayed = await resumeFlow(await flow(), { log, env });
+  const replayed = await resumeFlow({ log, env });
 
   expect(succeeded(replayed)).toEqual(first.output);
   expect(first.output).toEqual({ action: "sell", trade: 3n, note: "HI" });
@@ -257,7 +257,7 @@ test("resume after the union value continues down its branch", async () => {
   succeeded(first);
   cutAfterD(log);
 
-  const resumed = await resumeFlow(await flow(), { log, env });
+  const resumed = await resumeFlow({ log, env });
 
   expect(succeeded(resumed)).toEqual(first.output);
 });
@@ -275,7 +275,7 @@ test.each([
   lines[end] = JSON.stringify(record);
   writeFileSync(log, lines.join("\n") + "\n");
 
-  const error = await rejected(resumeFlow(await flow(), { log, env }));
+  const error = await rejected(resumeFlow({ log, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain(message);

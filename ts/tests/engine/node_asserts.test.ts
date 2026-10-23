@@ -58,7 +58,7 @@ import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
@@ -505,13 +505,14 @@ test("a code-built unparseable assert fails before the run starts", async () => 
 });
 
 test("a code-built unparseable assert fails before resume appends", async () => {
-  const flow = await loadConformanceFlow(TWO_NODES);
+  // Built in code, so resume runs this flow, broken while the run is stopped.
+  const flow = new ComposedFlow((await loadConformanceFlow(TWO_NODES)).compiled);
   const dir = mkdtempSync(join(tmpdir(), "node-asserts-"));
   try {
     const path = join(dir, "run.jsonl");
     const lines = await stoppedRunLog(flow, { v: 1 }, path, "a", () => breakAssert(flow));
 
-    const error = await rejected(resumeFlow(flow, { log: path }));
+    const error = await rejected(resumeFlow({ log: path, flow }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(/^node 'b' pre-assert 'n non-negative'/);
     expect(readFileSync(path, "utf8")).toBe(lines);

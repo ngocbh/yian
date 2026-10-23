@@ -361,7 +361,7 @@ test("azure resume uses the recorded endpoint", async () => {
     AZURE_OPENAI_DEPLOYMENT_NAME: "env-deployment",
   });
   const models = fakeClients(moved, "ok");
-  const result = await resumeFlow(await loadFlow(AZURE_FLOW, { env: moved }), { log: path, models, env: moved });
+  const result = await resumeFlow({ log: path, models, env: moved });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(built(models)).toEqual([["azure", "deploy-a", AZURE_RESOURCE, null]]);
   expect(sentTo(models.requests)).toEqual([[azureUrl(AZURE_RESOURCE, "deploy-a"), "sk-azure-environment"]]);
@@ -507,7 +507,7 @@ test("resume sends the key to the recorded base url", async () => {
   // The provider's endpoint variable cannot move a recorded agent.
   const moved = envWith({ VLLM_BASE_URL: "http://127.0.0.1:9/v1" });
   const models = recording(moved, chatText("ok"));
-  const result = await resumeFlow(await loadFlow(FLOW, { env: moved }), {
+  const result = await resumeFlow({
     log: path,
     onEvent: (event) => void events.push(event),
     apiKey: SENTINEL,
@@ -529,9 +529,9 @@ test("openai resume sends the key to the recorded azure url", async () => {
   const moved = envWith({ OPENAI_BASE_URL: ELSEWHERE });
   const models = recording(moved, responsesText("ok"));
   const flow = await loadFlow(FLOW, { env: moved });
-  expect((await resumeFlow(flow, { log: keyless, models, env: moved })).status).toBe("failed");
+  expect((await resumeFlow({ log: keyless, models, env: moved })).status).toBe("failed");
   expect(models.requests).toEqual([]);
-  const result = await resumeFlow(flow, { log: path, apiKey: SENTINEL, models, env: moved });
+  const result = await resumeFlow({ log: path, apiKey: SENTINEL, models, env: moved });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(models.requests[0]!.url).toBe("https://res.openai.azure.com/openai/v1/responses");
   expect(models.requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
@@ -552,7 +552,7 @@ test("backward sends the key to the recorded base url", async () => {
   });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect((await result.backward("Be brief.")).status).toBe("succeeded");
-  const recovered = await resumeFlow(await loadFlow(FLOW, { env }), { log: path, onEvent, models, env });
+  const recovered = await resumeFlow({ log: path, onEvent, models, env });
   const outcome = await recovered.backward("Be brief.", { apiKey: SENTINEL });
   expect(outcome.status, outcome.failure?.message).toBe("succeeded");
   expect(models.requests).toHaveLength(3);
@@ -580,7 +580,7 @@ test("openai backward builds its client with the recorded url and key", async ()
   });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect((await result.backward("Be brief.")).status).toBe("succeeded");
-  const recovered = await resumeFlow(await loadFlow(FLOW, { env: elsewhere }), { log: path, models, env: elsewhere });
+  const recovered = await resumeFlow({ log: path, models, env: elsewhere });
   const outcome = await recovered.backward("Be brief.", { apiKey: SENTINEL });
   expect(outcome.status, outcome.failure?.message).toBe("succeeded");
   expect(built(models)).toEqual(Array.from({ length: 3 }, () => ["openai", "gpt-5.4", AZURE_V1, SENTINEL]));
@@ -593,7 +593,7 @@ test("a recorded base url without the marker is refused", async () => {
   await interruptedRun(path, VLLM);
   rewriteEffective(path, (config) => delete config["_host_key"]);
   const error = (await rejected(
-    resumeFlow(await loadFlow(FLOW, { env }), { log: path, apiKey: SENTINEL, models, env }),
+    resumeFlow({ log: path, apiKey: SENTINEL, models, env }),
   )) as Error;
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toContain("base_url without a host key");
@@ -607,7 +607,7 @@ describe("a tampered recorded base url fails at resume start", () => {
     await interruptedRun(path, VLLM);
     rewriteEffective(path, (config) => void (config["base_url"] = recorded));
     const error = (await rejected(
-      resumeFlow(await loadFlow(FLOW, { env }), { log: path, apiKey: SENTINEL, models, env }),
+      resumeFlow({ log: path, apiKey: SENTINEL, models, env }),
     )) as Error;
     expect(error).toBeInstanceOf(RangeError);
     expect(error.message).toContain("effective LLM config for 'agent': base_url");
@@ -622,7 +622,7 @@ test("a recorded base url must match the host connection", async () => {
   await interruptedRun(path, AZURE);
   rewriteEffective(path, (config) => void (config["base_url"] = ELSEWHERE));
   const models = recording(env, responsesText("ok"));
-  const result = await resumeFlow(await loadFlow(FLOW, { env }), { log: path, apiKey: SENTINEL, models, env });
+  const result = await resumeFlow({ log: path, apiKey: SENTINEL, models, env });
   expect(result.status).toBe("failed");
   expect(result.failure!.message).toContain("host connection endpoint");
   expect(models.requests).toEqual([]);

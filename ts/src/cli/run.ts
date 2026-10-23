@@ -1404,7 +1404,7 @@ async function startRun(
         const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
           checkResumeCredentials(effective, callTimeHost, keyContext);
         return startLogged(log, (tools) =>
-          resumeFlow(flow, {
+          resumeFlow({
             log,
             numWorkers: options.numWorkers ?? null,
             onEvent,

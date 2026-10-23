@@ -295,7 +295,7 @@ test("resume with a different value fails", async () => {
   const before = readFileSync(path);
 
   const error = await rejected(
-    resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "6000" }) }),
+    resumeFlow({ log: path, env: envWith({ YIAN_MAX_TOTAL_NODES: "6000" }) }),
   );
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
@@ -308,7 +308,7 @@ test("resume without the variable fails", async () => {
   const path = freshLog();
   await interruptedRun(path, envWith(AT_5000));
 
-  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
+  const error = await rejected(resumeFlow({ log: path, env: envWith() }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("set YIAN_MAX_TOTAL_NODES=5000");
@@ -318,7 +318,7 @@ test("resume of a default run with a variable set fails", async () => {
   const path = freshLog();
   await interruptedRun(path);
 
-  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith(AT_5000) }));
+  const error = await rejected(resumeFlow({ log: path, env: envWith(AT_5000) }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("unset YIAN_MAX_TOTAL_NODES");
@@ -327,7 +327,7 @@ test("resume of a default run with a variable set fails", async () => {
 test("an old log resumes as all defaults: a plain log", async () => {
   const plain = freshLog();
   await interruptedRun(plain);
-  expect((await resumeFlow(await loadFlow(TWO_STEPS), { log: plain, env: envWith() })).output).toEqual({ n: 2n });
+  expect((await resumeFlow({ log: plain, env: envWith() })).output).toEqual({ n: 2n });
 });
 
 test("an old log resumes as all defaults: a stripped log is refused (Changed)", async () => {
@@ -341,7 +341,7 @@ test("an old log resumes as all defaults: a stripped log is refused (Changed)", 
   writeFileSync(stripped, lines.join(""));
   const before = readFileSync(stripped);
 
-  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: stripped, env: envWith() }));
+  const error = await rejected(resumeFlow({ log: stripped, env: envWith() }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain('invalid run_started payload fields; missing=["defaults"]');
@@ -363,7 +363,7 @@ test("a mismatch is reported before the fingerprint", async () => {
   expect(flowFingerprint(defaultRetries.compiled)).not.toBe(flowFingerprint(zeroRetries.compiled));
 
   // Resuming a finished run is enough: the check runs before anything else in replay.
-  const error = await rejected(resumeFlow(defaultRetries, { log: path, env: envWith() }));
+  const error = await rejected(resumeFlow({ log: path, env: envWith() }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("YIAN_AGENT_RETRIES");
@@ -377,7 +377,7 @@ test("an unknown recorded name fails", async () => {
     payload.defaults = { MAX_NOT_A_THING: 1n };
   });
 
-  const error = await rejected(resumeFlow(await loadFlow(TWO_STEPS), { log: path, env: envWith() }));
+  const error = await rejected(resumeFlow({ log: path, env: envWith() }));
 
   expect(error).toBeInstanceOf(DefaultsMismatchError);
   expect((error as Error).message).toContain("YIAN_MAX_NOT_A_THING");

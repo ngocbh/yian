@@ -113,7 +113,7 @@ import {
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
+import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -1602,6 +1602,19 @@ export function thrownBy(fn: () => unknown): unknown {
   throw new Error("expected a throw");
 }
 
+/**
+ * Rewrite the recorded text of the root flow file in the `RunStarted` line of the log at `log` with
+ * `edit`, as if the run had started from the edited file; the line stays canonical.
+ */
+export function editRecordedFlow(log: string, edit: (text: string) => string): void {
+  const lines = readFileSync(log, "utf8").split("\n");
+  const started = parseJson(lines[0]!, "codec") as { payload: { flow: { path: string; files: Record<string, string> } } };
+  const { path, files } = started.payload.flow;
+  files[path] = edit(files[path]!);
+  lines[0] = logJson(started);
+  writeFileSync(log, lines.join("\n"));
+}
+
 /** The process-loss marker a frozen log throws. */
 export class Crash extends Error {
   override name = "Crash";
@@ -1629,7 +1642,7 @@ export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise
 /**
  * Commit a canonical RunStarted of `loaded` to the empty `log`, under its run id, for a private
  * graph: START primed with `inputs` and wired to them, the system clock seeded at
- * 2026-08-14T12:00:00Z.
+ * 2026-08-14T12:00:00Z, and `loaded`'s flow files recorded.
  *
  * @param options.privateFlow The graph to run, a copy of `loaded.compiled` by default.
  * @returns The state after the record.
@@ -1661,6 +1674,8 @@ export function startedRun(
       startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
       effectiveLlmByStaticPath: effective,
       numWorkers,
+      // As a real run of `loaded` records it, so resume compiles it.
+      flow: loaded.source === null ? null : { ...loaded.source, files: Object.fromEntries(loaded.source.files) },
     }),
   );
   return state;
@@ -1795,7 +1810,7 @@ export function resumeWith(
   model: ChatModel,
   options: Omit<ResumeFlowOptions, "log"> = {},
 ): Promise<RunResult> {
-  return resumeFlow(flow, { log, memory, models: serving(model), env: NO_ENV, ...options });
+  return resumeFlow({ log, memory, models: serving(model), env: NO_ENV, ...options });
 }
 
 /**

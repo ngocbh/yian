@@ -744,7 +744,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       return original.call(this, inputs);
     });
     try {
-      const result = await resumeFlow(flow, { log: path, memory: backends, env });
+      const result = await resumeFlow({ log: path, memory: backends, env });
       expect(result.status).toBe("succeeded");
       expect(result.output).toEqual({ mapped: [1n, 2n], repeated: { n: 2n, exited: false } });
       expect(calls).toEqual(["outer/repeated#1/bump"]);
@@ -769,7 +769,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       for (const occurrence of historical) expect(occurrence.recordJson).toBe(untimed(lines[occurrence.outcomeSeq]!));
 
       const complete = readFileSync(path, "utf8");
-      const inspected = await resumeFlow(flow, {
+      const inspected = await resumeFlow({
         log: path,
         memory: new Map([["episodic", {}], ["reflective", {}]]) as never,
         env,

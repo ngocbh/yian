@@ -793,11 +793,12 @@ Node 22, and so does every unit test; a change keeps both green.
   openrouter and vllm).
 - `auth/common.ts`: `AuthError`, the credential classes and `ProviderSelection`.
 - `auth/store.ts`: `AuthStore`, the saved-login file in Python's format. Reads are sync. `save`,
-  `remove` and `setDefault` are async and hold `<path>.lock` through `waitForLock`; `credentials`
-  is async and takes the lock only to refresh. Node and Bun have no `dir_fd`, so private-path
-  checks use `lstat`, an `O_NOFOLLOW` open and `fstat`. Parallel `credentials` calls in one
-  process that refresh the same login share one refresh (success or failure); the file lock
-  still serializes processes.
+  `remove`, `setDefault` and `delete` (the whole store) are async and hold `<path>.lock` through
+  `waitForLock`, so `delete` waits for a refresh in flight; none unlinks the lock file, since a
+  waiter and a newcomer would then lock different files; `credentials` is async and takes the
+  lock only to refresh. Node and Bun have no `dir_fd`, so private-path checks use `lstat`, an
+  `O_NOFOLLOW` open and `fstat`. Parallel `credentials` calls in one process that refresh the same
+  login share one refresh (success or failure); the file lock still serializes processes.
 - `auth/http.ts`: `request`, Python's `HttpResponse` over `shortRequest`: one total timeout,
   redirects never followed (a 3xx comes back with `null` data), the body capped.
 - `auth/openai.ts`: `OpenAIAuth`, browser and device sign-in, refresh and the model catalogs.

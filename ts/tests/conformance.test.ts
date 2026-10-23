@@ -1425,6 +1425,15 @@ describe("main", () => {
     expect(cuts.map((names) => names.length)).toEqual([8, 0]);
   });
 
+  test("sweeps a learnable run case, whose captures name their sources' records by seq", async () => {
+    const learnable = TWO_NODES.replace("num_workers: 0}", "num_workers: 0, learnable: true}");
+    expect(learnable).not.toBe(TWO_NODES);
+    const files = { "a/two.yaml": learnable };
+    const { code, out } = await run(["--crash-sweep"], files, {}, { run: RUNNERS.run! });
+    expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
+    expect(code).toBe(0);
+  });
+
   test("restores a changed expectation with --write-expect, in the case's own form", async () => {
     const kinds = { run: RUNNERS.run! };
     const edited = FORMS.replace(

@@ -1,0 +1,68 @@
+# A learnable AGENT run whose evidence and steps the run log redesign (#996) rebuilds. Reply 1
+# makes two unsafe calls, which run one at a time; reply 2 mixes two safe calls (`lookup` is
+# marked concurrency_safe) and an unsafe one; reply 3 is the text. Every tool call id is
+# scripted, so the golden log holds no made-up id.
+kind: run
+rules: [run-log]
+flow: |
+  id: groups
+  name: groups
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      tools: [lookup, save]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${writer.output}
+run: {run_id: r1, num_workers: 0, learnable: true}
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      concurrency_safe: true
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: found:x
+      - return: found:y
+    save:
+      description: Save a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: saved:a
+      - return: saved:b
+      - return: saved:z
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-a, name: save, arguments: {topic: a}}
+          - {type: tool_call, id: call-b, name: save, arguments: {topic: b}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-x, name: lookup, arguments: {topic: x}}
+          - {type: tool_call, id: call-y, name: lookup, arguments: {topic: y}}
+          - {type: tool_call, id: call-z, name: save, arguments: {topic: z}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: all done}
+expect:
+  output: {status: succeeded, output: all done}

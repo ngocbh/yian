@@ -2831,7 +2831,8 @@ function sweepable(case_: Case): boolean {
  * the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
  * the run is resumed. The resume must end with a result whose invariants hold. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
- * also holds: the same output, and the same node outcome entries in the trace, in order.
+ * also holds: the same output, and the same node outcome entries in the trace, in order, with a
+ * capture's source named by its record's kind and node rather than its seq.
  */
 export async function crashSweep(
   case_: Case,
@@ -2858,7 +2859,24 @@ export async function crashSweep(
   const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
-    return trace(lines, flow).filter(([kind]) => OUTCOMES.has(kind as string));
+    const entries = trace(lines, flow);
+    // A learnable run's captures name each source's record by its seq, and a resume adds records,
+    // so a source is compared by the record's kind and node instead.
+    const rename = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(rename);
+      if (!isMapping(value)) return;
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "execution_seq" && typeof item === "bigint") {
+          const [kind, node] = entries[Number(item)] ?? [];
+          value[key] = `${String(kind)} ${String(node)}`;
+        } else {
+          rename(item);
+        }
+      }
+    };
+    const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
+    rename(kept);
+    return kept;
   };
   const expected = outcomes(uncutLog);
   const count = readRunLog(uncutLog).length;

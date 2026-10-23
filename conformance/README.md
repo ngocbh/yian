@@ -700,7 +700,8 @@ outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only).
 also cuts each serial `run` case that expects `output`, isn't `pending`, and has no `host.models`,
 `host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it, and
 checks the invariants, plus the output and node outcomes when the case has no `host.human` or
-`host.jitter` and its tool scripts only return.
+`host.jitter` and its tool scripts only return. A resume adds records, so in those outcomes a
+capture source's `execution_seq` is compared by the kind and node of the record it names.
 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
@@ -711,8 +712,9 @@ the virtual clock, which starts at the real time; each line is then written agai
 own encoder, which gives back the line as written. When the TS log format changes, regenerate the
 golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
 change. Bun and Node write the same bytes. A golden log goes
-with a serial case that sets `run.run_id`, makes no random ids (no AGENT or memory), and holds no
-file paths; the error texts in it are a stub's or the runner's own (the stop's `conformance stop`).
+with a serial case that sets `run.run_id`, makes no random ids (no memory; an AGENT case only when
+its scripted replies give every tool call id), and holds no file paths; the error texts in it are
+a stub's or the runner's own (the stop's `conformance stop`).
 `--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`,
 `resume` and `backward` case instead of comparing it. The Python runner ignores golden logs.
 

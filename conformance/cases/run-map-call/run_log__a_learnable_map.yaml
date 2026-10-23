@@ -1,0 +1,20 @@
+# A learnable MAP over three items, so the redesign (#996) rebuilds each item's seed.
+kind: run
+rules: [run-log]
+flow: |
+  id: doubles
+  name: doubles
+  input: {xs: !list(int)}
+  defs:
+    double:
+      input: {x: !int}
+      nodes:
+        times2: {kind: code, input: {x: "${input.x}"}, output: {y: int}, code: "return {y: inputs.x * 2}"}
+      output: ${times2.output.y}
+  nodes:
+    each: {kind: map, over: "${input.xs}", call: double, input: {x: "${item}"}}
+  output: ${each.output}
+inputs: {xs: [1, 2, 3]}
+run: {run_id: r1, num_workers: 0, learnable: true}
+expect:
+  output: {status: succeeded, output: [2, 4, 6]}

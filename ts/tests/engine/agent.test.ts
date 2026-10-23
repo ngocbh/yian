@@ -1202,7 +1202,7 @@ describe("forward", () => {
 
   test("a call-time agent records a copy of its bound config and calls with the host key", async () => {
     const recorded: unknown[] = [];
-    const steps = new NodeSteps(1, [], (step) => void recorded.push(step));
+    const steps = new NodeSteps(1, [], (step) => recorded.push(step));
     const models = access(new ScriptedModel([reply("ok")], NATIVE));
     const bound = structuredClone(BOUND);
     const result = await callTimeAgent().run({ [LLM_CONFIG_KEY]: bound }, { steps, models });
@@ -1218,7 +1218,7 @@ describe("forward", () => {
   test("a call-time agent's config differing from the recorded one is a host fault before any model is built", async () => {
     const recorded: unknown[] = [];
     const prior = [{ kind: "llm_config", effective_llm_config: { ...BOUND, model: "gpt-older" } }];
-    const steps = new NodeSteps(2, prior, (step) => void recorded.push(step));
+    const steps = new NodeSteps(2, prior, (step) => recorded.push(step));
     const models = access(new ScriptedModel([reply("ok")], NATIVE));
     const error = await rejected(callTimeAgent().run({ [LLM_CONFIG_KEY]: { ...BOUND } }, { steps, models }));
     expect(error).toBeInstanceOf(CapabilityFault);

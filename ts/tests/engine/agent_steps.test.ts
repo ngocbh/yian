@@ -41,7 +41,7 @@ import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { runFlow } from "../../src/run.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
@@ -134,6 +134,11 @@ function shape(path: string, nodeId = "writer"): string[] {
   });
 }
 
+/** An environment with no host setting but `YIAN_MODEL_RETRIES`. */
+function retriesEnv(modelRetries: number): (name: string) => string | undefined {
+  return (name) => (name === "YIAN_MODEL_RETRIES" ? String(modelRetries) : NO_ENV(name));
+}
+
 /**
  * Run `flow` over `model` with a log, `modelRetries` model retries (default 0) and a virtual clock
  * at `START`; the other options go to `runFlow`.
@@ -144,7 +149,7 @@ async function run(
 ): Promise<{ log: string; result: Awaited<ReturnType<typeof runFlow>> }> {
   const { flow = flowText(), modelRetries = 0, ...rest } = options;
   const log = (rest.log as string | undefined) ?? runLog();
-  const env = (name: string) => (name === "YIAN_MODEL_RETRIES" ? String(modelRetries) : NO_ENV(name));
+  const env = retriesEnv(modelRetries);
   const result = await runFlow(await loadFlow(flow), {}, {
     llmConfig: CONFIG,
     env,
@@ -286,6 +291,29 @@ test("a crash at a tool_result record leaves the next model call never made", as
     run(model, { tools: { lookup: topicTool("lookup"), save: topicTool("save") } }),
   );
   expect(model.requests.length).toBe(1);
+});
+
+test("a resumed AGENT's tool call gets an idempotency key no earlier start used", async () => {
+  const keys: string[] = [];
+  const save = topicTool("save", { run: (topic, ctx) => (keys.push(ctx.callId), `saved:${topic}`) });
+  const flow = flowText(["save"]);
+  const replies = () => [calls(["call-a", "save", "a"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { tools: { save }, flow, runId: "r" });
+  keys.length = 0;
+  const log = runLog();
+  // Cut at the second model_call: the first start wrote its reply (n 1) and the tool's result (n 2).
+  const cut = seqOf(uncut.log, "tool_result") + 1;
+  await crashAfter(cut, () => run(new ScriptedModel(replies(), CONFIG), { log, tools: { save }, flow, runId: "r" }));
+  const resumed = await resumeFlow({
+    log,
+    tools: { save },
+    env: retriesEnv(0),
+    scheduler: virtualScheduler(START),
+    models: serving(new ScriptedModel(replies(), CONFIG)),
+  });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  // Steps outlive the first start, so the resumed reply is step 3 and its key is new.
+  expect(keys).toEqual(["r/writer/1/0", "r/writer/3/0"]);
 });
 
 test("a reply whose arguments nest too deep still writes its model_call before the node fails", async () => {
@@ -524,10 +552,13 @@ test("a reply's media is a run file; the model_call and the next request hold it
 
 // --- AgentSteps alone --- //
 
-/** `AgentSteps` over a recording `NodeSteps` with `prior` steps, a clock at `START`, no run folder. */
+/**
+ * `AgentSteps` over a recording `NodeSteps` with `prior` steps, numbering each recorded step after
+ * them as the engine does, a clock at `START` and no run folder.
+ */
 function recordingSteps(prior: ValueRecord[] = []): { steps: AgentSteps; recorded: [ValueRecord, unknown][] } {
   const recorded: [ValueRecord, unknown][] = [];
-  const nodeSteps = new NodeSteps(1, prior, (step, options) => void recorded.push([step, options]));
+  const nodeSteps = new NodeSteps(1, prior, (step, options) => prior.length + recorded.push([step, options]));
   const scrub = (error: unknown) => {
     if (error instanceof Error) error.message = error.message.replaceAll("secret", "[REDACTED]");
     return error;
@@ -537,7 +568,6 @@ function recordingSteps(prior: ValueRecord[] = []): { steps: AgentSteps; recorde
 
 test("AgentSteps writes model_call and tool_result payloads and returns each n", () => {
   const { steps, recorded } = recordingSteps([{ kind: "llm_config" }]);
-  expect(steps.nextN()).toBe(2);
   const output = new Message({ role: "assistant", parts: [new TextPart("ok")] });
   const usage = new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, reasoningTokens: 0 });
   const n = steps.modelCall(
@@ -603,7 +633,6 @@ test("AgentSteps scrubs a failed call's error and names its kind", () => {
 
 test("AgentSteps without node steps records nothing and still numbers its steps", () => {
   const steps = new AgentSteps(undefined, () => START, null, (error) => error);
-  expect(steps.nextN()).toBe(1);
   expect(steps.toolResult({ callId: "c1", startedAt: null, output: "x", isError: false })).toBe(1);
-  expect(steps.nextN()).toBe(2);
+  expect(steps.toolResult({ callId: "c2", startedAt: null, output: "y", isError: false })).toBe(2);
 });

@@ -169,7 +169,7 @@ test("newExchangeId is 32 hex characters, fresh per call", () => {
 test("event sink alone reports usage without streaming", async () => {
   const { live, events, chunks } = sinks({ stream: false });
   const usage = new Usage({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cacheReadTokens: 4, reasoningTokens: 1 });
-  const response = await callModel(live, model(reply("ok", usage)), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const { response } = await callModel(live, model(reply("ok", usage)), REQUEST, { purpose: "chat", exchangeId: "x1" });
   expect(response.message.text()).toBe("ok");
   expect(chunks).toEqual([]);
   expect(events).toEqual([
@@ -221,7 +221,7 @@ test("a retryable provider error then a reply publishes one pair per attempt in 
   install({ ...BUILTIN, modelRetries: 1 });
   const { live, events } = sinks();
   const failure = new ProviderError("server", "boom", { retryAfter: 0.001 });
-  const response = await callModel(live, model(failure, reply("ok")), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const { response } = await callModel(live, model(failure, reply("ok")), REQUEST, { purpose: "chat", exchangeId: "x1" });
   expect(response.message.text()).toBe("ok");
   expect(events).toEqual([
     new ModelCallStarted({ ...identity("x1"), attempt: 1 }),
@@ -676,7 +676,7 @@ async function withSteps(
   chat: ScriptedModel,
   options: {
     steps?: false;
-    record?: (step: ValueRecord) => void;
+    record?: (step: ValueRecord) => number;
     log?: unknown[];
     tools?: ToolSet;
     llmConfig?: Record<string, unknown>;
@@ -689,7 +689,8 @@ async function withSteps(
   const node = new AgentNode("writer", { prompt: "hi", llmConfig, tools: tools ? ["lookup"] : undefined });
   if (output !== undefined) node.outputContract = new ValueContract(output);
   const log = options.log ?? [];
-  const record = options.record ?? ((step: ValueRecord) => void log.push(step));
+  // The engine returns a step's n; here, its place among the log's items will do.
+  const record = options.record ?? ((step: ValueRecord) => log.push(step));
   const steps = options.steps === false ? null : new NodeSteps(1, [], record);
   const { scheduler, sleeps } = recordingScheduler();
   const outcome = await drive(node, {

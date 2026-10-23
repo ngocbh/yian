@@ -1133,7 +1133,8 @@ export class HostToolCall {
  * The engine passes it as `caps.steps` to a node declaring `needsSteps`. A step is a JSON object
  * with a string `kind`, which the node gives meaning to; the engine appends each one to the run
  * log and keeps it until the node settles, so a resumed node reads the steps its earlier starts
- * recorded. Steps are numbered from 1 across the node's starts: `n`, the step's id within the node.
+ * recorded. Steps are numbered from 1 across the node's starts: `n`, the step's id within the node,
+ * which `record` returns.
  *
  * Example:
  * ```ts
@@ -1167,14 +1168,10 @@ export class NodeSteps {
    * mid-commit.
    */
   readonly record: (step: ValueRecord, options?: { settled?: boolean }) => number;
-  /** Returns the `n` the next recorded step gets. */
-  readonly nextN: () => number;
 
   /**
-   * Check the field types and that the current start is counted; `prior` is copied. The steps
-   * `record` appends are counted after `prior`, so the first gets `prior.length + 1`.
+   * Check the field types and that the current start is counted; `prior` is copied.
    *
-   * @param record Appends one step; what it returns is ignored.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
    *   records, or `record` isn't a function.
    * @throws RangeError when `starts` is less than 1.
@@ -1182,7 +1179,7 @@ export class NodeSteps {
   constructor(
     starts: number,
     prior: readonly ValueRecord[],
-    record: (step: ValueRecord, options?: { settled?: boolean }) => unknown,
+    record: (step: ValueRecord, options?: { settled?: boolean }) => number,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1192,13 +1189,7 @@ export class NodeSteps {
     if (typeof record !== "function") throw new TypeError("record must be callable");
     this.starts = starts;
     this.prior = Object.freeze([...prior]);
-    // The engine numbers a node's steps by the same count, so this matches the recorded `n`.
-    let count = prior.length;
-    this.record = (step, options) => {
-      record(step, options);
-      return ++count;
-    };
-    this.nextN = () => count + 1;
+    this.record = record;
     Object.freeze(this);
   }
 }

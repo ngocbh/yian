@@ -1,10 +1,11 @@
 # TS-only: Python records no step for a model retry.
 # The AGENT's first model call fails with a 503 reply before any output; with one model retry
-# (YIAN_MODEL_RETRIES=1) and a draw of 0, the node records a model_attempt step for call 1's
-# failed attempt 1, waits the first backoff (0.5 s), and the second attempt answers.
+# (YIAN_MODEL_RETRIES=1) and a draw of 0, the node records the failed attempt as a model_call step
+# with its error and wait, waits the first backoff (0.5 s), and the second attempt answers and is
+# recorded as the next model_call step.
 kind: run
 rules: [run-log]
-python_skip: model_attempt steps are TS-only
+python_skip: model_call steps are TS-only
 flow: |
   id: agent-model-retries
   name: agent_model_retries

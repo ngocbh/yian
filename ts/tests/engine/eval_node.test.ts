@@ -400,7 +400,7 @@ class StepsReservedNode extends ResultNode {
 test("a reserved binding failure after an earlier start recorded steps is a host fault", async () => {
   // The earlier start resolved the key from the same restored pool, so the flow or yian changed.
   const node = new StepsReservedNode("n", new Output("unused"));
-  const steps = new NodeSteps(2, [{ step: 1n }], () => {});
+  const steps = new NodeSteps(2, [{ step: 1n }], () => 1);
 
   expect(await rejected(drive(node, { steps }))).toEqual(
     new RangeError(
@@ -413,7 +413,7 @@ test("a reserved binding failure after an earlier start recorded steps is a host
 test("a reserved binding failure with no prior steps stays a node failure", async () => {
   const node = new StepsReservedNode("n", new Output("unused"));
 
-  for (const steps of [null, new NodeSteps(1, [], () => {})]) {
+  for (const steps of [null, new NodeSteps(1, [], () => 1)]) {
     expect((await driveFailure(node, { steps })).code).toBe("contract.input");
   }
 });
@@ -423,7 +423,7 @@ test("a reserved binding failure of a node that doesn't read its steps stays a n
   class NoStepsReservedNode extends StepsReservedNode {
     override readonly needsSteps = false;
   }
-  const steps = new NodeSteps(2, [{ step: 1n }], () => {});
+  const steps = new NodeSteps(2, [{ step: 1n }], () => 1);
 
   expect((await driveFailure(new NoStepsReservedNode("n", new Output("unused")), { steps })).code).toBe(
     "contract.input",
@@ -487,7 +487,7 @@ describe("evalNode checks its arguments", () => {
       emitEvent: () => {},
       skills: new Map(),
       tools: new ToolSet(),
-      steps: new NodeSteps(1, [], () => {}),
+      steps: new NodeSteps(1, [], () => 1),
       effectiveLlmByStaticPath: {},
       signal: new AbortController().signal,
       steering: { interruptSignal: () => new AbortController().signal, drain: () => [] },

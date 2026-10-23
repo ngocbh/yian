@@ -470,11 +470,12 @@ export async function generateStructured(
     signal?.throwIfAborted();
     const request = plan.apply(new Request({ messages: conversation }));
     const exchangeId = newExchangeId();
-    const response = await callModel(live, model, request, {
+    const { response } = await callModel(live, model, request, {
       purpose,
       exchangeId,
       signal,
       retry,
+      // No steers to leave out: a steerable agent's output is `str`, so it never calls here.
       record: steps === undefined ? undefined : { steps, digest: requestSha256(request, new Set()) },
     });
     // A stop that lands during the call wins over its reply.

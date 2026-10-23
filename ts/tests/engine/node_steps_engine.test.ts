@@ -29,8 +29,8 @@
  *
  * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
  * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
- * `record` returns the step's `n` and `nextN` the next one, counting `prior`; through the engine
- * `n` continues across the node's starts. A step without a `kind` is a host error.
+ * `record` returns what its recorder returns: through the engine, the committed record's `n`, which
+ * continues across the node's starts. A step without a `kind` is a host error.
  *
  * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
  * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step either;
@@ -81,7 +81,7 @@ class PlainNode extends StepNode {
 }
 
 test("NodeSteps checks its fields", () => {
-  const record = (): void => {};
+  const record = (): number => 1;
 
   expect(() => new NodeSteps(true as never, [], record)).toThrow(TypeError);
   expect(() => new NodeSteps(0, [], record)).toThrow(RangeError);
@@ -90,19 +90,13 @@ test("NodeSteps checks its fields", () => {
   expect(() => new NodeSteps(1, [], null as never)).toThrow(TypeError);
 });
 
-test("NodeSteps.record returns each step's n, and nextN the next one, counting the prior steps", () => {
-  const fresh = new NodeSteps(1, [], () => {});
-  expect(fresh.nextN()).toBe(1);
-  expect([fresh.record({ kind: "test" }), fresh.record({ kind: "test" }), fresh.record({ kind: "test" })]).toEqual([1, 2, 3]);
-  expect(fresh.nextN()).toBe(4);
-
-  const resumed = new NodeSteps(2, [{ kind: "test" }, { kind: "test" }], () => {});
-  expect(resumed.nextN()).toBe(3);
-  expect(resumed.record({ kind: "test" })).toBe(3);
+test("NodeSteps.record returns the n its recorder returns", () => {
+  const steps = new NodeSteps(1, [], () => 7);
+  expect(steps.record({ kind: "test" })).toBe(7);
 });
 
 test("eval node passes steps only to opted in nodes and checks the type", async () => {
-  const steps = new NodeSteps(1, [], () => {});
+  const steps = new NodeSteps(1, [], () => 1);
   const seen: unknown[] = [];
   const body = (caps: NodeCaps): NodeResult => {
     seen.push(caps.steps);
@@ -336,11 +330,12 @@ describe.each(WORKERS)("resume sees the second start and the prior steps (numWor
 test.each(WORKERS)("an engine step's n is the node's step count, across starts (numWorkers %p)", async (numWorkers) => {
   const seen: number[] = [];
   const node = crashingNode((steps) => {
-    seen.push(steps.nextN(), steps.record({ kind: "test", event: "started" }), steps.nextN());
+    seen.push(steps.record({ kind: "test", event: "started" }));
     return new Output("done");
   });
   const resumed = await crashAndResume(crashing(node, numWorkers), numWorkers);
-  expect(seen).toEqual([2, 2, 3]);
+  // `record` returns the committed record's n, which counts the first start's step.
+  expect(seen).toEqual([2]);
   const steps = records(resumed, "work").filter((record) => record instanceof NodeStepRecord);
   expect(steps.map((record) => (record as NodeStepRecord).n)).toEqual([1, 2]);
 });

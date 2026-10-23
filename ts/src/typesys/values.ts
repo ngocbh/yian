@@ -42,6 +42,11 @@ export class TypeCheckError extends RangeError {
 /** A record-field/list-index path to a value, as `TypeCheckError.path` holds it. */
 type ValuePath = readonly (string | number)[];
 
+/** Return `text` with each lone surrogate replaced by `?`, so it can be written as JSON. */
+export function jsonSafeText(text: string): string {
+  return text.replace(/\p{Cs}/gu, "?");
+}
+
 /**
  * Cut text to `YIAN_MAX_SHOWN_VALUE_CHARS` (200 by default) for a message, counting code points.
  *

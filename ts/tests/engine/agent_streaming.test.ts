@@ -120,7 +120,7 @@ test("plain chat streams text chunks then one final chunk", async () => {
   const { live, events, chunks } = sinks();
   const usage = new Usage({ inputTokens: 5, outputTokens: 3, totalTokens: 8 });
   const replyEvents = [...streamed("hello", " big", " world").slice(0, -1), new UsageReport(usage), FINISH];
-  const response = await callModel(live, model(replyEvents), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const { response } = await callModel(live, model(replyEvents), REQUEST, { purpose: "chat", exchangeId: "x1" });
   expect(response.message.text()).toBe("hello big world");
   expect(chunks).toEqual([chunk("hello"), chunk(" big"), chunk(" world"), chunk("", 1, true)]);
   const identity = { nodeId: "writer", exchangeId: "x1", purpose: "chat" as const, ...CONFIG, attempt: 1 };

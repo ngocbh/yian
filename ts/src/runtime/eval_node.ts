@@ -1062,7 +1062,7 @@ async function evaluateNode(
     caps.steps = new NodeSteps(steps.starts, steps.prior, (step, options) => {
       if (closed) throw new CapabilityFault(new Error("node steps capability is closed"));
       try {
-        steps.record(step, options);
+        return steps.record(step, options);
       } catch (error) {
         if (error instanceof CapabilityFault) onFault(error);
         throw error;

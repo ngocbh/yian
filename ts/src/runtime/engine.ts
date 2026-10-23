@@ -36,7 +36,7 @@ import {
   requireModels,
   requireSteering,
 } from "./eval_node.ts";
-import type { OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
+import type { NodeStepRecord, OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
 import {
   commitPrepared,
   type GrowBuilder,
@@ -422,7 +422,9 @@ export class FlowEngine {
       // control flow, not a host fault.
       if (signal.aborted && !(options?.settled === true && state.result === null)) throw signal.reason;
       try {
-        commitPrepared(log, state, prepareNodeStep(state, nodeId, step));
+        const prepared = prepareNodeStep(state, nodeId, step);
+        commitPrepared(log, state, prepared);
+        return (prepared.record as NodeStepRecord).n;
       } catch (error) {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);

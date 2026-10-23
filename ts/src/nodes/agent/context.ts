@@ -22,7 +22,7 @@ import type { Scheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
-import { FileRef, type Type, type ValueRecord } from "../../typesys/values.ts";
+import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import type { NodeCaps, Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 
@@ -106,24 +106,23 @@ export interface RetrySettings {
   readonly random?: () => number;
 }
 
-/** Return the retry settings of `ctx`'s model calls. */
-export function retrySettings(ctx: AgentRunContext): RetrySettings {
-  return { scheduler: ctx.scheduler, random: ctx.random };
-}
-
 /** The token counts a model call step records. */
 type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "reasoningTokens">;
 
-/** What a `model_call` step records of a call whose reply arrived. Times are epoch milliseconds. */
-export interface ModelCallFields {
+/** What every `model_call` step records. Times are epoch milliseconds. */
+interface CallFields {
   readonly purpose: ModelCallPurpose;
   readonly model: string;
   /** The request's digest (`requestSha256`). */
   readonly requestSha256: string;
-  /** When the call's last attempt started. */
+  /** When the attempt started. */
   readonly startedAt: number;
-  /** When that attempt's first event arrived; `null` before one did. */
+  /** When the attempt's first event arrived; `null` before one did. */
   readonly firstTokenAt: number | null;
+}
+
+/** What a `model_call` step records of a call whose reply arrived. */
+export interface ModelCallFields extends CallFields {
   /** The reply, its media in file form (`inlineToFile`). */
   readonly output: Message;
   readonly responseId: string | null;
@@ -132,13 +131,8 @@ export interface ModelCallFields {
   readonly usage: UsageCounts | null;
 }
 
-/** What a `model_call` step records of a failed attempt. Times are epoch milliseconds. */
-export interface FailedCallFields {
-  readonly purpose: ModelCallPurpose;
-  readonly model: string;
-  readonly requestSha256: string;
-  readonly startedAt: number;
-  readonly firstTokenAt: number | null;
+/** What a `model_call` step records of a failed attempt. */
+export interface FailedCallFields extends CallFields {
   /** What arrived before the failure, or `null` before anything did. */
   readonly output: Message | null;
   /** The usage the provider reported before the failure, or `null`. */
@@ -156,15 +150,15 @@ export interface ToolResultFields {
   /** The text the model reads, exactly as its `ToolResultPart` holds it. */
   readonly output: string;
   readonly isError: boolean;
-  /** Set only on a result yian wrote in place of running the call. */
-  readonly closed?: "skipped" | "interrupted";
+  /** Set only on a result yian wrote in place of running the call: one a host interrupt skipped. */
+  readonly closed?: "skipped";
 }
 
 /**
  * Writes one AGENT start's steps through the engine's `NodeSteps`, each as a JSON object with a
  * `kind`: `model_call` for a model call that returned or an attempt that failed, `tool_result`
- * for a tool call's result. Without engine steps (direct loop tests) it records nothing but still
- * numbers the steps.
+ * for a tool call's result. Each write returns the step's `n`, as the engine committed it. Without
+ * engine steps (direct loop tests) it records nothing and numbers the steps itself.
  */
 export class AgentSteps {
   /** The run's folder, where reply media is stored; `null` without a log. */
@@ -197,11 +191,6 @@ export class AgentSteps {
     return this.#clock();
   }
 
-  /** Return the `n` the next step gets. */
-  nextN(): number {
-    return this.#steps?.nextN() ?? this.#count + 1;
-  }
-
   /**
    * Write a call whose reply arrived as a `model_call` step: `purpose`, `model`,
    * `request_sha256`, `started_at`, `first_token_at`, `output` (`yian.message.v1`), `response_id`,
@@ -232,23 +221,20 @@ export class AgentSteps {
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
    */
-  failedModelCall(call: FailedCallFields, error: unknown, options?: { settled?: boolean }): number {
+  failedModelCall(call: FailedCallFields, error: unknown): number {
     let output: JsonObject | null = null;
     try {
       output = call.output === null ? null : inlineToFile(call.output, this.runDir).toJSON();
     } catch {
       // Media that can't be stored must not replace the call's own error.
     }
-    return this.#record(
-      {
-        ...this.#callStep(call),
-        output,
-        usage: usageStep(call.usage),
-        error: errorStep(this.#scrub(error)),
-        retry_in: call.retryIn,
-      },
-      options,
-    );
+    return this.#record({
+      ...this.#callStep(call),
+      output,
+      usage: usageStep(call.usage),
+      error: errorStep(this.#scrub(error)),
+      retry_in: call.retryIn,
+    });
   }
 
   /**
@@ -271,7 +257,7 @@ export class AgentSteps {
   }
 
   /** The fields every `model_call` step starts with. */
-  #callStep(call: ModelCallFields | FailedCallFields): ValueRecord {
+  #callStep(call: CallFields): ValueRecord {
     return {
       kind: "model_call",
       purpose: call.purpose,
@@ -282,7 +268,7 @@ export class AgentSteps {
     };
   }
 
-  #record(step: ValueRecord, options: { settled?: boolean } | undefined): number {
+  #record(step: ValueRecord, options?: { settled?: boolean }): number {
     if (this.#steps === undefined) return ++this.#count;
     return this.#steps.record(step, options);
   }
@@ -309,12 +295,7 @@ function usageStep(usage: UsageCounts | null): ValueRecord | null {
 function errorStep(error: unknown): { kind: string; message: string } {
   const kind = error instanceof ProviderError ? error.kind : error instanceof Error ? error.name : typeof error;
   const message = error instanceof Error ? error.message : String(error);
-  return { kind: clean(kind), message: clean(message) };
-}
-
-/** Return `text` with each lone surrogate replaced by `?`, so it can be written as JSON. */
-function clean(text: string): string {
-  return text.replace(/\p{Cs}/gu, "?");
+  return { kind: jsonSafeText(kind), message: jsonSafeText(message) };
 }
 
 /**

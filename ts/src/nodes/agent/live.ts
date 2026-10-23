@@ -151,7 +151,8 @@ export function errorName(error: unknown): string {
  * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call;
  *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
  *   waits; `record` holds the steps to write to and the request's digest (`requestSha256`).
- * @returns The successful attempt's reply, its media in file form with `record`.
+ * @returns The successful attempt's reply, its media in file form with `record`, and with
+ *   `record` the `n` of the reply's `model_call` step (`null` without).
  * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
  *   reply and `null` usage for a cut wait; it is never marked.
  */
@@ -167,7 +168,7 @@ export async function callModel(
     retry?: RetrySettings;
     record?: { steps: AgentSteps; digest: string };
   },
-): Promise<Response> {
+): Promise<{ response: Response; n: number | null }> {
   const { purpose, exchangeId, signal, interrupt, retry = {}, record } = options;
   const { scheduler = realScheduler, random } = retry;
   const emitEvent = live?.emitEvent ?? null;
@@ -253,17 +254,18 @@ export async function callModel(
     emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(error), attempt }));
     throw error;
   }
+  let n: number | null = null;
   if (record !== undefined) {
     const reply = inlineToFile(response.message, runDir);
     const { usage: used, finishReason, responseId } = response;
-    record.steps.modelCall(
+    n = record.steps.modelCall(
       { ...call(), output: reply, responseId, finish: finishReason, usage: used },
       { settled: true },
     );
     response = new Response({ message: reply, usage: used, finishReason, responseId });
   }
   emitEvent?.(new ModelCallFinished({ ...identity, usage: usageOf(response), attempt }));
-  return response;
+  return { response, n };
 }
 
 /**

@@ -21,7 +21,7 @@ import { reprText } from "../../diagnostics.ts";
 import { realScheduler } from "../../platform.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError } from "../../tools/errors.ts";
 import { ToolSet } from "../../tools/registry.ts";
-import { jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
+import { jsonSafeText, jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
 import { CapabilityFault, hostOutput, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { HostToolCall, outputContractType } from "../contracts.ts";
 
@@ -61,11 +61,6 @@ export function backoff(failure: number, error: unknown, random: () => number): 
   return delay / 2 + (random() * delay) / 2;
 }
 
-/** Return `text` with each lone surrogate replaced by `?`, so it can be written as JSON. */
-function clean(text: string): string {
-  return text.replace(/\p{Cs}/gu, "?");
-}
-
 /** The `kind` of each step a TOOL records. */
 const STEP_KIND = "tool_attempt";
 
@@ -78,14 +73,14 @@ function errorStep(error: unknown): { type: string; message: string } {
   } catch {
     name = jsTypeName(error);
   }
-  const type = shownText(clean(name));
+  const type = shownText(jsonSafeText(name));
   let text: string;
   try {
     text = error instanceof Error ? String(error.message) : String(error);
   } catch {
     text = `<${type} object>`;
   }
-  return { type, message: shownText(clean(text)) };
+  return { type, message: shownText(jsonSafeText(text)) };
 }
 
 /**

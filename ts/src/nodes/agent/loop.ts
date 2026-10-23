@@ -50,7 +50,6 @@ import {
   drainSteers,
   interruptSignal,
   requestSha256,
-  retrySettings,
   sentCredentials,
   ToolIterationLimitError,
 } from "./context.ts";
@@ -126,7 +125,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     ctx.runDir ?? null,
     (error) => scrubCallCredentials(error, ctx.llmConfig, { env: ctx.models.env, sent: sentCredentials(ctx) }),
   );
-  const retry = retrySettings(ctx);
+  const retry = { scheduler: ctx.scheduler, random: ctx.random };
   const messages = [system, ...ctx.messages];
   ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.promptText, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
@@ -173,9 +172,9 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     }
     const exchangeId = newExchangeId();
     const request = new Request({ messages, tools: bound });
-    let response: Response;
+    let called: Awaited<ReturnType<typeof callModel>>;
     try {
-      response = await callModel(live, model, request, {
+      called = await callModel(live, model, request, {
         purpose: "chat",
         exchangeId,
         signal: ctx.signal,
@@ -192,8 +191,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       }
       throw error;
     }
-    // The reply's step is the last one written: failed attempts come before it.
-    const n = steps.nextN() - 1;
+    // With `record`, `n` is the reply's `model_call` step.
+    const { response, n } = called as { response: Response; n: number };
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
     rejectInvalidArguments(response.message);
@@ -372,8 +371,10 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     }
     return { error, granted: true };
   }
-  // The key names the reply's `model_call` step and the call's place in it. Outside a run (no run
-  // id) the tool set gives each call a fresh id.
+  // The key names the reply's `model_call` step and the call's place in it. Steps outlive a start,
+  // so a resumed start's steps are numbered after the earlier starts' and its keys never repeat
+  // theirs: a key can't dedupe a different call's side effect. Outside a run (no run id) the tool
+  // set gives each call a fresh id.
   const runId = toolset.runId;
   const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });

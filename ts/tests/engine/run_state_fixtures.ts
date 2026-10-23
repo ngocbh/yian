@@ -1008,6 +1008,7 @@ export function stateSnapshot(state: RunState): Record<string, unknown> {
     pool: state.pool.toWire(),
     inputsCommitted: state.inputsCommitted,
     pendingCommits: [...state.pendingCommits],
+    producers: [...state.producers],
     nodeState: [...state.nodeState],
     edgeState: [...state.edgeState],
     ready: [...state.ready],
@@ -1671,6 +1672,8 @@ export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise
  * 2026-08-14T12:00:00Z, and `loaded`'s flow files recorded.
  *
  * @param options.privateFlow The graph to run, a copy of `loaded.compiled` by default.
+ * @param options.learnable Whether the run is learnable (`false` by default); a learnable run's
+ *   graph gets its execution layout first.
  * @returns The state after the record.
  */
 export function startedRun(
@@ -1681,10 +1684,12 @@ export function startedRun(
     numWorkers?: number;
     effective?: Record<string, Record<string, unknown>>;
     privateFlow?: CompiledFlow;
+    learnable?: boolean;
   } = {},
 ): RunState {
-  const { inputs = {}, numWorkers = 0, effective = {} } = options;
+  const { inputs = {}, numWorkers = 0, effective = {}, learnable = false } = options;
   const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
+  if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
   const pool = new VariablePool(privateFlow.startId);
   pool.set(privateFlow.startId, structuredClone(inputs));
   seedSystemClock(pool, Date.UTC(2026, 7, 14, 12));
@@ -1699,6 +1704,7 @@ export function startedRun(
       startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
       effectiveLlmByStaticPath: effective,
       numWorkers,
+      learnable,
       // As a real run of `loaded` records it, so resume compiles it.
       flow: loaded.source,
     }),

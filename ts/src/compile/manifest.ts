@@ -98,6 +98,7 @@ const IGNORED_NODE_FIELDS = [
   "needsSteps",
   "needsSteering",
   "needsModels",
+  "derived",
 ];
 
 // A kind owns both the canonical fields that affect its behavior and known noncanonical fields

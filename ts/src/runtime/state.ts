@@ -33,7 +33,7 @@ import {
   RunSucceeded,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { SourceRef, sameSource } from "../expr/lineage.ts";
+import { ResolvedValue, SourceRef, sameSource } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
   EvaluationEvidence,
@@ -64,6 +64,7 @@ import {
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
+  fieldOf,
   isRecord,
   jsTypeName,
   normalizeTypedFiles,
@@ -123,6 +124,7 @@ import {
   SourceEntry,
   sameSourceEntry,
   SYSTEM_PREFIX,
+  sourcePath,
   TraceDelta,
   TraceOccurrence,
   TraceTerminal,
@@ -340,6 +342,12 @@ export class RunState {
    * `NodeSucceeded` applies it to the pool; a resume drops it, and the node writes a new one.
    */
   pendingCommits = new Map<string, PendingCommit>();
+  /**
+   * The seq of the accepted `PoolCommitRecord` that last wrote each pool name: a store key, or
+   * `system.<name>` for a system value. Set when a commit is applied, deleted with its pool entry,
+   * so it holds exactly the pool's names and never grows past them.
+   */
+  producers = new Map<string, number>();
   /** Run-resolved agent configuration by stable static node path. */
   effectiveLlmByStaticPath: Record<string, JsonObject> = {};
   /**
@@ -409,6 +417,41 @@ export interface PendingCommit {
   readonly key: string;
   /** The value's canonical typed wire text. */
   readonly valueJson: string;
+}
+
+/**
+ * Pair one lookup's value and presence in `pool` with the commit that wrote it, as
+ * `RetainedTrace.resolve` pairs them from the retained trace, but with the seq of the name's
+ * accepted `PoolCommitRecord` (`producers`) as its source, so a run without a trace can build a
+ * node's input route. The paths read the same names (`sourcePath`). The one difference: a system
+ * value gets its run-start commit as its source, where the trace gives it none.
+ *
+ * @throws ExpressionError when a dotted segment of `path` is empty.
+ * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
+ *   every pool name.
+ */
+export function resolveFromPool(
+  path: string,
+  pool: VariablePool,
+  producers: ReadonlyMap<string, number>,
+  runId: string,
+): ResolvedValue {
+  const read = sourcePath(path, pool.startId, (name) => pool.store.has(name));
+  if (read === null) return new ResolvedValue(null, false);
+  const { name, projection } = read;
+  const typed = name.startsWith(SYSTEM_PREFIX)
+    ? pool.system.get(name.slice(SYSTEM_PREFIX.length))
+    : pool.store.get(name);
+  if (typed === undefined) return new ResolvedValue(null, false);
+  let value = typed.toObject();
+  for (const part of projection) {
+    const [present, next] = fieldOf(value, part);
+    if (!present) return new ResolvedValue(null, false);
+    value = next;
+  }
+  const seq = producers.get(name);
+  if (seq === undefined) throw new RangeError(`pool name ${reprText(name)} has no pool_commit in the producer index`);
+  return new ResolvedValue(value, true, new SourceRef(runId, seq, projection));
 }
 
 /**
@@ -1935,8 +1978,10 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
     state.pendingCommits.set(plan.nodeId, Object.freeze(pending));
   } else if (input === null) {
     state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value);
+    state.producers.set(plan.key, prepared.expectedSequence);
   } else {
     state.pool.store.set(plan.key, value);
+    state.producers.set(plan.key, prepared.expectedSequence);
     state.input = input;
     state.ready = [plan.startId];
     state.inputsCommitted = true;
@@ -2049,6 +2094,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
 
   appendAndVerify(log, prepared);
   state.pool.store.set(delta.commitTarget, apply.value);
+  state.producers.set(delta.commitTarget, record.commit);
   state.pendingCommits.delete(delta.nodeId);
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const edgeId of delta.outgoingEdgeIds) state.edgeState.set(edgeId, NodeState.TAKEN);
@@ -2395,6 +2441,7 @@ function requireInitialized(state: RunState): void {
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
     isExactly(state.pendingCommits, Map) &&
+    isExactly(state.producers, Map) &&
     isExactly(state.interruptedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
@@ -4282,6 +4329,7 @@ function requirePristine(state: RunState): void {
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
     isExactly(state.pendingCommits, Map) &&
+    isExactly(state.producers, Map) &&
     isExactly(state.interruptedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
@@ -4309,6 +4357,7 @@ function requirePristine(state: RunState): void {
     state.nodeStarts.size === 0 &&
     state.nodeSteps.size === 0 &&
     state.pendingCommits.size === 0 &&
+    state.producers.size === 0 &&
     state.inputsCommitted === false &&
     state.interruptedAttempts.size === 0 &&
     state.lastStopSequence === null &&
@@ -4674,6 +4723,7 @@ function applyGrowth(
       state.nodeState.delete(nodeId);
       state.unknownIncoming.delete(nodeId);
       state.pool.store.delete(nodeId);
+      state.producers.delete(nodeId);
       state.depth.delete(nodeId);
       state.wiringOverrides.delete(nodeId);
       state.growthOwner.delete(nodeId);

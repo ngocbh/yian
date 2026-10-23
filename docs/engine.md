@@ -234,7 +234,12 @@ crash between the two leaves an orphan commit: the resume retries the node, whic
 writes a new commit; the orphan stays in the log, unread. The run's inputs and system values are
 `pool_commit`s right after `run_started`, applied at once; START is ready only after the START
 inputs' commit, so a log that ends before it holds no inputs yet and isn't resumable
-(`resumeFlow` refuses it and leaves it as it is).
+(`resumeFlow` refuses it and leaves it as it is). The reducer keeps a producer index: each pool
+name maps to the seq of the accepted `pool_commit` that last wrote it, pruned with the pool and
+rebuilt by replay. A derived node (START, END, LOOP, CALL, MAP, whose value only reads earlier
+values through its binding) gets an input route in every run; in a non-learnable run its sources
+are those commits, and the route is kept in memory only, so such a run still keeps no retained
+trace and writes nothing more.
 
 `RunStartedRecord` holds the complete effective model map of the agents resolved at
 run start. An agent whose `llm_config` reads a value known only when it runs (see

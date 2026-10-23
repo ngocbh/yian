@@ -1126,7 +1126,12 @@ Node 22, and so does every unit test; a change keeps both green.
   returned, then applies the plan, with no `await` in between, so nothing interleaves between the
   append and the apply. `commitInitialPool` commits the run start's commits (the system values in
 key order, then the START inputs) after `RunStarted`; a node's `pool_commit` waits in
-`pendingCommits` until its `node_succeeded` names it, and a resume drops it. Frontier order:
+`pendingCommits` until its `node_succeeded` names it, and a resume drops it. `producers` maps each
+pool name (a store key, or `system.<name>`) to the seq of the accepted `pool_commit` that last wrote
+it: set when a commit is applied, deleted with its pool entry, rebuilt by replay, so it never grows
+past the pool. A `derived` node (START, END, LOOP, CALL, MAP) evaluates with binding capture in
+every run; without a retained trace its sources come from `resolveFromPool(path, pool, producers,
+runId)`, and the route stays in memory with the outcome and is dropped after the commit. Frontier order:
 START is ready after the START inputs' commit; a success walks its
   target's outgoing edges in order and appends each successor when its last edge from the target
   settles and its join is ready; a route settles its edges depth first in stored order, skips the

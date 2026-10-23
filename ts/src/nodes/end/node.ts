@@ -63,6 +63,8 @@ export class EndNode extends Node {
   static readonly ID = "__end__";
 
   readonly kind = NodeKind.END;
+  /** Its value only reads earlier pool values through its binding. */
+  override readonly derived: boolean = true;
 
   /** The terminal's mode: one value, a record of named outputs, or a MAP fan-in list. */
   mode: "value" | "record" | "list";

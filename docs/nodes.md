@@ -185,6 +185,7 @@ branching on kind.
 | `granted_tools()` | base; agent overrides | tool and group ids the run boundary checks against the run's tools before the run starts |
 | `needs_steps` | tool (TS yian: also every agent, which records a `model_attempt` step before each model retry) | receive `caps["steps"]`, a `NodeSteps`: the node's start count, the steps its earlier starts recorded, and `record(step)`, which appends a step to the run log and returns once it is applied (TS yian: once the run stops, `record` throws and appends nothing, except `record(step, { settled: true })` for an effect that settled before the stop, while the run has no terminal result) |
 | `needs_live_events` | agent | receive transient `emit_stream`/`emit_event` sinks for the host callbacks that exist |
+| `derived` (TS yian) | start, end, loop, call, map | the value only reads earlier pool values through the binding, and `forward` is pure and synchronous; the engine builds the node's input route in every run, from the pool and the reducer's producer index when the run keeps no trace |
 | `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
 
 A redirected target is an exclusive, inert logical anchor: it has exactly one

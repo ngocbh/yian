@@ -152,13 +152,16 @@ loadFlow(text: string, options?: {
   searchPaths?: readonly string[] | null;
   sourceLabel?: string;            // default "<flow>"
   baseDir?: string | null;
+  codeRoot?: string | null;
   childResolver?: ((path: string, version: string | null) => ComposedFlow | Promise<ComposedFlow>) | null;
   env?: (name: string) => string | undefined;
 }): Promise<ComposedFlow>
 ```
 
 See [`load_flow`][docs/api.md#load_flow]. `baseDir` is the directory a CODE node's `./file.ts:fn`
-reference resolves against (default: the first search path, else the current directory). A malformed
+reference resolves against (default: the first search path, else the current directory). With
+`codeRoot`, a reference whose file's real path is outside the real path of `codeRoot` is a
+`LoadError`; inline bodies aren't confined. A malformed
 flow rejects with `LoadError` (a `RangeError`), whose `diagnostic` is a `Diagnostic` located in the
 source.
 
@@ -608,7 +611,8 @@ Node 22, and so does every unit test; a change keeps both green.
   reader compiles nothing at build. The awaited load step, `checkFlowCode`, which the loader
   awaits once after assembly (each def's CODE nodes first, in written order, then the root's),
   checks every CODE node of the flow and its child flows: an inline body's syntax and a
-  reference's file, refusing a Python-style `module:function`, running no code. A CODE node's
+  reference's file, refusing a Python-style `module:function` and, when the load has a
+  `codeRoot`, a reference whose file's real path is outside it, running no code. A CODE node's
   `baseDir`, the directory its reference resolves against, comes from `BuildContext.baseDir`:
   `loadFlow`'s `baseDir`, else its first search path, else the current directory, for the root,
   its defs and its inline bodies alike; a file read through the search path uses its own

@@ -2770,7 +2770,9 @@ cached there (see below), so an edited file takes effect in a new process or on 
 thread. It is imported by the runtime's own module rules: on Node, the nearest `package.json`
 decides whether a `.ts` or `.js` file is an ES module, so a helper that uses `import` needs
 `"type": "module"` there (or the `.mjs` extension; `npm init` writes `"type": "commonjs"`); Bun
-and the single-file binaries load either form. Loading checks an inline body's syntax and that a reference's file exists, refuses
+and the single-file binaries load either form. Loading checks an inline body's syntax, that a
+reference's file exists and, when the host passes `codeRoot` (see
+[api.md](api.md#load_flow)), that the file's real path is inside it; it refuses
 a Python-style `module:function` value such as `pkg.mod:fn` ("use `./file.ts:fn`"), and
 runs no code. A CODE syntax error is reported after the flow's other load errors, such as
 an invalid `output:` type, because the check runs after the flow is assembled.

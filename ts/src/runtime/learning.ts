@@ -1127,20 +1127,17 @@ export function failureJson(failure: Failure): JsonObject {
 /**
  * Project the actual accepted outcome without assuming model evidence.
  *
- * Returns the episode status, the success output (`null` on failure) and the failure JSON (`null`
- * on success).
+ * `committed` is a success's committed value, as `RetainedTrace.lookupSource` reads it from the
+ * commit the success names; other outcomes ignore it. Returns the episode status, the success
+ * output (`null` on failure) and the failure JSON (`null` on success).
  *
- * @throws RangeError when a success has no canonical typed value.
  * @throws TypeError when `record` isn't exactly one of the outcome record classes.
  */
-export function episodeOutcome(record: OutcomeRecord): [MemoryEpisodeStatus, JsonValue, JsonObject | null] {
-  if (isExactly(record, NodeSucceededRecord)) {
-    const wire: unknown = record.value;
-    if (!isRecord(wire) || !Object.hasOwn(wire, "value")) {
-      throw new RangeError("successful record has no canonical typed value");
-    }
-    return [MemoryEpisodeStatus.SUCCEEDED, canonicalSeed(wire.value)[1], null];
-  }
+export function episodeOutcome(
+  record: OutcomeRecord,
+  committed: JsonValue = null,
+): [MemoryEpisodeStatus, JsonValue, JsonObject | null] {
+  if (isExactly(record, NodeSucceededRecord)) return [MemoryEpisodeStatus.SUCCEEDED, canonicalSeed(committed)[1], null];
   if (isExactly(record, NodeRoutedRecord)) {
     if (record.terminalFailure === null) {
       return [MemoryEpisodeStatus.SUCCEEDED, { kind: "route", handle: record.handle }, null];
@@ -1411,7 +1408,8 @@ export function projectOwnerContexts(
       // An accepted outcome holds its forward capture while learning.
       const capture = record.forwardCapture!;
       const evidence = record.evidence;
-      const [status, output, failure] = episodeOutcome(record);
+      const committed = isExactly(record, NodeSucceededRecord) ? trace.lookupSource(occurrence.source) : null;
+      const [status, output, failure] = episodeOutcome(record, committed);
       const executionScope = executionScopePayload(capture.scope);
       const coordinates = {
         execution_seq: BigInt(occurrence.source.executionSeq),

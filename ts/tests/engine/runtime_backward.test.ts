@@ -91,8 +91,10 @@
  *   `test_canonical_file_input_feedback_keeps_literal_and_opaque_stops` (2 rows) run on
  *   `ownerEngine`'s hand-built root-only memory layout, not Python's resolved one; `middle`'s
  *   `captureBackwardContext` is patched on the instance.
- * - `test_preseeded_root_output_does_not_invent_an_executed_producer` (2 rows): the flow's
- *   readonly `endId` is assigned through a cast, and the engine grows with `noGrowth`.
+ * - `test_preseeded_root_output_does_not_invent_an_executed_producer`: only the row where END is
+ *   START, whose output is the run inputs' commit (source 0); a run start commits only the
+ *   system values and the START inputs, so END can't be preseeded. The flow's readonly `endId` is
+ *   assigned through a cast, and the engine grows with `noGrowth`.
  * - `test_backward_context_is_trace_owned_detached_and_survives_replay`: the context is frozen, so
  *   writing to its inputs throws a `TypeError` (asserted) where Python's write lands on a detached
  *   copy; the replay's recapture guard spies on `Node.prototype.captureBackwardContext`.
@@ -219,13 +221,13 @@ import {
   BackwardReadyRecord,
   BackwardStartedRecord,
   canonicalTyped,
-  encodePool,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
   MemoryRunLog,
   NodeStartedRecord,
   NodeSucceededRecord,
+  PoolCommitRecord,
   RecordEnvelope,
   routePayload,
   type RunRecord,
@@ -233,11 +235,11 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   type PreparedTransition,
   prepareNodeRouted,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   prepareRunStarted,
   replayRecords,
   RunState,
@@ -258,6 +260,7 @@ import {
   noGrowth,
   ownerEngine,
   POLICY,
+  prepareOutput,
   RecordingBackwardNode,
   rejected,
   RUN_ID,
@@ -330,7 +333,7 @@ test("a terminal trace append rejection leaves every index unchanged", () => {
     [END_ID, null],
   ] as const) {
     commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-    prepared = prepareNodeSucceeded(state, nodeId, value, {
+    prepared = prepareOutput(log, state, nodeId, value, {
       forwardCapture: forwardCapture(state.flow.nodes.get(nodeId)!, {}),
     });
     if (nodeId === START_ID) commitPrepared(log, state, prepared);
@@ -373,7 +376,7 @@ test("a causal route's trace latch is installed only after append", () => {
   commitPrepared(
     log,
     state,
-    prepareNodeSucceeded(state, "unrelated", "done", {
+    prepareOutput(log, state, "unrelated", "done", {
       forwardCapture: forwardCapture(state.flow.nodes.get("unrelated")!, {}),
     }),
   );
@@ -429,10 +432,10 @@ function step(
   return delta.apply();
 }
 
-/** The chain's occurrences: START (seq 1), `p` (seq 3) and END (seq 5). */
-const S = new SourceRef(RUN, 1);
-const P = new SourceRef(RUN, 3);
-const E = new SourceRef(RUN, 5);
+/** The chain's occurrences: START (seq 2), `p` (seq 5) and END (seq 8). */
+const S = new SourceRef(RUN, 2);
+const P = new SourceRef(RUN, 5);
+const E = new SourceRef(RUN, 8);
 const ZERO = new SourceRef(RUN, 0);
 
 /** The options of `chainTrace`. */
@@ -456,11 +459,8 @@ interface ChainOptions {
  * terminal. Returns the trace, the nodes and the envelopes.
  */
 function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pScope = null }: ChainOptions = {}) {
-  const pool = new VariablePool(START_ID);
-  pool.set(START_ID, { x: 1n });
   const run = new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(pool),
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
@@ -473,7 +473,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
   const pCapture = new ForwardCapture(
     { v: 1n, w: 1n },
     ValueRoute.record([
-      ["v", sourceRoute(1, ["x"])],
+      ["v", sourceRoute(2, ["x"])],
       ["w", sourceRoute(0, ["x"])],
     ]),
     {
@@ -483,7 +483,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
       scope: pScope,
     },
   );
-  const endCapture = new ForwardCapture({ value: pOutput }, ValueRoute.record([["value", sourceRoute(3)]]), {
+  const endCapture = new ForwardCapture({ value: pOutput }, ValueRoute.record([["value", sourceRoute(5)]]), {
     inputNames: ["value"],
   });
   const nodes = { start: new TraceNode(START_ID), p: new TraceNode("p"), end: new TraceNode(END_ID) };
@@ -492,18 +492,33 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
   nodes.p.executionScope = pScope;
   const envelopes = [
     at(0, run),
-    at(1, new NodeStartedRecord(START_ID)),
-    at(2, new NodeSucceededRecord(START_ID, START_ID, wire({ x: 1n }), { forwardCapture: startCapture })),
-    at(3, new NodeStartedRecord("p")),
-    at(4, new NodeSucceededRecord("p", "p", wire(pOutput), { forwardCapture: pCapture })),
-    at(5, new NodeStartedRecord(END_ID)),
-    at(6, new NodeSucceededRecord(END_ID, END_ID, wire(pOutput), { forwardCapture: endCapture })),
+    at(1, new PoolCommitRecord(START_ID, START_ID, wire({ x: 1n }))),
+    at(2, new NodeStartedRecord(START_ID)),
+    at(3, new PoolCommitRecord(START_ID, START_ID, wire({ x: 1n }))),
+    at(4, new NodeSucceededRecord(START_ID, 3, { forwardCapture: startCapture })),
+    at(5, new NodeStartedRecord("p")),
+    at(6, new PoolCommitRecord("p", "p", wire(pOutput))),
+    at(7, new NodeSucceededRecord("p", 6, { forwardCapture: pCapture })),
+    at(8, new NodeStartedRecord(END_ID)),
+    at(9, new PoolCommitRecord(END_ID, END_ID, wire(pOutput))),
+    at(10, new NodeSucceededRecord(END_ID, 9, { forwardCapture: endCapture })),
   ];
-  let trace = step(null, envelopes[0]!, null, { rootEndId: END_ID, rootInputNames: ["x"] });
-  const owners = [null, nodes.start, null, nodes.p, null, nodes.end];
+  let trace = step(null, envelopes[0]!, null, { rootStartId: START_ID, rootEndId: END_ID, rootInputNames: ["x"] });
+  trace = step(trace, envelopes[1]!, null, { initialCommit: true });
+  const owners = [null, null, nodes.start, null, null, nodes.p, null, null, nodes.end];
   for (const [index, owner] of owners.entries()) {
-    const options = index === 5 ? { terminalSucceeded: true, terminalOutputJson: logJson(wire(pOutput)) } : {};
-    trace = step(trace, envelopes[index + 1]!, owner, options);
+    const envelope = envelopes[index + 2]!;
+    const record = envelope.record;
+    const options: PrepareTraceOptions = {};
+    if (record instanceof NodeSucceededRecord) {
+      const commit = envelopes[record.commit]!.record as PoolCommitRecord;
+      options.committed = { key: commit.key, valueJson: logJson(commit.value) };
+      if (record.nodeId === END_ID) {
+        options.terminalSucceeded = true;
+        options.terminalOutputJson = logJson(wire(pOutput));
+      }
+    }
+    trace = step(trace, envelope, owner, options);
   }
   return { trace, nodes, envelopes };
 }
@@ -543,7 +558,7 @@ test("chainTrace drives START, p and END to a terminal trace", () => {
   expect(trace.terminal!.source).toEqual(E);
   expect(trace.terminal!.output).toBe(2n);
   expect(trace.occurrence(P).memoryScope).toBe(nodes.p.memoryScope);
-  expect(envelopes).toHaveLength(7);
+  expect(envelopes).toHaveLength(11);
 });
 
 test("validateAttributedBackward accepts the exact transfers END → p → START → source 0", () => {
@@ -629,7 +644,7 @@ test.each<[string, (results: AttributedBackwardResult[], trace: RetainedTrace) =
   [
     "feedback to an unavailable occurrence",
     (_results, trace) => {
-      trace.terminal = new TraceTerminal(true, new SourceRef(RUN, 9), logJson(wire(2n)), null);
+      trace.terminal = new TraceTerminal(true, new SourceRef(RUN, 99), logJson(wire(2n)), null);
       return validateAttributedBackward(trace, "Too low.", new BackwardResult(), [S, P, E].map(unreached));
     },
     RangeError,
@@ -745,7 +760,7 @@ test("materializeContext describes a message with bigint integers", () => {
   const message = new BackwardMessage("Raise v.", new BackwardAttribution(P, "v", 0, 0, [0]), [0, 0], []);
   expect(materializeContext(message, 1, cache)).toEqual({
     message_index: 1n,
-    sender: { run_id: RUN, execution_seq: 3n, path: [] },
+    sender: { run_id: RUN, execution_seq: 5n, path: [] },
     input_name: "v",
     sender_message_index: 0n,
     contribution_index: 0n,
@@ -767,16 +782,16 @@ test("materializeContext resolves a source context once and shares it", () => {
   const materialized = materializeContext(message, 0, cache);
   expect(materialized).toEqual({
     message_index: 0n,
-    sender: { run_id: RUN, execution_seq: 5n, path: [] },
+    sender: { run_id: RUN, execution_seq: 8n, path: [] },
     input_name: "value",
     sender_message_index: 0n,
     contribution_index: 0n,
     parents: [0n],
     contexts: [
       {
-        expression: "${source_3}",
+        expression: "${source_5}",
         result: 2n,
-        sources: [{ source: { run_id: RUN, execution_seq: 3n, path: [] }, value: 2n }],
+        sources: [{ source: { run_id: RUN, execution_seq: 5n, path: [] }, value: 2n }],
         role: "source",
         operand: null,
         positions: [],
@@ -845,7 +860,7 @@ test("ContextCache.lookup looks a source up once and doesn't cache a failure", (
   expect(first).toEqual({ x: 1n });
   expect(cache.lookup(new SourceRef(RUN, 0))).toBe(first);
   expect(looked).toEqual([sourceKey(ZERO)]);
-  const missing = new SourceRef(RUN, 9);
+  const missing = new SourceRef(RUN, 99);
   const absent = `no accepted source for ${sourceKey(missing)}`;
   expectError(() => cache.lookup(missing), RangeError, absent);
   expectError(() => cache.lookup(missing), RangeError, absent);
@@ -1305,7 +1320,7 @@ function learnerFailure(cause = LEARN_CAUSE, options: FailureOptions = {}): Back
 
 /** A context failure attributed to `p`'s occurrence. */
 function contextFailure(options: FailureOptions = {}): BackwardFailure {
-  return learnerFailure(CONTEXT_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 3, ...options });
+  return learnerFailure(CONTEXT_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 5, ...options });
 }
 
 /** The learning of a learner failure from `cause` before any request. */
@@ -1321,7 +1336,7 @@ function learnerFinish(failure: BackwardFailure, learning: LearningResult | null
 
 /** A backward computation failure attributed to `p`'s occurrence. */
 function computeFailure(options: FailureOptions = {}, code = "backward.execute", stage = "backward"): BackwardFailure {
-  return new BackwardFailure(stage, code, "Broke.", { runId: RUN, nodeId: "p", nodeStartedSeq: 3, ...options });
+  return new BackwardFailure(stage, code, "Broke.", { runId: RUN, nodeId: "p", nodeStartedSeq: 5, ...options });
 }
 
 /** Reduce `records` in order over `trace` from a state with memory key `notes`. */
@@ -1661,7 +1676,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   [
     "an attributed learner failure that isn't a context failure",
     (trace) => {
-      const failure = learnerFailure(LEARN_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 3 });
+      const failure = learnerFailure(LEARN_CAUSE, { runId: RUN, nodeId: "p", nodeStartedSeq: 5 });
       return reduced([started(), learnerFinish(failure)], trace);
     },
     RangeError,
@@ -1697,7 +1712,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   [
     "a context failure of an occurrence without the memory",
     (trace) => {
-      const failure = contextFailure({ nodeId: START_ID, nodeStartedSeq: 1 });
+      const failure = contextFailure({ nodeId: START_ID, nodeStartedSeq: 2 });
       return reduced([started(), learnerFinish(failure)], trace);
     },
     RangeError,
@@ -1828,9 +1843,9 @@ function sourceJson(seq: number) {
 
 /** The materialized context of END's route reading `p`'s output. */
 const P_OUTPUT_CONTEXT = {
-  expression: "${source_3}",
+  expression: "${source_5}",
   result: 2n,
-  sources: [{ source: sourceJson(3), value: 2n }],
+  sources: [{ source: sourceJson(5), value: 2n }],
   role: "source",
   operand: null,
   positions: [],
@@ -1855,7 +1870,7 @@ function fieldContext(seq: number) {
 }
 
 /** `p`'s execution coordinates: no execution scope. */
-const P_COORDINATES = { execution_seq: 3n, owner_static_path: null, occurrence_path: null, execution_scope: null };
+const P_COORDINATES = { execution_seq: 5n, owner_static_path: null, occurrence_path: null, execution_scope: null };
 
 test("owner contexts project the producer's episode and feedback for its memory only", () => {
   const { trace } = chainTrace();
@@ -1865,7 +1880,7 @@ test("owner contexts project the producer's episode and feedback for its memory 
   expect(empty).toEqual(new LearnContext(RUN, "empty", []));
   expect(notes!.runId).toBe(RUN);
   expect(notes!.episodes).toEqual([
-    new MemoryEpisode(RUN, [], ["p"], MemoryEpisodeStatus.SUCCEEDED, { v: 1n }, { output: 2n, executionSeq: 3 }),
+    new MemoryEpisode(RUN, [], ["p"], MemoryEpisodeStatus.SUCCEEDED, { v: 1n }, { output: 2n, executionSeq: 5 }),
   ]);
   expect(notes!.feedback).toEqual([
     {
@@ -1875,7 +1890,7 @@ test("owner contexts project the producer's episode and feedback for its memory 
       value: "Too low.",
       contribution_context: {
         message_index: 0n,
-        sender: sourceJson(5),
+        sender: sourceJson(8),
         input_name: "value",
         sender_message_index: 0n,
         contribution_index: 0n,
@@ -1893,7 +1908,7 @@ test("owner contexts project the producer's episode and feedback for its memory 
         parents: [0n],
         contexts: [P_OUTPUT_CONTEXT],
         contributions: [
-          { source: sourceJson(1), value: { x: "Raise v." }, contribution_index: 0n, contexts: [fieldContext(1)] },
+          { source: sourceJson(2), value: { x: "Raise v." }, contribution_index: 0n, contexts: [fieldContext(2)] },
         ],
       },
     },
@@ -1956,7 +1971,7 @@ test("owner context entries carry p's execution scope coordinates", () => {
   const notes = ownerContexts(trace)[1]!;
   const occurrencePath = [{ kind: "map_item", static_path: ["outer"], index: 2n }];
   const coordinates = {
-    execution_seq: 3n,
+    execution_seq: 5n,
     owner_static_path: ["outer", "p"],
     occurrence_path: occurrencePath,
     execution_scope: {
@@ -2603,44 +2618,39 @@ test.each([false, true])(
   },
 );
 
-test.each([false, true])(
-  "a preseeded root output doesn't invent an executed producer (same boundary: %p)",
-  async (sameBoundary) => {
-    const start = new StartNode(START_ID, {
-      params: [new Parameter("topic"), new Parameter("omitted", { hasDefault: true, default: "unused" })],
-    });
-    (start as Node).forward = () => new Route(ELSE_HANDLE);
-    const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
-    // `endId` is readonly and fixed by the constructor.
-    (flow as { endId: string }).endId = sameBoundary ? START_ID : END_ID;
-    const initialPool = new VariablePool(START_ID);
-    initialPool.set(START_ID, { topic: "reefs", undeclared: "extra" });
-    if (!sameBoundary) initialPool.set(END_ID, "preseeded result");
-    initialPool.addSystem("run_id", "preseed");
-    const state = new RunState(flow);
-    const log = new MemoryRunLog("preseed");
-    commitPrepared(log, state, prepareRunStarted(state, {
-      runId: "preseed",
-      flowFingerprint: "f".repeat(64),
-      initialPool,
-      startWiringOverride: {},
-      effectiveLlmByStaticPath: {},
-      numWorkers: 0,
-      learnable: true,
-    }));
-    await new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 }).run();
-    const trace = state.trace!;
+test("a root output that is the run inputs doesn't invent an executed producer", async () => {
+  const start = new StartNode(START_ID, {
+    params: [new Parameter("topic"), new Parameter("omitted", { hasDefault: true, default: "unused" })],
+  });
+  (start as Node).forward = () => new Route(ELSE_HANDLE);
+  const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
+  // `endId` is readonly and fixed by the constructor.
+  (flow as { endId: string }).endId = START_ID;
+  const initialPool = new VariablePool(START_ID);
+  initialPool.set(START_ID, { topic: "reefs", undeclared: "extra" });
+  initialPool.addSystem("run_id", "preseed");
+  const state = new RunState(flow);
+  const log = new MemoryRunLog("preseed");
+  commitPrepared(log, state, prepareRunStarted(state, {
+    runId: "preseed",
+    flowFingerprint: "f".repeat(64),
+    startWiringOverride: {},
+    effectiveLlmByStaticPath: {},
+    numWorkers: 0,
+    learnable: true,
+  }));
+  commitInitialPool(log, state, initialPool);
+  await new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 }).run();
+  const trace = state.trace!;
 
-    const [root, results] = await computeBackward(trace, "review");
+  const [root, results] = await computeBackward(trace, "review");
 
-    validateAttributedBackward(trace, "review", root, results);
-    expect(root.inputFeedback).toEqual(sameBoundary ? { topic: ["review"] } : {});
-    expect(root.selfFeedback).toEqual([]);
-    expect(results.every((result) => !result.invoked)).toBe(true);
-    if (sameBoundary) expect(trace.terminal!.source!.executionSeq).toBe(0);
-    else expect(trace.terminal!.source).toBeNull();
-  },
-);
+  validateAttributedBackward(trace, "review", root, results);
+  expect(root.inputFeedback).toEqual({ topic: ["review"] });
+  expect(root.selfFeedback).toEqual([]);
+  expect(results.every((result) => !result.invoked)).toBe(true);
+  expect(trace.terminal!.source!.executionSeq).toBe(0);
+});
 
 test("opaque expression stops are recoverable without rerunning functions", async () => {
   const calls: unknown[] = [];

@@ -98,7 +98,7 @@ are internal: they serve the CLI and yian's own code, and may change without not
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
@@ -122,7 +122,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   values keep their own keys.
 - **Promises.** `loadFlow`, `runFlow`, `resumeFlow`, `result.backward`, `buildMemories`,
   `invokeTool` and `McpServer`'s `open` and `close` return Promises; their errors are rejections.
-  `inspectRun`, `iterRunRecords`, `loadSkills` and `loadSkillDir` are synchronous.
+  `inspectRun`, `iterRunRecords`, `runRecordOffsets`, `loadSkills` and `loadSkillDir` are synchronous.
 - **Numbers.** Ints in yian values are `bigint` and floats are `number`: `result.output`,
   `result.input` and event payloads hold `3n`, not `3`. Values a host passes in (`inputs`,
   `llmConfig`, feedback, a tool's result) go through host intake: a whole `number` within ±(2^53−1)
@@ -146,7 +146,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 12) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 13) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -287,7 +287,13 @@ streams a log another process may be writing, yielding `RunLogEntry`s and throwi
 log][docs/api.md#following-a-run-log-with-iterrunrecords]); `staticNodes(flow)` lists `[path, node]`
 for every node of a flow and its child flows, and `staticPathOf(nodeId)` maps a grown node's id onto
 that path ([Naming a run's nodes][docs/api.md#naming-a-runs-nodes-with-staticnodes]). A log of
-another schema throws `RunLogSchemaError`.
+another schema throws `RunLogSchemaError`. Every pool write is a `pool_commit` record: the run's
+system values and inputs right after `run_started`, and each node's output before the
+`node_succeeded` that names its seq (`commit`); `runRecordOffsets(log)` maps each seq to its line's
+byte offset, so a host reads the commit a success names with `iterRunRecords(log, { afterOffset })`.
+A crash between a commit and its success leaves an orphan the resume ignores (the node reruns); a
+log that ends inside its run start can't be resumed. See [Authoritative run
+logs][docs/api.md#authoritative-run-logs].
 
 ## Tools
 
@@ -1096,13 +1102,16 @@ Node 22, and so does every unit test; a change keeps both green.
 - Changed: `memoryCommitId` digests the `logJson` text of its input, not Python's sorted compact
   `json.dumps`; see `docs/api.md` for where the two differ.
 - `src/runtime/state.ts` holds the run state (`RunState`) and its reducer. Each `prepare*` function
-  (`prepareRunStarted`, `prepareNodeStarted`, `prepareNodeStep`, `prepareNodeSucceeded`,
-  `prepareNodeRouted`, `prepareNodeFailed`, `prepareExpanded`, `prepareRunResumed`,
-  `prepareRunStopped`, `prepareRecord`) validates one transition without mutating the state and
+  (`prepareRunStarted`, `prepareInitialCommit`, `prepareNodeStarted`, `prepareNodeStep`,
+  `preparePoolCommit`, `prepareNodeSucceeded`, `prepareNodeRouted`, `prepareNodeFailed`,
+  `prepareExpanded`, `prepareRunResumed`, `prepareRunStopped`, `prepareRecord`) validates one transition without mutating the state and
   returns a frozen `PreparedTransition`: the canonical record, the run id and sequence it expects,
   and a frozen plan. `commitPrepared(log, state, prepared)` appends the record, checks what the log
   returned, then applies the plan, with no `await` in between, so nothing interleaves between the
-  append and the apply. Frontier order: START is ready after `RunStarted`; a success walks its
+  append and the apply. `commitInitialPool` commits the run start's commits (the system values in
+key order, then the START inputs) after `RunStarted`; a node's `pool_commit` waits in
+`pendingCommits` until its `node_succeeded` names it, and a resume drops it. Frontier order:
+START is ready after the START inputs' commit; a success walks its
   target's outgoing edges in order and appends each successor when its last edge from the target
   settles and its join is ready; a route settles its edges depth first in stored order, skips the
   heads whose joins are dead (following each skipped node's output redirect) and appends the heads

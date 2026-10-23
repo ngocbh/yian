@@ -108,6 +108,7 @@ import {
   type GrowBuilder,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  preparePoolCommit,
   prepareRecord,
   type RunState,
 } from "../../src/runtime/state.ts";
@@ -116,7 +117,22 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, TypeCheckError, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
-import { aborted, commitStartSuccess, engine, forwardCapture, FuncNode, graph, learnableStarted, NO_ENV, nodeFlow, noGrowth, rejected, serving, stacks, textReply } from "./run_state_fixtures.ts";
+import {
+  aborted,
+  commitStartSuccess,
+  engine,
+  forwardCapture,
+  FuncNode,
+  graph,
+  learnableStarted,
+  NO_ENV,
+  nodeFlow,
+  noGrowth,
+  rejected,
+  serving,
+  stacks,
+  textReply,
+} from "./run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
@@ -171,8 +187,11 @@ class EvidenceOutputNode extends Node {
   }
 }
 
-/** Prepare one static test node as the sole in-flight evaluation. */
-function inflightState(node: Node): RunState {
+/**
+ * Prepare one static test node as the sole in-flight evaluation; with `output`, also commit it as
+ * the node's pending output.
+ */
+function inflightState(node: Node, output?: unknown): RunState {
   const flow = graph([node], [
     [START_ID, node.id],
     [node.id, END_ID],
@@ -181,6 +200,7 @@ function inflightState(node: Node): RunState {
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitStartSuccess(state, log, {});
   commitPrepared(log, state, prepareNodeStarted(state, node.id));
+  if (output !== undefined) commitPrepared(log, state, preparePoolCommit(state, node.id, output));
   return state;
 }
 
@@ -188,9 +208,9 @@ test("the state validates evidence scope and trait for live and replay", () => {
   const node = new EvidenceOutputNode("work", new Output("done"));
   node.memoryScope = scope(node.id);
   const evidence = new EvaluationEvidence(node.memoryScope, {}, null, null);
-  const state = inflightState(node);
+  const state = inflightState(node, "done");
 
-  const prepared = prepareNodeSucceeded(state, node.id, "done", {
+  const prepared = prepareNodeSucceeded(state, node.id, {
     evidence,
     forwardCapture: forwardCapture(node, {}),
   });
@@ -200,16 +220,16 @@ test("the state validates evidence scope and trait for live and replay", () => {
 
   const mismatched = new EvaluationEvidence(scope(node.id, occurrence(1)), {}, null, null);
   expectError(
-    () => prepareNodeSucceeded(inflightState(node), node.id, "done", { evidence: mismatched }),
+    () => prepareNodeSucceeded(inflightState(node, "done"), node.id, { evidence: mismatched }),
     RangeError,
     "node 'work' evidence scope does not match its compiled scope",
   );
-  const replayed = new NodeSucceededRecord(record.nodeId, record.commitTarget, record.value, {
+  const replayed = new NodeSucceededRecord(record.nodeId, record.commit, {
     evidence: mismatched,
     forwardCapture: record.forwardCapture,
   });
   expectError(
-    () => prepareRecord(inflightState(node), replayed),
+    () => prepareRecord(inflightState(node, "done"), replayed),
     RangeError,
     "node 'work' evidence scope does not match its compiled scope",
   );
@@ -218,7 +238,7 @@ test("the state validates evidence scope and trait for live and replay", () => {
   ordinary.memoryScope = scope(ordinary.id);
   const ordinaryEvidence = new EvaluationEvidence(ordinary.memoryScope, {}, null, null);
   expectError(
-    () => prepareNodeSucceeded(inflightState(ordinary), ordinary.id, "done", { evidence: ordinaryEvidence }),
+    () => prepareNodeSucceeded(inflightState(ordinary, "done"), ordinary.id, { evidence: ordinaryEvidence }),
     RangeError,
     "node 'ordinary' is ineligible for evaluation evidence",
   );

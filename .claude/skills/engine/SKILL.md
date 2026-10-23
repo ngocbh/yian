@@ -546,7 +546,12 @@ Most are just the functional model (above) made enforceable:
   frontier. Logs use schema 9; readers reject schemas 7 and 8 rather than
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
-  no conversation records; session history lives only in the backend.
+  no conversation records; session history lives only in the backend. TS yian
+  (schema 13) writes every pool write as a `pool_commit`: the run start's system
+  values and START inputs right after `run_started` (applied at once; a log cut
+  before the START inputs isn't resumable), and a node's output before the
+  `node_succeeded` that names its seq; the success applies it, and a resume drops
+  an orphan commit so the node reruns.
 - **Defaults are read once and recorded** — every predefined default and limit is an
   entry in `yian.defaults` (`docs/defaults.md`), overridable by `YIAN_<NAME>`.
   `current()` reads the environment once per process; the CLI callback, `load_flow`,

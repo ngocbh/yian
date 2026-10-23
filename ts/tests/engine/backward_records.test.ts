@@ -154,7 +154,7 @@
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
  * Ported, through `run.ts`: `test_historical_backward_prepares_recorded_schema_bytes` (7 rows).
- * Changed: Python reads recorded schema-9 lines; schema 12 is the only TS schema, so a live
+ * Changed: Python reads recorded schema-9 lines; schema 13 is the only TS schema, so a live
  * learnable `runFlow` of the source test's flow (memory `test` served by `FakeMemory`) and its
  * `RunResult.backward` write the lines (the failed rows' commit throws a `MemoryOperationError`);
  * each prefix replays through `replayRunLog` from a `MemoryRunLog`, and the next line is prepared
@@ -208,7 +208,6 @@ import {
   BackwardReadyRecord,
   BackwardStartedRecord,
   decodeRecord,
-  encodePool,
   encodeRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -226,7 +225,6 @@ import {
   HistoricalLogCursor,
   PreparedTransition,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   prepareRecord,
   replayRecords,
   RunState,
@@ -244,6 +242,7 @@ import {
   initializedAndStarted,
   learnableStarted,
   noGrowth,
+  prepareOutput,
   RecordingBackwardNode,
   untimed,
 } from "./run_state_fixtures.ts";
@@ -1074,6 +1073,7 @@ test("the post-terminal trace delta validation covers the closed field inventory
       "occurrence",
       "handler",
       "writer",
+      "systemValue",
       "pruneIds",
       "connections",
       "consumedConnection",
@@ -1094,7 +1094,7 @@ function succeedEach(state: RunState, log: MemoryRunLog, outcomes: [string, unkn
   for (const [nodeId, value, inputs] of outcomes) {
     commitPrepared(log, state, prepareNodeStarted(state, nodeId));
     const capture = forwardCapture(state.flow.nodes.get(nodeId)!, inputs);
-    commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, value, { forwardCapture: capture }));
+    commitPrepared(log, state, prepareOutput(log, state, nodeId, value, { forwardCapture: capture }));
   }
 }
 
@@ -1144,7 +1144,8 @@ test("the reducer-built terminal records learning and terminal trace authority",
   const { state } = retainedTerminal();
   expect(state.result).toBeInstanceOf(RunSucceeded);
   expect(state.trace!.terminal!.succeeded).toBe(true);
-  expect(state.nextSequence).toBe(7);
+  // RunStarted and the run start's two commits, then three successes of three records each.
+  expect(state.nextSequence).toBe(12);
 });
 
 test.each(["pristine", "nonterminal", "learn_false", "missing_terminal"] as const)(
@@ -1157,7 +1158,7 @@ test.each(["pristine", "nonterminal", "learn_false", "missing_terminal"] as cons
       ({ state, log } = initializedAndStarted(owned()));
       commitStartSuccess(state, log, {});
       commitPrepared(log, state, prepareNodeStarted(state, END_ID));
-      commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, null));
+      commitPrepared(log, state, prepareOutput(log, state, END_ID, null));
     } else {
       ({ state, log } = learnableStarted(owned()));
       if (gate === "missing_terminal") {
@@ -1452,7 +1453,7 @@ test("backward attempt records prepare, append, then reduce without forward effe
   const { state, log, root, attributed } = await retainedBackward();
   const forward = () => [
     state.result,
-    encodePool(state.pool),
+    state.pool.toWire(),
     [...state.nodeState],
     [...state.edgeState],
     [...state.ready],
@@ -2094,14 +2095,16 @@ nodes:
 output: \${work.output}
 `;
 
+// The forward run is RunStarted, the run start's four commits and three successes (start, commit,
+// success each), so the backward records begin at 14.
 test.each([
-  ["started", false, 7, "backward_started"],
-  ["ready", false, 8, "backward_ready"],
-  ["requested", false, 9, "memory_commit_requested"],
-  ["succeeded", false, 10, "memory_commit_succeeded"],
-  ["finished", false, 11, "backward_finished"],
-  ["failed", true, 10, "memory_commit_failed"],
-  ["failed-finished", true, 11, "backward_finished"],
+  ["started", false, 14, "backward_started"],
+  ["ready", false, 15, "backward_ready"],
+  ["requested", false, 16, "memory_commit_requested"],
+  ["succeeded", false, 17, "memory_commit_succeeded"],
+  ["finished", false, 18, "backward_finished"],
+  ["failed", true, 17, "memory_commit_failed"],
+  ["failed-finished", true, 18, "backward_finished"],
 ] as const)("a historical backward record prepares its recorded line: %s", async (_id, failed, index, kind) => {
   const dir = mkdtempSync(join(tmpdir(), "yian-backward-records-"));
   try {

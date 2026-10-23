@@ -111,7 +111,6 @@ import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import {
   BackwardReadyRecord,
   decodeRecord,
-  encodePool,
   encodeRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -127,7 +126,6 @@ import {
   RunStartedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { VariablePool } from "../../src/typesys/index.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError | typeof RunLogSchemaError;
@@ -463,13 +461,12 @@ function spec(key = "reflective", config: JsonObject = {}, owner: DeclSite = AGE
   return new MemorySpec(key, key, config, [owner]);
 }
 
-/** Return a run-start record with an empty pool and the given memory fields. */
+/** Return a run-start record with the given memory fields. */
 function started(
   fields: Pick<Partial<RunStartedFields>, "memorySnapshots" | "learnable" | "memories" | "memoryStacks"> = {},
 ): RunStartedRecord {
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(new VariablePool("start")),
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
@@ -621,7 +618,7 @@ test("records reject forged nested carrier subclasses", () => {
   const forgedEvidence = new ForgedEvidence(SCOPE, { question: ["hello"] }, "base", "answer the question");
 
   expectError(
-    () => new NodeSucceededRecord("agent", "agent", { kind: "str", value: "done" }, { evidence: forgedEvidence }),
+    () => new NodeSucceededRecord("agent", 1, { evidence: forgedEvidence }),
     TypeError,
     "evidence must be an EvaluationEvidence or null",
   );
@@ -674,10 +671,9 @@ function wireOf(record: RunRecord): Record<string, any> {
 }
 
 const FAILED = new Failure({ code: "node.execute", message: "failed", nodeId: "agent" });
-const DONE = { kind: "str", value: "done" } as const;
 
 test.each<[string, () => RunRecord]>([
-  ["NodeSucceededRecord", () => new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() })],
+  ["NodeSucceededRecord", () => new NodeSucceededRecord("agent", 1, { evidence: evidence() })],
   ["NodeRoutedRecord", () => new NodeRoutedRecord("agent", "yes", { evidence: evidence() })],
   ["NodeExpandedRecord", () => new NodeExpandedRecord("agent", {}, [], DIGEST, { evidence: evidence() })],
   ["NodeFailedRecord", () => new NodeFailedRecord(FAILED, { evidence: evidence() })],
@@ -688,7 +684,7 @@ test.each<[string, () => RunRecord]>([
 
 test("existing outcome records round trip with no evidence", () => {
   for (const record of [
-    new NodeSucceededRecord("agent", "agent", DONE),
+    new NodeSucceededRecord("agent", 1),
     new NodeRoutedRecord("agent", "yes"),
     new NodeExpandedRecord("agent", {}, [], DIGEST),
     new NodeFailedRecord(FAILED),
@@ -722,13 +718,13 @@ test.each<[string, (evidence: Record<string, any>) => void, string]>([
     `invalid ${EVIDENCE_LABEL} interactions item fields; missing=[], extra=["provider"]`,
   ],
 ])("the evidence wire rejects %s", (_name, mutate, message) => {
-  const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
+  const wire = wireOf(new NodeSucceededRecord("agent", 1, { evidence: evidence() }));
   mutate(wire.payload.evidence);
   expectError(() => decodeRecord(logJson(wire)), RangeError, message);
 });
 
 test("the memory scope wire has no boundary field", () => {
-  const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
+  const wire = wireOf(new NodeSucceededRecord("agent", 1, { evidence: evidence() }));
   const scope = wire.payload.evidence.scope;
   expect(Object.keys(scope).sort()).toEqual(["memories", "occurrence_path", "static_path"]);
   scope.boundary = null;
@@ -740,7 +736,7 @@ test("the memory scope wire has no boundary field", () => {
 });
 
 test("memory payloads name keys on the wire", () => {
-  const record = new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() });
+  const record = new NodeSucceededRecord("agent", 1, { evidence: evidence() });
   const wire = JSON.parse(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record))).payload.evidence;
   expect(wire.scope).toEqual({
     static_path: ["flow", "agent"],
@@ -906,7 +902,7 @@ test("proposals preserve order and reject duplicate ids", () => {
 
 // The schema row of test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields.
 test("the wire rejects an old schema", () => {
-  const wire = wireOf(new NodeSucceededRecord("agent", "agent", DONE, { evidence: evidence() }));
+  const wire = wireOf(new NodeSucceededRecord("agent", 1, { evidence: evidence() }));
   wire.schema = 3n;
   expectError(() => decodeRecord(logJson(wire)), RunLogSchemaError, "unsupported run-record schema: 3");
 });

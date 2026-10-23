@@ -223,20 +223,17 @@ nodes:
 output: \${work.output}
 `;
 
-/** The record kinds of Python's recorded logs, which the TS-written logs are cut at. */
-const FORWARD_KINDS = [
-  "run_started",
-  "node_started",
-  "node_succeeded",
-  "node_started",
-  "node_succeeded",
-  "node_started",
-  "node_succeeded",
-];
+/**
+ * The record kinds of Python's recorded logs, which the TS-written logs are cut at. Schema 13 adds
+ * the run start's four commits after `run_started` and a `pool_commit` before each success.
+ */
+const RUN_START_KINDS = ["run_started", "pool_commit", "pool_commit", "pool_commit", "pool_commit"];
+const SUCCESS_KINDS = ["node_started", "pool_commit", "node_succeeded"];
+const FORWARD_KINDS = [...RUN_START_KINDS, ...SUCCESS_KINDS, ...SUCCESS_KINDS, ...SUCCESS_KINDS];
 const BACKWARD_KINDS = [...FORWARD_KINDS, "backward_started", "backward_ready", "memory_commit_requested"];
 const RECORDED_BACKWARD_KINDS = [...BACKWARD_KINDS, "memory_commit_succeeded", "backward_finished"];
 const RECORDED_BACKWARD_FAILED_KINDS = [...BACKWARD_KINDS, "memory_commit_failed", "backward_finished"];
-const RECORDED_FAILURE_KINDS = ["run_started", "node_started", "node_succeeded", "node_started", "node_failed"];
+const RECORDED_FAILURE_KINDS = [...RUN_START_KINDS, ...SUCCESS_KINDS, "node_started", "node_failed"];
 
 /**
  * The lines of a TS-written log of the historical flow, standing in for Python's recorded bytes:
@@ -329,13 +326,14 @@ describe("recorded terminal inspection is inert", () => {
 
 describe("recorded backward history admits a later attempt at every boundary", () => {
   for (const [failedCommit, boundary, disposition] of [
-    [false, 7, "unrequested"],
-    [false, 8, "unrequested"],
-    [false, 9, "unknown"],
-    [false, 10, "succeeded"],
-    [false, 11, "succeeded"],
-    [true, 10, "failed"],
-    [true, 11, "failed"],
+    // Python's boundaries 7-11, past the run start's four commits and three success commits.
+    [false, 14, "unrequested"],
+    [false, 15, "unrequested"],
+    [false, 16, "unknown"],
+    [false, 17, "succeeded"],
+    [false, 18, "succeeded"],
+    [true, 17, "failed"],
+    [true, 18, "failed"],
   ] as const) {
     test(`${failedCommit}, ${boundary}, ${disposition}`, async () => {
       const flow = await load(RECORDED_BACKWARD_FLOW);
@@ -712,7 +710,7 @@ output: \${input.payload}
   expect(first.failure!.stage).toBe("learn");
   expect(first.failure!.code).toBe("memory.invalid_context");
   // START's episode is the first material the context construction refuses.
-  expect([first.failure!.nodeId, first.failure!.nodeStartedSeq]).toEqual(["__start__", 1]);
+  expect([first.failure!.nodeId, first.failure!.nodeStartedSeq]).toEqual(["__start__", 5]);
   expect(first.failure!.message).toBe(
     "memory learn context could not be constructed for node '__start__': context too deep",
   );

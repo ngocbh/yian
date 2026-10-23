@@ -476,10 +476,11 @@ test(
     const log = join(tmp, "run.jsonl");
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
-    // Cut after START: the run records the server's `echo` spec and the skill, and its AGENT never starts.
+    // Cut after START (the run start's five records and START's three): the run records the
+    // server's `echo` spec and the skill, and its AGENT never starts.
     const loaded = await loadFlow(grantingFlow("echo", "brief"), { searchPaths: [tmp], sourceLabel: "flow.yaml" });
     const server = mcpServer(stdio("--marker", pid));
-    await crashAfter(3, () => runFlow(loaded, {}, { log, tools: { fake: server }, skills, env }));
+    await crashAfter(8, () => runFlow(loaded, {}, { log, tools: { fake: server }, skills, env }));
     // An edit the resume must not read: a tool no server has, a skill no folder holds.
     writeFileSync(flow, grantingFlow("nowhere", "missing-skill"));
 

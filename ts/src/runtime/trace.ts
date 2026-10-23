@@ -63,6 +63,7 @@ import {
   NodeRoutedRecord,
   NodeStartedRecord,
   NodeSucceededRecord,
+  PoolCommitRecord,
   type RecordEnvelope,
   RunResumedRecord,
   RunStartedRecord,
@@ -577,6 +578,8 @@ export interface TraceDeltaFields {
   handler?: BackwardHandler | null;
   /** The accepted output's commit target and its source entry. */
   writer?: readonly [string, SourceEntry] | null;
+  /** A system value the run start commits: its name and canonical typed log text. */
+  systemValue?: readonly [string, string] | null;
   /** The current names an expansion retires. */
   pruneIds?: readonly string[];
   /** The child seed routes the outcome installs, by target node id. */
@@ -615,6 +618,8 @@ export class TraceDelta {
   readonly handler: BackwardHandler | null;
   /** The accepted output's commit target and its source entry, or `null`. */
   readonly writer: readonly [string, SourceEntry] | null;
+  /** A system value the run start commits: its name and canonical typed log text, or `null`. */
+  readonly systemValue: readonly [string, string] | null;
   /** The current names an expansion retires. */
   readonly pruneIds: readonly string[];
   /** The child seed routes the outcome installs, by target node id. */
@@ -644,6 +649,7 @@ export class TraceDelta {
     this.occurrence = fields.occurrence ?? null;
     this.handler = fields.handler ?? null;
     this.writer = frozenPair(fields.writer ?? null);
+    this.systemValue = frozenPair(fields.systemValue ?? null);
     this.pruneIds = Object.freeze([...(fields.pruneIds ?? [])]);
     const connections = fields.connections ?? [];
     this.connections = Object.freeze(connections.map(([nodeId, routes]) => Object.freeze([nodeId, routes] as const)));
@@ -719,9 +725,10 @@ export class TraceDelta {
     if (this.writer !== null) {
       const [target, entry] = this.writer;
       trace._currentWriters.set(target, entry);
-      // An outcome's writer always has its occurrence's source.
+      // An outcome's writer always has its occurrence's source, and the START inputs' source 0.
       trace._sources.set(sourceKey(entry.source!), entry);
     }
+    if (this.systemValue !== null) trace.system.set(this.systemValue[0], this.systemValue[1]);
     if (this.rootStartSource !== null) trace.rootStartSource = this.rootStartSource;
     if (this.rootWriter !== null) trace.rootWriter = this.rootWriter;
     if (this.causalRouteSource !== null) trace.causalRouteSource = this.causalRouteSource;
@@ -747,6 +754,8 @@ export interface PrepareTraceOptions {
   childBoundaries?: readonly ChildFlowBoundary[];
   /** The settled prune ids, earlier deferred ones and the nodes grown under them; defaults to none. */
   retiredIds?: readonly string[];
+  /** The root START id, required for a learnable RunStarted. */
+  rootStartId?: string | null;
   /** The root END id, required for a learnable RunStarted. */
   rootEndId?: string | null;
   /** The root START's backward input names, required for a learnable RunStarted. */
@@ -759,13 +768,18 @@ export interface PrepareTraceOptions {
   terminalFailure?: Failure | null;
   /** The type an accepted output's commit target reads it through to restore its files. */
   writerFiles?: Type | null;
+  /** An accepted success's commit: its pool key and canonical typed value text. */
+  committed?: { readonly key: string; readonly valueJson: string } | null;
+  /** Whether a `PoolCommitRecord` is one of the run start's commits, which apply at once. */
+  initialCommit?: boolean;
 }
 
 /**
  * Validate capture authority and prepare a detached accepted-record delta.
  *
- * A learnable RunStarted creates the trace from the record's initial pool; a RunStarted that
- * doesn't learn, and any record before one, prepares `null`. Outcomes join pending seed routes
+ * A learnable RunStarted creates an empty trace, and the run start's commits install the system
+ * values and the START inputs (as source 0); a RunStarted that doesn't learn, and any record
+ * before one, prepares `null`. A node's commit only advances the sequence. Outcomes join pending seed routes
  * into their input route (evaluated keys keep their own routes) and install their writer, seed
  * connections, child boundaries and terminal.
  *
@@ -788,12 +802,15 @@ export function prepareTrace(
     inputConnections = [],
     childBoundaries = [],
     retiredIds = [],
+    rootStartId = null,
     rootEndId = null,
     rootInputNames = null,
     terminalSucceeded = null,
     terminalOutputJson = null,
     terminalFailure = null,
     writerFiles = null,
+    committed = null,
+    initialCommit = false,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -801,17 +818,8 @@ export function prepareTrace(
     if (typeof rootEndId !== "string" || rootInputNames === null) {
       throw new RangeError("retained RunStarted requires verified root metadata");
     }
-    // The record validated its pool, so each stored wire is already canonical.
-    const pool = record.initialPool;
-    const initial = new RetainedTrace(envelope.runId, pool.start_id, rootEndId, rootInputNames);
-    for (const [target, wire] of Object.entries(pool.store)) {
-      const source = target === pool.start_id ? new SourceRef(envelope.runId, 0) : null;
-      const entry = new SourceEntry(source, 0, logJson(wire));
-      initial._currentWriters.set(target, entry);
-      if (source !== null) initial._sources.set(sourceKey(source), entry);
-    }
-    initial.rootWriter = initial._currentWriters.get(rootEndId) ?? null;
-    initial.system = new Map(Object.entries(pool.system).map(([key, wire]) => [key, logJson(wire)]));
+    if (typeof rootStartId !== "string") throw new RangeError("retained RunStarted requires verified root metadata");
+    const initial = new RetainedTrace(envelope.runId, rootStartId, rootEndId, rootInputNames);
     return new TraceDelta(null, envelope.seq, { initialized: initial });
   }
   const capture = (record as { forwardCapture?: ForwardCapture | null }).forwardCapture ?? null;
@@ -824,6 +832,20 @@ export function prepareTrace(
   }
   if (terminalSucceeded === null && (terminalOutputJson !== null || terminalFailure !== null)) {
     throw new RangeError("terminal payload requires a terminal disposition");
+  }
+  if (isExactly(record, PoolCommitRecord)) {
+    if (!initialCommit) return new TraceDelta(trace, envelope.seq);
+    // The record holds a canonical wire.
+    const valueJson = logJson(record.value);
+    if (record.key !== trace.startId) {
+      return new TraceDelta(trace, envelope.seq, { systemValue: [record.key.slice("system.".length), valueJson] });
+    }
+    // The run inputs keep their own source, seq 0: an internal number, not a record's seq.
+    const entry = new SourceEntry(new SourceRef(envelope.runId, 0), 0, valueJson);
+    return new TraceDelta(trace, envelope.seq, {
+      writer: [record.key, entry],
+      rootWriter: record.key === trace.endId ? entry : null,
+    });
   }
   if (isExactly(record, NodeStartedRecord)) {
     return new TraceDelta(trace, envelope.seq, { started: [record.nodeId, envelope.seq] });
@@ -909,8 +931,11 @@ export function prepareTrace(
   }
   if (typeof node.backward !== "function") throw new TypeError("node backward handler must be callable");
   const handler: BackwardHandler = node.backward.bind(node);
+  if (isExactly(record, NodeSucceededRecord) && committed === null) {
+    throw new RangeError("an accepted success requires its commit");
+  }
   const writer = isExactly(record, NodeSucceededRecord)
-    ? ([record.commitTarget, new SourceEntry(source, envelope.seq, logJson(record.value), writerFiles)] as const)
+    ? ([committed!.key, new SourceEntry(source, envelope.seq, committed!.valueJson, writerFiles)] as const)
     : null;
   const rootWriter = writer !== null && writer[0] === trace.endId ? writer[1] : null;
   const causalRouteSource =

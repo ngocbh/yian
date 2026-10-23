@@ -147,7 +147,6 @@ import {
   type PreparedTransition,
   prepareExpanded,
   prepareNodeStarted,
-  prepareNodeSucceeded,
   prepareRecord,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -162,6 +161,7 @@ import {
   fragmentIds,
   initializedSpawner,
   parentFlow,
+  prepareOutput,
   reducerSnapshot,
   RUN_ID,
   snapshot,
@@ -311,7 +311,7 @@ test("growth canonicalizes the seed and isolates the builder, record and observe
   expect(state.inFlight.has("spawn")).toBe(false);
   expect(state.ready).toEqual(["spawn/child/start"]);
   expect(state.depth.get("spawn/child/end")).toBe(1);
-  expect(state.nextSequence).toBe(5);
+  expect(state.nextSequence).toBe(8);
 });
 
 test("growth rejects a cyclic seed before the builder", () => {
@@ -485,7 +485,7 @@ test("growth accepts a disconnected inert redirect placeholder", () => {
   expect(prepared.record).toBeInstanceOf(NodeExpandedRecord);
   expectUnchanged(state, before);
   expect(topologySnapshot(state)).toEqual(beforeTopology);
-  expect(log.nextSequence).toBe(4);
+  expect(log.nextSequence).toBe(7);
 });
 
 const END_EDGE = "'spawn/child/start->spawn/child/end'";
@@ -671,9 +671,9 @@ test("a zero-field LOOP growth schedules its next driver after the body", () => 
   const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
 
   commitPrepared(log, state, prepareNodeStarted(state, bodyStart));
-  commitPrepared(log, state, prepareNodeSucceeded(state, bodyStart, {}));
+  commitPrepared(log, state, prepareOutput(log, state, bodyStart, {}));
   commitPrepared(log, state, prepareNodeStarted(state, bodyEnd));
-  commitPrepared(log, state, prepareNodeSucceeded(state, bodyEnd, null));
+  commitPrepared(log, state, prepareOutput(log, state, bodyEnd, null));
 
   expect(state.ready).toEqual(["spawn~1"]);
 });
@@ -1361,7 +1361,7 @@ test("growth rejects a Binding-wrapped dependency on a pruned node", () => {
       "surviving node '__end__' wiring depends on pruned node",
     ),
   );
-  expect(log.nextSequence).toBe(4);
+  expect(log.nextSequence).toBe(7);
 });
 
 test("growth rejects a template dependency on a pruned node", () => {
@@ -1380,7 +1380,7 @@ test("growth rejects a template dependency on a pruned node", () => {
       "surviving node '__end__' wiring depends on pruned node",
     ),
   );
-  expect(log.nextSequence).toBe(4);
+  expect(log.nextSequence).toBe(7);
 });
 
 test("an unsettled reader keeps a settled prune id it reads only through a template", () => {

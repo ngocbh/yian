@@ -6,7 +6,6 @@
  * `test_typed_object_output_records_a_nested_file_as_its_mapping`,
  * `test_recorded_object_past_the_nesting_limit_still_replays`,
  * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
- * `test_pool_decoder_rejects_unknown_fields_and_wrong_types` (3 rows),
  * `test_run_log_protocol_pins_iteration_append_close_and_context_management` (a class assigned
  * to `RunLog`, closed through `Symbol.dispose`),
  * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
@@ -15,7 +14,7 @@
  *
  * Ported, the wire codec tests (each row with its exact class and message; a field of the wrong
  * JSON type is a `TypeError`): `test_record_encoding_is_canonical_newline_free_and_byte_stable`
- * (`"schema":12`), `test_node_failure_encoding_nests_one_canonical_failure`,
+ * (`"schema":13`), `test_node_failure_encoding_nests_one_canonical_failure`,
  * `test_removed_frame_learning_wire_kinds_are_rejected`,
  * `test_removed_conversation_wire_kinds_are_rejected` (the module has no such export),
  * `test_decode_rejects_invalid_envelopes` (literal JSON text, so `10.0` stays a float token),
@@ -35,13 +34,13 @@
  * `test_record_wire_examples_cover_the_closed_record_inventory` (against `RUN_RECORD_TYPES`).
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
- * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 11 are
- * unsupported, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
+ * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 14 are
+ * unsupported, 10-12 are retired, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
  * its run-id rows (empty, a lone surrogate) and its unsupported-record row; the `RunStopped`
  * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
  * valid); a failure without a node id, an evidence or capture of another class, a bad worker
- * count, digest, commit target, handle, spawner id, typed-value wire or envelope seq, refused by
- * the record's constructor; a bad flow fingerprint, run-start worker count or initial pool, a
+ * count, digest, commit key, commit seq, handle, spawner id, typed-value wire or envelope seq,
+ * refused by the record's constructor; a bad flow fingerprint or run-start worker count, a
  * start wiring override holding NaN, a wiring override, agent configuration or one agent's
  * configuration that isn't a JSON object, a bad commit identity, mutation batch or failure, and
  * a backward carrier of another class, refused by the run-start, memory-commit and backward
@@ -55,8 +54,10 @@
  * non-text failure code, a failure or origin that isn't an object; a byte-pinned `node_succeeded`
  * line whose capture holds route sizes, spans and path indexes, an item index and an occurrence
  * index, all written as ints; a memory commit's `attempt_id` of 0 or -1; `run_started` rows for a
- * missing field, a non-text fingerprint, a pool, memory table or defaults of the wrong JSON type, a
- * float or negative worker count and a non-boolean `learnable`.
+ * missing field, a non-text fingerprint, the retired `initial_pool`, a memory table or defaults of
+ * the wrong JSON type, a float or negative worker count and a non-boolean `learnable`; a
+ * `pool_commit` written flat (`{node_id, key, kind, value}`) keeping int and float apart; a
+ * `node_succeeded` naming its commit's seq, and refusing the retired `value` and `commit_target`.
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -66,8 +67,8 @@
  *   value layer's `TypeCheckError`, the run-id row the envelope's `RangeError`, and the decode
  *   row reads `invalid run-record JSON` (the reader refuses the surrogate).
  * - Python's retired schemas 7 and 8 read `unsupported run-record schema: N` like every schema
- *   below 9; TS's retired schemas 10 and 11 read `run log schema N predates schema 12 and is not
- *   supported`.
+ *   below 9; TS's retired schemas 10, 11 and 12 read `run log schema N predates schema 13 and is
+ *   not supported`.
  * - `test_encode_rejects_invalid_id_tuple_carriers`: the 9 rows are constructor rejections
  *   (Python refused them at encode); "tuple" reads "array".
  * - `test_typed_object_output_rejects_a_non_json_member`: Python's date and datetime rows are one
@@ -83,8 +84,6 @@
  *   as `<Set object> is not a JSON value` by both helpers.
  * - `test_canonical_helpers_reject_cyclic_node_data`: both helpers give the value layer's `value
  *   contains itself` (Python's seed helper says `cyclic container`).
- * - `test_pool_codec_is_canonical_and_lossless_for_typed_values`: no date value; the tuple is an
- *   array.
  * - `test_memory_commit_wire_requires_a_positive_attempt`: a `null` attempt is a `TypeError` (a
  *   field of the wrong JSON type), with its message pinned.
  * - `test_expansion_record_with_nonfinite_seed_does_not_append` and
@@ -99,7 +98,10 @@
  * `test_canonical_seed_rejects_keys_before_json_stringification` (JS object keys are always
  * text); `test_typed_object_output_canonicalizes_a_tuple` (TS has no tuples); the
  * recursion-depth tests (the TS codec is iterative); `test_pool_codec_rejects_nonfinite_values`
- * (`inf` is a TS float, and a NaN fails at `pool.set`).
+ * (`inf` is a TS float, and a NaN fails at `pool.set`); the pool codec tests
+ * (`test_pool_codec_is_canonical_and_lossless_for_typed_values`,
+ * `test_pool_decoder_rejects_unknown_fields_and_wrong_types`), since a schema 13 log records no
+ * pool: each pool write is a `pool_commit`.
  *
  * Ported, through the run state: `test_prepared_record_tamper_check_uses_frozen_schema` (3 rows,
  * calling the internal `requireUnchangedRecord` as Python does; the record is frozen, so the
@@ -112,10 +114,10 @@
  * does not match prepared transition` where Python names the old schema.
  *
  * Not ported: `test_historical_record_requires_an_exact_supported_schema` (`prepareRecord` has no
- * schema parameter, since schema 12 is the only one).
+ * schema parameter, since schema 13 is the only one).
  *
  * Changed, through the run state (Python reads recorded schema-9 bytes of flows from `load_flow`;
- * schema 12 is the only TS schema, so each test records its own live log of a TS flow, replays it
+ * schema 13 is the only TS schema, so each test records its own live log of a TS flow, replays it
  * through `replayRecords` and compares `_plan.envelopeJson` with the live line):
  * - `test_historical_frontier_prepares_recorded_schema_bytes` (2 rows): the one-record prefix is
  *   the RunStarted of `flow()` with `startData`.
@@ -164,9 +166,7 @@ import {
   BackwardStartedRecord,
   canonicalSeed,
   canonicalTyped,
-  decodePool,
   decodeRecord,
-  encodePool,
   encodeRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -178,6 +178,7 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  PoolCommitRecord,
   RecordEnvelope,
   RUN_RECORD_TYPES,
   RUN_STOP_REASONS,
@@ -192,6 +193,7 @@ import {
 } from "../../src/runtime/log.ts";
 import * as runLog from "../../src/runtime/log.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   HistoricalLogCursor,
   PreparedTransition,
@@ -205,12 +207,10 @@ import {
 } from "../../src/runtime/state.ts";
 import {
   FileRef,
-  type PoolWire,
   TypeCheckError,
   TypedValue,
   type Value,
   ValueKind,
-  VariablePool,
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -221,6 +221,7 @@ import {
   forwardCapture,
   fragmentBuilder,
   learnableStarted,
+  pool,
   startData,
   stateSnapshot,
   terminalSkipRouteFlow,
@@ -346,48 +347,6 @@ test("the canonical helpers reject cyclic node data", () => {
   expectTypeCheck(() => canonicalTyped(cyclic, null), "value contains itself", [0]);
 });
 
-test("the pool codec is canonical and lossless for typed values", () => {
-  const pool = new VariablePool("start");
-  pool.set("start", { items: [1n, 2n], name: "x" });
-  pool.set("file", new FileRef({ uri: "s3://bucket/input", name: "input.txt" }));
-  pool.addSystem("run_id", "run-pool");
-
-  const wire = encodePool(pool);
-  const decoded = decodePool(wire);
-
-  expect(wire.store["start"]!.value).toEqual({ items: [1n, 2n], name: "x" });
-  expect(decoded.get("start")).toEqual(wire.store["start"]!.value);
-  expect(decoded.get("file")).toEqual(new FileRef({ uri: "s3://bucket/input", mime: null, name: "input.txt" }));
-  expect(encodePool(decoded)).toEqual(wire);
-});
-
-test.each<[string, unknown, string]>([
-  [
-    "an extra pool field",
-    { store: {}, system: {}, start_id: "start", extra: true },
-    'invalid variable pool fields; missing=[], extra=["extra"]',
-  ],
-  [
-    "an int typed value holding text",
-    { store: { node: { kind: "int", value: "1" } }, system: {}, start_id: "start" },
-    'invalid int typed value: expected a bigint, got "1"',
-  ],
-  [
-    "an extra typed-value field",
-    { store: { node: { kind: "int", value: 1n, extra: true } }, system: {}, start_id: "start" },
-    'invalid typed value fields; missing=[], extra=["extra"]',
-  ],
-])("the pool decoder rejects %s", (_name, wire, message) => {
-  let caught: unknown;
-  try {
-    decodePool(wire as PoolWire);
-  } catch (error) {
-    caught = error;
-  }
-  expect((caught as Error).constructor).toBe(RangeError);
-  expect((caught as Error).message).toBe(message);
-});
-
 /** A minimal structural implementation that pins the `RunLog` interface. */
 class ProtocolLog {
   readonly runId = "run-protocol";
@@ -447,11 +406,10 @@ const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "wo
 const OPERATION_FAILURE = new MemoryOperationFailure("backend", "failed", "Failed.", true);
 const SUCCEEDED = new BackwardOutcome("succeeded");
 
-/** Return a run-start record with an empty pool, one agent's LLM config and `fields` over them. */
+/** Return a run-start record with one agent's LLM config and `fields` over it. */
 function runStarted(fields: Partial<RunStartedFields> = {}): RunStartedRecord {
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(new VariablePool("start")),
     startWiringOverride: {},
     effectiveLlmByStaticPath: { agent: { model: "gpt-test" } },
     numWorkers: 0,
@@ -465,13 +423,8 @@ test.each<[string, () => unknown]>([
   ["run stopped", () => ((new RunStoppedRecord("signal", "stop", []) as { reason: string }).reason = "callback")],
   ["node started", () => ((new NodeStartedRecord("work") as { nodeId: string }).nodeId = "changed")],
   ["node step", () => ((new NodeStepRecord("a", {}) as { nodeId: string }).nodeId = "b")],
-  [
-    "node succeeded",
-    () => {
-      const record = new NodeSucceededRecord("a", "a", { kind: "int", value: 1n });
-      (record as { commitTarget: string }).commitTarget = "b";
-    },
-  ],
+  ["node succeeded", () => ((new NodeSucceededRecord("a", 1) as { commit: number }).commit = 2)],
+  ["pool commit", () => ((new PoolCommitRecord("a", "a", { kind: "int", value: 1n }) as { key: string }).key = "b")],
   ["node routed", () => ((new NodeRoutedRecord("a", "next") as { handle: string }).handle = "other")],
   [
     "node expanded",
@@ -486,8 +439,8 @@ test.each<[string, () => unknown]>([
   ["run stopped node ids", () => (new RunStoppedRecord("signal", "stop", ["a"]).nodeIds as string[]).push("b")],
   ["a nested step value", () => ((new NodeStepRecord("a", { n: { m: 1n } }).step["n"] as { m: unknown }).m = 2n)],
   [
-    "a succeeded value",
-    () => ((new NodeSucceededRecord("a", "a", { kind: "int", value: 1n }).value as { value: unknown }).value = 2n),
+    "a committed value",
+    () => ((new PoolCommitRecord("a", "a", { kind: "int", value: 1n }).value as { value: unknown }).value = 2n),
   ],
   [
     "a nested seed value",
@@ -499,10 +452,6 @@ test.each<[string, () => unknown]>([
   ["prune ids", () => (new NodeExpandedRecord("grow", {}, ["a"], TOPOLOGY_DIGEST).pruneIds as string[]).push("b")],
   ["a failure", () => ((new NodeFailedRecord(FAILURE).failure as { message: string }).message = "changed")],
   ["run started", () => ((runStarted() as { numWorkers: number }).numWorkers = 2)],
-  [
-    "a run-started pool value",
-    () => ((runStarted().initialPool.system as Record<string, unknown>)["run_id"] = null),
-  ],
   [
     "a nested start wiring override",
     () => ((runStarted({ startWiringOverride: { a: [1n] } }).startWiringOverride["a"] as unknown[]).push(2n)),
@@ -588,6 +537,7 @@ test("RUN_RECORD_TYPES holds every record class", () => {
     RunStoppedRecord,
     NodeStartedRecord,
     NodeStepRecord,
+    PoolCommitRecord,
     NodeSucceededRecord,
     NodeRoutedRecord,
     NodeExpandedRecord,
@@ -608,21 +558,54 @@ test("records hold their carriers by reference and frozen copies of their values
   const terminal = new Failure({ code: "graph.terminal_unreachable", message: "", nodeId: "a" });
   const wire = { kind: "object", value: { b: [1n], a: { file: { uri: "s3://x", mime: null, name: null } } } };
 
-  const succeeded = new NodeSucceededRecord("a", "a", wire as never, { evidence, forwardCapture: capture });
+  const succeeded = new NodeSucceededRecord("a", 1, { evidence, forwardCapture: capture });
+  const committed = new PoolCommitRecord("a", "a", wire as never);
   const routed = new NodeRoutedRecord("a", "next", { terminalFailure: terminal });
   const failed = new NodeFailedRecord(FAILURE);
   wire.value.b.push(2n);
 
   expect(succeeded.evidence).toBe(evidence);
   expect(succeeded.forwardCapture).toBe(capture);
-  expect(succeeded.value).toEqual({ kind: "object", value: { a: { file: wire.value.a.file }, b: [1n] } });
-  expect(Object.keys(succeeded.value.value as object)).toEqual(["a", "b"]);
+  expect(committed.value).toEqual({ kind: "object", value: { a: { file: wire.value.a.file }, b: [1n] } });
+  expect(Object.keys(committed.value.value as object)).toEqual(["a", "b"]);
   expect(routed.terminalFailure).toEqual(terminal);
   expect(routed.terminalFailure).not.toBe(terminal);
   expect(Object.isFrozen(routed.terminalFailure)).toBe(true);
   expect(failed.failure).toEqual(FAILURE);
   expect(failed.failure).not.toBe(FAILURE);
   expect(Object.isFrozen(failed.failure)).toBe(true);
+});
+
+test.each<[string, Readonly<{ kind: string; value: unknown }>, string]>([
+  ["an int", { kind: "int", value: 2n }, '"kind":"int","node_id":"a","value":2'],
+  ["a float", { kind: "float", value: 2 }, '"kind":"float","node_id":"a","value":2.0'],
+  ["an int above 2^53", { kind: "int", value: 2n ** 60n }, `"kind":"int","node_id":"a","value":${2n ** 60n}`],
+])("a pool commit encodes flat and decodes back equal (TS-only): %s", (_name, wire, text) => {
+  const record = new PoolCommitRecord("a", "a", wire as never);
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 1, record);
+  const encoded = encodeRecord(envelope);
+  expect(encoded).toContain(`"payload":{"key":"a",${text}}`);
+  const decoded = decodeRecord(encoded);
+  expect(decoded).toEqual(envelope);
+  expect((decoded.record as PoolCommitRecord).value).toEqual(wire as never);
+});
+
+test("a node success names its commit and holds no value (TS-only)", () => {
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 6, new NodeSucceededRecord("a", 5));
+  expect(envelope.payload).toEqual({ node_id: "a", commit: 5n, evidence: null, forward_capture: null });
+  for (const commit of [0, -1, 1.5, Number.NaN, 2 ** 53, "5"]) {
+    expectError(() => new NodeSucceededRecord("a", commit as never), RangeError, "commit must be a positive integer");
+  }
+});
+
+test.each<[string, string, string]>([
+  ["node_succeeded", "value", '{"kind":"int","value":1}'],
+  ["node_succeeded", "commit_target", '"a"'],
+])("decode rejects a %s payload holding the retired %s (TS-only)", (kind, field, json) => {
+  const line =
+    `{"at":"2026-01-01T00:00:00.000Z","kind":"${kind}","payload":{"commit":5,"evidence":null,` +
+    `"forward_capture":null,"node_id":"a","${field}":${json}},"run_id":"run","schema":${SCHEMA_VERSION},"seq":6}`;
+  expectError(() => decodeRecord(line), RangeError, `invalid ${kind} payload fields; missing=[], extra=["${field}"]`);
 });
 
 test("record constructors validate programmatically constructed values", () => {
@@ -648,7 +631,7 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   ],
   [
     "evidence of another class",
-    () => new NodeSucceededRecord("a", "a", { kind: "int", value: 1n }, { evidence: {} as never }),
+    () => new NodeSucceededRecord("a", 1, { evidence: {} as never }),
     TypeError,
     "evidence must be an EvaluationEvidence or null",
   ],
@@ -675,10 +658,10 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     "topology_digest must be 64 lowercase hex digits",
   ],
   [
-    "an empty commit target",
-    () => new NodeSucceededRecord("a", "", { kind: "int", value: 1n }),
+    "an empty commit key",
+    () => new PoolCommitRecord("a", "", { kind: "int", value: 1n }),
     RangeError,
-    "commit_target must be non-empty",
+    "key must be non-empty",
   ],
   ["an empty handle", () => new NodeRoutedRecord("a", ""), RangeError, "handle must be non-empty"],
   [
@@ -689,7 +672,7 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   ],
   [
     "a bad typed-value wire",
-    () => new NodeSucceededRecord("a", "a", { kind: "int", value: "1" }),
+    () => new PoolCommitRecord("a", "a", { kind: "int", value: "1" }),
     RangeError,
     'invalid int typed value: expected a bigint, got "1"',
   ],
@@ -724,12 +707,6 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     () => runStarted({ numWorkers: 1n as never }),
     TypeError,
     "num_workers must be an integer",
-  ],
-  [
-    "a bad initial pool",
-    () => runStarted({ initialPool: { store: {}, system: {} } as never }),
-    RangeError,
-    'invalid variable pool fields; missing=["start_id"], extra=[]',
   ],
   [
     "a NaN in the start wiring override",
@@ -849,11 +826,12 @@ test.each<[string, unknown, string]>([
   ["7", 7, "unsupported run-record schema: 7"],
   ["8", 8, "unsupported run-record schema: 8"],
   ["9", 9, "run log schema 9 was written by Python yian; resume it with Python yian"],
-  ["10", 10, "run log schema 10 predates schema 12 and is not supported"],
-  ["11", 11, "run log schema 11 predates schema 12 and is not supported"],
-  ["13", 13, "unsupported run-record schema: 13"],
+  ["10", 10, "run log schema 10 predates schema 13 and is not supported"],
+  ["11", 11, "run log schema 11 predates schema 13 and is not supported"],
+  ["12", 12, "run log schema 12 predates schema 13 and is not supported"],
+  ["14", 14, "unsupported run-record schema: 14"],
   ["true", true, "unsupported run-record schema: true"],
-  ["12n", 12n, "unsupported run-record schema: 12n"],
+  ["13n", 13n, "unsupported run-record schema: 13n"],
 ])("the envelope refuses schema %s", (_name, schema, message) => {
   expectError(() => new RecordEnvelope(schema as never, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, message);
 });
@@ -915,11 +893,8 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
 
 /** The run-start record of the round trips: a one-entry pool, a wiring override and one agent. */
 function roundTripRunStarted(): RunStartedRecord {
-  const pool = new VariablePool("start");
-  pool.set("start", { name: "Ada" });
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(pool),
     startWiringOverride: { name: "Ada" },
     effectiveLlmByStaticPath: { agent: { provider: "openai", model: "gpt-test" } },
     numWorkers: 2,
@@ -928,11 +903,8 @@ function roundTripRunStarted(): RunStartedRecord {
 
 /** A run-start record holding the flow files, skills, tool specs, version and parent. */
 function sourcedRunStarted(): RunStartedRecord {
-  const pool = new VariablePool("start");
-  pool.set("start", {});
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
-    initialPool: encodePool(pool),
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
@@ -973,7 +945,8 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunStoppedRecord", new RunStoppedRecord("callback", "the host callback threw", ["b", "a"])],
   ["NodeStartedRecord", new NodeStartedRecord("agent")],
   ["NodeStepRecord", new NodeStepRecord("agent", { event: "started", attempt: 2n })],
-  ["NodeSucceededRecord", new NodeSucceededRecord("agent", "agent", { kind: "str", value: "done" })],
+  ["PoolCommitRecord", new PoolCommitRecord("agent", "agent", { kind: "str", value: "done" })],
+  ["NodeSucceededRecord", new NodeSucceededRecord("agent", 3)],
   ["NodeRoutedRecord", new NodeRoutedRecord("choice", "approved")],
   [
     "NodeExpandedRecord",
@@ -1034,7 +1007,7 @@ test.each<[string, Record<string, unknown>]>([
   ["memory_commit_failed", { failure: { stage: "commit", code: "declined", message: "Declined.", retryable: true } }],
 ])("the memory commit wire requires a positive attempt: %s", (kind, extra) => {
   const wire = {
-    schema: 12,
+    schema: 13,
     run_id: "run",
     seq: 0,
     kind,
@@ -1075,10 +1048,10 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "run_started payload flow_fingerprint must be a string",
   ],
   [
-    "a pool that isn't an object",
-    (payload) => (payload["initial_pool"] = []),
-    TypeError,
-    "run_started payload initial_pool must be an object",
+    "the retired initial_pool",
+    (payload) => (payload["initial_pool"] = {}),
+    RangeError,
+    'invalid run_started payload fields; missing=[], extra=["initial_pool"]',
   ],
   [
     "a float worker count",
@@ -1208,7 +1181,7 @@ test.each([
       ...extra,
     },
   };
-  const message = `run-record kind '${kind}' is unsupported in schema 12`;
+  const message = `run-record kind '${kind}' is unsupported in schema 13`;
   expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
 });
 
@@ -1219,7 +1192,7 @@ test.each([
   ["conversation_closed", "ConversationClosedRecord"],
 ])("removed conversation wire kinds are rejected: %s", (kind, recordName) => {
   const wire = { schema: SCHEMA_VERSION, run_id: "run", seq: 0, kind, payload: { checkpoint: {} } };
-  const message = `run-record kind '${kind}' is unsupported in schema 12`;
+  const message = `run-record kind '${kind}' is unsupported in schema 13`;
   expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
   expect(Object.hasOwn(runLog, recordName)).toBe(false);
 });
@@ -1230,7 +1203,7 @@ test("record encoding is canonical, newline-free and byte-stable", () => {
   const encoded = encodeRecord(envelope);
 
   expect(encoded).toBe(
-    '{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run-canonical","schema":12,"seq":0}',
+    '{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run-canonical","schema":13,"seq":0}',
   );
   expect(encoded.endsWith("\n")).toBe(false);
   expect(encodeRecord(decodeRecord(encoded))).toBe(encoded);
@@ -1256,7 +1229,7 @@ test("a node failure encoding nests one canonical failure", () => {
   const encoded = encodeRecord(envelope);
 
   expect(JSON.parse(encoded)).toEqual({
-    schema: 12,
+    schema: 13,
     run_id: "run-failure",
     seq: 7,
     kind: "node_failed",
@@ -1349,7 +1322,7 @@ test("a node success with a capture encodes its counters as ints", () => {
     SCHEMA_VERSION,
     "run",
     5,
-    new NodeSucceededRecord("work", "work", { kind: "int", value: 7n }, { forwardCapture: capture }),
+    new NodeSucceededRecord("work", 4, { forwardCapture: capture }),
   );
 
   const encoded = encodeRecord(envelope);
@@ -1378,7 +1351,7 @@ test("a node success with a capture encodes its counters as ints", () => {
     '"result_type":null,"sizes":[],"snapshot":null,"source":null,"spans":[],"value_json":null},' +
     '"scope":null,"variable_names":[]}';
   expect(encoded).toBe(
-    '{"kind":"node_succeeded","payload":{"commit_target":"work","evidence":null,"forward_capture":{' +
+    '{"kind":"node_succeeded","payload":{"commit":4,"evidence":null,"forward_capture":{' +
       '"bound_inputs":{"joined":[1,2,3],"picked":2,"text":"n=3"},"evaluated_keys":["joined","text"],' +
       '"input_names":[],' +
       `"items":[{"capture":${itemWire},"index":2}],"node_data":null,` +
@@ -1387,7 +1360,7 @@ test("a node success with a capture encodes its counters as ints", () => {
       '"kind":"record","names":["joined","text","picked"],"path":[],"result_type":null,"sizes":[],"snapshot":null,' +
       '"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":["each"],' +
       '"occurrence_path":[{"index":3,"kind":"map_item","static_path":["each"]}],"static_path":["each","work"]},' +
-      '"variable_names":[]},"node_id":"work","value":{"kind":"int","value":7}},"run_id":"run","schema":12,"seq":5}',
+      '"variable_names":[]},"node_id":"work"},"run_id":"run","schema":13,"seq":5}',
   );
   expect(decodeRecord(encoded)).toEqual(envelope);
   expect(encodeRecord(decodeRecord(encoded))).toBe(encoded);
@@ -1395,7 +1368,7 @@ test("a node success with a capture encodes its counters as ints", () => {
 
 test("decode requires an explicit route terminal failure field", () => {
   const wire = {
-    schema: 12,
+    schema: 13,
     run_id: "run",
     seq: 0,
     kind: "node_routed",
@@ -1410,7 +1383,7 @@ test("decode requires an explicit route terminal failure field", () => {
 
 test("decode rejects an extra nested route terminal failure field", () => {
   const wire = {
-    schema: 12,
+    schema: 13,
     run_id: "run",
     seq: 0,
     kind: "node_routed",
@@ -1449,75 +1422,75 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
   ],
   // A float token reads as a number, never as a schema; it is shown as the log writes floats.
   [
-    "schema 12.0",
-    `{"schema":12.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
+    "schema 13.0",
+    `{"schema":13.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
     RunLogSchemaError,
-    "unsupported run-record schema: 12.0",
+    "unsupported run-record schema: 13.0",
   ],
   [
     "an empty run id",
-    `{"schema":12,"run_id":"","seq":0,${NODE_STARTED}}`,
+    `{"schema":13,"run_id":"","seq":0,${NODE_STARTED}}`,
     RangeError,
     "run-record envelope run_id must be a non-empty string",
   ],
   [
     "seq -1",
-    `{"schema":12,"run_id":"run","seq":-1,${NODE_STARTED}}`,
+    `{"schema":13,"run_id":"run","seq":-1,${NODE_STARTED}}`,
     RangeError,
     "run-record envelope seq must be a non-negative integer",
   ],
   [
     "seq true",
-    `{"schema":12,"run_id":"run","seq":true,${NODE_STARTED}}`,
+    `{"schema":13,"run_id":"run","seq":true,${NODE_STARTED}}`,
     TypeError,
     "run-record envelope seq must be an integer",
   ],
   [
     "an unknown kind",
-    '{"schema":12,"run_id":"run","seq":0,"kind":"not_a_record","payload":{}}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":"not_a_record","payload":{}}',
     RangeError,
-    "run-record kind 'not_a_record' is unsupported in schema 12",
+    "run-record kind 'not_a_record' is unsupported in schema 13",
   ],
   [
     "an extra key",
-    `{"schema":12,"run_id":"run","seq":0,${NODE_STARTED},"unexpected":true}`,
+    `{"schema":13,"run_id":"run","seq":0,${NODE_STARTED},"unexpected":true}`,
     RangeError,
     'invalid run-record envelope fields; missing=[], extra=["unexpected"]',
   ],
   [
     "a missing payload",
-    '{"schema":12,"run_id":"run","seq":0,"kind":"node_started"}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":"node_started"}',
     RangeError,
     'invalid run-record envelope fields; missing=["payload"], extra=[]',
   ],
   // TS-only rows.
   [
     "seq 0.0",
-    `{"schema":12,"run_id":"run","seq":0.0,${NODE_STARTED}}`,
+    `{"schema":13,"run_id":"run","seq":0.0,${NODE_STARTED}}`,
     TypeError,
     "run-record envelope seq must be an integer",
   ],
   [
     "seq past 2^53 - 1",
-    `{"schema":12,"run_id":"run","seq":9007199254740992,${NODE_STARTED}}`,
+    `{"schema":13,"run_id":"run","seq":9007199254740992,${NODE_STARTED}}`,
     RangeError,
     "run-record envelope seq must be a safe integer",
   ],
   [
     "a non-text run id",
-    `{"schema":12,"run_id":7,"seq":0,${NODE_STARTED}}`,
+    `{"schema":13,"run_id":7,"seq":0,${NODE_STARTED}}`,
     TypeError,
     "run-record envelope run_id must be a non-empty string",
   ],
   [
     "a non-text kind",
-    '{"schema":12,"run_id":"run","seq":0,"kind":7,"payload":{}}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":7,"payload":{}}',
     TypeError,
     "run-record envelope kind must be a string",
   ],
   [
     "a payload that isn't an object",
-    '{"schema":12,"run_id":"run","seq":0,"kind":"node_started","payload":[]}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":"node_started","payload":[]}',
     TypeError,
     "run-record envelope payload must be an object",
   ],
@@ -1563,7 +1536,7 @@ test.each<[string, string, unknown, new (...args: never[]) => Error, string]>([
   [
     "a node_succeeded payload without its carrier fields",
     "node_succeeded",
-    { node_id: "work", commit_target: "work", value: { kind: "int", value: "7" } },
+    { node_id: "work", commit: 7 },
     RangeError,
     'invalid node_succeeded payload fields; missing=["evidence","forward_capture"], extra=[]',
   ],
@@ -1593,7 +1566,7 @@ test.each<[string, string, unknown, new (...args: never[]) => Error, string]>([
     "node_started payload node_id must be a non-empty string",
   ],
 ])("decode rejects unknown, missing and wrong payload fields: %s", (_name, kind, payload, cls, message) => {
-  const wire = { schema: 12, run_id: "run", seq: 0, kind, payload };
+  const wire = { schema: 13, run_id: "run", seq: 0, kind, payload };
   expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
@@ -1608,7 +1581,7 @@ type FailureWire = {
 /** Return one independently mutable valid node-failure wire object. */
 function nodeFailureWire(): FailureWire {
   return {
-    schema: 12,
+    schema: 13,
     run_id: "run",
     seq: 0,
     kind: "node_failed",
@@ -1805,13 +1778,13 @@ function invalidJsonCause(data: string | Uint8Array): Error {
 
 test("decode rejects duplicate keys at any object depth", () => {
   const payloadKey = invalidJsonCause(
-    '{"schema":12,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"first","node_id":"second"}}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"first","node_id":"second"}}',
   );
   expect(payloadKey).toBeInstanceOf(JSONDecodeError);
   expect(payloadKey.message).toStartWith('duplicate JSON object key: "node_id"');
 
   const originKey = invalidJsonCause(
-    '{"schema":12,"run_id":"run","seq":0,"kind":"node_failed",' +
+    '{"schema":13,"run_id":"run","seq":0,"kind":"node_failed",' +
       '"payload":{"failure":{"code":"node.execute","message":"boom",' +
       '"node_id":"work","trace":[{"key":"one","key":"two"}],' +
       '"cause_type":null,"traceback":null}}}',
@@ -1843,7 +1816,7 @@ test("canonical JSON rejects lone Unicode surrogates", () => {
     "Unicode surrogate is not valid canonical JSON",
   );
   const cause = invalidJsonCause(
-    '{"schema":12,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"\\ud800"}}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"\\ud800"}}',
   );
   expect(cause).toBeInstanceOf(JSONDecodeError);
   expect(cause.message).toStartWith("string has an unpaired surrogate");
@@ -1867,7 +1840,7 @@ test("a line with a UTF-8 BOM is invalid record JSON", () => {
 
 test("a line that isn't UTF-8 is invalid record JSON", () => {
   const bytes = new TextEncoder().encode(
-    '{"schema":12,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"x"}}',
+    '{"schema":13,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"x"}}',
   );
   bytes[bytes.indexOf(0x78)] = 0xff;
   // Only the class is checked: the decoder's message differs between Bun and Node.
@@ -1910,7 +1883,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
     "node_ids must contain unique IDs",
   ],
 ])("decode rejects a run_stopped payload with %s", (_name, payload, cls, message) => {
-  const wire = { schema: 12, run_id: "run", seq: 0, kind: "run_stopped", payload };
+  const wire = { schema: 13, run_id: "run", seq: 0, kind: "run_stopped", payload };
   expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
@@ -1929,7 +1902,7 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     "run_resumed payload retry_node_ids must be an array of strings",
   ],
 ])("decode rejects a run_resumed payload with %s (TS-only)", (_name, payload, cls, message) => {
-  const text = `{"schema":12,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
+  const text = `{"schema":13,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
   expectError(() => decodeRecord(text), cls, message);
 });
 
@@ -1937,7 +1910,7 @@ const TAMPERED = ["payload", "run id", "sequence"];
 
 test.each(TAMPERED)("the prepared record tamper check uses the frozen schema: %s", (change) => {
   const state = new RunState(flow());
-  let prepared = prepareRunStarted(state, startData(state.flow));
+  let prepared = prepareRunStarted(state, startData());
   const before = stateSnapshot(state);
   requireUnchangedRecord(prepared, prepared._plan.envelopeJson);
   const { record, expectedRunId, expectedSequence, _plan: plan, observers } = prepared;
@@ -1973,7 +1946,7 @@ test("an append result of the wrong schema is a protocol fault", () => {
   }
 
   const state = new RunState(flow());
-  const prepared = prepareRunStarted(state, { ...startData(state.flow), learnable: true });
+  const prepared = prepareRunStarted(state, { ...startData(), learnable: true });
   const before = stateSnapshot(state);
   const log = new WrongSchemaLog(prepared.expectedRunId);
   expectError(
@@ -1989,16 +1962,19 @@ test("an append result of the wrong schema is a protocol fault", () => {
 
 test.each(["started", "resumed"])("a historical frontier prepares the recorded schema's line: %s", (kind) => {
   const live = new RunState(flow());
-  const data = startData(live.flow);
+  const data = startData();
   const log = new MemoryRunLog(data.runId);
   commitPrepared(log, live, prepareRunStarted(live, data));
+  commitInitialPool(log, live, pool(live.flow));
 
-  const state = replayRecords(new RunState(flow()), log.records().slice(0, 1), { growBuilder: fragmentBuilder });
+  const records = log.records();
+  const state = replayRecords(new RunState(flow()), records, { growBuilder: fragmentBuilder });
   const record = kind === "resumed" ? new RunResumedRecord([], 0) : new NodeStartedRecord(state.flow.startId);
   const prepared = prepareRecord(state, record);
 
-  expect(prepared._plan.envelopeJson).toBe(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, 1, record)));
-  expect(state.nextSequence).toBe(1);
+  const expected = new RecordEnvelope(SCHEMA_VERSION, state.runId!, records.length, record);
+  expect(prepared._plan.envelopeJson).toBe(encodeRecord(expected));
+  expect(state.nextSequence).toBe(records.length);
 });
 
 test("a historical route keeps the schema in its trace line", () => {
@@ -2121,8 +2097,9 @@ test.each(["success", "failure", "growth"])("historical outcomes keep the schema
     expect(result.status).toBe(kind === "failure" ? "failed" : "succeeded");
     const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
     // success: through work's NodeSucceeded; growth: through outer's NodeExpanded; failure: the
-    // whole log, ending with work's NodeFailed.
-    const wires = kind === "failure" ? lines : lines.slice(0, 5);
+    // whole log, ending with work's NodeFailed. The run start is RunStarted and four commits, and
+    // START's success its start, commit and success.
+    const wires = kind === "failure" ? lines : lines.slice(0, kind === "growth" ? 10 : 11);
     const last = wires.at(-1)!;
     expect(decodeRecord(last).kind).toBe({ success: "node_succeeded", failure: "node_failed", growth: "node_expanded" }[kind]);
 

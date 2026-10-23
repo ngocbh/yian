@@ -89,16 +89,17 @@ import {
   RecordEnvelope,
   RunResumedRecord,
   type RunRecord,
+  PoolCommitRecord,
   RunStartedRecord,
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import {
+  commitInitialPool,
   commitPrepared,
   PreparedTransition,
   prepareNodeStarted,
   prepareNodeStep,
-  prepareNodeSucceeded,
   prepareRecord,
   prepareRunResumed,
   prepareRunStarted,
@@ -117,6 +118,7 @@ import {
   fragmentBuilder,
   FuncNode,
   initializedAndStarted,
+  prepareOutput,
   reducerSnapshot,
   ReturningLog,
   roots,
@@ -176,23 +178,24 @@ function initialized(
   const prepared = prepareRunStarted(state, {
     runId: RUN_ID,
     flowFingerprint: FINGERPRINT,
-    initialPool: pool,
     startWiringOverride: { metadata: { labels: ["one", "two"] } },
     effectiveLlmByStaticPath: { agent: { options: { stop: ["END"] } } },
     numWorkers: options.numWorkers ?? 2,
   });
   commitPrepared(log, state, prepared);
+  commitInitialPool(log, state, pool);
   expectCommittedPath(log);
   return { state, log };
 }
 
-/** Assert one replay-shaped prefix with RunStarted followed by `tail`. */
+/** Assert one replay-shaped prefix with RunStarted and the run start's two commits, followed by `tail`. */
 function expectCommittedPath(log: MemoryRunLog, ...tail: RunRecord[]): void {
   const envelopes = log.records();
   expect(envelopes.map((envelope) => envelope.seq)).toEqual(envelopes.map((_, index) => index));
   expect(envelopes.every((envelope) => envelope.runId === RUN_ID)).toBe(true);
   expect(envelopes[0]!.record).toBeInstanceOf(RunStartedRecord);
-  expect(envelopes.slice(1).map((envelope) => envelope.record)).toStrictEqual(tail);
+  expect(envelopes.slice(1, 3).map((envelope) => envelope.record.constructor)).toEqual([PoolCommitRecord, PoolCommitRecord]);
+  expect(envelopes.slice(3).map((envelope) => envelope.record)).toStrictEqual(tail);
 }
 
 /** Accept starts from an isolated test frontier through the real reducer. */
@@ -216,10 +219,10 @@ test("NodeStarted requires and removes the exact ready head", () => {
   expect(observers).toStrictEqual([new NodeStarted({ nodeId: START_ID })]);
   expect(state.ready).toEqual([]);
   expect([...state.inFlight]).toEqual([START_ID]);
-  expect(state.acceptedStarts).toEqual(new Map([[START_ID, 1]]));
+  expect(state.acceptedStarts).toEqual(new Map([[START_ID, 3]]));
   expect(state.nodeStarts).toEqual(new Map([[START_ID, 1]]));
   expect(state.nodeState.get(START_ID)).toBe(NodeState.UNKNOWN);
-  expect(state.nextSequence).toBe(2);
+  expect(state.nextSequence).toBe(4);
   expectCommittedPath(log, new NodeStartedRecord(START_ID));
 });
 
@@ -235,7 +238,7 @@ test.each([
   expectError(() => prepareNodeStarted(state, nodeId), RangeError, message);
 
   expectUnchanged(state, before);
-  expect(log.nextSequence).toBe(1);
+  expect(log.nextSequence).toBe(3);
 });
 
 test.each([["true", true], ["1", 1], ["null", null], ["an object", {}]] as const)(
@@ -245,7 +248,7 @@ test.each([["true", true], ["1", 1], ["null", null], ["an object", {}]] as const
 
     expectError(() => prepareNodeStarted(state, invalid as unknown as string), TypeError, /^node_id must be a string$/);
 
-    expect(log.nextSequence).toBe(1);
+    expect(log.nextSequence).toBe(3);
   },
 );
 
@@ -265,7 +268,7 @@ test("NodeStarted requires UNKNOWN disposition and no existing flight", () => {
   state.ready.push("first");
   expectError(() => prepareNodeStarted(state, "first"), RangeError, /^NodeStarted node 'first' is already in-flight$/);
 
-  expect(log.nextSequence).toBe(2);
+  expect(log.nextSequence).toBe(4);
 });
 
 test("a retried node can start again in a valid record sequence", () => {
@@ -279,7 +282,7 @@ test("a retried node can start again in a valid record sequence", () => {
 
   expect(state.ready).toEqual([]);
   expect([...state.inFlight]).toEqual([START_ID]);
-  expect(state.acceptedStarts).toEqual(new Map([[START_ID, 3]]));
+  expect(state.acceptedStarts).toEqual(new Map([[START_ID, 5]]));
   expect(state.nodeStarts).toEqual(new Map([[START_ID, 2]]));
   expectCommittedPath(
     log,
@@ -401,7 +404,7 @@ test.each([
   );
 
   expectUnchanged(state, before);
-  expect(log.nextSequence).toBe(1);
+  expect(log.nextSequence).toBe(3);
 });
 
 /** Return a START fan-out whose first successor can be retried over wide ready work. */
@@ -422,7 +425,7 @@ function wideResumeFlow(width: number): CompiledFlow {
 test("RunResumed keeps wide ready work without copying it", () => {
   const { state, log } = initialized(wideResumeFlow(512));
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, { started: true }));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, { started: true }));
   commitPrepared(log, state, prepareNodeStarted(state, "retry"));
 
   const prepared = prepareRunResumed(state, { numWorkers: 3 });
@@ -475,7 +478,7 @@ test.each([
   expectError(() => prepareRunResumed(state, { numWorkers: 3 }), RangeError, message);
 
   expectUnchanged(state, before);
-  expect(log.nextSequence).toBe(2);
+  expect(log.nextSequence).toBe(4);
 });
 
 test.each([[[]], [["first"]], [["second", "first"]], [["first", "second", "ordinary"]]] as const)(
@@ -493,7 +496,7 @@ test.each([[[]], [["first"]], [["second", "first"]], [["first", "second", "ordin
     );
 
     expectUnchanged(state, before);
-    expect(log.nextSequence).toBe(3);
+    expect(log.nextSequence).toBe(5);
   },
 );
 
@@ -591,8 +594,8 @@ test.each(["start", "resume"] as const)(
 );
 
 test.each([
-  ["log run id", "different", 1, /^run-log run_id mismatch: prepared 'run-123', log 'different'$/],
-  ["log sequence", RUN_ID, 2, /^run-log sequence mismatch: prepared 1, log 2$/],
+  ["log run id", "different", 3, /^run-log run_id mismatch: prepared 'run-123', log 'different'$/],
+  ["log sequence", RUN_ID, 4, /^run-log sequence mismatch: prepared 3, log 4$/],
 ] as const)("a non-start commit requires the exact log identity before append: %s", (_name, runId, next, message) => {
   const { state, log: prior } = initialized();
   const prepared = prepareNodeStarted(state, START_ID);
@@ -623,7 +626,7 @@ test("resume rejects a different state before append", () => {
     RangeError,
     /^prepared transition belongs to a different originating RunState$/,
   );
-  expect(log.nextSequence).toBe(3);
+  expect(log.nextSequence).toBe(5);
 });
 
 test("dispatch rejects an adopted flow or boundary replacement before append", () => {
@@ -638,7 +641,7 @@ test("dispatch rejects an adopted flow or boundary replacement before append", (
     /^transition requires its originating flow and boundary identities$/,
   );
 
-  expect(log.nextSequence).toBe(1);
+  expect(log.nextSequence).toBe(3);
 });
 
 /** Return state, log and a prepared start of START, or a resume after START's start. */
@@ -702,7 +705,7 @@ test("a frontier commit rejects a changed public record before append", () => {
 
   expectError(() => commitPrepared(log, state, forged), RangeError, /^prepared record changed after validation$/);
 
-  expect(log.nextSequence).toBe(1);
+  expect(log.nextSequence).toBe(3);
   expect(state.ready).toEqual([START_ID]);
 });
 
@@ -745,8 +748,8 @@ test("a non-start append return mismatch leaves the state unapplied", () => {
   const { state } = initialized();
   const prepared = prepareNodeStarted(state, START_ID);
   const before = snapshot(state);
-  const returned = new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 2, prepared.record);
-  const log = new ReturningLog(() => returned, { nextSequence: 1 });
+  const returned = new RecordEnvelope(SCHEMA_VERSION, RUN_ID, 4, prepared.record);
+  const log = new ReturningLog(() => returned, { nextSequence: 3 });
 
   expectError(
     () => commitPrepared(log, state, prepared),
@@ -784,8 +787,8 @@ test("a RunStopped commit changes only the sequence and the last stop, and retur
   const observers = commitPrepared(log, state, prepareRunStopped(state, "callback", "boom"));
 
   expect(observers).toEqual([]);
-  expect(state.nextSequence).toBe(4);
-  expectUnchanged(state, { ...before, values: { ...before.values, nextSequence: 4, lastStopSequence: 3 } });
+  expect(state.nextSequence).toBe(6);
+  expectUnchanged(state, { ...before, values: { ...before.values, nextSequence: 6, lastStopSequence: 5 } });
   expect(state.ready).toEqual(["ordinary"]);
   expectCommittedPath(
     log,
@@ -812,7 +815,7 @@ test.each([
   );
 
   expectUnchanged(state, before);
-  expect(log.nextSequence).toBe(3);
+  expect(log.nextSequence).toBe(5);
 });
 
 test.each([
@@ -828,7 +831,7 @@ test.each([
   expectError(() => prepareRecord(state, new RunStoppedRecord("signal", "", ["first"])), RangeError, message);
 
   expectUnchanged(state, before);
-  expect(log.nextSequence).toBe(2);
+  expect(log.nextSequence).toBe(4);
 });
 
 test("a RunStopped plan whose delta disagrees with its record is refused", () => {
@@ -841,7 +844,7 @@ test("a RunStopped plan whose delta disagrees with its record is refused", () =>
 
   expectError(() => commitPrepared(log, state, forged), RangeError, /^frontier stop delta disagrees with its record$/);
 
-  expect(log.nextSequence).toBe(3);
+  expect(log.nextSequence).toBe(5);
 });
 
 test("RunStopped with nothing in flight records no node ids", () => {
@@ -852,7 +855,7 @@ test("RunStopped with nothing in flight records no node ids", () => {
 
   expect(prepared.record).toStrictEqual(new RunStoppedRecord("signal", "", []));
   expect(state.ready).toEqual([START_ID]);
-  expect(state.nextSequence).toBe(2);
+  expect(state.nextSequence).toBe(4);
 });
 
 test("a terminal state refuses RunStopped", () => {
@@ -904,7 +907,7 @@ test("a frontier plan holding an outcome record is refused", () => {
     /^frontier plan requires a dispatch, resume, step or stop record$/,
   );
 
-  expect(log.nextSequence).toBe(1);
+  expect(log.nextSequence).toBe(3);
 });
 
 // TS-only: interrupted-attempt counts.
@@ -928,7 +931,7 @@ test("a stop covers the starts before it, so their resume counts nothing", () =>
   startFrontier(state, log, "first");
 
   commitPrepared(log, state, prepareRunStopped(state, "signal", ""));
-  expect(state.lastStopSequence).toBe(2);
+  expect(state.lastStopSequence).toBe(4);
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
   expect(state.interruptedAttempts).toEqual(new Map());
@@ -954,7 +957,7 @@ test("two stops in a row cover everything started before the second", () => {
   commitPrepared(log, state, prepareRunStopped(state, "signal", ""));
   startFrontier(state, log, "second");
   commitPrepared(log, state, prepareRunStopped(state, "callback", "boom"));
-  expect(state.lastStopSequence).toBe(4);
+  expect(state.lastStopSequence).toBe(6);
 
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
@@ -968,7 +971,7 @@ test("an interrupted-attempt count survives the node's outcome, while its start 
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
 
-  commitPrepared(log, state, prepareNodeSucceeded(state, "first", {}));
+  commitPrepared(log, state, prepareOutput(log, state, "first", {}));
 
   expect(state.nodeStarts.has("first")).toBe(false);
   expect(state.interruptedAttempts).toEqual(new Map([["first", 1]]));
@@ -1007,7 +1010,7 @@ test("replayRecords rebuilds the interrupted-attempt counts and the last stop of
       ["second", 1],
     ]),
   );
-  expect(state.lastStopSequence).toBe(10);
+  expect(state.lastStopSequence).toBe(13);
   expect(state.ready).toEqual(["second"]);
 
   const replayed = replayRecords(new RunState(fanoutFlow()), log.records(), { growBuilder: fragmentBuilder });

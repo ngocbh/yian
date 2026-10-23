@@ -62,11 +62,9 @@ import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } 
 import {
   buildValue,
   buildValueAs,
-  type PoolWire,
   type Type,
   TypedValue,
   type ValueKind,
-  VariablePool,
 } from "../typesys/index.ts";
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 import {
@@ -82,10 +80,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -124,32 +122,6 @@ export function canonicalTyped(value: unknown, declared: ValueKind | Type | null
 export function canonicalSeed(value: unknown): [JsonValue, JsonValue] {
   const text = logJson(jsonPart(value, [], "mapping"));
   return [parseJson(text, "codec"), parseJson(text, "codec")];
-}
-
-/**
- * Encode a variable pool to its canonical JSON object, a `RunStartedRecord`'s `initial_pool`.
- *
- * @throws TypeCheckError when a stored value isn't a JSON value (see `TypedValue.toWire`).
- * @throws RangeError when a stored typed value doesn't hold its kind (`TypedValue.fromWire`).
- */
-export function encodePool(pool: VariablePool): PoolWire {
-  const wire = canonicalCopy(pool.toWire()) as unknown as PoolWire;
-  // The unchecked `TypedValue` constructor can hold a value of the wrong kind.
-  decodePool(wire);
-  return wire;
-}
-
-/**
- * Decode and strictly validate a canonical variable-pool wire object.
- *
- * `wire` must have exactly `store`, `system` and `start_id` (see `VariablePool.fromWire`). The
- * pool's values are decoded from a fresh copy, so they share nothing with `wire`.
- *
- * @throws RangeError when the object has missing or extra fields or invalid typed values.
- * @throws TypeError when it holds data outside canonical JSON (the writer's error).
- */
-export function decodePool(wire: PoolWire): VariablePool {
-  return VariablePool.fromWire(canonicalCopy(wire));
 }
 
 /**
@@ -247,8 +219,6 @@ export interface RunParent {
 export interface RunStartedFields {
   /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
   flowFingerprint: string;
-  /** The full initial variable pool's canonical wire object (see `encodePool`). */
-  initialPool: PoolWire;
   /** The per-run wiring override of the synthesized START node. */
   startWiringOverride: Readonly<Record<string, unknown>>;
   /** The complete resolved agent configuration, keyed by stable static node path. */
@@ -283,12 +253,13 @@ export interface RunStartedFields {
   parent?: RunParent | null;
 }
 
-/** Initialize a run from its complete canonical inputs and resolved configuration. Frozen. */
+/**
+ * Initialize a run from its resolved configuration. Frozen. The run's inputs and system values
+ * follow it as `PoolCommitRecord`s.
+ */
 export class RunStartedRecord {
   /** The authored flow's SHA-256 identity, 64 lowercase hex digits. */
   readonly flowFingerprint: string;
-  /** The full initial variable pool's deep-frozen canonical wire object. */
-  readonly initialPool: Readonly<PoolWire>;
   /** The deep-frozen canonical START wiring override; a `FileRef` is held as its mapping. */
   readonly startWiringOverride: Readonly<JsonObject>;
   /** The deep-frozen canonical agent configuration by static path; a `FileRef` is held as its mapping. */
@@ -330,7 +301,7 @@ export class RunStartedRecord {
    *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `yianVersion` or `parent` has
    *   the wrong type.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
-   *   negative, the initial pool isn't a pool wire object (see `decodePool`), the memory fields
+   *   negative, the memory fields
    *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
    *   an unknown key, a defaults name is empty, `callTimeLlm` has missing or extra fields, no
    *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.root` or a file
@@ -354,10 +325,6 @@ export class RunStartedRecord {
       parent = null,
     } = fields;
     this.flowFingerprint = requireSha256(fields.flowFingerprint, "flow_fingerprint");
-    // Decoding only validates: a decoded pool writes back exactly this canonical copy.
-    const pool = canonicalCopy(fields.initialPool);
-    VariablePool.fromWire(pool);
-    this.initialPool = freezeParsed(pool) as unknown as PoolWire;
     const wiring = canonicalCopy(jsonPart(fields.startWiringOverride, [], "mapping"));
     if (!isRecord(wiring)) throw new TypeError("start_wiring_override must be a mapping");
     this.startWiringOverride = freezeParsed(wiring);
@@ -619,35 +586,54 @@ export class NodeStepRecord {
   }
 }
 
-/** Commit one canonical typed value under an already-resolved target. Frozen. */
+/**
+ * Write one canonical typed value to the variable pool under `key`. Frozen.
+ *
+ * The run start writes the system values (`system.<name>`) and the START inputs this way; a node's
+ * output waits on its node until the node's `NodeSucceededRecord` names this record's seq.
+ */
+export class PoolCommitRecord {
+  /** The writing node's non-empty id: the node whose output this is, or the START for the run start. */
+  readonly nodeId: string;
+  /** The non-empty pool key the value is written under: a node id, or `system.<name>`. */
+  readonly key: string;
+  /** The value's deep-frozen canonical typed wire `{kind, value}`. */
+  readonly value: Readonly<TypedWire>;
+
+  /**
+   * @param value A typed value's wire form (see `TypedValue.fromWire`).
+   * @throws TypeError when an id isn't a string.
+   * @throws RangeError when an id is empty or `value` isn't a typed-value wire form.
+   * @throws TypeCheckError when the value holds NaN or another non-JSON value.
+   */
+  constructor(nodeId: string, key: string, value: TypedWire) {
+    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.key = requireNonemptyString(key, "key");
+    this.value = freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire;
+    Object.freeze(this);
+  }
+}
+
+/** Accept a node's success: its pending `PoolCommitRecord`, named by seq. Frozen. */
 export class NodeSucceededRecord {
   /** The succeeded node's non-empty id. */
   readonly nodeId: string;
-  /** The non-empty pool key the value is committed under. */
-  readonly commitTarget: string;
-  /** The value's deep-frozen canonical typed wire `{kind, value}`. */
-  readonly value: Readonly<TypedWire>;
+  /** The seq of the node's `PoolCommitRecord` this success accepts. */
+  readonly commit: number;
   /** Visible evidence accepted with the outcome, if any. */
   readonly evidence: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome, if any. */
   readonly forwardCapture: ForwardCapture | null;
 
   /**
-   * @param value A typed value's wire form (see `TypedValue.fromWire`).
-   * @throws TypeError when an id isn't a string, or a carrier is of another class.
-   * @throws RangeError when an id is empty or `value` isn't a typed-value wire form.
-   * @throws TypeCheckError when the value holds NaN or another non-JSON value.
+   * @throws TypeError when the id isn't a string, or a carrier is of another class.
+   * @throws RangeError when the id is empty or `commit` isn't a positive safe integer.
    */
-  constructor(
-    nodeId: string,
-    commitTarget: string,
-    value: TypedWire,
-    options: OutcomeCarriers = {},
-  ) {
+  constructor(nodeId: string, commit: number, options: OutcomeCarriers = {}) {
     const { evidence = null, forwardCapture = null } = options;
     this.nodeId = requireNonemptyString(nodeId, "node_id");
-    this.commitTarget = requireNonemptyString(commitTarget, "commit_target");
-    this.value = freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire;
+    if (!Number.isSafeInteger(commit) || commit < 1) throw new RangeError("commit must be a positive integer");
+    this.commit = commit;
     this.evidence = validatedEvidence(evidence);
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
@@ -949,6 +935,7 @@ export type RunRecord =
   | RunStoppedRecord
   | NodeStartedRecord
   | NodeStepRecord
+  | PoolCommitRecord
   | NodeSucceededRecord
   | NodeRoutedRecord
   | NodeExpandedRecord
@@ -970,6 +957,7 @@ const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass
   [RunStoppedRecord, "run_stopped"],
   [NodeStartedRecord, "node_started"],
   [NodeStepRecord, "node_step"],
+  [PoolCommitRecord, "pool_commit"],
   [NodeSucceededRecord, "node_succeeded"],
   [NodeRoutedRecord, "node_routed"],
   [NodeExpandedRecord, "node_expanded"],
@@ -1452,6 +1440,7 @@ function wireNodeId(kind: string, payload: JsonObject): string | null {
   switch (kind) {
     case "node_started":
     case "node_step":
+    case "pool_commit":
     case "node_succeeded":
     case "node_routed":
       return wireName(payload["node_id"], `${label} node_id`);
@@ -1829,8 +1818,9 @@ export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
   /** The record's wire kind, such as `node_started`. */
   readonly kind: string;
   /**
-   * The node the record is about: the `node_id` of a node's start, step, success or route, the
-   * spawner of a growth, the node of a failure; `null` for a run, stop, memory or backward record.
+   * The node the record is about: the `node_id` of a node's start, step, pool commit, success or
+   * route, the spawner of a growth, the node of a failure; `null` for a run, stop, memory or
+   * backward record.
    */
   readonly nodeId: string | null;
   /** The validated envelope; `null` when read with `payloads: false`. */
@@ -2018,6 +2008,18 @@ export function* iterRunRecords(
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/**
+ * Return where each record's line starts in the run log at `path`, by seq: a header scan
+ * (`iterRunRecords` with `payloads: false`) that takes no lock, so it reads a log another process
+ * is writing. A reader reads the record at seq `k` with `iterRunRecords(path, {afterOffset:
+ * offsets[k]})`.
+ *
+ * @throws the errors of `iterRunRecords`.
+ */
+export function runRecordOffsets(path: string): number[] {
+  return Array.from(iterRunRecords(path, { payloads: false }), (entry) => entry.offset);
 }
 
 /**
@@ -2945,10 +2947,9 @@ function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers
   };
 }
 
-/** The fields of a `run_started` payload; schema 12 writes every one. */
+/** The fields of a `run_started` payload; schema 13 writes every one. */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
-  "initial_pool",
   "start_wiring_override",
   "effective_llm_by_static_path",
   "num_workers",
@@ -2970,7 +2971,6 @@ function payloadForRecord(record: RunRecord): JsonObject {
   if (record instanceof RunStartedRecord) {
     return {
       flow_fingerprint: record.flowFingerprint,
-      initial_pool: record.initialPool as unknown as JsonObject,
       start_wiring_override: record.startWiringOverride as JsonObject,
       effective_llm_by_static_path: record.effectiveLlmByStaticPath as JsonObject,
       num_workers: BigInt(record.numWorkers),
@@ -2996,13 +2996,11 @@ function payloadForRecord(record: RunRecord): JsonObject {
   }
   if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
   if (record instanceof NodeStepRecord) return { node_id: record.nodeId, step: record.step as JsonObject };
+  if (record instanceof PoolCommitRecord) {
+    return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+  }
   if (record instanceof NodeSucceededRecord) {
-    return {
-      node_id: record.nodeId,
-      commit_target: record.commitTarget,
-      value: record.value as unknown as JsonObject,
-      ...outcomePayload(record),
-    };
+    return { node_id: record.nodeId, commit: BigInt(record.commit), ...outcomePayload(record) };
   }
   if (record instanceof NodeRoutedRecord) {
     return {
@@ -3077,7 +3075,6 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       // defaults and the call-time agents), so a bad value is named by its entry.
       return new RunStartedRecord({
         flowFingerprint: wireText(payload["flow_fingerprint"], `${label} flow_fingerprint`),
-        initialPool: wireObject(payload["initial_pool"], `${label} initial_pool`) as unknown as PoolWire,
         startWiringOverride: wireObject(payload["start_wiring_override"], `${label} start_wiring_override`),
         effectiveLlmByStaticPath: wireObject(
           payload["effective_llm_by_static_path"],
@@ -3122,12 +3119,18 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireName(payload["node_id"], `${label} node_id`),
         wireObject(payload["step"], `${label} step`),
       );
+    case "pool_commit":
+      requireFields(payload, ["node_id", "key", "kind", "value"], label);
+      return new PoolCommitRecord(
+        wireName(payload["node_id"], `${label} node_id`),
+        wireName(payload["key"], `${label} key`),
+        { kind: payload["kind"], value: payload["value"] } as unknown as TypedWire,
+      );
     case "node_succeeded":
-      requireFields(payload, ["node_id", "commit_target", "value", "evidence", "forward_capture"], label);
+      requireFields(payload, ["node_id", "commit", "evidence", "forward_capture"], label);
       return new NodeSucceededRecord(
         wireName(payload["node_id"], `${label} node_id`),
-        wireName(payload["commit_target"], `${label} commit_target`),
-        wireObject(payload["value"], `${label} value`) as unknown as TypedWire,
+        wireInt(payload["commit"], `${label} commit`),
         outcomeFromPayload(payload, label),
       );
     case "node_routed": {

@@ -12,7 +12,7 @@
  * Changed:
  * - `test_replay_requires_pristine_state`: the log is a live run of the fixtures' `flow()`.
  * - `test_historical_cursor_matches_each_envelopes_schema`: the cursor holds live TS log lines,
- *   not Python's recorded schema-9 bytes, since schema 12 is the only TS schema. It also pins the
+ *   not Python's recorded schema-9 bytes, since schema 13 is the only TS schema. It also pins the
  *   append past the prefix and the consumed envelopes `records()` and the iterator return.
  * - `test_replay_every_prefix_matches_live_state_and_uses_commit_path`: ESM bindings can't be
  *   patched, so the count of `commit_prepared` calls is not checked; the snapshots, the read-only
@@ -20,7 +20,7 @@
  * - `test_replay_applies_logged_llm_map_before_rebuilding_growth`: replay takes no environment, so
  *   the "never reads a default" half (Python patches `connection_snapshot`) has nothing to patch.
  * - `test_recorded_public_resume_keeps_completed_code_and_wire[6]`: the prefix is the first 6
- *   lines of a live TS run's log (schema 12 is the only TS schema), and an accepted CODE rerun is
+ *   lines of a live TS run's log (schema 13 is the only TS schema), and an accepted CODE rerun is
  *   caught by spying on `CodeNode.prototype.forward`; a resume in an environment whose
  *   `YIAN_DEFAULT_PROVIDER` and credential-store reads fail stands for the patched
  *   `connection_snapshot`.
@@ -78,6 +78,7 @@ import {
   NodeExpandedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
+  PoolCommitRecord,
   RecordEnvelope,
   type RunLog,
   RunStartedRecord,
@@ -87,18 +88,21 @@ import {
   commitPrepared,
   HistoricalLogCursor,
   prepareExpanded,
+  prepareInitialCommit,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  preparePoolCommit,
   prepareRunStarted,
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import {
-  commitStartSuccess,
   crashAfter,
   flow,
   fragmentBuilder,
+  pool,
+  prepareOutput,
   progressOf,
   reducerSnapshot,
   routeFlow,
@@ -123,18 +127,27 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 function linearHistory(): { log: MemoryRunLog; snapshots: Record<string, unknown>[] } {
   const state = new RunState(flow());
   const log = new MemoryRunLog(RUN_ID);
-  commitPrepared(log, state, prepareRunStarted(state, startData(state.flow)));
+  commitPrepared(log, state, prepareRunStarted(state, startData()));
   const snapshots = [reducerSnapshot(state)];
+  const start = pool(state.flow);
+  // One record each, so a snapshot follows every record.
   const transitions = [
-    () => commitPrepared(log, state, prepareNodeStarted(state, START_ID)),
-    () => commitStartSuccess(state, log),
-    () => commitPrepared(log, state, prepareNodeStarted(state, "work")),
-    () => commitPrepared(log, state, prepareNodeSucceeded(state, "work", "Ada")),
-    () => commitPrepared(log, state, prepareNodeStarted(state, END_ID)),
-    () => commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, "Ada")),
+    ...[...start.system.keys()]
+      .sort()
+      .map((name) => () => prepareInitialCommit(state, `system.${name}`, start.system.get(name))),
+    () => prepareInitialCommit(state, START_ID, start.get(START_ID)),
+    () => prepareNodeStarted(state, START_ID),
+    () => preparePoolCommit(state, START_ID, { items: ["canonical"] }),
+    () => prepareNodeSucceeded(state, START_ID),
+    () => prepareNodeStarted(state, "work"),
+    () => preparePoolCommit(state, "work", "Ada"),
+    () => prepareNodeSucceeded(state, "work"),
+    () => prepareNodeStarted(state, END_ID),
+    () => preparePoolCommit(state, END_ID, "Ada"),
+    () => prepareNodeSucceeded(state, END_ID),
   ];
   for (const transition of transitions) {
-    transition();
+    commitPrepared(log, state, transition());
     snapshots.push(reducerSnapshot(state));
   }
   expect(state.result).not.toBeNull();
@@ -163,7 +176,7 @@ test("a replayed RunStarted keeps the recorded defaults and call-time LLM config
   const live = new RunState(flow());
   const log = new MemoryRunLog(RUN_ID);
   const data = {
-    ...startData(live.flow),
+    ...startData(),
     defaults: { MAX_TOTAL_NODES: 5000n },
     callTimeLlm: { selection: {}, agents: { chat: {} } },
   };
@@ -388,14 +401,18 @@ async function loadedLinearHistory(): Promise<{
   const loaded = await load(LINEAR);
   const log = new MemoryRunLog(RECOVERY_RUN_ID);
   const state = startedRun(loaded, log, { inputs: { x: "Ada" }, numWorkers: 2 });
+  // The snapshots start after the run start, and each transition writes one record.
   const snapshots = [recoverySnapshot(state)];
   const transitions = [
     () => prepareNodeStarted(state, START_ID),
-    () => prepareNodeSucceeded(state, START_ID, { x: "Ada" }),
+    () => preparePoolCommit(state, START_ID, { x: "Ada" }),
+    () => prepareNodeSucceeded(state, START_ID),
     () => prepareNodeStarted(state, "n"),
-    () => prepareNodeSucceeded(state, "n", "Ada"),
+    () => preparePoolCommit(state, "n", "Ada"),
+    () => prepareNodeSucceeded(state, "n"),
     () => prepareNodeStarted(state, END_ID),
-    () => prepareNodeSucceeded(state, END_ID, "Ada"),
+    () => preparePoolCommit(state, END_ID, "Ada"),
+    () => prepareNodeSucceeded(state, END_ID),
   ];
   for (const transition of transitions) {
     commitPrepared(log, state, transition());
@@ -422,7 +439,7 @@ async function agentGrowthHistory(): Promise<{
   const log = new MemoryRunLog(RECOVERY_RUN_ID);
   const state = startedRun(loaded, log, { effective, privateFlow });
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "gate"));
   commitPrepared(log, state, prepareExpanded(state, "gate", new Grow({}), buildGrow));
   return { loaded, live: state, log, effective };
@@ -432,9 +449,12 @@ test("test_replay_every_prefix_matches_live_state_and_uses_commit_path", async (
   const { loaded, log, snapshots } = await loadedLinearHistory();
   const envelopes = log.records();
   const originalManifest = flowManifest(loaded.compiled);
+  // A prefix inside the run start can't be replayed; the first snapshot follows it.
+  const started = envelopes.length - snapshots.length + 1;
+  expect(started).toBe(5);
 
   snapshots.forEach((expected, index) => {
-    const length = index + 1;
+    const length = started + index;
     const source = new ReadOnlyLog(envelopes.slice(0, length));
     const recovered = replayRunLog(loaded, source);
 
@@ -451,7 +471,7 @@ test("test_replay_preserves_ordered_unfinished_starts_for_later_resume", async (
   const log = new MemoryRunLog(RECOVERY_RUN_ID);
   const state = startedRun(loaded, log, { numWorkers: 4 });
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   expect(state.ready).toEqual(["first", "second"]);
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
   commitPrepared(log, state, prepareNodeStarted(state, "second"));
@@ -498,7 +518,9 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
     });
     expect(fresh.status).toBe("succeeded");
     const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
-    const prefixLength = 6;
+    // Through n's success: the run start (RunStarted and four commits), then START's and n's
+    // start, commit and success.
+    const prefixLength = 11;
     const prefix = `${lines.slice(0, prefixLength).join("\n")}\n`;
     writeFileSync(path, prefix);
     const forward = spyOn(CodeNode.prototype, "forward").mockImplementation(() => {
@@ -588,7 +610,7 @@ test("test_replay_rejects_log_identity_and_length_disagreement", async () => {
   expectError(
     () => replayRunLog(loaded, new ReadOnlyLog(envelopes, { nextSequence: envelopes.length + 1 })),
     RangeError,
-    "run log sequence mismatch: next_sequence is 8, prefix length is 7",
+    "run log sequence mismatch: next_sequence is 15, prefix length is 14",
   );
 });
 
@@ -621,12 +643,15 @@ test("test_replay_rejects_records_after_terminal_without_touching_source", async
 
 test("test_run_started_replay_rejects_pool_and_envelope_identity_drift", async () => {
   const { loaded, log } = await loadedLinearHistory();
-  const first = log.records()[0]!;
-  const start = first.record as RunStartedRecord;
-  const pool = structuredClone(start.initialPool) as { system: Record<string, { value: unknown }> };
-  pool.system["run_id"]!.value = "other-run";
-  const drifted = new RunStartedRecord({ ...start, initialPool: pool as never });
-  const source = new ReadOnlyLog([new RecordEnvelope(SCHEMA_VERSION, first.runId, 0, drifted)]);
+  const records = log.records();
+  // The run start's `system.run_id` commit holds the run id.
+  const seq = records.findIndex(({ record }) => record instanceof PoolCommitRecord && record.key === "system.run_id");
+  const commit = records[seq]!;
+  const drifted = new PoolCommitRecord(START_ID, "system.run_id", { kind: "str", value: "other-run" });
+  const source = new ReadOnlyLog([
+    ...records.slice(0, seq),
+    new RecordEnvelope(SCHEMA_VERSION, commit.runId, seq, drifted),
+  ]);
 
   const caught = thrownBy(() => replayRunLog(loaded, source));
   expect(caught).toBeInstanceOf(RangeError);
@@ -639,8 +664,9 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
   try {
     const flow = await load(FANOUT);
     const path = join(dir, "pooled.jsonl");
-    // Records 0-4 are RunStarted, START's two and both NodeStarted records.
-    await crashAfter(5, () => runFlow(flow, {}, { log: path, numWorkers: 2, env }));
+    // Records 0-9 are the run start (RunStarted and four commits), START's three and both
+    // NodeStarted records.
+    await crashAfter(10, () => runFlow(flow, {}, { log: path, numWorkers: 2, env }));
 
     const counts = new Map([
       ["first", 1],

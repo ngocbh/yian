@@ -35,17 +35,23 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
-import { NodeRoutedRecord, NodeStartedRecord, NodeSucceededRecord, RunStartedRecord } from "../../src/runtime/log.ts";
+import {
+  NodeRoutedRecord,
+  NodeStartedRecord,
+  NodeSucceededRecord,
+  PoolCommitRecord,
+  RunStartedRecord,
+} from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   prepareNodeRouted,
   prepareNodeStarted,
-  prepareNodeSucceeded,
 } from "../../src/runtime/state.ts";
 import {
-  CHILD_END,
   callRedirectFlow,
+  CHILD_END,
   FuncNode,
+  prepareOutput,
   reducerSnapshot,
   replayOutcomeLog,
   routeInFlight,
@@ -167,7 +173,7 @@ test("a required CALL child END redirect skips the parent's output path", () => 
 test("a redirected skip completes a coalesced fallback and the run", () => {
   const { state, log } = routeInFlight(callRedirectFlow({ fallback: true }));
   commitPrepared(log, state, prepareNodeStarted(state, "fallback"));
-  commitPrepared(log, state, prepareNodeSucceeded(state, "fallback", "fallback-value"));
+  commitPrepared(log, state, prepareOutput(log, state, "fallback", "fallback-value"));
 
   commitPrepared(log, state, prepareNodeRouted(state, "router", ELSE_HANDLE));
 
@@ -178,7 +184,7 @@ test("a redirected skip completes a coalesced fallback and the run", () => {
   expect(state.result).toBeNull();
 
   commitPrepared(log, state, prepareNodeStarted(state, END_ID));
-  commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, "fallback-value"));
+  commitPrepared(log, state, prepareOutput(log, state, END_ID, "fallback-value"));
 
   expect(state.result).toStrictEqual(new RunSucceeded({ output: "fallback-value" }));
   expect(state.ready).toEqual([]);
@@ -336,7 +342,10 @@ test("a redirected skip replays without a terminal record", () => {
 
   expect(live.log.records().map((envelope) => envelope.record.constructor)).toEqual([
     RunStartedRecord,
+    PoolCommitRecord,
+    PoolCommitRecord,
     NodeStartedRecord,
+    PoolCommitRecord,
     NodeSucceededRecord,
     NodeStartedRecord,
     NodeRoutedRecord,

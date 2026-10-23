@@ -168,10 +168,10 @@ function committed(path: string): Record<string, { kind: string; value: unknown 
     if (line === "") continue;
     const record = decodeRecord(line) as unknown as {
       kind: string;
-      payload: { node_id: string; value: { kind: string; value: unknown } };
+      payload: { node_id: string; kind: string; value: unknown };
     };
-    if (record.kind === "node_succeeded" && ANY_NODES.includes(record.payload.node_id)) {
-      values[record.payload.node_id] = record.payload.value;
+    if (record.kind === "pool_commit" && ANY_NODES.includes(record.payload.node_id)) {
+      values[record.payload.node_id] = { kind: record.payload.kind, value: record.payload.value };
     }
   }
   return values;
@@ -201,8 +201,9 @@ test("a straight run stores any values in their natural carriers", async () => {
   expect(values.rec!.value).toStrictEqual({ v: [1n, true] });
   expect(values.obj!.value).toStrictEqual({ a: [1n, null] });
   expect(values.big!.value).toBe(2n ** 80n);
-  const started = JSON.parse(readFileSync(path, "utf8").split("\n")[0]!).payload.initial_pool;
-  expect(started.store.__start__).toStrictEqual({ kind: ValueKind.OBJECT, value: { x: [1, 2] } });
+  // The START inputs are the run start's last commit, record 4.
+  const inputs = JSON.parse(readFileSync(path, "utf8").split("\n")[4]!).payload;
+  expect(inputs).toStrictEqual({ node_id: "__start__", key: "__start__", kind: ValueKind.OBJECT, value: { x: [1, 2] } });
 });
 
 test("resuming a completed any run returns the same output", async () => {

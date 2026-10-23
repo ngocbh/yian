@@ -486,7 +486,11 @@ afterAll(() => {
   expect(strayProcesses()).toEqual([]);
 });
 
-/** Cut a run of `flow` after its first `k` records, into a fresh log; return the log. */
+/**
+ * Cut a run of `flow` after its first `k` records, into a fresh log; return the log. The run start
+ * is 5 records (RunStarted and four commits) and START's success 3 more, so `k` 9 cuts after the
+ * next node's start.
+ */
 async function cutRun(
   flow: ComposedFlow,
   k: number,
@@ -537,7 +541,7 @@ for (const [name, load] of Object.entries(LOAD_SHAPES)) {
     const dir = freshDir("resume");
     const flow = await load(dir);
     // Cut after the root's CALL started, so the resume runs the child.
-    const log = await cutRun(flow, 4);
+    const log = await cutRun(flow, 9);
     rmSync(dir, { recursive: true });
 
     const resumed = await resumeFlow({ log, env: hostEnv(logs), tools: { lookup: lookup() } });
@@ -553,7 +557,7 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
   writeTree(dir, { "flow.yaml": ROOT, "store/c.yaml": CODE_CHILD, "store/fn.ts": UP });
   mkdirSync(join(dir, "lib"));
   symlinkSync(join(dir, "store", "c.yaml"), join(dir, "lib", "child.yaml"));
-  const log = await cutRun(await loadRoot(dir), 4);
+  const log = await cutRun(await loadRoot(dir), 9);
 
   const resumed = await resumeFlow({ log, env: hostEnv(logs) });
 
@@ -563,7 +567,7 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
 
 /** Cut a run of `AGENT_FLOW` after its AGENT ran, with the tool `t`; return the log. */
 async function cutAgentRun(t: FunctionTool = lookup("t", "Look it up.")): Promise<string> {
-  return cutRun(await loadFlow(AGENT_FLOW), 4, { tools: { t }, skills: skill(), models }, {});
+  return cutRun(await loadFlow(AGENT_FLOW), 9, { tools: { t }, skills: skill(), models }, {});
 }
 
 test.each<[string, Partial<{ t: FunctionTool; skills: Map<string, Skill> }>, string]>([
@@ -593,7 +597,7 @@ test(
       execute: (args) => String(args.text),
     });
     const flow = await loadFlow(AGENT_FLOW.replace("tools: [t]", "tools: [echo]").replace("    skills: [s]\n", ""));
-    const log = await cutRun(flow, 4, { tools: { echo }, models }, {});
+    const log = await cutRun(flow, 9, { tools: { echo }, models }, {});
     const before = readFileSync(log);
     const marker = join(logs, `marker-${markers.length + 1}`);
     markers.push(marker);
@@ -623,7 +627,7 @@ test("a finished log resumes without its tools or skills", async () => {
 test("a log of another yian version resumes with a warning naming both versions", async () => {
   const dir = freshDir("version");
   writeTree(dir, SHAPES["one level"]!.files);
-  const log = await cutRun(await loadRoot(dir), 4);
+  const log = await cutRun(await loadRoot(dir), 9);
   const text = readFileSync(log, "utf8");
   writeFileSync(log, text.replace(`"yian_version":"${VERSION}"`, '"yian_version":"0.0.0-other"'));
   const warnings: string[] = [];
@@ -648,7 +652,7 @@ test("a log of another yian version resumes with a warning naming both versions"
 
 test("a run of a flow built in code resumes only with that flow passed in", async () => {
   const flow = new ComposedFlow((await loadFlow(leaf("solo"))).compiled);
-  const log = await cutRun(flow, 3);
+  const log = await cutRun(flow, 8);
   const before = readFileSync(log);
 
   const missing = await rejected(resumeFlow({ log, env: hostEnv(logs), tools: { lookup: lookup() } }));
@@ -664,7 +668,7 @@ test("a run with recorded flow files refuses a flow passed in", async () => {
   const dir = freshDir("refuse");
   writeTree(dir, SHAPES["one level"]!.files);
   const flow = await loadRoot(dir);
-  const log = await cutRun(flow, 4);
+  const log = await cutRun(flow, 9);
   const before = readFileSync(log);
 
   const error = await rejected(resumeFlow({ log, flow, env: hostEnv(logs), tools: { lookup: lookup() } }));

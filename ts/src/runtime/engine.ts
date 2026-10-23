@@ -47,6 +47,7 @@ import {
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
+  preparePoolCommit,
   prepareRunStopped,
   RunState,
 } from "./state.ts";
@@ -441,12 +442,18 @@ export class FlowEngine {
     if (outcome instanceof EvaluationFailure) {
       prepared = this.#prepareFailure(nodeId, outcome.failure, carriers);
     } else if (outcome instanceof Output) {
+      let commit: PreparedTransition;
       try {
-        prepared = prepareNodeSucceeded(state, nodeId, outcome.value, { commitAs: outcome.commitAs, ...carriers });
+        commit = preparePoolCommit(state, nodeId, outcome.value, { commitAs: outcome.commitAs });
       } catch (error) {
         if (!(error instanceof NodeDataError)) throw error;
-        prepared = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers);
+        const failure = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers);
+        return commitPrepared(this.log, state, failure);
       }
+      // The output is written before the success that accepts it: a crash between the two leaves
+      // an orphan commit, and the node reruns.
+      commitPrepared(this.log, state, commit);
+      prepared = prepareNodeSucceeded(state, nodeId, carriers);
     } else if (outcome instanceof Route) {
       try {
         prepared = prepareNodeRouted(state, nodeId, outcome.handle, carriers);

@@ -129,6 +129,7 @@ import {
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import {
   addInterruptedAttempts,
+  commitInitialPool,
   commitPrepared,
   prepareRunResumed,
   prepareRunStarted,
@@ -165,6 +166,7 @@ export {
   RunLogChangedError,
   type RunLogEntry,
   RunLogSchemaError,
+  runRecordOffsets,
 } from "./runtime/log.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
 
@@ -914,7 +916,6 @@ async function startRun(
     const preparedStart = prepareRunStarted(state, {
       runId: canonicalRunId,
       flowFingerprint: authoredFingerprint,
-      initialPool: pool,
       startWiringOverride,
       effectiveLlmByStaticPath: effectiveLlm,
       callTimeLlm,
@@ -942,6 +943,7 @@ async function startRun(
         ? new MemoryRunLog(canonicalRunId, { clock })
         : JsonlRunLog.create(locator, canonicalRunId, { clock });
     const observers = commitPrepared(authority, state, preparedStart);
+    commitInitialPool(authority, state, pool);
     const runtime = memoryRuntime;
     // Built before publishing so a callback's rejected promise can stop it.
     const engine = new FlowEngine(state, authority, {
@@ -1916,7 +1918,8 @@ export function replayRunLog(
  * @throws RangeError when the log's run id or sequence is malformed or changes while it is read,
  *   the prefix is empty, an envelope isn't in canonical form or breaks the run id or the sequence,
  *   the first record isn't `RunStarted`, the flow fingerprint differs, the recorded memory table
- *   doesn't match the flow, or a record isn't the exact next transition.
+ *   doesn't match the flow, a record isn't the exact next transition, or the log ends inside its
+ *   run start (before the START inputs' commit).
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from the ones in
  *   effect.
  */
@@ -1997,6 +2000,10 @@ export function replayCompiledRunLog(
   const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, { growBuilder: buildGrow });
   if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
     throw new RangeError("run log changed while its historical prefix was replayed");
+  }
+  // The run's inputs aren't all in the log yet, so nothing could go on from it.
+  if (!state.inputsCommitted) {
+    throw new RangeError(`run log ${log.path ?? reprText(sourceRunId)} ends inside its run start; start the run again`);
   }
   return state;
 }

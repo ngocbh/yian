@@ -108,7 +108,7 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
+import { commitInitialPool, commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { aborted, BlockingNode, fragment, fragmentBuilder, noGrowth, rejected } from "./run_state_fixtures.ts";
@@ -299,12 +299,12 @@ function initialized<L extends MemoryRunLog = MemoryRunLog>(
     prepareRunStarted(state, {
       runId: RUN_ID,
       flowFingerprint: FINGERPRINT,
-      initialPool: pool,
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers,
     }),
   );
+  commitInitialPool(target, state, pool);
   return { state, log: target };
 }
 

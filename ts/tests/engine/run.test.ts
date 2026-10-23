@@ -127,7 +127,7 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareNodeStarted, prepareNodeSucceeded } from "../../src/runtime/state.ts";
+import { commitPrepared, prepareNodeStarted } from "../../src/runtime/state.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
@@ -136,6 +136,7 @@ import { hostEnv } from "./mcp_helpers.ts";
 import {
   crashAfter,
   NO_ENV,
+  prepareOutput,
   progressOf,
   rejected,
   requiredEndFlow,
@@ -888,7 +889,8 @@ test("a boundary callback that throws rejects the run with no stop record", asyn
   await expect(run(await load(PLAN_FLOW), { topic: "ACME" }, { log: path, onEvent })).rejects.toBe(failure);
   const log = JsonlRunLog.resume(path);
   try {
-    expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started"]);
+    // The run start (RunStarted and its four commits) is written before its observer is published.
+    expect(log.records().map((envelope) => envelope.kind)).toEqual(["run_started", ...Array(4).fill("pool_commit")]);
   } finally {
     log[Symbol.dispose]();
   }
@@ -1112,10 +1114,13 @@ function inspectWithAndWithout(path: string, flow: ComposedFlow): RunInspection 
   return without;
 }
 
-/** A log of `WORK_FLOW` whose process ended while `work` ran: records 0-3 are kept. */
+/**
+ * A log of `WORK_FLOW` whose process ended while `work` ran: records 0-8 are kept, the run start
+ * (RunStarted and four commits), START's start, commit and success, and work's start.
+ */
 async function crashedWork(path: string): Promise<ComposedFlow> {
   const flow = await load(WORK_FLOW);
-  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0 }));
+  await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0 }));
   return flow;
 }
 
@@ -1176,7 +1181,7 @@ test("inspectRun: resumed then crashed again counts 2, and the count stays after
   const path = join(dir, "twice.jsonl");
   const flow = await crashedWork(path);
   // RunResumed and work's second NodeStarted are kept; its outcome is refused again.
-  await crashAfter(6, () => resume(flow, { log: path }));
+  await crashAfter(11, () => resume(flow, { log: path }));
 
   expect(inspectBoth(path, flow)).toEqual({
     status: "interrupted",
@@ -1211,10 +1216,10 @@ test("inspectRun: END succeeded with another node ready but unstarted is succeed
   try {
     const state = startedRun(flow, log, { inputs: { x: "Ada" } });
     commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-    commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, { x: "Ada" }));
+    commitPrepared(log, state, prepareOutput(log, state, START_ID, { x: "Ada" }));
     expect(state.ready).toEqual([END_ID, "side"]);
     commitPrepared(log, state, prepareNodeStarted(state, END_ID));
-    commitPrepared(log, state, prepareNodeSucceeded(state, END_ID, "Ada"));
+    commitPrepared(log, state, prepareOutput(log, state, END_ID, "Ada"));
     expect(state.result).toBeNull();
   } finally {
     log.close();
@@ -1286,7 +1291,7 @@ test("inspectRun replays with the run's env", async () => {
   const path = join(dir, "env.jsonl");
   const flow = await load(WORK_FLOW);
   const env = hostEnv(dir, { YIAN_MAX_TOTAL_NODES: "5000" });
-  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0, env }));
+  await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0, env }));
 
   expect(progressOf(inspectRun(path, { flow, env }))).toEqual({
     status: "interrupted",
@@ -1321,7 +1326,7 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
   const work = await crashedWork(crashed);
   const inspection = inspectWithAndWithout(crashed, work);
   expect(inspection.learnable).toBe(false);
-  expect(inspection.lastSeq).toBe(3);
+  expect(inspection.lastSeq).toBe(8);
   expect(inspection.failure).toBeNull();
 });
 
@@ -1412,7 +1417,7 @@ test("inspectRun reads when a run started and ended, and a node's outcome less i
 test("a resume keeps the recorded times and stamps its own records from its clock; an unfinished run has no end", async () => {
   const path = join(dir, "resumed.jsonl");
   const flow = await load(WORK_FLOW);
-  await crashAfter(4, () => run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) }));
+  await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) }));
   const crashed = inspectRun(path);
   expect([crashed.status, crashed.startedAt, crashed.endedAt]).toEqual(["interrupted", "2026-10-20T14:00:00.000Z", null]);
   const before = readRunLog(path);
@@ -1558,8 +1563,8 @@ test("inspectRun reads a locked log as running when a writer's rollback shrinks 
   await crashedWork(path);
   const text = readFileSync(path, "utf8");
   const kept = Buffer.byteLength(text);
-  // A fifth record, a second start of `work`, which the writer is about to roll back.
-  writeFileSync(path, `${text}${text.split("\n").at(-2)!.replace('"seq":3', '"seq":4')}\n`);
+  // A tenth record, a second start of `work`, which the writer is about to roll back.
+  writeFileSync(path, `${text}${text.split("\n").at(-2)!.replace('"seq":8', '"seq":9')}\n`);
   const held = JsonlRunLog.resume(path);
   const realRead = fs.readSync;
   let cut = false;
@@ -1576,7 +1581,7 @@ test("inspectRun reads a locked log as running when a writer's rollback shrinks 
     const inspection = inspectRun(path);
     expect(cut).toBe(true);
     expect(progressOf(inspection)).toEqual({ status: "running", inFlight: ["work"], interruptedAttempts: new Map() });
-    expect(inspection.lastSeq).toBe(3);
+    expect(inspection.lastSeq).toBe(8);
   } finally {
     readSpy.mockRestore();
     held.close();

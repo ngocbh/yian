@@ -1,13 +1,14 @@
 /**
  * TS-only: media as files beside the run. `writeRunFile` stores bytes under the run folder's
- * `media/`, named by their sha256; `inlineToFile` turns a message's inline media into file
- * references; `fileToInline` turns a request's file references back into inline bytes for the
- * provider. The run folder (`dirname` of the log) reaches an AGENT's run context, on a fresh run
+ * `media/`, named by their sha256, and refers to them relative to the run folder;
+ * `inlineToFile` turns a message's inline media into file references; `fileToInline` turns a
+ * request's file references back into inline bytes for the provider, reading them from the run
+ * folder, so a run folder copied elsewhere still inlines. The run folder (`dirname` of the log) reaches an AGENT's run context, on a fresh run
  * and on resume.
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,14 +45,14 @@ const PNG = new TextEncoder().encode("not really a png");
 
 // --- writeRunFile --- //
 
-test("writeRunFile writes <dir>/media/<sha256>.<ext> with mode 0600 and returns its FileRef", () => {
+test("writeRunFile writes <dir>/media/<sha256>.<ext> with mode 0600 and returns its run-relative FileRef", () => {
   const dir = folder();
   const name = `${sha256(PNG)}.png`;
   const path = join(dir, "media", name);
 
   const file = writeRunFile(dir, PNG, "image/png");
 
-  expect(file).toEqual(new FileRef({ uri: path, mime: "image/png", name }));
+  expect(file).toEqual(new FileRef({ uri: `media/${name}`, mime: "image/png", name }));
   expect(new Uint8Array(readFileSync(path))).toEqual(PNG);
   expect(statSync(path).mode & 0o777).toBe(0o600);
   expect(statSync(join(dir, "media")).mode & 0o777).toBe(0o700);
@@ -73,6 +74,14 @@ test("the extension follows the media type; an unknown one is .bin", () => {
 });
 
 // --- inlineToFile and fileToInline --- //
+
+/** Return what `promise` rejects with, or `null` when it fulfills. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => null,
+    (reason: unknown) => reason,
+  );
+}
 
 const DATA = Buffer.from(PNG).toString("base64");
 
@@ -100,7 +109,7 @@ test("inlineToFile stores each inline media part and gives its file form; other 
   expected["parts"][1] = {
     type: "media",
     mime: "image/png",
-    file: { uri: join(dir, "media", name), mime: "image/png", name },
+    file: { uri: `media/${name}`, mime: "image/png", name },
     name: "chart.png",
     provider_payload: { detail: "low" },
   };
@@ -130,7 +139,8 @@ test("inlineToFile refuses inline data that isn't base64, storing nothing", () =
 });
 
 test("fileToInline gives each file media part its bytes back as data; other parts stay", async () => {
-  const filed = inlineToFile(reply(), folder());
+  const dir = folder();
+  const filed = inlineToFile(reply(), dir);
   const tool = new ToolSpec({ name: "noop", description: "Do nothing.", parameters: { type: "object" } });
   const request = new Request({
     messages: [new Message({ role: "user", parts: [new TextPart("draw")] }), filed],
@@ -139,7 +149,7 @@ test("fileToInline gives each file media part its bytes back as data; other part
     parallelToolCalls: false,
   });
 
-  const sent = await fileToInline(request);
+  const sent = await fileToInline(request, dir);
 
   expect(sent.messages.map((message) => message.toJSON())).toEqual([
     request.messages[0]!.toJSON(),
@@ -150,7 +160,7 @@ test("fileToInline gives each file media part its bytes back as data; other part
 
 test("fileToInline returns a request without file media as is", async () => {
   const request = new Request({ messages: [reply()] });
-  expect(await fileToInline(request)).toBe(request);
+  expect(await fileToInline(request, folder())).toBe(request);
 });
 
 test("fileToInline rejects naming the path of a missing file", async () => {
@@ -158,12 +168,32 @@ test("fileToInline rejects naming the path of a missing file", async () => {
   const filed = inlineToFile(reply(), dir);
   const path = join(dir, "media", `${sha256(PNG)}.png`);
   rmSync(path);
-  const error = await fileToInline(new Request({ messages: [filed] })).then(
-    () => null,
-    (reason: unknown) => reason,
-  );
+  const error = await rejection(fileToInline(new Request({ messages: [filed] }), dir));
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain(path);
+});
+
+test("a run folder copied elsewhere still inlines its media", async () => {
+  const dir = folder();
+  const request = new Request({ messages: [inlineToFile(reply(), dir)] });
+  const copy = join(folder(), "moved");
+  cpSync(dir, copy, { recursive: true });
+  rmSync(dir, { recursive: true });
+
+  const sent = await fileToInline(request, copy);
+
+  expect(sent.messages.map((message) => message.toJSON())).toEqual([reply().toJSON()]);
+});
+
+test.each([
+  ["an absolute uri", (dir: string) => join(dir, "media", "x.png")],
+  ["a uri with a .. segment", () => "media/../../x.png"],
+  ["a uri that is only ..", () => ".."],
+])("fileToInline refuses %s, which escapes the run folder", async (_, uri) => {
+  const dir = folder();
+  const part = new MediaPart({ mime: "image/png", file: { uri: uri(dir) } });
+  const error = await rejection(fileToInline(new Request({ messages: [new Message({ role: "user", parts: [part] })] }), dir));
+  expect(error).toEqual(new RangeError(`media file ${uri(dir)} is not inside the run folder`));
 });
 
 // --- the run folder reaches the AGENT --- //

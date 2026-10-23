@@ -60,12 +60,12 @@
       ]
     },
     "file": {
-      "description": "A file holding a media part's content: the FileRef form (TS yian only; the Python reference reads data or url). A run writes the bytes it receives under <run folder>/media/<sha256>.<ext> and refers to them with the file's absolute path as uri.",
+      "description": "A file holding a media part's content: the FileRef form (TS yian only; the Python reference reads data or url). A run writes the bytes it receives under <run folder>/media/<sha256>.<ext> and refers to them by their path relative to the run folder (media/<sha256>.<ext>) as uri, so a copied run folder keeps its references.",
       "type": "object",
       "required": ["uri"],
       "additionalProperties": false,
       "properties": {
-        "uri": {"type": "string", "description": "Where the file is."},
+        "uri": {"type": "string", "description": "Where the file is; a run's own files are relative to its folder."},
         "mime": {"type": "string", "description": "The file's media type."},
         "name": {"type": "string", "description": "The file's name."}
       }

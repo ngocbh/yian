@@ -10,7 +10,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import type { RetryInfo } from "../../llm/executor.ts";
 import { MediaPart, Message, type Part, Request } from "../../llm/messages.ts";
@@ -170,7 +170,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  * file and the folder are synced before this returns, so a record naming the file can be
  * written next.
  *
- * @returns The file's reference: its absolute path as `uri`, `mime`, and its file name as `name`.
+ * @returns The file's reference: its path relative to the run folder (`media/<sha256>.<ext>`) as
+ *   `uri`, so it still holds when the folder is copied elsewhere; `mime`; and its file name as `name`.
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
@@ -197,7 +198,7 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
     }
   }
   syncFolder(media);
-  return new FileRef({ uri: path, mime, name });
+  return new FileRef({ uri: `media/${name}`, mime, name });
 }
 
 /** Flush folder `path`'s entries to disk. */
@@ -259,14 +260,16 @@ export function inlineToFile(message: Message, dir: string | null): Message {
 
 /**
  * Return `request` with each file media part given its bytes inline (`data`, read from the
- * file's `uri`); its type, name and payload stay. This is the form sent to a provider, so
- * provider adapters never see a file reference.
+ * file's `uri` resolved against the run folder `runDir`); its type, name and payload stay. This
+ * is the form sent to a provider, so provider adapters never see a file reference.
  *
  * A request without file media is returned as is.
  *
+ * @throws RangeError (as a rejection) when a `uri` is absolute or has a `..` segment, so it could
+ *   name a file outside the run folder.
  * @throws Error (as a rejection) naming the path when a file can't be read.
  */
-export async function fileToInline(request: Request): Promise<Request> {
+export async function fileToInline(request: Request, runDir: string): Promise<Request> {
   const filed = (part: Part): part is MediaPart => part instanceof MediaPart && part.file !== null;
   if (!request.messages.some((message) => message.parts.some(filed))) return request;
   const messages: Message[] = [];
@@ -281,7 +284,11 @@ export async function fileToInline(request: Request): Promise<Request> {
         parts.push(part);
         continue;
       }
-      const path = part.file!.uri;
+      const uri = part.file!.uri;
+      if (isAbsolute(uri) || uri.split(/[\\/]/).includes("..")) {
+        throw new RangeError(`media file ${uri} is not inside the run folder`);
+      }
+      const path = join(runDir, uri);
       let bytes: Buffer;
       try {
         bytes = await readFile(path);

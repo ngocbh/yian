@@ -298,7 +298,8 @@ export class TextPart {
 
 /**
  * An image or file, given inline as base64, by URL, or as a file reference; exactly one of the
- * three. A run keeps the media it receives inline as file references, so its log lines stay small.
+ * three. The file form lets a run log name media stored in the run's folder instead of holding
+ * its bytes.
  */
 export class MediaPart {
   readonly type = "media" as const;

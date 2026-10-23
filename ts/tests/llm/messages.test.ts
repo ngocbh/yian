@@ -66,7 +66,7 @@ function fullMessage(): Message {
       }),
       new ToolResultPart({ callId: "call_2", name: "broken", content: "ok" }),
       new RefusalPart("I can't help with that", { id: "msg_2", phase: "final" }),
-      new MediaPart({ mime: "image/png", file: new FileRef({ uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" }) }),
+      new MediaPart({ mime: "image/png", file: new FileRef({ uri: "media/ab.png", mime: "image/png", name: "ab.png" }) }),
     ],
     protocol: "anthropic_messages",
     providerPayload: { stop_sequence: null, meta: { k: "v" } },
@@ -87,7 +87,7 @@ function canonical(): Data {
       { type: "tool_result", call_id: "c1", name: "f", content: "r", is_error: true },
       { type: "tool_result", call_id: "c2", name: "g", content: "r" },
       { type: "refusal", text: "no", provider_payload: { id: "msg_1" } },
-      { type: "media", mime: "image/png", file: { uri: "/r/media/ab.png", mime: "image/png", name: "ab.png" } },
+      { type: "media", mime: "image/png", file: { uri: "media/ab.png", mime: "image/png", name: "ab.png" } },
     ],
     protocol: "openai_responses",
     provider_payload: { id: "resp_1" },
@@ -127,22 +127,22 @@ describe("round trip", () => {
   });
 
   test("a media part's file form takes a FileRef's fields and round-trips", () => {
-    const file = new FileRef({ uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" });
+    const file = new FileRef({ uri: "media/ab.png", mime: "image/png", name: "ab.png" });
     const part = new MediaPart({ mime: "image/png", file, name: "chart.png" });
-    const fields = { uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" };
+    const fields = { uri: "media/ab.png", mime: "image/png", name: "ab.png" };
     expect([part.file, part.data, part.url]).toEqual([fields, null, null]);
     expect(Object.isFrozen(part.file)).toBe(true);
     const message = new Message({ role: "assistant", parts: [part] });
     expect(message.toJSON()["parts"]).toEqual([
-      { type: "media", mime: "image/png", file: { uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" }, name: "chart.png" },
+      { type: "media", mime: "image/png", file: { uri: "media/ab.png", mime: "image/png", name: "ab.png" }, name: "chart.png" },
     ]);
     for (const read of [Message.fromJSON(message.toJSON()), throughCodec(message)]) {
       expect((read.parts[0] as MediaPart).file).toEqual(fields);
       expect(read.toJSON()).toEqual(message.toJSON());
     }
     // A file's unset fields are left out, as the message's own are.
-    const bare = new MediaPart({ mime: "image/png", file: new FileRef({ uri: "/a.png" }) });
-    expect(bare.toJSON()).toEqual({ type: "media", mime: "image/png", file: { uri: "/a.png" } });
+    const bare = new MediaPart({ mime: "image/png", file: new FileRef({ uri: "media/a.png" }) });
+    expect(bare.toJSON()).toEqual({ type: "media", mime: "image/png", file: { uri: "media/a.png" } });
   });
 
   test("the canonical form round-trips", () => {
@@ -245,7 +245,7 @@ describe("strict decode", () => {
   });
 
   test.each([
-    ["a file that isn't an object", (file: Data) => file, "/r/x.png", "parts[9].file: expected an object, got string"],
+    ["a file that isn't an object", (file: Data) => file, "media/x.png", "parts[9].file: expected an object, got string"],
     ["a file without uri", (file: Data) => (delete file["uri"], file), null, "parts[9].file.uri: missing"],
     ["an unknown file key", (file: Data) => ({ ...file, size: 3n }), null, "parts[9].file.size: unknown key"],
     ["a non-string uri", (file: Data) => ({ ...file, uri: 3n }), null, "parts[9].file.uri: expected string, got bigint"],
@@ -428,8 +428,8 @@ describe("construction", () => {
   test("invalid parts raise", () => {
     const makers = [
       () => new MediaPart({ mime: "image/png", data: "a", url: "https://e.com" }),
-      () => new MediaPart({ mime: "image/png", data: "a", file: new FileRef({ uri: "/a.png" }) }),
-      () => new MediaPart({ mime: "image/png", file: bad("/a.png") }),
+      () => new MediaPart({ mime: "image/png", data: "a", file: new FileRef({ uri: "media/a.png" }) }),
+      () => new MediaPart({ mime: "image/png", file: bad("media/a.png") }),
       () => new MediaPart({ mime: "image/png", file: bad({ uri: 3 }) }),
       () => new ToolCallPart({ id: "c", name: "f", arguments: null }),
       () => new TextPart(bad(3)),

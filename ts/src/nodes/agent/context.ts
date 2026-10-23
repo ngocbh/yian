@@ -9,8 +9,8 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 
 import type { RetryInfo } from "../../llm/executor.ts";
 import { MediaPart, Message, type Part, Request } from "../../llm/messages.ts";
@@ -165,7 +165,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
 /**
  * Store `bytes` as a file of the run in folder `dir` and return its reference.
  *
- * The file is `<dir>/media/<sha256>.<ext>`, mode 0600, in a `media` folder made with mode 0700;
+ * The file is `<dir>/media/<sha256>.<ext>`, mode 0600, in a `media` folder made with mode 0700
+ * (`dir` must exist);
  * `ext` follows `mime` (`.bin` when unknown). The same bytes of the same type keep one file. The
  * file and the folder are synced before this returns, so a record naming the file can be
  * written next.
@@ -175,11 +176,19 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
+  let made = true;
+  try {
+    mkdirSync(media, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    made = false;
+  }
   // A new `media` entry is durable only once the run folder holding it is synced.
-  if (mkdirSync(media, { mode: 0o700, recursive: true }) !== undefined) syncFolder(resolve(dir));
+  if (made) syncFolder(resolve(dir));
   const ext = MEDIA_EXTENSIONS.get(mime.split(";")[0]!.trim().toLowerCase()) ?? "bin";
   const name = `${createHash("sha256").update(bytes).digest("hex")}.${ext}`;
   const path = join(media, name);
+  // Two writers of the same bytes are harmless: each renames its own complete copy into place.
   if (!existsSync(path)) {
     // Written under a temporary name and renamed, so a crash never leaves a short file at `path`.
     const temporary = join(media, `.${name}.${randomBytes(8).toString("hex")}`);
@@ -214,8 +223,9 @@ function syncFolder(path: string): void {
 /**
  * Return the bytes of a media part's base64 `data`.
  *
- * @throws RangeError when `data` isn't base64 (padding may be left out), since decoding it
- *   anyway would store, and later send, different bytes.
+ * @throws RangeError when `data` isn't base64 (padding may be left out; url-safe letters,
+ *   whitespace and line breaks are refused), since decoding it anyway would store, and later
+ *   send, different bytes.
  */
 function base64Bytes(data: string, mime: string): Buffer {
   const bytes = Buffer.from(data, "base64");
@@ -265,8 +275,8 @@ export function inlineToFile(message: Message, dir: string | null): Message {
  *
  * A request without file media is returned as is.
  *
- * @throws RangeError (as a rejection) when a `uri` is absolute or has a `..` segment, so it could
- *   name a file outside the run folder.
+ * @throws RangeError (as a rejection) when a `uri`, with symlinks followed, names no file inside
+ *   the run's `media` folder (an absolute path elsewhere, a `..` escape, a symlink out, the log).
  * @throws Error (as a rejection) naming the path when a file can't be read.
  */
 export async function fileToInline(request: Request, runDir: string): Promise<Request> {
@@ -285,14 +295,18 @@ export async function fileToInline(request: Request, runDir: string): Promise<Re
         continue;
       }
       const uri = part.file!.uri;
-      if (isAbsolute(uri) || uri.split(/[\\/]/).includes("..")) {
-        throw new RangeError(`media file ${uri} is not inside the run folder`);
-      }
-      const path = join(runDir, uri);
+      const path = resolve(runDir, uri);
       let bytes: Buffer;
       try {
-        bytes = await readFile(path);
+        // Real paths, so a symlink can't lead a read out of the media folder.
+        const media = await realpath(join(runDir, "media"));
+        const real = await realpath(path);
+        if (!real.startsWith(media + sep)) {
+          throw new RangeError(`media file ${uri} is not inside the run's media folder`);
+        }
+        bytes = await readFile(real);
       } catch (error) {
+        if (error instanceof RangeError) throw error;
         throw new Error(`media file ${path} can't be read: ${error instanceof Error ? error.message : String(error)}`, {
           cause: error,
         });

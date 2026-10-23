@@ -8,7 +8,18 @@
  */
 
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,6 +74,12 @@ test("the same bytes twice keep one file", () => {
   const first = writeRunFile(dir, PNG, "image/png");
   expect(writeRunFile(dir, PNG, "image/png")).toEqual(first);
   expect(readdirSync(join(dir, "media"))).toEqual([first.name!]);
+});
+
+test("writeRunFile refuses a missing run folder and makes nothing", () => {
+  const dir = join(folder(), "missing");
+  expect(() => writeRunFile(dir, PNG, "image/png")).toThrow(expect.objectContaining({ code: "ENOENT" }));
+  expect(existsSync(dir)).toBe(false);
 });
 
 test("the extension follows the media type; an unknown one is .bin", () => {
@@ -138,6 +155,13 @@ test("inlineToFile refuses inline data that isn't base64, storing nothing", () =
   expect(readdirSync(join(dir, "media"))).toHaveLength(1);
 });
 
+test("inlineToFile writes nothing when a later part's data isn't base64", () => {
+  const dir = folder();
+  const parts = [new MediaPart({ mime: "image/png", data: DATA }), new MediaPart({ mime: "image/png", data: "a-b_" })];
+  expect(() => inlineToFile(new Message({ role: "assistant", parts }), dir)).toThrow(RangeError);
+  expect(existsSync(join(dir, "media"))).toBe(false);
+});
+
 test("fileToInline gives each file media part its bytes back as data; other parts stay", async () => {
   const dir = folder();
   const filed = inlineToFile(reply(), dir);
@@ -185,15 +209,32 @@ test("a run folder copied elsewhere still inlines its media", async () => {
   expect(sent.messages.map((message) => message.toJSON())).toEqual([reply().toJSON()]);
 });
 
+/**
+ * A run folder `run` with a `media` folder, a log, and a file `outside.png` beside the run folder;
+ * `escape` is a symlink under `media` to that outside file.
+ */
+function escapes(): { run: string; outside: string } {
+  const base = folder();
+  const run = join(base, "run");
+  mkdirSync(join(run, "media"), { recursive: true });
+  writeFileSync(join(run, "log.jsonl"), "{}\n");
+  const outside = join(base, "outside.png");
+  writeFileSync(outside, PNG);
+  symlinkSync(outside, join(run, "media", "escape.png"));
+  return { run, outside };
+}
+
 test.each([
-  ["an absolute uri", (dir: string) => join(dir, "media", "x.png")],
-  ["a uri with a .. segment", () => "media/../../x.png"],
+  ["an absolute uri", (outside: string) => outside],
+  ["a uri with a .. segment", () => "media/../../outside.png"],
   ["a uri that is only ..", () => ".."],
-])("fileToInline refuses %s, which escapes the run folder", async (_, uri) => {
-  const dir = folder();
-  const part = new MediaPart({ mime: "image/png", file: { uri: uri(dir) } });
-  const error = await rejection(fileToInline(new Request({ messages: [new Message({ role: "user", parts: [part] })] }), dir));
-  expect(error).toEqual(new RangeError(`media file ${uri(dir)} is not inside the run folder`));
+  ["a symlink under media to an outside file", () => "media/escape.png"],
+  ["the run's log", () => "log.jsonl"],
+])("fileToInline refuses %s, which isn't a file in the run's media folder", async (_, uri) => {
+  const { run, outside } = escapes();
+  const part = new MediaPart({ mime: "image/png", file: { uri: uri(outside) } });
+  const error = await rejection(fileToInline(new Request({ messages: [new Message({ role: "user", parts: [part] })] }), run));
+  expect(error).toEqual(new RangeError(`media file ${uri(outside)} is not inside the run's media folder`));
 });
 
 // --- the run folder reaches the AGENT --- //
@@ -212,12 +253,12 @@ nodes:
     output: str
 output: \${reply.output}
 `;
-// The records before \`reply\`'s success: RunStarted, START's start and success, \`reply\`'s start.
+// The records before `reply`'s success: RunStarted, START's start and success, `reply`'s start.
 const BEFORE_REPLY_SUCCESS = 4;
 
-/** Run \`fn\` and return the \`runDir\` of each AGENT run context it built, in order. */
+/** Run `fn` and return the `runDir` of each AGENT run context it built, in order. */
 async function runDirs(fn: () => Promise<unknown>): Promise<(string | null | undefined)[]> {
-  // \`runContext\` is private to the type checker only, so the test can watch what it returns.
+  // `runContext` is private to the type checker only, so the test can watch what it returns.
   const target = AgentNode.prototype as unknown as { runContext: (...args: unknown[]) => AgentRunContext };
   const spy = spyOn(target, "runContext");
   try {
@@ -228,7 +269,7 @@ async function runDirs(fn: () => Promise<unknown>): Promise<(string | null | und
   }
 }
 
-/** Run options serving a model that replies each of \`texts\` in turn, with no host credentials. */
+/** Run options serving a model that replies each of `texts` in turn, with no host credentials. */
 function served(...texts: string[]) {
   const model = new ScriptedModel(texts.map(textReply), { provider: "anthropic", model: "claude-test" });
   return { models: serving(model), env: hostEnv(folder()) };

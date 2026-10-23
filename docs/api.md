@@ -2842,11 +2842,13 @@ of its own must keep one run per folder; Yian doesn't check it.
 
 Changed (TS yian): a `yian.message.v1` media part may hold a file reference,
 `{"type": "media", "mime": ..., "file": {"uri": ..., "mime": ..., "name": ...}}`, in
-place of `data` or `url`. Media bytes a run keeps go to `<run folder>/media/<sha256>.<ext>`
-(mode `0600`, the `media` folder `0700`), and the run refers to each file by its path
-relative to the run folder (`media/<sha256>.<ext>`), so a run folder copied elsewhere keeps
-its references. The bytes are inlined again, read from the run folder, only in the request
-sent to a provider; a `uri` that is absolute or has a `..` segment is refused there.
+place of `data` or `url`. A run's media files live in `<run folder>/media/<sha256>.<ext>`
+(mode `0600`, the `media` folder `0700`), and a reference names one by its path relative to
+the run folder (`media/<sha256>.<ext>`), so a run folder copied elsewhere keeps its
+references. A request sent to a provider gets the bytes inline again, read from the run
+folder; a `uri` that names no file inside the run's `media` folder (symlinks followed) is
+refused. Nothing writes media files yet: the AGENT will store the media in its replies this
+way.
 
 ## Blocking human interaction
 

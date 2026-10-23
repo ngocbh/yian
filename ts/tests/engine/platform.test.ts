@@ -864,8 +864,8 @@ const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
 const BUILT = path.join(ROOT, "dist/src/platform.js");
 const BUILT_URL = pathToFileURL(BUILT).href;
 /**
- * The public entry; children run from ROOT, so it resolves by self-reference. Typed string so tsc
- * doesn't resolve it to dist/, missing before a build.
+ * The public entry. It resolves by self-reference from inside ROOT (this file, and children whose
+ * cwd is ROOT). Typed string so tsc doesn't resolve it to dist/, missing before a build.
  */
 const ENTRY: string = "@ngocbh/yian/platform";
 
@@ -1398,14 +1398,22 @@ describe("the @ngocbh/yian/platform entry", () => {
       const script = `
 const entry = await import(${JSON.stringify(ENTRY)});
 const names = ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode"];
-console.log(JSON.stringify({ resolved: import.meta.resolve(${JSON.stringify(ENTRY)}), types: names.map((n) => typeof entry[n]) }));
+const types = Object.fromEntries(names.map((n) => [n, typeof entry[n]]));
+console.log(JSON.stringify({ resolved: import.meta.resolve(${JSON.stringify(ENTRY)}), types }));
 `;
       const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { cwd: ROOT, encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
       const { resolved, types } = JSON.parse(result.stdout);
       expect(fs.realpathSync(fileURLToPath(resolved))).toBe(fs.realpathSync(BUILT));
-      expect(types).toEqual(Array(6).fill("function"));
+      expect(types).toEqual({
+        lockFile: "function",
+        waitForLock: "function",
+        isLocked: "function",
+        FileLockError: "function",
+        openSqlite: "function",
+        sqliteErrorCode: "function",
+      });
     },
     SPAWNED_MS,
   );

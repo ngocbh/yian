@@ -98,18 +98,19 @@ are internal: they serve the CLI and yian's own code, and may change without not
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
 | `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `Issue`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `ResumeFlowOptions`, `RunInspection`,
-`RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `ToolEntry`, `AskUserHandler`,
-`AskUserRequest`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`,
-`StandardIssue`, `StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`,
-`Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `LLMProvider`,
-`Issue`, `ListModelsOptions`, `AuthStoreOptions`, `AuthState`, `Credentials`, `AuthRequest` and
+`RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `StorageKind`, `Value`, `ValueRecord`,
+`JsonValue`, `JsonObject`, `JsonMode`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`,
+`CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`, `StandardIssue`,
+`StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`, `Sqlite`,
+`SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `LLMProvider`, `Issue`,
+`ListModelsOptions`, `AuthStoreOptions`, `AuthState`, `Credentials`, `AuthRequest` and
 `AuthRequestOptions` are types only.
 
 ## Differences from Python yian
@@ -294,6 +295,21 @@ byte offset, so a host reads the commit a success names with `iterRunRecords(log
 A crash between a commit and its success leaves an orphan the resume ignores (the node reruns); a
 log that ends inside its run start can't be resumed. See [Authoritative run
 logs][docs/api.md#authoritative-run-logs].
+
+A `pool_commit` payload is flat, `{node_id, key, kind, value}`. A host decodes its value with
+`TypedValue.fromWire({ kind, value })` (an int is a `bigint`, a file a `FileRef`), writes it as the
+log does with `logJson(typed.toWire())` (ints of any size from `bigint`s, floats marked `.0`,
+`±Infinity` as `{"$float": "inf"}` or `"-inf"`, a tag-shaped record wrapped in `{"$record": …}`;
+NaN, `-0` and lone surrogates throw `TypeError`), and reads that text back with
+`parseJson(text, "codec")` (`JSONDecodeError` on text yian doesn't read; `"plain"` decodes no tags):
+
+```ts
+const typed = TypedValue.fromWire({ kind: payload.kind, value: payload.value });
+const text = logJson(typed.toWire()); // {"kind":…,"value":…}, the value as the log wrote it
+const back = TypedValue.fromWire(parseJson(text, "codec"));
+```
+
+See [Reading values from a run log][docs/api.md#reading-values-from-a-run-log].
 
 ## Tools
 
@@ -556,6 +572,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 
 [conformance/schema/events.schema.json]: https://github.com/ngocbh/yian/blob/main/conformance/schema/events.schema.json
 [docs/api.md]: https://github.com/ngocbh/yian/blob/main/docs/api.md
+[docs/api.md#authoritative-run-logs]: https://github.com/ngocbh/yian/blob/main/docs/api.md#authoritative-run-logs
 [docs/api.md#blocking-human-interaction]: https://github.com/ngocbh/yian/blob/main/docs/api.md#blocking-human-interaction
 [docs/api.md#building-memories-with-build_memories]: https://github.com/ngocbh/yian/blob/main/docs/api.md#building-memories-with-build_memories
 [docs/api.md#defaults-and-limits]: https://github.com/ngocbh/yian/blob/main/docs/api.md#defaults-and-limits
@@ -569,6 +586,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/api.md#naming-a-runs-nodes-with-staticnodes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#naming-a-runs-nodes-with-staticnodes
 [docs/api.md#optional-durable-memory]: https://github.com/ngocbh/yian/blob/main/docs/api.md#optional-durable-memory
 [docs/api.md#reading-a-run-log-with-inspectrun]: https://github.com/ngocbh/yian/blob/main/docs/api.md#reading-a-run-log-with-inspectrun
+[docs/api.md#reading-values-from-a-run-log]: https://github.com/ngocbh/yian/blob/main/docs/api.md#reading-values-from-a-run-log
 [docs/api.md#run_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#run_flow
 [docs/api.md#runresult]: https://github.com/ngocbh/yian/blob/main/docs/api.md#runresult
 [docs/api.md#skills]: https://github.com/ngocbh/yian/blob/main/docs/api.md#skills
@@ -1214,7 +1232,9 @@ START is ready after the START inputs' commit; a success walks its
   child flows with its node, so a host can name a logged node's kind; `staticPathOf(nodeId)`
   (`nodes/ids.ts`, beside `mapCallsite`) maps a grown node's id onto that path by dropping each
   segment's MAP element `#<i>` and LOOP iteration `~<k>` suffixes. `run.ts` re-exports
-  `staticPathOf`, `iterRunRecords`, `RunLogChangedError` and `RunLogSchemaError` for hosts.
+  `staticPathOf`, `iterRunRecords`, `RunLogChangedError` and `RunLogSchemaError` for hosts, and,
+  for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson` and
+  `JSONDecodeError`.
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the

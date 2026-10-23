@@ -2309,10 +2309,14 @@ damaged one. yian isn't released yet, so there is no migration: finish or drop a
 run with the yian version that wrote it.
 
 Changed (TS yian): `RunStartedRecord` records what the run needs to rebuild it, once:
-`flow`, the text of the flow file and of every `uses:` file the loader read,
-`{path, dir, search_paths, files}` (`dir` is the real absolute base folder; `path`, the
-search paths and the keys of `files` are relative to it, with `..` for a `system.paths`
-folder outside it), or `null` for a flow built in code; `skills`, each skill an AGENT
+`flow`, the flow file and every `uses:` file the loader read, `{root, dir, files}`, or
+`null` for a flow built in code. `files` maps each file's key to `{text, refs}`: its text,
+and `refs`, each `uses:` path written in it mapped to the key of the file it resolved to. A
+key is the file's path relative to `dir` (the absolute base folder, as given), as the
+resolver tried it: a symlink isn't followed, and a file outside `dir` (a `system.paths`
+folder, a child a host resolver read from elsewhere) is keyed with `..`. The root is keyed by
+its label; a host resolver's child is keyed from its own folder, and two different files that
+would share a key get keys of their own (`<key>~1`). `skills`, each skill an AGENT
 grants, `{<name>: {description, instructions}}`; `tools`, each tool an AGENT grants, groups
 expanded, `{<name>: {description, parameters}}`; `yian_version`, the version that started the
 run; and `parent`, `{run_id, node}` for a run the host started from another run (a child run
@@ -2503,10 +2507,11 @@ are for tests, as for `runFlow`. Header names that aren't the recorded ones, a n
 
 Changed (TS yian): `resumeFlow({ log, flow, ... })` takes no flow argument. It compiles the
 flow files `RunStarted` recorded, never the files on disk now, so an edited flow file means a
-new run; the fingerprint is still checked, against the compiled recorded flow. The load reads
-the recorded text through `recordedFiles(dir, files)`, a `SourceFiles` reader `loadFlow` takes
-as `files` (the disk's is `diskFiles()`); a CODE reference's file is not recorded and must
-still be there. `loadRecordedFlow(log, env)` (from `yian/run`) compiles a log's recorded flow
+new run; the fingerprint is still checked, against the compiled recorded flow. The load
+(`loadFlowSource(source)`, which takes a loaded flow's `source` or a run's recorded `flow`)
+starts at the root and follows each file's `refs` inside the log: no disk, search path or
+symlink. A CODE reference's file is not recorded and must still be there, in `dir` (or the
+folder below it a file's key names). `loadRecordedFlow(log, env)` (from `yian/run`) compiles a log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI
 reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
 resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`

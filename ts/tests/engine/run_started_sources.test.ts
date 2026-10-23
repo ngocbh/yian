@@ -4,7 +4,7 @@
  * compiles the recorded flow, never the files on disk.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -12,7 +12,7 @@ import { afterAll, expect, test } from "bun:test";
 
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { loadFlow, recordedFiles } from "../../src/compose/loader.ts";
+import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { VERSION, withWarnings } from "../../src/platform.ts";
 import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
@@ -54,6 +54,9 @@ const leaf = (id: string) =>
   `id: ${id}\nname: ${id}\ninput:\n  q: !str\n` +
   `nodes:\n  fetch:\n    kind: tool\n    tool_id: lookup\n    input:\n      q: \${input.q}\noutput: \${fetch.output}\n`;
 
+/** A flow `id` with no input whose output is its id. */
+const leafOut = (id: string) => `id: ${id}\nname: ${id}\nnodes: {}\noutput: ${id}\n`;
+
 const ROOT = caller("root", "child", "lib/child");
 const CHILD = leaf("child");
 const NESTED_CHILD = caller("child", "grand", "grand");
@@ -61,24 +64,49 @@ const GRAND = leaf("grand");
 const PATHS_ROOT = caller("root", "util", "util", "system:\n  paths: [../shared]\n");
 const UTIL = leaf("util");
 
-/** The four load shapes: the files to write under a folder, and the folder the root is in. */
-const SHAPES: Record<string, { files: Record<string, string>; root: string; keys: Record<string, string> }> = {
+/** A recorded file: its text and the file each `uses:` path written in it resolved to. */
+const file = (text: string, refs: Record<string, string> = {}) => ({ text, refs });
+
+/** The load shapes on disk: the files to write under a folder, the root's folder, the recorded files. */
+const SHAPES: Record<
+  string,
+  { files: Record<string, string>; root: string; keys: Record<string, { text: string; refs: Record<string, string> }> }
+> = {
   "one level": {
     files: { "flow.yaml": ROOT, "lib/child.yaml": CHILD },
     root: ".",
-    keys: { "flow.yaml": ROOT, "lib/child.yaml": CHILD },
+    keys: { "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }), "lib/child.yaml": file(CHILD) },
   },
   "two levels": {
     files: { "flow.yaml": ROOT, "lib/child.yaml": NESTED_CHILD, "lib/grand.yaml": GRAND },
     root: ".",
-    keys: { "flow.yaml": ROOT, "lib/child.yaml": NESTED_CHILD, "lib/grand.yaml": GRAND },
+    keys: {
+      "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }),
+      "lib/child.yaml": file(NESTED_CHILD, { grand: "lib/grand.yaml" }),
+      "lib/grand.yaml": file(GRAND),
+    },
   },
   "system.paths": {
     files: { "proj/flow.yaml": PATHS_ROOT, "shared/util.yaml": UTIL },
     root: "proj",
-    keys: { "flow.yaml": PATHS_ROOT, "../shared/util.yaml": UTIL },
+    keys: { "flow.yaml": file(PATHS_ROOT, { util: "../shared/util.yaml" }), "../shared/util.yaml": file(UTIL) },
+  },
+  // The child file is a symlink: it is recorded under the path the resolver tried.
+  "a symlinked child file": {
+    files: { "flow.yaml": ROOT, "shared/real-child.yaml": CHILD },
+    root: ".",
+    keys: { "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }), "lib/child.yaml": file(CHILD) },
   },
 };
+
+/** Write `shape`'s files under `dir`, linking `lib/child.yaml` when the shape has no such file. */
+function writeShape(dir: string, shape: (typeof SHAPES)[string]): void {
+  writeTree(dir, shape.files);
+  if (Object.hasOwn(shape.files, "shared/real-child.yaml")) {
+    mkdirSync(join(dir, "lib"), { recursive: true });
+    symlinkSync(join(dir, "shared", "real-child.yaml"), join(dir, "lib", "child.yaml"));
+  }
+}
 
 /** Load `<dir>/flow.yaml` as the CLI does: its folder searched first, named by its file name. */
 async function loadRoot(dir: string): Promise<ComposedFlow> {
@@ -88,48 +116,34 @@ async function loadRoot(dir: string): Promise<ComposedFlow> {
 
 /** A flow's source as plain data. */
 function sourceOf(flow: ComposedFlow) {
-  const source = flow.source;
-  if (source === null) return null;
-  const { path, dir, searchPaths, files } = source;
-  return { path, dir, searchPaths, files: { ...files } };
+  return flow.source === null ? null : structuredClone(flow.source);
 }
 
 for (const [name, shape] of Object.entries(SHAPES)) {
-  test(`a loaded flow keeps the text of each file it read: ${name}`, async () => {
+  test(`a loaded flow records each file it read and where each reference went: ${name}`, async () => {
     const dir = freshDir("load");
-    writeTree(dir, shape.files);
+    writeShape(dir, shape);
     const root = join(dir, shape.root);
 
-    expect(sourceOf(await loadRoot(root))).toEqual({
-      path: "flow.yaml",
-      dir: realpathSync(root),
-      searchPaths: ["."],
-      files: shape.keys,
-    });
+    expect(sourceOf(await loadRoot(root))).toEqual({ root: "flow.yaml", dir: root, files: shape.keys });
   });
 }
 
 for (const [name, shape] of Object.entries(SHAPES)) {
   test(`the recorded files load the same flow once the folder is gone: ${name}`, async () => {
     const dir = freshDir("reload");
-    writeTree(dir, shape.files);
+    writeShape(dir, shape);
     const loaded = await loadRoot(join(dir, shape.root));
-    const { path, dir: real, searchPaths, files } = loaded.source!;
     rmSync(dir, { recursive: true });
 
-    const again = await loadFlow(files[path]!, {
-      sourceLabel: path,
-      baseDir: real,
-      searchPaths: searchPaths.map((item) => join(real, item)),
-      files: recordedFiles(real, files),
-    });
+    const again = await loadFlowSource(loaded.source!);
 
     expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
     expect(sourceOf(again)).toEqual(sourceOf(loaded));
   });
 }
 
-test("a folder reached through a symlink keys its files from the real folder", async () => {
+test("a folder reached through a symlink keys its files from the folder as given", async () => {
   const dir = freshDir("symlink");
   writeTree(join(dir, "real"), SHAPES["one level"]!.files);
   symlinkSync(join(dir, "real"), join(dir, "link"));
@@ -137,31 +151,68 @@ test("a folder reached through a symlink keys its files from the real folder", a
   const link = join(dir, "link");
   const loaded = await loadFlow(ROOT, { searchPaths: [link], baseDir: link, sourceLabel: "flow.yaml" });
 
-  expect(sourceOf(loaded)).toEqual({
-    path: "flow.yaml",
-    dir: realpathSync(join(dir, "real")),
-    searchPaths: ["."],
-    files: { "flow.yaml": ROOT, "lib/child.yaml": CHILD },
-  });
+  expect(sourceOf(loaded)).toEqual({ root: "flow.yaml", dir: link, files: SHAPES["one level"]!.keys });
 });
+
+/** A host resolver that loads `<dir>/<ref>.yaml` searching its own folder, as a file resolver would. */
+const hostResolver = (dir: string) => async (ref: string) => {
+  const path = join(dir, `${ref}.yaml`);
+  return loadFlow(readFileSync(path, "utf8"), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
+};
 
 test("a host resolver's loaded children join the root's files, keyed from the root's folder", async () => {
   const dir = freshDir("host");
   writeTree(dir, SHAPES["two levels"]!.files);
-  const childResolver = async (ref: string) => {
-    const path = join(dir, `${ref}.yaml`);
-    return loadFlow(readFileSync(path, "utf8"), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
+
+  const loaded = await loadFlow(ROOT, { childResolver: hostResolver(dir), baseDir: dir, sourceLabel: "flow.yaml" });
+
+  expect(sourceOf(loaded)).toEqual({ root: "flow.yaml", dir, files: SHAPES["two levels"]!.keys });
+});
+
+test("a host child read from outside the root's folder is keyed from the root's folder", async () => {
+  const dir = freshDir("outside");
+  writeTree(dir, { "other/lib/child.yaml": CHILD });
+  // As `yian check --root` loads a child: labelled from another root, its CODE folder its own.
+  const childResolver = async () => {
+    const path = join(dir, "other", "lib", "child.yaml");
+    return loadFlow(readFileSync(path, "utf8"), { sourceLabel: "lib/child.yaml", baseDir: dirname(path) });
   };
+  const rootDir = join(dir, "root");
+  mkdirSync(rootDir);
 
-  const loaded = await loadFlow(ROOT, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" });
+  const loaded = await loadFlow(ROOT, { childResolver, baseDir: rootDir, sourceLabel: "flow.yaml" });
 
-  // Resume finds each child where the host found it: in the root's folder.
   expect(sourceOf(loaded)).toEqual({
-    path: "flow.yaml",
-    dir: realpathSync(dir),
-    searchPaths: ["."],
-    files: { "flow.yaml": ROOT, "lib/child.yaml": NESTED_CHILD, "lib/grand.yaml": GRAND },
+    root: "flow.yaml",
+    dir: rootDir,
+    files: {
+      "flow.yaml": file(ROOT, { "lib/child": "../other/lib/child.yaml" }),
+      "../other/lib/child.yaml": file(CHILD),
+    },
   });
+});
+
+test("host children given as texts in one folder get keys of their own", async () => {
+  const dir = freshDir("texts");
+  const two =
+    "id: root\nname: root\nuses:\n  a: a\n  b: b\n" +
+    "nodes:\n  x:\n    kind: call\n    call: a\n  y:\n    kind: call\n    call: b\n";
+  const texts: Record<string, string> = { a: leafOut("a"), b: leafOut("b") };
+  const childResolver = (ref: string) => loadFlow(texts[ref]!, { baseDir: dir });
+
+  const loaded = await loadFlow(two, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" });
+
+  expect(sourceOf(loaded)).toEqual({
+    root: "flow.yaml",
+    dir,
+    files: {
+      "flow.yaml": file(two, { a: "<flow>", b: "<flow>~1" }),
+      "<flow>": file(texts["a"]!),
+      "<flow>~1": file(texts["b"]!),
+    },
+  });
+  const again = await loadFlowSource(loaded.source!);
+  expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
 });
 
 test("a flow built in code, or loaded over one, has no source", async () => {
@@ -176,31 +227,6 @@ test("a flow built in code, or loaded over one, has no source", async () => {
     baseDir: dir,
   });
   expect(over.source).toBeNull();
-});
-
-test("a host child resume couldn't find where the host found it leaves the root without a source", async () => {
-  const dir = freshDir("elsewhere");
-  // The host reads the child from another folder, so the root's folder doesn't hold it.
-  writeTree(dir, { "other/child.yaml": CHILD });
-  const childResolver = async () => {
-    const path = join(dir, "other", "child.yaml");
-    return loadFlow(readFileSync(path, "utf8"), { searchPaths: [dirname(path)], sourceLabel: basename(path) });
-  };
-
-  expect((await loadFlow(ROOT, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" })).source).toBeNull();
-});
-
-test("a host child that searched beyond its own folder leaves the root without a source", async () => {
-  const dir = freshDir("wide");
-  writeTree(dir, { "lib/child.yaml": caller("child", "grand", "grand"), "shared/grand.yaml": GRAND });
-  // Resume searches only the child's folder, where `grand` isn't.
-  const childResolver = async (ref: string) => {
-    const path = join(dir, `${ref}.yaml`);
-    const searchPaths = [dirname(path), join(dir, "shared")];
-    return loadFlow(readFileSync(path, "utf8"), { searchPaths, sourceLabel: basename(path) });
-  };
-
-  expect((await loadFlow(ROOT, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" })).source).toBeNull();
 });
 
 // ---------- the run start ----------
@@ -267,12 +293,7 @@ test("run_started records the flow files, the yian version and no parent", async
 
   const record = started(await runInto(await loadRoot(dir)));
 
-  expect(record.flow).toEqual({
-    path: "flow.yaml",
-    dir: realpathSync(dir),
-    searchPaths: ["."],
-    files: SHAPES["two levels"]!.keys,
-  });
+  expect(record.flow).toEqual({ root: "flow.yaml", dir, files: SHAPES["two levels"]!.keys });
   expect(record.yianVersion).toBe(VERSION);
   expect(record.parent).toBeNull();
   // A TOOL node's tool is not one an AGENT grants.
@@ -327,13 +348,13 @@ async function cutRun(
   return log;
 }
 
-/** The four load shapes, each as a function writing its files and loading the root. */
+/** The load shapes, each as a function writing its files and loading the root. */
 const LOAD_SHAPES: Record<string, (dir: string) => Promise<ComposedFlow>> = {
   ...Object.fromEntries(
     Object.entries(SHAPES).map(([name, shape]) => [
       name,
       async (dir: string) => {
-        writeTree(dir, shape.files);
+        writeShape(dir, shape);
         return loadRoot(join(dir, shape.root));
       },
     ]),
@@ -342,6 +363,20 @@ const LOAD_SHAPES: Record<string, (dir: string) => Promise<ComposedFlow>> = {
     writeTree(join(dir, "real"), SHAPES["one level"]!.files);
     symlinkSync(join(dir, "real"), join(dir, "link"));
     return loadRoot(join(dir, "link"));
+  },
+  "host children": async (dir: string) => {
+    writeTree(dir, SHAPES["two levels"]!.files);
+    return loadFlow(ROOT, { childResolver: hostResolver(dir), baseDir: dir, sourceLabel: "flow.yaml" });
+  },
+  "a host child from outside the root's folder": async (dir: string) => {
+    writeTree(dir, { "other/lib/child.yaml": NESTED_CHILD, "other/lib/grand.yaml": GRAND, "root/flow.yaml": ROOT });
+    const childResolver = async () => {
+      const path = join(dir, "other", "lib", "child.yaml");
+      const own = dirname(path);
+      const text = readFileSync(path, "utf8");
+      return loadFlow(text, { childResolver: hostResolver(own), sourceLabel: "lib/child.yaml", baseDir: own });
+    };
+    return loadFlow(ROOT, { childResolver, baseDir: join(dir, "root"), sourceLabel: "flow.yaml" });
   },
 };
 

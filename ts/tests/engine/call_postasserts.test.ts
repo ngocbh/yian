@@ -187,9 +187,7 @@ async function driveDurable(name: string, asserts: string, answer: string) {
     ),
   );
   expect(caught).toBe(interruption);
-  // The children come from a host resolver over texts, so the run records no flow files.
-  const flow = await loadBlocking(asserts);
-  return resumeFlow({ flow, log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
+  return resumeFlow({ log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
 }
 
 test("call post assert survives recovery true", async () => {

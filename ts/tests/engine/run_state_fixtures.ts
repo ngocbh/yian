@@ -1608,9 +1608,10 @@ export function thrownBy(fn: () => unknown): unknown {
  */
 export function editRecordedFlow(log: string, edit: (text: string) => string): void {
   const lines = readFileSync(log, "utf8").split("\n");
-  const started = parseJson(lines[0]!, "codec") as { payload: { flow: { path: string; files: Record<string, string> } } };
-  const { path, files } = started.payload.flow;
-  files[path] = edit(files[path]!);
+  type Flow = { root: string; files: Record<string, { text: string }> };
+  const started = parseJson(lines[0]!, "codec") as { payload: { flow: Flow } };
+  const { root, files } = started.payload.flow;
+  files[root]!.text = edit(files[root]!.text);
   lines[0] = logJson(started);
   writeFileSync(log, lines.join("\n"));
 }

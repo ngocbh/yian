@@ -195,19 +195,23 @@ export interface OutcomeCarriers {
   forwardCapture?: ForwardCapture | null;
 }
 
+/** One recorded flow file: its text, and the key of the file each `uses:` path in it resolved to. */
+export interface RecordedFlowFile {
+  readonly text: string;
+  readonly refs: Readonly<Record<string, string>>;
+}
+
 /**
- * The flow files a run recorded, as `ComposedFlow.source` holds them: every path is relative to
- * `dir`, the real base folder.
+ * The flow files a run recorded, as `ComposedFlow.source` holds them: each file by key (its path
+ * relative to `dir`), and where each of its `uses:` paths went, so resume reads nothing else.
  */
 export interface RecordedFlow {
   /** The root file's key in `files`. */
-  readonly path: string;
-  /** The real absolute base folder; CODE references resolve in it. */
+  readonly root: string;
+  /** The absolute base folder the keys are relative to; CODE references resolve in it. */
   readonly dir: string;
-  /** The folders searched for `uses:` targets, in order. */
-  readonly searchPaths: readonly string[];
-  /** The text of each flow file the loader read, by path. */
-  readonly files: Readonly<Record<string, string>>;
+  /** Each flow file the loader read, by key. */
+  readonly files: Readonly<Record<string, RecordedFlowFile>>;
 }
 
 /** A tool an AGENT of the run grants, as the model is told about it. */
@@ -416,20 +420,22 @@ function requireName(value: unknown, label: string): string {
  */
 function validatedRecordedFlow(flow: RecordedFlow): RecordedFlow {
   if (!isRecord(flow)) throw new TypeError("RunStarted flow must be an object or null");
-  const path = requireName(flow.path, "RunStarted flow path");
+  const root = requireName(flow.root, "RunStarted flow root");
   const dir = requireName(flow.dir, "RunStarted flow dir");
-  if (!isList(flow.searchPaths) || !flow.searchPaths.every((item) => typeof item === "string")) {
-    throw new TypeError("RunStarted flow search_paths must be an array of strings");
-  }
-  if (!isRecord(flow.files)) throw new TypeError("RunStarted flow files must be an object");
-  for (const [key, text] of Object.entries(flow.files)) {
-    requireText(text, `RunStarted flow files[${reprText(key)}]`);
-  }
-  if (!Object.hasOwn(flow.files, path)) {
-    throw new RangeError(`RunStarted flow files must hold the flow path ${reprText(path)}`);
-  }
-  const files = freezeParsed(canonicalCopy(flow.files)) as Record<string, string>;
-  return Object.freeze({ path, dir, searchPaths: Object.freeze([...flow.searchPaths]), files });
+  const files = validatedEntries(flow.files, "flow files", (file, label) => {
+    const refs = file["refs"];
+    if (!isRecord(refs)) throw new TypeError(`${label} refs must be an object`);
+    for (const [path, target] of Object.entries(refs)) {
+      const key = requireText(target, `${label} refs[${reprText(path)}]`);
+      if (!Object.hasOwn(flow.files, key)) {
+        throw new RangeError(`${label} refs[${reprText(path)}] names no recorded file: ${reprText(key)}`);
+      }
+    }
+    const text = requireText(file["text"], `${label} text`);
+    return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
+  });
+  if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
+  return Object.freeze({ root, dir, files });
 }
 
 /**
@@ -2189,7 +2195,7 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
 
 /** Encode a `run_started` flow. */
 function flowPayload(flow: RecordedFlow): JsonObject {
-  return { path: flow.path, dir: flow.dir, search_paths: [...flow.searchPaths], files: flow.files };
+  return { root: flow.root, dir: flow.dir, files: flow.files as unknown as JsonObject };
 }
 
 /**
@@ -2199,12 +2205,11 @@ function flowPayload(flow: RecordedFlow): JsonObject {
  * @throws TypeError when a field has the wrong JSON type.
  */
 function flowFromPayload(value: unknown, label: string): RecordedFlow {
-  const wire = wireObject(value, label, ["path", "dir", "search_paths", "files"]);
+  const wire = wireObject(value, label, ["root", "dir", "files"]);
   return {
-    path: wireText(wire["path"], `${label} path`),
+    root: wireText(wire["root"], `${label} root`),
     dir: wireText(wire["dir"], `${label} dir`),
-    searchPaths: wireTextArray(wire["search_paths"], `${label} search_paths`),
-    files: wireObject(wire["files"], `${label} files`) as Record<string, string>,
+    files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
   };
 }
 

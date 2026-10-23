@@ -53,7 +53,7 @@ import { type CompiledFlow, copyGraph, END_ID, type Flow } from "./compile/model
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
-import { loadFlow, recordedFiles } from "./compose/loader.ts";
+import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
@@ -984,9 +984,7 @@ async function startRun(
 
 /** Return the flow files `RunStarted` records for `flow`, or `null` for a flow built in code. */
 function recordedFlow(flow: ComposedFlow): RecordedFlow | null {
-  if (flow.source === null) return null;
-  const { path, dir, searchPaths, files } = flow.source;
-  return { path, dir, searchPaths, files };
+  return flow.source;
 }
 
 /**
@@ -1303,15 +1301,7 @@ function startRecord(envelopes: readonly RecordEnvelope[]): RunStartedRecord {
  * @throws LoadError when the files no longer load.
  */
 async function compileRecordedFlow(start: RunStartedRecord): Promise<ComposedFlow | null> {
-  const recorded = start.flow;
-  if (recorded === null) return null;
-  const { path, dir, searchPaths, files } = recorded;
-  return loadFlow(files[path]!, {
-    sourceLabel: path,
-    baseDir: dir,
-    searchPaths: searchPaths.map((item) => resolve(dir, item)),
-    files: recordedFiles(dir, files),
-  });
+  return start.flow === null ? null : loadFlowSource(start.flow);
 }
 
 /**

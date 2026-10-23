@@ -41,7 +41,7 @@
  * value names the block field").
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -176,7 +176,7 @@ const GOLDEN_RUN_STARTED = {
         provider: "openai",
       },
     },
-    flow: { dir: "<dir>", files: { "<flow>": FLOW }, path: "<flow>", search_paths: [] },
+    flow: { dir: "<dir>", files: { "<flow>": { refs: {}, text: FLOW } }, root: "<flow>" },
     flow_fingerprint: "3d9b9bbd0808d27babce1bded77b3e90b642d179cc9678abcae0f4da66d4bfa7",
     initial_pool: {
       start_id: "__start__",
@@ -222,7 +222,7 @@ test("a run with a default input records and returns as before", async () => {
   expect(Number.isNaN(Date.parse(started["at"]))).toBe(false);
   started["at"] = "<at>";
   // Loaded without a folder, the flow's base folder is the current one.
-  expect(started["payload"]["flow"]["dir"]).toBe(realpathSync(process.cwd()));
+  expect(started["payload"]["flow"]["dir"]).toBe(process.cwd());
   started["payload"]["flow"]["dir"] = "<dir>";
   expect(started).toEqual(GOLDEN_RUN_STARTED);
 });

@@ -941,7 +941,7 @@ function sourcedRunStarted(): RunStartedRecord {
       dir: "/x",
       files: {
         "flow.yaml": { text: "id: a\n", refs: { "lib/b": "lib/b.yaml" } },
-        "lib/b.yaml": { text: "id: b\n", refs: {} },
+        "lib/b.yaml": { text: "id: b\n", refs: {}, codeDir: "store" },
       },
     },
     skills: { s: { description: "d", instructions: "i" } },

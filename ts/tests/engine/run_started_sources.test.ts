@@ -58,6 +58,11 @@ const leaf = (id: string) =>
 const leafOut = (id: string) => `id: ${id}\nname: ${id}\nnodes: {}\noutput: ${id}\n`;
 
 const ROOT = caller("root", "child", "lib/child");
+/** A child flow whose CODE node runs `./fn.ts:up`, a file beside the child. */
+const CODE_CHILD =
+  "id: child\nname: child\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ./fn.ts:up\n" +
+  "    input:\n      q: ${input.q}\n    output: str\noutput: ${up.output}\n";
+const UP = "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n";
 const CHILD = leaf("child");
 const NESTED_CHILD = caller("child", "grand", "grand");
 const GRAND = leaf("grand");
@@ -70,7 +75,11 @@ const file = (text: string, refs: Record<string, string> = {}) => ({ text, refs 
 /** The load shapes on disk: the files to write under a folder, the root's folder, the recorded files. */
 const SHAPES: Record<
   string,
-  { files: Record<string, string>; root: string; keys: Record<string, { text: string; refs: Record<string, string> }> }
+  {
+    files: Record<string, string>;
+    root: string;
+    keys: Record<string, { text: string; refs: Record<string, string>; codeDir?: string }>;
+  }
 > = {
   "one level": {
     files: { "flow.yaml": ROOT, "lib/child.yaml": CHILD },
@@ -91,11 +100,15 @@ const SHAPES: Record<
     root: "proj",
     keys: { "flow.yaml": file(PATHS_ROOT, { util: "../shared/util.yaml" }), "../shared/util.yaml": file(UTIL) },
   },
-  // The child file is a symlink: it is recorded under the path the resolver tried.
+  // The child file is a symlink: it is recorded under the path the resolver tried, with the
+  // target's folder for its CODE references.
   "a symlinked child file": {
     files: { "flow.yaml": ROOT, "shared/real-child.yaml": CHILD },
     root: ".",
-    keys: { "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }), "lib/child.yaml": file(CHILD) },
+    keys: {
+      "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }),
+      "lib/child.yaml": { ...file(CHILD), codeDir: "shared" },
+    },
   },
 };
 
@@ -142,6 +155,46 @@ for (const [name, shape] of Object.entries(SHAPES)) {
     expect(sourceOf(again)).toEqual(sourceOf(loaded));
   });
 }
+
+test("a symlinked child file records the folder its CODE references resolve in", async () => {
+  const dir = freshDir("codedir");
+  writeTree(dir, { "flow.yaml": ROOT, "store/c.yaml": CODE_CHILD, "store/fn.ts": UP });
+  mkdirSync(join(dir, "lib"));
+  symlinkSync(join(dir, "store", "c.yaml"), join(dir, "lib", "child.yaml"));
+
+  expect(sourceOf(await loadRoot(dir))).toEqual({
+    root: "flow.yaml",
+    dir,
+    files: {
+      "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }),
+      "lib/child.yaml": { text: CODE_CHILD, refs: {}, codeDir: "store" },
+    },
+  });
+});
+
+test("a uses: path keeps its pinned version in refs", async () => {
+  const dir = freshDir("pinned");
+  const pinned =
+    "id: root\nname: root\nuses:\n  a: lib/child@1\n  b: lib/child@2\n" +
+    "nodes:\n  x:\n    kind: call\n    call: a\n  y:\n    kind: call\n    call: b\n";
+  const versioned = (version: string) =>
+    `id: child\nname: child\nversion: "${version}"\nnodes: {}\noutput: ${version}\n`;
+  // A host resolver serves each version from its own folder.
+  const childResolver = async (ref: string, version: string | null) => {
+    const own = join(dir, `v${version}`);
+    mkdirSync(own, { recursive: true });
+    return loadFlow(versioned(version!), { baseDir: own, sourceLabel: `${ref.split("/").at(-1)}.yaml` });
+  };
+
+  const loaded = await loadFlow(pinned, { childResolver, baseDir: dir, sourceLabel: "flow.yaml" });
+
+  expect(loaded.source!.files["flow.yaml"]!.refs).toEqual({
+    "lib/child@1": "v1/child.yaml",
+    "lib/child@2": "v2/child.yaml",
+  });
+  const again = await loadFlowSource(loaded.source!);
+  expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
+});
 
 test("a folder reached through a symlink keys its files from the folder as given", async () => {
   const dir = freshDir("symlink");
@@ -394,6 +447,20 @@ for (const [name, load] of Object.entries(LOAD_SHAPES)) {
     expect(resumed.output).toBe("lookup:x");
   });
 }
+
+test("a symlinked child's CODE node resolves beside the link's target on resume too", async () => {
+  // CODE files are read from disk, so the folder stays in place; the file sits beside the target.
+  const dir = freshDir("resume-code");
+  writeTree(dir, { "flow.yaml": ROOT, "store/c.yaml": CODE_CHILD, "store/fn.ts": UP });
+  mkdirSync(join(dir, "lib"));
+  symlinkSync(join(dir, "store", "c.yaml"), join(dir, "lib", "child.yaml"));
+  const log = await cutRun(await loadRoot(dir), 4);
+
+  const resumed = await resumeFlow({ log, env: hostEnv(logs) });
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("up:x");
+});
 
 /** Cut a run of `AGENT_FLOW` after its AGENT ran, with the tool `t`; return the log. */
 async function cutAgentRun(t: FunctionTool = lookup("t", "Look it up.")): Promise<string> {

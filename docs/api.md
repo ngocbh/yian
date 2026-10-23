@@ -2311,7 +2311,10 @@ run with the yian version that wrote it.
 Changed (TS yian): `RunStartedRecord` records what the run needs to rebuild it, once:
 `flow`, the flow file and every `uses:` file the loader read, `{root, dir, files}`, or
 `null` for a flow built in code. `files` maps each file's key to `{text, refs}`: its text,
-and `refs`, each `uses:` path written in it mapped to the key of the file it resolved to. A
+and `refs`, each `uses:` ref written in it (its path, with `@<version>` when pinned) mapped to
+the key of the file it resolved to. A file whose CODE references resolve in another folder
+than the one its key names (a symlinked file's target folder) adds `code_dir`, that folder
+relative to `dir`. A
 key is the file's path relative to `dir` (the absolute base folder, as given), as the
 resolver tried it: a symlink isn't followed, and a file outside `dir` (a `system.paths`
 folder, a child a host resolver read from elsewhere) is keyed with `..`. The root is keyed by
@@ -2510,8 +2513,11 @@ flow files `RunStarted` recorded, never the files on disk now, so an edited flow
 new run; the fingerprint is still checked, against the compiled recorded flow. The load
 (`loadFlowSource(source)`, which takes a loaded flow's `source` or a run's recorded `flow`)
 starts at the root and follows each file's `refs` inside the log: no disk, search path or
-symlink. A CODE reference's file is not recorded and must still be there, in `dir` (or the
-folder below it a file's key names). `loadRecordedFlow(log, env)` (from `yian/run`) compiles a log's recorded flow
+symlink. A CODE reference's file is not recorded and must still be there, in the folder
+the first load resolved it in (`code_dir`, else the folder the file's key names, below `dir`).
+CODE files are read from disk on resume, so an edited CODE file is picked up, as a
+reference-mode CODE node's function is today. `loadRecordedFlow(log, env)` (from `yian/run`)
+compiles a log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI
 reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
 resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`

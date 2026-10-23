@@ -195,10 +195,15 @@ export interface OutcomeCarriers {
   forwardCapture?: ForwardCapture | null;
 }
 
-/** One recorded flow file: its text, and the key of the file each `uses:` path in it resolved to. */
+/**
+ * One recorded flow file: its text, the key of the file each `uses:` ref in it (its path, with
+ * `@<version>` when pinned) resolved to, and, when it isn't the folder the file's key names, the
+ * folder its CODE references resolve in, relative to the flow's `dir`.
+ */
 export interface RecordedFlowFile {
   readonly text: string;
   readonly refs: Readonly<Record<string, string>>;
+  readonly codeDir?: string;
 }
 
 /**
@@ -432,7 +437,9 @@ function validatedRecordedFlow(flow: RecordedFlow): RecordedFlow {
       }
     }
     const text = requireText(file["text"], `${label} text`);
-    return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
+    const copy = { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
+    if (file["codeDir"] === undefined) return copy;
+    return { ...copy, codeDir: requireName(file["codeDir"], `${label} code_dir`) };
   });
   if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
   return Object.freeze({ root, dir, files });
@@ -2195,7 +2202,14 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
 
 /** Encode a `run_started` flow. */
 function flowPayload(flow: RecordedFlow): JsonObject {
-  return { root: flow.root, dir: flow.dir, files: flow.files as unknown as JsonObject };
+  const files = Object.entries(flow.files).map(([key, file]): [string, JsonObject] => [
+    key,
+    file.codeDir === undefined
+      ? { text: file.text, refs: file.refs as JsonObject }
+      : { text: file.text, refs: file.refs as JsonObject, code_dir: file.codeDir },
+  ]);
+  // `Object.fromEntries` defines own data properties, so a `__proto__` key stays a key.
+  return { root: flow.root, dir: flow.dir, files: Object.fromEntries(files) };
 }
 
 /**
@@ -2209,7 +2223,16 @@ function flowFromPayload(value: unknown, label: string): RecordedFlow {
   return {
     root: wireText(wire["root"], `${label} root`),
     dir: wireText(wire["dir"], `${label} dir`),
-    files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
+    files: Object.fromEntries(
+      Object.entries(wireObject(wire["files"], `${label} files`)).map(([key, item]) => {
+        const fileLabel = `${label} files[${reprText(key)}]`;
+        const entry = wireObject(item, fileLabel);
+        const fields = Object.hasOwn(entry, "code_dir") ? ["text", "refs", "code_dir"] : ["text", "refs"];
+        const file = wireObject(item, fileLabel, fields);
+        const read = { text: file["text"] as string, refs: file["refs"] as Record<string, string> };
+        return [key, file["code_dir"] === undefined ? read : { ...read, codeDir: file["code_dir"] as string }];
+      }),
+    ),
   };
 }
 

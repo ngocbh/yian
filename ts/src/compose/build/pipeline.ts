@@ -246,8 +246,10 @@ export class DescriptorBuildCache {
  * Each file is keyed by its path relative to `dir`, as the resolver tried it (a symlink isn't
  * followed; `..` for a file outside `dir`). The root is keyed by its label. A file a host resolver
  * gave is keyed from its own folder, and two different files that would share a key get keys of
- * their own (`<key>~1`, ...). `refs` maps each `uses:` path written in a file to the key of the
- * file it resolved to, so a load from the source needs no disk, search path or symlink.
+ * their own (`<key>~1`, ...). `refs` maps each `uses:` ref written in a file (its path, with
+ * `@<version>` when pinned) to the key of the file it resolved to, so a load from the source needs
+ * no search path or symlink. `codeDir`, relative to `dir`, is the folder a file's CODE references
+ * resolve in, given only when it isn't the folder its key names (a symlinked file's target folder).
  */
 export interface FlowSource {
   /** The root file's key. */
@@ -255,7 +257,12 @@ export interface FlowSource {
   /** The absolute base folder the keys are relative to, as given; CODE references resolve in it. */
   readonly dir: string;
   /** Each flow file the load read, by key: its text and where each `uses:` path in it went. */
-  readonly files: Readonly<Record<string, { readonly text: string; readonly refs: Readonly<Record<string, string>> }>>;
+  readonly files: Readonly<
+    Record<
+      string,
+      { readonly text: string; readonly refs: Readonly<Record<string, string>>; readonly codeDir?: string }
+    >
+  >;
 }
 
 /**

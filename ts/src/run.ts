@@ -1049,6 +1049,13 @@ export interface ResumeFlowOptions {
    */
   flow?: ComposedFlow | null;
   /**
+   * A directory every CODE reference of the recorded flow files must resolve inside, symlinks
+   * followed on both sides, as `loadFlow`'s `codeRoot`; a reference outside it rejects with
+   * `LoadError` before anything is appended. `null` (the default) confines nothing. Not used for
+   * a flow built in code: the host confines it when it loads it.
+   */
+  codeRoot?: string | null;
+  /**
    * The non-negative worker bound of the new segment; `null` (the default) keeps the last recorded
    * one.
    */
@@ -1153,7 +1160,8 @@ export interface ResumeFlowOptions {
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
- * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone).
+ * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone, or
+ *   resolving outside `codeRoot`), before anything is appended.
  * @throws The signal's reason when it aborts.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the lock, repair, append, sync or
  *   close error of the log.
@@ -1164,7 +1172,15 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { log, tools = null, steering = null, context, signal = null, flow: hostFlow = null } = options;
+    const {
+      log,
+      tools = null,
+      steering = null,
+      context,
+      signal = null,
+      flow: hostFlow = null,
+      codeRoot = null,
+    } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("resumeFlow flow must be a ComposedFlow or null");
     }
@@ -1192,7 +1208,7 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
       const start = startRecord(authority[Symbol.iterator]().next().value);
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
-      const flow = await resumedFlow(log, start, hostFlow);
+      const flow = await resumedFlow(log, start, hostFlow, codeRoot);
       const state = replayRunLog(flow, authority, { apiKey, headers });
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
@@ -1312,11 +1328,14 @@ function startRecord(first: RecordEnvelope | undefined): RunStartedRecord {
  *
  * @throws RangeError when the run's flow was built in code and `hostFlow` is `null`, or its files
  *   were recorded and `hostFlow` isn't `null`.
+ * @throws LoadError when the recorded files don't load, a CODE reference resolving outside
+ *   `codeRoot` included.
  */
 async function resumedFlow(
   log: string,
   start: RunStartedRecord,
   hostFlow: ComposedFlow | null,
+  codeRoot: string | null,
 ): Promise<ComposedFlow> {
   if (start.flow === null) {
     if (hostFlow === null) {
@@ -1327,7 +1346,7 @@ async function resumedFlow(
   if (hostFlow !== null) {
     throw new RangeError(`run log ${log} holds its flow files, which resume compiles; leave out flow`);
   }
-  return loadFlowSource(start.flow);
+  return loadFlowSource(start.flow, { codeRoot });
 }
 
 /**
@@ -1336,15 +1355,23 @@ async function resumedFlow(
  * be the ones the run recorded. The log is read without its lock.
  *
  * @param log The JSONL run log.
- * @param env The environment the load reads the `YIAN_*` values from (default `processEnv`).
+ * @param options.env The environment the load reads the `YIAN_*` values from (default
+ *   `processEnv`).
+ * @param options.codeRoot As `resumeFlow`'s.
  * @returns The recorded flow, or `null` when the run's flow was built in code.
  * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`,
  *   besides `iterRunRecords`' errors.
- * @throws LoadError when the files no longer load (a CODE reference's file gone).
+ * @throws LoadError when the files no longer load (a CODE reference's file gone, or outside
+ *   `codeRoot`).
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  */
-export async function loadRecordedFlow(log: string, env: Env = processEnv): Promise<ComposedFlow | null> {
+export async function loadRecordedFlow(
+  log: string,
+  options: { env?: Env | null; codeRoot?: string | null } = {},
+): Promise<ComposedFlow | null> {
+  const env = options.env ?? processEnv;
+  const { codeRoot = null } = options;
   // Only the first record is read.
   const records = iterRunRecords(log);
   let first: RecordEnvelope | undefined;
@@ -1357,7 +1384,7 @@ export async function loadRecordedFlow(log: string, env: Env = processEnv): Prom
   const start = startRecord(first);
   return withEnv(env, () => {
     checkRecorded(start.defaults);
-    return start.flow === null ? null : loadFlowSource(start.flow);
+    return start.flow === null ? null : loadFlowSource(start.flow, { codeRoot });
   });
 }
 

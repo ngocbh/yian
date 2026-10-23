@@ -1025,7 +1025,9 @@ test("the load check refuses a symlink pointing outside codeRoot", async () => {
     `\`code:\` file './link.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
   );
   const dir = new CodeNode("r", { code: "./lib/h.ts:fn", baseDir: join(confined, "root") });
-  expect(await rejected(dir.check({ codeRoot }))).toBeInstanceOf(RangeError);
+  expect((await rejected(dir.check({ codeRoot })) as Error).message).toBe(
+    `\`code:\` file './lib/h.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
+  );
 });
 
 test("the load check without codeRoot passes a reference outside any root", async () => {

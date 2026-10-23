@@ -17,8 +17,8 @@
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
  * return the node's one output value. Nothing is compiled or imported at construction; the
  * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
- * `module:function` value, and requires a reference's file to exist, and inside the load's code
- * root when it has one, running no code.
+ * `module:function` value, and requires a reference's file to exist (and, when the load has a code
+ * root, to resolve inside it); it runs no code.
  *
  * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
  * per thread. Idle workers are reused (at most `availableParallelism()` wait), and an idle worker
@@ -96,11 +96,11 @@ const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
 // check refuses it rather than run it as a body.
 const PYTHON_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
 
+// Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
 /**
  * Whether a path relative to a root (`relative(root, file)`) leaves that root: `..`, a `../`
  * prefix, or an absolute path (another drive).
  */
-// Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
 function leavesRoot(rel: string): boolean {
   return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
@@ -575,7 +575,8 @@ export class CodeNode extends Node {
       }
       const { codeRoot = null } = options;
       if (codeRoot !== null) {
-        // The OS realpath, as the loader's root: it returns the on-disk case on Bun and Node.
+        // The native realpath, like the loader's `fsp.realpath` for the root, so both give the
+        // on-disk case and compare equal on a case-insensitive disk, on Bun and Node alike.
         const real = realpathSync.native(file);
         if (leavesRoot(relative(codeRoot, real))) {
           throw new RangeError(

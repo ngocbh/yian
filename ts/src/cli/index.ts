@@ -263,7 +263,13 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "status",
       summary: "Report the run recorded in a run log.",
-      positionals: [{ name: "log", help: "Path to a run log .jsonl", path: { exists: true, dir: false } }],
+      positionals: [
+        {
+          name: "log",
+          help: "Path to a run log, such as ~/.yian/runs/<run_id>/log.jsonl",
+          path: { exists: true, dir: false },
+        },
+      ],
       options: [JSON_OPTION],
     },
     load: async () => {

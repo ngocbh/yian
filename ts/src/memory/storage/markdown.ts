@@ -39,14 +39,15 @@ export class MarkdownVersionMismatch extends Error {
  *
  * Versions are opaque strings the store chooses: `FileMarkdownStore` uses `markdownVersion`, and a
  * git-backed store may use blob ids. yian only compares them for equality and hands them back.
- * `read(v)` returns `v` itself as the version. A store must keep every version it has handed out:
- * profile memory's run snapshot records only the version and a text hash, so resume and later
- * backward attempts read that version again.
+ * `read(v)` returns `v` itself as the version. A store must keep every version it has handed out,
+ * including the version it reports before the first write: profile memory's run snapshot records
+ * only the version and a text hash, so resume and later backward attempts read that version again.
  *
  * Implementations throw `RangeError` for an unknown version or stored text they can't decode,
- * `MarkdownVersionMismatch` for a stale base version, and a Node system error when storage can't
- * be reached. In a run, profile memory turns these, and on restore a `TypeError`, into typed memory
- * failures; any other error passes through it, `backward` and `resumeFlow` unchanged.
+ * `MarkdownVersionMismatch` for a stale base version, and a Node system error (an `Error` with a
+ * string `code` and a string `syscall` or a numeric `errno`) when storage can't be reached. In a
+ * run, profile memory turns these, and on restore a `TypeError`, into typed memory failures; any
+ * other error passes through it, `runFlow`, `resumeFlow` and `backward` unchanged.
  */
 export interface MarkdownStore {
   /**

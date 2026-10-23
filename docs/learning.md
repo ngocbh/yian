@@ -265,7 +265,7 @@ Changed (TS yian): import `ProfileMemory` from `@ngocbh/yian` and pass it in a `
   text. `resume_flow(..., memory=...)` and later backward reopen that exact
   version, so the store must keep every version it handed out. An unknown
   version is a `MemorySetupError`, from `resume_flow` for an unfinished run and
-  from the first `backward` for a finished one. The run log still holds
+  from each backward attempt for a finished one. The run log still holds
   profile text: AGENT evidence has the recalled document, and learning records
   have the proposed one. Keep run logs as private as the profile.
 - **Host edits.** `profile.read()` returns `(text, version)`, and
@@ -318,8 +318,9 @@ Changed (TS yian): `read(version?)` returns `[text, version]`, and
 `write(text, { baseVersion, provenance })` returns the version. `FileMarkdownStore` answers
 with a promise and `InMemoryMarkdownStore` answers at once; a host store may do either, and
 yian awaits. An unknown version, or stored text that isn't UTF-8, throws `RangeError`. Storage
-that can't be reached throws a Node system error, an `Error` with a string `code`: `ENOENT` for
-a missing parent directory, `EIO` when the lock fails. Bad provenance throws `TypeError` or
+that can't be reached throws a Node system error, an `Error` with a string `code` and a string
+`syscall` or a numeric `errno` (for example `code: "EIO", syscall: "read"`): `ENOENT` for a
+missing parent directory, `EIO` when the lock fails. Bad provenance throws `TypeError` or
 `RangeError` naming `provenance`, and nothing is written. The document, the kept versions
 (`.<name>.versions/<sha256>.md`), and the write log are byte-compatible with Python yian's,
 so a profile directory written by Python opens in TS and continues. Each log line is exactly

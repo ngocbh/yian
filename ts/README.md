@@ -299,9 +299,9 @@ logs][docs/api.md#authoritative-run-logs].
 A `pool_commit` payload is flat, `{node_id, key, kind, value}`. A host decodes its value with
 `TypedValue.fromWire({ kind, value })` (an int is a `bigint`, a file a `FileRef`), writes it as the
 log does with `logJson(typed.toWire())` (ints of any size from `bigint`s, floats marked `.0`,
-`±Infinity` as `{"$float": "inf"}` or `"-inf"`, a tag-shaped record wrapped in `{"$record": …}`;
-NaN, `-0` and lone surrogates throw `TypeError`), and reads that text back with
-`parseJson(text, "codec")` (`JSONDecodeError` on text yian doesn't read; `"plain"` decodes no tags):
+`±Infinity` as `{"$float": "inf"}` or `"-inf"`, a tag-shaped record wrapped in `{"$record": …}`),
+and reads that text back with `parseJson(text, "codec")` (`JSONDecodeError` on text yian doesn't
+read; `"plain"` decodes no tags):
 
 ```ts
 const typed = TypedValue.fromWire({ kind: payload.kind, value: payload.value });

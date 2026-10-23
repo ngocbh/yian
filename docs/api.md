@@ -2867,13 +2867,13 @@ The `json` conformance group (`conformance/cases/json/`) specifies the form, for
 - The `TypedValue` constructor doesn't check that the value fits the kind; `fromWire` is the checked
   way to build one.
 - `toWire` throws `TypeCheckError` (a `RangeError`, not exported) for a value that isn't JSON, which
-  only the unchecked constructor can hold.
+  the unchecked constructor, or `fromWire` given data `parseJson` didn't make, can hold.
 - A `FileRef` appears only for kind `file`; it is a reserved placeholder, and its shape may change
   when file handling lands.
 - `logJson` writes every JS `number` as a float (`{a: 1}` gives `{"a":1.0}`) and refuses `undefined`
   and a `Date`, so pass ints as `bigint`s.
-- Plain `JSON.parse` reads `logJson` text, but loses ints past 2^53 and reads `±Infinity` as the tag
-  object and an escaped record with its `$record` wrapper.
+- Plain `JSON.parse` reads `logJson` text, but loses ints past 2^53 and reads `±Infinity` as the
+  tag object and an escaped record with its `$record` wrapper.
 - `yian/run` imports `node:` modules, so it is for server-side hosts, not browsers.
 
 No Python counterpart: Python yian's run log refuses infinity and writes no tags, so Python hosts

@@ -5,6 +5,7 @@
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 rules: [messages, run-log]
+python_skip: "crash_after_record counts TS log records, which now include each pool_commit"
 flow: |
   id: typed-gate-replay
   name: typed_gate_replay

@@ -3093,6 +3093,26 @@ function section(text: string, key: string): [number, number] | undefined {
 }
 
 /**
+ * Quote each text in a flow collection under `node` that holds a `?`. The writer leaves it bare,
+ * as YAML 1.2 allows, but PyYAML ends the text there, so the Python runner couldn't read the case.
+ */
+function quoteQuestionMarks(node: unknown): void {
+  visit(node as Parameters<typeof visit>[0], {
+    Collection(_, collection) {
+      if (!collection.flow) return;
+      const parts = isMap(collection)
+        ? collection.items.flatMap((pair) => [pair.key, pair.value])
+        : collection.items;
+      for (const part of parts) {
+        if (isScalar(part) && typeof part.value === "string" && part.value.includes("?")) {
+          part.type = "QUOTE_DOUBLE";
+        }
+      }
+    },
+  });
+}
+
+/**
  * Return the case file `text` with each result in `results` written into `expect` in case form
  * (as `updated` changes it), and `run-log` added to its `rules`; a new `rules` goes right after
  * `kind`. Only the lines of `rules` and `expect` change: they are cut from the whole file written
@@ -3126,6 +3146,7 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
   } else if (!rules.items.some((item) => isScalar(item) && item.value === "run-log")) {
     rules.add("run-log");
   }
+  quoteQuestionMarks(doc.get("expect"));
   const written = doc.toString(options(indentSeq));
   let result = text;
   for (const key of ["expect", "rules"]) {

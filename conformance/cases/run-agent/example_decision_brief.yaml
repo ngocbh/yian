@@ -221,7 +221,7 @@ expect:
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]
     - [pool_commit, __start__, {key: system.today}]
-    - [pool_commit, __start__, {value: {audience: the CTO, question: Should a small team adopt a monorepo?}}]
+    - [pool_commit, __start__, {value: {audience: the CTO, question: "Should a small team adopt a monorepo?"}}]
     - [node_started, __start__]
     - - pool_commit
       - __start__

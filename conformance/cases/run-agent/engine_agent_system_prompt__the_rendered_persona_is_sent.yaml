@@ -104,7 +104,7 @@ expect:
     - {key: system.today}
   - - pool_commit
     - __start__
-    - value: {message: How are we doing?, name: Ada, title: CTO}
+    - value: {message: "How are we doing?", name: Ada, title: CTO}
   - [node_started, __start__]
   - - pool_commit
     - __start__

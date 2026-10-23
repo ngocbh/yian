@@ -1461,6 +1461,18 @@ describe("main", () => {
     expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
   });
 
+  test("--write-expect quotes a `?` in a flow collection, which Python's YAML reader won't take bare", async () => {
+    const asked = FORMS.replace('big: "${input.big}"}', 'big: "${input.big}", q: "why?"}')
+      .replace("output: {id: <id:1>, f: 2.0, big: 9007199254740993}", "output: {id: <id:1>, f: 2.0, big: 9007199254740993, q: \"why?\"}")
+      .replace("{value: {big: 9007199254740993, f: 2.0, id: <id:1>}}", "{value: {big: 1}}");
+    expect(asked).not.toBe(FORMS);
+    const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! });
+    expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
+    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    expect(text).toContain('q: "why?"}}]');
+    expect(text).not.toContain("q: why?");
+  });
+
   test("--write-expect changes a block entry in place, keeping its comment and style", async () => {
     const kinds = { run: RUNNERS.run! };
     const block = FORMS.replace(

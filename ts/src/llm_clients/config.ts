@@ -12,6 +12,7 @@ import { isIPv6 } from "node:net";
 import { current } from "../defaults.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
+import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
@@ -360,8 +361,9 @@ function bindConnectionToKey(connection: Connection): void {
  * by `yian auth`; with neither, building the model fails, since no provider or model is built in.
  * Only the block named by the selected provider is sent. An unknown key is refused, so a mistyped
  * `llm_config:` key is loud at load time, and a retired key (`temperature`, `anthropic_effort`,
- * ...) fails with its new form (see `retiredKeyError`). Validation errors never echo the input
- * values, so a rejected config cannot leak `api_key`. Instances are frozen.
+ * ...) fails with its new form (see `retiredKeyError`). Validation errors never hold an input
+ * value, so a rejected config cannot leak `api_key`; they name record keys as written, at any depth
+ * (an unknown key or block field, a header or `metadata` name). Instances are frozen.
  *
  * Fields (keys of `data`):
  * - `provider`: one of `SUPPORTED_LLM_PROVIDERS`. Unset takes `YIAN_DEFAULT_PROVIDER`, else the
@@ -487,6 +489,16 @@ export class LLMConfig {
     this.#headers = headers;
     this.#blocks = blocks;
     Object.freeze(this);
+  }
+
+  /**
+   * Validate a host `llm_config` (JSON-shaped: a whole number becomes an int), converting values
+   * with the host intake `runFlow` uses. Throws `ValidationError`, or `TypeCheckError` (a
+   * `RangeError`) for a value that isn't a yian value, such as NaN or text with a lone surrogate,
+   * which `JSON.parse` can produce.
+   */
+  static fromHost(data: unknown): LLMConfig {
+    return new LLMConfig(hostValue(data, "llm_config"));
   }
 
   /** The host-supplied provider key, or `null`. */

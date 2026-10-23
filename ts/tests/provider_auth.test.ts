@@ -1251,6 +1251,53 @@ describe("AuthStore", () => {
     expect(fs.readdirSync(join(tmp, "auth"))).toEqual(["auth.json.lock"]);
   });
 
+  test("delete waits for a held lock, then removes the store and keeps its lock file", async () => {
+    await new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model");
+    const scheduler = virtualScheduler(1_000_000);
+    const holder = lockFile(`${file}.lock`);
+    // Checked at +200, while the holder still has the lock; released at +250, between two of
+    // waitForLock's 100 ms polls, so the delete takes the lock on the +300 poll.
+    let stillThere = false;
+    void scheduler.sleep(200).then(() => {
+      stillThere = fs.existsSync(file);
+    });
+    void scheduler.sleep(250).then(() => holder.release());
+    await new AuthStore(file, { scheduler, lockTimeoutMs: 1_000 }).delete();
+    expect(stillThere).toBe(true);
+    expect(scheduler.now()).toBe(1_000_300);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+  });
+
+  test("delete waits for a refresh in flight and the store stays deleted", async () => {
+    const scheduler = virtualScheduler(1_000_000);
+    const store = new AuthStore(file, { scheduler });
+    const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");
+    const [entered, enter] = gate();
+    const [finished, finish] = gate();
+    const refreshed = store.credentials("openai", selection.credentialId, {
+      refresh: async () => {
+        enter();
+        await finished;
+        return oauth("new", "new-refresh", 5000);
+      },
+    });
+    await entered;
+    let deleted = false;
+    const deleting = store.delete().then(() => {
+      deleted = true;
+    });
+    // Past waitForLock's +100 and +200 polls, the delete must still wait on the refresh's lock.
+    await scheduler.sleep(250);
+    expect(deleted).toBe(false);
+    finish();
+    expect(((await refreshed) as OAuthCredentials).accessToken).toBe("new");
+    await deleting;
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+    expect(store.read().selections).toEqual([]);
+  });
+
   test("delete without a store or lock file creates nothing", async () => {
     const missing = join(tmp, "missing");
     await new AuthStore(join(missing, "auth.json")).delete();

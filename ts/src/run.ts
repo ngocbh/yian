@@ -14,7 +14,8 @@
  * (`nodes/base.ts`). For hosts that show runs it also exports `inspectRun`, which reads where a run
  * log stands, and `staticNodes`, which names each node of a flow, and re-exports `staticPathOf`
  * (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
- * `RunLogSchemaError` (`runtime/log.ts`).
+ * `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
+ * the host's runs folder and names its log there.
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -23,7 +24,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { chmodSync, mkdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { types } from "node:util";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
@@ -1200,6 +1202,35 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
       await closeRunResources(memoryRuntime, authority, primary);
     }
   });
+}
+
+/**
+ * Create a fresh run's folder, `<runsDir>/<runId>`, and return its log path, `log.jsonl` inside it.
+ *
+ * A run's folder is the folder that holds its log, and the run's other files go only there, so
+ * each run gets a folder of its own. `runsDir` is made when missing. The run folder is made with
+ * mode 0700, or set to it if it exists. The log file is not created: the run log creates it
+ * exclusively, owner-only.
+ *
+ * @throws {RangeError} When `runId` isn't one folder name: empty, `.`, `..`, or holding `/`, `\`
+ *   or NUL.
+ * @throws {Error} When a folder can't be made or changed, or a non-folder holds the run folder's
+ *   path.
+ */
+export function runLogPath(runsDir: string, runId: string): string {
+  if (runId === "" || runId === "." || runId === ".." || /[/\\\0]/.test(runId)) {
+    throw new RangeError(`run id is not one folder name: ${reprText(runId)}`);
+  }
+  mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+  const runDir = join(runsDir, runId);
+  try {
+    mkdirSync(runDir, { mode: 0o700 });
+  } catch (error) {
+    const taken = (error as NodeJS.ErrnoException).code === "EEXIST";
+    if (!taken || !statSync(runDir, { throwIfNoEntry: false })?.isDirectory()) throw error;
+  }
+  chmodSync(runDir, 0o700);
+  return join(runDir, "log.jsonl");
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */

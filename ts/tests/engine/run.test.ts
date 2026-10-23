@@ -68,11 +68,15 @@
  * `staticNodes` of a flow with CALL and MAP children, and the paths a run's effective model map
  * uses; `staticPathOf` on MAP, LOOP and nested ids, and every node id of a MAP run and a LOOP run
  * mapped onto a `staticNodes` path.
+ *
+ * TS-only, `runLogPath`: a run's log is `log.jsonl` in its own folder below the runs folder, made
+ * 0700 (an existing one is set to 0700, the runs folder is made when missing), the file not
+ * created; a file holding the folder's path, and a run id that isn't one folder name, are refused.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +102,7 @@ import {
   runFlow,
   type RunFlowOptions,
   RunLogSchemaError,
+  runLogPath,
   staticNodes,
   staticPathOf,
 } from "../../src/run.ts";
@@ -1562,4 +1567,33 @@ test("inspectRun reads a locked log as running when a writer's rollback shrinks 
     readSpy.mockRestore();
     held.close();
   }
+});
+
+// ---- TS-only: runLogPath ----
+
+test("runLogPath is log.jsonl in the run's own 0700 folder, and creates no file", () => {
+  const runs = join(dir, "runs");
+  const path = runLogPath(runs, "r1");
+  expect(path).toBe(join(runs, "r1", "log.jsonl"));
+  expect(statSync(join(runs, "r1")).mode & 0o777).toBe(0o700);
+  expect(existsSync(path)).toBe(false);
+});
+
+test("runLogPath sets an existing run folder to 0700", () => {
+  mkdirSync(join(dir, "r2"), { mode: 0o755 });
+  chmodSync(join(dir, "r2"), 0o755);
+  expect(runLogPath(dir, "r2")).toBe(join(dir, "r2", "log.jsonl"));
+  expect(statSync(join(dir, "r2")).mode & 0o777).toBe(0o700);
+});
+
+test("runLogPath refuses a file holding the run folder's path", () => {
+  writeFileSync(join(dir, "r3"), "");
+  expect(() => runLogPath(dir, "r3")).toThrow(/EEXIST/);
+});
+
+test("runLogPath refuses a run id that isn't one folder name", () => {
+  for (const runId of ["", ".", "..", "a/b", "../r", "a\\b", "a\0b"]) {
+    expect(() => runLogPath(dir, runId)).toThrow(RangeError);
+  }
+  expect(existsSync(join(dir, "a"))).toBe(false);
 });

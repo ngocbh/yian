@@ -82,7 +82,7 @@ const NAMES: Record<string, string[]> = {
     "MarkdownVersionMismatch",
     "markdownVersion",
   ],
-  "./run": ["RunResult", "BackwardOutcome", "inspectRun", "runFlow", "resumeFlow"],
+  "./run": ["RunResult", "BackwardOutcome", "inspectRun", "runFlow", "resumeFlow", "runLogPath"],
   "./tools": [
     "registerTool",
     "registeredTools",

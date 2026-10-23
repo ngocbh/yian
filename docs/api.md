@@ -1815,14 +1815,13 @@ rules.
 
 Changed (TS yian): `new ProfileMemory(store, { llmConfig, maxChars, inputBudgetChars, env,
 createModel, onRetry })`, exported from `@ngocbh/yian` (Python imports `yian.memory.profile`) and
-passed in a `Map`. A host store's versions may be any string, such as a git blob id. `openRun`,
-`read`, `write`, `learn` and `commit` are async; store errors map by kind: a Node system error is
-`profile.store_unavailable`, a `RangeError` `profile.store_invalid`. `env` is where the learner's
-model defaults and credentials are read (default `processEnv`). `createModel(config)` gets the
-resolved config with the host credentials (default `chatModelFromConfig`), and `onRetry` sees each
-transport retry, its error scrubbed of the call's credentials. The learner makes one plain call
-through `callWithRetries`, so only transport errors retry; a reply without `<profile>` tags fails
-`profile.contract` without a retry.
+passed in a `Map`. `openRun`, `read`, `write`, `learn` and `commit` are async; store errors map by
+kind: a Node system error is `profile.store_unavailable`, a `RangeError` `profile.store_invalid`.
+`env` is where the learner's model defaults and credentials are read (default `processEnv`).
+`createModel(config)` gets the resolved config with the host credentials (default
+`chatModelFromConfig`), and `onRetry` sees each transport retry, its error scrubbed of the call's
+credentials. The learner makes one plain call through `callWithRetries`, so only transport errors
+retry; a reply without `<profile>` tags fails `profile.contract` without a retry.
 
 ### Optional durable memory
 

@@ -54,8 +54,8 @@ const SYSTEM =
   `complete new document between ${OPEN_TAG} and ${CLOSE_TAG} and nothing else.`;
 
 /**
- * Build the learner's model from its resolved config: `llmConfig` with the host credentials, its
- * unset provider, model and connection filled from the defaults in `env` (Python's
+ * Build the learner's model from its resolved config: `llmConfig` with the host credentials, and
+ * with any unset provider, model or connection filled from the defaults in `env` (Python's
  * `model_from_config` input).
  */
 type CreateModel = (config: Readonly<Record<string, unknown>>) => ChatModel | Promise<ChatModel>;
@@ -205,15 +205,14 @@ export class ProfileMemory implements Memory {
    *   it; for `provider: azure` it is the required resource endpoint and needs no key.
    *   `organization`, `project` and `headers` entries need `api_key` and go with it.
    * @param options.maxChars Largest document the learner may write; unset uses
-   *   `YIAN_PROFILE_MAX_CHARS` (32,000, about 8k tokens) as `current()` reads it, from `withEnv`'s
-   *   scope or the process, not from `options.env`. Host writes are not bounded.
+   *   `YIAN_PROFILE_MAX_CHARS` (32,000, about 8k tokens), read from `withEnv`'s scope or the
+   *   process, not from `options.env`. Host writes are not bounded.
    * @param options.inputBudgetChars Character budget for episode JSON sent to the learner; unset
    *   uses `YIAN_PROFILE_INPUT_BUDGET_CHARS` (24,000), read the same way. Feedback is always sent.
    * @param options.env The environment model defaults and credentials are read from; default
    *   `processEnv`.
-   * @param options.createModel Build the learner's model from its resolved config: `llmConfig`
-   *   with the host credentials, its unset provider, model and connection filled from the defaults
-   *   in `env` (Python's `model_from_config` input); default `chatModelFromConfig(config, {env})`.
+   * @param options.createModel Build the learner's model from its resolved config (see
+   *   `CreateModel`); default `chatModelFromConfig(config, {env})`.
    * @param options.onRetry Called before the learner's model call is retried, with the error
    *   scrubbed of the call's credentials; unset publishes nothing.
    * @throws TypeError when `store` lacks `read`/`write` or `llmConfig` isn't a record.

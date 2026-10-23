@@ -366,8 +366,8 @@ use or throws. A `MarkdownStore` (profile memory's document) has `read(version?)
 the new version (or a promise of it); `new FileMarkdownStore(path, { createParent })` and
 `new InMemoryMarkdownStore(text)` implement it, a stale `baseVersion` throws
 `MarkdownVersionMismatch`, and `markdownVersion(text)` is the `"sha256:<hex>"` version of a text.
-A store's versions are opaque strings; it must keep every version it hands out, since resume and
-backward read the recorded one, and it throws `RangeError` for a version it doesn't have.
+A store's versions are opaque strings, and `read(v)` returns `v`. It must keep every version it
+hands out, since resume and backward read the recorded one; an unknown version throws `RangeError`.
 
 `new ProfileMemory(store, { llmConfig, maxChars, inputBudgetChars, env, createModel, onRetry })`
 keeps one profile document in any `MarkdownStore`. Pass it in `runFlow`'s `memory` `Map`, or in

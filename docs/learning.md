@@ -309,20 +309,17 @@ Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 `read(version=None) -> (text, version)` and
 `write(text, *, base_version, provenance=None) -> version`. Versions are opaque
 strings the store chooses (a git blob id works), and `read(version)` returns
-that same version. It raises
-`MarkdownVersionMismatch` when `base_version` is stale (nothing was written),
-`LookupError` for an unknown version, `ValueError` for text it cannot decode, and
-`OSError` when storage cannot be reached.
+that same version. The store raises `MarkdownVersionMismatch` when
+`base_version` is stale (nothing was written), `LookupError` for an unknown
+version, `ValueError` for text it cannot decode, and `OSError` when storage
+cannot be reached.
 
 Changed (TS yian): `read(version?)` returns `[text, version]`, and
 `write(text, { baseVersion, provenance })` returns the version. `FileMarkdownStore` answers
 with a promise and `InMemoryMarkdownStore` answers at once; a host store may do either, and
 yian awaits. An unknown version, or stored text that isn't UTF-8, throws `RangeError`. Storage
 that can't be reached throws a Node system error, an `Error` with a string `code`: `ENOENT` for
-a missing parent directory, `EIO` when the lock fails. Profile memory maps a `RangeError`, a Node
-system error and `MarkdownVersionMismatch`, and on restore a `TypeError` too; any other error
-passes through it unchanged. On restore, a `RangeError`, a `TypeError` or a Node system error
-becomes `profile.snapshot_unavailable`. Bad provenance throws `TypeError` or
+a missing parent directory, `EIO` when the lock fails. Bad provenance throws `TypeError` or
 `RangeError` naming `provenance`, and nothing is written. The document, the kept versions
 (`.<name>.versions/<sha256>.md`), and the write log are byte-compatible with Python yian's,
 so a profile directory written by Python opens in TS and continues. Each log line is exactly
@@ -330,7 +327,11 @@ what Python's `json.dumps(sort_keys=True)` writes. A whole-number JS `number` in
 written as a float (`2.0`); pass `2n` for an int. TS locks `.<name>.lock` with SQLite, not
 `flock`, so the lock file must stay an empty regular file, and Python's and TS's locks don't
 see each other. Don't let Python yian and TS yian write the same profile at the same time: both
-could pass the compare-and-set, and one update would be lost.
+could pass the compare-and-set, and one update would be lost. In a run, profile memory turns a
+`MarkdownVersionMismatch` into `profile.version_mismatch`, a Node system error into
+`profile.store_unavailable` and a `RangeError` into `profile.store_invalid`; on restore, a
+`RangeError`, a `TypeError` or a Node system error becomes `profile.snapshot_unavailable`. Any
+other error passes through unchanged.
 
 ## Compute first, then commit
 

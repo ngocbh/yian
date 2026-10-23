@@ -297,15 +297,13 @@ log that ends inside its run start can't be resumed. See [Authoritative run
 logs][docs/api.md#authoritative-run-logs].
 
 A `pool_commit` payload is flat, `{node_id, key, kind, value}`. A host decodes its value with
-`TypedValue.fromWire({ kind, value })` (an int is a `bigint`, a file a `FileRef`), writes it as the
-log does with `logJson(typed.toWire())` (ints of any size from `bigint`s, floats marked `.0`,
-`±Infinity` as `{"$float": "inf"}` or `"-inf"`, a tag-shaped record wrapped in `{"$record": …}`),
-and reads that text back with `parseJson(text, "codec")` (`JSONDecodeError` on text yian doesn't
-read; `"plain"` decodes no tags):
+`TypedValue.fromWire({ kind, value })` (an int is a `bigint`, a file a `FileRef`), writes it back as
+the log does with `logJson(typed.toWire())`, and reads that text with `parseJson(text, "codec")`,
+which throws `JSONDecodeError` on text yian doesn't read:
 
 ```ts
 const typed = TypedValue.fromWire({ kind: payload.kind, value: payload.value });
-const text = logJson(typed.toWire()); // {"kind":…,"value":…}, the value as the log wrote it
+const text = logJson(typed.toWire()); // {"kind":…,"value":…}, the value as the log writes it
 const back = TypedValue.fromWire(parseJson(text, "codec"));
 ```
 

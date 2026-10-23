@@ -2832,7 +2832,8 @@ them with: `TypedValue` and `FileRef`, `logJson`, `parseJson` and `JSONDecodeErr
 payload is flat, `{node_id, key, kind, value}`, and its `kind` and `value` are the typed value's
 wire form. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
 `kind` and `value`, `kind` must be a storage kind (not `Any`) and `value` of that kind, or it throws
-a `RangeError`. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int items as `bigint`s.
+a `RangeError`. It checks the value's top level, not its contents, which it trusts `parseJson` to
+have read. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int items as `bigint`s.
 `typed.toWire()` gives `{kind, value}` back, each `FileRef` written as its `{uri, mime, name}`
 mapping.
 
@@ -2856,8 +2857,8 @@ for (const { envelope } of iterRunRecords(log, { kinds: ["pool_commit"] })) {
   const { node_id, key, kind, value } = envelope.payload;
   const typed = TypedValue.fromWire({ kind, value }); // an int is a bigint, a file a FileRef
   show(node_id, key, typed.kind, typed.value);
-  const text = logJson(typed.toWire()); // {"kind":…,"value":…}, the value as the line writes it
-  TypedValue.fromWire(parseJson(text, "codec")); // the same value again
+  const text = logJson(typed.toWire()); // {"kind":…,"value":…}, the value as the log writes it
+  const back = TypedValue.fromWire(parseJson(text, "codec")); // the same value again
 }
 ```
 
@@ -2868,10 +2869,10 @@ The `json` conformance group (`conformance/cases/json/`) specifies the form, for
   way to build one.
 - `toWire` throws `TypeCheckError` (a `RangeError`, not exported) for a value that isn't JSON, which
   the unchecked constructor, or `fromWire` given data `parseJson` didn't make, can hold.
-- A `FileRef` appears only for kind `file`; it is a reserved placeholder, and its shape may change
-  when file handling lands.
-- `logJson` writes every JS `number` as a float (`{a: 1}` gives `{"a":1.0}`) and refuses `undefined`
-  and a `Date`, so pass ints as `bigint`s.
+- A `FileRef` appears only for kind `file`; it holds only `uri`, `mime` and `name`, and yian stores
+  no file content.
+- `logJson` writes every JS `number` as a float (`{a: 1}` gives `{"a":1.0}`), so pass ints as
+  `bigint`s; it refuses `undefined` and a `Date`.
 - Plain `JSON.parse` reads `logJson` text, but loses ints past 2^53 and reads `±Infinity` as the
   tag object and an escaped record with its `$record` wrapper.
 - `yian/run` imports `node:` modules, so it is for server-side hosts, not browsers.

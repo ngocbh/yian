@@ -121,7 +121,8 @@ describe("fromHost", () => {
   });
 
   test("fromHost refuses a value that is not a yian value", () => {
-    for (const data of [{ model: NaN }, JSON.parse('{"model": "\\ud800"}')]) {
+    const key = "sk-proj-SENTINEL-0123456789abcdef";
+    for (const data of [{ model: NaN }, JSON.parse('{"model": "\\ud800"}'), { api_key: `${key}\ud800` }]) {
       let error: unknown;
       try {
         LLMConfig.fromHost(data);
@@ -130,6 +131,7 @@ describe("fromHost", () => {
       }
       expect(error).toBeInstanceOf(RangeError);
       expect((error as Error).name).toBe("TypeCheckError");
+      expect((error as Error).message).not.toContain("SENTINEL");
     }
   });
 });
@@ -153,6 +155,9 @@ describe("value-free validation messages", () => {
     ["long safety_identifier", { openai: { safety_identifier: K.repeat(4) } }],
     ["long metadata value", { openai: { metadata: { a: K.repeat(20) } } }],
     ["temperature", { temperature: K }],
+    ["retired anthropic_effort", { anthropic_effort: K }],
+    ["anthropic block", { anthropic: { output_config: { effort: K } } }],
+    ["google block", { google: { generationConfig: { thinkingConfig: { thinkingLevel: K } } } }],
     ["sandbox", { sandbox: K }],
   ];
 

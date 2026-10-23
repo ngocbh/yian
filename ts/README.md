@@ -102,14 +102,14 @@ are internal: they serve the CLI and yian's own code, and may change without not
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
-| `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
+| `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `Issue`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `ResumeFlowOptions`, `RunInspection`,
 `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `ToolEntry`, `AskUserHandler`,
 `AskUserRequest`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`,
 `StandardIssue`, `StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`,
 `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `LLMProvider`,
-`ListModelsOptions`, `AuthStoreOptions`, `AuthState`, `Credentials`, `AuthRequest` and
+`Issue`, `ListModelsOptions`, `AuthStoreOptions`, `AuthState`, `Credentials`, `AuthRequest` and
 `AuthRequestOptions` are types only.
 
 ## Differences from Python yian
@@ -404,11 +404,11 @@ console.log(store.selection()?.model);
 ```
 
 - `LLMConfig.fromHost(data)` checks a JSON `llm_config` through the host intake `runFlow` uses
-  and throws `ValidationError` (a `RangeError` with `issues`), or `TypeCheckError` (a `RangeError`,
-  not exported) for a value that isn't a yian value, such as NaN. Its messages never hold a value,
-  but they name record keys as written, at any depth (an unknown key, a block field, a header
-  name), so a host that must not echo input names shows its own fixed text. `LLM_CONFIG_KEYS`
-  holds the top-level keys.
+  and throws `ValidationError` (a `RangeError` whose `issues` are `Issue`s: `loc`, `type`,
+  `msg`), or `TypeCheckError` (a `RangeError`, not exported) for a value that isn't a yian value,
+  such as NaN. Its messages never hold a value, but they name record keys as written, at any
+  depth (an unknown key, a block field, a header name), so a host that must not echo input names
+  shows its own fixed text. `LLM_CONFIG_KEYS` holds the top-level keys.
 - `listModels(provider, { apiKey, baseUrl, timeout, headers, organization, project, signal,
   scheduler, request })` resolves to the model ids the provider's host offers, sorted and without
   duplicates, or `null` for `azure`, which has no listing. It reads no environment, so a host can

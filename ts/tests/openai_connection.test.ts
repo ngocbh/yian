@@ -335,6 +335,26 @@ test("an explicit refresh wins over OpenAI's", async () => {
   }
 });
 
+test("a refused refresh keeps its HTTP status on the rewrapped AuthError", async () => {
+  await expiringSubscription();
+  const connection = resolveModelConfig({}, { env })["_connection"];
+  const refused = new AuthError("OpenAI authentication request failed (HTTP 401)", { status: 401 });
+  const error = await rejected(
+    connectionCredentials(connection, "openai", {
+      env,
+      refresh: () => {
+        throw refused;
+      },
+    }),
+  );
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toBe(
+    "OpenAI authentication request failed (HTTP 401). Run 'yian auth openai' and start a new run",
+  );
+  expect((error as AuthError).status).toBe(401);
+  expect(error.cause).toBe(refused);
+});
+
 test("endpoint metadata cannot record embedded secrets", () => {
   vars.set("OPENAI_BASE_URL", "https://api.example/v1?key=hidden-secret");
   const error = thrown(() => connectionSnapshot({ env }));

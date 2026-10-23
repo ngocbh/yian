@@ -43,4 +43,4 @@ export {
 export { callCredentials, scrubCallCredentials } from "./connection.ts";
 export { chatModelFromConfig, defaultModelAccess, type ModelAccess } from "./factory.ts";
 export { type ListModelsOptions, listModels, ModelListError } from "./model_list.ts";
-export { ValidationError } from "./provider_blocks.ts";
+export { type Issue, ValidationError } from "./provider_blocks.ts";

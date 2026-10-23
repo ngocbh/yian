@@ -43,6 +43,7 @@ import type {
   AuthState,
   AuthStoreOptions,
   Credentials,
+  Issue,
   ListModelsOptions,
   LLMProvider,
 } from "../src/llm_clients/index.ts";
@@ -231,6 +232,7 @@ describe("entry points", () => {
       AuthStoreOptions?,
       Credentials?,
       AuthState?,
+      Issue?,
     ];
     expect(names).toEqual([]);
   });

@@ -1309,6 +1309,7 @@ async function startRun(
   if (options.resume !== undefined) {
     let recorded: ComposedFlow | null;
     try {
+      // `resumeFlow` compiles it again: it refuses a flow for a run with recorded files.
       recorded = await loadRecordedFlow(options.resume, io.env);
     } catch (error) {
       if (error instanceof LoadError) {

@@ -102,7 +102,7 @@ import {
   NodeSucceededRecord,
   type OutcomeCarriers,
   RecordEnvelope,
-  type RecordedFlow,
+  type FlowSource,
   type RecordedSkill,
   type RecordedTool,
   type RunLog,
@@ -424,7 +424,7 @@ export interface RunStartData {
    */
   callTimeLlm?: Readonly<Record<string, unknown>> | null;
   /** The flow files the run compiled; `null` (the default) for a flow built in code. */
-  flow?: RecordedFlow | null;
+  flow?: FlowSource | null;
   /** Each skill an AGENT grants, by name; defaults to `{}`. */
   skills?: Readonly<Record<string, RecordedSkill>>;
   /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */

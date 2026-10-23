@@ -4,7 +4,7 @@
  * compiles the recorded flow, never the files on disk.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -78,7 +78,7 @@ const SHAPES: Record<
   {
     files: Record<string, string>;
     root: string;
-    keys: Record<string, { text: string; refs: Record<string, string>; codeDir?: string }>;
+    keys: Record<string, { text: string; refs: Record<string, string> }>;
   }
 > = {
   "one level": {
@@ -100,14 +100,13 @@ const SHAPES: Record<
     root: "proj",
     keys: { "flow.yaml": file(PATHS_ROOT, { util: "../shared/util.yaml" }), "../shared/util.yaml": file(UTIL) },
   },
-  // The child file is a symlink: it is recorded under the path the resolver tried, with the
-  // target's folder for its CODE references.
+  // The child file is a symlink: it is recorded under its real path.
   "a symlinked child file": {
     files: { "flow.yaml": ROOT, "shared/real-child.yaml": CHILD },
     root: ".",
     keys: {
-      "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }),
-      "lib/child.yaml": { ...file(CHILD), codeDir: "shared" },
+      "flow.yaml": file(ROOT, { "lib/child": "shared/real-child.yaml" }),
+      "shared/real-child.yaml": file(CHILD),
     },
   },
 };
@@ -138,7 +137,7 @@ for (const [name, shape] of Object.entries(SHAPES)) {
     writeShape(dir, shape);
     const root = join(dir, shape.root);
 
-    expect(sourceOf(await loadRoot(root))).toEqual({ root: "flow.yaml", dir: root, files: shape.keys });
+    expect(sourceOf(await loadRoot(root))).toEqual({ root: "flow.yaml", dir: realpathSync(root), files: shape.keys });
   });
 }
 
@@ -156,20 +155,42 @@ for (const [name, shape] of Object.entries(SHAPES)) {
   });
 }
 
-test("a symlinked child file records the folder its CODE references resolve in", async () => {
-  const dir = freshDir("codedir");
-  writeTree(dir, { "flow.yaml": ROOT, "store/c.yaml": CODE_CHILD, "store/fn.ts": UP });
-  mkdirSync(join(dir, "lib"));
-  symlinkSync(join(dir, "store", "c.yaml"), join(dir, "lib", "child.yaml"));
+test("one file reached by two paths is recorded once", async () => {
+  const dir = freshDir("twice");
+  writeTree(join(dir, "real"), { "b.yaml": leafOut("b") });
+  symlinkSync(join(dir, "real"), join(dir, "link"));
+  const root =
+    "id: root\nname: root\nsystem:\n  paths: [../real]\nuses:\n  b: b\n  c: ../real/b\nnodes: {}\noutput: done\n";
+  const link = join(dir, "link");
 
-  expect(sourceOf(await loadRoot(dir))).toEqual({
+  const loaded = await loadFlow(root, { searchPaths: [link], baseDir: link, sourceLabel: "flow.yaml" });
+
+  expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
-    dir,
-    files: {
-      "flow.yaml": file(ROOT, { "lib/child": "lib/child.yaml" }),
-      "lib/child.yaml": { text: CODE_CHILD, refs: {}, codeDir: "store" },
-    },
+    dir: realpathSync(join(dir, "real")),
+    files: { "flow.yaml": file(root, { b: "b.yaml", "../real/b": "b.yaml" }), "b.yaml": file(leafOut("b")) },
   });
+});
+
+test("a chain 50 files deep, and imports shared along several paths, record each file once", async () => {
+  const dir = freshDir("chain");
+  /** A flow `name` importing each of `refs`, calling none. */
+  const importing = (name: string, refs: string[]) =>
+    `id: ${name}\nname: ${name}\n` +
+    (refs.length > 0 ? `uses:\n${refs.map((ref) => `  ${ref}: ${ref}\n`).join("")}` : "") +
+    "nodes: {}\noutput: done\n";
+  const chain: Record<string, string> = {};
+  for (let i = 0; i < 50; i += 1) chain[`u${i}.yaml`] = importing(`u${i}`, i < 49 ? [`u${i + 1}`] : []);
+  writeTree(join(dir, "chain"), chain);
+  const lattice = { "a.yaml": importing("a", ["c"]), "b.yaml": importing("b", ["c"]), "c.yaml": importing("c", ["d"]) };
+  writeTree(join(dir, "lattice"), { ...lattice, "d.yaml": importing("d", []) });
+
+  const deep = await loadFlow(chain["u0.yaml"]!, { searchPaths: [join(dir, "chain")], sourceLabel: "u0.yaml" });
+  const latticeDir = join(dir, "lattice");
+  const shared = await loadFlow(importing("root", ["a", "b"]), { searchPaths: [latticeDir], sourceLabel: "root.yaml" });
+
+  expect(Object.keys(deep.source!.files)).toHaveLength(50);
+  expect(Object.keys(shared.source!.files).sort()).toEqual(["a.yaml", "b.yaml", "c.yaml", "d.yaml", "root.yaml"]);
 });
 
 test("a uses: path keeps its pinned version in refs", async () => {
@@ -196,7 +217,7 @@ test("a uses: path keeps its pinned version in refs", async () => {
   expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
 });
 
-test("a folder reached through a symlink keys its files from the folder as given", async () => {
+test("a folder reached through a symlink keys its files from its real folder", async () => {
   const dir = freshDir("symlink");
   writeTree(join(dir, "real"), SHAPES["one level"]!.files);
   symlinkSync(join(dir, "real"), join(dir, "link"));
@@ -204,7 +225,11 @@ test("a folder reached through a symlink keys its files from the folder as given
   const link = join(dir, "link");
   const loaded = await loadFlow(ROOT, { searchPaths: [link], baseDir: link, sourceLabel: "flow.yaml" });
 
-  expect(sourceOf(loaded)).toEqual({ root: "flow.yaml", dir: link, files: SHAPES["one level"]!.keys });
+  expect(sourceOf(loaded)).toEqual({
+    root: "flow.yaml",
+    dir: realpathSync(join(dir, "real")),
+    files: SHAPES["one level"]!.keys,
+  });
 });
 
 /** A host resolver that loads `<dir>/<ref>.yaml` searching its own folder, as a file resolver would. */
@@ -219,7 +244,7 @@ test("a host resolver's loaded children join the root's files, keyed from the ro
 
   const loaded = await loadFlow(ROOT, { childResolver: hostResolver(dir), baseDir: dir, sourceLabel: "flow.yaml" });
 
-  expect(sourceOf(loaded)).toEqual({ root: "flow.yaml", dir, files: SHAPES["two levels"]!.keys });
+  expect(sourceOf(loaded)).toEqual({ root: "flow.yaml", dir: realpathSync(dir), files: SHAPES["two levels"]!.keys });
 });
 
 test("a host child read from outside the root's folder is keyed from the root's folder", async () => {
@@ -237,7 +262,7 @@ test("a host child read from outside the root's folder is keyed from the root's 
 
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
-    dir: rootDir,
+    dir: realpathSync(rootDir),
     files: {
       "flow.yaml": file(ROOT, { "lib/child": "../other/lib/child.yaml" }),
       "../other/lib/child.yaml": file(CHILD),
@@ -257,7 +282,7 @@ test("host children given as texts in one folder get keys of their own", async (
 
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
-    dir,
+    dir: realpathSync(dir),
     files: {
       "flow.yaml": file(two, { a: "<flow>", b: "<flow>~1" }),
       "<flow>": file(texts["a"]!),
@@ -346,7 +371,7 @@ test("run_started records the flow files, the yian version and no parent", async
 
   const record = started(await runInto(await loadRoot(dir)));
 
-  expect(record.flow).toEqual({ root: "flow.yaml", dir, files: SHAPES["two levels"]!.keys });
+  expect(record.flow).toEqual({ root: "flow.yaml", dir: realpathSync(dir), files: SHAPES["two levels"]!.keys });
   expect(record.yianVersion).toBe(VERSION);
   expect(record.parent).toBeNull();
   // A TOOL node's tool is not one an AGENT grants.

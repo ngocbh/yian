@@ -2312,14 +2312,13 @@ Changed (TS yian): `RunStartedRecord` records what the run needs to rebuild it, 
 `flow`, the flow file and every `uses:` file the loader read, `{root, dir, files}`, or
 `null` for a flow built in code. `files` maps each file's key to `{text, refs}`: its text,
 and `refs`, each `uses:` ref written in it (its path, with `@<version>` when pinned) mapped to
-the key of the file it resolved to. A file whose CODE references resolve in another folder
-than the one its key names (a symlinked file's target folder) adds `code_dir`, that folder
-relative to `dir`. A
-key is the file's path relative to `dir` (the absolute base folder, as given), as the
-resolver tried it: a symlink isn't followed, and a file outside `dir` (a `system.paths`
-folder, a child a host resolver read from elsewhere) is keyed with `..`. The root is keyed by
-its label; a host resolver's child is keyed from its own folder, and two different files that
-would share a key get keys of their own (`<key>~1`). `skills`, each skill an AGENT
+the key of the file it resolved to. `dir` is the real path of the folder the root was loaded
+from, and a key is a file's real path relative to it (`..` for a file outside it, such as a
+`system.paths` folder or a child a host resolver read from elsewhere), so one file reached
+by two paths is recorded once; a file's CODE references resolve in its key's folder. The
+root is keyed by the file name of its label, and a host resolver's child's files by their
+real paths too. Two texts a host resolver gave that claim one path get keys of their own
+(`<key>~1`). A YAML root whose host-resolver child was built in code records `flow: null`. `skills`, each skill an AGENT
 grants, `{<name>: {description, instructions}}`; `tools`, each tool an AGENT grants, groups
 expanded, `{<name>: {description, parameters}}`; `yian_version`, the version that started the
 run; and `parent`, `{run_id, node}` for a run the host started from another run (a child run
@@ -2513,9 +2512,8 @@ flow files `RunStarted` recorded, never the files on disk now, so an edited flow
 new run; the fingerprint is still checked, against the compiled recorded flow. The load
 (`loadFlowSource(source)`, which takes a loaded flow's `source` or a run's recorded `flow`)
 starts at the root and follows each file's `refs` inside the log: no disk, search path or
-symlink. A CODE reference's file is not recorded and must still be there, in the folder
-the first load resolved it in (`code_dir`, else the folder the file's key names, below `dir`).
-CODE files are read from disk on resume, so an edited CODE file is picked up, as a
+symlink. A CODE reference's file is not recorded and must still be there, in the folder of
+the file's key below `dir`. CODE files are read from disk on resume, so an edited CODE file is picked up, as a
 reference-mode CODE node's function is today. `loadRecordedFlow(log, env)` (from `yian/run`)
 compiles a log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI

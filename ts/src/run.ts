@@ -118,7 +118,6 @@ import {
   NodeStartedRecord,
   NodeSucceededRecord,
   readRunLog,
-  type RecordedFlow,
   type RecordedSkill,
   type RecordedTool,
   type RecordEnvelope,
@@ -925,7 +924,7 @@ async function startRun(
       memories: layout?.memories ?? null,
       memoryStacks: layout?.stacks ?? null,
       defaults: nonDefaults(runDefaults),
-      flow: recordedFlow(flow),
+      flow: flow.source,
       skills: recordedSkills(flow.compiled, skills),
       tools: recordedTools(flow.compiled, runTools),
       yianVersion: VERSION,
@@ -980,11 +979,6 @@ async function startRun(
   } finally {
     await closeRunResources(memoryRuntime, authority, primary);
   }
-}
-
-/** Return the flow files `RunStarted` records for `flow`, or `null` for a flow built in code. */
-function recordedFlow(flow: ComposedFlow): RecordedFlow | null {
-  return flow.source;
 }
 
 /**
@@ -1111,10 +1105,10 @@ export interface ResumeFlowOptions {
  * flow; recovery never reads the ambient model defaults, mints a new identity or takes new inputs
  * or configuration. A finished log returns its result with no events, opening no server and no
  * memory. Otherwise a log another yian version started is resumed with a warning naming both
- * versions, and the host's specs of the tools and skills the AGENTs grant must be the recorded ones,
- * checked once the servers are open; then the starts the log left unfinished are retried first,
- * in their recorded order, after one `RunResumed` observer and one `NodeAttemptResumed` per
- * retried node.
+ * versions, and the host's specs of the tools and skills the AGENTs grant must be the recorded ones
+ * (the skills checked before any server starts, the tools once the servers are open); then the
+ * starts the log left unfinished are retried first, in their recorded order, after one
+ * `RunResumed` observer and one `NodeAttemptResumed` per retried node.
  *
  * @param options See `ResumeFlowOptions`.
  * @returns The recorded terminal result, or the terminal result of the resumed segment with its
@@ -1178,7 +1172,7 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
     let runServers: McpServer[] = [];
     let primary: { error: unknown } | null = null;
     try {
-      const start = startRecord([...authority]);
+      const start = startRecord(authority[Symbol.iterator]().next().value);
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
       const flow = await resumedFlow(log, start, hostFlow);
@@ -1226,11 +1220,13 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
       if (state.memories !== null && memory === null) {
         throw new MemorySetupError("resuming this run requires its enabled memory mapping");
       }
+      // Skills need no server, so a changed one is refused before any server starts.
+      checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
       const runTools = new ToolSet(tools, { context });
       checkToolGrants(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
-      checkRecordedHostText(start, recordedTools(flow.compiled, runTools), recordedSkills(flow.compiled, skills));
+      checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
 
       if (state.memories !== null) {
         checkRegistryTypes(memory!, state.memories);
@@ -1283,25 +1279,14 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
 }
 
 /**
- * Return the `RunStarted` record that opens `envelopes`.
+ * Return the `RunStarted` record of `first`, a log's first envelope.
  *
- * @throws RangeError when there is none, or the first record is another kind.
+ * @throws RangeError when there is none, or it is another kind.
  */
-function startRecord(envelopes: readonly RecordEnvelope[]): RunStartedRecord {
-  if (envelopes.length === 0) throw new RangeError("cannot replay an empty run log");
-  const first = envelopes[0]!.record;
-  if (!(first instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
-  return first;
-}
-
-/**
- * Compile the flow files `start` recorded as the loader first read them, under the `YIAN_*` values
- * in effect, or return `null` for a flow built in code.
- *
- * @throws LoadError when the files no longer load.
- */
-async function compileRecordedFlow(start: RunStartedRecord): Promise<ComposedFlow | null> {
-  return start.flow === null ? null : loadFlowSource(start.flow);
+function startRecord(first: RecordEnvelope | undefined): RunStartedRecord {
+  if (first === undefined) throw new RangeError("cannot replay an empty run log");
+  if (!(first.record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+  return first.record;
 }
 
 /**
@@ -1325,7 +1310,7 @@ async function resumedFlow(
   if (hostFlow !== null) {
     throw new RangeError(`run log ${log} holds its flow files, which resume compiles; leave out flow`);
   }
-  return (await compileRecordedFlow(start))!;
+  return loadFlowSource(start.flow);
 }
 
 /**
@@ -1343,46 +1328,43 @@ async function resumedFlow(
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  */
 export async function loadRecordedFlow(log: string, env: Env = processEnv): Promise<ComposedFlow | null> {
-  const envelopes: RecordEnvelope[] = [];
   // Only the first record is read.
-  for (const entry of iterRunRecords(log)) {
-    envelopes.push(entry.envelope);
-    break;
+  const records = iterRunRecords(log);
+  let first: RecordEnvelope | undefined;
+  try {
+    first = records.next().value?.envelope;
+  } finally {
+    records.return();
   }
-  if (envelopes.length === 0) throw new RangeError(`cannot resume an empty run log: ${log}`);
-  const start = startRecord(envelopes);
+  if (first === undefined) throw new RangeError(`cannot resume an empty run log: ${log}`);
+  const start = startRecord(first);
   return withEnv(env, () => {
     checkRecorded(start.defaults);
-    return compileRecordedFlow(start);
+    return start.flow === null ? null : loadFlowSource(start.flow);
   });
 }
 
 /**
- * Check the host's specs of the granted tools and skills against the ones `start` recorded.
+ * Check the host's specs of the granted tools or skills (`kind`) against the ones the run recorded.
  *
- * @throws RangeError naming the first tool or skill, by name, that is missing, added, or has a
- *   field that differs.
+ * @throws RangeError naming the first one, by name, that is missing, added, or has a field that
+ *   differs.
  */
-function checkRecordedHostText(
-  start: RunStartedRecord,
-  tools: Readonly<Record<string, RecordedTool>>,
-  skills: Readonly<Record<string, RecordedSkill>>,
+function checkRecordedSpecs(
+  kind: "tools" | "skills",
+  recorded: Readonly<Record<string, RecordedTool | RecordedSkill>>,
+  current: Readonly<Record<string, RecordedTool | RecordedSkill>>,
 ): void {
-  for (const [kind, recorded, current] of [
-    ["tools", start.tools, tools],
-    ["skills", start.skills, skills],
-  ] as const) {
-    const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
-    for (const name of names) {
-      const subject = `resume refused: ${kind}.${name}`;
-      if (!Object.hasOwn(current, name)) throw new RangeError(`${subject} is recorded, but this run's ${kind} lack it`);
-      if (!Object.hasOwn(recorded, name)) throw new RangeError(`${subject} isn't recorded; the run started without it`);
-      const was = recorded[name] as unknown as Record<string, unknown>;
-      const now = current[name] as unknown as Record<string, unknown>;
-      for (const field of Object.keys(was)) {
-        if (logJson(was[field]) !== logJson(now[field])) {
-          throw new RangeError(`${subject} ${field} differs from the recorded one`);
-        }
+  const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
+  for (const name of names) {
+    const subject = `resume refused: ${kind}.${name}`;
+    if (!Object.hasOwn(current, name)) throw new RangeError(`${subject} is recorded, but this run's ${kind} lack it`);
+    if (!Object.hasOwn(recorded, name)) throw new RangeError(`${subject} isn't recorded; the run started without it`);
+    const was = recorded[name] as unknown as Record<string, unknown>;
+    const now = current[name] as unknown as Record<string, unknown>;
+    for (const field of Object.keys(was)) {
+      if (logJson(was[field]) !== logJson(now[field])) {
+        throw new RangeError(`${subject} ${field} differs from the recorded one`);
       }
     }
   }

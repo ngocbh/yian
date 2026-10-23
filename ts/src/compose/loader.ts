@@ -33,7 +33,8 @@
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `compile`, `defaults`, `diagnostics`, `llm_clients`, `memory`, `nodes` and `typesys`; nothing
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `memory`, `nodes` and `typesys`, and the
+ * `FlowSource` type of `runtime/log`; nothing
  * in the engine imports it back.
  */
 
@@ -72,7 +73,8 @@ import {
   valueRepr,
   writeAsText,
 } from "../typesys/values.ts";
-import { assemble, type CallableScope as AssemblyScope, ComposedFlow, type FlowSource } from "./build/pipeline.ts";
+import type { FlowSource } from "../runtime/log.ts";
+import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
 import { parseMemoryDeclarations } from "./helpers/memory.ts";
@@ -297,10 +299,8 @@ function rejectAuthoredPrivateCallableNames(root: SourceCursor, defs: ValueRecor
 /** A flow file a load read from disk: its text, and the path each `uses:` path in it resolved to. */
 interface ReadFile {
   readonly text: string;
-  /** Each `uses:` ref written in the file (`usesRef`), mapped to the absolute path the resolver tried. */
+  /** Each `uses:` ref written in the file (`usesRef`), mapped to the real path it resolved to. */
   readonly refs: Map<string, string>;
-  /** The absolute folder the file's CODE references resolve in. */
-  readonly codeDir: string;
 }
 
 /** Return a `uses:` ref as written: its path, and `@<version>` when pinned. */
@@ -316,8 +316,6 @@ export class LoadCtx {
   readonly flows = new Map<string, ComposedFlow>();
   /** Each file read from disk, by real path. */
   readonly read = new Map<string, ReadFile>();
-  /** The real path of each path a resolver tried and found. */
-  readonly tried = new Map<string, string>();
 }
 
 // `uses:` imports being loaded around the current one. It spans files and `loadFlow` never resets
@@ -559,19 +557,16 @@ export function makeFileResolver(
 ): ChildResolver {
   return async (path: string, version: string | null = null): Promise<ComposedFlow> => {
     for (const dir of searchPaths) {
-      const tried = resolvePath(dir, path + ".yaml");
       let real: string;
       try {
-        real = await fsp.realpath(tried);
+        real = await fsp.realpath(resolvePath(dir, path + ".yaml"));
       } catch (error) {
         // A search directory or file that doesn't exist is skipped; any other failure is loud.
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") continue;
         throw error;
       }
-      // A run records the path as tried, not the real one, so resume follows refs, not symlinks.
-      from?.refs.set(usesRef(path, version), tried);
-      ctx.tried.set(tried, real);
+      from?.refs.set(usesRef(path, version), real);
       const cached = ctx.flows.get(real);
       if (cached !== undefined) {
         checkVersion(cached, path, version);
@@ -584,9 +579,9 @@ export function makeFileResolver(
       let child: ComposedFlow;
       try {
         const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
-        const own = dirname(real);
-        const file: ReadFile = { text, refs: new Map(), codeDir: own };
+        const file: ReadFile = { text, refs: new Map() };
         ctx.read.set(real, file);
+        const own = dirname(real);
         child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
       } finally {
         ctx.loading.delete(real);
@@ -655,7 +650,7 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
   const ctx = new LoadCtx();
-  const rootFile: ReadFile = { text, refs: new Map(), codeDir: ownDir };
+  const rootFile: ReadFile = { text, refs: new Map() };
   const hosted = new Map<string, unknown>();
   const resolver: ChildResolver | null =
     childResolver === null
@@ -671,33 +666,33 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
 }
 
 /**
- * Compile the flow files `source` holds, as a run recorded them, without reading the disk: the
- * load starts at `source.root` and resolves each `uses:` path through the file's `refs`. CODE
- * references still resolve on disk, in `source.dir` (a file's own folder below it).
+ * Compile the flow files `source` holds, as a run recorded them, without reading them from disk:
+ * the load starts at `source.root` and resolves each `uses:` ref through the file's `refs`. Each
+ * file is labelled with its key's file name, and its CODE references resolve on disk in its key's
+ * folder below `source.dir`.
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
  * @returns The flow, whose `source` is `source`.
- * @throws LoadError for a flow that doesn't load, or a `uses:` path its file's `refs` lacks.
+ * @throws LoadError for a flow that doesn't load, or a `uses:` ref its file's `refs` lacks.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  */
 export async function loadFlowSource(source: FlowSource, options: { env?: Env } = {}): Promise<ComposedFlow> {
   const { env = processEnv } = options;
   return withEnv(env, async () => {
-    const root = source.files[source.root]!;
-    const ctx = new LoadCtx();
-    const document = parseSourceDocument(root.text, source.root);
-    const resolver = recordedResolver(source, source.root, ctx);
-    const loaded = await loadFlowFile(document, resolver, null, ctx, resolvePath(source.dir));
+    const loaded = await loadSourceFile(source, source.root, new LoadCtx());
     return checkRoot(replaceFlow(loaded, { source }));
   });
 }
 
-/**
- * Return a resolver for the `uses:` paths written in `source`'s file `from`: each goes to the file
- * its `refs` names, loaded the same way.
- */
-function recordedResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildResolver {
+/** Load `source`'s file `key`, its refs resolved through `source` too. */
+function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
+  const document = parseSourceDocument(source.files[key]!.text, basename(key));
+  return loadFlowFile(document, sourceResolver(source, key, ctx), null, ctx, resolvePath(source.dir, dirname(key)));
+}
+
+/** Return a resolver for the `uses:` refs written in `source`'s file `from`, through its `refs`. */
+function sourceResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildResolver {
   return async (path: string, version: string | null = null): Promise<ComposedFlow> => {
     const refs = source.files[from]!.refs;
     const ref = usesRef(path, version);
@@ -714,11 +709,7 @@ function recordedResolver(source: FlowSource, from: string, ctx: LoadCtx): Child
     ctx.loading.add(key);
     let child: ComposedFlow;
     try {
-      const recorded = source.files[key]!;
-      const document = parseSourceDocument(recorded.text, basename(key).replace(/~\d+$/, ""));
-      // A CODE reference resolves in the folder the file recorded, else the one its key names.
-      const own = resolvePath(source.dir, recorded.codeDir ?? dirname(key));
-      child = await loadFlowFile(document, recordedResolver(source, key, ctx), null, ctx, own);
+      child = await loadSourceFile(source, key, ctx);
     } finally {
       ctx.loading.delete(key);
     }
@@ -744,22 +735,19 @@ function checkRoot(flow: ComposedFlow): ComposedFlow {
   return flow;
 }
 
-/** A flow file in a source graph: its text, and the file each `uses:` path in it went to. */
+/** A flow file in a source graph: its real path, its text, and the file each `uses:` ref in it went to. */
 interface SourceNode {
-  /** The file's absolute path, as the resolver tried it; its key derives from it. */
-  readonly abs: string;
+  readonly path: string;
   readonly text: string;
   readonly refs: Map<string, SourceNode>;
-  /** The absolute folder the file's CODE references resolve in. */
-  readonly codeDir: string;
 }
 
 /**
- * Return the source of a loaded root: `rootFile` under `sourceLabel`, every file the disk resolver
- * read, and each host child's own source, keyed by path relative to `ownDir` (see `FlowSource`).
+ * Return the source of a loaded root: `rootFile`, every file the disk resolver read, and each host
+ * child's own source, each keyed by its real path relative to the real `ownDir` (see `FlowSource`).
+ * The root's path is `<real ownDir>/<file name of sourceLabel>`, as is any source's root.
  *
- * Files are compared by text and by what their refs reach, so two that would share a key but
- * differ get keys of their own (`<key>~1`, ...). `null` when a host child has no source.
+ * @returns The source, or `null` when a host child has none (it was built in code).
  */
 async function flowSource(
   ctx: LoadCtx,
@@ -768,63 +756,47 @@ async function flowSource(
   sourceLabel: string,
   ownDir: string,
 ): Promise<FlowSource | null> {
+  const dir = await realOr(ownDir);
   const fromDisk = new Map<string, SourceNode>();
-  const diskNode = (tried: string): SourceNode => {
-    let node = fromDisk.get(tried);
+  const diskNode = (path: string, file: ReadFile): SourceNode => {
+    let node = fromDisk.get(path);
     if (node === undefined) {
-      const file = ctx.read.get(ctx.tried.get(tried)!)!;
-      node = { abs: tried, text: file.text, refs: new Map(), codeDir: file.codeDir };
-      fromDisk.set(tried, node);
-      for (const [path, target] of file.refs) node.refs.set(path, diskNode(target));
+      node = { path, text: file.text, refs: new Map() };
+      fromDisk.set(path, node);
+      for (const [ref, real] of file.refs) node.refs.set(ref, diskNode(real, ctx.read.get(real)!));
     }
     return node;
   };
-  const root: SourceNode = {
-    abs: resolvePath(ownDir, sourceLabel),
-    text: rootFile.text,
-    refs: new Map(),
-    codeDir: rootFile.codeDir,
-  };
-  for (const [path, target] of rootFile.refs) root.refs.set(path, diskNode(target));
-  for (const [path, child] of hosted) {
+  const root = diskNode(join(dir, basename(sourceLabel)), rootFile);
+  for (const [ref, child] of hosted) {
     if (!(child instanceof ComposedFlow) || child.source === null) return null;
-    root.refs.set(path, sourceNodes(child.source));
+    root.refs.set(ref, sourceNodes(child.source));
   }
-  return sourceOf(root, sourceLabel, ownDir);
+  return sourceOf(root, dir);
 }
 
-/** Return the graph of `source`'s files, from its root, each at its absolute path. */
+/** Return the graph of `source`'s files, from its root, each at its path below `source.dir`. */
 function sourceNodes(source: FlowSource): SourceNode {
   const nodes = new Map<string, SourceNode>();
   const node = (key: string): SourceNode => {
     let found = nodes.get(key);
     if (found === undefined) {
-      // A root's key is its label, which needn't be a path; the file sits in the source's folder.
-      const abs = resolvePath(source.dir, key === source.root ? basename(key) : key);
       const file = source.files[key]!;
-      const codeDir = resolvePath(source.dir, file.codeDir ?? (key === source.root ? "." : dirname(key)));
-      found = { abs, text: file.text, refs: new Map(), codeDir };
+      found = { path: resolvePath(source.dir, key), text: file.text, refs: new Map() };
       nodes.set(key, found);
-      for (const [path, target] of Object.entries(file.refs)) found.refs.set(path, node(target));
+      for (const [ref, target] of Object.entries(file.refs)) found.refs.set(ref, node(target));
     }
     return found;
   };
   return node(source.root);
 }
 
-/** Key each file of the graph at `root`, which is keyed `rootKey`, and return the source. */
-async function sourceOf(root: SourceNode, rootKey: string, ownDir: string): Promise<FlowSource> {
-  const realDir = await realOr(ownDir);
-  // A file outside `ownDir` as written may sit inside it through a symlinked folder (macOS's
-  // /var -> /private/var), so it is keyed from the real folder when that keeps it inside.
-  const folderOf = async (abs: string): Promise<string> => {
-    const lexical = relative(ownDir, abs);
-    if (!isOutside(lexical)) return lexical;
-    const real = relative(realDir, await realOr(abs));
-    return isOutside(real) ? lexical : real;
-  };
-  const keyOf = async (abs: string): Promise<string> => join(await folderOf(dirname(abs)), basename(abs));
-  // Two nodes are the same file when their paths, texts and the files their refs reach are; each
+/**
+ * Key each file of the graph at `root` by its path relative to `dir`, and return the source. Two
+ * different files claiming one path (texts a host gave) get keys of their own, `<key>~1`, ...
+ */
+function sourceOf(root: SourceNode, dir: string): FlowSource {
+  // Two nodes are one file when their paths, texts and the files their refs reach are; each
   // distinct file gets a number, so a long chain compares in linear time.
   const ids = new Map<string, number>();
   const nodeIds = new Map<SourceNode, number>();
@@ -832,8 +804,8 @@ async function sourceOf(root: SourceNode, rootKey: string, ownDir: string): Prom
     let found = nodeIds.get(node);
     if (found === undefined) {
       // The ref graph has no cycle: the load refused one.
-      const refs = [...node.refs].sort(([a], [b]) => compareCodeUnits(a, b)).map(([path, to]) => [path, signature(to)]);
-      const text = JSON.stringify([node.abs, node.text, node.codeDir, refs]);
+      const refs = [...node.refs].sort(([a], [b]) => compareCodeUnits(a, b)).map(([ref, to]) => [ref, signature(to)]);
+      const text = JSON.stringify([node.path, node.text, refs]);
       found = ids.get(text) ?? ids.size;
       ids.set(text, found);
       nodeIds.set(node, found);
@@ -841,36 +813,26 @@ async function sourceOf(root: SourceNode, rootKey: string, ownDir: string): Prom
     return found;
   };
   const keys = new Map<number, string>();
-  const used = new Map<string, number>();
+  const used = new Set<string>();
   const files: [string, FlowSource["files"][string]][] = [];
-  const visit = async (node: SourceNode, wanted: string): Promise<string> => {
+  const visit = (node: SourceNode): string => {
     const sign = signature(node);
     const known = keys.get(sign);
     if (known !== undefined) return known;
+    const wanted = relative(dir, node.path);
     let key = wanted;
-    for (let n = 1; used.has(key) && used.get(key) !== sign; n += 1) key = `${wanted}~${n}`;
+    for (let n = 1; used.has(key); n += 1) key = `${wanted}~${n}`;
     keys.set(sign, key);
-    used.set(key, sign);
-    const refs: [string, string][] = [];
-    for (const [path, to] of [...node.refs].sort(([a], [b]) => compareCodeUnits(a, b))) {
-      refs.push([path, await visit(to, await keyOf(to.abs))]);
-    }
+    used.add(key);
+    const refs = [...node.refs]
+      .sort(([a], [b]) => compareCodeUnits(a, b))
+      .map(([ref, to]): [string, string] => [ref, visit(to)]);
     // `Object.fromEntries` defines own data properties, so a `__proto__` key stays a key.
-    const entry = { text: node.text, refs: Object.freeze(Object.fromEntries(refs)) };
-    // A file whose CODE folder isn't the one its key names (a symlink's target) records its own.
-    const named = resolvePath(ownDir, key === rootKey ? "." : dirname(key));
-    const same = node.codeDir === named || (await realOr(node.codeDir)) === (await realOr(named));
-    const codeDir = same ? null : await folderOf(node.codeDir);
-    files.push([key, Object.freeze(codeDir === null ? entry : { ...entry, codeDir: codeDir || "." })]);
+    files.push([key, Object.freeze({ text: node.text, refs: Object.freeze(Object.fromEntries(refs)) })]);
     return key;
   };
-  await visit(root, rootKey);
-  return Object.freeze({ root: rootKey, dir: ownDir, files: Object.freeze(Object.fromEntries(files)) });
-}
-
-/** Whether a relative path leaves its folder. */
-function isOutside(path: string): boolean {
-  return path === ".." || path.startsWith("../") || isAbsolute(path);
+  const rootKey = visit(root);
+  return Object.freeze({ root: rootKey, dir, files: Object.freeze(Object.fromEntries(files)) });
 }
 
 /** Return `path`'s real path, or `path` itself when it doesn't exist. */

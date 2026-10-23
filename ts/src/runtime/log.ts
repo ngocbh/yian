@@ -195,28 +195,28 @@ export interface OutcomeCarriers {
   forwardCapture?: ForwardCapture | null;
 }
 
-/**
- * One recorded flow file: its text, the key of the file each `uses:` ref in it (its path, with
- * `@<version>` when pinned) resolved to, and, when it isn't the folder the file's key names, the
- * folder its CODE references resolve in, relative to the flow's `dir`.
- */
-export interface RecordedFlowFile {
+/** One flow file a load read: its text, and where each `uses:` ref written in it resolved. */
+export interface FlowSourceFile {
   readonly text: string;
+  /** Each `uses:` ref (its path, with `@<version>` when pinned), mapped to the key of its file. */
   readonly refs: Readonly<Record<string, string>>;
-  readonly codeDir?: string;
 }
 
 /**
- * The flow files a run recorded, as `ComposedFlow.source` holds them: each file by key (its path
- * relative to `dir`), and where each of its `uses:` paths went, so resume reads nothing else.
+ * The flow files a loaded flow was compiled from, as `ComposedFlow.source` holds them and
+ * `RunStarted.flow` records them; frozen. Each file is keyed by its real path relative to `dir`
+ * (`..` for a file outside it); a file is labelled with its key's file name, and its CODE
+ * references resolve in its key's folder. Two different files claiming one path (texts a host
+ * resolver gave) get keys of their own, `<key>~1`, ... A load from the source follows `refs`
+ * and reads no flow file from disk.
  */
-export interface RecordedFlow {
-  /** The root file's key in `files`. */
+export interface FlowSource {
+  /** The root file's key in `files`: the file name of the label it was loaded under. */
   readonly root: string;
-  /** The absolute base folder the keys are relative to; CODE references resolve in it. */
+  /** The real path of the folder the root was loaded from. */
   readonly dir: string;
-  /** Each flow file the loader read, by key. */
-  readonly files: Readonly<Record<string, RecordedFlowFile>>;
+  /** Each flow file the load read, by key. */
+  readonly files: Readonly<Record<string, FlowSourceFile>>;
 }
 
 /** A tool an AGENT of the run grants, as the model is told about it. */
@@ -272,7 +272,7 @@ export interface RunStartedFields {
    */
   callTimeLlm?: Readonly<Record<string, unknown>> | null;
   /** The flow files the run compiled; `null` (the default) for a flow built in code. */
-  flow?: RecordedFlow | null;
+  flow?: FlowSource | null;
   /** Each skill an AGENT grants, by name; defaults to `{}`. */
   skills?: Readonly<Record<string, RecordedSkill>>;
   /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
@@ -308,7 +308,7 @@ export class RunStartedRecord {
   /** The deep-frozen canonical call-time agents `{selection, agents}`, or `null` when there are none. */
   readonly callTimeLlm: Readonly<JsonObject> | null;
   /** The deep-frozen flow files the run compiled, or `null` for a flow built in code. */
-  readonly flow: RecordedFlow | null;
+  readonly flow: FlowSource | null;
   /** The deep-frozen skills the AGENTs grant, by name. */
   readonly skills: Readonly<Record<string, RecordedSkill>>;
   /** The deep-frozen tools the AGENTs grant, by name. */
@@ -333,8 +333,9 @@ export class RunStartedRecord {
    *   negative, the initial pool isn't a pool wire object (see `decodePool`), the memory fields
    *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
    *   an unknown key, a defaults name is empty, `callTimeLlm` has missing or extra fields, no
-   *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.path`, a name, path
-   *   or the version is empty, or a tool's parameters aren't JSON.
+   *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.root` or a file
+   *   its refs name, a name, the flow's root or folder or the version is empty, or a tool's
+   *   parameters aren't JSON.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -378,7 +379,7 @@ export class RunStartedRecord {
     this.learnable = learnable;
     this.defaults = validatedDefaults(defaults);
     this.callTimeLlm = callTimeLlm === null ? null : validatedCallTimeLlm(callTimeLlm);
-    this.flow = flow === null ? null : validatedRecordedFlow(flow);
+    this.flow = flow === null ? null : validatedFlowSource(flow);
     this.skills = validatedEntries(skills, "skills", (skill, label) => ({
       description: requireText(skill["description"], `${label} description`),
       instructions: requireText(skill["instructions"], `${label} instructions`),
@@ -421,9 +422,10 @@ function requireName(value: unknown, label: string): string {
  * Return a frozen copy of a `RunStarted.flow` value.
  *
  * @throws TypeError when a part has the wrong type.
- * @throws RangeError when the path or folder is empty, or `files` doesn't hold `path`.
+ * @throws RangeError when the root or folder is empty, or `files` doesn't hold the root or a file a
+ *   ref names.
  */
-function validatedRecordedFlow(flow: RecordedFlow): RecordedFlow {
+function validatedFlowSource(flow: FlowSource): FlowSource {
   if (!isRecord(flow)) throw new TypeError("RunStarted flow must be an object or null");
   const root = requireName(flow.root, "RunStarted flow root");
   const dir = requireName(flow.dir, "RunStarted flow dir");
@@ -437,9 +439,7 @@ function validatedRecordedFlow(flow: RecordedFlow): RecordedFlow {
       }
     }
     const text = requireText(file["text"], `${label} text`);
-    const copy = { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
-    if (file["codeDir"] === undefined) return copy;
-    return { ...copy, codeDir: requireName(file["codeDir"], `${label} code_dir`) };
+    return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
   });
   if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
   return Object.freeze({ root, dir, files });
@@ -2201,15 +2201,8 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
 }
 
 /** Encode a `run_started` flow. */
-function flowPayload(flow: RecordedFlow): JsonObject {
-  const files = Object.entries(flow.files).map(([key, file]): [string, JsonObject] => [
-    key,
-    file.codeDir === undefined
-      ? { text: file.text, refs: file.refs as JsonObject }
-      : { text: file.text, refs: file.refs as JsonObject, code_dir: file.codeDir },
-  ]);
-  // `Object.fromEntries` defines own data properties, so a `__proto__` key stays a key.
-  return { root: flow.root, dir: flow.dir, files: Object.fromEntries(files) };
+function flowPayload(flow: FlowSource): JsonObject {
+  return { root: flow.root, dir: flow.dir, files: flow.files as unknown as JsonObject };
 }
 
 /**
@@ -2218,21 +2211,12 @@ function flowPayload(flow: RecordedFlow): JsonObject {
  * @throws RangeError for missing or extra fields.
  * @throws TypeError when a field has the wrong JSON type.
  */
-function flowFromPayload(value: unknown, label: string): RecordedFlow {
+function flowFromPayload(value: unknown, label: string): FlowSource {
   const wire = wireObject(value, label, ["root", "dir", "files"]);
   return {
     root: wireText(wire["root"], `${label} root`),
     dir: wireText(wire["dir"], `${label} dir`),
-    files: Object.fromEntries(
-      Object.entries(wireObject(wire["files"], `${label} files`)).map(([key, item]) => {
-        const fileLabel = `${label} files[${reprText(key)}]`;
-        const entry = wireObject(item, fileLabel);
-        const fields = Object.hasOwn(entry, "code_dir") ? ["text", "refs", "code_dir"] : ["text", "refs"];
-        const file = wireObject(item, fileLabel, fields);
-        const read = { text: file["text"] as string, refs: file["refs"] as Record<string, string> };
-        return [key, file["code_dir"] === undefined ? read : { ...read, codeDir: file["code_dir"] as string }];
-      }),
-    ),
+    files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
   };
 }
 

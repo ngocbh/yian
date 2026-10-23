@@ -14,6 +14,7 @@
     "./run": { "bun": "./src/run.ts", "types": "./dist/src/run.d.ts", "default": "./dist/src/run.js" },
     "./tools": { "bun": "./src/tools/index.ts", "types": "./dist/src/tools/index.d.ts", "default": "./dist/src/tools/index.js" },
     "./skills": { "bun": "./src/compose/skills.ts", "types": "./dist/src/compose/skills.d.ts", "default": "./dist/src/compose/skills.js" },
+    "./platform": { "bun": "./src/platform.ts", "types": "./dist/src/platform.d.ts", "default": "./dist/src/platform.js" },
     "./package.json": "./package.json"
   },
   "files": ["dist/src", "src", "LICENSE", "NOTICE", "README.md"],

@@ -104,6 +104,7 @@ const NAMES: Record<string, string[]> = {
     "InMemoryMarkdownStore",
     "MarkdownVersionMismatch",
     "markdownVersion",
+    "ProfileMemory",
   ],
   "./run": ["RunResult", "BackwardOutcome", "inspectRun", "runFlow", "resumeFlow", "loadRecordedFlow", "runLogPath"],
   "./tools": [

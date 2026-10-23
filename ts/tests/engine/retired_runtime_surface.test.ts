@@ -24,8 +24,8 @@
  * `test_final_run_boundary_signatures_and_result_fields_are_exact`.
  *
  * TS-only: the package root (`index.ts`) exports exactly its documented root list plus the memory
- * storage names and `ToolAttemptsFailed`, each the owning module's export, and `yian/run`
- * (`run.ts`) re-exports `BackwardOutcome` and `Steering`.
+ * storage names, `ProfileMemory` and `ToolAttemptsFailed`, each the owning module's export, and
+ * `yian/run` (`run.ts`) re-exports `BackwardOutcome` and `Steering`.
  */
 
 import { expect, test } from "bun:test";
@@ -41,6 +41,7 @@ import * as events from "../../src/events.ts";
 import { registerTemplateFn } from "../../src/expr/builtins.ts";
 import { ExpressionError, evaluateWhen } from "../../src/expr/expressions.ts";
 import * as yian from "../../src/index.ts";
+import { ProfileMemory } from "../../src/memory/profile.ts";
 import {
   FileMarkdownStore,
   InMemoryMarkdownStore,
@@ -177,7 +178,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(getters).toEqual(["learning", "backwardOutcome"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names and ToolAttemptsFailed", () => {
+test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory and ToolAttemptsFailed", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -190,6 +191,7 @@ test("the package root exports exactly its documented root list plus the memory 
     InMemoryMarkdownStore,
     MarkdownVersionMismatch,
     markdownVersion,
+    ProfileMemory,
     Failure,
     Diagnostic,
     ComposedFlow,

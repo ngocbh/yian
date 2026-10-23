@@ -569,6 +569,7 @@ export class AgentNode extends Node {
       steps: caps.steps,
       scheduler: caps.scheduler,
       random: caps.random,
+      runDir: caps.runDir ?? null,
     };
   }
 

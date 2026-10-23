@@ -523,7 +523,7 @@ class TraitCapsNode extends CapsNode {
   override readonly needsSteering = true;
 }
 
-/** The scheduler and random-draw options, malformed, with the error each rejects with. */
+/** The scheduler, random-draw and run-folder options, malformed, with the error each rejects with. */
 const BAD_WAIT_CAPS = [
   ["scheduler without sleep", { scheduler: { now: () => 0 } }, new TypeError("scheduler must be a Scheduler or null")],
   [
@@ -533,9 +533,10 @@ const BAD_WAIT_CAPS = [
   ],
   ["scheduler that isn't an object", { scheduler: "clock" }, new TypeError("scheduler must be a Scheduler or null")],
   ["random", { random: 0.5 }, new TypeError("random must be a function or null")],
+  ["run folder", { runDir: 3 }, new TypeError("run_dir must be a string or null")],
 ] as const;
 
-describe("evalNode gives every node the scheduler and the random draw", () => {
+describe("evalNode gives every node the scheduler, the random draw and the run folder", () => {
   const pool = new VariablePool();
 
   for (const make of [
@@ -547,23 +548,25 @@ describe("evalNode gives every node the scheduler and the random draw", () => {
       const scheduler = virtualScheduler();
       const random = (): number => 0.25;
 
-      await evalNode(make(seen), null, pool, { scheduler, random });
+      await evalNode(make(seen), null, pool, { scheduler, random, runDir: "/runs/r1" });
 
       expect(seen).toHaveLength(1);
       expect(seen[0]!.scheduler).toBe(scheduler);
       expect(seen[0]!.random).toBe(random);
+      expect(seen[0]!.runDir).toBe("/runs/r1");
     });
 
     test(`neither key when not given (${make([]).constructor.name})`, async () => {
       const seen: NodeCaps[] = [];
 
-      await evalNode(make(seen), null, pool, { scheduler: null, random: null });
+      await evalNode(make(seen), null, pool, { scheduler: null, random: null, runDir: null });
       await evalNode(make(seen), null, pool);
 
       expect(seen).toHaveLength(2);
       for (const caps of seen) {
         expect("scheduler" in caps).toBe(false);
         expect("random" in caps).toBe(false);
+        expect("runDir" in caps).toBe(false);
       }
     });
   }
@@ -576,7 +579,7 @@ describe("evalNode gives every node the scheduler and the random draw", () => {
   }
 });
 
-describe("FlowEngine gives every node the scheduler and the random draw", () => {
+describe("FlowEngine gives every node the scheduler, the random draw and the run folder", () => {
   test("each evaluated node receives the given objects", async () => {
     const seen: NodeCaps[] = [];
     const flow = graph([new CapsNode("a", seen), new TraitCapsNode("b", seen)], [
@@ -587,11 +590,12 @@ describe("FlowEngine gives every node the scheduler and the random draw", () => 
     const scheduler = virtualScheduler();
     const random = (): number => 0.75;
 
-    expect((await engine(flow, { scheduler, random }).run()).at(-1)).toBeInstanceOf(RunSucceeded);
+    expect((await engine(flow, { scheduler, random, runDir: "/runs/r1" }).run()).at(-1)).toBeInstanceOf(RunSucceeded);
     expect(seen).toHaveLength(2);
     for (const caps of seen) {
       expect(caps.scheduler).toBe(scheduler);
       expect(caps.random).toBe(random);
+      expect(caps.runDir).toBe("/runs/r1");
     }
   });
 

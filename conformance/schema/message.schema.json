@@ -40,7 +40,7 @@
       }
     },
     "media": {
-      "description": "An image or file, given inline as base64 data or by url; exactly one of the two.",
+      "description": "An image or file, given inline as base64 data, by url, or as a file reference; exactly one of the three. The file form names media stored in the run's folder instead of holding the bytes.",
       "type": "object",
       "required": ["type", "mime"],
       "additionalProperties": false,
@@ -49,13 +49,26 @@
         "mime": {"type": "string", "description": "The media type, e.g. image/png."},
         "data": {"type": "string", "description": "Base64 content."},
         "url": {"type": "string", "description": "Where the content lives."},
+        "file": {"$ref": "#/$defs/file"},
         "name": {"type": "string", "description": "A file name."},
         "provider_payload": {"$ref": "#/$defs/provider_payload"}
       },
       "oneOf": [
         {"required": ["data"]},
-        {"required": ["url"]}
+        {"required": ["url"]},
+        {"required": ["file"]}
       ]
+    },
+    "file": {
+      "description": "A file holding a media part's content: the FileRef form (TS yian only; the Python reference reads data or url). A run's media files live in <run folder>/media/<sha256>.<ext>, and uri names one by its path relative to the run folder (media/<sha256>.<ext>), so a copied run folder keeps its references.",
+      "type": "object",
+      "required": ["uri"],
+      "additionalProperties": false,
+      "properties": {
+        "uri": {"type": "string", "description": "Where the file is; a run's own files are relative to its folder."},
+        "mime": {"type": "string", "description": "The file's media type."},
+        "name": {"type": "string", "description": "The file's name."}
+      }
     },
     "tool_call": {
       "description": "A tool call the model asked for, with arguments, raw_arguments or both. By adapter convention, arguments is left out exactly when the raw text failed to parse.",

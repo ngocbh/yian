@@ -86,6 +86,8 @@ export interface FlowEngineOptions {
   scheduler?: Scheduler | null;
   /** A draw in [0, 1) for backoff jitter, passed to every node; `Math.random` when omitted. */
   random?: (() => number) | null;
+  /** The run's folder (its log's folder), passed to every node; `null` for a run without a log. */
+  runDir?: string | null;
 }
 
 /** One settled worker: the outcome its evaluation resolved to, or the error it rejected with. */
@@ -206,6 +208,7 @@ export class FlowEngine {
   readonly scheduler: Scheduler | null;
   readonly random: (() => number) | null;
   readonly models: ModelAccess | null;
+  readonly runDir: string | null;
   /** The run's stop; single-use, so `run()` runs once. */
   readonly #controller = new AbortController();
   /** The host's stop, linked to the run's while `run()` runs. */
@@ -223,13 +226,14 @@ export class FlowEngine {
    *   `nextSequence`, `growBuilder` or a given callback isn't a function, `numWorkers` isn't a safe
    *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `steering` or `models`
    *   lacks its methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now`
-   *   and `sleep` are functions, or `random` isn't a function.
+   *   and `sleep` are functions, `random` isn't a function, or `runDir` isn't a string.
    * @throws RangeError when `numWorkers` is negative.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
     const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
     const { tools = null, skills = null, steering = null, models = null, signal = null, scheduler = null, random = null } =
       options;
+    const { runDir = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
     if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
@@ -252,6 +256,7 @@ export class FlowEngine {
       throw new TypeError("scheduler must be a Scheduler or null");
     }
     if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
+    if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
     this.state = state;
     this.log = log;
     this.growBuilder = growBuilder;
@@ -265,6 +270,7 @@ export class FlowEngine {
     this.scheduler = scheduler;
     this.random = random;
     this.models = requireModels(models);
+    this.runDir = runDir;
     this.#hostSignal = signal;
     const inbox = this.steering;
     this.#steering =
@@ -525,6 +531,7 @@ export class FlowEngine {
         steering: this.#steering,
         scheduler: this.scheduler,
         random: this.random,
+        runDir: this.runDir,
         models: this.models,
         steps: this.#nodeSteps(nodeId, nodeController.signal),
         // A capability fault ends the run now, not when the node settles, so a node that catches

@@ -241,6 +241,23 @@ export class DescriptorBuildCache {
 }
 
 /**
+ * The flow files a loaded flow was compiled from, as a run records them; frozen.
+ *
+ * Every path is relative to `dir`, so a folder reached through a symlink keys its files the same
+ * way each time; a file outside `dir` (a `system.paths` folder) is keyed with `..`.
+ */
+export interface FlowSource {
+  /** The root file's key in `files`: the name its load diagnostics give it. */
+  readonly path: string;
+  /** The real absolute folder the keys and search paths are relative to; CODE references resolve in it. */
+  readonly dir: string;
+  /** The folders searched for `uses:` targets, in order. */
+  readonly searchPaths: readonly string[];
+  /** The text of each flow file the loader read, by path. */
+  readonly files: ReadonlyMap<string, string>;
+}
+
+/**
  * A compiled, validated flow ready to run; frozen.
  *
  * Produced by `loadFlow` and consumed by `runFlow` and the engine. Immutable so it can be reused
@@ -274,8 +291,13 @@ export class ComposedFlow {
    * without the loader.
    */
   readonly importDepth: number;
+  /**
+   * The flow files this flow was compiled from, which a run records and resume compiles again;
+   * `null` for a flow built in code, or loaded over a child resume couldn't read back.
+   */
+  readonly source: FlowSource | null;
 
-  /** Wrap `compiled`; the metadata and resolver default to `null`, `importDepth` to 0. */
+  /** Wrap `compiled`; the metadata, resolver and source default to `null`, `importDepth` to 0. */
   constructor(
     compiled: CompiledFlow,
     options: {
@@ -284,6 +306,7 @@ export class ComposedFlow {
       description?: string | null;
       originResolver?: OriginResolver | null;
       importDepth?: number;
+      source?: FlowSource | null;
     } = {},
   ) {
     const {
@@ -292,6 +315,7 @@ export class ComposedFlow {
       description = null,
       originResolver = null,
       importDepth = 0,
+      source = null,
     } = options;
     this.compiled = compiled;
     this.version = version;
@@ -299,6 +323,7 @@ export class ComposedFlow {
     this.description = description;
     this.originResolver = originResolver;
     this.importDepth = importDepth;
+    this.source = source;
     Object.freeze(this);
   }
 

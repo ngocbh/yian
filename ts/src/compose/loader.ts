@@ -39,7 +39,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import fsp from "node:fs/promises";
-import { basename, dirname, isAbsolute, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve as resolvePath } from "node:path";
 
 import { fieldLabel, findInheritedLlmValue, inheritedValueFix } from "../compile/llm_cascade.ts";
 import { resolveMemoryLayout, scopeMemoryDeclarations } from "../compile/memory_layout.ts";
@@ -72,7 +72,7 @@ import {
   valueRepr,
   writeAsText,
 } from "../typesys/values.ts";
-import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
+import { assemble, type CallableScope as AssemblyScope, ComposedFlow, type FlowSource } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
 import { parseMemoryDeclarations } from "./helpers/memory.ts";
@@ -108,7 +108,12 @@ function errorText(error: unknown): string {
 /** Return `flow` with some of its fields replaced, as a new frozen `ComposedFlow`. */
 function replaceFlow(
   flow: ComposedFlow,
-  changes: { compiled?: CompiledFlow; originResolver?: OriginResolver | null; importDepth?: number },
+  changes: {
+    compiled?: CompiledFlow;
+    originResolver?: OriginResolver | null;
+    importDepth?: number;
+    source?: FlowSource | null;
+  },
 ): ComposedFlow {
   return new ComposedFlow(changes.compiled ?? flow.compiled, {
     version: flow.version,
@@ -116,6 +121,7 @@ function replaceFlow(
     description: flow.description,
     originResolver: changes.originResolver === undefined ? flow.originResolver : changes.originResolver,
     importDepth: changes.importDepth === undefined ? flow.importDepth : changes.importDepth,
+    source: changes.source === undefined ? flow.source : changes.source,
   });
 }
 
@@ -288,12 +294,59 @@ function rejectAuthoredPrivateCallableNames(root: SourceCursor, defs: ValueRecor
   }
 }
 
-/** Cross-file cycle state and successful compiled-flow reuse, by real path. */
+/** How the loader finds and reads flow files: the disk by default, the recorded files at resume. */
+export interface SourceFiles {
+  /** The file's or folder's identity for cycle and reuse checks; rejects with ENOENT when absent. */
+  realpath(path: string): Promise<string>;
+  /** The file's text, as the loader reads it (UTF-8, `\r\n` and a lone `\r` as `\n`). */
+  read(real: string): Promise<string>;
+}
+
+/** The flow files on disk. */
+export function diskFiles(): SourceFiles {
+  return {
+    realpath: (path) => fsp.realpath(path),
+    read: async (real) => UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n"),
+  };
+}
+
+/**
+ * The flow files a run recorded: `dir` is the recorded real folder, and the keys of `files` are
+ * paths relative to it. A path resolves against `dir`; `dir` itself and each key exist, and
+ * anything else rejects with ENOENT, so the loader searches them as it searched the disk.
+ */
+export function recordedFiles(dir: string, files: ReadonlyMap<string, string>): SourceFiles {
+  const missing = (path: string) =>
+    Object.assign(new Error(`ENOENT: no recorded flow file, realpath '${path}'`), { code: "ENOENT" });
+  return {
+    realpath: async (path) => {
+      const abs = resolvePath(dir, path);
+      if (abs === dir || files.has(relative(dir, abs))) return abs;
+      throw missing(path);
+    },
+    read: async (real) => {
+      const text = files.get(relative(dir, real));
+      if (text === undefined) throw missing(real);
+      return text;
+    },
+  };
+}
+
+/** Cross-file cycle state, successful compiled-flow reuse and the text read, by real path. */
 export class LoadCtx {
   /** The real paths of the files being loaded. */
   readonly loading = new Set<string>();
   /** Each loaded file's flow, by real path. */
   readonly flows = new Map<string, ComposedFlow>();
+  /** Each file's text the resolver read, by real path. */
+  readonly texts = new Map<string, string>();
+  /** Where the files are read from. */
+  readonly files: SourceFiles;
+
+  /** A fresh context reading `files` (default: the disk). */
+  constructor(files: SourceFiles = diskFiles()) {
+    this.files = files;
+  }
 }
 
 // `uses:` imports being loaded around the current one. It spans files and `loadFlow` never resets
@@ -531,7 +584,7 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
     for (const dir of searchPaths) {
       let real: string;
       try {
-        real = await fsp.realpath(resolvePath(dir, path + ".yaml"));
+        real = await ctx.files.realpath(resolvePath(dir, path + ".yaml"));
       } catch (error) {
         // A search directory or file that doesn't exist is skipped; any other failure is loud.
         const code = (error as NodeJS.ErrnoException).code;
@@ -549,7 +602,8 @@ export function makeFileResolver(searchPaths: readonly string[], ctx: LoadCtx): 
       ctx.loading.add(real);
       let child: ComposedFlow;
       try {
-        const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
+        const text = await ctx.files.read(real);
+        ctx.texts.set(real, text);
         const own = dirname(real);
         child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own);
       } finally {
@@ -571,6 +625,7 @@ interface LoadOptions {
   searchPaths?: readonly string[] | null;
   sourceLabel?: string;
   baseDir?: string | null;
+  files?: SourceFiles;
   env?: Env;
 }
 
@@ -593,10 +648,15 @@ interface LoadOptions {
  * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference resolves against
  *   (default: the first search path, else the current directory). A file read through the search
  *   path resolves its own references against its own directory.
+ * @param options.files Where the default file resolver reads `uses:` targets (default: the disk);
+ *   resume passes a run's `recordedFiles`.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
  *   without `env` loads under the caller's.
- * @returns The compiled, validated flow.
+ * @returns The compiled, validated flow. Its `source` holds `text` under `sourceLabel` and every
+ *   file the load read, keyed from the real base folder; it is `null` when a `childResolver`
+ *   returned a flow without a source, or one a load from the recorded files couldn't find where
+ *   the resolver found it (`<base folder>/<path>.yaml`).
  * @throws LoadError (as a rejection) for any malformed or inconsistent flow, located at the
  *   offending line when source provenance is available: among them a memory layout that breaks a
  *   rule, and an `llm_config` value a child flow's agent would inherit before it is known.
@@ -616,7 +676,21 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   const document = parseSourceDocument(text, sourceLabel);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
-  const flow = await loadFlowFile(document, childResolver, searchPaths, new LoadCtx(), ownDir);
+  const ctx = new LoadCtx(options.files);
+  const children: [string, unknown][] = [];
+  const resolver: ChildResolver | null =
+    childResolver === null
+      ? null
+      : async (path, version) => {
+          const child = await childResolver(path, version);
+          children.push([path, child]);
+          return child;
+        };
+  const loaded = await loadFlowFile(document, resolver, searchPaths, ctx, ownDir);
+  const hosted = childResolver === null ? null : children;
+  const flow = replaceFlow(loaded, {
+    source: await flowSource(ctx, { text, sourceLabel, ownDir, searchPaths, children: hosted }),
+  });
   // Only the root load sees the fully assembled graph, imports included; children loaded for
   // uses: are checked as part of their importer.
   try {
@@ -629,6 +703,59 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   // here.
   refuseInheritedLlmValues(flow);
   return flow;
+}
+
+/**
+ * Return the source of a loaded root: `text` under `sourceLabel`, then every file `ctx` read, then
+ * each host child's own files, all keyed from the real `ownDir`.
+ *
+ * With a host resolver (`children` not `null`), resume loads the recorded files with the default
+ * resolver searching the root's folder, so each child must be a loaded flow whose root file is
+ * `<folder>/<path>.yaml`; otherwise, or when two files would share a key, the root has no source.
+ */
+async function flowSource(
+  ctx: LoadCtx,
+  options: {
+    text: string;
+    sourceLabel: string;
+    ownDir: string;
+    searchPaths: readonly string[] | null;
+    children: readonly [string, unknown][] | null;
+  },
+): Promise<FlowSource | null> {
+  const { text, sourceLabel, ownDir, searchPaths, children } = options;
+  const dir = await realOr(ctx.files, ownDir);
+  const files = new Map<string, string>([[sourceLabel, text]]);
+  const add = (key: string, body: string): boolean => {
+    if (files.has(key) && files.get(key) !== body) return false;
+    files.set(key, body);
+    return true;
+  };
+  for (const [real, body] of ctx.texts) if (!add(relative(dir, real), body)) return null;
+  let paths: string[] = [];
+  if (children !== null) {
+    paths = ["."];
+    for (const [path, child] of children) {
+      if (!(child instanceof ComposedFlow) || child.source === null) return null;
+      const { dir: childDir, path: childPath, files: childFiles } = child.source;
+      if (resolvePath(childDir, childPath) !== resolvePath(dir, `${path}.yaml`)) return null;
+      for (const [key, body] of childFiles) if (!add(relative(dir, resolvePath(childDir, key)), body)) return null;
+    }
+  } else if (searchPaths !== null) {
+    for (const path of searchPaths) paths.push(relative(dir, await realOr(ctx.files, resolvePath(path))) || ".");
+  }
+  return Object.freeze({ path: sourceLabel, dir, searchPaths: Object.freeze(paths), files });
+}
+
+/** Return `path`'s real path through `files`, or `path` itself when it doesn't exist there. */
+async function realOr(files: SourceFiles, path: string): Promise<string> {
+  try {
+    return await files.realpath(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return path;
+    throw error;
+  }
 }
 
 /**

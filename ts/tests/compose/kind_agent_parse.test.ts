@@ -332,7 +332,6 @@ describe("literal llm_config fields", () => {
 
 test.each<CaseRow>([
   // tests/cli/test_memory.py
-  { id: "load-agent/cli_memory__session_recent_turns_below_zero", call: parsedNodes },
   { id: "load-agent/cli_memory__storage_key_is_host_owned", call: parsedNodes },
   // tests/compose/test_agent_field_shapes.py
   { id: "load-agent/compose_agent_field_shapes__bool_retries", call: parsedNodes },

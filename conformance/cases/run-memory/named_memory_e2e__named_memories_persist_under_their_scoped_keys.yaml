@@ -1,4 +1,5 @@
-# From tests/engine/test_named_memory_e2e.py::test_python_api_named_memories_persist_and_stack.
+# From tests/engine/test_named_memory_e2e.py::test_python_api_named_memories_persist_and_stack,
+# without the AGENT's session memory `chat` (TS yian has none), so `ask` sees one user turn.
 # Pins: named memories persist across runs over one root: the earlier run's backward commits episodes
 # to the root flow's `notes` (every occurrence) and to the `uses:` file's own `notes`, the key
 # `lib.notes` (only that file's nodes), read back through fresh memories. The replies are what the
@@ -21,7 +22,6 @@ flow: |
     ask:
       kind: agent
       llm_config: {provider: openai, model: fake-model}
-      long_term_memory: {chat: session}
       input: {question: "${input.question}"}
       prompt: ${question}
       output: str
@@ -89,7 +89,7 @@ host:
           role: assistant
           parts:
           - type: text
-            text: users=2 memories=notes
+            text: users=1 memories=notes
     lib_step/summarize:
       agent:
       - reply:
@@ -120,7 +120,7 @@ expect:
   output:
     status: succeeded
     output:
-      answer: users=2 memories=notes
+      answer: users=1 memories=notes
       summary: users=1 memories=notes,lib.notes
   trace:
   - - run_started
@@ -152,7 +152,7 @@ expect:
   - [node_started, ask]
   - - node_succeeded
     - ask
-    - value: users=2 memories=notes
+    - value: users=1 memories=notes
   - [node_started, lib_step]
   - - node_expanded
     - lib_step
@@ -177,7 +177,7 @@ expect:
   - - node_succeeded
     - __end__
     - value:
-        answer: users=2 memories=notes
+        answer: users=1 memories=notes
         summary: users=1 memories=notes,lib.notes
   events:
   - [RunStarted]
@@ -190,20 +190,20 @@ expect:
   - - NodeStarted
     - node_id: ask
   - - ModelCallStarted
-    - exchange_id: <id:14>
+    - exchange_id: <id:13>
       model: fake-model
       node_id: ask
       provider: openai
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:14>
+    - exchange_id: <id:13>
       model: fake-model
       node_id: ask
       provider: openai
       purpose: chat
   - - NodeSucceeded
     - node_id: ask
-      output: users=2 memories=notes
+      output: users=1 memories=notes
   - - NodeStarted
     - node_id: lib_step
   - - NodeExpanded
@@ -221,13 +221,13 @@ expect:
   - - NodeStarted
     - node_id: lib_step/summarize
   - - ModelCallStarted
-    - exchange_id: <id:15>
+    - exchange_id: <id:14>
       model: fake-model
       node_id: lib_step/summarize
       provider: openai
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:15>
+    - exchange_id: <id:14>
       model: fake-model
       node_id: lib_step/summarize
       provider: openai
@@ -246,30 +246,30 @@ expect:
   - - NodeSucceeded
     - node_id: __end__
       output:
-        answer: users=2 memories=notes
+        answer: users=1 memories=notes
         summary: users=1 memories=notes,lib.notes
   - - RunSucceeded
     - output:
-        answer: users=2 memories=notes
+        answer: users=1 memories=notes
         summary: users=1 memories=notes,lib.notes
   stream:
-  - chunk: users=2 memories=notes
-    exchange_id: <id:14>
+  - chunk: users=1 memories=notes
+    exchange_id: <id:13>
     final: false
     key: text
     node_id: ask
   - chunk: ''
-    exchange_id: <id:14>
+    exchange_id: <id:13>
     final: true
     key: text
     node_id: ask
   - chunk: users=1 memories=notes,lib.notes
-    exchange_id: <id:15>
+    exchange_id: <id:14>
     final: false
     key: text
     node_id: lib_step/summarize
   - chunk: ''
-    exchange_id: <id:15>
+    exchange_id: <id:14>
     final: true
     key: text
     node_id: lib_step/summarize

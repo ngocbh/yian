@@ -5,7 +5,7 @@ flow: |
   nodes:
     work:
       kind: agent
-      long_term_memory: {session: {type: session, config: {storage: x.sqlite}}}
+      long_term_memory: {notes: {type: episodic, config: {storage: x.sqlite}}}
       prompt: hello
       output: str
   output: ${work.output}
@@ -13,7 +13,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'long_term_memory ''session'': config key ''storage'' is not allowed: storage belongs to the host (build_memories storage=/root= or yian run --memory-root)'
+      message: 'long_term_memory ''notes'': config key ''storage'' is not allowed: storage belongs to the host (build_memories storage=/root= or yian run --memory-root)'
       frames:
       - label: flow.yaml
-        range: [6, 23, 6, 78]
+        range: [6, 23, 6, 77]

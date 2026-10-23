@@ -600,7 +600,9 @@ export class NodeStepRecord {
  * Write one canonical typed value to the variable pool under `key`. Frozen.
  *
  * The run start writes the system values (`system.<name>`) and the START inputs this way; a node's
- * output waits on its node until the node's `NodeSucceededRecord` names this record's seq.
+ * output waits on its node until the node's `NodeSucceededRecord` names this record's seq. A
+ * derived commit (one a derived node writes, or an expansion writes for a child START) also holds
+ * `from`: the seq of the `pool_commit` that wrote each pool name its binding read.
  */
 export class PoolCommitRecord {
   /** The writing node's non-empty id: the node whose output this is, or the START for the run start. */
@@ -609,19 +611,49 @@ export class PoolCommitRecord {
   readonly key: string;
   /** The value's deep-frozen canonical typed wire `{kind, value}`. */
   readonly value: Readonly<TypedWire>;
+  /**
+   * A derived commit's sources, sorted by name: each pool name its binding read, to the seq of the
+   * `pool_commit` that wrote it; `null` for any other commit. Frozen.
+   */
+  readonly from: ReadonlyMap<string, number> | null;
 
   /**
    * @param value A typed value's wire form (see `TypedValue.fromWire`).
-   * @throws TypeError when an id isn't a string.
-   * @throws RangeError when an id is empty or `value` isn't a typed-value wire form.
+   * @param options.from A derived commit's sources; copied in name order.
+   * @throws TypeError when an id isn't a string, or `from` isn't a `Map` or `null`.
+   * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, or a `from`
+   *   name is empty or its seq isn't a positive safe integer.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
-  constructor(nodeId: string, key: string, value: TypedWire) {
+  constructor(nodeId: string, key: string, value: TypedWire, options: { from?: ReadonlyMap<string, number> | null } = {}) {
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     this.key = requireNonemptyString(key, "key");
     this.value = freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire;
+    this.from = validatedFrom(options.from ?? null);
     Object.freeze(this);
   }
+}
+
+/**
+ * Return a frozen copy of a derived commit's `from` in name order, or `null`.
+ *
+ * @throws TypeError when `from` isn't a `Map` or `null`.
+ * @throws RangeError when a name is empty or a seq isn't a positive safe integer.
+ */
+function validatedFrom(from: unknown): ReadonlyMap<string, number> | null {
+  if (from === null) return null;
+  if (!(from instanceof Map)) throw new TypeError("from must be a Map or null");
+  const entries: [string, number][] = [];
+  for (const [name, seq] of from as Map<unknown, unknown>) {
+    if (typeof name !== "string") throw new TypeError("from names must be strings");
+    if (!name) throw new RangeError("from names must be non-empty");
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) {
+      throw new RangeError(`from seq of ${reprText(name)} must be a positive integer`);
+    }
+    entries.push([name, seq]);
+  }
+  entries.sort(([a], [b]) => compareCodeUnits(a, b));
+  return Object.freeze(new Map(entries));
 }
 
 /** Accept a node's success: its pending `PoolCommitRecord`, named by seq. Frozen. */
@@ -3009,7 +3041,16 @@ function payloadForRecord(record: RunRecord): JsonObject {
     return { node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject };
   }
   if (record instanceof PoolCommitRecord) {
-    return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+    const payload: JsonObject = {
+      node_id: record.nodeId,
+      key: record.key,
+      kind: record.value.kind,
+      value: record.value.value as JsonValue,
+    };
+    if (record.from !== null) {
+      payload["from"] = Object.fromEntries([...record.from].map(([name, seq]) => [name, BigInt(seq)]));
+    }
+    return payload;
   }
   if (record instanceof NodeSucceededRecord) {
     return { node_id: record.nodeId, commit: BigInt(record.commit), ...outcomePayload(record) };
@@ -3132,13 +3173,16 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireInt(payload["n"], `${label} n`),
         wireObject(payload["step"], `${label} step`),
       );
-    case "pool_commit":
-      requireFields(payload, ["node_id", "key", "kind", "value"], label);
+    case "pool_commit": {
+      const derived = Object.hasOwn(payload, "from");
+      requireFields(payload, derived ? ["node_id", "key", "kind", "value", "from"] : ["node_id", "key", "kind", "value"], label);
       return new PoolCommitRecord(
         wireName(payload["node_id"], `${label} node_id`),
         wireName(payload["key"], `${label} key`),
         { kind: payload["kind"], value: payload["value"] } as unknown as TypedWire,
+        { from: derived ? fromFromPayload(payload["from"], `${label} from`) : null },
       );
+    }
     case "node_succeeded":
       requireFields(payload, ["node_id", "commit", "evidence", "forward_capture"], label);
       return new NodeSucceededRecord(
@@ -3344,6 +3388,17 @@ function wireInt(value: unknown, label: string): number {
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new RangeError(`${label} must be a safe integer`);
   return number;
+}
+
+/**
+ * Decode a derived commit's `from`: an object of pool names to int seqs.
+ *
+ * @throws TypeError when it isn't an object or a seq isn't an int token.
+ * @throws RangeError when a seq is beyond ±(2^53 - 1).
+ */
+function fromFromPayload(value: unknown, label: string): Map<string, number> {
+  const object = wireObject(value, label);
+  return new Map(Object.entries(object).map(([name, seq]) => [name, wireInt(seq, `${label} ${reprText(name)}`)]));
 }
 
 /**

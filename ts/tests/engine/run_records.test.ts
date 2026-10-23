@@ -590,6 +590,39 @@ test.each<[string, Readonly<{ kind: string; value: unknown }>, string]>([
   expect((decoded.record as PoolCommitRecord).value).toEqual(wire as never);
 });
 
+test("a derived pool commit's from encodes as an object with sorted keys and decodes back to a map (TS-only)", () => {
+  const from = new Map([
+    ["b", 7],
+    ["a", 4],
+    ["system.now", 1],
+  ]);
+  const record = new PoolCommitRecord("e", "e", { kind: "int", value: 2n }, { from });
+  expect([...record.from!]).toEqual([
+    ["a", 4],
+    ["b", 7],
+    ["system.now", 1],
+  ]);
+  expect(Object.isFrozen(record.from)).toBe(true);
+  from.set("c", 9);
+  expect(record.from!.has("c")).toBe(false);
+  const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 8, record);
+  const encoded = encodeRecord(envelope);
+  expect(encoded).toContain('"payload":{"from":{"a":4,"b":7,"system.now":1},"key":"e","kind":"int","node_id":"e","value":2}');
+  const decoded = decodeRecord(encoded);
+  expect(decoded).toEqual(envelope);
+  expect([...(decoded.record as PoolCommitRecord).from!]).toEqual([...record.from!]);
+  expect(new PoolCommitRecord("e", "e", { kind: "int", value: 2n }).from).toBeNull();
+  expect(new PoolCommitRecord("e", "e", { kind: "int", value: 2n }, { from: new Map() }).from!.size).toBe(0);
+});
+
+test.each<[string, unknown, new (...args: never[]) => Error, string]>([
+  ["a seq that isn't a positive integer", new Map([["a", 0]]), RangeError, "from seq of 'a' must be a positive integer"],
+  ["an empty name", new Map([["", 3]]), RangeError, "from names must be non-empty"],
+  ["a plain object", { a: 3 }, TypeError, "from must be a Map or null"],
+])("a pool commit refuses a from with %s (TS-only)", (_name, from, cls, message) => {
+  expectError(() => new PoolCommitRecord("e", "e", { kind: "int", value: 2n }, { from: from as never }), cls, message);
+});
+
 test("a node success names its commit and holds no value (TS-only)", () => {
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 6, new NodeSucceededRecord("a", 5));
   expect(envelope.payload).toEqual({ node_id: "a", commit: 5n, evidence: null, forward_capture: null });

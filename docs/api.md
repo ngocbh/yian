@@ -121,11 +121,11 @@ path is outside the real path of `codeRoot` (symlinks are followed on both sides
 `codeRoot` on. An inline `code:` body and a module's own imports aren't confined; without
 `codeRoot`, nothing is. A relative `codeRoot` resolves against the current directory, and one
 that doesn't exist refuses every reference. The check runs at load: the file is imported by
-path when the node runs, so a file replaced after the load isn't checked again; a resume
+path when the node runs, so a file replaced after the load isn't checked again; `resumeFlow`
 with `codeRoot` checks the recorded flow's files again (see [Durable recovery with
-`resume_flow`](#durable-recovery-with-resume_flow)). `env` is the environment this load reads the `YIAN_*` values from. The
-default is the process environment, or the calling load's when a `childResolver` calls
-`loadFlow` without `env`.
+`resume_flow`](#durable-recovery-with-resume_flow)). `env` is the environment this load reads
+the `YIAN_*` values from. The default is the process environment, or the calling load's when a
+`childResolver` calls `loadFlow` without `env`.
 A bad `YIAN_*` value in `env` rejects with `DefaultsError`, not `LoadError`.
 
 ## `run_flow`
@@ -2539,7 +2539,8 @@ with the key. `context` re-supplies the host's app
 object; the log does not hold it (see [Tool context](#tool-context)).
 
 Changed (TS yian): `resumeFlow({ log, numWorkers, onEvent, onStream, memory, tools, skills,
-steering, apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the `RunResult`, and the
+steering, apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the
+`RunResult`, and the
 errors are its rejections. `memory` and `skills` are `Map`s and `tools` a plain record, as for
 `runFlow`. `signal` is the host's stop: aborting it stops the resumed segment, which rejects with
 the signal's reason and records a `RunStoppedRecord`, and an already-aborted signal rejects before
@@ -2555,12 +2556,13 @@ new run; the fingerprint is still checked, against the compiled recorded flow. T
 starts at the root and follows each file's `refs` inside the log: no disk, search path or
 symlink. A CODE reference's file is not recorded and must still be there, in the folder of
 the file's key below `dir`. CODE files are read from disk on resume, so an edited CODE file is picked up, as a
-reference-mode CODE node's function is today. `resumeFlow({ log, codeRoot })` takes
+reference-mode CODE node's function is today. `resumeFlow({ log, codeRoot })` runs
 `loadFlow`'s `codeRoot` check over every recorded file, a host child's included: a CODE
-reference whose file's real path is now outside `codeRoot` (the file, or its folder, replaced
-by a symlink pointing out) raises `LoadError` before anything is appended, for a finished log
-too; a run whose flow was built in code ignores it (the host confines that flow when it loads
-it). `loadRecordedFlow(log, { env, codeRoot })` (from `yian/run`) compiles a log's recorded flow
+reference whose file's real path is now outside `codeRoot` (say, the file or its folder was
+replaced by a symlink pointing out) raises `LoadError` before anything is appended, even for
+a finished log. A run whose flow was built in code ignores `codeRoot`: the host confines that
+flow when it loads it. `loadRecordedFlow(log, { env, codeRoot })` (from `yian/run`) compiles a
+log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI
 reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
 resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`

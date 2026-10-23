@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: ic_over
@@ -84,15 +85,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        topics: [A, B]
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value:
         topics: [A, B]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        topics: [A, B]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, __call_0]
   - - node_expanded
     - __call_0
@@ -100,19 +115,28 @@ expect:
       seed:
         xs: [A, B]
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         xs: [A, B]
-  - [node_started, __call_0/x]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 11}
+  - [node_started, __call_0/x]
+  - - pool_commit
     - __call_0/x
     - value: [A, B]
+  - - node_succeeded
+    - __call_0/x
+    - {commit: 14}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: [A, B]
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: [A, B]
+    - {commit: 17}
   - [node_started, each]
   - - node_expanded
     - each
@@ -121,44 +145,71 @@ expect:
       - topic: A
       - topic: B
   - [node_started, each/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each/__start__
+    - {commit: 22}
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         topic: A
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#0/__start__
+    - {commit: 25}
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         topic: B
-  - [node_started, each#0/x]
   - - node_succeeded
+    - each#1/__start__
+    - {commit: 28}
+  - [node_started, each#0/x]
+  - - pool_commit
     - each#0/x
     - value: A
-  - [node_started, each#1/x]
   - - node_succeeded
+    - each#0/x
+    - {commit: 31}
+  - [node_started, each#1/x]
+  - - pool_commit
     - each#1/x
     - value: B
-  - [node_started, each#0/__end__]
   - - node_succeeded
+    - each#1/x
+    - {commit: 34}
+  - [node_started, each#0/__end__]
+  - - pool_commit
     - each#0/__end__
     - value: A
-  - [node_started, each#1/__end__]
   - - node_succeeded
+    - each#0/__end__
+    - {commit: 37}
+  - [node_started, each#1/__end__]
+  - - pool_commit
     - each#1/__end__
     - value: B
+  - - node_succeeded
+    - each#1/__end__
+    - {commit: 40}
   - [node_started, each/__end__]
+  - - pool_commit
+    - each/__end__
+    - value: [A, B]
+      key: each
   - - node_succeeded
     - each/__end__
-    - commit_target: each
-      value: [A, B]
+    - {commit: 43}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: [A, B]
+  - - node_succeeded
+    - __end__
+    - {commit: 46}
   events:
   - [RunStarted]
   - - NodeStarted

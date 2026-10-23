@@ -2,6 +2,7 @@
 # A reference CODE node returns the same verdict line as seed 29's inline body.
 # The header (`module:function`, `tests.seeds.fns:verdict_line`) describes the Python form.
 kind: run
+rules: [run-log]
 flow: |
   # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine
   # imports the module and calls `func(inputs)` IN-PROCESS — the alternative to the inline
@@ -60,10 +61,17 @@ run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: "ACME: positive (+0.42)"}
   trace:
-    - [run_started, null, {inputs: {rating: 0.42, label: ACME}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {label: ACME, rating: 0.42}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {rating: 0.42, label: ACME}}]
+    - [pool_commit, __start__, {value: {rating: 0.42, label: ACME}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, verdict]
-    - [node_succeeded, verdict, {value: "ACME: positive (+0.42)"}]
+    - [pool_commit, verdict, {value: "ACME: positive (+0.42)"}]
+    - [node_succeeded, verdict, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: "ACME: positive (+0.42)"}]
+    - [pool_commit, __end__, {value: "ACME: positive (+0.42)"}]
+    - [node_succeeded, __end__, {commit: 12}]

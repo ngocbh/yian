@@ -5,6 +5,7 @@
 # each item's AGENT and returns one positional message per item; positional feedback [null, ""]
 # calls only item 1 ("" is effective feedback).
 kind: backward
+rules: [run-log]
 flow: |
   id: ordered-map-feedback
   name: ordered_map_feedback
@@ -88,14 +89,30 @@ expect:
         each/answer:
           model: local-test
           provider: ollama
-      inputs:
-        values: [same, same]
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        values: [same, same]
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        values: [same, same]
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs:
           values: [same, same]
         evaluated_keys: [values]
@@ -117,8 +134,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        values: [same, same]
   - [node_started, each]
   - - node_expanded
     - each
@@ -137,7 +152,7 @@ expect:
               - children:
                 - kind: source
                   source:
-                    execution_seq: 1
+                    execution_seq: 5
                     path: [values, 0]
                     run_id: r1
                 kind: selected
@@ -154,7 +169,7 @@ expect:
               - children:
                 - kind: source
                   source:
-                    execution_seq: 1
+                    execution_seq: 5
                     path: [values, 1]
                     run_id: r1
                 kind: selected
@@ -166,7 +181,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [values]
               run_id: r1
           kind: record
@@ -181,34 +196,39 @@ expect:
       - value: same
       - value: same
   - [node_started, each/__start__]
+  - - pool_commit
+    - each/__start__
+    - value: {}
   - - node_succeeded
     - each/__start__
-    - forward_capture:
+    - commit: 11
+      forward_capture:
         bound_inputs: {}
         node_data:
           input_output_paths: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: null
           flow_path: []
           occurrence_path: []
           static_path: [each]
-      value: {}
   - [node_started, each#0/__start__]
+  - - pool_commit
+    - each#0/__start__
+    - value:
+        value: same
   - - node_succeeded
     - each#0/__start__
-    - forward_capture:
-        bound_inputs:
-          value: same
+    - commit: 14
+      forward_capture:
+        bound_inputs: {value: same}
         input_names: [value]
         node_data:
           input_output_paths:
             value: [value]
         route:
           children:
-          - kind: literal
-            value_json: same
+          - {kind: literal, value_json: same}
           kind: record
           names: [value]
         scope:
@@ -219,22 +239,23 @@ expect:
             kind: map_item
             static_path: [each]
           static_path: [each, __start__]
-      value:
-        value: same
   - [node_started, each#1/__start__]
+  - - pool_commit
+    - each#1/__start__
+    - value:
+        value: same
   - - node_succeeded
     - each#1/__start__
-    - forward_capture:
-        bound_inputs:
-          value: same
+    - commit: 17
+      forward_capture:
+        bound_inputs: {value: same}
         input_names: [value]
         node_data:
           input_output_paths:
             value: [value]
         route:
           children:
-          - kind: literal
-            value_json: same
+          - {kind: literal, value_json: same}
           kind: record
           names: [value]
         scope:
@@ -245,174 +266,83 @@ expect:
             kind: map_item
             static_path: [each]
           static_path: [each, __start__]
-      value:
-        value: same
   - [node_started, each#0/answer]
+  - - pool_commit
+    - each#0/answer
+    - value: same
   - - node_succeeded
     - each#0/answer
-    - forward_capture:
-        bound_inputs:
-          value: same
+    - commit: 20
+      forward_capture:
+        bound_inputs: {value: same}
         evaluated_keys: [value]
         input_names: [value]
         node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
+          effective_llm_config: {model: local-test, provider: ollama}
           prompt_template: ${value}
           rendered_prompt: same
           variable_domains: {}
           variables: {}
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 7
-              path: [value]
-              run_id: r1
-          kind: record
-          names: [value]
-        scope:
-          boundary: null
-          flow_path: [each]
-          occurrence_path:
-          - index: 0
-            kind: map_item
-            static_path: [each]
-          static_path: [each, answer]
-      value: same
-  - [node_started, each#1/answer]
-  - - node_succeeded
-    - each#1/answer
-    - forward_capture:
-        bound_inputs:
-          value: same
-        evaluated_keys: [value]
-        input_names: [value]
-        node_data:
-          effective_llm_config:
-            model: local-test
-            provider: ollama
-          prompt_template: ${value}
-          rendered_prompt: same
-          variable_domains: {}
-          variables: {}
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 9
-              path: [value]
-              run_id: r1
-          kind: record
-          names: [value]
-        scope:
-          boundary: null
-          flow_path: [each]
-          occurrence_path:
-          - index: 1
-            kind: map_item
-            static_path: [each]
-          static_path: [each, answer]
-      value: same
-  - [node_started, each#0/__end__]
-  - - node_succeeded
-    - each#0/__end__
-    - forward_capture:
-        bound_inputs:
-          result: same
-        evaluated_keys: [result]
-        input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 11
-              path: []
-              run_id: r1
-          kind: record
-          names: [result]
-        scope:
-          boundary: end
-          flow_path: [each]
-          occurrence_path:
-          - index: 0
-            kind: map_item
-            static_path: [each]
-          static_path: [each, __end__]
-      value: same
-  - [node_started, each#1/__end__]
-  - - node_succeeded
-    - each#1/__end__
-    - forward_capture:
-        bound_inputs:
-          result: same
-        evaluated_keys: [result]
-        input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source
             source:
               execution_seq: 13
-              path: []
+              path: [value]
               run_id: r1
           kind: record
-          names: [result]
+          names: [value]
         scope:
-          boundary: end
+          boundary: null
+          flow_path: [each]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [each]
+          static_path: [each, answer]
+  - [node_started, each#1/answer]
+  - - pool_commit
+    - each#1/answer
+    - value: same
+  - - node_succeeded
+    - each#1/answer
+    - commit: 23
+      forward_capture:
+        bound_inputs: {value: same}
+        evaluated_keys: [value]
+        input_names: [value]
+        node_data:
+          effective_llm_config: {model: local-test, provider: ollama}
+          prompt_template: ${value}
+          rendered_prompt: same
+          variable_domains: {}
+          variables: {}
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 16
+              path: [value]
+              run_id: r1
+          kind: record
+          names: [value]
+        scope:
+          boundary: null
           flow_path: [each]
           occurrence_path:
           - index: 1
             kind: map_item
             static_path: [each]
-          static_path: [each, __end__]
-      value: same
-  - [node_started, each/__end__]
+          static_path: [each, answer]
+  - [node_started, each#0/__end__]
+  - - pool_commit
+    - each#0/__end__
+    - value: same
   - - node_succeeded
-    - each/__end__
-    - commit_target: each
+    - each#0/__end__
+    - commit: 26
       forward_capture:
-        bound_inputs:
-          e0: same
-          e1: same
-        evaluated_keys: [e0, e1]
-        input_names: [e0, e1]
-        node_data:
-          input_output_paths:
-            e0: [0]
-            e1: [1]
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 15
-              path: []
-              run_id: r1
-          - kind: source
-            source:
-              execution_seq: 17
-              path: []
-              run_id: r1
-          kind: record
-          names: [e0, e1]
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [each]
-      value: [same, same]
-  - [node_started, __end__]
-  - - node_succeeded
-    - __end__
-    - forward_capture:
-        bound_inputs:
-          result: [same, same]
+        bound_inputs: {result: same}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -429,10 +359,107 @@ expect:
           names: [result]
         scope:
           boundary: end
+          flow_path: [each]
+          occurrence_path:
+          - index: 0
+            kind: map_item
+            static_path: [each]
+          static_path: [each, __end__]
+  - [node_started, each#1/__end__]
+  - - pool_commit
+    - each#1/__end__
+    - value: same
+  - - node_succeeded
+    - each#1/__end__
+    - commit: 29
+      forward_capture:
+        bound_inputs: {result: same}
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 22
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
+          flow_path: [each]
+          occurrence_path:
+          - index: 1
+            kind: map_item
+            static_path: [each]
+          static_path: [each, __end__]
+  - [node_started, each/__end__]
+  - - pool_commit
+    - each/__end__
+    - value: [same, same]
+      key: each
+  - - node_succeeded
+    - each/__end__
+    - commit: 32
+      forward_capture:
+        bound_inputs: {e0: same, e1: same}
+        evaluated_keys: [e0, e1]
+        input_names: [e0, e1]
+        node_data:
+          input_output_paths:
+            e0: [0]
+            e1: [1]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 25
+              path: []
+              run_id: r1
+          - kind: source
+            source:
+              execution_seq: 28
+              path: []
+              run_id: r1
+          kind: record
+          names: [e0, e1]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [each]
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: [same, same]
+  - - node_succeeded
+    - __end__
+    - commit: 35
+      forward_capture:
+        bound_inputs:
+          result: [same, same]
+        evaluated_keys: [result]
+        input_names: [result]
+        node_data:
+          input_output_paths:
+            result: []
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 31
+              path: []
+              run_id: r1
+          kind: record
+          names: [result]
+        scope:
+          boundary: end
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: [same, same]
   - - backward_started
     - null
     - attempt_id: 1
@@ -447,7 +474,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 13
             path: []
             run_id: r1
         - contribution_index: 0
@@ -455,7 +482,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 9
+            execution_seq: 16
             path: []
             run_id: r1
         feedback:
@@ -470,50 +497,29 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 3
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
           execution_seq: 5
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: value
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 11
-            path: []
-            run_id: r1
-        feedback:
-        - value: Review every item.
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            value: [Review every item.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 8
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 10
           path: []
           run_id: r1
       - attribution:
@@ -522,51 +528,11 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 13
+            execution_seq: 19
             path: []
             run_id: r1
         feedback:
         - value: Review every item.
-        invoked: true
-        result:
-          input_feedback:
-            value: [Review every item.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 9
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 15
-            path: []
-            run_id: r1
-        feedback: [Review every item.]
-        invoked: true
-        result:
-          input_feedback:
-            value: [Review every item.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 11
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: result
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 17
-            path: []
-            run_id: r1
-        feedback: [Review every item.]
         invoked: true
         result:
           input_feedback:
@@ -579,42 +545,23 @@ expect:
           run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: e0
+          input_name: value
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 19
+            execution_seq: 22
             path: []
             run_id: r1
-        feedback: [Review every item.]
+        feedback:
+        - value: Review every item.
         invoked: true
         result:
           input_feedback:
-            result: [Review every item.]
+            value: [Review every item.]
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 15
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: e1
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 19
-            path: []
-            run_id: r1
-        feedback: [Review every item.]
-        invoked: true
-        result:
-          input_feedback:
-            result: [Review every item.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 17
+          execution_seq: 16
           path: []
           run_id: r1
       - attribution:
@@ -623,7 +570,87 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 21
+            execution_seq: 25
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            value: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 19
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 28
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            value: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 22
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e0
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 31
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 25
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: e1
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 31
+            path: []
+            run_id: r1
+        feedback: [Review every item.]
+        invoked: true
+        result:
+          input_feedback:
+            result: [Review every item.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 28
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: result
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 34
             path: []
             run_id: r1
         feedback: [Review every item.]
@@ -635,7 +662,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 19
+          execution_seq: 31
           path: []
           run_id: r1
       - attribution:
@@ -652,7 +679,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 21
+          execution_seq: 34
           path: []
           run_id: r1
       proposals: []
@@ -692,7 +719,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 9
+            execution_seq: 16
             path: []
             run_id: r1
         feedback:
@@ -702,28 +729,6 @@ expect:
           input_feedback:
             values:
             - [null, '']
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 1
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 3
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
@@ -738,7 +743,29 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 8
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 10
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -747,7 +774,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 13
+            execution_seq: 22
             path: []
             run_id: r1
         feedback:
@@ -759,7 +786,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 9
+          execution_seq: 16
           path: []
           run_id: r1
       - attribution: []
@@ -770,7 +797,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
+          execution_seq: 19
           path: []
           run_id: r1
       - attribution:
@@ -779,7 +806,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 17
+            execution_seq: 28
             path: []
             run_id: r1
         feedback: ['']
@@ -790,7 +817,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 13
+          execution_seq: 22
           path: []
           run_id: r1
       - attribution: []
@@ -801,7 +828,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 15
+          execution_seq: 25
           path: []
           run_id: r1
       - attribution:
@@ -810,7 +837,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 19
+            execution_seq: 31
             path: []
             run_id: r1
         feedback: ['']
@@ -821,7 +848,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 17
+          execution_seq: 28
           path: []
           run_id: r1
       - attribution:
@@ -830,7 +857,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 21
+            execution_seq: 34
             path: []
             run_id: r1
         feedback:
@@ -842,7 +869,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 19
+          execution_seq: 31
           path: []
           run_id: r1
       - attribution:
@@ -861,7 +888,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 21
+          execution_seq: 34
           path: []
           run_id: r1
       proposals: []

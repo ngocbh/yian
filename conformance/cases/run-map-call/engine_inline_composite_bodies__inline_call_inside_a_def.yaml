@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: eager-def-inline-call
   name: eager_def_inline_call
@@ -52,49 +53,81 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, invoke]
   - - node_expanded
     - invoke
     - prune_ids: []
       seed: {}
   - [node_started, invoke/__start__]
-  - - node_succeeded
+  - - pool_commit
     - invoke/__start__
     - value: {}
+  - - node_succeeded
+    - invoke/__start__
+    - {commit: 11}
   - [node_started, invoke/wrapper]
   - - node_expanded
     - invoke/wrapper
     - prune_ids: []
       seed: {}
   - [node_started, invoke/wrapper/__start__]
-  - - node_succeeded
+  - - pool_commit
     - invoke/wrapper/__start__
     - value: {}
-  - [node_started, invoke/wrapper/constant]
   - - node_succeeded
+    - invoke/wrapper/__start__
+    - {commit: 16}
+  - [node_started, invoke/wrapper/constant]
+  - - pool_commit
     - invoke/wrapper/constant
     - value: inline-ok
+  - - node_succeeded
+    - invoke/wrapper/constant
+    - {commit: 19}
   - [node_started, invoke/wrapper/__end__]
+  - - pool_commit
+    - invoke/wrapper/__end__
+    - value: inline-ok
+      key: invoke/wrapper
   - - node_succeeded
     - invoke/wrapper/__end__
-    - commit_target: invoke/wrapper
-      value: inline-ok
+    - {commit: 22}
   - [node_started, invoke/__end__]
+  - - pool_commit
+    - invoke/__end__
+    - value: inline-ok
+      key: invoke
   - - node_succeeded
     - invoke/__end__
-    - commit_target: invoke
-      value: inline-ok
+    - {commit: 25}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: inline-ok
+  - - node_succeeded
+    - __end__
+    - {commit: 28}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -2,6 +2,7 @@
 # A HUMAN_INPUT's static questions get an answer record keyed by header; CODE reads its label.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define `question` for a questions-only gate.
 kind: run
+rules: [run-log]
 flow: |
   # 26 — HUMAN_INPUT questions: the three question surfaces.
   #
@@ -111,12 +112,20 @@ host:
 expect:
   output: {status: succeeded, output: React}
   trace:
-    - [run_started, null, {inputs: {proj: Atlas}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {proj: Atlas}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {proj: Atlas}}]
+    - [pool_commit, __start__, {value: {proj: Atlas}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, ask]
-    - [node_succeeded, ask, {value: {Framework: React, Notes: none}}]
+    - [pool_commit, ask, {value: {Framework: React, Notes: none}}]
+    - [node_succeeded, ask, {commit: 9}]
     - [node_started, pick]
-    - [node_succeeded, pick, {value: React}]
+    - [pool_commit, pick, {value: React}]
+    - [node_succeeded, pick, {commit: 12}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: React}]
+    - [pool_commit, __end__, {value: React}]
+    - [node_succeeded, __end__, {commit: 15}]

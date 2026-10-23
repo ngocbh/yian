@@ -2,6 +2,7 @@
 # A gate with a record `output:` sends one answer-schema entry per field (an Optional field not
 # required), and a record answer with a null field passes.
 kind: run
+rules: [run-log]
 flow: |
   id: rate
   name: rate
@@ -30,23 +31,43 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, rate]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, rate]
+  - - pool_commit
     - rate
     - value:
         note: null
         rating: 4.5
-  - [node_started, __end__]
   - - node_succeeded
+    - rate
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         note: null
         rating: 4.5
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

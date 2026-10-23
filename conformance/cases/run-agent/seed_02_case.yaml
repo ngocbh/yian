@@ -2,6 +2,7 @@
 # A float AGENT output routes a searched `case` to `positive`; `cautious` is skipped and gets no
 # model call, and the coalesce join returns `positive`'s text.
 kind: run
+rules: [run-log]
 flow: |
   # 02 — Branching with a `case` node (searched form) + a coalesce join.
   #
@@ -79,8 +80,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: ACME}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           score:
@@ -95,13 +95,21 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: ACME}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [pool_commit, __start__, {value: {topic: ACME}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, score]
-    - [node_succeeded, score, {value: 0.6}]
+    - [pool_commit, score, {value: 0.6}]
+    - [node_succeeded, score, {commit: 9}]
     - [node_started, gate]
     - [node_routed, gate, {handle: positive}]
     - [node_started, positive]
-    - [node_succeeded, positive, {value: ACME's demand is steady.}]
+    - [pool_commit, positive, {value: ACME's demand is steady.}]
+    - [node_succeeded, positive, {commit: 14}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: ACME's demand is steady.}]
+    - [pool_commit, __end__, {value: ACME's demand is steady.}]
+    - [node_succeeded, __end__, {commit: 17}]

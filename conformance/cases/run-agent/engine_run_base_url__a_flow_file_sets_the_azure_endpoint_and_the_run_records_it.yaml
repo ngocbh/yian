@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: az
   name: az
@@ -50,21 +51,41 @@ expect:
           base_url: https://res.openai.azure.com/
           model: deploy-a
           provider: azure
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, agent]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, agent]
+  - - pool_commit
     - agent
     - value: ok
-  - [node_started, __end__]
   - - node_succeeded
+    - agent
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: ok
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -75,13 +96,13 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: deploy-a
       node_id: agent
       provider: azure
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: deploy-a
       node_id: agent
       provider: azure
@@ -98,12 +119,12 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: false
     key: text
     node_id: agent
   - chunk: ''
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: true
     key: text
     node_id: agent

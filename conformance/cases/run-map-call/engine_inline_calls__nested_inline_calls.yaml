@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: ic_nested
@@ -84,15 +85,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         topic: ACME
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, __call_0]
   - - node_expanded
     - __call_0
@@ -100,19 +114,28 @@ expect:
       seed:
         topic: ACME
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         topic: ACME
-  - [node_started, __call_0/x]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 11}
+  - [node_started, __call_0/x]
+  - - pool_commit
     - __call_0/x
     - value: ACME
+  - - node_succeeded
+    - __call_0/x
+    - {commit: 14}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: ACME
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: ACME
+    - {commit: 17}
   - [node_started, __call_1]
   - - node_expanded
     - __call_1
@@ -120,27 +143,42 @@ expect:
       seed:
         topic: ACME
   - [node_started, __call_1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_1/__start__
     - value:
         topic: ACME
-  - [node_started, __call_1/x]
   - - node_succeeded
+    - __call_1/__start__
+    - {commit: 22}
+  - [node_started, __call_1/x]
+  - - pool_commit
     - __call_1/x
     - value: ACME
+  - - node_succeeded
+    - __call_1/x
+    - {commit: 25}
   - [node_started, __call_1/__end__]
+  - - pool_commit
+    - __call_1/__end__
+    - value: ACME
+      key: __call_1
   - - node_succeeded
     - __call_1/__end__
-    - commit_target: __call_1
-      value: ACME
+    - {commit: 28}
   - [node_started, use]
-  - - node_succeeded
+  - - pool_commit
     - use
     - value: ACME
-  - [node_started, __end__]
   - - node_succeeded
+    - use
+    - {commit: 31}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: ACME
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

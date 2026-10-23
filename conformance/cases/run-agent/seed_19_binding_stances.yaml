@@ -3,6 +3,7 @@
 # `assemble` binds every stance (plain, join, `:-`, a bare-ref default, `:?`).
 # On `con`, `detail` is null, and a null span fails `assemble`'s strict prompt, so this takes `pro`.
 kind: run
+rules: [run-log]
 flow: |
   # 19 — Input-binding stances: required, optional, branch-join, fail-loud, co-skip.
   #
@@ -141,8 +142,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: rates, as_of: "2026-01-01"}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           score:
@@ -169,19 +169,30 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {as_of: 2026-01-01, topic: rates}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: rates, as_of: "2026-01-01"}}]
+    - [pool_commit, __start__, {value: {topic: rates, as_of: "2026-01-01"}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, score]
-    - [node_succeeded, score, {value: 0.6}]
+    - [pool_commit, score, {value: 0.6}]
+    - [node_succeeded, score, {commit: 9}]
     - [node_started, macro]
-    - [node_succeeded, macro, {value: Inflation is cooling.}]
+    - [pool_commit, macro, {value: Inflation is cooling.}]
+    - [node_succeeded, macro, {commit: 12}]
     - [node_started, gate]
     - [node_routed, gate, {handle: pro}]
     - [node_started, pro]
-    - [node_succeeded, pro, {value: Rates may ease. Demand holds.}]
+    - [pool_commit, pro, {value: Rates may ease. Demand holds.}]
+    - [node_succeeded, pro, {commit: 17}]
     - [node_started, pro_detail]
-    - [node_succeeded, pro_detail, {value: Wages are steady.}]
+    - [pool_commit, pro_detail, {value: Wages are steady.}]
+    - [node_succeeded, pro_detail, {commit: 20}]
     - [node_started, assemble]
-    - [node_succeeded, assemble, {value: Rates may ease as inflation cools.}]
+    - [pool_commit, assemble, {value: Rates may ease as inflation cools.}]
+    - [node_succeeded, assemble, {commit: 23}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: Rates may ease as inflation cools.}]
+    - [pool_commit, __end__, {value: Rates may ease as inflation cools.}]
+    - [node_succeeded, __end__, {commit: 26}]

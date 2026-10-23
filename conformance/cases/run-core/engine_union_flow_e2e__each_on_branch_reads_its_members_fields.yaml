@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: unions
   name: unions
@@ -130,39 +131,60 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        decision:
-          action: hold
-          note: wait
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        decision: {action: hold, note: wait}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         decision:
           action: hold
           note: wait
-  - [node_started, d]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, d]
+  - - pool_commit
     - d
     - value:
         action: hold
         note: wait
+  - - node_succeeded
+    - d
+    - {commit: 9}
   - [node_started, route]
   - - node_routed
     - route
     - handle: '#else'
   - [node_started, log_hold]
-  - - node_succeeded
+  - - pool_commit
     - log_hold
     - value: 'hold: wait'
-  - [node_started, __end__]
   - - node_succeeded
+    - log_hold
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         action: hold
         trade: 'hold: wait'
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

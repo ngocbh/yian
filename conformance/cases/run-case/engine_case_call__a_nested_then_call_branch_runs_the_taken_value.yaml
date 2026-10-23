@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: cc
@@ -66,15 +67,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        score: 0.9
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {score: 0.9}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         score: 0.9
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
@@ -86,19 +100,28 @@ expect:
       seed:
         stance: pro
   - [node_started, __call_0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_0/__start__
     - value:
         stance: pro
-  - [node_started, __call_0/x]
   - - node_succeeded
+    - __call_0/__start__
+    - {commit: 13}
+  - [node_started, __call_0/x]
+  - - pool_commit
     - __call_0/x
     - value: took:pro
+  - - node_succeeded
+    - __call_0/x
+    - {commit: 16}
   - [node_started, __call_0/__end__]
+  - - pool_commit
+    - __call_0/__end__
+    - value: took:pro
+      key: __call_0
   - - node_succeeded
     - __call_0/__end__
-    - commit_target: __call_0
-      value: took:pro
+    - {commit: 19}
   - [node_started, __call_1]
   - - node_expanded
     - __call_1
@@ -106,23 +129,35 @@ expect:
       seed:
         stance: took:pro
   - [node_started, __call_1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - __call_1/__start__
     - value:
         stance: took:pro
-  - [node_started, __call_1/x]
   - - node_succeeded
+    - __call_1/__start__
+    - {commit: 24}
+  - [node_started, __call_1/x]
+  - - pool_commit
     - __call_1/x
     - value: took:took:pro
+  - - node_succeeded
+    - __call_1/x
+    - {commit: 27}
   - [node_started, __call_1/__end__]
+  - - pool_commit
+    - __call_1/__end__
+    - value: took:took:pro
+      key: __call_1
   - - node_succeeded
     - __call_1/__end__
-    - commit_target: __call_1
-      value: took:took:pro
+    - {commit: 30}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: took:took:pro
+  - - node_succeeded
+    - __end__
+    - {commit: 33}
   events:
   - [RunStarted]
   - - NodeStarted

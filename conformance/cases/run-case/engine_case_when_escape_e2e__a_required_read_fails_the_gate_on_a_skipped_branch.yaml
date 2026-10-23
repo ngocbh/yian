@@ -2,7 +2,7 @@
 # A CASE `when:` with a required read (`:?`) of a skipped branch fails the gate with the read's
 # message. TS fails condition.evaluate and Python node.execute.
 kind: run
-rules: [failure-codes]
+rules: [failure-codes, run-log]
 flow: |2
 
   id: when_escape
@@ -111,17 +111,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        score: 0.2
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {score: 0.2, topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         score: 0.2
         topic: ACME
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate

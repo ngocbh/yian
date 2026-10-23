@@ -1,8 +1,9 @@
 # From tests/engine/test_run_connection_settings.py::test_resume_needs_exactly_the_recorded_header_names[None-missing X-Gateway, X-Trace].
 # A resume of a run whose host key came with headers needs the same header names; with none it names both,
 # shows no value, and appends nothing.
-# Record 3 is agent's node_started: its first model call runs, its result is refused.
+# Record 8 is agent's node_started: its first model call runs, its result is refused.
 kind: resume
+rules: [run-log]
 flow: |
   id: keyed
   name: keyed
@@ -29,7 +30,7 @@ host:
           parts:
           - type: text
             text: ok
-  crash_after_record: 3
+  crash_after_record: 8
 expect:
   raises:
     class: ValueError
@@ -49,11 +50,25 @@ expect:
             endpoint: https://api.openai.com/v1
       learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, agent]
   events: []
 resume:

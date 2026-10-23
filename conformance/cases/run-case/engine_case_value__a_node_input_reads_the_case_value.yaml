@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: cvc
@@ -89,37 +90,61 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        seed: 0.9
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {seed: 0.9, topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         seed: 0.9
         topic: ACME
-  - [node_started, s]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, s]
+  - - pool_commit
     - s
     - value: 0.9
+  - - node_succeeded
+    - s
+    - {commit: 9}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: pro
   - [node_started, pro]
-  - - node_succeeded
+  - - pool_commit
     - pro
     - value: pro case for ACME
-  - [node_started, summary]
   - - node_succeeded
+    - pro
+    - {commit: 14}
+  - [node_started, summary]
+  - - pool_commit
     - summary
     - value: pro case for ACME
-  - [node_started, __end__]
   - - node_succeeded
+    - summary
+    - {commit: 17}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: pro case for ACME
+  - - node_succeeded
+    - __end__
+    - {commit: 20}
   events:
   - [RunStarted]
   - - NodeStarted

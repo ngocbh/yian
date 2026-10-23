@@ -3,7 +3,7 @@
 # flow continues." (no Python test runs it).
 # An answer outside the gate's Literal fails the gate with contract.output.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: approval
   name: approval
@@ -41,13 +41,26 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        plan: release
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {plan: release}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         plan: release
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, approval]
   - - node_failed
     - approval

@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: seed-call-code
@@ -37,21 +38,41 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, mk]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, mk]
+  - - pool_commit
     - mk
     - value: echo ${probe.output}
-  - [node_started, probe]
   - - node_succeeded
+    - mk
+    - {commit: 9}
+  - [node_started, probe]
+  - - pool_commit
     - probe
     - value: SECRET
+  - - node_succeeded
+    - probe
+    - {commit: 12}
   - [node_started, echo]
   - - node_expanded
     - echo
@@ -59,23 +80,35 @@ expect:
       seed:
         text: echo ${probe.output}
   - [node_started, echo/__start__]
-  - - node_succeeded
+  - - pool_commit
     - echo/__start__
     - value:
         text: echo ${probe.output}
-  - [node_started, echo/inner]
   - - node_succeeded
+    - echo/__start__
+    - {commit: 17}
+  - [node_started, echo/inner]
+  - - pool_commit
     - echo/inner
     - value: echo ${probe.output}
+  - - node_succeeded
+    - echo/inner
+    - {commit: 20}
   - [node_started, echo/__end__]
+  - - pool_commit
+    - echo/__end__
+    - value: echo ${probe.output}
+      key: echo
   - - node_succeeded
     - echo/__end__
-    - commit_target: echo
-      value: echo ${probe.output}
+    - {commit: 23}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: echo ${probe.output}
+  - - node_succeeded
+    - __end__
+    - {commit: 26}
   events:
   - [RunStarted]
   - - NodeStarted

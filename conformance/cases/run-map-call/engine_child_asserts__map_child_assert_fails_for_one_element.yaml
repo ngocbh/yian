@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: dm
@@ -80,15 +81,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        vs: [1, -1, 3]
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value:
         vs: [1, -1, 3]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        vs: [1, -1, 3]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, map_it]
   - - node_expanded
     - map_it
@@ -98,14 +113,20 @@ expect:
       - n: -1
       - n: 3
   - [node_started, map_it/__start__]
-  - - node_succeeded
+  - - pool_commit
     - map_it/__start__
     - value: {}
-  - [node_started, map_it#0/__start__]
   - - node_succeeded
+    - map_it/__start__
+    - {commit: 11}
+  - [node_started, map_it#0/__start__]
+  - - pool_commit
     - map_it#0/__start__
     - value:
         n: 1
+  - - node_succeeded
+    - map_it#0/__start__
+    - {commit: 14}
   - [node_started, map_it#1/__start__]
   - - node_failed
     - map_it#1/__start__

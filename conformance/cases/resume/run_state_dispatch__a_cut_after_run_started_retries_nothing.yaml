@@ -1,8 +1,10 @@
 # From tests/engine/test_run_state_dispatch.py::test_run_resumed_allows_an_empty_retry_segment_and_changes_workers.
 # Also tests/engine/test_run_recovery_prefixes.py::test_replay_every_prefix_matches_live_state_and_uses_commit_path.
-# A run cut right after `run_started` has nothing in flight: the resume retries nothing and starts at __start__.
-# Record 0 is run_started: __start__'s node_started is refused, so nothing ran before the resume.
+# A run cut right after its run start has nothing in flight: the resume retries nothing and starts at __start__.
+# Records 0-4 are the run start (run_started, then its four commits): __start__'s node_started is refused, so
+# nothing ran before the resume.
 kind: resume
+rules: [run-log]
 flow: |
   id: one-tool
   name: one_tool
@@ -31,7 +33,7 @@ host:
         required: [x]
       results:
       - return: Ada
-  crash_after_record: 0
+  crash_after_record: 4
 expect:
   output:
     status: succeeded
@@ -41,25 +43,44 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        x: Ada
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {x: Ada}
   - - run_resumed
     - null
     - num_workers: 0
       retry_node_ids: []
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         x: Ada
-  - [node_started, n]
   - - node_succeeded
+    - __start__
+    - {commit: 7}
+  - [node_started, n]
+  - - pool_commit
     - n
     - value: Ada
-  - [node_started, __end__]
   - - node_succeeded
+    - n
+    - {commit: 10}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: Ada
+  - - node_succeeded
+    - __end__
+    - {commit: 13}
   events:
   - [RunResumed]
   - - NodeStarted

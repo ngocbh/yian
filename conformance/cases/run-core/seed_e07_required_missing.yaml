@@ -1,6 +1,7 @@
 # From tests/seeds/errors/e07-required-missing.yaml.
 # A `:?` binding on an omitted Optional input fails its AGENT node before any model call.
 kind: run
+rules: [run-log]
 flow: |
   # e07 — Required-at-use-site (`:?`) missing at runtime.
   # EXPECT: RUNTIME RunFailed (not a compile error) — `as_of` is an Optional param, omitted
@@ -47,17 +48,21 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: X}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           report:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: X}}]
     - [node_started, __start__]
     # An omitted Optional input with no default is absent here; a read of it gives null.
-    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [pool_commit, __start__, {value: {topic: X}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, report]
     - - node_failed
       - report

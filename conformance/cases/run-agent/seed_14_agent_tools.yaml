@@ -2,6 +2,7 @@
 # A structured AGENT with tools runs its tool loop (a text reply, no tool call), then the
 # structured call; the flow's own `llm_config:` (anthropic, with a provider block) is recorded.
 kind: run
+rules: [run-log]
 flow: |
   # 14 — AGENT knobs: tools, llm_config.
   #
@@ -82,8 +83,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: rates}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           reviewer:
@@ -94,9 +94,16 @@ expect:
             # `endpoint: null` (src/yian/llm_clients/connection.py); `docs/` doesn't give these
             # fields, and TS has to record the same.
             _connection: {method: api_key, source: environment, endpoint: null}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: rates}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: rates}}]
+    - [pool_commit, __start__, {value: {topic: rates}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, reviewer]
-    - [node_succeeded, reviewer, {value: {claim: Rates held steady., confidence: 0.7}}]
+    - [pool_commit, reviewer, {value: {claim: Rates held steady., confidence: 0.7}}]
+    - [node_succeeded, reviewer, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {claim: Rates held steady., confidence: 0.7}}]
+    - [pool_commit, __end__, {value: {claim: Rates held steady., confidence: 0.7}}]
+    - [node_succeeded, __end__, {commit: 12}]

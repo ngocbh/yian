@@ -4,6 +4,7 @@
 # shared: ('${input.n}') is the `until:` source text as written, which stays Python-quoted in both
 # languages (names and source text are shared); the value 5 is spelled the same in both.
 kind: run
+rules: [run-log]
 flow: |
   id: wait_int
   name: wait_int
@@ -34,13 +35,26 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        n: 5
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {n: 5}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         n: 5
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, settle]
   - - node_failed
     - settle

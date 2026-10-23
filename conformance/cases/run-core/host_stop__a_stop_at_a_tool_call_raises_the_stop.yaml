@@ -1,6 +1,7 @@
 # TS-only (decision 20): a host stop after fetch's first tool call rejects the run with the stop, and
 # the log ends with run_stopped naming fetch, still in flight.
 kind: run
+rules: [run-log]
 python_skip: TS-only (decision 20)
 flow: |
   id: fetch-once
@@ -22,9 +23,14 @@ host:
 expect:
   raises: {class: ConformanceStop, message: conformance stop}
   trace:
-  - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+  - [run_started, null, {learnable: false, num_workers: 0}]
+  - [pool_commit, __start__, {key: system.now}]
+  - [pool_commit, __start__, {key: system.run_id, value: r1}]
+  - [pool_commit, __start__, {key: system.today}]
+  - [pool_commit, __start__, {value: {}}]
   - [node_started, __start__]
-  - [node_succeeded, __start__, {value: {}}]
+  - [pool_commit, __start__, {value: {}}]
+  - [node_succeeded, __start__, {commit: 6}]
   - [node_started, fetch]
   - [run_stopped, null, {node_ids: [fetch], reason: signal}]
   events:

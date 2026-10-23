@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: \n      qty: int\n    code: |\n      return {\"qty\": 2}\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  check:\n    kind: case\n    cases:\n      - when: ${order.output.qty > 1}\n        then: use\n  use:\n    kind: code\n    output: int\n    input:\n      q: ${order.output.qty * 2}\n    code: |\n      return inputs[\"q\"]\noutput:\n  u: ${use.output}\n"
 inputs:
   approve: false
@@ -12,28 +13,47 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        approve: false
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {approve: false}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         approve: false
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: '#else'
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
         u: null
-  - [node_started, rejected]
   - - node_succeeded
+    - __end__
+    - {commit: 11}
+  - [node_started, rejected]
+  - - pool_commit
     - rejected
     - value: no
+  - - node_succeeded
+    - rejected
+    - {commit: 14}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -1,7 +1,7 @@
 # From tests/engine/test_typed_tool_node.py::test_the_gate_runs_on_every_call_inside_a_map.
 # The TOOL output check runs on each MAP item's call; the second item's return fails at each#1/place.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: batch
   name: batch
@@ -52,11 +52,25 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, each]
   - - node_expanded
     - each
@@ -65,23 +79,35 @@ expect:
       - x: 1
       - x: 2
   - [node_started, each/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each/__start__
+    - {commit: 11}
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         x: 1
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#0/__start__
+    - {commit: 14}
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         x: 2
-  - [node_started, each#0/place]
   - - node_succeeded
+    - each#1/__start__
+    - {commit: 17}
+  - [node_started, each#0/place]
+  - - pool_commit
     - each#0/place
     - value: 1
+  - - node_succeeded
+    - each#0/place
+    - {commit: 20}
   - [node_started, each#1/place]
   - - node_failed
     - each#1/place

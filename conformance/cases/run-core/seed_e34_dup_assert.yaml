@@ -1,6 +1,7 @@
 # From tests/seeds/errors/e34-dup-assert.yaml.
 # Of two identical false node asserts, the failure is at the first one.
 kind: run
+rules: [run-log]
 flow: |
   # e34 — two IDENTICAL post-asserts on one node. RUNTIME: `output < 0` is false
   # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
@@ -44,9 +45,14 @@ expect:
       # The first assert `output < 0` on line 12.
       frames: [{label: flow.yaml, range: [12, 9, 12, 19]}]
   trace:
-    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {}}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, compute]
     - - node_failed
       - compute

@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: nullable-projection
   name: nullable_projection
@@ -31,15 +32,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        payload: null
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {payload: null}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         payload: null
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, invoke]
   - - node_expanded
     - invoke
@@ -47,16 +61,25 @@ expect:
       seed:
         payload: null
   - [node_started, invoke/__start__]
-  - - node_succeeded
+  - - pool_commit
     - invoke/__start__
     - value:
         payload: null
+  - - node_succeeded
+    - invoke/__start__
+    - {commit: 11}
   - [node_started, invoke/__end__]
+  - - pool_commit
+    - invoke/__end__
+    - key: invoke
   - - node_succeeded
     - invoke/__end__
-    - commit_target: invoke
+    - {commit: 14}
   - [node_started, __end__]
-  - [node_succeeded, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

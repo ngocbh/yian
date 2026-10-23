@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |2
 
   id: narrow
@@ -70,28 +70,42 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        decision:
-          action: sell
-          price: 1.5
-          qty: 2
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        decision: {action: sell, price: 1.5, qty: 2}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         decision:
           action: sell
           price: 1.5
           qty: 2
-  - [node_started, decide]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, decide]
+  - - pool_commit
     - decide
     - value:
         action: sell
         price: 1.5
         qty: 2
+  - - node_succeeded
+    - decide
+    - {commit: 9}
   - [node_started, place]
   - - node_failed
     - place

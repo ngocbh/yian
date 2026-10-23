@@ -1,5 +1,5 @@
 kind: run
-rules: [messages, int-in-float]
+rules: [messages, int-in-float, run-log]
 flow: |2
 
   id: f
@@ -31,17 +31,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        x: 1
-        z: 0
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {x: 1, z: 0}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         x: 1
         z: 0
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, __end__]
   - - node_failed
     - __end__

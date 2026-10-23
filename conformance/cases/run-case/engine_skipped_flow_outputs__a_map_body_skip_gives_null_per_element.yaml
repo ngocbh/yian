@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -34,15 +35,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        approve: true
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {approve: true}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         approve: true
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, each]
   - - node_expanded
     - each
@@ -51,19 +65,28 @@ expect:
       - flag: true
       - flag: false
   - [node_started, each/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each/__start__
+    - {commit: 11}
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         flag: true
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#0/__start__
+    - {commit: 14}
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         flag: false
+  - - node_succeeded
+    - each#1/__start__
+    - {commit: 17}
   - [node_started, each#0/gate]
   - - node_routed
     - each#0/gate
@@ -73,24 +96,39 @@ expect:
     - each#1/gate
     - handle: '#else'
   - [node_started, each#0/mk]
-  - - node_succeeded
+  - - pool_commit
     - each#0/mk
     - value: made
-  - [node_started, each#1/__end__]
-  - [node_succeeded, each#1/__end__]
-  - [node_started, each#0/__end__]
   - - node_succeeded
+    - each#0/mk
+    - {commit: 24}
+  - [node_started, each#1/__end__]
+  - [pool_commit, each#1/__end__]
+  - - node_succeeded
+    - each#1/__end__
+    - {commit: 27}
+  - [node_started, each#0/__end__]
+  - - pool_commit
     - each#0/__end__
     - value: made
+  - - node_succeeded
+    - each#0/__end__
+    - {commit: 30}
   - [node_started, each/__end__]
+  - - pool_commit
+    - each/__end__
+    - value: [made, null]
+      key: each
   - - node_succeeded
     - each/__end__
-    - commit_target: each
-      value: [made, null]
+    - {commit: 33}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: [made, null]
+  - - node_succeeded
+    - __end__
+    - {commit: 36}
   events:
   - [RunStarted]
   - - NodeStarted

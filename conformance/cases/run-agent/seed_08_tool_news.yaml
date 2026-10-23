@@ -3,6 +3,7 @@
 # the tool's whole list value.
 # The header's TOOL_REGISTRY key is the case's stub tool here.
 kind: run
+rules: [run-log]
 flow: |
   # 08 — TOOL: a direct, deterministic tool invocation.
   #
@@ -68,22 +69,29 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: ACME}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           summarize:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: ACME}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [pool_commit, __start__, {value: {topic: ACME}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, news]
-    - [node_succeeded, news, {value: ["ACME opens a plant", "ACME beats estimates"]}]
+    - [pool_commit, news, {value: ["ACME opens a plant", "ACME beats estimates"]}]
+    - [node_succeeded, news, {commit: 9}]
     - [node_started, summarize]
-    - [node_succeeded, summarize, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
+    - [pool_commit, summarize, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
+    - [node_succeeded, summarize, {commit: 12}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
+    - [pool_commit, __end__, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
+    - [node_succeeded, __end__, {commit: 15}]
   # A TOOL node's call id is <run>/<node>.
   tool_calls:
     get_facts:

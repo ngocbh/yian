@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: input-contract-origins
   name: input-contract-origins
@@ -78,17 +78,26 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
+    - learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
         flags:
           enabled: true
-          limits:
-            count: 1
+          limits: {count: 1}
         payload:
-          profile:
-            age: not-an-int
+          profile: {age: not-an-int}
         topic: hello
-      learnable: false
-      num_workers: 0
   - [node_started, __start__]
   - - node_failed
     - __start__

@@ -3,6 +3,7 @@
 # The header (`def main(inputs)`, `module:function`) describes the Python form.
 # String concatenation, not a template literal: `${...}` in flow text reads as a yian reference.
 kind: run
+rules: [run-log]
 flow: |
   # 29 — inline CODE source. A `code:` node carries a bare body that reads `inputs` and
   # `return`s a value; the engine wraps it as `def main(inputs)` and runs it IN-PROCESS
@@ -69,10 +70,17 @@ run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: "ACME: positive (+0.42)"}
   trace:
-    - [run_started, null, {inputs: {rating: 0.42, label: ACME}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {label: ACME, rating: 0.42}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {rating: 0.42, label: ACME}}]
+    - [pool_commit, __start__, {value: {rating: 0.42, label: ACME}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, verdict]
-    - [node_succeeded, verdict, {value: "ACME: positive (+0.42)"}]
+    - [pool_commit, verdict, {value: "ACME: positive (+0.42)"}]
+    - [node_succeeded, verdict, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: "ACME: positive (+0.42)"}]
+    - [pool_commit, __end__, {value: "ACME: positive (+0.42)"}]
+    - [node_succeeded, __end__, {commit: 12}]

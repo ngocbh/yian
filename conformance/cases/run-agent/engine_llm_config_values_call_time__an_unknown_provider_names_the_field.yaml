@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -29,17 +30,34 @@ expect:
     - call_time_llm:
         agents:
           chat: {}
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, pick]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, pick]
+  - - pool_commit
     - pick
     - value: nope
+  - - node_succeeded
+    - pick
+    - {commit: 9}
   - [node_started, chat]
   - - node_failed
     - chat

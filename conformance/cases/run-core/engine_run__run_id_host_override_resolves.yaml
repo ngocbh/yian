@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: run-runid
@@ -41,21 +42,40 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        topic: ACME
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: rid-123}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         topic: ACME
-  - [node_started, echo]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, echo]
+  - - pool_commit
     - echo
     - value: rid-123
-  - [node_started, __end__]
   - - node_succeeded
+    - echo
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: rid-123
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

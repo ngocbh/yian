@@ -1,7 +1,7 @@
 # hand TS expect: the TS body throws `new Error("boom")`, whose failure message is "Error: boom", and its
 # throwing line `throw new Error("boom")` ends at column 34; Python's "boom" and column 37 are in python_expect.
 kind: run
-rules: [code]
+rules: [code, run-log]
 flow: |
   id: code-origin-inline-failure
   name: code-origin-inline-failure
@@ -51,22 +51,39 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, invoke]
   - - node_expanded
     - invoke
     - prune_ids: []
       seed: {}
   - [node_started, invoke/__start__]
-  - - node_succeeded
+  - - pool_commit
     - invoke/__start__
     - value: {}
+  - - node_succeeded
+    - invoke/__start__
+    - {commit: 11}
   - [node_started, invoke/worker]
   - - node_failed
     - invoke/worker

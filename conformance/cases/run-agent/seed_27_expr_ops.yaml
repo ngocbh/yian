@@ -2,6 +2,7 @@
 # Every input given, the expression forms bind, the flow asserts pass and the AGENT's reply is the
 # output. Its prompt isn't pinned: it shows `sizable`, an `and` result.
 kind: run
+rules: [run-log]
 flow: |
   # 27 — Every new ${...} expression form, in one flow.
   #
@@ -101,22 +102,19 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs:
-          topic: rates
-          base_weight: 0.03
-          extra_bps: 25
-          tags: [macro]
-          note: watch
-          as_of: "2026-01-01"
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           brief:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {as_of: 2026-01-01, base_weight: 0.03, extra_bps: 25, note: watch, tags: [macro], topic: rates}}]
     - [node_started, __start__]
-    - - node_succeeded
+    - - pool_commit
       - __start__
       - value:
           topic: rates
@@ -125,7 +123,10 @@ expect:
           tags: [macro]
           note: watch
           as_of: "2026-01-01"
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, brief]
-    - [node_succeeded, brief, {value: Rates were steady through the week.}]
+    - [pool_commit, brief, {value: Rates were steady through the week.}]
+    - [node_succeeded, brief, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: Rates were steady through the week.}]
+    - [pool_commit, __end__, {value: Rates were steady through the week.}]
+    - [node_succeeded, __end__, {commit: 12}]

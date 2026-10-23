@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: tagged_inputs
   name: tagged_inputs
@@ -70,12 +71,22 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        qty: 3
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {qty: 3}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         cfg:
@@ -85,8 +96,11 @@ expect:
         note: null
         qty: 3
         s: ${x}
-  - [node_started, worker]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, worker]
+  - - pool_commit
     - worker
     - value:
         cfg:
@@ -97,8 +111,11 @@ expect:
         note: null
         qty: 3
         s: ${x}
-  - [node_started, __end__]
   - - node_succeeded
+    - worker
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         cfg:
@@ -109,6 +126,9 @@ expect:
         note: null
         qty: 3
         s: ${x}
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

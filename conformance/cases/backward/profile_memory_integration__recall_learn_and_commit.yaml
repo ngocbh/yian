@@ -3,6 +3,7 @@
 # profile learner rewrite it (one call, a <profile> reply), and the commit writes the new document.
 # YIAN_DEFAULT_PROVIDER/MODEL: a profile learner's model config comes from the defaults, not the flow.
 kind: backward
+rules: [run-log]
 flow: |
   id: chat
   name: chat
@@ -95,16 +96,30 @@ expect:
             source: missing
           model: test-model
           provider: openai
-      inputs:
-        message: hi
       learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {message: hi}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        message: hi
   - - node_succeeded
     - __start__
-    - forward_capture:
-        bound_inputs:
-          message: hi
+    - commit: 6
+      forward_capture:
+        bound_inputs: {message: hi}
         evaluated_keys: [message]
         input_names: [message]
         node_data:
@@ -124,22 +139,20 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        message: hi
   - [node_started, reply]
+  - - pool_commit
+    - reply
+    - value: Hello.
   - - node_succeeded
     - reply
-    - forward_capture:
-        bound_inputs:
-          message: hi
+    - commit: 9
+      forward_capture:
+        bound_inputs: {message: hi}
         evaluated_keys: [message]
         input_names: [message]
         node_data:
           effective_llm_config:
-            _connection:
-              endpoint: https://api.openai.com/v1
-              method: api_key
-              source: missing
+            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
             model: test-model
             provider: openai
           prompt_template: ${message}
@@ -150,7 +163,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [message]
               run_id: r1
           kind: record
@@ -160,13 +173,15 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [reply]
-      value: Hello.
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: Hello.
   - - node_succeeded
     - __end__
-    - forward_capture:
-        bound_inputs:
-          result: Hello.
+    - commit: 12
+      forward_capture:
+        bound_inputs: {result: Hello.}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -176,7 +191,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 3
+              execution_seq: 8
               path: []
               run_id: r1
           kind: record
@@ -186,7 +201,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: Hello.
   - - backward_started
     - null
     - attempt_id: 1
@@ -203,7 +217,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
+          execution_seq: 5
           path: []
           run_id: r1
       - attribution:
@@ -212,7 +226,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 11
             path: []
             run_id: r1
         feedback: [Keep replies brief.]
@@ -222,7 +236,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 3
+          execution_seq: 8
           path: []
           run_id: r1
       - attribution:
@@ -239,7 +253,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 5
+          execution_seq: 11
           path: []
           run_id: r1
       proposals:

@@ -5,6 +5,7 @@
 # and the whole recall lists every lesson in order.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
 kind: run
+rules: [run-log]
 flow: |
   id: tutor
   name: tutor
@@ -100,23 +101,42 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs:
-        q: RED berry
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r2}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {q: RED berry}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         q: RED berry
-  - [node_started, answer]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, answer]
+  - - pool_commit
     - answer
     - value: a2
-  - [node_started, __end__]
   - - node_succeeded
+    - answer
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: a2
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

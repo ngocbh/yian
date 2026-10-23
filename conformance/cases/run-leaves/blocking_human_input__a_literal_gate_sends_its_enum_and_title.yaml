@@ -3,6 +3,7 @@
 # A HUMAN_INPUT gate typed Literal(...) sends its tags as the answer schema's enum, and its
 # `node_name:` as the title.
 kind: run
+rules: [run-log]
 flow: |
   id: approval
   name: approval
@@ -34,21 +35,40 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        plan: release
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {plan: release}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         plan: release
-  - [node_started, approval]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, approval]
+  - - pool_commit
     - approval
     - value: approve
-  - [node_started, __end__]
   - - node_succeeded
+    - approval
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: approve
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

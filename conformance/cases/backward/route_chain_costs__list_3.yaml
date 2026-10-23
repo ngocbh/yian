@@ -3,6 +3,7 @@
 # Pins: feedback on a CALL whose argument concatenates `input.values` three times reaches the flow
 # input as one message per operand.
 kind: backward
+rules: [run-log]
 flow: |
   id: lc
   name: lc
@@ -38,12 +39,28 @@ expect:
     - null
     - learnable: true
       num_workers: 0
-      inputs:
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
         values: [v]
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        values: [v]
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs:
           values: [v]
         evaluated_keys: [values]
@@ -65,8 +82,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        values: [v]
   - [node_started, outer]
   - - node_expanded
     - outer
@@ -80,18 +95,18 @@ expect:
           - children:
             - kind: source
               source:
-                execution_seq: 1
+                execution_seq: 5
                 path: [values]
                 run_id: r1
             - children:
               - kind: source
                 source:
-                  execution_seq: 1
+                  execution_seq: 5
                   path: [values]
                   run_id: r1
               - kind: source
                 source:
-                  execution_seq: 1
+                  execution_seq: 5
                   path: [values]
                   run_id: r1
               kind: concat
@@ -109,9 +124,14 @@ expect:
       seed:
         values: [v, v, v]
   - [node_started, outer/__start__]
+  - - pool_commit
+    - outer/__start__
+    - value:
+        values: [v, v, v]
   - - node_succeeded
     - outer/__start__
-    - forward_capture:
+    - commit: 11
+      forward_capture:
         bound_inputs:
           values: [v, v, v]
         input_names: [values]
@@ -132,12 +152,14 @@ expect:
             kind: call
             static_path: [outer]
           static_path: [outer, __start__]
-      value:
-        values: [v, v, v]
   - [node_started, outer/__end__]
+  - - pool_commit
+    - outer/__end__
+    - value: [v, v, v]
+      key: outer
   - - node_succeeded
     - outer/__end__
-    - commit_target: outer
+    - commit: 14
       forward_capture:
         bound_inputs:
           result: [v, v, v]
@@ -150,7 +172,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 5
+              execution_seq: 10
               path: [values]
               run_id: r1
           kind: record
@@ -163,11 +185,14 @@ expect:
             kind: call
             static_path: [outer]
           static_path: [outer, __end__]
-      value: [v, v, v]
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: [v, v, v]
   - - node_succeeded
     - __end__
-    - forward_capture:
+    - commit: 17
+      forward_capture:
         bound_inputs:
           result: [v, v, v]
         evaluated_keys: [result]
@@ -179,7 +204,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 7
+              execution_seq: 13
               path: []
               run_id: r1
           kind: record
@@ -189,7 +214,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: [v, v, v]
   - - backward_started
     - null
     - attempt_id: 1
@@ -204,7 +228,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 10
             path: []
             run_id: r1
         - contribution_index: 1
@@ -212,7 +236,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 10
             path: []
             run_id: r1
         - contribution_index: 2
@@ -220,7 +244,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
+            execution_seq: 10
             path: []
             run_id: r1
         feedback:
@@ -234,7 +258,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
+          execution_seq: 5
           path: []
           run_id: r1
       - attribution: []
@@ -245,7 +269,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 3
+          execution_seq: 8
           path: []
           run_id: r1
       - attribution:
@@ -254,7 +278,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 7
+            execution_seq: 13
             path: []
             run_id: r1
         feedback:
@@ -266,7 +290,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 5
+          execution_seq: 10
           path: []
           run_id: r1
       - attribution:
@@ -275,7 +299,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 9
+            execution_seq: 16
             path: []
             run_id: r1
         feedback: [good]
@@ -286,7 +310,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -303,7 +327,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 9
+          execution_seq: 16
           path: []
           run_id: r1
       proposals: []

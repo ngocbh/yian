@@ -2,7 +2,7 @@
 # TS fails condition.evaluate, naming the assert and the evaluation error; Python counts an assert
 # that raises as false and fails assertion.failed.
 kind: run
-rules: [failure-codes]
+rules: [failure-codes, run-log]
 flow: |
   id: na
   name: na
@@ -46,9 +46,14 @@ expect:
       # The assert `"10 / n > 0"` on line 13.
       frames: [{label: flow.yaml, range: [13, 9, 13, 21]}]
   trace:
-    - [run_started, null, {inputs: {v: 0}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {v: 0}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {v: 0}}]
+    - [pool_commit, __start__, {value: {v: 0}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, x]
     - - node_failed
       - x

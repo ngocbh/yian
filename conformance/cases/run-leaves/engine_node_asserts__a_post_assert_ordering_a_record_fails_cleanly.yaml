@@ -4,7 +4,7 @@
 # the text form; in Python the comparison raises, the assert counts as false and fails
 # assertion.failed.
 kind: run
-rules: [compare, failure-codes, messages]
+rules: [compare, failure-codes, messages, run-log]
 flow: |2
 
   id: rec
@@ -58,15 +58,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         topic: ACME
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, x]
   - - node_failed
     - x

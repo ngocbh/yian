@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: f
   name: f
@@ -36,17 +37,34 @@ expect:
     - call_time_llm:
         agents:
           sub/ask__compose: {}
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, pick]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, pick]
+  - - pool_commit
     - pick
     - value: nope
+  - - node_succeeded
+    - pick
+    - {commit: 9}
   - [node_started, sub]
   - - node_expanded
     - sub
@@ -54,10 +72,13 @@ expect:
       seed:
         p: nope
   - [node_started, sub/__start__]
-  - - node_succeeded
+  - - pool_commit
     - sub/__start__
     - value:
         p: nope
+  - - node_succeeded
+    - sub/__start__
+    - {commit: 14}
   - [node_started, sub/ask__compose]
   - - node_failed
     - sub/ask__compose

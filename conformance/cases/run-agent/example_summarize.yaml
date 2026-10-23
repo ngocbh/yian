@@ -1,6 +1,7 @@
 # From examples/summarize.yaml.
 # One AGENT in the full `nodes:` form condenses the input text; the flow returns its text.
 kind: run
+rules: [run-log]
 flow: |
   # summarize — one AGENT that condenses a block of text into a single sentence.
   #
@@ -43,19 +44,25 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {text: The team moved the launch to Friday because the venue was booked on Thursday.}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           summary:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {text: The team moved the launch to Friday because the venue was booked on Thursday.}}]
     - [node_started, __start__]
-    - - node_succeeded
+    - - pool_commit
       - __start__
       - value: {text: The team moved the launch to Friday because the venue was booked on Thursday.}
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, summary]
-    - [node_succeeded, summary, {value: The launch moved to Friday since the venue was taken Thursday.}]
+    - [pool_commit, summary, {value: The launch moved to Friday since the venue was taken Thursday.}]
+    - [node_succeeded, summary, {commit: 9}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: The launch moved to Friday since the venue was taken Thursday.}]
+    - [pool_commit, __end__, {value: The launch moved to Friday since the venue was taken Thursday.}]
+    - [node_succeeded, __end__, {commit: 12}]

@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: pooled-siblings
   name: pooled_siblings
@@ -35,15 +36,23 @@ expect:
     status: succeeded
     output: {a: A, b: B}
   trace:
-    - [run_started, null, {inputs: {q: x}, learnable: false, num_workers: 8}]
+    - [run_started, null, {learnable: false, num_workers: 8}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {a: A, b: B}}]
+    - [pool_commit, __end__, {value: {a: A, b: B}}]
+    - [node_succeeded, __end__]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {q: x}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {q: x}}]
+    - [pool_commit, __start__, {value: {q: x}}]
+    - [node_succeeded, __start__]
     - [node_started, a]
-    - [node_succeeded, a, {value: A}]
+    - [pool_commit, a, {value: A}]
+    - [node_succeeded, a]
     - [node_started, b]
-    - [node_succeeded, b, {value: B}]
+    - [pool_commit, b, {value: B}]
+    - [node_succeeded, b]
   events:
     - [RunStarted]
     - [RunSucceeded, {output: {a: A, b: B}}]

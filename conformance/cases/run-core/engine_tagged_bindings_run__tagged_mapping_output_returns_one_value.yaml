@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: tagged_output
@@ -24,23 +25,43 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, size]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, size]
+  - - pool_commit
     - size
     - value:
         qty: 1
-  - [node_started, __end__]
   - - node_succeeded
+    - size
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         a: 1
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

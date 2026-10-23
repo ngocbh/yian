@@ -1,6 +1,7 @@
 # From tests/engine/test_tool_retries.py::test_an_awaitable_from_a_function_tool_is_not_retried.
 # A ToolCheckError (a check yian runs) is never retried: one call, the message unchanged.
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -39,11 +40,25 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, call]
   - - node_failed
     - call

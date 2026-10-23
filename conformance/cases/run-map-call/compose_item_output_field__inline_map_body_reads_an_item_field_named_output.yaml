@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: p
   name: p
@@ -56,19 +57,33 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        rows:
-        - output: a
-        - output: b
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        rows:
+        - {output: a}
+        - {output: b}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         rows:
         - output: a
         - output: b
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, m]
   - - node_expanded
     - m
@@ -77,44 +92,71 @@ expect:
       - x: a
       - x: b
   - [node_started, m/__start__]
-  - - node_succeeded
+  - - pool_commit
     - m/__start__
     - value: {}
-  - [node_started, m#0/__start__]
   - - node_succeeded
+    - m/__start__
+    - {commit: 11}
+  - [node_started, m#0/__start__]
+  - - pool_commit
     - m#0/__start__
     - value:
         x: a
-  - [node_started, m#1/__start__]
   - - node_succeeded
+    - m#0/__start__
+    - {commit: 14}
+  - [node_started, m#1/__start__]
+  - - pool_commit
     - m#1/__start__
     - value:
         x: b
-  - [node_started, m#0/up]
   - - node_succeeded
+    - m#1/__start__
+    - {commit: 17}
+  - [node_started, m#0/up]
+  - - pool_commit
     - m#0/up
     - value: A
-  - [node_started, m#1/up]
   - - node_succeeded
+    - m#0/up
+    - {commit: 20}
+  - [node_started, m#1/up]
+  - - pool_commit
     - m#1/up
     - value: B
-  - [node_started, m#0/__end__]
   - - node_succeeded
+    - m#1/up
+    - {commit: 23}
+  - [node_started, m#0/__end__]
+  - - pool_commit
     - m#0/__end__
     - value: A
-  - [node_started, m#1/__end__]
   - - node_succeeded
+    - m#0/__end__
+    - {commit: 26}
+  - [node_started, m#1/__end__]
+  - - pool_commit
     - m#1/__end__
     - value: B
+  - - node_succeeded
+    - m#1/__end__
+    - {commit: 29}
   - [node_started, m/__end__]
+  - - pool_commit
+    - m/__end__
+    - value: [A, B]
+      key: m
   - - node_succeeded
     - m/__end__
-    - commit_target: m
-      value: [A, B]
+    - {commit: 32}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: [A, B]
+  - - node_succeeded
+    - __end__
+    - {commit: 35}
   events:
   - [RunStarted]
   - - NodeStarted

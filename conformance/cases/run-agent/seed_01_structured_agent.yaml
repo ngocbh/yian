@@ -1,6 +1,7 @@
 # From tests/seeds/01-structured-agent.yaml.
 # A record AGENT output, its fields read by dotted access into a CODE node and the flow output.
 kind: run
+rules: [run-log]
 flow: |
   # 01 — Structured (object) AGENT output.
   #
@@ -104,19 +105,26 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: ACME}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           score:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: ACME}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [pool_commit, __start__, {value: {topic: ACME}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, score]
-    - [node_succeeded, score, {value: {rating: 0.6, rationale: Demand is steady.}}]
+    - [pool_commit, score, {value: {rating: 0.6, rationale: Demand is steady.}}]
+    - [node_succeeded, score, {commit: 9}]
     - [node_started, verdict]
-    - [node_succeeded, verdict, {value: "positive (+0.60): Demand is steady."}]
+    - [pool_commit, verdict, {value: "positive (+0.60): Demand is steady."}]
+    - [node_succeeded, verdict, {commit: 12}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {rating: 0.6, verdict: "positive (+0.60): Demand is steady."}}]
+    - [pool_commit, __end__, {value: {rating: 0.6, verdict: "positive (+0.60): Demand is steady."}}]
+    - [node_succeeded, __end__, {commit: 15}]

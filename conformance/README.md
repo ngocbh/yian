@@ -530,12 +530,13 @@ they are, except as the rules below say), and an empty payload is left out.
 
 | Record | Node | Payload fields |
 |---|---|---|
-| `run_started` | null | `inputs` (the run's inputs as recorded), `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
+| `run_started` | null | `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
 | `run_resumed` | null | `retry_node_ids`, `num_workers` |
 | `run_stopped` (TS only) | null | `reason` (the reason's kind), `node_ids` |
 | `node_started` | `node_id` | none |
 | `node_step` | `node_id` | `step` |
-| `node_succeeded` | `node_id` | `value`, `commit_target` (only when it differs from the node), `forward_capture` |
+| `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`) |
+| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `forward_capture` |
 | `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
 | `node_expanded` | `spawner_id` | `seed`, `prune_ids`, `forward_capture` |
 | `node_failed` | the failure's node | `failure`, `forward_capture` |
@@ -547,20 +548,31 @@ they are, except as the rules below say), and an empty payload is left out.
 For example:
 
 ```yaml
-- [run_started, null, {inputs: {q: x}, learnable: false, num_workers: 0, defaults: {MAX_TOTAL_NODES: 20000}}]
+- [run_started, null, {learnable: false, num_workers: 0, defaults: {MAX_TOTAL_NODES: 20000}}]
+- [pool_commit, __start__, {key: system.now}]
+- [pool_commit, __start__, {key: system.run_id, value: r1}]
+- [pool_commit, __start__, {key: system.today}]
+- [pool_commit, __start__, {value: {q: x}}]
 - [node_started, fetch]
 - [node_step, fetch, {step: {event: failed, attempt: 1, error: {type: TransientToolError, message: busy}, retry_in: 0.5}}]
-- [node_succeeded, fetch, {value: F1}]
+- [pool_commit, fetch, {value: F1}]
+- [node_succeeded, fetch, {commit: 7}]
 - [node_failed, place, {failure: {code: node.execute, message: rejected, node: place, frames: [{label: flow.yaml, range: [12, 3, 12, 8]}]}}]
 ```
 
-- Values are plain values: `run_started.inputs` and `node_succeeded.value` are recorded
-  typed, and are written without the kind tag (a file as `{uri, mime, name}`); every other
-  value (seeds, captures, feedback) is recorded plain already.
+- Every write to the variable pool is a `pool_commit` (TS schema 13): the run start writes the
+  system values (keys `system.now`, `system.run_id`, `system.today`, in key order) and then the
+  START inputs right after `run_started`, and a node's output is a `pool_commit` before the
+  `node_succeeded` that names its seq. A commit no success names (a crash between the two) stays
+  in the log and its node reran. The run start's times (`system.now`, `system.today`) leave out
+  their `value`.
+- Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
+  is written without the kind tag (a file as `{uri, mime, name}`); every other value (seeds,
+  captures, feedback) is recorded plain already.
 - `defaults`, `effective_llm_by_static_path`, `call_time_llm` and `parent` are left out when
   empty or absent.
-- Dropped: the envelope (`schema`, `run_id`, `seq`); from `run_started`, `flow_fingerprint`,
-  `initial_pool` (beyond the inputs), `start_wiring_override`, `memory_snapshots`, `memories`,
+- Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from
+  `run_started`, `flow_fingerprint`, `start_wiring_override`, `memory_snapshots`, `memories`,
   `memory_stacks`, and the bulky `flow` (the flow files), `skills`, `tools` and `yian_version`;
   `topology_digest`; and every `evidence` field (the model and tool evaluation
   evidence, whose shape is implementation-specific).
@@ -616,7 +628,9 @@ run id gives `run_id`.
 
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
-order, each group keeping its order. Placeholders are numbered and lists compared after that.
+order, each group keeping its order, and each `node_succeeded` leaves out its `commit` (the seq of
+the `pool_commit` just before it in its node's group, which depends on how the parallel nodes
+interleave). Placeholders are numbered and lists compared after that.
 Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
 `num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped
 when its own `num_workers` isn't 0.
@@ -702,13 +716,16 @@ also cuts each serial `run` case that expects `output`, isn't `pending`, and has
 `host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it, and
 checks the invariants, plus the output and node outcomes when the case has no `host.human` or
 `host.jitter` and its tool scripts only return. A resume adds records, so in those outcomes a
-capture source's `execution_seq` is compared by the kind and node of the record it names.
+capture source's `execution_seq` is compared by the kind and node of the record it names, and a
+success's `commit` by the trace fields of the `pool_commit` it names. A cut inside the run start
+(before the START inputs' commit) can't be resumed: the sweep expects the resume to refuse it
+(`run log <path> ends inside its run start; start the run again`) and leave the log as it is.
 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
 case, with its backward records), pinned byte for byte. Before
 the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
-(`initial_pool.system`'s `now` and `today`), the recorded flow's folder (`run_started`'s
+(the `value` of the `system.now` and `system.today` commits), the recorded flow's folder (`run_started`'s
 `flow.dir`) and the yian version (`yian_version`) are replaced by `"<masked>"`, since the times
 come from the virtual clock, which starts at the real time, the folder is the case's temporary one,
 and the version changes with each release; each line is then written again with the log's own

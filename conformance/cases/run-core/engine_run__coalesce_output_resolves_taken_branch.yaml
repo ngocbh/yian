@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: run-case
@@ -78,33 +79,54 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        seed: 0.2
-        topic: BETA
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {seed: 0.2, topic: BETA}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         seed: 0.2
         topic: BETA
-  - [node_started, score]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, score]
+  - - pool_commit
     - score
     - value: 0.2
+  - - node_succeeded
+    - score
+    - {commit: 9}
   - [node_started, gate]
   - - node_routed
     - gate
     - handle: '#else'
   - [node_started, cautious]
-  - - node_succeeded
+  - - pool_commit
     - cautious
     - value: cautious note for BETA
-  - [node_started, __end__]
   - - node_succeeded
+    - cautious
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: cautious note for BETA
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

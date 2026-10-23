@@ -2,6 +2,7 @@
 # Asserts at every scope pass: both calls grow the def, whose inline score is -0.6 for a
 # four-letter topic, so the `case` takes its `else:` route (`#else`) to `skip`.
 kind: run
+rules: [run-log]
 flow: |
   # 23 — Asserts at every scope (flow / def-child / node).
   #
@@ -243,8 +244,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: bond, window: 30, weight: 0.02}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           take:
@@ -255,27 +255,40 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: bond, weight: 0.02, window: 30}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: bond, window: 30, weight: 0.02}}]
+    - [pool_commit, __start__, {value: {topic: bond, window: 30, weight: 0.02}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, score]
     - [node_expanded, score, {seed: {topic: bond, window: 30}, prune_ids: []}]
     - [node_started, score_one_call]
     - [node_expanded, score_one_call, {seed: {topic: bond, window: 30}, prune_ids: []}]
     - [node_started, score/__start__]
-    - [node_succeeded, score/__start__, {value: {topic: bond, window: 30}}]
+    - [pool_commit, score/__start__, {value: {topic: bond, window: 30}}]
+    - [node_succeeded, score/__start__, {commit: 13}]
     - [node_started, score_one_call/__start__]
-    - [node_succeeded, score_one_call/__start__, {value: {topic: bond, window: 30}}]
+    - [pool_commit, score_one_call/__start__, {value: {topic: bond, window: 30}}]
+    - [node_succeeded, score_one_call/__start__, {commit: 16}]
     - [node_started, score/raw]
-    - [node_succeeded, score/raw, {value: -0.6}]
+    - [pool_commit, score/raw, {value: -0.6}]
+    - [node_succeeded, score/raw, {commit: 19}]
     - [node_started, score_one_call/raw]
-    - [node_succeeded, score_one_call/raw, {value: -0.6}]
+    - [pool_commit, score_one_call/raw, {value: -0.6}]
+    - [node_succeeded, score_one_call/raw, {commit: 22}]
     - [node_started, score/__end__]
-    - [node_succeeded, score/__end__, {value: -0.6, commit_target: score}]
+    - [pool_commit, score/__end__, {value: -0.6, key: score}]
+    - [node_succeeded, score/__end__, {commit: 25}]
     - [node_started, score_one_call/__end__]
-    - [node_succeeded, score_one_call/__end__, {value: -0.6, commit_target: score_one_call}]
+    - [pool_commit, score_one_call/__end__, {value: -0.6, key: score_one_call}]
+    - [node_succeeded, score_one_call/__end__, {commit: 28}]
     - [node_started, size]
     - [node_routed, size, {handle: "#else"}]
     - [node_started, skip]
-    - [node_succeeded, skip, {value: Bonds score below zero. They are passed for now.}]
+    - [pool_commit, skip, {value: Bonds score below zero. They are passed for now.}]
+    - [node_succeeded, skip, {commit: 33}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {decision: Bonds score below zero. They are passed for now.}}]
+    - [pool_commit, __end__, {value: {decision: Bonds score below zero. They are passed for now.}}]
+    - [node_succeeded, __end__, {commit: 36}]

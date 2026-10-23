@@ -3,10 +3,11 @@
 # recorded retry_in again without a new draw (jitter holds one draw, for attempt 1's backoff), and the resumed
 # attempt is the node's own start, so it records no `started` step.
 # env: YIAN_TOOL_RETRY_DELAY_SECONDS=1 with draw 0.0 keeps each wait at 0.5 s.
-# Record 4 is the `failed` step: the wait runs, then the `started` step is refused.
+# Record 9 is the `failed` step: the wait runs, then the `started` step is refused.
 # hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -33,7 +34,7 @@ host:
           message: a
       - return: ok
   jitter: [0.0]
-  crash_after_record: 4
+  crash_after_record: 9
 expect:
   output:
     status: succeeded
@@ -43,11 +44,25 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, call]
   - - node_step
     - call
@@ -63,13 +78,17 @@ expect:
     - num_workers: 0
       retry_node_ids: [call]
   - [node_started, call]
+  - [pool_commit, call, {value: ok}]
   - - node_succeeded
     - call
-    - value: ok
+    - commit: 12
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: ok
+  - - node_succeeded
+    - __end__
+    - {commit: 15}
   tool_calls:
     x:
     - args: {}

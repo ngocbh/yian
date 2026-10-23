@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |2
 
   id: opaque-turn-zero
@@ -42,15 +42,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        initial_n: not-an-int
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {initial_n: not-an-int}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         initial_n: not-an-int
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, loop]
   - - node_failed
     - loop

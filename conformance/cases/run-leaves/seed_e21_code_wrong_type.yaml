@@ -2,7 +2,7 @@
 # A reference CODE function's text return into an `int` output fails `contract.output`.
 kind: run
 # The message quotes the returned text as a value: JSON text in TS, a repr in Python.
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   # e21 — a CODE node returns the wrong type for its declared `output:`. RUNTIME:
   # the typed write boundary rejects it.
@@ -46,9 +46,14 @@ expect:
       # The declared type `int` on line 12.
       frames: [{label: flow.yaml, range: [12, 13, 12, 16]}]
   trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: X}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [pool_commit, __start__, {value: {topic: X}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, calc]
     - - node_failed
       - calc

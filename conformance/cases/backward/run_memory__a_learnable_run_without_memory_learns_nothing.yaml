@@ -1,4 +1,5 @@
 kind: backward
+rules: [run-log]
 flow: |
   id: memory-run
   name: memory_run
@@ -21,43 +22,61 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: true
+    - learnable: true
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs: {}
         node_data:
           input_output_paths: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: start
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value: {}
   - [node_started, work]
+  - - pool_commit
+    - work
+    - value: 7
   - - node_succeeded
     - work
-    - forward_capture:
+    - commit: 9
+      forward_capture:
         bound_inputs: {}
-        route:
-          kind: record
+        route: {kind: record}
         scope:
           boundary: null
           flow_path: []
           occurrence_path: []
           static_path: [work]
-      value: 7
   - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: 7
   - - node_succeeded
     - __end__
-    - forward_capture:
-        bound_inputs:
-          result: 7
+    - commit: 12
+      forward_capture:
+        bound_inputs: {result: 7}
         evaluated_keys: [result]
         input_names: [result]
         node_data:
@@ -67,7 +86,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 3
+              execution_seq: 8
               path: []
               run_id: <id:1>
           kind: record
@@ -77,7 +96,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value: 7
   - - backward_started
     - null
     - attempt_id: 1
@@ -93,29 +111,29 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 1
-          path: []
-          run_id: <id:1>
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 3
-          path: []
-          run_id: <id:1>
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
           execution_seq: 5
+          path: []
+          run_id: <id:1>
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 8
+          path: []
+          run_id: <id:1>
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 11
           path: []
           run_id: <id:1>
       proposals: []

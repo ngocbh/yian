@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: old_bindings
   name: old_bindings
@@ -32,28 +33,50 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        n: 3
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {n: 3}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         n: 3
-  - [node_started, size]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, size]
+  - - pool_commit
     - size
     - value:
         qty: 3
-  - [node_started, use]
   - - node_succeeded
+    - size
+    - {commit: 9}
+  - [node_started, use]
+  - - pool_commit
     - use
     - value: int = 5
-  - [node_started, __end__]
   - - node_succeeded
+    - use
+    - {commit: 12}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: int = 5
+  - - node_succeeded
+    - __end__
+    - {commit: 15}
   events:
   - [RunStarted]
   - - NodeStarted

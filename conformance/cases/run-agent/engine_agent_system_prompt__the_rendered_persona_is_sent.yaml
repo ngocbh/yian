@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: chat
   name: chat
@@ -90,31 +91,51 @@ expect:
             source: environment
           model: claude-test
           provider: anthropic
-      inputs:
-        message: How are we doing?
-        name: Ada
-        title: CTO
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {message: How are we doing?, name: Ada, title: CTO}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         message: How are we doing?
         name: Ada
         title: CTO
-  - [node_started, reply]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, reply]
+  - - pool_commit
     - reply
     - value: draft
-  - [node_started, after]
   - - node_succeeded
+    - reply
+    - {commit: 9}
+  - [node_started, after]
+  - - pool_commit
     - after
     - value: final
-  - [node_started, __end__]
   - - node_succeeded
+    - after
+    - {commit: 12}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: final
+  - - node_succeeded
+    - __end__
+    - {commit: 15}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -128,13 +149,13 @@ expect:
   - - NodeStarted
     - node_id: reply
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: claude-test
       node_id: reply
       provider: anthropic
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: claude-test
       node_id: reply
       provider: anthropic
@@ -145,13 +166,13 @@ expect:
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted
-    - exchange_id: <id:2>
+    - exchange_id: <id:3>
       model: claude-test
       node_id: after
       provider: anthropic
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:2>
+    - exchange_id: <id:3>
       model: claude-test
       node_id: after
       provider: anthropic
@@ -168,22 +189,22 @@ expect:
     - output: final
   stream:
   - chunk: draft
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: false
     key: text
     node_id: reply
   - chunk: ''
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: true
     key: text
     node_id: reply
   - chunk: final
-    exchange_id: <id:2>
+    exchange_id: <id:3>
     final: false
     key: text
     node_id: after
   - chunk: ''
-    exchange_id: <id:2>
+    exchange_id: <id:3>
     final: true
     key: text
     node_id: after

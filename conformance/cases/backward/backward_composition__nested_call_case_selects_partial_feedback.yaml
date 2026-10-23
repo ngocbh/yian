@@ -1,5 +1,5 @@
 kind: backward
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: selected-feedback
   name: selected_feedback
@@ -80,19 +80,40 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
+    - learnable: true
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
         payload:
           rows:
           - [a]
           - [b, c]
           title: unchanged
         selected: true
-      learnable: true
-      num_workers: 0
   - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        payload:
+          rows:
+          - [a]
+          - [b, c]
+          title: unchanged
+        selected: true
   - - node_succeeded
     - __start__
-    - forward_capture:
+    - commit: 6
+      forward_capture:
         bound_inputs:
           payload:
             rows:
@@ -125,13 +146,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__start__]
-      value:
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-        selected: true
   - [node_started, outer]
   - - node_expanded
     - outer
@@ -149,12 +163,12 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [selected]
               run_id: <id:1>
           - kind: source
             source:
-              execution_seq: 1
+              execution_seq: 5
               path: [payload]
               run_id: <id:1>
           kind: record
@@ -173,9 +187,19 @@ expect:
           title: unchanged
         selected: true
   - [node_started, outer/__start__]
+  - - pool_commit
+    - outer/__start__
+    - value:
+        payload:
+          rows:
+          - [a]
+          - [b, c]
+          title: unchanged
+        selected: true
   - - node_succeeded
     - outer/__start__
-    - forward_capture:
+    - commit: 11
+      forward_capture:
         bound_inputs:
           payload:
             rows:
@@ -190,8 +214,7 @@ expect:
             selected: [selected]
         route:
           children:
-          - kind: literal
-            value_json: true
+          - {kind: literal, value_json: true}
           - kind: literal
             value_json:
               rows:
@@ -208,13 +231,6 @@ expect:
             kind: call
             static_path: [outer]
           static_path: [outer, __start__]
-      value:
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-        selected: true
   - [node_started, outer/gate]
   - - node_routed
     - outer/gate
@@ -226,7 +242,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 5
+              execution_seq: 10
               path: [selected]
               run_id: <id:1>
           kind: record
@@ -256,7 +272,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 5
+              execution_seq: 10
               path: [payload]
               run_id: <id:1>
           kind: record
@@ -277,9 +293,19 @@ expect:
           - [b, c]
           title: unchanged
   - [node_started, outer/chosen/__start__]
+  - - pool_commit
+    - outer/chosen/__start__
+    - value:
+        local: child default
+        payload:
+          rows:
+          - [a]
+          - [b, c]
+          title: unchanged
   - - node_succeeded
     - outer/chosen/__start__
-    - forward_capture:
+    - commit: 18
+      forward_capture:
         bound_inputs:
           local: child default
           payload:
@@ -300,8 +326,7 @@ expect:
               - [a]
               - [b, c]
               title: unchanged
-          - kind: literal
-            value_json: child default
+          - {kind: literal, value_json: child default}
           kind: record
           names: [payload, local]
         scope:
@@ -315,17 +340,20 @@ expect:
             kind: call
             static_path: [outer, chosen]
           static_path: [outer, chosen, __start__]
-      value:
+  - [node_started, outer/chosen/__end__]
+  - - pool_commit
+    - outer/chosen/__end__
+    - value:
         local: child default
         payload:
           rows:
           - [a]
           - [b, c]
           title: unchanged
-  - [node_started, outer/chosen/__end__]
+      key: outer/chosen
   - - node_succeeded
     - outer/chosen/__end__
-    - commit_target: outer/chosen
+    - commit: 21
       forward_capture:
         bound_inputs:
           local: child default
@@ -344,12 +372,12 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 11
+              execution_seq: 17
               path: [payload]
               run_id: <id:1>
           - kind: source
             source:
-              execution_seq: 11
+              execution_seq: 17
               path: [local]
               run_id: <id:1>
           kind: record
@@ -365,17 +393,20 @@ expect:
             kind: call
             static_path: [outer, chosen]
           static_path: [outer, chosen, __end__]
-      value:
+  - [node_started, outer/__end__]
+  - - pool_commit
+    - outer/__end__
+    - value:
         local: child default
         payload:
           rows:
           - [a]
           - [b, c]
           title: unchanged
-  - [node_started, outer/__end__]
+      key: outer
   - - node_succeeded
     - outer/__end__
-    - commit_target: outer
+    - commit: 24
       forward_capture:
         bound_inputs:
           result:
@@ -395,7 +426,7 @@ expect:
           - children:
             - kind: source
               source:
-                execution_seq: 13
+                execution_seq: 20
                 path: []
                 run_id: <id:1>
             kind: selected
@@ -409,17 +440,20 @@ expect:
             kind: call
             static_path: [outer]
           static_path: [outer, __end__]
-      value:
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
         local: child default
         payload:
           rows:
           - [a]
           - [b, c]
           title: unchanged
-  - [node_started, __end__]
   - - node_succeeded
     - __end__
-    - forward_capture:
+    - commit: 27
+      forward_capture:
         bound_inputs:
           result:
             local: child default
@@ -437,7 +471,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 15
+              execution_seq: 23
               path: []
               run_id: <id:1>
           kind: record
@@ -447,13 +481,6 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [__end__]
-      value:
-        local: child default
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
   - - backward_started
     - null
     - attempt_id: 1
@@ -473,45 +500,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 5
-            path: []
-            run_id: <id:1>
-        feedback:
-        - payload:
-            rows:
-            - null
-            - [Revise b., null]
-        invoked: true
-        result:
-          input_feedback:
-            payload:
-            - rows:
-              - null
-              - [Revise b., null]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 1
-          path: []
-          run_id: <id:1>
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 3
-          path: []
-          run_id: <id:1>
-      - attribution:
-        - contribution_index: 0
-          input_name: payload
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 11
+            execution_seq: 10
             path: []
             run_id: <id:1>
         feedback:
@@ -540,7 +529,34 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 7
+          execution_seq: 8
+          path: []
+          run_id: <id:1>
+      - attribution:
+        - contribution_index: 0
+          input_name: payload
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 17
+            path: []
+            run_id: <id:1>
+        feedback:
+        - payload:
+            rows:
+            - null
+            - [Revise b., null]
+        invoked: true
+        result:
+          input_feedback:
+            payload:
+            - rows:
+              - null
+              - [Revise b., null]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 10
           path: []
           run_id: <id:1>
       - attribution: []
@@ -551,7 +567,18 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 9
+          execution_seq: 13
+          path: []
+          run_id: <id:1>
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 15
           path: []
           run_id: <id:1>
       - attribution:
@@ -560,7 +587,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 13
+            execution_seq: 20
             path: []
             run_id: <id:1>
         - contribution_index: 0
@@ -568,7 +595,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 13
+            execution_seq: 20
             path: []
             run_id: <id:1>
         feedback:
@@ -588,7 +615,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 11
+          execution_seq: 17
           path: []
           run_id: <id:1>
       - attribution:
@@ -597,7 +624,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 15
+            execution_seq: 23
             path: []
             run_id: <id:1>
         feedback:
@@ -617,7 +644,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 13
+          execution_seq: 20
           path: []
           run_id: <id:1>
       - attribution:
@@ -626,7 +653,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 17
+            execution_seq: 26
             path: []
             run_id: <id:1>
         feedback:
@@ -647,7 +674,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 15
+          execution_seq: 23
           path: []
           run_id: <id:1>
       - attribution:
@@ -674,7 +701,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 17
+          execution_seq: 26
           path: []
           run_id: <id:1>
       proposals: []

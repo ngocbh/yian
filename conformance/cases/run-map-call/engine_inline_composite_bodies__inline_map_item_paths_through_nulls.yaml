@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: inline-map-nullable-items
   name: inline_map_nullable_items
@@ -53,16 +54,26 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
+    - learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
         items:
         - null
-        - detail: null
-        - detail:
-            name: ready
-      learnable: false
-      num_workers: 0
+        - {detail: null}
+        - detail: {name: ready}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         items:
@@ -70,6 +81,9 @@ expect:
         - detail: null
         - detail:
             name: ready
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, each]
   - - node_expanded
     - each
@@ -85,77 +99,106 @@ expect:
           detail:
             name: ready
   - [node_started, each/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each/__start__
+    - {commit: 11}
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         name: null
         row: null
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#0/__start__
+    - {commit: 14}
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         name: null
         row:
           detail: null
-  - [node_started, each#2/__start__]
   - - node_succeeded
+    - each#1/__start__
+    - {commit: 17}
+  - [node_started, each#2/__start__]
+  - - pool_commit
     - each#2/__start__
     - value:
         name: ready
         row:
           detail:
             name: ready
-  - [node_started, each#0/collect]
   - - node_succeeded
+    - each#2/__start__
+    - {commit: 20}
+  - [node_started, each#0/collect]
+  - - pool_commit
     - each#0/collect
     - value:
         name: null
         row: null
-  - [node_started, each#1/collect]
   - - node_succeeded
+    - each#0/collect
+    - {commit: 23}
+  - [node_started, each#1/collect]
+  - - pool_commit
     - each#1/collect
     - value:
         name: null
         row:
           detail: null
-  - [node_started, each#2/collect]
   - - node_succeeded
+    - each#1/collect
+    - {commit: 26}
+  - [node_started, each#2/collect]
+  - - pool_commit
     - each#2/collect
     - value:
         name: ready
         row:
           detail:
             name: ready
-  - [node_started, each#0/__end__]
   - - node_succeeded
+    - each#2/collect
+    - {commit: 29}
+  - [node_started, each#0/__end__]
+  - - pool_commit
     - each#0/__end__
     - value:
         name: null
         row: null
-  - [node_started, each#1/__end__]
   - - node_succeeded
+    - each#0/__end__
+    - {commit: 32}
+  - [node_started, each#1/__end__]
+  - - pool_commit
     - each#1/__end__
     - value:
         name: null
         row:
           detail: null
-  - [node_started, each#2/__end__]
   - - node_succeeded
+    - each#1/__end__
+    - {commit: 35}
+  - [node_started, each#2/__end__]
+  - - pool_commit
     - each#2/__end__
     - value:
         name: ready
         row:
           detail:
             name: ready
-  - [node_started, each/__end__]
   - - node_succeeded
+    - each#2/__end__
+    - {commit: 38}
+  - [node_started, each/__end__]
+  - - pool_commit
     - each/__end__
-    - commit_target: each
-      value:
+    - value:
       - name: null
         row: null
       - name: null
@@ -165,8 +208,12 @@ expect:
         row:
           detail:
             name: ready
-  - [node_started, __end__]
+      key: each
   - - node_succeeded
+    - each/__end__
+    - {commit: 41}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
       - name: null
@@ -178,6 +225,9 @@ expect:
         row:
           detail:
             name: ready
+  - - node_succeeded
+    - __end__
+    - {commit: 44}
   events:
   - [RunStarted]
   - - NodeStarted

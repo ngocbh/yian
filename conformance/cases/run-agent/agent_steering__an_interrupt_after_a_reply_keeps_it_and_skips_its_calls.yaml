@@ -3,6 +3,7 @@
 # An interrupt set once model call 1 has finished keeps that reply's text as the output and runs
 # none of its two tool calls: each is reported as a ToolCallFinished with error `interrupted`.
 kind: run
+rules: [run-log]
 flow: |
   id: steer
   name: steer
@@ -69,21 +70,41 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, chat]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - pool_commit
     - chat
     - value: Checking both.
-  - [node_started, __end__]
   - - node_succeeded
+    - chat
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: Checking both.
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: when_escape
@@ -101,17 +102,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        score: 0.2
-        topic: ACME
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {score: 0.2, topic: ACME}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         score: 0.2
         topic: ACME
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, gate]
   - - node_routed
     - gate
@@ -121,17 +134,26 @@ expect:
     - gate2
     - handle: hot
   - [node_started, con]
-  - - node_succeeded
+  - - pool_commit
     - con
     - value: 'con: ACME'
-  - [node_started, hot]
   - - node_succeeded
+    - con
+    - {commit: 13}
+  - [node_started, hot]
+  - - pool_commit
     - hot
     - value: pro case for ACME
-  - [node_started, __end__]
   - - node_succeeded
+    - hot
+    - {commit: 16}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: pro case for ACME
+  - - node_succeeded
+    - __end__
+    - {commit: 19}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -1,5 +1,5 @@
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: p
   name: p
@@ -43,22 +43,38 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        order:
-          conviction: 0.5
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        order: {conviction: 0.5}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         order:
           conviction: 0.5
-  - [node_started, d]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, d]
+  - - pool_commit
     - d
     - value:
         conviction: 0.5
+  - - node_succeeded
+    - d
+    - {commit: 9}
   - [node_started, c]
   - - node_failed
     - c

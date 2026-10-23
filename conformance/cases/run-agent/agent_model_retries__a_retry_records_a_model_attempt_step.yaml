@@ -3,6 +3,7 @@
 # (YIAN_MODEL_RETRIES=1) and a draw of 0, the node records a model_attempt step for call 1's
 # failed attempt 1, waits the first backoff (0.5 s), and the second attempt answers.
 kind: run
+rules: [run-log]
 python_skip: model_attempt steps are TS-only
 flow: |
   id: agent-model-retries
@@ -32,8 +33,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {}
-        learnable: false
+      - learnable: false
         num_workers: 0
         defaults: {MODEL_RETRIES: 1}
         effective_llm_by_static_path:
@@ -41,8 +41,13 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {}}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, write]
     - - node_step
       - write
@@ -54,6 +59,8 @@ expect:
             error: {kind: server, message: The server is temporarily unavailable}
             partial: null
             retry_in: 0.5
-    - [node_succeeded, write, {value: A line.}]
+    - [pool_commit, write, {value: A line.}]
+    - [node_succeeded, write, {commit: 10}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: A line.}]
+    - [pool_commit, __end__, {value: A line.}]
+    - [node_succeeded, __end__, {commit: 13}]

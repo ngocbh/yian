@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: nested-call-loop-maxed
@@ -48,22 +49,39 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, outer]
   - - node_expanded
     - outer
     - prune_ids: []
       seed: {}
   - [node_started, outer/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/__start__
     - value: {}
+  - - node_succeeded
+    - outer/__start__
+    - {commit: 11}
   - [node_started, outer/repeat]
   - - node_expanded
     - outer/repeat
@@ -72,20 +90,29 @@ expect:
       - n: 0
       - 0
   - [node_started, outer/repeat#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - outer/repeat#0/__start__
     - value:
         n: 0
-  - [node_started, outer/repeat#0/step]
   - - node_succeeded
+    - outer/repeat#0/__start__
+    - {commit: 16}
+  - [node_started, outer/repeat#0/step]
+  - - pool_commit
     - outer/repeat#0/step
     - value:
         n: 0
-  - [node_started, outer/repeat#0/__end__]
   - - node_succeeded
+    - outer/repeat#0/step
+    - {commit: 19}
+  - [node_started, outer/repeat#0/__end__]
+  - - pool_commit
     - outer/repeat#0/__end__
     - value:
         n: 0
+  - - node_succeeded
+    - outer/repeat#0/__end__
+    - {commit: 22}
   - [node_started, outer/repeat~1]
   - - node_failed
     - outer/repeat~1

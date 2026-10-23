@@ -1,6 +1,7 @@
 # From tests/engine/test_tool_retries.py::test_exhausted_retries_list_every_attempt.
 # Retries used up: the failure lists every attempt's error.
 kind: run
+rules: [run-log]
 flow: |
   id: t
   name: t
@@ -46,11 +47,25 @@ expect:
         TOOL_RETRY_DELAY_SECONDS: 0
       learnable: false
       num_workers: 0
-      inputs: {}
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, call]
   - - node_step
     - call

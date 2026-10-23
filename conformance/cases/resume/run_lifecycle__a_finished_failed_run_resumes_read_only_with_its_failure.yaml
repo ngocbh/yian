@@ -2,7 +2,7 @@
 # Also ::test_terminal_resume_is_read_only_silent_and_unlocks[failed]. Resuming a failed run returns its failure,
 # located as before, read-only: nothing is appended and no event fires.
 kind: resume
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: lifecycle-located-failure
   name: lifecycle_located_failure
@@ -51,8 +51,18 @@ expect:
     - null
     - learnable: false
       num_workers: 0
-      inputs:
-        window: soon
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {window: soon}
   - [node_started, __start__]
   - - node_failed
     - __start__

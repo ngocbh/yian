@@ -2,6 +2,7 @@
 # Node and flow asserts pass, and the `when:` with arithmetic and `and` holds, so `take` runs;
 # `skip` is skipped and gets no model call.
 kind: run
+rules: [run-log]
 flow: |
   # 10 — Arithmetic + boolean logic in when: / asserts:.
   #
@@ -92,8 +93,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {topic: ACME, window: 30, weight: 0.02, style: relevance}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           score:
@@ -108,13 +108,21 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {style: relevance, topic: ACME, weight: 0.02, window: 30}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: ACME, window: 30, weight: 0.02, style: relevance}}]
+    - [pool_commit, __start__, {value: {topic: ACME, window: 30, weight: 0.02, style: relevance}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, score]
-    - [node_succeeded, score, {value: 0.4}]
+    - [pool_commit, score, {value: 0.4}]
+    - [node_succeeded, score, {commit: 9}]
     - [node_started, size]
     - [node_routed, size, {handle: take}]
     - [node_started, take]
-    - [node_succeeded, take, {value: ACME scores above zero. The weight is small.}]
+    - [pool_commit, take, {value: ACME scores above zero. The weight is small.}]
+    - [node_succeeded, take, {commit: 14}]
     - [node_started, __end__]
-    - [node_succeeded, __end__, {value: {decision: ACME scores above zero. The weight is small.}}]
+    - [pool_commit, __end__, {value: {decision: ACME scores above zero. The weight is small.}}]
+    - [node_succeeded, __end__, {commit: 17}]

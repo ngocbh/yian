@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: inline-named-equivalence
   name: inline_named_equivalence
@@ -116,13 +117,27 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, inline_call]
   - - node_expanded
     - inline_call
@@ -136,53 +151,80 @@ expect:
       seed:
         x: 5
   - [node_started, inline_call/__start__]
-  - - node_succeeded
+  - - pool_commit
     - inline_call/__start__
     - value:
         x: 5
-  - [node_started, named_call/__start__]
   - - node_succeeded
+    - inline_call/__start__
+    - {commit: 13}
+  - [node_started, named_call/__start__]
+  - - pool_commit
     - named_call/__start__
     - value:
         x: 5
-  - [node_started, inline_call/echo]
   - - node_succeeded
+    - named_call/__start__
+    - {commit: 16}
+  - [node_started, inline_call/echo]
+  - - pool_commit
     - inline_call/echo
     - value: 5
-  - [node_started, named_call/echo]
   - - node_succeeded
+    - inline_call/echo
+    - {commit: 19}
+  - [node_started, named_call/echo]
+  - - pool_commit
     - named_call/echo
     - value: 5
-  - [node_started, inline_call/pack]
   - - node_succeeded
+    - named_call/echo
+    - {commit: 22}
+  - [node_started, inline_call/pack]
+  - - pool_commit
     - inline_call/pack
     - value:
         value: 5
-  - [node_started, named_call/pack]
   - - node_succeeded
+    - inline_call/pack
+    - {commit: 25}
+  - [node_started, named_call/pack]
+  - - pool_commit
     - named_call/pack
     - value:
         value: 5
+  - - node_succeeded
+    - named_call/pack
+    - {commit: 28}
   - [node_started, inline_call/__end__]
+  - - pool_commit
+    - inline_call/__end__
+    - value:
+        value: 5
+      key: inline_call
   - - node_succeeded
     - inline_call/__end__
-    - commit_target: inline_call
-      value:
-        value: 5
+    - {commit: 31}
   - [node_started, named_call/__end__]
+  - - pool_commit
+    - named_call/__end__
+    - value:
+        value: 5
+      key: named_call
   - - node_succeeded
     - named_call/__end__
-    - commit_target: named_call
-      value:
-        value: 5
+    - {commit: 34}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
         inline:
           value: 5
         named:
           value: 5
+  - - node_succeeded
+    - __end__
+    - {commit: 37}
   events:
   - [RunStarted]
   - - NodeStarted

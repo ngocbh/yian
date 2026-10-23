@@ -1,6 +1,7 @@
 # From tests/seeds/errors/e19-false-post-assert.yaml.
 # A false flow assert over a node's output fails END after the node succeeds, at the assert.
 kind: run
+rules: [run-log]
 flow: |
   # e19 — a false POST-TERMINAL assert (X.output). RUNTIME: flips success to failed.
   id: err-false-post-assert
@@ -46,11 +47,17 @@ expect:
       # The assert `"calc.output > 100"` on line 14.
       frames: [{label: flow.yaml, range: [14, 5, 14, 24]}]
   trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {topic: X}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [pool_commit, __start__, {value: {topic: X}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, calc]
-    - [node_succeeded, calc, {value: 1}]
+    - [pool_commit, calc, {value: 1}]
+    - [node_succeeded, calc, {commit: 9}]
     - [node_started, __end__]
     - - node_failed
       - __end__

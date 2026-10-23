@@ -2,6 +2,7 @@
 # A record AGENT output with Literal fields, three of them read field by field by a second AGENT;
 # the flow returns the record and the reply.
 kind: run
+rules: [run-log]
 flow: |
   # triage-ticket — turn a raw support message into a structured record, then draft a reply.
   #
@@ -104,8 +105,7 @@ expect:
   trace:
     - - run_started
       - null
-      - inputs: {message: I was charged twice this month. Please refund the extra charge.}
-        learnable: false
+      - learnable: false
         num_workers: 0
         effective_llm_by_static_path:
           triage:
@@ -116,22 +116,29 @@ expect:
             provider: openai
             model: gpt-5.5
             _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {message: I was charged twice this month. Please refund the extra charge.}}]
     - [node_started, __start__]
-    - - node_succeeded
+    - - pool_commit
       - __start__
       - value: {message: I was charged twice this month. Please refund the extra charge.}
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, triage]
-    - - node_succeeded
+    - - pool_commit
       - triage
       - value:
           category: billing
           priority: high
           summary: The customer was charged twice.
           sentiment: negative
+    - [node_succeeded, triage, {commit: 9}]
     - [node_started, reply]
-    - [node_succeeded, reply, {value: Sorry about the double charge; we are refunding it now.}]
+    - [pool_commit, reply, {value: Sorry about the double charge; we are refunding it now.}]
+    - [node_succeeded, reply, {commit: 12}]
     - [node_started, __end__]
-    - - node_succeeded
+    - - pool_commit
       - __end__
       - value:
           triage:
@@ -140,3 +147,4 @@ expect:
             summary: The customer was charged twice.
             sentiment: negative
           draft_reply: Sorry about the double charge; we are refunding it now.
+    - [node_succeeded, __end__, {commit: 15}]

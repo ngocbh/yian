@@ -1,7 +1,7 @@
 # The model entries carry no `request`: its schema instruction text spells the schema as each
 # implementation lowers it (Python's `json.dumps` spacing, TS compact JSON).
 kind: run
-rules: [llm]
+rules: [llm, run-log]
 flow: |
   id: plain-session
   name: plain_session
@@ -54,25 +54,44 @@ expect:
             source: environment
           model: no-structured-sentinel
           provider: vllm
-      inputs:
-        question: q
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {question: q}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         question: q
-  - [node_started, agent]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, agent]
+  - - pool_commit
     - agent
     - value:
         k: 1
-  - [node_started, __end__]
   - - node_succeeded
+    - agent
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value:
         k: 1
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -84,29 +103,21 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: no-structured-sentinel
       node_id: agent
       provider: vllm
       purpose: structured_fallback
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: no-structured-sentinel
       node_id: agent
       provider: vllm
       purpose: structured_fallback
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: no-structured-sentinel
-      node_id: agent
-      provider: vllm
-      purpose: structured_fallback
+    - {exchange_id: <id:3>, model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback}
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: no-structured-sentinel
-      node_id: agent
-      provider: vllm
-      purpose: structured_fallback
+    - {exchange_id: <id:3>, model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback}
   - - NodeSucceeded
     - node_id: agent
       output:

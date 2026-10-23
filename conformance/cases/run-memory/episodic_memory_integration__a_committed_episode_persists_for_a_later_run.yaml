@@ -4,6 +4,7 @@
 # request has no memory block. The main run's request (the episode recalled in the memory block)
 # is pinned by episodic_memory_integration__a_recalled_episode_reaches_the_request.
 kind: run
+rules: [run-log]
 flow: |
   id: episodic-history
   name: episodic_history
@@ -77,23 +78,42 @@ expect:
             source: missing
           model: test-model
           provider: openai
-      inputs:
-        topic: queue ordering
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r2}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {topic: queue ordering}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         topic: queue ordering
-  - [node_started, answer]
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, answer]
+  - - pool_commit
     - answer
     - value: Use a queue again.
-  - [node_started, __end__]
   - - node_succeeded
+    - answer
+    - {commit: 9}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: Use a queue again.
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -138,4 +158,4 @@ expect:
     key: text
     node_id: answer
   memory:
-    episodic: '{"entry_id":"<id:1>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":3,"failure":null,"inputs":{"topic":"queue ordering"},"interactions":[{"kind":"model_text","text":"Use a queue to preserve arrival order."}],"memory_sections":[],"occurrence_path":[],"output":"Use a queue to preserve arrival order.","owner_static_path":["answer"],"prompt":"Explain queue ordering.","run_id":"r1","status":"succeeded"}}'
+    episodic: '{"entry_id":"<id:1>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":8,"failure":null,"inputs":{"topic":"queue ordering"},"interactions":[{"kind":"model_text","text":"Use a queue to preserve arrival order."}],"memory_sections":[],"occurrence_path":[],"output":"Use a queue to preserve arrival order.","owner_static_path":["answer"],"prompt":"Explain queue ordering.","run_id":"r1","status":"succeeded"}}'

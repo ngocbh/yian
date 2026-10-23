@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: two
   name: two
@@ -126,43 +127,75 @@ expect:
             source: environment
           model: claude-sonnet-4-5
           provider: anthropic
-      inputs: {}
       learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, agent]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, agent]
+  - - pool_commit
     - agent
     - value: ok
+  - - node_succeeded
+    - agent
+    - {commit: 9}
   - [node_started, child]
   - - node_expanded
     - child
     - prune_ids: []
       seed: {}
   - [node_started, other]
-  - - node_succeeded
+  - - pool_commit
     - other
     - value: ok
-  - [node_started, child/__start__]
   - - node_succeeded
+    - other
+    - {commit: 14}
+  - [node_started, child/__start__]
+  - - pool_commit
     - child/__start__
     - value: {}
-  - [node_started, __end__]
   - - node_succeeded
+    - child/__start__
+    - {commit: 17}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: ok
-  - [node_started, child/nested]
   - - node_succeeded
+    - __end__
+    - {commit: 20}
+  - [node_started, child/nested]
+  - - pool_commit
     - child/nested
     - value: ok
+  - - node_succeeded
+    - child/nested
+    - {commit: 23}
   - [node_started, child/__end__]
+  - - pool_commit
+    - child/__end__
+    - value: ok
+      key: child
   - - node_succeeded
     - child/__end__
-    - commit_target: child
-      value: ok
+    - {commit: 26}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -173,13 +206,13 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: gpt-5.4
       node_id: agent
       provider: openai
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:1>
+    - exchange_id: <id:2>
       model: gpt-5.4
       node_id: agent
       provider: openai
@@ -197,13 +230,13 @@ expect:
   - - NodeStarted
     - node_id: other
   - - ModelCallStarted
-    - exchange_id: <id:2>
+    - exchange_id: <id:3>
       model: claude-sonnet-4-5
       node_id: other
       provider: anthropic
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:2>
+    - exchange_id: <id:3>
       model: claude-sonnet-4-5
       node_id: other
       provider: anthropic
@@ -224,13 +257,13 @@ expect:
   - - NodeStarted
     - node_id: child/nested
   - - ModelCallStarted
-    - exchange_id: <id:3>
+    - exchange_id: <id:4>
       model: nested-model
       node_id: child/nested
       provider: openai
       purpose: chat
   - - ModelCallFinished
-    - exchange_id: <id:3>
+    - exchange_id: <id:4>
       model: nested-model
       node_id: child/nested
       provider: openai
@@ -248,32 +281,32 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: false
     key: text
     node_id: agent
   - chunk: ''
-    exchange_id: <id:1>
+    exchange_id: <id:2>
     final: true
     key: text
     node_id: agent
-  - chunk: ok
-    exchange_id: <id:2>
-    final: false
-    key: text
-    node_id: other
-  - chunk: ''
-    exchange_id: <id:2>
-    final: true
-    key: text
-    node_id: other
   - chunk: ok
     exchange_id: <id:3>
+    final: false
+    key: text
+    node_id: other
+  - chunk: ''
+    exchange_id: <id:3>
+    final: true
+    key: text
+    node_id: other
+  - chunk: ok
+    exchange_id: <id:4>
     final: false
     key: text
     node_id: child/nested
   - chunk: ''
-    exchange_id: <id:3>
+    exchange_id: <id:4>
     final: true
     key: text
     node_id: child/nested

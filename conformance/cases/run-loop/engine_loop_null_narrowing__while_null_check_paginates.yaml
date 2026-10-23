@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: pages
   name: pages
@@ -67,15 +68,28 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        start: p1
-      learnable: false
+    - learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {start: p1}
   - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
     - __start__
     - value:
         start: p1
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, pages]
   - - node_expanded
     - pages
@@ -84,19 +98,28 @@ expect:
       - cursor: p1
       - 0
   - [node_started, pages#0/__start__]
-  - - node_succeeded
+  - - pool_commit
     - pages#0/__start__
     - value:
         cursor: p1
-  - [node_started, pages#0/get]
   - - node_succeeded
+    - pages#0/__start__
+    - {commit: 11}
+  - [node_started, pages#0/get]
+  - - pool_commit
     - pages#0/get
     - value: p2
-  - [node_started, pages#0/__end__]
   - - node_succeeded
+    - pages#0/get
+    - {commit: 14}
+  - [node_started, pages#0/__end__]
+  - - pool_commit
     - pages#0/__end__
     - value:
         cursor: p2
+  - - node_succeeded
+    - pages#0/__end__
+    - {commit: 17}
   - [node_started, pages~1]
   - - node_expanded
     - pages~1
@@ -105,28 +128,43 @@ expect:
       - cursor: p2
       - 1
   - [node_started, pages#1/__start__]
-  - - node_succeeded
+  - - pool_commit
     - pages#1/__start__
     - value:
         cursor: p2
-  - [node_started, pages#1/get]
-  - [node_succeeded, pages#1/get]
-  - [node_started, pages#1/__end__]
   - - node_succeeded
+    - pages#1/__start__
+    - {commit: 22}
+  - [node_started, pages#1/get]
+  - [pool_commit, pages#1/get]
+  - - node_succeeded
+    - pages#1/get
+    - {commit: 25}
+  - [node_started, pages#1/__end__]
+  - - pool_commit
     - pages#1/__end__
     - value:
         cursor: null
+  - - node_succeeded
+    - pages#1/__end__
+    - {commit: 28}
   - [node_started, pages~2]
+  - - pool_commit
+    - pages~2
+    - value:
+        cursor: null
+      key: pages
   - - node_succeeded
     - pages~2
-    - commit_target: pages
-      value:
-        cursor: null
+    - {commit: 31}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value:
         cursor: null
+  - - node_succeeded
+    - __end__
+    - {commit: 34}
   events:
   - [RunStarted]
   - - NodeStarted

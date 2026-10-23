@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |2
 
   id: opaque-output-map
@@ -30,15 +31,29 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs:
-        values: [1, 4]
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value:
         values: [1, 4]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        values: [1, 4]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
   - [node_started, each]
   - - node_expanded
     - each
@@ -47,36 +62,57 @@ expect:
       - value: 1
       - value: 4
   - [node_started, each/__start__]
-  - - node_succeeded
+  - - pool_commit
     - each/__start__
     - value: {}
-  - [node_started, each#0/__start__]
   - - node_succeeded
+    - each/__start__
+    - {commit: 11}
+  - [node_started, each#0/__start__]
+  - - pool_commit
     - each#0/__start__
     - value:
         value: 1
-  - [node_started, each#1/__start__]
   - - node_succeeded
+    - each#0/__start__
+    - {commit: 14}
+  - [node_started, each#1/__start__]
+  - - pool_commit
     - each#1/__start__
     - value:
         value: 4
-  - [node_started, each#0/__end__]
   - - node_succeeded
+    - each#1/__start__
+    - {commit: 17}
+  - [node_started, each#0/__end__]
+  - - pool_commit
     - each#0/__end__
     - value: 2
-  - [node_started, each#1/__end__]
   - - node_succeeded
+    - each#0/__end__
+    - {commit: 20}
+  - [node_started, each#1/__end__]
+  - - pool_commit
     - each#1/__end__
     - value: 5
+  - - node_succeeded
+    - each#1/__end__
+    - {commit: 23}
   - [node_started, each/__end__]
+  - - pool_commit
+    - each/__end__
+    - value: [2, 5]
+      key: each
   - - node_succeeded
     - each/__end__
-    - commit_target: each
-      value: [2, 5]
+    - {commit: 26}
   - [node_started, __end__]
-  - - node_succeeded
+  - - pool_commit
     - __end__
     - value: [2, 5]
+  - - node_succeeded
+    - __end__
+    - {commit: 29}
   events:
   - [RunStarted]
   - - NodeStarted

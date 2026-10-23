@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: nested
   name: nested
@@ -31,29 +32,55 @@ expect:
   trace:
   - - run_started
     - null
-    - inputs: {}
-      learnable: false
+    - learnable: false
       num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
     - __start__
     - value: {}
-  - [node_started, n]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
   - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, n]
+  - - pool_commit
     - n
     - value: hi
-  - [node_started, score]
   - - node_succeeded
+    - n
+    - {commit: 9}
+  - [node_started, score]
+  - - pool_commit
     - score
     - value: 0.75
-  - [node_started, c]
   - - node_succeeded
+    - score
+    - {commit: 12}
+  - [node_started, c]
+  - - pool_commit
     - c
     - value: [0.75, hi]
-  - [node_started, __end__]
   - - node_succeeded
+    - c
+    - {commit: 15}
+  - [node_started, __end__]
+  - - pool_commit
     - __end__
     - value: [0.75, hi]
+  - - node_succeeded
+    - __end__
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted

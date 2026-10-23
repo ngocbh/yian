@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: loop-max-exceeded
   name: loop_max_exceeded
@@ -51,28 +52,39 @@ expect:
       node: repeat~2
       frames: [{label: flow.yaml, range: [4, 3, 4, 9]}]
   trace:
-    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
     - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {}}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
     - [node_started, repeat]
     - [node_expanded, repeat, {seed: [{n: 0}, 0], prune_ids: []}]
     - [node_started, "repeat#0/__start__"]
-    - [node_succeeded, "repeat#0/__start__", {value: {n: 0}}]
+    - [pool_commit, "repeat#0/__start__", {value: {n: 0}}]
+    - [node_succeeded, repeat#0/__start__, {commit: 11}]
     - [node_started, "repeat#0/bump"]
-    - [node_succeeded, "repeat#0/bump", {value: {n: 1}}]
+    - [pool_commit, "repeat#0/bump", {value: {n: 1}}]
+    - [node_succeeded, repeat#0/bump, {commit: 14}]
     - [node_started, "repeat#0/__end__"]
-    - [node_succeeded, "repeat#0/__end__", {value: {n: 1}}]
+    - [pool_commit, "repeat#0/__end__", {value: {n: 1}}]
+    - [node_succeeded, repeat#0/__end__, {commit: 17}]
     - [node_started, repeat~1]
     - - node_expanded
       - repeat~1
       - seed: [{n: 1}, 1]
         prune_ids: ["repeat#0/__end__", "repeat#0/__start__", "repeat#0/bump", repeat~1]
     - [node_started, "repeat#1/__start__"]
-    - [node_succeeded, "repeat#1/__start__", {value: {n: 1}}]
+    - [pool_commit, "repeat#1/__start__", {value: {n: 1}}]
+    - [node_succeeded, repeat#1/__start__, {commit: 22}]
     - [node_started, "repeat#1/bump"]
-    - [node_succeeded, "repeat#1/bump", {value: {n: 2}}]
+    - [pool_commit, "repeat#1/bump", {value: {n: 2}}]
+    - [node_succeeded, repeat#1/bump, {commit: 25}]
     - [node_started, "repeat#1/__end__"]
-    - [node_succeeded, "repeat#1/__end__", {value: {n: 2}}]
+    - [pool_commit, "repeat#1/__end__", {value: {n: 2}}]
+    - [node_succeeded, repeat#1/__end__, {commit: 28}]
     - [node_started, repeat~2]
     - - node_failed
       - repeat~2

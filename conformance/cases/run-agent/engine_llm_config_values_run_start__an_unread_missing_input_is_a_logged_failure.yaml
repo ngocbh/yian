@@ -2,7 +2,7 @@
 # hand TS expect: Python prints `from=None` in this message and no shim converts it, so the TS
 # text `from=null` was written by hand.
 kind: run
-rules: [messages]
+rules: [messages, run-log]
 flow: |
   id: f
   name: f
@@ -41,10 +41,20 @@ expect:
             source: missing
           model: gpt-x
           provider: openai
-      inputs:
-        m: gpt-x
       learnable: false
       num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {m: gpt-x}
   - [node_started, __start__]
   - - node_failed
     - __start__

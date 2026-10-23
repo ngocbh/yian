@@ -40,7 +40,6 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   MemoryContext,
-  type MemoryContextRequest,
   MemoryRecallError,
   MemoryScope,
   MemorySection,
@@ -88,8 +87,8 @@ function scope(): MemoryScope {
 
 /** An opener serving text-only memory: `recall`'s sections, given the scope and recall context. */
 function opener(recall: (scope: MemoryScope, context: RecallContext) => readonly MemorySection[]): MemoryContextOpener {
-  return async (memoryScope: MemoryScope, request: MemoryContextRequest) =>
-    new MemoryContext({ sections: recall(memoryScope, request.recall) });
+  return async (memoryScope: MemoryScope, context: RecallContext) =>
+    new MemoryContext({ sections: recall(memoryScope, context) });
 }
 
 /** An AGENT `agent` with prompt `Answer` and the test scope. */

@@ -5,15 +5,18 @@
  * Ported, through `runFlow` and `RunResult.backward`: `test_python_api_named_memories_persist_and_stack`.
  * Changed: the model is a `ChatModel` from `models` (Python patches `model_from_config`); the runs'
  * environment is `NO_ENV`, so `HOME` is the test preload's per-test home where Python uses `tmp_path`.
+ * TS yian has no session memory, so the AGENT's own memory `chat` is episodic: the rerun's AGENT
+ * recalls it after the root memory and sees one user turn.
  *
- * Ported through the CLI, each `yian run` a `main` call (`cli`), as
- * `tests/cli/memory_persistence.test.ts` runs it: `test_cli_memory_root_persists_session_across_processes`
- * and `test_cli_memory_storage_override_places_one_key`. Changed: each command builds and closes
- * its own memory registry in this process, so only the storage files carry the session from one
- * to the next (Python runs a child process per command); the model is a fake `fetch` answering as
- * xAI's chat endpoint (`runCli` with `describeCliSeen`), so the flows' `llm_config` names xAI, its
- * key in the command's env (`HOME` is the preload's per-test home), where Python patches `model_from_config`; the printed output is its
- * text form, compact JSON (design 3.2.3), not Python's `repr`.
+ * Ported through the CLI, each `yian run` a `main` call (`cli`):
+ * `test_cli_memory_root_persists_session_across_processes` and
+ * `test_cli_memory_storage_override_places_one_key`. Changed: `chat` is episodic, as above, and the
+ * CLI never runs backward, so the second command sees what the first did; only where each key's
+ * file lands is checked. Each command builds and closes its own memory registry in this process
+ * (Python runs a child process per command); the model is a fake `fetch` answering as xAI's chat
+ * endpoint (`runCli` with `describeCliSeen`), so the flows' `llm_config` names xAI, its key in the
+ * command's env (`HOME` is the preload's per-test home), where Python patches `model_from_config`;
+ * the printed output is its text form, compact JSON (design 3.2.3), not Python's `repr`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -26,7 +29,7 @@ import type { ChatModel } from "../../src/llm/events.ts";
 import type { Message } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { buildMemories } from "../../src/memory_host.ts";
-import { type ChatText, memorySections, reply, runCli, runWith } from "./session_fakes.ts";
+import { type ChatText, memorySections, reply, runCli, runWith } from "./run_state_fixtures.ts";
 
 const ROOT_FLOW = `id: e2e-memory
 name: e2e_memory
@@ -42,7 +45,7 @@ nodes:
   ask:
     kind: agent
     llm_config: {provider: openai, model: fake-model}
-    long_term_memory: {chat: session}
+    long_term_memory: {chat: episodic}
     input: {question: "\${input.question}"}
     prompt: \${question}
     output: str
@@ -70,11 +73,9 @@ nodes:
 output: \${summarize.output}
 `;
 
-const STATUS_PREFIX = "Session history status (context only): ";
-
 /** Describe what the model saw: real user turns and recalled memory keys (Python's `_reply`). */
 function describeSeen(messages: readonly Message[]) {
-  const users = messages.filter((message) => message.role === "user" && !message.text().startsWith(STATUS_PREFIX));
+  const users = messages.filter((message) => message.role === "user");
   const keys: string[] = [];
   for (const section of memorySections(messages)) if (!keys.includes(section.memory)) keys.push(section.memory);
   return reply(`users=${users.length} memories=${keys.join(",")}`);
@@ -110,7 +111,7 @@ test("the API's named memories persist and stack", async () => {
   {
     const memory = await buildMemories(flow, { root });
     try {
-      expect(Object.fromEntries(memory.types)).toEqual({ chat: "session", "lib.notes": "episodic", notes: "episodic" });
+      expect(Object.fromEntries(memory.types)).toEqual({ chat: "episodic", "lib.notes": "episodic", notes: "episodic" });
       expect(existsSync(root)).toBe(false); // construction is lazy
       const first = await runWith(flow, { question: "q1" }, memory, MODEL, { learnable: true });
       expect(first.status).toBe("succeeded");
@@ -126,7 +127,7 @@ test("the API's named memories persist and stack", async () => {
 
   expect(sqliteFiles(join(root, "e2e-memory"))).toEqual(["chat.sqlite", join("lib", "notes.sqlite"), "notes.sqlite"]);
 
-  // A fresh registry over the same root sees the learned episodes and the session.
+  // A fresh registry over the same root sees the learned episodes.
   let second;
   {
     const memory = await buildMemories(flow, { root });
@@ -138,8 +139,8 @@ test("the API's named memories persist and stack", async () => {
   }
   expect(second.status).toBe("succeeded");
   const output = second.output as { answer: string; summary: string };
-  // ask: one root-flow memory, plus two session user turns.
-  expect(output.answer).toBe("users=2 memories=notes");
+  // ask: the root-flow memory, then its own.
+  expect(output.answer).toBe("users=1 memories=notes,chat");
   // summarize: outer root memory first, then its own file's scoped memory.
   expect(output.summary).toBe("users=1 memories=notes,lib.notes");
 });
@@ -157,7 +158,7 @@ function writeFlows(dir: string): string {
 /** Python's `_Model` behind the CLI: what the model saw, as `describeSeen`. */
 function describeCliSeen(messages: readonly ChatText[]): string {
   const texts = (role: string) => messages.filter((m) => m.role === role).map((m) => m.text);
-  const users = texts("user").filter((text) => !text.startsWith(STATUS_PREFIX));
+  const users = texts("user");
   const system = texts("system")[0] ?? "";
   const keys: string[] = [];
   if (system.includes("Memory context (canonical JSON")) {
@@ -172,13 +173,13 @@ function cli(argv: readonly string[]) {
   return runCli(argv, describeCliSeen);
 }
 
-/** The exact line `yian run` prints for this flow's output. */
-function resultLine(answerUsers: number): string {
-  // The CLI never runs backward, so no episodic memory has anything to recall.
-  return `{"answer":"users=${answerUsers} memories=","summary":"users=1 memories="}`;
-}
+/**
+ * The exact line `yian run` prints for this flow's output: the CLI never runs backward, so no
+ * episodic memory has anything to recall.
+ */
+const RESULT_LINE = `{"answer":"users=1 memories=","summary":"users=1 memories="}`;
 
-test("the CLI's memory root persists the session across processes", async () => {
+test("the CLI's memory root keeps every key under the flow id across processes", async () => {
   const flow = writeFlows(tmp);
   const root = join(tmp, "mem");
   const outputs: string[][] = [];
@@ -188,8 +189,8 @@ test("the CLI's memory root persists the session across processes", async () => 
     expect(result.code, result.stdout + result.stderr).toBe(0);
     outputs.push(result.stdout.split("\n"));
   }
-  expect(outputs[0]).toContain(resultLine(1));
-  expect(outputs[1]).toContain(resultLine(2)); // session history came from chat.sqlite
+  expect(outputs[0]).toContain(RESULT_LINE);
+  expect(outputs[1]).toContain(RESULT_LINE);
   const base = join(root, "e2e-memory");
   expect(existsSync(join(base, "chat.sqlite"))).toBe(true);
   expect(existsSync(join(base, "notes.sqlite"))).toBe(true);
@@ -208,7 +209,7 @@ test("the CLI's memory storage override places one key", async () => {
     expect(result.code, result.stdout + result.stderr).toBe(0);
     stdout = result.stdout;
   }
-  expect(stdout.split("\n")).toContain(resultLine(2));
+  expect(stdout.split("\n")).toContain(RESULT_LINE);
   expect(existsSync(chat)).toBe(true);
   expect(existsSync(join(root, "e2e-memory", "chat.sqlite"))).toBe(false);
 });

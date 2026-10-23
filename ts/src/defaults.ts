@@ -268,18 +268,6 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 256,
   }),
-  entry("SESSION_HISTORY_BUDGET_CHARS", {
-    default: 32_000,
-    description: "Characters of history a session memory sends to the model",
-    group: "setting",
-    minimum: 1,
-  }),
-  entry("SESSION_RECENT_TURNS", {
-    default: 4,
-    description: "Recent turns a session memory always keeps whole",
-    group: "setting",
-    minimum: 0,
-  }),
   entry("PROFILE_MAX_CHARS", {
     default: 32_000,
     description: "Characters a profile memory may hold",

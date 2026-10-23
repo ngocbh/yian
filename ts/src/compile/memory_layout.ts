@@ -26,7 +26,6 @@ import {
   sameMemoryScope,
   sameMemorySpec,
 } from "../memory/contracts.ts";
-import { compatibility } from "../nodes/agent/memory.ts";
 import { AgentNode } from "../nodes/agent/node.ts";
 import { Node } from "../nodes/base.ts";
 import { comparePaths, isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
@@ -95,8 +94,8 @@ export function revalidateMemoryScope(value: unknown, name = "memory_scope"): Me
 /**
  * One reachable memory key with its owners and AGENT placements. Frozen.
  *
- * `placements` lists the locators of AGENT targets whose own declarations include the key; the
- * run-setup session check reads it. `origins` aligns with `owners` and serves diagnostics only.
+ * `placements` lists the locators of AGENT targets whose own declarations include the key.
+ * `origins` aligns with `owners` and serves diagnostics only.
  */
 export class ResolvedMemory {
   readonly key: string;
@@ -511,8 +510,7 @@ function siteLabel(site: DeclSite): string {
 /**
  * Group reachable declarations by key and enforce the per-key rules. Exported for tests.
  *
- * Each key has one type and config. A session key has exactly one owner, an AGENT, and an AGENT
- * owns at most one session key.
+ * Each key has one type and config.
  *
  * @throws MemorySetupError when a rule fails; its notes name the other sites.
  */
@@ -557,28 +555,6 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
       if (!bySite.has(siteKey(decl.site))) bySite.set(siteKey(decl.site), decl);
     }
     const ordered = [...bySite.values()];
-    if (first.type === "session") {
-      const flowDecl = ordered.find((decl) => decl.site.node === null);
-      if (flowDecl !== undefined) {
-        throw setupError(
-          `session memory ${reprText(key)} cannot be declared on a flow ` +
-            `(${siteLabel(flowDecl.site)}); declare it on one AGENT`,
-          { origin: flowDecl.origin },
-        );
-      }
-      if (ordered.length > 1) {
-        throw setupError(
-          `session memory ${reprText(key)} has more than one owner: ` +
-            ordered.map((decl) => siteLabel(decl.site)).join(", ") +
-            "; give each AGENT its own session memory",
-          {
-            origin: ordered[0]!.origin,
-            related: ordered.slice(1).map((decl) => decl.origin),
-            notes: ordered.slice(1).map((decl) => `also owned at ${siteLabel(decl.site)}`),
-          },
-        );
-      }
-    }
     const owners = ordered.map((decl) => decl.site);
     const placements = new Map<string, readonly string[]>();
     for (const [, placement] of entries) {
@@ -595,27 +571,6 @@ export function memoryTable(declared: readonly Declared[]): readonly ResolvedMem
         ordered.map((decl) => decl.origin),
       ),
     );
-  }
-  const sessionsByAgent = new Map<string, { site: DeclSite; sessions: ResolvedMemory[] }>();
-  for (const memory of table) {
-    if (memory.type !== "session") continue;
-    const site = memory.owners[0]!;
-    const group = sessionsByAgent.get(siteKey(site));
-    if (group === undefined) sessionsByAgent.set(siteKey(site), { site, sessions: [memory] });
-    else group.sessions.push(memory);
-  }
-  for (const { site, sessions } of sessionsByAgent.values()) {
-    if (sessions.length > 1) {
-      throw setupError(
-        `${siteLabel(site)} declares more than one session memory: ` +
-          sessions.map((memory) => JSON.stringify(memory.key)).join(", "),
-        {
-          origin: sessions[0]!.origin,
-          related: sessions.slice(1).map((memory) => memory.origin),
-          notes: sessions.slice(1).map((memory) => `also declares ${reprText(memory.key)}`),
-        },
-      );
-    }
   }
   return Object.freeze(table);
 }
@@ -672,54 +627,6 @@ export function memoryStacks(layout: ResolvedMemoryLayout): readonly MemoryStack
       .map((target) => new MemoryStack(target.locator, target.scope!.memories))
       .sort((a, b) => comparePaths(a.locator, b.locator)),
   );
-}
-
-/**
- * Require every placement of a session key to resolve one compatibility.
- *
- * `effectiveLlm` is the run's resolved LLM map keyed by the `/`-joined root-relative node ids.
- * `callTimeKnown` gives each placement whose config resolves only when it runs its provider when
- * run start knows it, else `null`; such a placement is skipped, and the session checks it when the
- * agent runs. Compatibility is provider plus message format; model differences are allowed.
- *
- * @throws MemorySetupError when two placements resolve different compatibilities.
- * @throws RangeError when a placement has an entry in neither map (Python's `KeyError`), because
- *   the cascade and the layout then disagree about the flow.
- */
-export function checkSessionCompatibility(
-  layout: ResolvedMemoryLayout,
-  effectiveLlm: Readonly<Record<string, Readonly<Record<string, unknown>> | null>>,
-  options: { callTimeKnown?: Readonly<Record<string, string | null>> | null } = {},
-): void {
-  revalidateResolvedLayout(layout);
-  const known = options.callTimeKnown ?? {};
-  for (const memory of layout.memories) {
-    if (memory.type !== "session" || memory.placements.length < 2) continue;
-    const configs: [string, Readonly<Record<string, unknown>> | null][] = [];
-    for (const placement of memory.placements) {
-      const path = placement.join("/");
-      if (!Object.hasOwn(known, path)) {
-        if (!Object.hasOwn(effectiveLlm, path)) throw new RangeError(`no effective LLM config for ${reprText(path)}`);
-        configs.push([path, effectiveLlm[path] ?? null]);
-      } else if (known[path] !== null) {
-        configs.push([path, { provider: known[path] }]);
-      }
-    }
-    if (configs.length < 2) continue;
-    const [firstPath, firstConfig] = configs[0]!;
-    const first = compatibility(firstConfig);
-    for (const [path, config] of configs.slice(1)) {
-      const other = compatibility(config);
-      if (exactJson(other) !== exactJson(first)) {
-        throw setupError(
-          `session memory ${reprText(memory.key)} resolves provider ` +
-            `${reprText(first["provider"] as string)} at ${reprText(firstPath)} but ` +
-            `${reprText(other["provider"] as string)} at ${reprText(path)}; pin a provider on the AGENT`,
-          { origin: memory.origin },
-        );
-      }
-    }
-  }
 }
 
 /** Resolve one flow occurrence into node scopes and reachable declarations. */

@@ -67,8 +67,7 @@ import {
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { rejected, textReply } from "./run_state_fixtures.ts";
-import { CrashAt, crashes } from "./session_fakes.ts";
+import { CrashAt, crashes, rejected, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-backward-recovery-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

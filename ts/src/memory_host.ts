@@ -23,7 +23,6 @@ import {
 import { EpisodicMemory } from "./memory/episodic.ts";
 import { ProfileMemory } from "./memory/profile.ts";
 import { ReflectiveMemory } from "./memory/reflective.ts";
-import { SessionMemory } from "./memory/session.ts";
 import { FileMarkdownStore, InMemoryMarkdownStore } from "./memory/storage/markdown.ts";
 import { realStoragePath } from "./memory/storage/sqlite.ts";
 import { addNote } from "./runtime/eval_node.ts";
@@ -225,7 +224,6 @@ function builtin(memory: ResolvedMemory, path: string | null, createParent: bool
   const camel = (key: string) => key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
   const options = Object.fromEntries(Object.entries(config).map(([key, value]) => [camel(key), value]));
   if (type === "episodic") return new EpisodicMemory({ ...options, storage: path, createParent });
-  if (type === "session") return new SessionMemory({ ...options, storage: path, createParent });
   const learner = learnerOptions(memory.key, learners);
   if (type === "reflective") return new ReflectiveMemory({ ...options, storage: path, createParent, ...learner });
   const store = path === null ? new InMemoryMarkdownStore() : new FileMarkdownStore(path, { createParent });

@@ -44,7 +44,7 @@ import { McpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../engine/mcp_helpers.ts";
-import { NO_ENV } from "../engine/session_fakes.ts";
+import { NO_ENV } from "../engine/run_state_fixtures.ts";
 
 // Each row starts server processes; the default 5 s is too tight on a loaded machine.
 const SLOW = 60_000;

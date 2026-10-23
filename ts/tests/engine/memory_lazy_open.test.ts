@@ -1,7 +1,7 @@
 /**
  * Built-in SQLite backends open storage on first use, never in the constructor: a port of
- * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory`, `ReflectiveMemory` and
- * `SessionMemory`.
+ * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory` and `ReflectiveMemory` (TS yian
+ * has no `SessionMemory`).
  *
  * Ported: `test_construction_touches_no_file`, `test_bad_path_shape_fails_at_construction_without_io`,
  * `test_reset_also_opens_storage`, `test_missing_parent_fails_at_first_open_without_create_parent`,
@@ -29,7 +29,6 @@ import { BUILTIN, type Env, install } from "../../src/defaults.ts";
 import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 
 const REFLECTIVE_LLM = { provider: "ollama", model: "current" };
@@ -49,7 +48,6 @@ const BACKENDS: [string, (file: string, options?: { createParent?: boolean }) =>
     (file, options = {}) =>
       new ReflectiveMemory({ llmConfig: REFLECTIVE_LLM, storage: file, env: baseEnv(), ...options }),
   ],
-  ["session", (file, options = {}) => new SessionMemory({ storage: file, ...options })],
 ];
 
 let dir: string;

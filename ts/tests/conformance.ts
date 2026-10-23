@@ -2352,19 +2352,11 @@ function runHooks(
 
 /**
  * Return the whole recall text of memory `key` in `memory`, after the main run. Fails the case for
- * a key the flow doesn't declare, and for a session key, whose whole recall is empty by contract
- * (a session is checked through a later run's request).
+ * a key the flow doesn't declare.
  */
 async function recall(memory: MemoryRegistry, key: string): Promise<string> {
-  const type = memory.types.get(key);
-  if (type === undefined) {
+  if (!memory.types.has(key)) {
     throw new CaseFailure(`\`expect.memory.${key}\` names no memory the flow declares`);
-  }
-  if (type === "session") {
-    throw new CaseFailure(
-      `\`expect.memory.${key}\` is a session memory, whose whole recall is empty; check it ` +
-        "through a later run's request",
-    );
   }
   const session = await memory.get(key)!.openRun();
   try {

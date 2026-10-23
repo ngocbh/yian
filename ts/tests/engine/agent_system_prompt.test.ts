@@ -34,12 +34,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  MemoryContext,
-  type MemoryContextRequest,
-  MemoryScope,
-  MemorySection,
-} from "../../src/memory/contracts.ts";
+import { MemoryContext, MemoryScope, MemorySection, type RecallContext } from "../../src/memory/contracts.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -143,8 +138,8 @@ test("memory sections append after the authored prompt", async () => {
   node.memoryScope = new MemoryScope(["flow", "agent"], { memories: ["outer", "local"] });
   const sections = [new MemorySection("outer", "outer facts"), new MemorySection("local", "local facts")];
   const recalled: string[] = [];
-  const memoryContextOpener = async (_scope: MemoryScope, request: MemoryContextRequest) => {
-    recalled.push(request.recall.baseSystemPrompt);
+  const memoryContextOpener = async (_scope: MemoryScope, recall: RecallContext) => {
+    recalled.push(recall.baseSystemPrompt);
     return new MemoryContext({ sections });
   };
 

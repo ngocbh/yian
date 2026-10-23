@@ -50,7 +50,7 @@
  * construction error ignored, a `null` trace does nothing); `toolText` of a string, a record, a
  * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
  * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
- * its `typeof`); the `SKIPPED_TOOL_RESULT` and `SKIPPED_TOOL_ERROR` texts; the `DEFAULT_SYSTEM`
+ * its `typeof`); the `SKIPPED_TOOL_ERROR` text; the `DEFAULT_SYSTEM`
  * text and the loop errors' names; `isTextOutput`; `isMaxToolIterations`; the default
  * `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward`'s host
  * secrets (a static agent's own `api_key` and `headers`, a marked call-time agent's host key and
@@ -134,7 +134,7 @@ import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../s
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
-import { reportedText, SKIPPED_TOOL_RESULT, toolText } from "../../src/nodes/agent/memory.ts";
+import { reportedText, toolText } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
 import {
   recordModelText,
@@ -160,8 +160,7 @@ import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.t
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { drive, engine, graph, noGrowth, rejected, serving, textReply } from "./run_state_fixtures.ts";
-import { NO_ENV, runWith } from "./session_fakes.ts";
+import { drive, engine, graph, NO_ENV, noGrowth, rejected, runWith, serving, textReply } from "./run_state_fixtures.ts";
 
 test("textOf returns a string as it is", () => {
   expect(textOf("hello\nworld")).toBe("hello\nworld");
@@ -273,8 +272,7 @@ test("reportedText gives the message, else the error's name", () => {
   expect([reportedText("x", branded), reportedText("x", { ...branded, toString: () => "" })]).toEqual(["branded", "object"]);
 });
 
-test("the skipped tool texts keep Python's wording", () => {
-  expect(SKIPPED_TOOL_RESULT).toBe("Not run: interrupted by the user.");
+test("the skipped tool text keeps Python's wording", () => {
   expect(SKIPPED_TOOL_ERROR).toBe("interrupted");
 });
 

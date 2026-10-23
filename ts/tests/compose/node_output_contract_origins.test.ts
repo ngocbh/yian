@@ -62,8 +62,7 @@ import { ValueKind } from "../../src/typesys/values.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { runFlow } from "../../src/run.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
-import { drive } from "../engine/run_state_fixtures.ts";
-import { NO_ENV } from "../engine/session_fakes.ts";
+import { drive, NO_ENV } from "../engine/run_state_fixtures.ts";
 import { assembleText, loadError } from "./declarations.ts";
 
 const NESTED_OUTPUT_FLOW = `id: nested-output-contract

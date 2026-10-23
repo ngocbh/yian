@@ -159,14 +159,14 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     event: new ModelCallFinished({
       nodeId: "n",
       exchangeId: "x",
-      purpose: "history_summary",
+      purpose: "chat",
       error: "TimeoutError",
       attempt: 1,
     }),
     data: {
       node_id: "n",
       exchange_id: "x",
-      purpose: "history_summary",
+      purpose: "chat",
       provider: null,
       model: null,
       usage: null,
@@ -517,7 +517,6 @@ const PURPOSES: Record<ModelCallPurpose, null> = {
   chat: null,
   structured_native: null,
   structured_fallback: null,
-  history_summary: null,
 };
 
 /** Return the `$defs` entry named `name`. */

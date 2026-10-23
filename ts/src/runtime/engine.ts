@@ -8,8 +8,8 @@
  * follows its record's append and reducer application. Stream chunks are transient callback-only
  * messages and never enter the log.
  *
- * Knows about:   compile/model, diagnostics, events, llm_clients (types), memory contracts, nodes,
- *                runtime eval_node, log, state and trace, skills, tools, typesys.
+ * Knows about:   compile/model, diagnostics, events, llm_clients (types), nodes, runtime
+ *                eval_node, log, state and trace, skills, tools, typesys.
  * Never imports: the run boundary, compose, or the CLI.
  */
 
@@ -19,7 +19,6 @@ import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { NodeAttemptResumed, type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { ConversationInvocation } from "../memory/contracts.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
@@ -330,10 +329,9 @@ export class FlowEngine {
         if (state.ready.length === 0) throw new Error("FlowEngine reached nonterminal quiescence");
         const nodeId = state.ready[0]!;
         const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-        const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
         this.#publish(started, events);
         signal.throwIfAborted();
-        const evaluated = await this.#startEvaluation(nodeId, invocation);
+        const evaluated = await this.#startEvaluation(nodeId);
         signal.throwIfAborted();
         const settled = this.#commitOutcome(nodeId, evaluated);
         // The commit may have set the result, which the loop condition narrowed to `null`.
@@ -367,11 +365,10 @@ export class FlowEngine {
           signal.throwIfAborted();
           const nodeId = state.ready[0]!;
           const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-          const invocation = new ConversationInvocation(state.runId!, state.acceptedStarts.get(nodeId)!);
           // The start is durable and published before its worker starts.
           this.#publish(started, events);
           signal.throwIfAborted();
-          const worker = this.#startEvaluation(nodeId, invocation).then(
+          const worker = this.#startEvaluation(nodeId).then(
             (outcome) => completions.push({ nodeId, outcome }),
             (error: unknown) => completions.push({ nodeId, error }),
           );
@@ -494,15 +491,15 @@ export class FlowEngine {
    * caller's async context and a store the node sets (`AsyncLocalStorage.enterWith`, even in its
    * synchronous part) stays in its own chain, never reaching the dispatcher or another node.
    */
-  #startEvaluation(nodeId: string, invocation: ConversationInvocation): Promise<EvaluatedOutcome> {
-    return new AsyncResource("yian.node").runInAsyncScope(() => this.#evaluate(nodeId, invocation));
+  #startEvaluation(nodeId: string): Promise<EvaluatedOutcome> {
+    return new AsyncResource("yian.node").runInAsyncScope(() => this.#evaluate(nodeId));
   }
 
   /**
    * Evaluate one started node under its own signal, aborted with the run's reason when the run
    * signal aborts; the run state changes only through its recorded steps.
    */
-  async #evaluate(nodeId: string, invocation: ConversationInvocation): Promise<EvaluatedOutcome> {
+  async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream } = this;
     const trace = state.trace;
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
@@ -523,7 +520,6 @@ export class FlowEngine {
         effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
         sourceResolver: trace === null ? null : (path) => trace.resolve(path),
         memoryContextOpener: this.memoryContextOpener,
-        memoryInvocation: invocation,
         tools: this.tools,
         skills: this.skills,
         steering: this.#steering,

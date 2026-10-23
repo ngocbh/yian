@@ -45,7 +45,6 @@ import {
 import { flowFingerprint } from "./compile/manifest.ts";
 import {
   applyMemoryLayout,
-  checkSessionCompatibility,
   memoryStacks,
   type ResolvedMemoryLayout,
   resolveMemoryLayout,
@@ -856,7 +855,7 @@ async function startRun(
     hostSettings: host,
   });
   // Each call-time agent's provider when run start already knows it: it limits the recorded
-  // selection and the session check.
+  // selection.
   const known = knownCallTimeProviders(privateFlow, runLlm.callTime, snapshot.defaults);
   let callTimeLlm: CallTimeLlm | null = null;
   if (Object.keys(runLlm.callTime).length > 0) {
@@ -887,7 +886,7 @@ async function startRun(
   let memoryRuntime: MemoryRuntime | null = null;
   let layout: MemoryLayoutParts | null = null;
   if (memory !== null) {
-    layout = resolveRuntimeMemoryLayout(privateFlow, effectiveLlm, known);
+    layout = resolveRuntimeMemoryLayout(privateFlow);
     checkRegistryTypes(memory, layout.memories);
     memoryRuntime = await MemoryRuntime.open({
       memories: layout.memories,
@@ -937,7 +936,7 @@ async function startRun(
       onStream,
       // A bare `runtime.openContext` would lose its `this`.
       memoryContextOpener:
-        runtime === null ? null : (scope, request, opts) => runtime.openContext(scope, request, opts),
+        runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
       tools: runTools,
       skills,
       steering,
@@ -1180,7 +1179,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
         onStream: options.onStream ?? null,
         // A bare `runtime.openContext` would lose its `this`.
         memoryContextOpener:
-          runtime === null ? null : (scope, request, opts) => runtime.openContext(scope, request, opts),
+          runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
         tools: runTools,
         skills,
         steering,
@@ -1942,23 +1941,11 @@ type MemoryLayoutParts = {
 /**
  * Derive the key table, origins and stacks, and stamp one private graph.
  *
- * With `effectiveLlm`, first check that each session key resolves one conversation compatibility
- * across its placements; `callTimeKnown` gives the provider of each placement resolved only when
- * it runs, when run start knows it (`checkSessionCompatibility`).
- *
  * @param flow The run's private flow copy; its nodes get their memory scopes.
- * @throws MemorySetupError when the layout breaks a rule or two placements of a session key
- *   resolve different providers.
+ * @throws MemorySetupError when the layout breaks a rule.
  */
-function resolveRuntimeMemoryLayout(
-  flow: CompiledFlow,
-  effectiveLlm: Readonly<Record<string, Readonly<AgentConfig>>> | null = null,
-  callTimeKnown: ReadonlyMap<string, string | null> = new Map(),
-): MemoryLayoutParts {
+function resolveRuntimeMemoryLayout(flow: CompiledFlow): MemoryLayoutParts {
   const resolved = resolveMemoryLayout(flow);
-  if (effectiveLlm !== null) {
-    checkSessionCompatibility(resolved, effectiveLlm, { callTimeKnown: Object.fromEntries(callTimeKnown) });
-  }
   applyMemoryLayout(flow, resolved);
   return memoryLayoutParts(resolved);
 }

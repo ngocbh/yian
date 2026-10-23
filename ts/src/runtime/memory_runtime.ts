@@ -13,14 +13,12 @@
 
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 import {
-  ConversationRequest,
   isMemory,
   type JsonObject,
   LearnContext,
   type Memory,
   MemoryContent,
   MemoryContext,
-  MemoryContextRequest,
   type MemoryMutation,
   MemoryOperationError,
   MemoryOperationFailure,
@@ -31,8 +29,8 @@ import {
   MemorySetupError,
   MemorySnapshotEnvelope,
   MemorySpec,
+  RecallContext,
   sameMemorySnapshotEnvelope,
-  type TranscriptSource,
 } from "../memory/contracts.ts";
 import { isExactly, sameItems } from "../nodes/contracts.ts";
 import { isList } from "../typesys/values.ts";
@@ -177,7 +175,7 @@ function invalidResultFailure(operation: string): MemoryOperationFailure {
   );
 }
 
-// Local copy of memory/session.ts's addNote.
+// Local copy of runtime/eval_node.ts's addNote: this module doesn't import the evaluator.
 /**
  * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
  * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
@@ -193,7 +191,7 @@ function addNote(error: unknown, text: () => string): void {
   } catch {}
 }
 
-// Local copy of memory/session.ts's typeName.
+// Local copy of memory/episodic.ts's typeName.
 /** Python's `type(value).__name__`: the constructor's name, else a string `name`, else `Error`. */
 function typeName(value: unknown): string {
   const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
@@ -240,8 +238,6 @@ export class MemoryRuntime {
   readonly snapshots: readonly MemorySnapshotEnvelope[];
   private readonly origins: ReadonlyMap<string, OriginRef | null>;
   private readonly sessions: ReadonlyMap<string, MemorySession>;
-  /** The keys that may hold a conversation. */
-  private readonly eligible: ReadonlySet<string>;
   #closing: Promise<void> | null = null;
 
   /** @internal Use `MemoryRuntime.open`, which validates and opens the sessions. */
@@ -255,7 +251,6 @@ export class MemoryRuntime {
     this.origins = options.origins;
     this.sessions = options.sessions;
     this.snapshots = options.snapshots;
-    this.eligible = new Set(options.memories.filter((spec) => spec.conversationEligible).map((spec) => spec.key));
   }
 
   /** @internal Whether `close()` has started. */
@@ -292,49 +287,42 @@ export class MemoryRuntime {
   }
 
   /**
-   * Recall each key in the scope and admit its one eligible transcript.
+   * Recall each key in the scope into ordered sections.
    *
-   * Sections keep the scope's outermost-first key order. Only a conversation-eligible key may
-   * contribute a transcript, and at most one key may do so; a losing source is never opened. A live
-   * transcript requires the accepted invocation, while text-only contexts do not. The caller owns
-   * the admitted turn and closes it.
+   * Sections keep the scope's outermost-first key order; a key with empty notes contributes none.
    *
    * @param scope - The exact compiled consumer scope over opened keys.
-   * @param request - The matching recall context, optional accepted invocation and compatibility
-   *   descriptor.
-   * @param options.signal - Checked after recall, before any transcript is opened; also given to
-   *   the selected source.
+   * @param recall - The matching recall context.
+   * @param options.signal - Checked after recall.
    * @throws Error when the runtime is closed or the scope names a key that wasn't opened.
    * @throws TypeError when a carrier or the signal has the wrong type.
-   * @throws RangeError when the paths disagree or a transcript lacks an invocation.
-   * @throws MemoryRecallError when a memory rejects recall, returns invalid content, returns a
-   *   transcript without being conversation-eligible, or returns a second transcript.
-   * @throws `signal.reason` when the signal aborted by the end of recall; any other recall or
-   *   `openTurn` failure propagates unchanged.
+   * @throws RangeError when the paths disagree.
+   * @throws MemoryRecallError when a memory rejects recall or returns invalid content.
+   * @throws `signal.reason` when the signal aborted by the end of recall; any other recall failure
+   *   propagates unchanged.
    */
   async openContext(
     scope: MemoryScope,
-    request: MemoryContextRequest,
+    recall: RecallContext,
     options: { signal: AbortSignal },
   ): Promise<MemoryContext> {
     if (this.closed) throw new Error("memory runtime is closed");
     if (!isExactly(scope, MemoryScope)) throw new TypeError("memory context scope must be a MemoryScope");
-    if (!isExactly(request, MemoryContextRequest)) throw new TypeError("memory request must be a MemoryContextRequest");
+    if (!isExactly(recall, RecallContext)) throw new TypeError("memory recall must be a RecallContext");
     const signal = options?.signal;
     if (!(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal");
-    if (!sameItems(request.recall.consumerStaticPath, scope.staticPath)) {
-      throw new RangeError("memory context request does not match the consumer scope");
+    if (!sameItems(recall.consumerStaticPath, scope.staticPath)) {
+      throw new RangeError("memory recall context does not match the consumer scope");
     }
     if (!scope.memories.every((key) => this.sessions.has(key))) {
       throw new Error("memory scope names a memory outside the opened table");
     }
     const sections: MemorySection[] = [];
-    let selected: TranscriptSource | null = null;
     for (const key of scope.memories) {
       const origin = this.origins.get(key)!;
       let recalled: unknown;
       try {
-        recalled = await this.sessions.get(key)!.recall(request.recall);
+        recalled = await this.sessions.get(key)!.recall(recall);
       } catch (error) {
         if (!(error instanceof MemoryOperationError)) throw error;
         throw new MemoryRecallError(`memory ${reprText(key)} recall failed: ${error.message}`, {
@@ -342,13 +330,13 @@ export class MemoryRuntime {
           cause: error,
         });
       }
-      let content: MemoryContent;
       let section: MemorySection;
       try {
-        if (typeof recalled === "string") content = new MemoryContent({ text: recalled });
-        else if (isExactly(recalled, MemoryContent)) content = recalled;
+        let text: string;
+        if (typeof recalled === "string") text = recalled;
+        else if (isExactly(recalled, MemoryContent)) text = recalled.text;
         else throw new TypeError("memory recall must return a string or a MemoryContent");
-        section = new MemorySection(key, content.text);
+        section = new MemorySection(key, text);
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         // The content may be private, so the message leaves it out.
@@ -358,29 +346,9 @@ export class MemoryRuntime {
         });
       }
       if (section.text) sections.push(section);
-      if (content.transcript === null) continue;
-      if (!this.eligible.has(key)) {
-        throw new MemoryRecallError(
-          `memory ${reprText(key)} returned a transcript but is not conversation-eligible; only a memory with one AGENT owner may hold a conversation`,
-          { origin },
-        );
-      }
-      if (selected !== null) {
-        throw new MemoryRecallError(
-          `memory ${reprText(key)} returned a second transcript for ${reprText(scope.staticPath.join("/"))}; one AGENT may hold at most one conversation`,
-          { origin },
-        );
-      }
-      selected = content.transcript;
     }
     signal.throwIfAborted();
-    if (selected === null) return new MemoryContext({ sections });
-    if (request.invocation === null) throw new RangeError("transcript context requires an accepted invocation");
-    const turn = await selected.openTurn(
-      new ConversationRequest(scope.staticPath, request.invocation, request.compatibility),
-      { signal },
-    );
-    return new MemoryContext({ sections, transcript: turn });
+    return new MemoryContext({ sections });
   }
 
   /**

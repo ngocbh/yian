@@ -40,7 +40,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { runFlow } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
-import { NO_ENV } from "../engine/session_fakes.ts";
+import { NO_ENV } from "../engine/run_state_fixtures.ts";
 
 let tmp: string;
 

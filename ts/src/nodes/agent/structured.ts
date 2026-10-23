@@ -34,8 +34,7 @@
  * keeps the shape Python's pydantic model gives it (an open record drops unknown fields, an absent
  * optional field reads `null`, records follow the declared field order). An invalid reply is
  * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
- * `path` locates the last error inside the output when it can. With a memory turn, each call's new
- * input and raw reply are recorded in it, an invalid reply included.
+ * `path` locates the last error inside the output when it can.
  *
  * Knows about:   defaults, diagnostics, llm, memory contracts, nodes/contracts, typesys, peer
  *                AGENT modules.
@@ -47,7 +46,7 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, TextPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
-import type { ConversationTurn, EvaluationTrace } from "../../memory/contracts.ts";
+import type { EvaluationTrace } from "../../memory/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
@@ -69,7 +68,6 @@ import {
 import type { ValuePath } from "../contracts.ts";
 import type { RetrySettings } from "./context.ts";
 import { callModel, type LiveSinks, newExchangeId } from "./live.ts";
-import { invokeModel } from "./memory.ts";
 import { recordModelText, recordModelValue } from "./text.ts";
 
 // ValueKind -> JSON Schema type of a scalar slot. date and datetime persist as ISO strings.
@@ -431,30 +429,21 @@ export function userMessage(text: string): Message {
  * Generate a value of `typ` with `model`, correcting an invalid reply up to `retries` times.
  *
  * The schema is sent the way `planStructured` picks for the model; the prompt strategy appends its
- * instruction as a user message. Each call has a fresh exchange id and goes through `invokeModel`
- * and `callModel` with purpose `structured_fallback` for the prompt strategy, else
- * `structured_native`. A reply holding no valid answer (`StructuredOutputError`) or failing
- * `checkReply` is not kept in the conversation: the next call gets the earlier messages and a
- * correction naming the error. The prompt strategy records every reply's text in
- * `evaluationTrace`, the other strategies the returned value.
- *
- * With a `transcript`, each call stores only its new input (the first: `newMessages` and the
- * prompt strategy's instruction; a later one: its correction) and its raw reply, before the reply
- * is parsed, so an invalid reply is stored too; a stop that lands while the reply is parsed wins
- * over its value.
+ * instruction as a user message. Each call has a fresh exchange id and goes through `callModel`
+ * with purpose `structured_fallback` for the prompt strategy, else `structured_native`. A reply
+ * holding no valid answer (`StructuredOutputError`) or failing `checkReply` is not kept in the
+ * conversation: the next call gets the earlier messages and a correction naming the error. The
+ * prompt strategy records every reply's text in `evaluationTrace`, the other strategies the
+ * returned value.
  *
  * @param messages The conversation so far; not changed.
  * @param typ The declared output type; `typeToSchema` must give it a schema.
  * @param options `retries` defaults to `YIAN_AGENT_RETRIES`; `live` gets the call events;
  *   `signal` stops the run before each call and wins over the reply of a call it stopped during;
- *   `retry` gives each call its retry settings, called once per call; `transcript` is the memory
- *   turn the calls are recorded in; `newMessages` are the messages of `messages` the transcript
- *   doesn't hold yet, all of them by default.
+ *   `retry` gives each call its retry settings, called once per call.
  * @returns The checked value, unwrapped.
  * @throws OutputInvalidError once `retries + 1` replies were invalid.
- * @throws CapabilityFault when recording a call in the transcript fails; it is never corrected.
- * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged, except as
- *   `invokeModel` wraps it.
+ * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged.
  */
 export async function generateStructured(
   model: ChatModel,
@@ -466,29 +455,27 @@ export async function generateStructured(
     signal?: AbortSignal;
     evaluationTrace?: EvaluationTrace | null;
     retry?: () => RetrySettings;
-    transcript?: ConversationTurn | null;
-    newMessages?: readonly Message[];
   } = {},
 ): Promise<Value> {
-  const { live = null, signal, evaluationTrace, retry, transcript } = options;
+  const { live = null, signal, evaluationTrace, retry } = options;
   const retries = options.retries ?? current().agentRetries;
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
   const purpose = prompted ? "structured_fallback" : "structured_native";
   const instruction = prompted ? [userMessage(plan.instruction())] : [];
   let conversation = [...messages, ...instruction];
-  // The messages the transcript doesn't hold yet: the next call's new input.
-  let pending = [...(options.newMessages ?? messages), ...instruction];
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     const request = plan.apply(new Request({ messages: conversation }));
     const exchangeId = newExchangeId();
-    // `invokeModel` checks the stop after the call: a stop that lands during it wins over its reply.
-    const response = await invokeModel(
-      transcript,
-      () => callModel(live, model, request, { purpose, exchangeId, signal, retry: retry?.() }),
-      { newMessages: pending, signal, exchangeId, purpose },
-    );
+    const response = await callModel(live, model, request, {
+      purpose,
+      exchangeId,
+      signal,
+      retry: retry?.(),
+    });
+    // A stop that lands during the call wins over its reply.
+    signal?.throwIfAborted();
     if (prompted) recordModelText(evaluationTrace, response.message.text());
     let value: Value;
     try {
@@ -500,11 +487,8 @@ export async function generateStructured(
       }
       const correction = userMessage(plan.correction(error.message));
       conversation = [...conversation, correction];
-      pending = [correction];
       continue;
     }
-    // As in Python, with a transcript a stop that lands while the reply is parsed wins over its value.
-    if (transcript) signal?.throwIfAborted();
     if (!prompted) recordModelValue(evaluationTrace, value);
     return value;
   }

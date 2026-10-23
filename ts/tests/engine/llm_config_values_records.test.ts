@@ -16,8 +16,8 @@
  *   reached through `yian run --resume` with no terminal, whose output carries its message ("a
  *   host's" for Python's "a Python host's").
  * - The bound key and headers are plain strings in the built config (Python's `SecretStr`).
- * - `FakeMemory` records the recall contexts, where Python spies on `RecallContext` over a
- *   `SessionMemory`; the reflector is given as `ReflectiveMemory`'s `createModel`.
+ * - `FakeMemory`, an AGENT memory `notes`, records the recall contexts, where Python spies on
+ *   `RecallContext` over a `SessionMemory`; the reflector is given as `ReflectiveMemory`'s `createModel`.
  * - Spies patch `AgentNode.prototype.bindReserved` and the producer's prototype `backward`; the
  *   drift row patches `bindReserved` to throw the `BindingError` Python's patched
  *   `call_time_config` raises. Resume errors are `RangeError`s where Python raises `ValueError`.
@@ -393,13 +393,13 @@ test("a learnable host key call time run records no secret", async () => {
 });
 
 test("llm config is not model visible", async () => {
-  const text = PICKED.replace("    prompt: Go.\n", "    prompt: Go.\n    long_term_memory: session\n");
+  const text = PICKED.replace("    prompt: Go.\n", "    prompt: Go.\n    long_term_memory: notes\n");
   const log = fresh("run.jsonl");
-  const session = new FakeMemory();
+  const notes = new FakeMemory();
   const { model, models } = fakeModel(["ok", NO_FEEDBACK]);
-  const result = await run(text, { log, models, learnable: true, memory: new Map([["session", session]]) });
+  const result = await run(text, { log, models, learnable: true, memory: new Map([["notes", notes]]) });
   expect(result.status).toBe("succeeded");
-  expect(session.recallContexts.map((context) => context!.inputs)).toEqual([{}]);
+  expect(notes.recallContexts.map((context) => context!.inputs)).toEqual([{}]);
   const succeeded = records(log)
     .filter((entry) => entry.kind === "node_succeeded" && entry.payload["node_id"] === "chat")
     .map((entry) => entry.payload);

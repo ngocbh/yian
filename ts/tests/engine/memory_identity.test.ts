@@ -10,7 +10,11 @@
  * `test_backward_failure_and_commit_records_name_their_memory_key` (with the run-log codec)
  * and `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node
  * id, a compiled spec whose key and config the declaration check would refuse, and a snapshot
- * deeper than the value nesting limit.
+ * deeper than the value nesting limit. From `tests/engine/test_session_contracts.py`, the rows
+ * that don't involve a conversation: `test_memory_protocol_has_no_frames` (the fake memory is a
+ * plain object, as Python's `_Memory`; `isMemory` stands in for `isinstance`), the text half of
+ * `test_memory_content_validates_explicit_transcript_sources`, and `MemoryContext`'s section
+ * checks.
  *
  * Changed: sites sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
  * message names `DeclSite.compare`), and equal sites compare 0. A declaration's config is its
@@ -34,25 +38,26 @@ import { readFileSync } from "node:fs";
 import { OriginRef } from "../../src/diagnostics.ts";
 import {
   DeclSite,
+  isMemory,
   iterMemoryDeclOrigins,
+  LearnContext,
   LearningFailure,
   LearningResult,
+  MemoryContent,
+  MemoryContext,
   MemoryDecl,
   MemoryOperationFailure,
+  MemorySection,
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
   PolicyCommitOutcome,
+  type RecallContext,
   rewriteMemoryDeclOrigins,
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
 // Unused on purpose: the typecheck fails if the facade stops exporting one of these types.
 import type {
-  ConversationCheckpoint,
-  ConversationEffectKind,
-  ConversationEffectStatus,
-  ConversationTurn,
-  ConversationTurnStatus,
   EvaluationTrace,
   JsonObject,
   JsonScalar,
@@ -62,7 +67,6 @@ import type {
   Memory,
   MemorySession,
   PolicyCommitStatus,
-  TranscriptSource,
   VisibleInteraction,
 } from "../../src/memory/index.ts";
 import { BackwardFailure } from "../../src/runtime/contracts.ts";
@@ -259,13 +263,13 @@ test("origin traversal requires an array of exact declarations", () => {
 test("a spec requires sorted owners and derived eligibility", () => {
   const agent = new DeclSite([], ["root"], "ask");
   const flow = new DeclSite([], ["root"]);
-  const spec = new MemorySpec("chat", "session", {}, [agent], true);
+  const spec = new MemorySpec("chat", "episodic", {}, [agent], true);
   expect(spec.conversationEligible).toBe(true);
   expect(Object.isFrozen(spec.owners)).toBe(true);
   expect(new MemorySpec("notes", "episodic", {}, [flow, agent], false).owners).toEqual([flow, agent]);
   const eligibility = "conversation_eligible must be true exactly for one AGENT owner";
-  expectError(() => new MemorySpec("chat", "session", {}, [flow], true), RangeError, eligibility);
-  expectError(() => new MemorySpec("chat", "session", {}, [agent], false), RangeError, eligibility);
+  expectError(() => new MemorySpec("chat", "episodic", {}, [flow], true), RangeError, eligibility);
+  expectError(() => new MemorySpec("chat", "episodic", {}, [agent], false), RangeError, eligibility);
   const order = "owners must be sorted and unique by DeclSite.compare";
   expectError(() => new MemorySpec("notes", "episodic", {}, [agent, flow], false), RangeError, order);
   expectError(() => new MemorySpec("notes", "episodic", {}, [flow, flow], false), RangeError, order);
@@ -391,18 +395,6 @@ test("the package doc and exports describe keyed memories", () => {
   // Exact, so a leaked internal (the origin traversal or rewrite) fails.
   expect(Object.keys(memoryPackage)).toEqual([
     "BUILTIN_MEMORY_CONFIG_KEYS",
-    "ConversationAdmitted",
-    "ConversationApplied",
-    "ConversationClosed",
-    "ConversationCompletion",
-    "ConversationEffectObserved",
-    "ConversationEffectRequested",
-    "ConversationEffectState",
-    "ConversationInvocation",
-    "ConversationItem",
-    "ConversationRequest",
-    "ConversationStamp",
-    "ConversationView",
     "DeclSite",
     "EvaluationEvidence",
     "LearnContext",
@@ -411,7 +403,6 @@ test("the package doc and exports describe keyed memories", () => {
     "MEMORY_IDENTIFIER_PATTERN",
     "MemoryContent",
     "MemoryContext",
-    "MemoryContextRequest",
     "MemoryDecl",
     "MemoryEpisode",
     "MemoryEpisodeStatus",
@@ -436,4 +427,78 @@ test("the package doc and exports describe keyed memories", () => {
     "checkMemoryDeclaration",
     "isMemory",
   ]);
+});
+
+// test_memory_protocol_has_no_frames
+test("the memory protocol has no frames", async () => {
+  const recallContexts: (RecallContext | null)[] = [];
+  const learnContexts: LearnContext[] = [];
+  const memory: Memory = {
+    openRun: () => ({
+      snapshot: { namespace: "test" },
+      close() {},
+      recall: (context = null) => {
+        recallContexts.push(context);
+        return "notes";
+      },
+      learn: (context) => {
+        learnContexts.push(context);
+        return [];
+      },
+      commit() {},
+    }),
+    reset() {},
+  };
+  const session = await memory.openRun();
+  expect(isMemory(memory)).toBe(true);
+  // The typecheck fails if `MemorySession` gains or loses a member.
+  const members: Record<keyof MemorySession, true> = {
+    snapshot: true,
+    close: true,
+    recall: true,
+    learn: true,
+    commit: true,
+  };
+  expect(Object.keys(session).sort()).toEqual(Object.keys(members).sort());
+  expect("openFrame" in session).toBe(false);
+  expect(await session.recall()).toBe("notes");
+  expect(await session.learn(new LearnContext("run", "notes", []))).toEqual([]);
+  expect(recallContexts).toEqual([null]);
+  expect(learnContexts.map((context) => context.memory)).toEqual(["notes"]);
+  await session.close();
+});
+
+// test_memory_content_validates_explicit_transcript_sources, the notes half
+test("memory content validates its notes", () => {
+  const content = new MemoryContent({ text: "notes" });
+  expect(content.text).toBe("notes");
+  expect(new MemoryContent().text).toBe("");
+  for (const [text, cls, message] of [
+    [null, TypeError, "text must be a string"],
+    [7, TypeError, "text must be a string"],
+    ["\ud800", RangeError, "Unicode surrogate is not valid canonical JSON"],
+  ] as const) {
+    expectError(() => new MemoryContent({ text: text as never }), cls, message);
+  }
+  expect(() => {
+    (content as { text: string }).text = "changed";
+  }).toThrow(TypeError);
+});
+
+test("a memory context requires exact sections", () => {
+  expect(new MemoryContext().sections).toEqual([]);
+  const section = new MemorySection("notes", "outer");
+  const sections = [section];
+  const context = new MemoryContext({ sections });
+  sections.push(new MemorySection("chat", "inner"));
+  expect(context.sections).toEqual([section]);
+  expect(context.sections[0]).toBe(section);
+  expect(Object.isFrozen(context)).toBe(true);
+  expect(Object.isFrozen(context.sections)).toBe(true);
+  expectError(() => new MemoryContext({ sections: new Set() as never }), TypeError, "sections must be an array");
+  expectError(
+    () => new MemoryContext({ sections: [{ memory: "notes", text: "" }] as never }),
+    TypeError,
+    "sections must contain MemorySection values",
+  );
 });

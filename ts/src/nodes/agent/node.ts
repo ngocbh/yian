@@ -2,11 +2,10 @@
  * AGENT: one authored leaf invoking a model.
  *
  * It makes one call without tools or skills, and runs the tool loop with them. The loop drives
- * local model and tool calls through the shared provider interface. An optional memory backend
- * owns conversation admission and retained history; the evaluator owns the turn's lifetime.
- * Tools, including the run's `ask_user`, are ordinary explicitly authored tool grants. A crash or
- * host interruption unwinds the node; no conversation or continuation state is stored in the
- * graph or variable pool.
+ * local model and tool calls through the shared provider interface. Memories recall notes into
+ * the system prompt; they hold no conversation. Tools, including the run's `ask_user`, are
+ * ordinary explicitly authored tool grants. A crash or host interruption unwinds the node; no
+ * conversation or continuation state is stored in the graph or variable pool.
  *
  * Backward makes one tool-free model call over the recorded invocation (`backward.ts`).
  *
@@ -82,7 +81,6 @@ import {
   typesNullable,
 } from "./llm_values.ts";
 import { runAgent } from "./loop.ts";
-import { compatibility } from "./memory.ts";
 import { OutputInvalidError } from "./structured.ts";
 
 /** The step key under which a call-time agent records the config it resolved. */
@@ -636,7 +634,7 @@ export class AgentNode extends Node {
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
    *   null.
    * @throws SkillError when the node grants skills the host did not supply.
-   * @throws CapabilityFault when capture or conversation access fails, or the bound config
+   * @throws CapabilityFault when capture or memory access fails, or the bound config
    *   differs from the one an earlier start recorded; the evaluator rethrows its original host
    *   error.
    * @throws The signal's reason once the host stopped the node.
@@ -689,7 +687,7 @@ export class AgentNode extends Node {
     const memoryContext =
       caps.openMemoryContext === undefined
         ? new MemoryContext()
-        : await caps.openMemoryContext(systemPrompt, prompt, compatibility(config, { env }));
+        : await caps.openMemoryContext(systemPrompt, prompt);
     checkStopped(caps);
     const ctx = this.runContext(prompt, config, caps, { memoryContext, baseSystemPrompt, skills: granted, models });
     try {

@@ -26,7 +26,8 @@
  * `sys.set_int_max_str_digits`),
  * `test_a_parser_digit_limit_error_reads_as_yians_in_correction_and_failure` and
  * `test_a_node_raising_pythons_digit_limit_error_fails_with_yians_message` (Python's
- * digit-limit error text, which nothing in TS raises).
+ * digit-limit error text, which nothing in TS raises), and the `session` rows (TS yian has no session
+ * memory).
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -39,7 +40,6 @@ import type { FeedbackValue } from "../../src/expr/lineage.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { generateStructured } from "../../src/nodes/agent/structured.ts";
 import { BackwardContext } from "../../src/nodes/base.ts";
@@ -48,8 +48,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, serving } from "./run_state_fixtures.ts";
-import { PLAIN_FLOW } from "./session_fakes.ts";
+import { PLAIN_FLOW, rejected, serving } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-replies-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -57,7 +56,6 @@ const env = hostEnv(dir);
 
 const BIG = 10n ** 4999n + 12345n;
 const D = "1".repeat(5000);
-const SESSION_LINE = "    long_term_memory: session\n";
 const NATIVE = { provider: "openai", model: "gpt-4o" };
 const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
 const RECORD = new Type({
@@ -83,27 +81,20 @@ function generate(model: ScriptedModel, typ: Type, retries = 2): Promise<unknown
   return generateStructured(model, [question], typ, { retries });
 }
 
-/** `PLAIN_FLOW` with its AGENT's `output`, model and `retries`, with or without memory `session`. */
-function structuredFlow(output: string, options: { native: boolean; session: boolean; retries?: number }): string {
+/** `PLAIN_FLOW` with its AGENT's `output`, model and `retries`. */
+function structuredFlow(output: string, options: { native: boolean; retries?: number }): string {
   const config = options.native ? "{provider: openai, model: gpt-4o}" : "{provider: vllm, model: no-structured-sentinel}";
   let flow = PLAIN_FLOW.replace("{provider: openai, model: test-model}", config).replace(
     "    output: str",
     `    output: ${output}`,
   );
-  if (!options.session) flow = flow.replace(SESSION_LINE, "");
   if (options.retries !== undefined) flow = flow.replace("    output:", `    retries: ${options.retries}\n    output:`);
   return flow;
 }
 
-/** Run `flow` with the question `q`, `model` serving its AGENT, with memory `session` when `session`. */
-async function run(
-  flow: string,
-  model: ScriptedModel,
-  session: boolean,
-  tools: Record<string, FunctionTool> | null = null,
-): Promise<RunResult> {
-  const memory = session ? new Map([["session", new SessionMemory()]]) : null;
-  return runFlow(await loadFlow(flow, { env }), { question: "q" }, { env, models: serving(model, env), memory, tools });
+/** Run `flow` with the question `q`, `model` serving its AGENT. */
+async function run(flow: string, model: ScriptedModel, tools: Record<string, FunctionTool> | null = null): Promise<RunResult> {
+  return runFlow(await loadFlow(flow, { env }), { question: "q" }, { env, models: serving(model, env), tools });
 }
 
 /** Assert the run succeeded with `output`. */
@@ -115,10 +106,10 @@ function assertSucceeds(result: RunResult, output: unknown): void {
 
 // Structured replies
 
-test.each([false, true])("a long int in a provider parsed reply is retried then fails (session %p)", async (session) => {
+test("a long int in a provider parsed reply is retried then fails", async () => {
   const model = carrier(D, D);
 
-  const result = await run(structuredFlow("int", { native: true, session, retries: 1 }), model, session);
+  const result = await run(structuredFlow("int", { native: true, retries: 1 }), model);
 
   assertSucceeds(result, BigInt(D));
   expect(model.requests).toHaveLength(1);
@@ -127,7 +118,7 @@ test.each([false, true])("a long int in a provider parsed reply is retried then 
 test("a long int in a provider parsed reply retries to a good value", async () => {
   const model = carrier(D, "7");
 
-  const result = await run(structuredFlow("int", { native: true, session: false, retries: 1 }), model, false);
+  const result = await run(structuredFlow("int", { native: true, retries: 1 }), model);
 
   assertSucceeds(result, BigInt(D));
   expect(model.requests).toHaveLength(1);
@@ -158,7 +149,7 @@ test("a prompted long int fails the same whatever pythons limit (None)", async (
 test("a long int prompted record reply fails the run at the field", async () => {
   const model = texts(`{"n": ${D}}`);
 
-  const result = await run(structuredFlow("{n: int}", { native: false, session: false, retries: 0 }), model, false);
+  const result = await run(structuredFlow("{n: int}", { native: false, retries: 0 }), model);
 
   assertSucceeds(result, { n: BigInt(D) });
 });
@@ -167,9 +158,6 @@ test("a long int prompted record reply fails the run at the field", async () => 
 
 // Python's `_TOOL_FLOW`: `PLAIN_FLOW` with the AGENT granted `lookup`.
 const TOOL_FLOW = PLAIN_FLOW.replace("    kind: agent\n", "    kind: agent\n    tools: [lookup]\n");
-
-/** Python's `_flow`: `TOOL_FLOW`, with or without memory `session`. */
-const toolFlow = (session: boolean) => (session ? TOOL_FLOW : TOOL_FLOW.replace(SESSION_LINE, ""));
 
 /** Python's `_Tool`: a tool taking an integer `value`, recording each call's arguments; `action` answers. */
 function recordedTool(
@@ -209,15 +197,13 @@ function sentResult(model: ScriptedModel): unknown {
 }
 
 test.each([
-  ["valid", false, call({ value: BIG }), BIG],
-  ["valid", true, call({ value: BIG }), BIG],
-  ["invalid", false, streamedCall(`{"value": ${D}}`), BigInt(D)],
-  ["invalid", true, streamedCall(`{"value": ${D}}`), BigInt(D)],
-] as const)("a long int tool argument fails before the tool runs (%s, session %p)", async (_id, session, reply, value) => {
+  ["valid", call({ value: BIG }), BIG],
+  ["invalid", streamedCall(`{"value": ${D}}`), BigInt(D)],
+] as const)("a long int tool argument fails before the tool runs (%s)", async (_id, reply, value) => {
   const { tool, calls } = recordedTool();
   const chat = new ScriptedModel([reply, text("done")]);
 
-  const result = await run(toolFlow(session), chat, session, { lookup: tool });
+  const result = await run(TOOL_FLOW, chat, { lookup: tool });
 
   assertSucceeds(result, "done");
   expect(calls).toEqual([{ value }]);
@@ -230,17 +216,17 @@ test("an invalid tool call with unrelated bad json keeps todays behaviour", asyn
   const reply = new Response({ message: new Message({ role: "assistant", parts: [part] }), finishReason: "tool_calls" });
   const { tool, calls } = recordedTool();
 
-  const result = await run(toolFlow(false), new ScriptedModel([reply]), false, { lookup: tool });
+  const result = await run(TOOL_FLOW, new ScriptedModel([reply]), { lookup: tool });
 
   assertSucceeds(result, "");
   expect(calls).toEqual([]);
 });
 
-test.each([false, true])("a tool returning a long int fails naming the tool (session %p)", async (session) => {
+test("a tool returning a long int fails naming the tool", async () => {
   const { tool, calls } = recordedTool(() => BIG);
   const chat = new ScriptedModel([call({ value: 1n }), text("done")]);
 
-  const result = await run(toolFlow(session), chat, session, { lookup: tool });
+  const result = await run(TOOL_FLOW, chat, { lookup: tool });
 
   assertSucceeds(result, "done");
   expect(calls).toHaveLength(1);

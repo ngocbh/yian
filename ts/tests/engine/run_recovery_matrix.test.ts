@@ -9,8 +9,18 @@
  *
  * Ported: `test_every_nested_growth_prefix_replays_to_the_live_state` (4 rows),
  * `test_every_loop_body_spawner_prefix_replays_to_the_live_state` (3 rows),
- * `test_every_partial_loop_prefix_replays_to_the_live_state` (2 rows) and
- * `test_resume_prepends_ordered_effect_retries_before_existing_ready_work`.
+ * `test_every_partial_loop_prefix_replays_to_the_live_state` (2 rows),
+ * `test_resume_prepends_ordered_effect_retries_before_existing_ready_work`, and from
+ * `tests/engine/test_session_reducer.py`: `test_forged_resume_plan_cannot_change_the_retry_frontier`
+ * (the forged transition spreads the frozen plan and its delta; the error is the `RangeError`
+ * `frontier resume delta disagrees with its record`, and the state is checked with the shared
+ * `snapshot` and `expectUnchanged`), `test_resume_allows_memory_free_unfinished_invocations` and
+ * `test_resume_retries_every_unfinished_invocation` (2 rows), on an AGENT stand-in recalling an
+ * episodic memory, since TS yian has no session memory. Python's local `_replay` is the local
+ * `expectReplays`: `replayRecords` over a fresh flow, compared through the shared
+ * `reducerSnapshot` plus the memory table, stacks, snapshots, `learnable` and backward state, the
+ * topology, each node's class and scopes, and the trace (the backward handlers by key: a TS bound
+ * handler can't name its node).
  *
  * Changed:
  * - The live snapshot after each commit is taken by the log, before the next append and once at
@@ -49,16 +59,21 @@ import { fileURLToPath } from "node:url";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
-import { copyGraph, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent, RunSucceeded } from "../../src/events.ts";
+import { ValueRoute } from "../../src/expr/lineage.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { NodeKind, Output } from "../../src/nodes/base.ts";
+import { DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
+import { type Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import type { Scheduler } from "../../src/platform.ts";
 import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import {
@@ -74,16 +89,29 @@ import {
 } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  PreparedTransition,
   prepareNodeStarted,
   prepareNodeSucceeded,
   prepareRunResumed,
-  type RunState,
+  prepareRunStarted,
+  replayRecords,
+  RunState,
 } from "../../src/runtime/state.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { NO_ENV, reducerSnapshot, startedRun, untimed } from "./run_state_fixtures.ts";
+import {
+  expectUnchanged,
+  FuncNode,
+  NO_ENV,
+  reducerSnapshot,
+  replayTraceSnapshot,
+  snapshot,
+  startedRun,
+  untimed,
+} from "./run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";
@@ -787,4 +815,169 @@ test("test_resume_prepends_ordered_effect_retries_before_existing_ready_work", a
   expect(log.records().at(-1)!.record).toEqual(prepared.record);
   expect([...recovered.inFlight]).toEqual([]);
   expect(recovered.ready).toEqual([...retryOrder, "later"]);
+});
+
+// ---- The retry frontier of unfinished invocations ----
+
+/**
+ * Return `START -> agent -> END` where `agent` has the memory scope `notes`; with `sibling`, also
+ * `START -> sibling`.
+ */
+function agentFlow(options: { sibling?: boolean } = {}): CompiledFlow {
+  const agent = new FuncNode("agent", () => {
+    throw new Error("replay invoked a node");
+  });
+  agent.memoryScope = new MemoryScope(["agent"], { memories: ["notes"] });
+  const built = CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["agent", agent],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [new Edge("start-agent", START_ID, "agent"), new Edge("agent-end", "agent", END_ID)],
+  );
+  if (options.sibling) {
+    const sibling = new FuncNode("sibling", () => {
+      throw new Error("node called");
+    });
+    built.addSubgraph(new Map([["sibling", sibling]]), [new Edge("start-sibling", START_ID, "sibling")], new Map([
+      ["sibling", new Map()],
+    ]));
+  }
+  return built;
+}
+
+/**
+ * Return a state and log with START succeeded and `agent` in flight. The memory `notes` is
+ * recorded unless `enabled` is false; `learnable` and `sibling` shape the run and the flow.
+ */
+function agentStarted(
+  options: { learnable?: boolean; sibling?: boolean; enabled?: boolean } = {},
+): { state: RunState; log: MemoryRunLog } {
+  const enabled = options.enabled ?? true;
+  const flow = agentFlow(options);
+  const state = new RunState(flow);
+  const pool = new VariablePool(flow.startId);
+  pool.set(flow.startId, {});
+  pool.addSystem("run_id", "run");
+  const log = new MemoryRunLog("run");
+  commitPrepared(
+    log,
+    state,
+    prepareRunStarted(state, {
+      runId: "run",
+      flowFingerprint: "a".repeat(64),
+      initialPool: pool,
+      startWiringOverride: {},
+      effectiveLlmByStaticPath: {},
+      numWorkers: 0,
+      learnable: options.learnable ?? false,
+      memories: enabled ? [new MemorySpec("notes", "episodic", {}, [new DeclSite([], ["root"], "agent")], true)] : null,
+      memoryStacks: enabled ? [new MemoryStack(["agent"], ["notes"])] : null,
+      memorySnapshots: enabled ? [new MemorySnapshotEnvelope("notes", {})] : null,
+    }),
+  );
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  const forwardCapture = state.learnable ? new ForwardCapture({}, ValueRoute.record([])) : null;
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID, {}, { forwardCapture }));
+  commitPrepared(log, state, prepareNodeStarted(state, "agent"));
+  return { state, log };
+}
+
+/** Return `reducerSnapshot(state)` with the memory, learning and backward state. */
+function frontierSnapshot(state: RunState): Record<string, unknown> {
+  return {
+    ...reducerSnapshot(state),
+    memories: state.memories,
+    memoryStacks: state.memoryStacks,
+    memorySnapshots: state.memorySnapshots,
+    learnable: state.learnable,
+    backwardState: state.backwardState,
+  };
+}
+
+/** Return `state`'s topology and each node's class, scopes and `commitAs`. */
+function frontierFlowSnapshot(state: RunState): Record<string, unknown> {
+  const flow = state.flow;
+  return {
+    initialStaticIds: [...state.initialStaticIds],
+    startId: flow.startId,
+    endId: flow.endId,
+    edges: [...flow.edges],
+    wiring: [...flow.wiring],
+    incoming: [...flow.incomingEdges],
+    outgoing: [...flow.outgoingEdges],
+    nodes: [...flow.nodes].map(([nodeId, node]) => [
+      nodeId,
+      node.constructor,
+      node.memoryScope,
+      node.executionScope,
+      node.commitAs,
+    ]),
+  };
+}
+
+/** Replay `log` over a fresh flow and expect the replay to equal the live `state`; return it. */
+function expectReplays(state: RunState, log: MemoryRunLog, options: { sibling?: boolean } = {}): RunState {
+  const replayed = replayRecords(new RunState(agentFlow(options)), log.records(), {
+    growBuilder: () => {
+      throw new Error("builder called");
+    },
+  });
+  expect(frontierSnapshot(replayed)).toEqual(frontierSnapshot(state));
+  expect(frontierFlowSnapshot(replayed)).toEqual(frontierFlowSnapshot(state));
+  const trace = (s: RunState) => (s.trace === null ? null : replayTraceSnapshot(s.trace));
+  expect(trace(replayed)).toEqual(trace(state));
+  return replayed;
+}
+
+test("a resume allows memory-free unfinished invocations", () => {
+  const { state, log } = agentStarted({ enabled: false });
+  const firstSequence = state.acceptedStarts.get("agent")!;
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
+  expect(state.acceptedStarts).toEqual(new Map());
+  commitPrepared(log, state, prepareNodeStarted(state, "agent"));
+  expect(state.acceptedStarts.get("agent")!).toBeGreaterThan(firstSequence);
+  expectReplays(state, log);
+});
+
+test.each([false, true])("a resume retries every unfinished invocation (learnable: %p)", (learnable) => {
+  const { state, log } = agentStarted({ learnable, sibling: true });
+  commitPrepared(log, state, prepareNodeStarted(state, "sibling"));
+  const before = [...state.inFlight];
+  const prepared = prepareRunResumed(state, { numWorkers: 0 });
+  expect((prepared.record as RunResumedRecord).retryNodeIds).toEqual(before);
+  expect(before).toEqual(["agent", "sibling"]);
+  commitPrepared(log, state, prepared);
+  expect(state.ready).toEqual(before);
+  expect(state.inFlight).toEqual(new Set());
+  expect(state.acceptedStarts).toEqual(new Map());
+  expectReplays(state, log, { sibling: true });
+});
+
+test("a forged resume plan can't change the retry frontier", () => {
+  const { state, log } = agentStarted();
+  const prepared = prepareRunResumed(state, { numWorkers: 0 });
+  const plan = prepared._plan;
+  if (plan.kind !== "frontier") throw new Error(`expected a frontier plan, found ${plan.kind}`);
+  const forged = new PreparedTransition(
+    prepared.record,
+    prepared.expectedRunId,
+    prepared.expectedSequence,
+    Object.freeze({ ...plan, delta: Object.freeze({ ...plan.delta, retryNodeIds: Object.freeze([]) }) }),
+    prepared.observers,
+  );
+  const before = snapshot(state);
+
+  let caught: unknown;
+  try {
+    commitPrepared(log, state, forged);
+  } catch (error) {
+    caught = error;
+  }
+
+  expect((caught as Error).constructor).toBe(RangeError);
+  expect((caught as Error).message).toBe("frontier resume delta disagrees with its record");
+  expectUnchanged(state, before);
+  expect([...state.inFlight]).toEqual(["agent"]);
 });

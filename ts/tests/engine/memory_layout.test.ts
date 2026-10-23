@@ -11,8 +11,7 @@
  * `test_config_clash_carries_every_other_site_as_a_related_origin`,
  * `test_config_clash_lists_a_repeated_declaration_once` (every case),
  * `test_memory_flow_without_an_id_resolves`, `test_one_agent_stacks_several_keys_in_authored_order`,
- * `test_agent_declaration_must_name_its_own_node`, `test_flow_declaration_must_not_name_a_node` and
- * `test_agent_with_two_session_memories_is_a_setup_error`.
+ * `test_agent_declaration_must_name_its_own_node` and `test_flow_declaration_must_not_name_a_node`.
  *
  * Changed:
  * - Python's `ValueError` is a `RangeError`; `MemorySetupError` extends `RangeError`.
@@ -22,8 +21,6 @@
  *   boundary ids are reassigned with `Object.assign` (they're `readonly` in TS's types only).
  * - `caught.value.__notes__` (Python's `add_note`) is `error.notes`.
  * - Python's `copy.deepcopy` of a declaration is a declaration rebuilt from equal parts.
- * - The "declares more than one session memory" message lists the keys as JSON strings
- *   (`"chat", "session"`), not Python's repr.
  *
  * Ported too, the rows that load flows: `test_flow_start_and_end_scopes_carry_the_enclosing_keys`,
  * `test_composite_drivers_see_only_enclosing_keys`,
@@ -39,17 +36,20 @@
  * `test_memory_stacks_dedupe_a_repeated_key_at_its_outermost_position`,
  * `test_single_agent_owner_is_conversation_eligible`,
  * `test_one_key_with_two_configs_is_a_load_error_at_the_first_site`,
- * `test_session_def_called_twice_has_one_owner_and_two_placements`,
- * `test_flow_level_session_is_a_load_error`, `test_session_key_with_two_agent_owners_is_a_load_error`,
- * `test_flow_level_session_in_an_uncalled_def_is_not_an_error`,
- * `test_session_placements_must_resolve_one_compatibility`,
- * `test_session_compatibility_ignores_other_types_and_disabled_layouts`,
+ * `test_session_def_called_twice_has_one_owner_and_two_placements` (on a custom type),
  * `test_scopes_are_root_relative_and_carry_outermost_first_keys` and
  * `test_one_def_under_two_parents_has_one_stack_per_placement_and_one_owner`. Their CODE references
  * are TS's form (`./fixtures/compose_codefns.ts:echo`), resolved against the conformance directory.
  * Frozen values can't be changed in place, so Python's `object.__setattr__` forgeries are
  * unfrozen objects of the same class carrying the forged field (`forged`), and its
  * `copy.deepcopy` of a node is `copyGraph`.
+ *
+ * Not ported: the session rows (`test_agent_with_two_session_memories_is_a_setup_error`,
+ * `test_flow_level_session_is_a_load_error`, `test_session_key_with_two_agent_owners_is_a_load_error`,
+ * `test_flow_level_session_in_an_uncalled_def_is_not_an_error`,
+ * `test_session_placements_must_resolve_one_compatibility` and
+ * `test_session_compatibility_ignores_other_types_and_disabled_layouts`). TS-only instead: a
+ * `session` memory, from YAML or built in code, is a load error.
  */
 
 import { expect, test } from "bun:test";
@@ -57,7 +57,6 @@ import { expect, test } from "bun:test";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import {
   applyMemoryLayout,
-  checkSessionCompatibility,
   memoryStacks,
   memoryTable,
   type ResolvedMemoryLayout,
@@ -289,12 +288,12 @@ test("one agent stacks several keys in authored order", () => {
 });
 
 test("agent declaration must name its own node", () => {
-  // A programmatic flow could otherwise make two AGENTs share one session owner.
+  // A programmatic flow could otherwise make two AGENTs share one AGENT owner.
   const forged = new DeclSite([], ["root"], "a");
   const flow = new CompiledFlow(
     new Map<string, Node>([
-      ["a", new AgentNode("a", { memories: [new MemoryDecl("chat", "session", {}, forged)] })],
-      ["b", new AgentNode("b", { memories: [new MemoryDecl("chat", "session", {}, forged)] })],
+      ["a", new AgentNode("a", { memories: [new MemoryDecl("chat", "episodic", {}, forged)] })],
+      ["b", new AgentNode("b", { memories: [new MemoryDecl("chat", "episodic", {}, forged)] })],
     ]),
     [],
   );
@@ -305,19 +304,6 @@ test("flow declaration must not name a node", () => {
   const flow = new CompiledFlow(new Map<string, Node>([["a", new AgentNode("a")]]), []);
   flow.memories = [new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"], "a"))];
   setupError(() => resolveMemoryLayout(flow), /flow memory 'notes' names site node 'a'/);
-});
-
-test("agent with two session memories is a setup error", () => {
-  const site = new DeclSite([], ["root"], "agent");
-  const agent = new AgentNode("agent", {
-    memories: [new MemoryDecl("session", "session", {}, site), new MemoryDecl("chat", "session", {}, site)],
-  });
-  const flow = new CompiledFlow(new Map<string, Node>([["agent", agent]]), []);
-
-  setupError(
-    () => resolveMemoryLayout(flow),
-    /AGENT 'agent' declares more than one session memory: "chat", "session"/,
-  );
 });
 
 // ---------- loaded flows ----------
@@ -635,14 +621,14 @@ test("one key with two configs is a load error at the first site", async () => {
   expect(notes[1]!).toStartWith("related declaration at <flow>:");
 });
 
-const SESSION_CALLS = `id: calls
+const AGENT_CALLS = `id: calls
 name: calls
 defs:
   body:
     nodes:
       ask:
         kind: agent
-        long_term_memory: session
+        long_term_memory: notes
         prompt: answer
         output: str
     output: \${ask.output}
@@ -652,8 +638,8 @@ nodes:
 output: \${[a.output, b.output]}
 `;
 
-test("a session def called twice has one owner and two placements", async () => {
-  const memories = resolveMemoryLayout(await compiled(SESSION_CALLS)).memories;
+test("an agent memory def called twice has one owner and two placements", async () => {
+  const memories = resolveMemoryLayout(await compiled(AGENT_CALLS)).memories;
   expect(memories).toHaveLength(1);
   expect(memories[0]!.owners).toEqual([new DeclSite([], ["def", "body"], "ask")]);
   expect(memories[0]!.conversationEligible).toBe(true);
@@ -663,73 +649,20 @@ test("a session def called twice has one owner and two placements", async () => 
   ]);
 });
 
-test("a flow-level session is a load error", async () => {
+test("a session memory is a load error", async () => {
   const source =
-    "id: flat\nname: flat\nlong_term_memory: session\nnodes:\n" +
-    "  ask:\n    kind: agent\n    prompt: hi\n    output: str\n" +
+    "id: chat\nname: chat\nnodes:\n" +
+    "  ask:\n    kind: agent\n    long_term_memory: {history: session}\n    prompt: hi\n    output: str\n" +
     "output: ${ask.output}\n";
   const error = await loadErrorAsync(loadFlow(source));
-  expect(error.message).toContain("session memory 'session' cannot be declared on a flow");
-  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(3);
-});
-
-test("a session key with two agent owners is a load error", async () => {
-  const source =
-    "id: pair\nname: pair\nnodes:\n" +
-    "  left:\n    kind: agent\n    long_term_memory: session\n" +
-    "    prompt: hi\n    output: str\n" +
-    "  right:\n    kind: agent\n    long_term_memory: session\n" +
-    "    prompt: hi\n    output: str\n" +
-    "output: ${[left.output, right.output]}\n";
-  const error = await loadErrorAsync(loadFlow(source));
-  const { diagnostic } = error;
-  expect(diagnostic.message).toContain("session memory 'session' has more than one owner");
-  expect(diagnostic.message).toContain("AGENT 'left'");
-  expect(diagnostic.message).toContain("AGENT 'right'");
-  expect(diagnostic.frames.at(-1)!.range.startLine).toBe(6);
-  expect(diagnostic.notes[0]).toBe("also owned at root AGENT 'right'");
-  expect(diagnostic.notes).toHaveLength(2);
-  expect(diagnostic.notes[1]!).toStartWith("related declaration at <flow>:11:");
-});
-
-test("a flow-level session in an uncalled def is not an error", async () => {
-  const source =
-    "id: spare\nname: spare\ndefs:\n" +
-    "  unused:\n    long_term_memory: session\n    nodes:\n" +
-    "      ask:\n        kind: agent\n        prompt: hi\n        output: str\n" +
-    "    output: ${ask.output}\n" +
-    "nodes:\n  ask:\n    kind: agent\n    long_term_memory: episodic\n" +
-    "    prompt: hi\n    output: str\n" +
-    "output: ${ask.output}\n";
-  const layout = resolveMemoryLayout(await compiled(source));
-  expect(layout.memories.map((memory) => memory.key)).toEqual(["episodic"]);
-});
-
-test("session placements must resolve one compatibility", async () => {
-  const layout = resolveMemoryLayout(await compiled(SESSION_CALLS));
-  checkSessionCompatibility(layout, {
-    "a/ask": { provider: "openai", model: "one" },
-    "b/ask": { provider: "OpenAI", model: "two" },
-  });
-  setupError(
-    () =>
-      checkSessionCompatibility(layout, {
-        "a/ask": { provider: "openai", model: "m" },
-        "b/ask": { provider: "anthropic", model: "m" },
-      }),
-    new RegExp(
-      "session memory 'session' resolves provider 'openai' at 'a/ask' but 'anthropic' at 'b/ask'; " +
-        "pin a provider on the AGENT",
-    ),
+  expect(error.message).toContain(
+    "long_term_memory 'history': session memory was removed; carry the history as a loop field",
   );
-});
-
-test("session compatibility ignores other types and disabled layouts", async () => {
-  const episodic = SESSION_CALLS.replace("long_term_memory: session", "long_term_memory: episodic");
-  const layout = resolveMemoryLayout(await compiled(episodic));
-  checkSessionCompatibility(layout, { "a/ask": { provider: "openai" }, "b/ask": { provider: "anthropic" } });
-  const plain = new CompiledFlow(new Map<string, Node>([["plain", code("plain")]]), []);
-  checkSessionCompatibility(resolveMemoryLayout(plain), {});
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(6);
+  const site = new DeclSite([], ["root"], "ask");
+  expect(() => new MemoryDecl("history", "session", {}, site)).toThrow(
+    new RangeError("session memory was removed; carry the history as a loop field"),
+  );
 });
 
 test("scopes are root-relative and carry outermost-first keys", async () => {

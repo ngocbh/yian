@@ -3,8 +3,9 @@
  * comparison, the case directory, selection and the report. Not a port of
  * `tests/test_conformance.py`, which `conformance.ts` is, except for
  * `test_steering_unreached_action_fails`, which no case can cover (a passing case reaches every
- * action), and `test_memory_expect_refuses_a_session_key`. TS-only: an undeclared `expect.memory`
- * key fails the case, and a `host.memory.before` entry whose backward call raises fails it.
+ * action). Not ported: `test_memory_expect_refuses_a_session_key` (TS yian has no session memory).
+ * TS-only: an undeclared `expect.memory` key fails the case, and a `host.memory.before` entry whose
+ * backward call raises fails it.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -992,13 +993,6 @@ describe("run", () => {
     "  models: {answer: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
     "parts: [{type: text, text: a1}]}}]}}\n" +
     `expect: {output: {status: succeeded, output: a1}, memory: ${expected}}\n`;
-
-  // test_memory_expect_refuses_a_session_key
-  test("a session key in `expect.memory` fails the case when the runner reads it", async () => {
-    const read = runCase(MEMORY_CASE("{chat: session}", "{}", "{chat: ''}"));
-    await expect(read).rejects.toBeInstanceOf(CaseFailure);
-    await expect(read).rejects.toThrow("`expect.memory.chat` is a session memory");
-  });
 
   test("a key the flow doesn't declare in `expect.memory` fails the case", async () => {
     const read = runCase(MEMORY_CASE("", "{}", "{nope: ''}"));

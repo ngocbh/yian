@@ -41,7 +41,7 @@ import {
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import type { EvaluationTrace, JsonObject, MemoryContext, MemoryScope } from "../memory/contracts.ts";
+import type { EvaluationTrace, MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
@@ -807,15 +807,10 @@ export interface NodeCaps {
    */
   readonly evaluationTrace?: EvaluationTrace;
   /**
-   * Opens the invocation's memory context once, from the visible base system prompt, the rendered
-   * prompt and the transcript compatibility descriptor; supplied to a node that declares
-   * `needsMemoryContext`. The evaluator closes the context's transcript when the evaluation ends.
+   * Opens the invocation's memory context once, from the visible base system prompt and the
+   * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
-  readonly openMemoryContext?: (
-    baseSystemPrompt: string,
-    renderedPrompt: string,
-    compatibility: JsonObject,
-  ) => Promise<MemoryContext>;
+  readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
   readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */
@@ -879,8 +874,8 @@ export abstract class Node {
    */
   readonly isLoop: boolean = false;
   /**
-   * Declares access to notes and an optional structured transcript through one lazy memory
-   * context capability. AGENT is the only built-in kind that opts in.
+   * Declares access to recalled notes through one lazy memory context capability. AGENT is the
+   * only built-in kind that opts in.
    */
   readonly needsMemoryContext: boolean = false;
   /**

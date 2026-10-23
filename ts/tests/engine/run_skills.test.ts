@@ -11,6 +11,8 @@
  * - The early checks throw a `RangeError` where Python raises `ValueError`; a skills mapping is a
  *   `Map`, a hand-made skill a `new Skill({...})`; a list of names in a message is written in the
  *   text form (`["release-notes"]`, Python `['release-notes']`).
+ * - `test_load_skill_runs_through_a_session_conversation` runs without the session memory TS yian
+ *   doesn't have, so it checks the result the next request reads, not the stored effects.
  * - A crash is a frozen log: `CrashAt` marks request N, and from then on every durable log's
  *   append throws a `Crash` the run rejects with (Python: the model raises `_SimulatedCrash` for
  *   request N). Either way no record of request N's outcome reaches the log.
@@ -27,14 +29,12 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { loadSkills } from "../../src/compose/skills.ts";
 import { Message, Response, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { SessionMemory } from "../../src/memory/session.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { NodeStartedRecord, NodeSucceededRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { rejected, textReply } from "./run_state_fixtures.ts";
-import { CrashAt, crashes, effectsOf, resumeWith, runWith, SESSION_CONFIG } from "./session_fakes.ts";
+import { CrashAt, crashes, PLAIN_CONFIG, rejected, resumeWith, runWith, textReply } from "./run_state_fixtures.ts";
 
 /** A reply calling `load_skill` with `args` as call `id`. */
 function loadCall(args: JsonObject, id: string): Response {
@@ -67,11 +67,6 @@ nodes:
     output: str
 output: \${review.output}
 `;
-
-const SESSION_FLOW = FLOW.replace(
-  "    skills: [code-review, release-notes]\n",
-  "    long_term_memory: session\n    skills: [code-review, release-notes]\n",
-);
 
 const ALL_FLOW = FLOW.replace("skills: [code-review, release-notes]", "skills: all");
 
@@ -120,7 +115,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 test("runFlow delivers skills to the agent", async () => {
-  const model = new ScriptedModel([textReply("ok")], SESSION_CONFIG);
+  const model = new ScriptedModel([textReply("ok")], PLAIN_CONFIG);
   const skills = loadSkills([skillRoot]);
   const result = await runWith(await loadFlow(FLOW), { change: "x" }, null, model, { skills });
   expect(result.failure).toBeNull();
@@ -129,24 +124,17 @@ test("runFlow delivers skills to the agent", async () => {
   expect(systemText(model)).toBe(systemPromptWithSkills(DEFAULT_SYSTEM, granted));
 });
 
-test("load_skill runs through a session conversation", async () => {
-  const model = new ScriptedModel([loadCall({ name: "code-review" }, "a"), textReply("done")], SESSION_CONFIG);
-  const memory = new SessionMemory();
-  const result = await runWith(await loadFlow(SESSION_FLOW), { change: "x" }, memory, model, {
-    skills: loadSkills([skillRoot]),
-  });
+test("load_skill runs and the next request reads its result", async () => {
+  const model = new ScriptedModel([loadCall({ name: "code-review" }, "a"), textReply("done")], PLAIN_CONFIG);
+  const result = await runWith(await loadFlow(FLOW), { change: "x" }, null, model, { skills: loadSkills([skillRoot]) });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
+  expect(model.requests).toHaveLength(2);
   expect(lastResult(model, 1)).toBe("Read references/checklist.md.\n");
-  expect(effectsOf(memory)).toEqual([
-    ["model", "completed"],
-    ["tool", "completed"],
-    ["model", "completed"],
-  ]);
 });
 
 test("a missing skill is rejected before any record", async () => {
-  const model = new ScriptedModel([], SESSION_CONFIG);
+  const model = new ScriptedModel([], PLAIN_CONFIG);
   const skills = new Map([["code-review", new Skill({ name: "code-review", description: "d", instructions: "" })]]);
   const error = await rejected(runWith(await loadFlow(FLOW), { change: "x" }, null, model, { log, skills }));
   expect(error).toBeInstanceOf(RangeError);
@@ -164,14 +152,14 @@ test.each([
   ["nested", NESTED],
 ])("a granting flow needs a skills mapping: %s", async (_label, text) => {
   const inputs = text === NESTED ? {} : { change: "x" };
-  const error = await rejected(runWith(await loadFlow(text), inputs, null, new ScriptedModel([], SESSION_CONFIG), { log }));
+  const error = await rejected(runWith(await loadFlow(text), inputs, null, new ScriptedModel([], PLAIN_CONFIG), { log }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("grants skills, but no skills= mapping was passed");
   expect(existsSync(log)).toBe(false);
 });
 
 test("skills: all with an empty mapping grants none", async () => {
-  const model = new ScriptedModel([textReply("ok")], SESSION_CONFIG);
+  const model = new ScriptedModel([textReply("ok")], PLAIN_CONFIG);
   const result = await runWith(await loadFlow(ALL_FLOW), { change: "x" }, null, model, { skills: new Map() });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
@@ -185,12 +173,12 @@ test("a resume of a skills: all flow needs the mapping", async () => {
   );
   const before = readFileSync(log);
 
-  const refused = await rejected(resumeWith(await loadFlow(ALL_FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
+  const refused = await rejected(resumeWith(await loadFlow(ALL_FLOW), log, null, new ScriptedModel([], PLAIN_CONFIG)));
   expect(refused).toBeInstanceOf(RangeError);
   expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);
 
-  const model = new ScriptedModel([textReply("ok")], SESSION_CONFIG);
+  const model = new ScriptedModel([textReply("ok")], PLAIN_CONFIG);
   const resumed = await resumeWith(await loadFlow(ALL_FLOW), log, null, model, { skills: loadSkills([skillRoot]) });
   expect(resumed.status).toBe("succeeded");
   expect(systemText(model)).toContain("- unused: Not granted.");
@@ -199,7 +187,7 @@ test("a resume of a skills: all flow needs the mapping", async () => {
 test("the skills mapping must be keyed by skill name", async () => {
   const skills = new Map([["alias", new Skill({ name: "code-review", description: "d", instructions: "" })]]);
   const error = await rejected(
-    runWith(await loadFlow(FLOW), { change: "x" }, null, new ScriptedModel([], SESSION_CONFIG), { skills }),
+    runWith(await loadFlow(FLOW), { change: "x" }, null, new ScriptedModel([], PLAIN_CONFIG), { skills }),
   );
   expect(error).toBeInstanceOf(TypeError);
   expect((error as Error).message).toBe("skills['alias'] must be a Skill named 'alias'");
@@ -226,7 +214,7 @@ test("end to end: listing, load, escape and resume", async () => {
   expect(lastResult(first, 2)).toBe("1. Tests pass.\n");
 
   const before = readFileSync(log);
-  const refused = await rejected(resumeWith(await loadFlow(FLOW), log, null, new ScriptedModel([], SESSION_CONFIG)));
+  const refused = await rejected(resumeWith(await loadFlow(FLOW), log, null, new ScriptedModel([], PLAIN_CONFIG)));
   expect(refused).toBeInstanceOf(RangeError);
   expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);
@@ -237,7 +225,7 @@ test("end to end: listing, load, escape and resume", async () => {
       loadCall({ name: "code-review", path: "references/checklist.md" }, "b"),
       textReply("looks good"),
     ],
-    SESSION_CONFIG,
+    PLAIN_CONFIG,
   );
   const resumed = await resumeWith(await loadFlow(FLOW), log, null, second, { skills: loadSkills([skillRoot]) });
 
@@ -251,7 +239,7 @@ test("end to end: listing, load, escape and resume", async () => {
   expect(review(NodeStartedRecord)).toBe(2);
   expect(review(NodeSucceededRecord)).toBe(1);
 
-  const escape = new ScriptedModel([loadCall({ name: "code-review", path: "../../secret.txt" }, "c")], SESSION_CONFIG);
+  const escape = new ScriptedModel([loadCall({ name: "code-review", path: "../../secret.txt" }, "c")], PLAIN_CONFIG);
   const failed = await runWith(await loadFlow(FLOW), { change: "diff-2" }, null, escape, { skills });
   expect(failed.status).toBe("failed");
   expect(failed.failure!.message).toContain("relative path inside the skill directory");

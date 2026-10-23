@@ -7,16 +7,23 @@
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here: also the recording `send`, reply streams and secret
  * scan the provider and host-credential tests share (Python's `_chat_completions`, `_rejecting`,
- * `_plain` and `_assert_hidden` of `test_run_api_key.py`).
+ * `_plain` and `_assert_hidden` of `test_run_api_key.py`), and the `runFlow` and `resumeFlow`
+ * helpers of the run-level AGENT and memory tests (`PLAIN_FLOW`, `runWith`, `resumeWith`,
+ * `CrashAt`, `crashes`, `sentTexts`, `reply`, `backwardReply`,
+ * `memorySections`, `memorySnapshot`) and the in-process `yian run` over a fake chat endpoint
+ * (`runCli`, `ChatText`).
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { inspect } from "node:util";
 
 import { expect } from "bun:test";
 
+import { main } from "../../src/cli/index.ts";
+import type { CliIo } from "../../src/cli/utils.ts";
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import {
   applyMemoryLayout,
@@ -43,12 +50,15 @@ import {
   Output,
   Route,
 } from "../../src/nodes/base.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, comparePaths, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import {
   DeclSite,
+  type JsonObject as MemoryJson,
   type LearnContext,
+  type Memory,
   MemoryDecl,
   MemoryScope,
   MemorySnapshotEnvelope,
@@ -63,12 +73,20 @@ import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
-import { NodeStarted, type RunEvent, StreamChunk } from "../../src/events.ts";
-import type { ChatModel } from "../../src/llm/events.ts";
-import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { NodeStarted, type RunEvent, type RunFailed, type RunSucceeded, StreamChunk } from "../../src/events.ts";
+import { type ChatModel, EventStream } from "../../src/llm/events.ts";
+import { Message, type Request, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { chatModelFromConfig, type ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { Send } from "../../src/platform.ts";
-import { type RunInspection, type RunResult, runFlow } from "../../src/run.ts";
+import {
+  type ResumeFlowOptions,
+  resumeFlow,
+  type RunFlowOptions,
+  type RunInspection,
+  type RunResult,
+  runFlow,
+} from "../../src/run.ts";
 import {
   decodePool,
   decodeRecord,
@@ -1683,4 +1701,209 @@ export function requiredEndFlow(loaded: ComposedFlow): ComposedFlow {
 /** The progress parts of an `inspectRun` result: its status, nodes in flight and interrupted counts. */
 export function progressOf({ status, inFlight, interruptedAttempts }: RunInspection) {
   return { status, inFlight, interruptedAttempts };
+}
+
+// ---- Runs of one-AGENT flows over a scripted model, and `yian run` over a fake chat endpoint ----
+
+// Cloned snapshots and nested test values are edited freely.
+export type Mutable = any;
+
+/** The model config `PLAIN_FLOW` names. */
+export const PLAIN_CONFIG = { provider: "openai", model: "test-model" };
+
+/** AGENT `agent` prompted with the run's input `question`, its text output the flow's. */
+export const PLAIN_FLOW = `id: plain
+name: plain
+llm_config: {provider: openai, model: test-model}
+input:
+  question: !str
+nodes:
+  agent:
+    kind: agent
+    prompt: \${question}
+    input:
+      question: \${input.question}
+    output: str
+output: \${agent.output}
+`;
+
+/**
+ * Python's `_FLOW` of the AGENT tests: one AGENT `nodeId` (`agent` by default) prompted with the
+ * run's input `question`, its output (of type `output`, text by default) the flow's, its model
+ * config `PLAIN_CONFIG`; the other options go to the node.
+ */
+export function agentFlow(
+  options: ConstructorParameters<typeof AgentNode>[1] & { nodeId?: string; output?: Type } = {},
+): CompiledFlow {
+  const { nodeId = "agent", output, ...rest } = options;
+  const node = new AgentNode(nodeId, { prompt: "${question}", llmConfig: PLAIN_CONFIG, ...rest });
+  node.params = [new Parameter("question")];
+  if (output !== undefined) node.outputContract = new ValueContract(output);
+  return graph([node], [[START_ID, nodeId]], {
+    wiring: { [nodeId]: { question: "${input.question}" } },
+    outputs: [new FlowOutput("result", `\${${nodeId}.output}`)],
+  });
+}
+
+/**
+ * Run `flow` through `FlowEngine`; the options go to `engine`.
+ *
+ * @returns The run's terminal event.
+ * @throws What the run throws, such as a stop's reason.
+ */
+export async function runAgentFlow(
+  flow: CompiledFlow,
+  options: Parameters<typeof engine>[1] = {},
+): Promise<RunSucceeded | RunFailed> {
+  const built = engine(flow, options);
+  await built.run();
+  return built.state.result as RunSucceeded | RunFailed;
+}
+
+/** The current snapshot of `memory`, read through a fresh run. */
+export function memorySnapshot(memory: { openRun(): { readonly snapshot: MemoryJson; close(): void } }): MemoryJson {
+  const opened = memory.openRun();
+  try {
+    return opened.snapshot;
+  } finally {
+    opened.close();
+  }
+}
+
+/**
+ * `runFlow` of `flow` with `inputs`, `memory` backing each memory key, `model` serving every AGENT,
+ * in `NO_ENV`; the other options go to `runFlow`.
+ */
+export function runWith(
+  flow: ComposedFlow,
+  inputs: Readonly<Record<string, unknown>>,
+  memory: ReadonlyMap<string, Memory> | null,
+  model: ChatModel,
+  options: RunFlowOptions = {},
+): Promise<RunResult> {
+  return runFlow(flow, inputs, { memory, models: serving(model), env: NO_ENV, ...options });
+}
+
+/**
+ * `resumeFlow` of `flow` from `log`, with `runWith`'s `memory`, `model` and `NO_ENV`; the other
+ * options go to `resumeFlow`.
+ */
+export function resumeWith(
+  flow: ComposedFlow,
+  log: string,
+  memory: ReadonlyMap<string, Memory> | null,
+  model: ChatModel,
+  options: Omit<ResumeFlowOptions, "log"> = {},
+): Promise<RunResult> {
+  return resumeFlow(flow, { log, memory, models: serving(model), env: NO_ENV, ...options });
+}
+
+/**
+ * A `ScriptedModel` that sets `frozen` as it serves request `at` (1-based); `crashes` reads it.
+ * Its config is `PLAIN_CONFIG` unless `config` is given.
+ */
+export class CrashAt extends ScriptedModel {
+  readonly at: number;
+  frozen = false;
+
+  constructor(replies: ScriptedReply[], at: number, config: { provider?: string; model?: string } = PLAIN_CONFIG) {
+    super(replies, config);
+    this.at = at;
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (this.requests.length === this.at - 1) this.frozen = true;
+    return super.stream(request, options);
+  }
+}
+
+/**
+ * Await `run`, which must reject with the `Crash` every durable log throws once `model` froze
+ * them: a process lost while serving request `at`, so no record of its outcome reaches the log.
+ */
+export async function crashes(model: CrashAt, run: () => Promise<unknown>): Promise<void> {
+  const crash = new Crash("process lost");
+  const append = JsonlRunLog.prototype.append;
+  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
+    if (model.frozen) throw crash;
+    return append.call(this, record);
+  };
+  try {
+    expect(await rejected(run())).toBe(crash);
+  } finally {
+    JsonlRunLog.prototype.append = append;
+  }
+}
+
+/** The texts of the messages of `model`'s request `index` (the last by default) after its system prompt. */
+export function sentTexts(model: { requests: readonly { messages: readonly Message[] }[] }, index = -1): string[] {
+  return model.requests.at(index)!.messages.slice(1).map((message) => message.text());
+}
+
+/** A text-only assistant reply. */
+export function reply(text: string): Response {
+  return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
+}
+
+/** An AGENT backward reply whose only feedback is the self-feedback `notes`. */
+export function backwardReply(...notes: string[]): Response {
+  return reply(JSON.stringify({ input_feedback: {}, self_feedback: notes, variable_feedback: {} }));
+}
+
+/** The memory sections the system prompt among `messages` shows; none without a memory context. */
+export function memorySections(messages: readonly Message[]): { memory: string; text: string }[] {
+  const system = messages.find((message) => message.role === "system")?.text() ?? "";
+  if (!system.includes("Memory context (canonical JSON")) return [];
+  return (JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { memory: string; text: string }[] })
+    .sections;
+}
+
+/** The text of a chat message's `content`, a string or a list of text parts. */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  return (content as { text?: string }[]).map((part) => part.text ?? "").join("");
+}
+
+/** One message of a chat request the fake endpoint received: its role and its content's text. */
+export interface ChatText {
+  role: string;
+  text: string;
+}
+
+/**
+ * Run `yian run argv` through `main` in this process, `fetch` answering each chat request as a
+ * chat-completions stream of `answer(messages)`. The env holds xAI's key, so the flows name xAI's
+ * route; every other name is `NO_ENV`'s.
+ *
+ * @returns The command's exit code and its output.
+ */
+export async function runCli(
+  argv: readonly string[],
+  answer: (messages: readonly ChatText[]) => string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: CliIo = {
+    stdout: { write: async (text) => void out.push(text) },
+    stderr: { write: async (text) => void err.push(text) },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name)),
+  };
+  // The fetch `Request` and `Response`: this module's own names are the LLM message types.
+  const fakeFetch = async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const request = new globalThis.Request(input as string, init);
+    const body = (await request.json()) as { messages: { role: string; content: unknown }[] };
+    const messages = body.messages.map((message) => ({ role: message.role, text: contentText(message.content) }));
+    const stream = chatText(answer(messages)).join("");
+    return new globalThis.Response(stream, { headers: { "content-type": "text/event-stream" } });
+  };
+  const send = globalThis.fetch;
+  globalThis.fetch = fakeFetch as typeof fetch;
+  try {
+    const code = await main(["run", ...argv], io);
+    return { code, stdout: out.join(""), stderr: err.join("") };
+  } finally {
+    globalThis.fetch = send;
+  }
 }

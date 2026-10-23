@@ -54,8 +54,7 @@ export class PermanentToolError extends Error {
  * In an AGENT's tool loop, the model reads the message as the call's result (an error tool
  * message, or the error's name when the message is empty) and the loop continues. In a TOOL node
  * it is an ordinary failure: the node fails, and `retries:` retries it unless it is also
- * permanent. The message goes to the model provider and the session transcript, so it must not
- * hold secrets.
+ * permanent. The message goes to the model provider, so it must not hold secrets.
  *
  * @example
  * function readFile(path: string): string {

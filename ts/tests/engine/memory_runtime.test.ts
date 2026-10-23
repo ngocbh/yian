@@ -9,16 +9,11 @@
  * `test_registry_rejects_aliases_and_attributes_missing_key_origin`,
  * `test_later_open_failure_closes_prior_session_and_preserves_origin`,
  * `test_frame_era_session_is_closed_before_setup_failure`,
- * `test_context_recalls_every_key_in_stack_order_and_opens_the_eligible_transcript`,
- * `test_context_validates_scope_request_and_full_opened_coverage`,
- * `test_recall_returns_nonempty_outer_to_local_sections_with_exact_context`,
+ * `test_context_recalls_every_key_in_stack_order_and_opens_the_eligible_transcript` (no
+ * transcript), `test_context_validates_scope_request_and_full_opened_coverage` (a recall context
+ * in place of the request), `test_recall_returns_nonempty_outer_to_local_sections_with_exact_context`,
  * `test_recall_wraps_typed_failure_with_the_key_origin`,
  * `test_recall_wraps_noncanonical_text_without_exposing_it`,
- * `test_context_ignores_uncontributed_session_capabilities`,
- * `test_transcript_admission_requires_invocation_before_opening_source`,
- * `test_stop_during_recall_prevents_transcript_source_acquisition`,
- * `test_context_admits_a_transcript_only_from_an_eligible_memory`,
- * `test_context_rejects_a_second_transcript_for_one_agent`,
  * `test_propose_learning_returns_one_proposal_per_key_in_table_order`,
  * `test_propose_learning_attributes_a_failure_to_its_key` and
  * `test_commit_learning_commits_on_the_named_key_session`, with the `_Session`, `_Memory`,
@@ -30,11 +25,8 @@
  * checked, the missing key's included, is the very `OriginRef` passed in (`toBe`); the restore
  * test also checks the captured snapshots; `open` and `close` return promises; a wrapped setup
  * failure's `cause` is the backend's error (Python's `raise ... from`). `openContext` returns a
- * promise of the context instead of a context manager, and takes `{ signal }` instead of
- * `check_stopped`; a transcript source is a plain object whose `openTurn` returns a fake turn;
- * Python's `str` subclass is a `String` object; the second-transcript test uses a two-part path to
- * pin the `/` join. The stop test has no `_HostStop`: the recall aborts
- * the controller with a reason object, and `openContext` rejects with that very object. The
+ * promise of the context instead of a context manager, takes the `RecallContext` itself and
+ * `{ signal }` instead of `check_stopped`; Python's `str` subclass is a `String` object. The
  * context validation test tries four non-signal options (`undefined`, `{}`, `{ signal: null }`, a
  * fake signal) where Python tries one `check_stopped=None`, and checks nothing was recalled; the
  * recall context is the very `RecallContext` (`toBe`, where Python uses `==`); an invalid-content
@@ -56,10 +48,8 @@
  * a concurrent or later `close()` waits for the first, never throws and adds no notes; a reentrant
  * close from inside a session's close doesn't close again; the caller's array and `Map`s edited
  * during `open` change nothing; a subclass's `open` returns the subclass; `openContext` is a
- * `MemoryContextOpener`; an async `recall` is awaited; `openTurn` receives the same signal and a
- * `ConversationRequest` with the scope's path, the invocation and the compatibility; an `openTurn`
- * rejection rejects `openContext` with it unchanged; a number from `recall` is invalid content; an
- * already-aborted signal with text-only memories still recalls, then rejects with the reason;
+ * `MemoryContextOpener`; an async `recall` is awaited; a number from `recall` is invalid content;
+ * an already-aborted signal still recalls, then rejects with the reason;
  * `proposeLearning` and `commitLearning` refuse on a closed runtime; a `Set` of contexts, a plain
  * object shaped like a `LearnContext` and sparse contexts (`[alpha, <hole>]`, `[<hole>]`) are
  * refused before any learner; a learn result of `{}`, two mutations with one id, or a non-mutation
@@ -77,15 +67,11 @@ import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import {
-  ConversationInvocation,
-  ConversationRequest,
-  type ConversationTurn,
   DeclSite,
   type JsonObject,
   LearnContext,
   type Memory,
   MemoryContent,
-  MemoryContextRequest,
   MemoryMutation,
   type MemorySession,
   MemoryOperationError,
@@ -96,7 +82,6 @@ import {
   MemorySnapshotEnvelope,
   MemorySpec,
   RecallContext,
-  type TranscriptSource,
 } from "../../src/memory/contracts.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { MemoryProposal } from "../../src/runtime/contracts.ts";
@@ -910,20 +895,10 @@ function live(): { signal: AbortSignal } {
   return { signal: new AbortController().signal };
 }
 
-/** Return the text-only sections `runtime` admits for `scope` and `recall`. */
+/** Return the sections `runtime` admits for `scope` and `recall`. */
 async function recallSections(runtime: MemoryRuntime, scope: MemoryScope, recall: RecallContext) {
-  const admitted = await runtime.openContext(scope, new MemoryContextRequest(recall, null, {}), live());
+  const admitted = await runtime.openContext(scope, recall, live());
   return admitted.sections;
-}
-
-/** A transcript source whose `openTurn` records `[request, signal]` in `calls` and returns `turn`. */
-function source(turn: unknown, calls: unknown[][]): TranscriptSource {
-  return {
-    openTurn(request, { signal }) {
-      calls.push([request, signal]);
-      return turn as ConversationTurn;
-    },
-  };
 }
 
 /** Return the two fake memories, each recalling its own name as text. */
@@ -934,38 +909,29 @@ function named(): Map<string, FakeMemory> {
   ]);
 }
 
-test("context recalls every key in stack order and opens the eligible transcript", async () => {
+test("context recalls every key in stack order", async () => {
   const policies = named();
   const runtime = await open(policies);
-  const calls: unknown[][] = [];
-  const turn = { close() {} };
-  policies.get("alpha")!.session.value = new MemoryContent({ text: "alpha", transcript: source(turn, calls) });
   try {
-    const rows: [MemoryScope, unknown, string[]][] = [
-      [scope(), turn, ["beta", "alpha"]],
+    const rows: [MemoryScope, string[]][] = [
+      [scope(), ["beta", "alpha"]],
       // A sibling sees the flow key, never the first leaf's AGENT key.
-      [new MemoryScope(["sibling"], { memories: ["beta"] }), null, ["beta"]],
+      [new MemoryScope(["sibling"], { memories: ["beta"] }), ["beta"]],
     ];
-    for (const [consumer, transcript, texts] of rows) {
-      const request = new MemoryContextRequest(
-        new RecallContext("system", "prompt", {}, consumer.staticPath),
-        new ConversationInvocation("run", 1),
-        {},
-      );
-      const admitted = await runtime.openContext(consumer, request, live());
-      expect(admitted.transcript).toBe(transcript as never);
+    for (const [consumer, texts] of rows) {
+      const recall = new RecallContext("system", "prompt", {}, consumer.staticPath);
+      const admitted = await runtime.openContext(consumer, recall, live());
       expect(admitted.sections.map((section) => section.text)).toEqual(texts);
       expect(admitted.sections.map((section) => section.memory)).toEqual(texts);
     }
     expect(policies.get("beta")!.session.calls).toHaveLength(2);
     expect(policies.get("alpha")!.session.calls).toHaveLength(1);
-    expect(calls.map(([request]) => (request as ConversationRequest).consumerStaticPath)).toEqual([["agent"]]);
   } finally {
     await runtime.close();
   }
 });
 
-test("context validates scope request and full opened coverage", async () => {
+test("context validates scope, recall and full opened coverage", async () => {
   const alpha = new FakeMemory("alpha", []);
   const runtime = await MemoryRuntime.open({
     memories: table().slice(0, 1),
@@ -973,37 +939,33 @@ test("context validates scope request and full opened coverage", async () => {
     memory: new Map([["alpha", alpha]]),
   });
   const consumer = scope();
-  const request = new MemoryContextRequest(
-    new RecallContext("system", "prompt", {}, consumer.staticPath),
-    new ConversationInvocation("run", 1),
-    {},
-  );
+  const recall = new RecallContext("system", "prompt", {}, consumer.staticPath);
   try {
     await expectError(
-      () => runtime.openContext(null as never, request, live()),
+      () => runtime.openContext(null as never, recall, live()),
       TypeError,
       "memory context scope must be a MemoryScope",
     );
     await expectError(
       () => runtime.openContext(consumer, null as never, live()),
       TypeError,
-      "memory request must be a MemoryContextRequest",
+      "memory recall must be a RecallContext",
     );
     for (const options of [undefined, {}, { signal: null }, { signal: { aborted: false } }]) {
       await expectError(
-        () => runtime.openContext(consumer, request, options as never),
+        () => runtime.openContext(consumer, recall, options as never),
         TypeError,
         "signal must be an AbortSignal",
       );
     }
-    const wrong = new MemoryContextRequest(new RecallContext("system", "prompt", {}, ["other"]), request.invocation, {});
+    const wrong = new RecallContext("system", "prompt", {}, ["other"]);
     await expectError(
       () => runtime.openContext(consumer, wrong, live()),
       RangeError,
-      "memory context request does not match the consumer scope",
+      "memory recall context does not match the consumer scope",
     );
     await expectError(
-      () => runtime.openContext(consumer, request, live()),
+      () => runtime.openContext(consumer, recall, live()),
       Error,
       "memory scope names a memory outside the opened table",
     );
@@ -1011,7 +973,7 @@ test("context validates scope request and full opened coverage", async () => {
   } finally {
     await runtime.close();
   }
-  await expectError(() => runtime.openContext(consumer, request, live()), Error, "memory runtime is closed");
+  await expectError(() => runtime.openContext(consumer, recall, live()), Error, "memory runtime is closed");
 });
 
 test("recall returns nonempty outer to local sections with exact context", async () => {
@@ -1081,132 +1043,13 @@ test("recall wraps noncanonical text without exposing it", async () => {
   }
 });
 
-test("context ignores uncontributed session capabilities", async () => {
-  const alpha = new FakeMemory("alpha", [], { value: "local notes" });
-  const beta = new FakeMemory("beta", [], { value: "outer notes" });
-  const runtime = await open(new Map([["alpha", alpha], ["beta", beta]]));
-  const forbidden: unknown[] = [];
-  // A session's incidental openTurn is not a recall contribution.
-  Object.assign(alpha.session, { openTurn: (...args: unknown[]) => forbidden.push(args) });
-  try {
-    const admitted = await runtime.openContext(scope(), new MemoryContextRequest(context(), null, {}), live());
-    expect(admitted.transcript).toBeNull();
-    expect(admitted.sections.map((section) => section.text)).toEqual(["outer notes", "local notes"]);
-    expect(forbidden).toEqual([]);
-  } finally {
-    await runtime.close();
-  }
-});
-
-test("transcript admission requires invocation before opening source", async () => {
-  const calls: unknown[][] = [];
-  const alpha = new FakeMemory("alpha", [], { value: new MemoryContent({ transcript: source({}, calls) }) });
-  const runtime = await open(new Map([["alpha", alpha], ["beta", new FakeMemory("beta", [])]]));
-  try {
-    await expectError(
-      () => runtime.openContext(scope(), new MemoryContextRequest(context(), null, {}), live()),
-      RangeError,
-      "transcript context requires an accepted invocation",
-    );
-    expect(calls).toEqual([]);
-  } finally {
-    await runtime.close();
-  }
-});
-
-test("stop during recall prevents transcript source acquisition", async () => {
-  const alpha = new FakeMemory("alpha", []);
-  const runtime = await open(new Map([["alpha", alpha], ["beta", new FakeMemory("beta", [])]]));
-  const controller = new AbortController();
-  const reason = { stop: "host" };
-  const calls: unknown[][] = [];
-  alpha.session.recall = () => {
-    controller.abort(reason);
-    return new MemoryContent({ text: "notes", transcript: source({}, calls) });
-  };
-  const request = new MemoryContextRequest(context(), new ConversationInvocation("run", 1), {});
-  try {
-    let caught: unknown;
-    await runtime.openContext(scope(), request, { signal: controller.signal }).catch((error: unknown) => {
-      caught = error;
-    });
-    expect(caught).toBe(reason);
-    expect(calls).toEqual([]);
-  } finally {
-    await runtime.close();
-  }
-});
-
-test("context admits a transcript only from an eligible memory", async () => {
-  for (const contributor of ["alpha", "beta"]) {
-    const policies = named();
-    const authored = origins();
-    const runtime = await open(policies, { origins: authored });
-    const opened: unknown[][] = [];
-    const turn = { close() {} };
-    try {
-      policies.get(contributor)!.session.value = new MemoryContent({
-        text: contributor,
-        transcript: source(turn, opened),
-      });
-      const request = new MemoryContextRequest(context(), new ConversationInvocation("run", 1), {});
-      if (contributor === "alpha") {
-        const admitted = await runtime.openContext(scope(), request, live());
-        expect(admitted.transcript).toBe(turn as never);
-        expect(opened).toHaveLength(1);
-      } else {
-        const error = await expectError(
-          () => runtime.openContext(scope(), request, live()),
-          MemoryRecallError,
-          "memory 'beta' returned a transcript but is not conversation-eligible; only a memory with one AGENT owner may hold a conversation",
-        );
-        expect((error as MemoryRecallError).origin).toBe(authored.get("beta")!);
-        expect(opened).toEqual([]);
-      }
-    } finally {
-      await runtime.close();
-    }
-  }
-});
-
-test("context rejects a second transcript for one agent", async () => {
-  const agent = [new DeclSite([], ["root"], "agent")];
-  const calls: unknown[][] = [];
-  const policies = new Map(
-    ["alpha", "gamma"].map((name) => [
-      name,
-      new FakeMemory(name, [], { value: new MemoryContent({ text: name, transcript: source({}, calls) }) }),
-    ]),
-  );
-  const gammaSite = new OriginRef("gamma-site");
-  const runtime = await MemoryRuntime.open({
-    memories: [new MemorySpec("alpha", "alpha", {}, agent, true), new MemorySpec("gamma", "gamma", {}, agent, true)],
-    origins: new Map([["alpha", null], ["gamma", gammaSite]]),
-    memory: policies,
-  });
-  const recall = new RecallContext("base system", "rendered prompt", {}, ["team", "agent"]);
-  const request = new MemoryContextRequest(recall, new ConversationInvocation("run", 1), {});
-  try {
-    const error = await expectError(
-      () => runtime.openContext(new MemoryScope(["team", "agent"], { memories: ["alpha", "gamma"] }), request, live()),
-      MemoryRecallError,
-      "memory 'gamma' returned a second transcript for 'team/agent'; one AGENT may hold at most one conversation",
-    );
-    expect((error as MemoryRecallError).origin).toBe(gammaSite);
-    expect(calls).toEqual([]);
-  } finally {
-    await runtime.close();
-  }
-});
-
 test("openContext is a MemoryContextOpener", async () => {
   const runtime = await open(named());
   const opener: MemoryContextOpener = (s, r, o) => runtime.openContext(s, r, o);
 
-  const admitted = await opener(scope(), new MemoryContextRequest(context(), null, {}), live());
+  const admitted = await opener(scope(), context(), live());
 
   expect(admitted.sections.map((section) => section.text)).toEqual(["beta", "alpha"]);
-  expect(admitted.transcript).toBeNull();
   await runtime.close();
 });
 
@@ -1225,63 +1068,7 @@ test("an async recall is awaited", async () => {
   await runtime.close();
 });
 
-test("openTurn receives the same signal and the scope's conversation request", async () => {
-  const policies = named();
-  const runtime = await open(policies);
-  const calls: unknown[][] = [];
-  const turn = { close() {} };
-  policies.get("alpha")!.session.value = new MemoryContent({
-    transcript: {
-      async openTurn(request, { signal }) {
-        calls.push([request, signal]);
-        return turn as never;
-      },
-    },
-  });
-  const controller = new AbortController();
-  const invocation = new ConversationInvocation("run", 7);
-
-  const admitted = await runtime.openContext(
-    scope(),
-    new MemoryContextRequest(context(), invocation, { model: "m" }),
-    { signal: controller.signal },
-  );
-
-  expect(admitted.transcript).toBe(turn as never);
-  expect(admitted.sections.map((section) => section.text)).toEqual(["beta"]);
-  expect(calls).toHaveLength(1);
-  const [request, signal] = calls[0] as [ConversationRequest, AbortSignal];
-  expect(signal).toBe(controller.signal);
-  expect(Object.getPrototypeOf(request)).toBe(ConversationRequest.prototype);
-  expect(request.consumerStaticPath).toEqual(["agent"]);
-  expect(request.invocation).toBe(invocation);
-  expect(request.compatibility).toEqual({ model: "m" });
-  await runtime.close();
-});
-
-test("an openTurn rejection rejects openContext unchanged", async () => {
-  const policies = named();
-  const runtime = await open(policies);
-  const failure = new StorageError("lease lost");
-  policies.get("alpha")!.session.value = new MemoryContent({
-    transcript: {
-      async openTurn() {
-        throw failure;
-      },
-    },
-  });
-  const request = new MemoryContextRequest(context(), new ConversationInvocation("run", 1), {});
-
-  let caught: unknown;
-  await runtime.openContext(scope(), request, live()).catch((error: unknown) => {
-    caught = error;
-  });
-
-  expect(caught).toBe(failure);
-  await runtime.close();
-});
-
-test("an already-aborted signal still recalls text-only memories, then rejects with the reason", async () => {
+test("an aborted signal still recalls every memory, then rejects with the reason", async () => {
   const policies = named();
   const runtime = await open(policies);
   const controller = new AbortController();
@@ -1289,11 +1076,9 @@ test("an already-aborted signal still recalls text-only memories, then rejects w
   controller.abort(reason);
 
   let caught: unknown;
-  await runtime
-    .openContext(scope(), new MemoryContextRequest(context(), null, {}), { signal: controller.signal })
-    .catch((error: unknown) => {
-      caught = error;
-    });
+  await runtime.openContext(scope(), context(), { signal: controller.signal }).catch((error: unknown) => {
+    caught = error;
+  });
 
   expect(caught).toBe(reason);
   expect(policies.get("beta")!.session.calls).toHaveLength(1);

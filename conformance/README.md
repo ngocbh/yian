@@ -445,8 +445,8 @@ HUMAN_INPUT never sends `options`; a model's `ask_user` call can.
 backward calls, the runner builds the memories afresh and reads each listed key's whole recall
 text (Python: `open_run().recall(None)`, a `MemoryContent`'s `text`). Its keys, like `<key>` in
 `memory:<key>`, are memory keys as the `memory_commit_*` records name them. A key the flow
-doesn't declare fails the case, and so does a session key, whose whole recall is empty by
-contract: a session is checked through a later run's `request`.
+doesn't declare fails the case. The Python runner also fails a session key, whose whole recall is
+empty by contract; TS yian has no session memory.
 
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
@@ -670,7 +670,7 @@ A case's group is its directory under `cases/`.
 | `run-case`, `run-loop`, `run-map-call` | run | control flow and growth |
 | `run-leaves` | run | TOOL (retries, call ids), CODE, HUMAN_INPUT, WAIT |
 | `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steering, interrupts, retries |
-| `run-memory` | run | session, episodic, reflective and profile memories |
+| `run-memory` | run | episodic, reflective and profile memories |
 | `resume` | resume | recovery, TOOL attempts across a resume, interrupted-attempt counts, re-supplied keys |
 | `backward` | backward | explicit backward feedback and learning |
 | `cli` | cli | non-interactive `yian run`, the `--json` commands, `yian status --json` |

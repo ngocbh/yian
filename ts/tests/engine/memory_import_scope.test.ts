@@ -92,7 +92,7 @@ test("scope rewrite prefixes every reachable declaration", async () => {
       "    nodes:\n" +
       "      ask:\n" +
       "        kind: agent\n" +
-      "        long_term_memory: {chat: session}\n" +
+      "        long_term_memory: {chat: episodic}\n" +
       "        prompt: hi\n" +
       "        output: str\n" +
       "    output: ${ask.output}\n" +
@@ -124,7 +124,7 @@ test("scope rewrite visits a shared node once", async () => {
       "    nodes:\n" +
       "      ask:\n" +
       "        kind: agent\n" +
-      "        long_term_memory: {chat: session}\n" +
+      "        long_term_memory: {chat: episodic}\n" +
       "        prompt: hi\n" +
       "        output: str\n" +
       "    output: ${ask.output}\n" +
@@ -164,7 +164,7 @@ test("one file under two aliases gives two sets", async () => {
         "      ask:\n" +
         "        kind: agent\n" +
         "        llm_config: {provider: openai, model: fake-model}\n" +
-        "        long_term_memory: {chat: session}\n" +
+        "        long_term_memory: {chat: episodic}\n" +
         "        prompt: hi\n" +
         "        output: str\n" +
         "    output: ${ask.output}\n" +

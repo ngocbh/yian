@@ -1158,7 +1158,8 @@ Node 22, and so does every unit test; a change keeps both green.
   (one `yian.cli.v1` document; ints must be `bigint`, a `number` is written as a float), and the
   key prompts `ensureEnvKey`, `ensureApiKey`, `confirmOllamaEndpoint`.
 - `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, wired to
-  `loadFlow`, `runFlow` (fresh), `resumeFlow` (`--resume`, with the recorded-key checks),
+  `loadFlow`, `runFlow` (fresh), `loadRecordedFlow` and `resumeFlow` (`--resume`, which takes no
+  flow file and runs the recorded flow, with the recorded-key checks),
   `loadSkillDir` and `inspectRun`; the diagnostic boxes, the banner, progress on stderr and
   `stopOnSignals` (SIGINT, SIGTERM and SIGHUP stop a run; exit 130).
 - A stop aborts the run's controller with a `HostStop` (`utils.ts`) naming the signal; Ctrl-C at

@@ -206,7 +206,7 @@ test.each(OLD_LOGS)("cli resume fails clearly (%s)", async (_id, makeLog) => {
     env: (name) => (name === "HOME" ? dir : undefined),
   };
 
-  const code = await main(["run", flowPath, "--resume", path, "--quiet"], io);
+  const code = await main(["run", "--resume", path, "--quiet"], io);
 
   expect(code).toBe(0);
   expect(out.join("")).toBe(`${String(output)}\n`);

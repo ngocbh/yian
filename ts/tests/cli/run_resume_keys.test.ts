@@ -174,8 +174,8 @@ async function unfinishedLog(
   return log;
 }
 
-/** Run `yian run <flow> --resume <log> --quiet`, stdin a fake TTY given `keys` when set. */
-async function resume(flow: string, log: string, keys?: (input: FakeInput) => void) {
+/** Run `yian run --resume <log> --quiet`, stdin a fake TTY given `keys` when set. */
+async function resume(log: string, keys?: (input: FakeInput) => void) {
   const chunks: string[] = [];
   const stdout: string[] = [];
   const output = new FakeOutput();
@@ -189,7 +189,7 @@ async function resume(flow: string, log: string, keys?: (input: FakeInput) => vo
     stderrStream: output,
     env,
   };
-  const code = await main(["run", flow, "--resume", log, "--quiet"], io);
+  const code = await main(["run", "--resume", log, "--quiet"], io);
   // Each prompt takes the terminal once, setting raw mode on and then off.
   const prompts = input.rawCalls.filter((mode) => mode).length;
   return { code, output: plain(chunks.join("")), stdout: stdout.join(""), prompts };
@@ -203,7 +203,7 @@ function plain(text: string): string {
 /** Assert the log is still recoverable and unlocked (Python's `_resumes_with_the_key`). */
 async function resumesWithTheKey(flow: string, log: string): Promise<void> {
   vars["OPENAI_API_KEY"] = "sk-fake";
-  const result = await withFetch(fakeModel, () => resume(flow, log));
+  const result = await withFetch(fakeModel, () => resume(log));
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
 }
@@ -213,7 +213,7 @@ test("test_resume_without_the_key_exits_before_writing", async () => {
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain(
@@ -230,7 +230,7 @@ test("test_resume_with_a_changed_key_exits_before_writing", async () => {
   const before = readFileSync(log);
   vars["OPENAI_API_KEY"] = "sk-other";
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain(
@@ -244,7 +244,7 @@ test("test_resume_prompts_for_a_missing_key_on_a_tty", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
 
-  const result = await withFetch(fakeModel, () => resume(flow, log, (keys) => keys.write("sk-fake\r")));
+  const result = await withFetch(fakeModel, () => resume(log, (keys) => keys.write("sk-fake\r")));
 
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
@@ -258,7 +258,7 @@ test("test_resume_rejects_a_typed_key_that_does_not_match", async () => {
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log, (keys) => keys.write("sk-other\r")));
+  const result = await withFetch(noModel, () => resume(log, (keys) => keys.write("sk-other\r")));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain(
@@ -273,7 +273,7 @@ test("test_resume_reprompts_on_empty_answers_then_gives_up", async () => {
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log, (keys) => keys.write("\r  \r\r")));
+  const result = await withFetch(noModel, () => resume(log, (keys) => keys.write("\r  \r\r")));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("no API key provided for 'openai' ($OPENAI_API_KEY); set it and resume again");
@@ -286,7 +286,7 @@ test("test_resume_checks_other_providers_by_env_var", async () => {
   const log = await unfinishedLog(flow, { envVar: "ANTHROPIC_API_KEY", key: "sk-ant" });
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain(
@@ -301,7 +301,7 @@ test("test_resume_on_a_saved_api_key_login_needs_no_environment_key", async () =
   const log = await unfinishedLog(flow, { envVar: null });
 
   // Not a TTY: a prompt can't be answered.
-  const result = await withFetch(fakeModel, () => resume(flow, log));
+  const result = await withFetch(fakeModel, () => resume(log));
 
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
@@ -316,7 +316,7 @@ test("test_agents_sharing_one_connection_get_one_prompt", async () => {
   const flow = flowFile(tmp, "openai", text);
   const log = await unfinishedLog(flow);
 
-  const result = await withFetch(fakeModel, () => resume(flow, log, (keys) => keys.write("sk-fake\r")));
+  const result = await withFetch(fakeModel, () => resume(log, (keys) => keys.write("sk-fake\r")));
 
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
@@ -332,7 +332,7 @@ test("test_resume_relays_a_reconnected_store_credential", async () => {
   await store.save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("yian auth openai");
@@ -345,7 +345,7 @@ test("test_resume_key_prompt_eof_leaves_the_log_unchanged", async () => {
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log, (keys) => keys.end()));
+  const result = await withFetch(noModel, () => resume(log, (keys) => keys.end()));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("run cancelled");
@@ -358,7 +358,7 @@ test("test_resume_key_prompt_ctrl_c_leaves_the_log_unchanged", async () => {
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log, (keys) => keys.write("\x03")));
+  const result = await withFetch(noModel, () => resume(log, (keys) => keys.write("\x03")));
 
   expect(result.code, result.output).toBe(130);
   expect(result.output).toContain("cancelled by user");
@@ -373,7 +373,7 @@ test("test_resume_of_a_host_key_run_points_to_python", async () => {
   const before = readFileSync(log);
   vars["OPENAI_API_KEY"] = "sk-h";
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("resume_flow(api_key=...)");
@@ -387,7 +387,7 @@ test("test_resume_of_a_host_key_run_with_headers_names_both", async () => {
   const log = await unfinishedLog(flow, { envVar: null, llmConfig });
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("resume_flow(api_key=..., headers=...)");
@@ -405,7 +405,7 @@ test("test_resume_of_a_login_saved_again_with_other_settings_fails", async () =>
   await store.save("openai", second, "gpt-5.5", { organization: "org-b" });
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("yian auth openai");
@@ -423,7 +423,7 @@ test("test_terminal_resume_of_an_agent_run_skips_the_key_check", async () => {
   );
   const before = readFileSync(log);
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
@@ -438,7 +438,7 @@ test("test_resume_checks_saved_login_of_non_openai_provider", async () => {
   let flow = flowFile(firstDir, "xai");
   let log = await unfinishedLog(flow, { envVar: null });
 
-  let result = await withFetch(fakeModel, () => resume(flow, log));
+  let result = await withFetch(fakeModel, () => resume(log));
 
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
@@ -451,7 +451,7 @@ test("test_resume_checks_saved_login_of_non_openai_provider", async () => {
   await store.save("xai", new ApiKeyCredentials("saved-xai"), "m", { makeDefault: false });
   let before = readFileSync(log);
 
-  result = await withFetch(noModel, () => resume(flow, log));
+  result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("yian auth xai");
@@ -464,7 +464,7 @@ test("test_resume_checks_saved_login_of_non_openai_provider", async () => {
   log = await unfinishedLog(flow, { envVar: "XAI_API_KEY", key: "sk-xai" });
   before = readFileSync(log);
 
-  result = await withFetch(noModel, () => resume(flow, log));
+  result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("$XAI_API_KEY is not set");
@@ -475,7 +475,7 @@ test("test_resume_of_keyless_vllm_run_needs_no_key", async () => {
   const flow = flowFile(tmp, "vllm");
   const log = await unfinishedLog(flow, { envVar: null });
 
-  const result = await withFetch(fakeModel, () => resume(flow, log));
+  const result = await withFetch(fakeModel, () => resume(log));
 
   expect(result.code, result.output).toBe(0);
   expect(result.stdout).toContain("written offline");
@@ -494,7 +494,7 @@ test("test_resume_of_a_call_time_host_key_selection_points_to_python", async () 
   expect(before.toString()).toContain('"call_time_llm"');
   vars["OPENAI_API_KEY"] = "sk-h";
 
-  const result = await withFetch(noModel, () => resume(flow, log));
+  const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("this run's openai API key came from a host's llm_config.api_key");

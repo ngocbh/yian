@@ -1342,16 +1342,17 @@ async function resumedFlow(
 
 /**
  * Compile the flow the run log at `log` recorded, as `resumeFlow` does: its flow files as the
- * loader first read them, never the files on disk now, under `env`'s `YIAN_*` values. The log is
- * read without its lock.
+ * loader first read them, never the files on disk now, under `env`'s `YIAN_*` values, which must
+ * be the ones the run recorded. The log is read without its lock.
  *
  * @param log The JSONL run log.
  * @param env The environment the load reads the `YIAN_*` values from (default `processEnv`).
  * @returns The recorded flow, or `null` when the run's flow was built in code.
- * @throws RangeError when the log holds no record or doesn't start with `RunStarted`, besides
- *   `iterRunRecords`' errors.
+ * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`,
+ *   besides `iterRunRecords`' errors.
  * @throws LoadError when the files no longer load (a CODE reference's file gone).
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
+ * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  */
 export async function loadRecordedFlow(log: string, env: Env = processEnv): Promise<ComposedFlow | null> {
   const envelopes: RecordEnvelope[] = [];
@@ -1360,8 +1361,12 @@ export async function loadRecordedFlow(log: string, env: Env = processEnv): Prom
     envelopes.push(entry.envelope);
     break;
   }
+  if (envelopes.length === 0) throw new RangeError(`cannot resume an empty run log: ${log}`);
   const start = startRecord(envelopes);
-  return withEnv(env, () => compileRecordedFlow(start));
+  return withEnv(env, () => {
+    checkRecorded(start.defaults);
+    return compileRecordedFlow(start);
+  });
 }
 
 /**

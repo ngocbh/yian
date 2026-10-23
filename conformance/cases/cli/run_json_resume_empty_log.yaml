@@ -1,11 +1,13 @@
 kind: cli
+# A resume names no flow file: it runs the flow the log recorded.
+rules: [run-log]
 flow: |
   id: echo
   name: echo
   nodes: {}
   output: done
 files: {old.jsonl: ""}
-args: [run, flow.yaml, --resume, old.jsonl, --json]
+args: [run, --resume, old.jsonl, --json]
 expect:
   exit: 1
   json:

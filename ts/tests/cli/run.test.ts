@@ -516,7 +516,7 @@ describe("main", () => {
     const { io, stdout, stderr } = testIo();
     expect(await main(["run", "-w", "-1", flow], io)).toBe(2);
     expect(stdout()).toBe("");
-    expect(stderr()).toStartWith("Usage: yian run [OPTIONS] FLOW\nTry 'yian run --help' for help.\n");
+    expect(stderr()).toStartWith("Usage: yian run [OPTIONS] [FLOW]\nTry 'yian run --help' for help.\n");
   });
 
   test("a missing flow, resume log or --root directory exits 2", async () => {
@@ -527,7 +527,7 @@ describe("main", () => {
     const nodir = join(tmp, "nodir");
     for (const [argv, message] of [
       [["run", missing], `Invalid value for 'FLOW': File '${missing}' does not exist.`],
-      [["run", flow, "--resume", log], `Invalid value for '--resume': File '${log}' does not exist.`],
+      [["run", "--resume", log], `Invalid value for '--resume': File '${log}' does not exist.`],
       [["check", "--root", nodir, "x.yaml"], `Invalid value for '--root': Directory '${nodir}' does not exist.`],
     ] as const) {
       const { io, stdout, stderr } = testIo();
@@ -602,13 +602,27 @@ function file(name: string, content: string | Uint8Array): string {
 }
 
 describe("run", () => {
-  test("--resume with --input exits 2 naming the conflict, before the flow is read", async () => {
+  test("--resume with --input exits 2 naming the conflict, before the log is read", async () => {
+    const old = file("old.jsonl", "");
+    const { io, stdout, stderr } = testIo();
+    expect(await main(["run", "--resume", old, "--input", "n=1"], io)).toBe(2);
+    expect(stdout()).toBe("");
+    expect(stderr()).toEndWith("Error: Invalid value: --resume cannot be combined with --input\n");
+  });
+
+  test("--resume with a flow file exits 2: the resume runs the recorded flow", async () => {
     const flow = file("flow.yaml", NOT_UTF8);
     const old = file("old.jsonl", "");
     const { io, stdout, stderr } = testIo();
-    expect(await main(["run", flow, "--resume", old, "--input", "n=1"], io)).toBe(2);
+    expect(await main(["run", flow, "--resume", old], io)).toBe(2);
     expect(stdout()).toBe("");
-    expect(stderr()).toEndWith("Error: Invalid value: --resume cannot be combined with --input\n");
+    expect(stderr()).toEndWith("Error: Invalid value: --resume runs the flow recorded in the log; leave out <flow>\n");
+  });
+
+  test("a fresh run without a flow file exits 2", async () => {
+    const { io, stderr } = testIo();
+    expect(await main(["run"], io)).toBe(2);
+    expect(stderr()).toContain("Missing argument 'FLOW'.");
   });
 
   test("an existing --log exits 2, before the flow is read", async () => {

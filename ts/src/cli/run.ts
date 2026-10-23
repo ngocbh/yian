@@ -65,6 +65,7 @@ import {
   hostInputs,
   inspectRun,
   type LlmConfigsCheck,
+  loadRecordedFlow,
   resumeFlow,
   type RunInspection,
   type RunResult,
@@ -635,16 +636,19 @@ function lexists(path: string): boolean {
 }
 
 /**
- * Reject fresh-only options on `--resume`, and a `--log` path that already exists. Absent
- * options are `undefined`; `inputValues` is empty when no `--input` is given.
+ * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
+ * `--log` path that already exists. Absent options are `undefined`; `inputValues` is empty when
+ * no `--input` is given.
  *
  * Run before input files are read, prompts are shown, or provider configuration is resolved.
  *
- * @throws {UsageError} When `resume` is given with `--input`, `--inputs`, `--provider`,
- *   `--model` or `--log` (each one given is named, in that order), or a directory entry, even a
- *   dangling symlink, exists at `log`.
+ * @throws {UsageError} When `resume` is given with `flow` (the resume runs the flow the log
+ *   recorded), or with `--input`, `--inputs`, `--provider`, `--model` or `--log` (each one given is
+ *   named, in that order); when neither `flow` nor `resume` is given; or when a directory entry,
+ *   even a dangling symlink, exists at `log`.
  */
 export function validateRunLogOptions(options: {
+  flow?: string | undefined;
   inputValues: readonly string[];
   inputs?: string | undefined;
   provider?: string | undefined;
@@ -652,8 +656,13 @@ export function validateRunLogOptions(options: {
   log?: string | undefined;
   resume?: string | undefined;
 }): void {
-  const { inputValues, inputs, provider, model, log, resume } = options;
+  const { flow, inputValues, inputs, provider, model, log, resume } = options;
+  if (resume === undefined && flow === undefined) throw new UsageError("Missing argument 'FLOW'.");
   if (resume !== undefined) {
+    // An edited flow file means a new run, so a resume never reads one.
+    if (flow !== undefined) {
+      throw new UsageError("Invalid value: --resume runs the flow recorded in the log; leave out <flow>");
+    }
     const conflicts: string[] = [];
     if (inputValues.length > 0) conflicts.push("--input");
     if (inputs !== undefined) conflicts.push("--inputs");
@@ -1186,9 +1195,11 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
  * `McpConnectError`'s notes on the lines below, and exits 1.
  *
- * With `resume`, the flow loads and its memories, skills and MCP config are read as for a fresh
- * run; then the log path is printed and `resumeFlow` recovers the run, with no input prompts, no
- * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count.
+ * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
+ * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
+ * the log path is printed and `resumeFlow` recovers the run, with no input prompts, no
+ * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count. A
+ * log whose flow was built in code can't be resumed here and prints `resume failed: ...`.
  * Before anything is appended, the keys the recorded configs need are checked: a missing one is
  * prompted for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
  * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
@@ -1208,7 +1219,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
  *   inputs.
  */
-export async function run(flowPath: string, options: RunOptions, io: CliIo): Promise<number> {
+export async function run(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<number> {
   const controller = new AbortController();
   // From the command's start, so a signal during the load or the prompts stops the run too.
   const disposeSignals = stopOnSignals(controller);
@@ -1268,13 +1279,13 @@ interface RunHost {
 
 /** `run`'s body, prompting at `host.terminal`, stopped through `host.controller`. */
 async function startRun(
-  flowPath: string,
+  flowPath: string | undefined,
   options: RunOptions,
   io: CliIo,
   host: RunHost,
 ): Promise<number> {
   const { terminal, controller, reporter } = host;
-  validateRunLogOptions(options);
+  validateRunLogOptions({ ...options, flow: flowPath });
   const { json, quiet, engineTrace } = options;
   const fail = async (diagnostic: Diagnostic) => {
     if (json) await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
@@ -1294,25 +1305,47 @@ async function startRun(
     await writeStack(error);
     return fail(new Diagnostic({ code: "run.setup", message: error.message, notes }));
   };
-  let text: string;
-  try {
-    text = readFlowText(flowPath);
-  } catch (error) {
-    if (!(error instanceof NotUtf8Error)) throw error;
-    const message = `can't read ${flowPath}: not UTF-8 text`;
-    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
-    return fail(new Diagnostic({ code: "compose.load", message }));
-  }
   let flow: ComposedFlow;
-  try {
-    const loading = { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env };
-    flow = await loadFlow(text, loading);
-  } catch (error) {
-    if (!(error instanceof LoadError)) throw error;
-    // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
-    await renderDiagnostic(error.diagnostic, io.stderr, io.env);
-    await writeStack(error);
-    return fail(error.diagnostic);
+  if (options.resume !== undefined) {
+    let recorded: ComposedFlow | null;
+    try {
+      recorded = await loadRecordedFlow(options.resume, io.env);
+    } catch (error) {
+      if (error instanceof LoadError) {
+        await renderDiagnostic(error.diagnostic, io.stderr, io.env);
+        await writeStack(error);
+        return fail(error.diagnostic);
+      }
+      if (!isSetupError(error)) throw error;
+      return setupFailed(error);
+    }
+    if (recorded === null) {
+      return setupFailed(
+        new RangeError("this run's flow was built in code; resume it with resumeFlow({log, flow})"),
+      );
+    }
+    flow = recorded;
+  } else {
+    const path = flowPath!;
+    let text: string;
+    try {
+      text = readFlowText(path);
+    } catch (error) {
+      if (!(error instanceof NotUtf8Error)) throw error;
+      const message = `can't read ${path}: not UTF-8 text`;
+      await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+      return fail(new Diagnostic({ code: "compose.load", message }));
+    }
+    try {
+      const loading = { searchPaths: [dirname(path)], sourceLabel: basename(path), env: io.env };
+      flow = await loadFlow(text, loading);
+    } catch (error) {
+      if (!(error instanceof LoadError)) throw error;
+      // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
+      await renderDiagnostic(error.diagnostic, io.stderr, io.env);
+      await writeStack(error);
+      return fail(error.diagnostic);
+    }
   }
 
   const commandEnv = new CommandEnv(io.env);

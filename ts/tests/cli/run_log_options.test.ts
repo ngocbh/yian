@@ -79,16 +79,26 @@ describe("validateRunLogOptions", () => {
   test("an existing log is rejected, a dangling symlink too", () => {
     const existing = join(tmp, "existing.jsonl");
     writeFileSync(existing, "keep");
-    expect(() => validateRunLogOptions({ inputValues: [], log: existing })).toThrow(
+    expect(() => validateRunLogOptions({ flow: "flow.yaml", inputValues: [], log: existing })).toThrow(
       new UsageError(`Invalid value for --log: --log path already exists: ${existing}`),
     );
     // A broken symlink is still an occupied directory entry, never a fresh path.
     const dangling = join(tmp, "dangling.jsonl");
     symlinkSync(join(tmp, "missing-target.jsonl"), dangling);
-    expect(() => validateRunLogOptions({ inputValues: [], log: dangling })).toThrow(
+    expect(() => validateRunLogOptions({ flow: "flow.yaml", inputValues: [], log: dangling })).toThrow(
       new UsageError(`Invalid value for --log: --log path already exists: ${dangling}`),
     );
-    expect(() => validateRunLogOptions({ inputValues: ["a=1"], log: join(tmp, "new.jsonl") })).not.toThrow();
+    expect(() =>
+      validateRunLogOptions({ flow: "flow.yaml", inputValues: ["a=1"], log: join(tmp, "new.jsonl") }),
+    ).not.toThrow();
+  });
+
+  test("a resume takes no flow file, and a fresh run needs one", () => {
+    const resume = join(tmp, "prior.jsonl");
+    expect(() => validateRunLogOptions({ flow: "flow.yaml", inputValues: [], resume })).toThrow(
+      new UsageError("Invalid value: --resume runs the flow recorded in the log; leave out <flow>"),
+    );
+    expect(() => validateRunLogOptions({ inputValues: [] })).toThrow(new UsageError("Missing argument 'FLOW'."));
   });
 });
 
@@ -148,14 +158,14 @@ output: \${echo.output}
 
 /**
  * Run `yian run` on `FLOW` with `args` and `HOME` at `tmp/home`, `io`'s fields replacing the
- * defaults; return the code and output.
+ * defaults; return the code and output. A resume (`--resume` in `args`) names no flow file.
  */
 async function runCli(args: string[], io: Partial<CliIo> = {}) {
   const flow = join(tmp, "flow.yaml");
   writeFileSync(flow, FLOW);
   const out: string[] = [];
   const err: string[] = [];
-  const code = await main(["run", flow, ...args], {
+  const code = await main(["run", ...(args.includes("--resume") ? [] : [flow]), ...args], {
     stdout: { write: async (text) => void out.push(text) },
     stderr: { write: async (text) => void err.push(text) },
     stdin: new PassThrough(),

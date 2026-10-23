@@ -255,7 +255,7 @@ async function cliResume(text: string, log: string, runEnv: Env) {
     stderrStream: new FakeOutput(),
     env: runEnv,
   };
-  const code = await main(["run", flow, "--resume", log, "--quiet"], io);
+  const code = await main(["run", "--resume", log, "--quiet"], io);
   return { code, output: chunks.join("").split(/\s+/).filter(Boolean).join(" ") };
 }
 

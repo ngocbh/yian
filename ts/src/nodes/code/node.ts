@@ -557,7 +557,7 @@ export class CodeNode extends Node {
    * refused; otherwise it is stripped of its types and built, never called.
    *
    * @param options.codeRoot The real path of the directory a reference's file must resolve
-   *   inside, symlinks followed; `null` (the default) confines nothing.
+   *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
    * @throws RangeError when a reference's file isn't a regular file, or resolves outside
    *   `options.codeRoot`, or an inline body looks like a Python reference.
    * @throws TypeStripError when the body doesn't parse or strip.

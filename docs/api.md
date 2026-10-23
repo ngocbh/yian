@@ -107,14 +107,21 @@ reachable source origin. It is `None` only for a source-free graph. External
 files remain canonical in the path cache; each `uses:` alias embeds a rebased
 copy whose routes still resolve to the original file.
 
-Changed (TS yian): `loadFlow(text, { childResolver, searchPaths, sourceLabel, baseDir, env })`
-returns a Promise of the `ComposedFlow`, and a `LoadError` is its rejection. A
+Changed (TS yian): `loadFlow(text, { childResolver, searchPaths, sourceLabel, baseDir, codeRoot,
+env })` returns a Promise of the `ComposedFlow`, and a `LoadError` is its rejection. A
 `childResolver(path, version)` may return the flow or a Promise of it. Every `uses:` file
 is read before the flow assembles. `baseDir` is the directory a CODE node's
 `./file.ts:fn` reference resolves against (default: the first search path, else the
 current directory); a file read through the search path resolves against its own
 directory, so a `childResolver` that loads a child file passes the child's own directory
-as its `baseDir`. `env` is the environment this load reads the `YIAN_*` values from. The
+as its `baseDir`. With `codeRoot`, a CODE node's `./file.ts:fn` reference whose file's real
+path is outside the real path of `codeRoot` (symlinks are followed on both sides) is a
+`LoadError` at the `code:` value. This covers the files the search path reads. A flow a
+`childResolver` returns was checked by its own load, so a resolver that loads a file passes
+`codeRoot` on. An inline `code:` body and a module's own imports aren't confined; without
+`codeRoot`, nothing is. A relative `codeRoot` resolves against the current directory, and one
+that doesn't exist refuses every reference. The check runs at load: the file is imported by
+path when the node runs, so a file replaced after the load isn't checked again. `env` is the environment this load reads the `YIAN_*` values from. The
 default is the process environment, or the calling load's when a `childResolver` calls
 `loadFlow` without `env`.
 A bad `YIAN_*` value in `env` rejects with `DefaultsError`, not `LoadError`.
@@ -2514,7 +2521,9 @@ new run; the fingerprint is still checked, against the compiled recorded flow. T
 starts at the root and follows each file's `refs` inside the log: no disk, search path or
 symlink. A CODE reference's file is not recorded and must still be there, in the folder of
 the file's key below `dir`. CODE files are read from disk on resume, so an edited CODE file is picked up, as a
-reference-mode CODE node's function is today. `loadRecordedFlow(log, env)` (from `yian/run`)
+reference-mode CODE node's function is today. The recorded load (internal, not exported) can
+take `loadFlow`'s `codeRoot` check over every recorded file, a host child's included;
+`resumeFlow` has no option for it yet. `loadRecordedFlow(log, env)` (from `yian/run`)
 compiles a log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI
 reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is

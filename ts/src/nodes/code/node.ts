@@ -17,7 +17,8 @@
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
  * return the node's one output value. Nothing is compiled or imported at construction; the
  * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
- * `module:function` value, and requires a reference's file to exist, running no code.
+ * `module:function` value, and requires a reference's file to exist (and, when the load has a code
+ * root, to resolve inside it); it runs no code.
  *
  * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
  * per thread. Idle workers are reused (at most `availableParallelism()` wait), and an idle worker
@@ -54,9 +55,9 @@
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../../defaults.ts";
@@ -94,6 +95,15 @@ const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
 // Python's own reference shape (`pkg.mod:fn`). Read as TS it is a labeled statement, so the load
 // check refuses it rather than run it as a body.
 const PYTHON_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
+
+// Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
+/**
+ * Whether a path relative to a root (`relative(root, file)`) leaves that root: `..`, a `../`
+ * prefix, or an absolute path (another drive).
+ */
+function leavesRoot(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
 
 /** The built-in identity operation: return the input named `field` unchanged. */
 export interface BuiltinCode {
@@ -546,19 +556,33 @@ export class CodeNode extends Node {
    * found when the node runs. An inline body that has Python's `module:function` shape is
    * refused; otherwise it is stripped of its types and built, never called.
    *
-   * @throws RangeError when a reference's file isn't a regular file, or an inline body looks
-   *   like a Python reference.
+   * @param options.codeRoot The real path of the directory a reference's file must resolve
+   *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
+   * @throws RangeError when a reference's file isn't a regular file, or resolves outside
+   *   `options.codeRoot`, or an inline body looks like a Python reference.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
    */
-  async check(): Promise<void> {
+  async check(options: { codeRoot?: string | null } = {}): Promise<void> {
     const code = this.code;
     if (typeof code !== "string") return;
     if (this.mode === "reference") {
       const { path } = splitReference(code);
       const dir = this.baseDir ?? process.cwd();
-      if (statSync(resolve(dir, path), { throwIfNoEntry: false })?.isFile() !== true) {
+      const file = resolve(dir, path);
+      if (statSync(file, { throwIfNoEntry: false })?.isFile() !== true) {
         throw new RangeError(`\`code:\` file ${reprText(path)} does not exist in ${reprText(dir)}`);
+      }
+      const { codeRoot = null } = options;
+      if (codeRoot !== null) {
+        // The native realpath, like the loader's `fsp.realpath` for the root, so both give the
+        // on-disk case and compare equal on a case-insensitive disk, on Bun and Node alike.
+        const real = realpathSync.native(file);
+        if (leavesRoot(relative(codeRoot, real))) {
+          throw new RangeError(
+            `\`code:\` file ${reprText(path)} resolves to ${reprText(real)}, outside the code root ${reprText(codeRoot)}`,
+          );
+        }
       }
       return;
     }

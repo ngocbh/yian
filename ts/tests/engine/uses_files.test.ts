@@ -14,7 +14,9 @@
  * `baseDir` is `loadFlow`'s option, else the first search path, else the current directory, made
  * absolute, for the root, its defs and its inline bodies alike, and a child file's own directory;
  * an importer doesn't check a `uses:` child's CODE again, so a host's cached child whose CODE file
- * was removed after its load still imports.
+ * was removed after its load still imports. With `codeRoot`, every CODE reference of the root, its
+ * defs, its inline bodies and its search-path children must resolve (symlinks followed) inside it,
+ * or the load fails at the `code:` value; a `childResolver`'s flow isn't checked again.
  *
  * Covered by `run-map-call/seed_24_uses_external`: `test_seed_24_runs_via_search_path`. The case
  * runs seed 24 with its sibling `lib_verdict.yaml` on the search path and pins the succeeded
@@ -23,7 +25,7 @@
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fsp from "node:fs/promises";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -446,4 +448,124 @@ test("a uses: child loaded earlier isn't checked again by its importer", async (
   const parent = flowText("p", { call: "ch", uses: { ch: "child" } });
   const loaded = await loadFlow(parent, { childResolver: () => cached });
   expect(childOf(loaded.compiled, "a").flowId).toBe("child");
+});
+
+// ---------- TS-only: codeRoot ----------
+
+const H_TS = "export function fn(inputs: Record<string, unknown>): unknown {\n  return inputs.x;\n}\n";
+
+/** A flow `p` whose CODE node `a` (written in block style) runs `ref`. */
+const codeFlow = (ref: string) =>
+  "id: p\nname: p\ninput:\n  x: !str\nnodes:\n" +
+  `  a:\n    kind: code\n    code: ${ref}\n    input: {x: "\${input.x}"}\n` +
+  'output: {y: "${a.output}"}\n';
+
+/** Make `tmp/root` and `tmp/out`, each with an `h.ts` exporting `fn`; return both. */
+function codeDirs(): { root: string; out: string } {
+  const root = join(tmp, "root");
+  const out = join(tmp, "out");
+  for (const dir of [root, out]) {
+    mkdirSync(dir);
+    writeFileSync(join(dir, "h.ts"), H_TS);
+  }
+  return { root, out };
+}
+
+/** The 1-based line of `text` that holds `needle`. */
+const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+test("loadFlow with codeRoot accepts a CODE reference inside it", async () => {
+  const { root } = codeDirs();
+  const text =
+    "id: p\nname: p\ninput:\n  x: !str\n" +
+    "defs:\n  d:\n    input: {x: !str}\n    nodes:\n" +
+    '      c: {kind: code, code: ./h.ts:fn, input: {x: "${input.x}"}}\n' +
+    "    output: ${c.output}\n" +
+    "nodes:\n" +
+    '  a: {kind: code, code: ./h.ts:fn, input: {x: "${input.x}"}}\n' +
+    '  b: {kind: call, call: d, input: {x: "${input.x}"}}\n' +
+    '  f: {kind: call, input: {x: "${input.x}"}, nodes: ' +
+    '{g: {kind: code, code: ./h.ts:fn, input: {x: "${input.x}"}}}, output: "${g.output}"}\n' +
+    'output: {y: "${a.output}"}\n';
+  const rootLink = join(tmp, "rootlink");
+  symlinkSync(root, rootLink);
+
+  for (const codeRoot of [root, rootLink, relative(process.cwd(), root)]) {
+    const loaded = await loadFlow(text, { baseDir: root, codeRoot });
+    expect(loaded.compiled.flowId).toBe("p");
+  }
+});
+
+test("loadFlow with codeRoot refuses a ../ reference outside it, at the code: value", async () => {
+  const { root, out } = codeDirs();
+  const outside =
+    `\`code:\` file '../out/h.ts' resolves to '${realpathSync(join(out, "h.ts"))}', ` +
+    `outside the code root '${realpathSync(root)}'`;
+  const text = codeFlow("../out/h.ts:fn");
+
+  const error = await loadErrorAsync(loadFlow(text, { baseDir: root, codeRoot: root }));
+  expect(error.message).toBe(`node 'a': ${outside}`);
+  expect(error.diagnostic.code).toBe("compose.load");
+  expect(error.diagnostic.frames.map((frame) => frame.range.startLine)).toEqual([lineOf(text, "code: ../out")]);
+
+  const defText =
+    "id: p\nname: p\ninput:\n  x: !str\n" +
+    "defs:\n  d:\n    input: {x: !str}\n    nodes:\n" +
+    "      c:\n        kind: code\n        code: ../out/h.ts:fn\n" +
+    '        input: {x: "${input.x}"}\n' +
+    "    output: ${c.output}\n" +
+    'nodes:\n  b: {kind: call, call: d, input: {x: "${input.x}"}}\n' +
+    'output: {y: "${b.output}"}\n';
+  const defError = await loadErrorAsync(loadFlow(defText, { baseDir: root, codeRoot: root }));
+  expect(defError.message).toBe(`defs entry 'd': node 'c': ${outside}`);
+  // The def's frame is its body, which starts on the line after `d:`.
+  expect(defError.diagnostic.frames.map((frame) => frame.range.startLine)).toEqual([
+    lineOf(defText, "input: {x: !str}"),
+    lineOf(defText, "code: ../out"),
+  ]);
+});
+
+test("loadFlow with codeRoot refuses a symlink pointing outside it", async () => {
+  const { root, out } = codeDirs();
+  symlinkSync(join(out, "h.ts"), join(root, "link.ts"));
+
+  const error = await loadErrorAsync(loadFlow(codeFlow("./link.ts:fn"), { baseDir: root, codeRoot: root }));
+  expect(error.message).toBe(
+    `node 'a': \`code:\` file './link.ts' resolves to '${realpathSync(join(out, "h.ts"))}', ` +
+      `outside the code root '${realpathSync(root)}'`,
+  );
+});
+
+test("loadFlow with codeRoot checks a search-path child file's CODE references", async () => {
+  const { root } = codeDirs();
+  const lib = join(root, "lib");
+  mkdirSync(lib);
+  writeFileSync(join(lib, "h.ts"), H_TS);
+  const parent = flowText("q", { call: "ch", uses: { ch: "lib/child" } });
+  const options = { searchPaths: [root], baseDir: root, codeRoot: root };
+
+  writeFileSync(join(lib, "child.yaml"), codeFlow("../../out/h.ts:fn"));
+  const error = await loadErrorAsync(loadFlow(parent, options));
+  expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+
+  writeFileSync(join(lib, "child.yaml"), codeFlow("./h.ts:fn"));
+  const loaded = await loadFlow(parent, options);
+  expect(childOf(loaded.compiled, "a").flowId).toBe("p");
+});
+
+test("loadFlow with codeRoot leaves a childResolver's flow to the host", async () => {
+  const { root, out } = codeDirs();
+  const hosted = await loadFlow(codeFlow("./h.ts:fn"), { baseDir: out });
+  const parent = flowText("q", { call: "ch", uses: { ch: "child" } });
+
+  const loaded = await loadFlow(parent, { childResolver: () => hosted, baseDir: root, codeRoot: root });
+  expect(childOf(loaded.compiled, "a").flowId).toBe("p");
+});
+
+test("loadFlow without codeRoot loads a reference outside any root", async () => {
+  const { root } = codeDirs();
+  const text = codeFlow("../out/h.ts:fn");
+
+  expect((await loadFlow(text, { baseDir: root })).compiled.flowId).toBe("p");
+  expect((await loadFlow(text, { baseDir: root, codeRoot: null })).compiled.flowId).toBe("p");
 });

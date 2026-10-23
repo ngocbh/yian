@@ -25,9 +25,9 @@
  * private `assemble` products keep the resolver unset.
  *
  * After a file assembles, its CODE nodes are checked (each def's in written order, then the
- * root's) against the file's base directory. Only the root load sees the fully assembled graph, so
- * `loadFlow` then resolves its memory layout and refuses an `llm_config` value a child flow's agent
- * would inherit before it is known.
+ * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
+ * Only the root load sees the fully assembled graph, so `loadFlow` then resolves its memory layout
+ * and refuses an `llm_config` value a child flow's agent would inherit before it is known.
  *
  * A flow's chain of `uses:` imports is at most `current().maxCallNesting` files deep, the call
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
@@ -316,6 +316,17 @@ export class LoadCtx {
   readonly flows = new Map<string, ComposedFlow>();
   /** Each file read from disk, by real path. */
   readonly read = new Map<string, ReadFile>();
+  /** The real path every CODE reference in the import graph must resolve inside, or `null`. */
+  readonly codeRoot: string | null;
+
+  constructor(codeRoot: string | null = null) {
+    this.codeRoot = codeRoot;
+  }
+}
+
+/** Return a fresh `LoadCtx` whose `codeRoot` is `codeRoot` made absolute and real, or `null`. */
+async function newLoadCtx(codeRoot: string | null): Promise<LoadCtx> {
+  return new LoadCtx(codeRoot === null ? null : await realOr(resolvePath(codeRoot)));
 }
 
 // `uses:` imports being loaded around the current one. It spans files and `loadFlow` never resets
@@ -602,6 +613,7 @@ interface LoadOptions {
   searchPaths?: readonly string[] | null;
   sourceLabel?: string;
   baseDir?: string | null;
+  codeRoot?: string | null;
   env?: Env;
 }
 
@@ -624,6 +636,11 @@ interface LoadOptions {
  * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference resolves against
  *   (default: the first search path, else the current directory). A file read through the search
  *   path resolves its own references against its own directory.
+ * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
+ *   one against the current directory); symlinks are resolved on both sides. A reference outside
+ *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
+ *   too; a `childResolver`'s flow is the host's to load with its own `codeRoot`. An inline `code:`
+ *   body is not confined. `null` or absent confines nothing.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
  *   without `env` loads under the caller's.
@@ -644,12 +661,12 @@ export async function loadFlow(text: string, options: LoadOptions = {}): Promise
 
 /** Load `text` as `loadFlow` does, under the `YIAN_*` values already in effect. */
 async function loadText(text: string, options: Omit<LoadOptions, "env">): Promise<ComposedFlow> {
-  const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null } = options;
+  const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null, codeRoot = null } = options;
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const document = parseSourceDocument(text, sourceLabel);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
-  const ctx = new LoadCtx();
+  const ctx = await newLoadCtx(codeRoot);
   const rootFile: ReadFile = { text, refs: new Map() };
   const hosted = new Map<string, unknown>();
   const resolver: ChildResolver | null =
@@ -673,14 +690,20 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
+ * @param options.codeRoot A directory every recorded file's CODE references must resolve inside,
+ *   as `loadFlow`'s; a host child's recorded file is checked too. `null` or absent confines
+ *   nothing.
  * @returns The flow, whose `source` is `source`.
  * @throws LoadError for a flow that doesn't load, or a `uses:` ref its file's `refs` lacks.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  */
-export async function loadFlowSource(source: FlowSource, options: { env?: Env } = {}): Promise<ComposedFlow> {
-  const { env = processEnv } = options;
+export async function loadFlowSource(
+  source: FlowSource,
+  options: { env?: Env; codeRoot?: string | null } = {},
+): Promise<ComposedFlow> {
+  const { env = processEnv, codeRoot = null } = options;
   return withEnv(env, async () => {
-    const loaded = await loadSourceFile(source, source.root, new LoadCtx());
+    const loaded = await loadSourceFile(source, source.root, await newLoadCtx(codeRoot));
     return checkRoot(replaceFlow(loaded, { source }));
   });
 }
@@ -1166,6 +1189,7 @@ export async function loadFlowFile(
     // Shared so the root skips the defs its calls bake in, already checked. A `uses:` child was
     // checked in its own load, so its flow starts out seen.
     seen: new Set(Object.keys(f.uses).map((alias) => scope.resolve(alias).compiled)),
+    codeRoot: ctx.codeRoot,
   };
   await scope.checkDefsCode(code);
   await checkFlowCode(staged.compiled, code);

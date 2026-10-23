@@ -34,10 +34,19 @@ export const MODEL_LIST_TIMEOUT_SECONDS = 8;
  *
  * The message is one of `HTTP <status>`, `can't reach host`, `timed out`, `invalid request`,
  * `invalid response`, or `unsupported provider`; it never holds the key, a header value, the URL,
- * or the response body.
+ * or the response body. `status` is the HTTP status of an `HTTP <status>` failure, else `null`;
+ * hosts read it rather than the message. A status of 401 or 403 makes `isAuthFailure` count the
+ * error.
  */
 export class ModelListError extends Error {
   override name = "ModelListError";
+  readonly status: number | null;
+
+  constructor(message: string, options: { status?: number } = {}) {
+    // No options reach `super`, so the error never has a `cause` key.
+    super(message);
+    this.status = options.status ?? null;
+  }
 }
 
 /** Options for `listModels`. */
@@ -161,7 +170,9 @@ export async function listModels(
     if (!(response instanceof HttpResponse) || !Number.isInteger(response.status)) {
       throw new ModelListError("invalid response");
     }
-    if (!(response.status >= 200 && response.status < 300)) throw new ModelListError(`HTTP ${response.status}`);
+    if (!(response.status >= 200 && response.status < 300)) {
+      throw new ModelListError(`HTTP ${response.status}`, { status: response.status });
+    }
     const data = response.data;
     if (!isRecord(data)) throw new ModelListError("invalid response");
     return data;

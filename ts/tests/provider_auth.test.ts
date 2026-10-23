@@ -2,6 +2,7 @@
  * Mirrors `tests/test_provider_auth.py`: `auth/index.ts`'s exports, the credential values, the
  * store, `isAuthFailure`, `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs;
  * and the scenarios of `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
+ * The `AuthError` status tests are TS-only.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
@@ -2175,6 +2176,7 @@ describe("OpenAIAuth", () => {
     );
     expect(error).toBeInstanceOf(AuthError);
     expect(error.message).toBe("OpenAI authentication request failed (HTTP 401)");
+    expect((error as AuthError).status).toBe(401);
     assertNoSettings(error);
     expect(http.calls).toHaveLength(1);
   });
@@ -2319,6 +2321,30 @@ describe("OpenAIAuth", () => {
     });
   }
 
+  test("an HTTP failure sets the status on AuthError", async () => {
+    for (const status of [401, 403, 404]) {
+      const http = new FakeHttp(new HttpResponse(status, { error: "secret-do-not-print" }));
+      const error = await rejected(new OpenAIAuth({ request: http.request }).subscriptionModels(SUBSCRIPTION()));
+      expect(error).toBeInstanceOf(AuthError);
+      expect((error as AuthError).status).toBe(status);
+    }
+    const http = new FakeHttp(new HttpResponse(403, { error: "secret-do-not-print" }));
+    const error = await rejected(new OpenAIAuth({ request: http.request }).refresh(SUBSCRIPTION()));
+    expect(error).toBeInstanceOf(AuthError);
+    expect((error as AuthError).status).toBe(403);
+  });
+
+  test("an AuthError without an HTTP status has a null status and no cause", () => {
+    const error = new AuthError("x");
+    expect(error.status).toBeNull();
+    expect("cause" in error).toBe(false);
+    const cause = new Error("inner");
+    const wrapped = new AuthError("x", { cause });
+    expect(wrapped.cause).toBe(cause);
+    expect(wrapped.status).toBeNull();
+    expect(new AuthError("x", { status: 401 }).status).toBe(401);
+  });
+
   test("cancellation comes before the network", async () => {
     const controller = new AbortController();
     const reason = new Error("stopped by host");
@@ -2453,6 +2479,7 @@ describe("OpenAIAuth", () => {
     );
     const error = await rejected(new OpenAIAuth({ request: failed.request }).deviceLogin(() => {}));
     expect(error.message).toBe("OpenAI authentication request failed (HTTP 500)");
+    expect((error as AuthError).status).toBe(500);
     const missing = new FakeHttp(
       new HttpResponse(200, { device_auth_id: "id", user_code: "code" }),
       new HttpResponse(200, { code_verifier: "v" }),
@@ -2460,6 +2487,7 @@ describe("OpenAIAuth", () => {
     const missingError = await rejected(new OpenAIAuth({ request: missing.request }).deviceLogin(() => {}));
     expect(missingError).toBeInstanceOf(AuthError);
     expect(missingError.message).toBe("OpenAI returned invalid authorization data");
+    expect((missingError as AuthError).status).toBeNull();
     expect(missing.calls).toHaveLength(2);
   });
 

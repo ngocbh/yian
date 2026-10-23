@@ -1,6 +1,7 @@
 /**
  * Mirrors `tests/test_model_list.py`: model listing per provider host, through an injected
- * `request` (no network), plus two loopback tests through the default `request`.
+ * `request` (no network), plus two loopback tests through the default `request`. The `status`
+ * tests are TS-only.
  */
 
 import http from "node:http";
@@ -328,15 +329,45 @@ describe("http error carries only the status", () => {
   for (const provider of ["openai", "anthropic", "google", "openrouter"]) {
     test(provider, async () => {
       const fake = server(() => new HttpResponse(401, { error: { message: `${BODY_MARKER}: ${KEY}` } }));
-      assertClean(await rejected(listModels(provider, { apiKey: KEY, request: fake })), "HTTP 401");
+      const error = await rejected(listModels(provider, { apiKey: KEY, request: fake }));
+      assertClean(error, "HTTP 401");
+      expect((error as ModelListError).status).toBe(401);
+    });
+  }
+});
+
+describe("the status is the HTTP status", () => {
+  for (const status of [401, 403, 404]) {
+    test(String(status), async () => {
+      const fake = server(() => new HttpResponse(status, { error: { message: `${BODY_MARKER}: ${KEY}` } }));
+      const error = await rejected(listModels("openai", { apiKey: KEY, request: fake }));
+      assertClean(error, `HTTP ${status}`);
+      expect((error as ModelListError).status).toBe(status);
     });
   }
 });
 
 test("refused redirect is an http status", async () => {
   const fake = server(() => new HttpResponse(302, null));
-  assertClean(await rejected(listModels("anthropic", { apiKey: KEY, request: fake })), "HTTP 302");
+  const error = await rejected(listModels("anthropic", { apiKey: KEY, request: fake }));
+  assertClean(error, "HTTP 302");
+  expect((error as ModelListError).status).toBe(302);
   expect(fake.calls).toHaveLength(1);
+});
+
+test("a failure without an HTTP status has a null status", async () => {
+  const failures: [() => Promise<unknown>, string][] = [
+    [() => listModels("nope", { apiKey: KEY, request: neverCalled }), "unsupported provider"],
+    [() => listModels("openai", { apiKey: KEY, timeout: 0, request: neverCalled }), "invalid request"],
+    [() => listModels("openai", { apiKey: KEY, request: raising(new ProviderError("timeout", "slow")) }), "timed out"],
+    [() => listModels("openai", { apiKey: KEY, request: raising(new TypeError("fetch failed")) }), "can't reach host"],
+    [() => listModels("openai", { apiKey: KEY, request: ok(null) }), "invalid response"],
+  ];
+  for (const [list, message] of failures) {
+    const error = await rejected(list());
+    assertClean(error, message);
+    expect((error as ModelListError).status).toBeNull();
+  }
 });
 
 describe("transport failures map to a clean reason", () => {

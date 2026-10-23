@@ -5,9 +5,20 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "../connection_settings.ts";
 
-/** An authentication or credential-storage failure safe to show to a user. */
+/**
+ * An authentication or credential-storage failure safe to show to a user.
+ *
+ * `status` is the HTTP status when an authentication request failed with one, else `null`.
+ */
 export class AuthError extends Error {
   override name = "AuthError";
+  readonly status: number | null;
+
+  constructor(message: string, options: ErrorOptions & { status?: number } = {}) {
+    const { status = null, ...errorOptions } = options;
+    super(message, errorOptions);
+    this.status = status;
+  }
 }
 
 /** Return `link`'s `name` property, or `undefined` if reading it throws. */

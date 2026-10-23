@@ -111,6 +111,7 @@ import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
@@ -247,7 +248,8 @@ async function run(
 function agentContext(model: ChatModel, extra: Partial<AgentRunContext>): AgentRunContext {
   return {
     nodeId: "chat",
-    prompt: "go",
+    messages: [userMessage("go")],
+    promptText: "go",
     tools: [],
     llmConfig: CONFIG,
     outputType: null,

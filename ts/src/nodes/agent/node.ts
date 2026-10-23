@@ -10,7 +10,8 @@
  * Backward makes one tool-free model call over the recorded invocation (`backward.ts`).
  *
  * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, memory contracts,
- *                llm_clients (config, connection, factory), expr (templates, lineage), skills,
+ *                llm (messages), llm_clients (config, connection, factory), expr (expressions,
+ *                templates, lineage), skills,
  *                defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
@@ -18,10 +19,12 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import type { FeedbackValue } from "../../expr/lineage.ts";
-import { renderTemplateRecord } from "../../expr/template.ts";
+import { ExpressionError, ResolveMode, resolveInRecord } from "../../expr/expressions.ts";
+import { evalTemplate, renderTemplateRecord, scanTemplate } from "../../expr/template.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.ts";
+import { Message, TextPart } from "../../llm/messages.ts";
 import {
   iterMemoryDeclOrigins,
   MemoryContext,
@@ -31,7 +34,7 @@ import {
 } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../skills/tool.ts";
-import { canonicalJson } from "../../typesys/json.ts";
+import { canonicalJson, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
@@ -101,6 +104,100 @@ export function isMaxToolIterations(value: unknown): value is bigint {
   return typeof value === "bigint" && (value >= 1n || value === -1n);
 }
 
+/**
+ * One item of an AGENT list prompt: a message whose text is a template, or the name of a local
+ * input or variable holding a message or a list of messages, spliced in.
+ */
+export type PromptItem =
+  | { readonly role: "user" | "assistant"; readonly text: string }
+  | { readonly splice: string };
+
+/**
+ * Return a list prompt as authored: a splice as `${name}`, a message as `{<role>: <text>}`. The
+ * manifest and the render capture hold this form.
+ */
+export function authoredPrompt(items: readonly PromptItem[]): (string | Record<string, string>)[] {
+  return items.map((item) => ("splice" in item ? `\${${item.splice}}` : { [item.role]: item.text }));
+}
+
+/**
+ * Check a list prompt's items.
+ *
+ * @throws TypeError for an item other than `{role: "user" | "assistant", text: string}` or
+ *   `{splice: string}`.
+ * @throws RangeError for an empty list, or one whose last item is an assistant message.
+ */
+function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
+  const where = `AGENT node ${reprText(nodeId)}`;
+  if (items.length === 0) throw new RangeError(`${where}: a list prompt must hold at least one item`);
+  items.forEach((item, index) => {
+    const fields: Readonly<Record<string, unknown>> = isRecord(item) ? item : {};
+    const keys = Object.keys(fields).sort(compareCodeUnits).join(",");
+    const message =
+      keys === "role,text" &&
+      (fields.role === "user" || fields.role === "assistant") &&
+      typeof fields.text === "string";
+    const splice = keys === "splice" && typeof fields.splice === "string";
+    if (!message && !splice) {
+      throw new TypeError(`${where}: prompt[${index}] must be {role: user or assistant, text} or {splice: <name>}`);
+    }
+  });
+  if ((items.at(-1) as Readonly<Record<string, unknown>>).role === "assistant") {
+    throw new RangeError(`${where}: the last message of a list prompt must be from the user`);
+  }
+}
+
+/** One rendered prompt message. */
+interface PromptMessage {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+}
+
+/** Whether `value` is a prompt message: a record with `role` user or assistant and a string `text`. */
+function isPromptMessage(value: unknown): value is PromptMessage {
+  return isRecord(value) && (value.role === "user" || value.role === "assistant") && typeof value.text === "string";
+}
+
+/**
+ * Render a list prompt against `record`: each message's text as a template, each splice's value
+ * as one message or a list of them, keeping only `role` and `text`.
+ *
+ * @throws ExpressionError when a template or splice names a missing value or reads a null, a
+ *   spliced value isn't a message or a list of messages, or the list renders no message or ends
+ *   in one that isn't the user's.
+ */
+function renderPromptList(nodeId: string, items: readonly PromptItem[], record: ValueRecord): PromptMessage[] {
+  const messages: PromptMessage[] = [];
+  items.forEach((item, index) => {
+    if (!("splice" in item)) {
+      messages.push({ role: item.role, text: renderTemplateRecord(item.text, record) });
+      return;
+    }
+    const ref = `\${${item.splice}}`;
+    const value = evalTemplate(scanTemplate(ref), (path) => resolveInRecord(path, record), {
+      mode: ResolveMode.STRICT_RAISE,
+    });
+    const spliced: readonly unknown[] = isList(value) ? value : [value];
+    if (!spliced.every(isPromptMessage)) {
+      throw new ExpressionError(
+        `node ${reprText(nodeId)} prompt[${index}]: ${ref} must be a message (a record with \`role\` user or ` +
+          "assistant and `text: str`) or a list of them",
+      );
+    }
+    for (const { role, text } of spliced as readonly PromptMessage[]) messages.push({ role, text });
+  });
+  const last = messages.at(-1);
+  if (last === undefined) {
+    throw new ExpressionError(`node ${reprText(nodeId)} prompt: the rendered list holds no message`);
+  }
+  if (last.role !== "user") {
+    throw new ExpressionError(
+      `node ${reprText(nodeId)} prompt: the last message must be from the user, got ${last.role}`,
+    );
+  }
+  return messages;
+}
+
 /** Return `make()`; its error is a capability fault, since the render capture is the host's. */
 function captureValue<T>(make: () => T): T {
   try {
@@ -132,8 +229,8 @@ export class AgentNode extends Node {
    * records and reads back its `effective_llm_config`.
    */
   override readonly needsSteps: boolean = true;
-  /** The prompt template. */
-  prompt: string;
+  /** The prompt template, or a list of messages and splices. */
+  prompt: string | readonly PromptItem[];
   /** The system prompt template replacing the default one; `null` keeps the default. */
   systemPrompt: string | null;
   /** The authored tool grants, which may name host-filled groups. */
@@ -187,7 +284,7 @@ export class AgentNode extends Node {
    * Build an AGENT node.
    *
    * @param nodeId The node's unique id.
-   * @param options.prompt The prompt template; `null` or omitted means `""`.
+   * @param options.prompt The prompt template or a list prompt; `null` or omitted means `""`.
    * @param options.systemPrompt A non-empty system prompt template, or `null` (the default).
    * @param options.tools The tool grants; defaults to `[]`.
    * @param options.llmConfig A config record, a `ValueTemplate` or `Binding` for a layer
@@ -201,16 +298,17 @@ export class AgentNode extends Node {
    * @param options.variables Exact `Parameter`s with literal defaults; defaults to `[]`.
    * @param options.skills Skill names, or `"all"`; defaults to `[]`.
    * @param options.steerable Whether the host may steer this agent; defaults to `false`.
-   * @throws TypeError for a bad `systemPrompt`, `llmConfig`, `memories`, `variables` or
-   *   `steerable`.
-   * @throws RangeError for the retired `builtin_tools` grant, a memory without an AGENT
+   * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `memories`, `variables`
+   *   or `steerable`.
+   * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
+   *   `builtin_tools` grant, a memory without an AGENT
    *   `DeclSite`, or a variable whose name repeats or whose default is missing or invalid.
    * @throws SkillError for a `load_skill` tool grant or a bad skill grant.
    */
   constructor(
     nodeId: string,
     options: {
-      prompt?: string | null;
+      prompt?: string | readonly PromptItem[] | null;
       systemPrompt?: string | null;
       tools?: readonly string[] | null;
       llmConfig?: Readonly<Record<string, unknown>> | ValueTemplate | Binding | null;
@@ -237,6 +335,7 @@ export class AgentNode extends Node {
       steerable = false,
     } = options;
     super(nodeId, { title });
+    if (isList(prompt)) checkPromptItems(nodeId, prompt);
     this.prompt = prompt ?? "";
     if (systemPrompt !== null && (typeof systemPrompt !== "string" || systemPrompt === "")) {
       throw new TypeError(`AGENT node ${reprText(nodeId)}: system_prompt must be a non-empty string or null`);
@@ -408,13 +507,16 @@ export class AgentNode extends Node {
    */
   override validatePrompts(options: { path?: string | null } = {}): void {
     const { path = null } = options;
-    for (const [field, text] of [
-      ["prompt", this.prompt],
-      ["system_prompt", this.systemPrompt],
-    ] as const) {
-      // `||`, as Python's `or`: an empty path names the node by its id.
-      if (typeof text === "string") checkNamedPrompt(text, `node ${reprText(path || this.id)} ${field}`);
+    // `||`, as Python's `or`: an empty path names the node by its id.
+    const subject = `node ${reprText(path || this.id)}`;
+    if (typeof this.prompt === "string") {
+      checkNamedPrompt(this.prompt, `${subject} prompt`);
+    } else {
+      this.prompt.forEach((item, index) => {
+        if ("text" in item) checkNamedPrompt(item.text, `${subject} prompt[${index}]`);
+      });
     }
+    if (this.systemPrompt !== null) checkNamedPrompt(this.systemPrompt, `${subject} system_prompt`);
   }
 
   /** Require `"all"` or unique valid names, and no `load_skill` tool grant. */
@@ -531,13 +633,15 @@ export class AgentNode extends Node {
   /**
    * Build the complete process-local context for one invocation.
    *
-   * @param prompt The rendered prompt.
+   * @param messages The rendered prompt's messages.
+   * @param promptText The text of the last, user, message.
    * @param config The config this invocation's model call uses, host secrets included; it lives
    *   only in the returned context.
    * @throws RangeError when the authored `env.max_tool_iterations` is invalid.
    */
   private runContext(
-    prompt: string,
+    messages: readonly PromptMessage[],
+    promptText: string,
     config: Readonly<Record<string, unknown>> | null,
     caps: NodeCaps,
     options: {
@@ -549,7 +653,8 @@ export class AgentNode extends Node {
   ): AgentRunContext {
     return {
       nodeId: this.id,
-      prompt,
+      messages: messages.map(({ role, text }) => new Message({ role, parts: [new TextPart(text)] })),
+      promptText,
       tools: [...this.tools],
       llmConfig: config,
       outputType: isExactly(this.outputContract, ValueContract) ? this.outputContract.type : null,
@@ -611,10 +716,13 @@ export class AgentNode extends Node {
    * Render fresh locals once, publish the render capture, and run the loop.
    *
    * The authored `systemPrompt` renders against the same inputs and variables as `prompt`;
-   * without one the loop receives `DEFAULT_SYSTEM`. `caps.captureRender` receives the actual
-   * template, the resolved variable values and domains, and the rendered prompt once, with the
-   * parts established so far when preparation fails; unknown variables or an unfinished prompt
-   * stay `null`, and capture faults propagate. No invocation state is stored on the node.
+   * without one the loop receives `DEFAULT_SYSTEM`. A text prompt renders into one user message,
+   * a list prompt into its messages (`renderPromptList`); recall, memory episodes and evidence
+   * read the last message's text. `caps.captureRender` receives the actual template, the resolved
+   * variable values and domains, and the rendered prompt once, with the parts established so far
+   * when preparation fails; unknown variables or an unfinished prompt stay `null`, and capture
+   * faults propagate. A list prompt's template and rendered prompt are `logJson` text: the
+   * authored items, and the `{role, text}` messages. No invocation state is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
    * header values joined when it is marked for the host key; any other agent uses its run's
@@ -633,7 +741,8 @@ export class AgentNode extends Node {
    * @returns The model's answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
-   *   null.
+   *   null, a spliced value isn't a message or a list of them, or a list prompt renders no
+   *   message or ends in one that isn't the user's.
    * @throws SkillError when the node grants skills the host did not supply.
    * @throws CapabilityFault when capture or memory access fails, or the bound config
    *   differs from the one an earlier start recorded; the evaluator rethrows its original host
@@ -644,11 +753,12 @@ export class AgentNode extends Node {
     if (caps.steps !== undefined && this.callTime !== null) {
       this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
     }
+    const template = typeof this.prompt === "string" ? this.prompt : logJson(authoredPrompt(this.prompt));
     const captured: Record<string, unknown> | null =
       caps.captureRender === undefined
         ? null
-        : { prompt_template: this.prompt, variables: null, variable_domains: null, rendered_prompt: null };
-    let prompt: string;
+        : { prompt_template: template, variables: null, variable_domains: null, rendered_prompt: null };
+    let messages: PromptMessage[];
     let systemPrompt: string;
     try {
       const inputNames = new Set([...Object.keys(inputs), ...(this.params ?? []).map((parameter) => parameter.name)]);
@@ -672,8 +782,13 @@ export class AgentNode extends Node {
         captured["variables"] = captureValue(() => copyValue(variables));
       }
       const record = { ...inputs, ...variables } as ValueRecord;
-      prompt = renderTemplateRecord(this.prompt, record);
-      if (captured !== null) captured["rendered_prompt"] = prompt;
+      if (typeof this.prompt === "string") {
+        messages = [{ role: "user", text: renderTemplateRecord(this.prompt, record) }];
+        if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
+      } else {
+        messages = renderPromptList(this.id, this.prompt, record);
+        if (captured !== null) captured["rendered_prompt"] = logJson(messages);
+      }
       systemPrompt = this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record);
     } finally {
       if (captured !== null) caps.captureRender?.(captured);
@@ -684,13 +799,20 @@ export class AgentNode extends Node {
     const config = this.callConfig(inputs);
     const models = caps.models ?? defaultModelAccess();
     const env = models.env;
+    // Recall, memory episodes and evidence read the last message, which is always the user's.
+    const promptText = messages.at(-1)!.text;
     // Recall sees the system prompt without the skill listing, so grants never change recall.
     const memoryContext =
       caps.openMemoryContext === undefined
         ? new MemoryContext()
-        : await caps.openMemoryContext(systemPrompt, prompt);
+        : await caps.openMemoryContext(systemPrompt, promptText);
     checkStopped(caps);
-    const ctx = this.runContext(prompt, config, caps, { memoryContext, baseSystemPrompt, skills: granted, models });
+    const ctx = this.runContext(messages, promptText, config, caps, {
+      memoryContext,
+      baseSystemPrompt,
+      skills: granted,
+      models,
+    });
     try {
       return await runAgent(ctx);
     } catch (error) {

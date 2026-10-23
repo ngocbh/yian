@@ -50,6 +50,7 @@ import {
 } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
+import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { loadSkillTool } from "../../src/skills/tool.ts";
@@ -76,7 +77,8 @@ function context(model: ChatModel, overrides: Partial<AgentRunContext> = {}): Ag
   const ctx = {
     built: 0,
     nodeId: "a",
-    prompt: "x",
+    messages: [userMessage("x")],
+    promptText: "x",
     tools: [],
     llmConfig: null,
     outputType: null,
@@ -137,7 +139,8 @@ test("test_no_tools_uses_ollama_structured_output_for_literal (Changed: the nati
   const model = new ScriptedModel([textReply('{"value": "neutral"}')], { provider: "ollama", model: "qwen2.5:72b" });
   const events: unknown[] = [];
   const ctx = context(model, {
-    prompt: "classify",
+    messages: [userMessage("classify")],
+    promptText: "classify",
     llmConfig: { provider: "ollama", model: "qwen2.5:72b" },
     outputType: typ,
     emitEvent: (event) => void events.push(event),
@@ -306,7 +309,7 @@ test("the prompt is recorded in the evaluation trace", async () => {
   };
   const sections = [new MemorySection("m", "remember")];
   await runAgent(
-    context(model, { baseSystemPrompt: "sys", prompt: "p", evaluationTrace: trace, memoryContext: new MemoryContext({ sections }) }),
+    context(model, { baseSystemPrompt: "sys", messages: [userMessage("p")], promptText: "p", evaluationTrace: trace, memoryContext: new MemoryContext({ sections }) }),
   );
   expect(prompts).toEqual([["sys", "p", sections]]);
   expect(interactions).toEqual([new ModelTextInteraction("hi")]);

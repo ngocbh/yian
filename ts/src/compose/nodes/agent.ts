@@ -22,7 +22,7 @@ import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
-import { AgentNode, isMaxToolIterations, isTextOutput } from "../../nodes/agent/node.ts";
+import { AgentNode, isMaxToolIterations, isTextOutput, type PromptItem } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
   Binding,
@@ -50,9 +50,11 @@ import {
   type NodeDescriptorFields,
   notTextDetail,
   notTextError,
+  rangeAt,
   rejectInfinityName,
   rejectNonText,
   siteKey,
+  wholeRefName,
 } from "./base.ts";
 
 /** Shared by the AGENT and `adaptive_questions:` errors for the removed `mode:` key. */
@@ -430,9 +432,66 @@ function validateLlmConfig(
   return [rest, inherit];
 }
 
+/** The roles a prompt list message may take; `system` is `system_prompt:`. */
+const PROMPT_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
+
+/**
+ * Read an authored list `prompt:` into its items, and range each at
+ * `siteKey("field", "prompt[<i>]")` in `desc.fieldRanges`.
+ *
+ * An item is a lone `${name}` (a splice) or a one-key `user:`/`assistant:` mapping whose value is
+ * template text.
+ *
+ * @throws LoadError at the item for any other shape, a `system:` item, non-text message text or
+ *   text holding a lone surrogate, or a last item that is an `assistant:` message; at the field
+ *   for an empty list.
+ */
+function readPromptList(
+  nodeId: string,
+  desc: AgentDescriptor,
+  cursor: SourceCursor,
+  diagnostics: LoadDiagnostics,
+): PromptItem[] {
+  const where = `node ${reprText(nodeId)} (kind=agent)`;
+  const list = desc.prompt as readonly unknown[];
+  const fieldRange = desc.fieldRanges.get(siteKey("field", "prompt")) ?? desc.range;
+  if (list.length === 0) {
+    throw diagnostics.error(`${where}: \`prompt:\` must hold at least one message`, { range: fieldRange });
+  }
+  const items = list.map((item, index): PromptItem => {
+    const range = rangeAt(cursor, ["prompt", index]) ?? fieldRange;
+    if (range !== null) desc.fieldRanges.set(siteKey("field", `prompt[${index}]`), range);
+    const name = typeof item === "string" ? wholeRefName(item) : null;
+    if (name !== null) return { splice: name };
+    const [role] = isRecord(item) ? Object.keys(item) : [];
+    if (role === "system" && Object.keys(item as object).length === 1) {
+      throw diagnostics.error(`${where}: a prompt list item can't be \`system:\`; use \`system_prompt:\``, { range });
+    }
+    if (role === undefined || !PROMPT_ROLES.has(role) || Object.keys(item as object).length !== 1) {
+      throw diagnostics.error(`${where}: a prompt list item is \`\${name}\` or \`user:\`/\`assistant:\` text`, {
+        range,
+      });
+    }
+    const text = (item as Record<string, unknown>)[role];
+    const textRange = rangeAt(cursor, ["prompt", index, role]) ?? range;
+    if (typeof text !== "string") {
+      throw diagnostics.error(`${where}: ${notTextError(`prompt[${index}].${role}`, text)}`, { range: textRange });
+    }
+    checkWrittenValue(text, `node ${reprText(nodeId)} field 'prompt[${index}].${role}'`, textRange, diagnostics);
+    return { role: role as "user" | "assistant", text };
+  });
+  const last = items.at(-1)!;
+  if ("role" in last && last.role === "assistant") {
+    throw diagnostics.error(`${where}: the last message of \`prompt:\` must be from the user`, {
+      range: desc.fieldRanges.get(siteKey("field", `prompt[${items.length - 1}]`)) ?? fieldRange,
+    });
+  }
+  return items;
+}
+
 /** The fields `AgentDescriptor`'s constructor takes: the common ones and the AGENT's own. */
 export interface AgentDescriptorFields extends NodeDescriptorFields {
-  prompt?: string | null;
+  prompt?: string | readonly PromptItem[] | null;
   systemPrompt?: string | null;
   variables?: unknown;
   tools?: readonly string[];
@@ -474,8 +533,8 @@ export class AgentDescriptor extends NodeDescriptor {
   static override readonly bindingFields: readonly string[] = ["inputs"];
   static override readonly keywordRemap: ReadonlyMap<string, string> = new Map([["long_term_memory", "memories"]]);
 
-  /** The prompt template; `null` when absent. */
-  readonly prompt: string | null;
+  /** The prompt template or list prompt; `null` when absent. */
+  readonly prompt: string | readonly PromptItem[] | null;
   /** The system prompt template; `null` when absent. */
   readonly systemPrompt: string | null;
   /** The authored `variables:` as YAML read it; `build` reads the declarations. */
@@ -530,10 +589,10 @@ export class AgentDescriptor extends NodeDescriptor {
 
   /**
    * Reject the removed `mode:` key, parse as usual, then reject a variable named `inf`, since
-   * `${inf}` reads infinity.
+   * `${inf}` reads infinity, and read a list `prompt:` into its items (`readPromptList`).
    *
    * @throws LoadError when the node authors `mode:` (at its key) or a variable named `inf` (at
-   *   its key), or the template `parse` rejects it.
+   *   its key), a list `prompt:` is malformed, or the template `parse` rejects it.
    */
   static override parse<T extends typeof NodeDescriptor>(
     this: T,
@@ -560,7 +619,8 @@ export class AgentDescriptor extends NodeDescriptor {
         );
       }
     }
-    return desc as InstanceType<T>;
+    if (!isList(desc.prompt)) return desc as InstanceType<T>;
+    return desc.replace({ prompt: readPromptList(nodeId, desc, cursor, diagnostics) }) as InstanceType<T>;
   }
 
   /** Reject the retired `memory_policy:` key, at its key, before the generic key check. */
@@ -592,8 +652,11 @@ export class AgentDescriptor extends NodeDescriptor {
     const id = reprText(nodeId);
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
     const prompt = fields["prompt"] ?? null;
-    rejectNonText(this.kind, nodeId, "prompt", prompt, rangeOf("prompt"), diagnostics);
-    if (prompt !== null) checkWrittenValue(prompt, `node ${id} field 'prompt'`, rangeOf("prompt"), diagnostics);
+    // `parse` reads a list prompt's items, where each item's range is known.
+    if (!isList(prompt)) {
+      rejectNonText(this.kind, nodeId, "prompt", prompt, rangeOf("prompt"), diagnostics);
+      if (prompt !== null) checkWrittenValue(prompt, `node ${id} field 'prompt'`, rangeOf("prompt"), diagnostics);
+    }
     if (Object.hasOwn(fields, "systemPrompt")) {
       const systemPrompt = fields["systemPrompt"];
       if (typeof systemPrompt !== "string" || !systemPrompt) {

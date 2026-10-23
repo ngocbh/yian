@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 import { DeclSite, MemoryDecl, MemoryOccurrenceSegment, MemoryScope } from "../memory/contracts.ts";
-import { AgentNode } from "../nodes/agent/node.ts";
+import { AgentNode, authoredPrompt } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
 import { Case, CaseNode } from "../nodes/case/node.ts";
@@ -841,7 +841,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       if (!isList(tools)) throw new TypeError(`${path}.tools: expected array, got ${typeName(tools)}`);
       const memories = memoriesManifest(agent.memories, ctx, `${path}.memories`);
       manifest.llm_inherit = agent.llmInherit;
-      manifest.prompt = agent.prompt;
+      // A list prompt as authored; a text prompt stays text, so text-prompt flows keep their identity.
+      manifest.prompt = typeof agent.prompt === "string" ? agent.prompt : authoredPrompt(agent.prompt);
       manifest.retries = count(agent.retries, `${path}.retries`, false);
       manifest.tools = canonicalSequence(tools, ctx, `${path}.tools`);
       manifest.own_llm_config = llmLayerManifest(agent.ownLlmConfig, ctx, `${path}.ownLlmConfig`);

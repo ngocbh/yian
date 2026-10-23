@@ -29,6 +29,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
+import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -55,7 +56,8 @@ async function run(
   const events: unknown[] = [];
   const ctx: AgentRunContext = {
     nodeId: "n",
-    prompt: options.prompt ?? "produce a value",
+    messages: [userMessage(options.prompt ?? "produce a value")],
+    promptText: options.prompt ?? "produce a value",
     tools: options.tools ?? [],
     llmConfig: null,
     outputType,

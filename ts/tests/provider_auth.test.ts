@@ -1287,7 +1287,7 @@ describe("AuthStore", () => {
     const deleting = store.delete().then(() => {
       deleted = true;
     });
-    // Past waitForLock's +100 and +200 retries: the delete must still be waiting on the refresh's lock.
+    // Past waitForLock's +100 and +200 polls, the delete must still wait on the refresh's lock.
     await scheduler.sleep(250);
     expect(deleted).toBe(false);
     finish();

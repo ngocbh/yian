@@ -3,20 +3,39 @@
  * system values and the START inputs as commits right after `run_started`; a node's output is a
  * commit its `node_succeeded` names by seq. An orphan commit (its node never succeeded) is ignored
  * on replay and its node reruns; a log cut inside the run start can't be resumed.
+ *
+ * Also checks the public JSON form hosts read `pool_commit` values with (`TypedValue`, `logJson`,
+ * `parseJson` from `yian/run`), on Bun and, with `YIAN_TEST_NODE` set to a Node binary, on the
+ * built package.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterAll, expect, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { inspectRun, replayRunLog, resumeFlow, runFlow, runRecordOffsets } from "../../src/run.ts";
-import { iterRunRecords, JsonlRunLog, MemoryRunLog, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
+import {
+  FileRef,
+  inspectRun,
+  iterRunRecords,
+  JSONDecodeError,
+  type JsonObject,
+  logJson,
+  parseJson,
+  replayRunLog,
+  resumeFlow,
+  runFlow,
+  runRecordOffsets,
+  TypedValue,
+} from "../../src/run.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
+import { TypedValue as RuntimeTypedValue } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected } from "./run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-pool-commit-"));
@@ -79,6 +98,66 @@ function named(envelopes: readonly RecordEnvelope[]): Map<number, number> {
   }
   return commits;
 }
+
+/**
+ * Return `line`, a `pool_commit` record, re-encoded through the public JSON form: its payload's
+ * value decoded with `TypedValue.fromWire` and written back with `toWire`.
+ */
+function roundTrip(line: string): string {
+  const envelope = parseJson(line, "codec") as JsonObject & { payload: JsonObject };
+  const { payload } = envelope;
+  const typed = TypedValue.fromWire({ kind: payload["kind"], value: payload["value"] });
+  return logJson({ ...envelope, payload: { ...payload, ...typed.toWire() } });
+}
+
+/** A flow whose commits hold big ints, infinities, tag-shaped records, a date and a datetime. */
+const VALUES = `
+id: values
+name: values
+input: {when: !date}
+nodes:
+  huge: {kind: code, output: int, code: "return 2n ** 80n"}
+  negative: {kind: code, output: float, code: "return -Infinity"}
+  nums: {kind: code, output: list(float), code: "return [1n, 0.5, Infinity]"}
+  make:
+    kind: code
+    input: {when: "\${input.when}"}
+    output: {big: int, inf: float, tag: object, esc: object, when: date}
+    code: |
+      return {big: -(2n ** 80n), inf: Infinity, tag: {$float: "inf"}, esc: {$record: {a: 1n}}, when: inputs.when}
+output: {make: "\${make.output}", whole: "\${0.5 + 1.5}"}
+`;
+
+const ROOT = join(import.meta.dirname, "../..");
+const BUILT = join(ROOT, "dist/src/run.js");
+/**
+ * The public entry. It resolves by self-reference from inside ROOT (this file, and children whose
+ * cwd is ROOT). Typed string so tsc doesn't resolve it to dist/, missing before a build.
+ */
+const ENTRY: string = "@ngocbh/yian/run";
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/llm_clients.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
 
 test("the run start writes its system values, then the START inputs, as commits after run_started", async () => {
   const log = freshLog();
@@ -305,3 +384,133 @@ test("runRecordOffsets maps each seq to its line's byte offset, without the writ
     writer.close();
   }
 });
+
+test("every pool_commit line of the conformance golden logs round-trips byte for byte through the public JSON form", () => {
+  const cases = join(import.meta.dirname, "../../../conformance/cases");
+  let checked = 0;
+  const kinds = new Set<string>();
+  for (const name of readdirSync(cases, { recursive: true, encoding: "utf8" })) {
+    if (!name.endsWith(".log.jsonl")) continue;
+    for (const line of lines(join(cases, name))) {
+      const { kind, payload } = parseJson(line, "codec") as { kind: string; payload: JsonObject };
+      // The conformance masks `system.now` and `system.today`.
+      if (kind !== "pool_commit" || payload["value"] === "<masked>") continue;
+      expect(roundTrip(line)).toBe(line);
+      kinds.add(payload["kind"] as string);
+      checked++;
+    }
+  }
+  // So a moved fixture folder can't pass empty.
+  expect(checked).toBeGreaterThanOrEqual(100);
+  expect([...kinds]).toEqual(expect.arrayContaining(["object", "str", "int", "float", "list[int]"]));
+});
+
+test("a run's pool_commit values with big ints, infinities and tag-shaped records round-trip through the public JSON form", async () => {
+  const log = freshLog();
+  const result = await run(await load(VALUES), log, { when: "2026-10-23" });
+  expect(result.status).toBe("succeeded");
+  const kinds = new Set<string>();
+  const values = new Map<string, unknown>();
+  let end: string | undefined;
+  for (const line of lines(log)) {
+    const { kind, payload } = parseJson(line, "codec") as { kind: string; payload: JsonObject };
+    if (kind !== "pool_commit") continue;
+    expect(roundTrip(line)).toBe(line);
+    kinds.add(payload["kind"] as string);
+    values.set(payload["node_id"] as string, TypedValue.fromWire({ kind: payload["kind"], value: payload["value"] }).value);
+    if (payload["node_id"] === "__end__") end = line;
+  }
+  expect([...kinds]).toEqual(expect.arrayContaining(["datetime", "date", "int", "float", "list[float]", "object"]));
+  expect(values.get("huge")).toBe(2n ** 80n);
+  expect(values.get("negative")).toBe(-Infinity);
+  const make = values.get("make") as Record<string, unknown>;
+  expect(make["big"]).toBe(-(2n ** 80n));
+  expect(make["tag"]).toEqual({ $float: "inf" });
+  expect(end).toContain('"whole":2.0');
+  expect((values.get("__end__") as Record<string, unknown>)["whole"]).toBe(2);
+});
+
+test("iterRunRecords hands a host the pool_commit payload the public JSON form decodes", async () => {
+  const log = freshLog();
+  await run(await load(VALUES), log, { when: "2026-10-23" });
+  let checked = 0;
+  for (const { envelope } of iterRunRecords(log, { kinds: ["pool_commit"] })) {
+    const { payload } = envelope;
+    const typed = TypedValue.fromWire({ kind: payload["kind"], value: payload["value"] });
+    expect(logJson({ ...payload, ...typed.toWire() })).toBe(logJson(payload));
+    checked++;
+  }
+  expect(checked).toBeGreaterThan(5);
+});
+
+test("the public TypedValue is the runtime's class, so values the runtime gives a host are instances of it", () => {
+  expect(TypedValue).toBe(RuntimeTypedValue);
+});
+
+test("the public JSON form reads a file as a FileRef and refuses text the log refuses", () => {
+  const file = TypedValue.fromWire({ kind: "file", value: { uri: "s3://b/k", mime: null, name: "k" } });
+  expect(FileRef.isFileRef(file.value)).toBe(true);
+  expect(logJson(file.toWire())).toBe('{"kind":"file","value":{"mime":null,"name":"k","uri":"s3://b/k"}}');
+  expect(() => parseJson("Infinity", "codec")).toThrow(JSONDecodeError);
+});
+
+test.if(process.versions.bun !== undefined)("on Bun the run entry is the source module", async () => {
+  expect(realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(realpathSync(join(ROOT, "src/run.ts")));
+  const entry = (await import(ENTRY)) as typeof import("../../src/run.ts");
+  expect(entry.TypedValue).toBe(RuntimeTypedValue);
+});
+
+/** A `pool_commit` line holding a big int, both infinities, an escaped tag and an integral float. */
+const NODE_LINE =
+  '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
+  '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":13,"seq":9}';
+
+test.skipIf(!NODE)("on Node the built run entry round-trips a pool_commit line with a big int and infinities", () => {
+  const script = `
+const { FileRef, JSONDecodeError, TypedValue, logJson, parseJson } = await import(${JSON.stringify(ENTRY)});
+const line = ${JSON.stringify(NODE_LINE)};
+const envelope = parseJson(line, "codec");
+const { payload } = envelope;
+const typed = TypedValue.fromWire({ kind: payload.kind, value: payload.value });
+const value = typed.value;
+const again = logJson({ ...envelope, payload: { ...payload, ...typed.toWire() } });
+const file = TypedValue.fromWire({ kind: "file", value: { uri: "s3://b/k", mime: null, name: "k" } }).value;
+let decodeError = false;
+try {
+  parseJson("NaN", "codec");
+} catch (error) {
+  decodeError = error instanceof JSONDecodeError;
+}
+console.log(JSON.stringify({
+  resolved: import.meta.resolve(${JSON.stringify(ENTRY)}),
+  same: again === line,
+  big: typeof value.big,
+  inf: value.inf === Infinity,
+  ninf: value.ninf === -Infinity,
+  esc: Object.keys(value.esc),
+  whole: [typeof value.whole, value.whole],
+  file: FileRef.isFileRef(file),
+  decodeError,
+}));
+`;
+  const result = spawnSync(NODE!, ["--input-type=module", "-e", script], {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  expect(result.status, `signal: ${result.signal}\nstderr: ${result.stderr}`).toBe(0);
+  expect(result.stderr).toBe("");
+  const { resolved, ...checks } = JSON.parse(result.stdout);
+  expect(realpathSync(fileURLToPath(resolved))).toBe(realpathSync(BUILT));
+  expect(checks).toEqual({
+    same: true,
+    big: "bigint",
+    inf: true,
+    ninf: true,
+    esc: ["$record"],
+    whole: ["number", 2],
+    file: true,
+    decodeError: true,
+  });
+}, 70_000);

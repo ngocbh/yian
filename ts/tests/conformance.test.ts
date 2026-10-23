@@ -1376,7 +1376,7 @@ describe("main", () => {
     expect(out).toEqual([]);
     expect(err).toEqual([
       "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
-        "[--diagnostic-code CODE] [--crash-sweep] [--write-logs]",
+        "[--diagnostic-code CODE] [--crash-sweep] [--write-logs] [--write-expect]",
     ]);
   });
 
@@ -1424,7 +1424,77 @@ describe("main", () => {
     expect((await run([], files, {}, { run: counting })).code).toBe(0);
     expect(cuts.map((names) => names.length)).toEqual([8, 0]);
   });
+
+  test("restores a changed expectation with --write-expect, in the case's own form", async () => {
+    const kinds = { run: RUNNERS.run! };
+    const edited = FORMS.replace(
+      "{value: {big: 9007199254740993, f: 2.0, id: <id:1>}}",
+      "{value: {big: 1, f: 3.0, id: wrong}}",
+    );
+    expect(edited).not.toBe(FORMS);
+    const argv = ["--write-expect", "--case", "a/forms"];
+    const written = await run(argv, { "a/forms.yaml": edited }, {}, kinds);
+    expect(written).toEqual({
+      code: 0,
+      out: ["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"],
+      err: [],
+    });
+    const path = join(roots.at(-1)!, "cases", "a", "forms.yaml");
+    const text = readFileSync(path, "utf8");
+    // Comments, styles and key order stay; `run-log` goes right after `kind`.
+    expect(text).toBe(FORMS.replace("kind: run\n", "kind: run\nrules: [run-log]\n"));
+    // The float stays a float, the int past 2^53 exact, and the placeholder a placeholder.
+    const trace = (readCase(text)["expect"] as Case)["trace"] as unknown[][];
+    expect(trace[4]).toEqual([
+      "node_succeeded",
+      "__end__",
+      { value: { big: 9007199254740993n, f: 2, id: "<id:1>" } },
+    ]);
+    expect(typeof (trace[4]![2] as { value: Case }).value["f"]).toBe("number");
+    // Run again, it writes nothing.
+    const again = await run(argv, { "a/forms.yaml": text }, {}, kinds);
+    expect(again.out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
+    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
+  });
+
+  test("--write-expect leaves a case whose output differs as it is, and fails it", async () => {
+    const kinds = { run: RUNNERS.run! };
+    const wrong = FORMS.replace("output: {id: <id:1>, f: 2.0,", "output: {id: <id:1>, f: 3.0,")
+      .replace("{value: 1}", "{value: 2}");
+    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": wrong }, {}, kinds);
+    expect(code).toBe(1);
+    expect(out[0]).toBe("FAIL a/forms: output differs");
+    expect(out.at(-1)).toBe("1 case: 0 passed, 1 failed, 0 pending");
+    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(wrong);
+  });
 });
+
+// A run whose trace holds a float with no fraction, an int past 2^53 and a placeholder.
+const FORMS = `# The run's own id, a float and an int past 2^53 flow through to the output.
+kind: run
+flow: |
+  id: forms
+  name: forms
+  input: {n: !int, big: !int}
+  nodes:
+    one: {kind: code, output: int, code: return 1}
+  output: {id: "\${system.run_id}", f: "\${input.n / 2}", big: "\${input.big}"}
+inputs: {n: 4, big: 9007199254740993}
+run: {num_workers: 0}
+expect:
+  output:
+    status: succeeded
+    output: {id: <id:1>, f: 2.0, big: 9007199254740993}
+  # Without a run id, the run makes one up.
+  trace:
+  - [run_started, null, {inputs: {big: 9007199254740993, n: 4}, learnable: false, num_workers: 0}]
+  - [node_started, __start__]
+  - [node_succeeded, __start__, {value: {big: 9007199254740993, n: 4}}]
+  - [node_started, __end__]
+  - [node_succeeded, __end__, {value: {big: 9007199254740993, f: 2.0, id: <id:1>}}]
+  - [node_started, one]
+  - [node_succeeded, one, {value: 1}]
+`;
 
 // A serial run of two CODE nodes: nine records, so a crash sweep resumes eight cuts.
 const TWO_NODES = `kind: run

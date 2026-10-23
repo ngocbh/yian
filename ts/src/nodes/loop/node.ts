@@ -84,6 +84,8 @@ export class LoopNode extends Node {
   override readonly isSpawner: boolean = true;
   /** The fixpoint-iteration driver: the ledger stays single-record. */
   override readonly isLoop: boolean = true;
+  /** Its seed, and a stopping driver's value, only read earlier pool values through its binding. */
+  override readonly derived: boolean = true;
   /** Each body inherits the enclosing call depth without consuming a level. */
   override readonly growDepthDelta: number | null = 0;
   /** The id of the body flow. */

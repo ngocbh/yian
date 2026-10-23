@@ -923,6 +923,12 @@ export abstract class Node {
    * into another run.
    */
   readonly needsModels: boolean = false;
+  /**
+   * Declares "my value only reads earlier pool values through my binding, and my `forward` is
+   * pure and synchronous" (START, END, LOOP, CALL, MAP), so it can be rebuilt from the values its
+   * binding read. The engine builds such a node's input route in every run, learnable or not.
+   */
+  readonly derived: boolean = false;
 
   /** The node's unique id within its (possibly namespaced) flow. */
   id: string;

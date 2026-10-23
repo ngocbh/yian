@@ -35,6 +35,8 @@ export class CallNode extends Node {
   override readonly isSpawner: boolean = true;
   /** Each child is one call level deeper. */
   override readonly growDepthDelta: number | null = 1;
+  /** Its seed only reads earlier pool values through its binding. */
+  override readonly derived: boolean = true;
   /** The id of the child flow to call. */
   flowId: string;
   /** A pinned child flow version, if any. */

@@ -39,6 +39,8 @@ export class StartNode extends Node {
   readonly kind = NodeKind.START;
   /** Commits its bound input record as the node's output. */
   override readonly commitsInputRecord: boolean = true;
+  /** Its value only reads earlier pool values through its binding. */
+  override readonly derived: boolean = true;
 
   /**
    * Build a START node.

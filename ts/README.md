@@ -550,7 +550,7 @@ Node 22, and so does every unit test; a change keeps both green.
   (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`) and HTTP (`safeFetch`
   over an injectable `Send`, which never follows a redirect, throws `RedirectError` for a 3xx
   and sends `USER_AGENT`; every request goes through it). The lock and SQLite names are public
-  through `@ngocbh/yian/platform`, so their behaviour is API. Never open a lock file
+  through `@ngocbh/yian/platform`, so their behavior is API. Never open a lock file
   any other way: on Node, closing any descriptor of a locked file drops the process's lock. Code
   that waits takes an injected `Scheduler`, so tests and conformance run on `virtualScheduler`.
   `stripTypes` strips a CODE body's types with amaro on both runtimes, keeping every line

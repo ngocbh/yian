@@ -126,17 +126,18 @@ describe("round trip", () => {
     expect(throughCodec(message)).toEqual(message);
   });
 
-  test("a media part's file form round-trips as a FileRef", () => {
+  test("a media part's file form takes a FileRef's fields and round-trips", () => {
     const file = new FileRef({ uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" });
     const part = new MediaPart({ mime: "image/png", file, name: "chart.png" });
-    expect([part.file, part.data, part.url]).toEqual([file, null, null]);
+    const fields = { uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" };
+    expect([part.file, part.data, part.url]).toEqual([fields, null, null]);
+    expect(Object.isFrozen(part.file)).toBe(true);
     const message = new Message({ role: "assistant", parts: [part] });
     expect(message.toJSON()["parts"]).toEqual([
       { type: "media", mime: "image/png", file: { uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" }, name: "chart.png" },
     ]);
     for (const read of [Message.fromJSON(message.toJSON()), throughCodec(message)]) {
-      const back = read.parts[0] as MediaPart;
-      expect(FileRef.isFileRef(back.file)).toBe(true);
+      expect((read.parts[0] as MediaPart).file).toEqual(fields);
       expect(read.toJSON()).toEqual(message.toJSON());
     }
     // A file's unset fields are left out, as the message's own are.
@@ -428,7 +429,8 @@ describe("construction", () => {
     const makers = [
       () => new MediaPart({ mime: "image/png", data: "a", url: "https://e.com" }),
       () => new MediaPart({ mime: "image/png", data: "a", file: new FileRef({ uri: "/a.png" }) }),
-      () => new MediaPart({ mime: "image/png", file: bad({ uri: "/a.png" }) }),
+      () => new MediaPart({ mime: "image/png", file: bad("/a.png") }),
+      () => new MediaPart({ mime: "image/png", file: bad({ uri: 3 }) }),
       () => new ToolCallPart({ id: "c", name: "f", arguments: null }),
       () => new TextPart(bad(3)),
       () => new TextPart("x", bad({ a: new Map() })),

@@ -1,10 +1,15 @@
 /**
- * Process-local context for one AGENT invocation.
+ * Process-local context for one AGENT invocation, and the run files its replies' media go to.
  *
- * Knows about:   llm executor types, llm_clients (connection, factory), memory contracts, nodes/base,
- *                nodes/contracts, platform, skills, tools and typesys.
+ * Knows about:   llm executor types, llm messages, llm_clients (connection, factory), memory
+ *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys and
+ *                node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
+
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import type { RetryInfo } from "../../llm/executor.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
@@ -13,7 +18,7 @@ import type { EvaluationTrace, MemoryContext } from "../../memory/contracts.ts";
 import type { Scheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
-import type { Type } from "../../typesys/values.ts";
+import { FileRef, type Type } from "../../typesys/values.ts";
 import type { NodeCaps, Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 
@@ -138,4 +143,59 @@ export async function drainSteers(ctx: Pick<AgentRunContext, "nodeId" | "steerin
 /** Return the signal the host aborts to interrupt this node; `undefined` without an inbox. */
 export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | undefined {
   return ctx.steering?.interruptSignal(ctx.nodeId);
+}
+
+// The extensions of the media types models send; any other type is stored as `.bin`.
+const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/gif", "gif"],
+  ["image/webp", "webp"],
+  ["image/svg+xml", "svg"],
+  ["audio/wav", "wav"],
+  ["audio/mpeg", "mp3"],
+  ["application/pdf", "pdf"],
+  ["text/plain", "txt"],
+]);
+
+/**
+ * Store `bytes` as a file of the run in folder `dir` and return its reference.
+ *
+ * The file is `<dir>/media/<sha256>.<ext>`, mode 0600, in a `media` folder made with mode 0700;
+ * `ext` follows `mime` (`.bin` when unknown). The same bytes of the same type keep one file. The
+ * file and the folder are synced before this returns, so a record naming the file can be
+ * written next.
+ *
+ * @returns The file's reference: its absolute path as `uri`, `mime`, and its file name as `name`.
+ */
+export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
+  const media = resolve(dir, "media");
+  mkdirSync(media, { mode: 0o700, recursive: true });
+  const ext = MEDIA_EXTENSIONS.get(mime.split(";")[0]!.trim().toLowerCase()) ?? "bin";
+  const name = `${createHash("sha256").update(bytes).digest("hex")}.${ext}`;
+  const path = join(media, name);
+  if (!existsSync(path)) {
+    // Written under a temporary name and renamed, so a crash never leaves a short file at `path`.
+    const temporary = join(media, `.${name}.${randomBytes(8).toString("hex")}`);
+    try {
+      const fd = openSync(temporary, "wx", 0o600);
+      try {
+        let offset = 0;
+        while (offset < bytes.length) offset += writeSync(fd, bytes, offset);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(temporary, path);
+    } finally {
+      if (existsSync(temporary)) unlinkSync(temporary);
+    }
+  }
+  const folder = openSync(media, "r");
+  try {
+    fsyncSync(folder);
+  } finally {
+    closeSync(folder);
+  }
+  return new FileRef({ uri: path, mime, name });
 }

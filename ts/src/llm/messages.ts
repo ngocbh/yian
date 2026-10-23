@@ -11,7 +11,6 @@
 
 import { current } from "../defaults.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { FileRef } from "../typesys/values.ts";
 
 /** The format tag every message's JSON carries. */
 export const MESSAGE_FORMAT = "yian.message.v1";
@@ -310,8 +309,8 @@ export class MediaPart {
   readonly data: string | null;
   /** Where the content lives. */
   readonly url: string | null;
-  /** The file holding the content; its JSON is `{uri, mime, name}`, unset fields left out. */
-  readonly file: FileRef | null;
+  /** The file holding the content: a frozen `{uri, mime, name}`, written as JSON without its `null` fields. */
+  readonly file: MediaFile | null;
   /** A file name, if any. */
   readonly name: string | null;
   /** Opaque provider data, e.g. OpenAI's image `detail`. */
@@ -321,18 +320,14 @@ export class MediaPart {
     mime: string;
     data?: string | null;
     url?: string | null;
-    file?: FileRef | null;
+    file?: { readonly uri: string; readonly mime?: string | null; readonly name?: string | null } | null;
     name?: string | null;
     providerPayload?: JsonObject | null;
   }) {
     this.mime = checkString(options.mime, "mime");
     this.data = optionalString(options.data, "data");
     this.url = optionalString(options.url, "url");
-    const file: unknown = options.file ?? null;
-    if (file !== null && !FileRef.isFileRef(file)) {
-      throw new MessageFormatError("file", `expected a FileRef, got ${typeName(file)}`);
-    }
-    this.file = file;
+    this.file = optionalFile(options.file);
     this.name = optionalString(options.name, "name");
     if ([this.data, this.url, this.file].filter((source) => source !== null).length !== 1) {
       throw new MessageFormatError("", "media needs exactly one of data, url or file");
@@ -353,10 +348,35 @@ export class MediaPart {
   }
 }
 
+/**
+ * A file holding a media part's content: the fields of a `FileRef` (`typesys`), which `llm`
+ * doesn't import, so a `FileRef` can be given where a `MediaFile` is read.
+ */
+export interface MediaFile {
+  /** Where the file is. */
+  readonly uri: string;
+  /** The file's media type. */
+  readonly mime: string | null;
+  /** The file's name. */
+  readonly name: string | null;
+}
+
 const FILE_KEYS: readonly string[] = ["uri", "mime", "name"];
 
+/** Return a frozen copy of a media part's `file`, or `null` when it is `null` or `undefined`. */
+function optionalFile(file: unknown): MediaFile | null {
+  if (file === null || file === undefined) return null;
+  if (typeof file !== "object") throw new MessageFormatError("file", `expected an object, got ${typeName(file)}`);
+  const fields = file as Record<string, unknown>;
+  return Object.freeze({
+    uri: checkString(fields["uri"], "file.uri"),
+    mime: optionalString(fields["mime"], "file.mime"),
+    name: optionalString(fields["name"], "file.name"),
+  });
+}
+
 /** Return a file reference's JSON: `uri`, then `mime` and `name` unless `null`. */
-function fileJSON(file: FileRef): JsonObject {
+function fileJSON(file: MediaFile): JsonObject {
   const data: JsonObject = { uri: file.uri };
   if (file.mime !== null) data["mime"] = file.mime;
   if (file.name !== null) data["name"] = file.name;
@@ -364,7 +384,7 @@ function fileJSON(file: FileRef): JsonObject {
 }
 
 /** Read a media part's `file` JSON strictly; errors name paths under `path`. */
-function fileFromJSON(data: unknown, path: string): FileRef {
+function fileFromJSON(data: unknown, path: string): MediaFile {
   if (!isPlainObject(data)) throw new MessageFormatError(path, `expected an object, got ${typeName(data)}`);
   refuseSymbolKeys(data, path);
   const record = ownRecord(data);
@@ -377,11 +397,11 @@ function fileFromJSON(data: unknown, path: string): FileRef {
       throw new MessageFormatError(join(path, key), "expected string, got null");
     }
   }
-  return new FileRef({
+  return {
     uri: checkString(record["uri"], join(path, "uri")),
     mime: optionalString(record["mime"], join(path, "mime")),
     name: optionalString(record["name"], join(path, "name")),
-  });
+  };
 }
 
 /**

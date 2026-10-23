@@ -457,16 +457,26 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
   expect(entry.TypedValue).toBe(RuntimeTypedValue);
 });
 
-/** A `pool_commit` line holding a big int, both infinities, an escaped tag and an integral float. */
-const NODE_LINE =
+/**
+ * A `pool_commit` line as the log writes it, holding a big int, both infinities, an escaped record
+ * and an integral float: fixed text, so a change to the spelling the writer and reader share fails.
+ */
+const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
   '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":13,"seq":9}';
 
+test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
+  expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);
+  const { payload } = parseJson(WRITTEN_LINE, "codec") as { payload: JsonObject };
+  const value = TypedValue.fromWire({ kind: payload["kind"], value: payload["value"] }).value as Record<string, unknown>;
+  expect(value).toEqual({ big: 2n ** 80n, esc: { $record: { a: 1n } }, inf: Infinity, ninf: -Infinity, whole: 2 });
+});
+
 test.skipIf(!NODE)("on Node the built run entry round-trips a pool_commit line with a big int and infinities", () => {
   const script = `
 const { FileRef, JSONDecodeError, TypedValue, logJson, parseJson } = await import(${JSON.stringify(ENTRY)});
-const line = ${JSON.stringify(NODE_LINE)};
+const line = ${JSON.stringify(WRITTEN_LINE)};
 const envelope = parseJson(line, "codec");
 const { payload } = envelope;
 const typed = TypedValue.fromWire({ kind: payload.kind, value: payload.value });

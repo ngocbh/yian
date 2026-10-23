@@ -2832,8 +2832,9 @@ them with: `TypedValue` and `FileRef`, `logJson`, `parseJson` and `JSONDecodeErr
 payload is flat, `{node_id, key, kind, value}`, and its `kind` and `value` are the typed value's
 wire form. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
 `kind` and `value`, `kind` must be a storage kind (not `Any`) and `value` of that kind, or it throws
-a `RangeError`. It checks the value's top level, not its contents, which it trusts `parseJson` to
-have read. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int items as `bigint`s.
+a `RangeError`. It checks the value's top level and a typed list's items, not nested contents, which
+it trusts `parseJson` to have read. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int
+items as `bigint`s.
 `typed.toWire()` gives `{kind, value}` back, each `FileRef` written as its `{uri, mime, name}`
 mapping.
 

@@ -463,7 +463,8 @@ any descriptor of a locked file drops the process's lock.
   other `lockFile` failure propagates at once.
 - `isLocked(path)` says whether another connection holds the lock. A missing path, a non-regular
   file and a foreign (non-SQLite) file are `false`, and nothing is created. Any other open failure
-  (no read permission, say) throws, so a held lock is never reported free.
+  (no read permission, say) throws, so a held lock is never reported free. Like busy, `true` can
+  show up briefly while a `lockFile` call is mid-attempt.
 
 `openSqlite(path, { readonly })` opens a database file (creating it unless `readonly`) through
 `bun:sqlite` or `node:sqlite`. A `Sqlite` has `exec(sql)`, `prepare(sql)` (cached per SQL text) and
@@ -473,9 +474,9 @@ row) and `run`. Parameters are positional `?`s: a safe-integer `number` binds as
 `RangeError`.
 
 Foreign keys are off and double-quoted string literals are accepted, as in Python's sqlite3. Two
-runtime differences remain: a missing positional parameter throws on Bun but binds NULL on Node,
-and the drivers' error objects differ, so read the extended result code with
-`sqliteErrorCode(error)` (`& 0xff` for the primary code).
+runtime differences remain: passing some but too few positional parameters throws on Bun but binds
+NULL on Node (passing none binds NULL on both), and the drivers' error objects differ, so read the
+extended result code with `sqliteErrorCode(error)` (`& 0xff` for the primary code).
 
 ## CLI
 

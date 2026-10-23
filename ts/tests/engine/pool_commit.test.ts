@@ -440,11 +440,8 @@ test("iterRunRecords hands a host the pool_commit payload the public JSON form d
     expect(logJson({ ...payload, ...typed.toWire() })).toBe(logJson(payload));
     checked++;
   }
-  expect(checked).toBeGreaterThan(5);
-});
-
-test("the public TypedValue is the runtime's class, so values the runtime gives a host are instances of it", () => {
-  expect(TypedValue).toBe(RuntimeTypedValue);
+  const commits = lines(log).filter((line) => (parseJson(line, "codec") as { kind: string }).kind === "pool_commit");
+  expect(checked).toBe(commits.length);
 });
 
 test("the public JSON form reads a file as a FileRef and refuses text the log refuses", () => {

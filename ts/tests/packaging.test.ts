@@ -6,15 +6,14 @@
 // dependency pins, and the names each entry point exports, Python's `yian.__all__`, `yian.run`,
 // `yian.tools`, `yian.skills`, and `yian.llm_clients` with `yian.llm_clients.auth` (one
 // `./llm_clients` entry; `./platform`, the lock and SQLite helpers for hosts, has no Python
-// counterpart, nor has the value codec hosts read run-log values with that `./run` also carries:
-// Python hosts use `yian.typesys.TypedValue`); and `LICENSES`, the text `yian --licenses` prints,
-// against `NOTICE`, Bun's license and the license files of the packages the binaries bundle, and of
-// the packages copied into their `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes
-// `src/cli/licenses.ts` instead, taking Bun's license from the file `YIAN_BUN_LICENSE` names and the
-// copied packages' from the npm packages extracted under `YIAN_VENDORED_LICENSES`, or else each from
-// the current `LICENSES`. With `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the file
-// also runs that binary: `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`,
-// `check`, an MCP server, and a cwd `.env` and `bunfig.toml` it must ignore.
+// counterpart); and `LICENSES`, the text `yian --licenses` prints, against `NOTICE`, Bun's license
+// and the license files of the packages the binaries bundle, and of the packages copied into their
+// `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's
+// license from the file `YIAN_BUN_LICENSE` names and the copied packages' from the npm packages
+// extracted under `YIAN_VENDORED_LICENSES`, or else each from the current `LICENSES`. With
+// `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the file also runs that binary:
+// `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a
+// cwd `.env` and `bunfig.toml` it must ignore.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";

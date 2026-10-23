@@ -24,7 +24,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { types } from "node:util";
 
@@ -1208,14 +1208,14 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
  * Create a fresh run's folder, `<runsDir>/<runId>`, and return its log path, `log.jsonl` inside it.
  *
  * A run's folder is the folder that holds its log, and the run's other files go only there, so
- * each run gets a folder of its own. `runsDir` is made when missing. The run folder is made with
- * mode 0700, or set to it if it exists. The log file is not created: the run log creates it
+ * each run gets a folder of its own. `runsDir` is made when missing. The run folder must not
+ * exist yet; it is made with mode 0700. The log file is not created: the run log creates it
  * exclusively, owner-only.
  *
  * @throws {RangeError} When `runId` isn't one folder name: empty, `.`, `..`, or holding `/`, `\`
  *   or NUL.
- * @throws {Error} When a folder can't be made or changed, or a non-folder holds the run folder's
- *   path.
+ * @throws {Error} `EEXIST` when anything (a folder, a file, a symlink) already holds the run
+ *   folder's path, or another error when a folder can't be made or changed.
  */
 export function runLogPath(runsDir: string, runId: string): string {
   if (runId === "" || runId === "." || runId === ".." || /[/\\\0]/.test(runId)) {
@@ -1223,12 +1223,8 @@ export function runLogPath(runsDir: string, runId: string): string {
   }
   mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   const runDir = join(runsDir, runId);
-  try {
-    mkdirSync(runDir, { mode: 0o700 });
-  } catch (error) {
-    const taken = (error as NodeJS.ErrnoException).code === "EEXIST";
-    if (!taken || !statSync(runDir, { throwIfNoEntry: false })?.isDirectory()) throw error;
-  }
+  mkdirSync(runDir, { mode: 0o700 });
+  // The umask can narrow mkdir's mode.
   chmodSync(runDir, 0o700);
   return join(runDir, "log.jsonl");
 }

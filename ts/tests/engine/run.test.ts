@@ -70,13 +70,24 @@
  * mapped onto a `staticNodes` path.
  *
  * TS-only, `runLogPath`: a run's log is `log.jsonl` in its own folder below the runs folder, made
- * 0700 (an existing one is set to 0700, the runs folder is made when missing), the file not
- * created; a file holding the folder's path, and a run id that isn't one folder name, are refused.
+ * 0700 (the runs folder is made when missing), the file not created; an existing folder, file or
+ * symlink at the run folder's path is refused (`EEXIST`), the symlink's target left unchanged; a
+ * run id that isn't one folder name is refused, and `a..b` is one.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1579,11 +1590,14 @@ test("runLogPath is log.jsonl in the run's own 0700 folder, and creates no file"
   expect(existsSync(path)).toBe(false);
 });
 
-test("runLogPath sets an existing run folder to 0700", () => {
-  mkdirSync(join(dir, "r2"), { mode: 0o755 });
-  chmodSync(join(dir, "r2"), 0o755);
-  expect(runLogPath(dir, "r2")).toBe(join(dir, "r2", "log.jsonl"));
-  expect(statSync(join(dir, "r2")).mode & 0o777).toBe(0o700);
+test("runLogPath refuses an existing run folder, and a symlink to one, leaving its target as it was", () => {
+  mkdirSync(join(dir, "r2"));
+  expect(() => runLogPath(dir, "r2")).toThrow(/EEXIST/);
+  mkdirSync(join(dir, "shared"));
+  chmodSync(join(dir, "shared"), 0o755);
+  symlinkSync(join(dir, "shared"), join(dir, "r4"));
+  expect(() => runLogPath(dir, "r4")).toThrow(/EEXIST/);
+  expect(statSync(join(dir, "shared")).mode & 0o777).toBe(0o755);
 });
 
 test("runLogPath refuses a file holding the run folder's path", () => {
@@ -1596,4 +1610,8 @@ test("runLogPath refuses a run id that isn't one folder name", () => {
     expect(() => runLogPath(dir, runId)).toThrow(RangeError);
   }
   expect(existsSync(join(dir, "a"))).toBe(false);
+});
+
+test("runLogPath takes a run id holding two dots as one folder name", () => {
+  expect(runLogPath(dir, "a..b")).toBe(join(dir, "a..b", "log.jsonl"));
 });

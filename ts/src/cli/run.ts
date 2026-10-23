@@ -675,10 +675,12 @@ export function validateRunLogOptions(options: {
  * path, `~/.yian/runs/<runId>/log.jsonl` (`runLogPath` under `~/.yian/runs`), with `HOME` from
  * `env` (the process user's home directory, `os.homedir()`, when it is unset or empty).
  *
- * Each directory is created with mode 0700, or set to it if it exists. The file itself is not
- * created: the run log creates it exclusively, owner-only.
+ * `~/.yian` and `~/.yian/runs` are created with mode 0700, or set to it if they exist; the run's
+ * folder must be new and is created with mode 0700. The file itself is not created: the run log
+ * creates it exclusively, owner-only.
  *
- * @throws {Error} When a directory can't be created or changed, or a non-directory holds its path.
+ * @throws {Error} When a directory can't be created or changed, a non-directory holds the path of
+ *   `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
  */
 export function defaultRunLogPath(runId: string, env: Env): string {
   const stateDir = join(env("HOME") || homedir(), ".yian");

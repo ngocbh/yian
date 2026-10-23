@@ -9,9 +9,11 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type { RetryInfo } from "../../llm/executor.ts";
+import { MediaPart, Message, type Part, Request } from "../../llm/messages.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { EvaluationTrace, MemoryContext } from "../../memory/contracts.ts";
@@ -198,4 +200,84 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
     closeSync(folder);
   }
   return new FileRef({ uri: path, mime, name });
+}
+
+/** Return `message` with `parts` in place of its parts, everything else kept. */
+function withParts(message: Message, parts: readonly Part[]): Message {
+  return new Message({ role: message.role, parts, protocol: message.protocol, providerPayload: message.providerPayload });
+}
+
+/**
+ * Return `message` with each inline (`data`) media part stored as a run file under `dir` and
+ * given in its file form; its type, name and payload stay.
+ *
+ * A message without inline media, or any message when `dir` is `null` (a run without a log), is
+ * returned as is.
+ */
+export function inlineToFile(message: Message, dir: string | null): Message {
+  if (dir === null || !message.parts.some((part) => part instanceof MediaPart && part.data !== null)) return message;
+  const parts = message.parts.map((part) =>
+    part instanceof MediaPart && part.data !== null
+      ? new MediaPart({
+          mime: part.mime,
+          file: writeRunFile(dir, Buffer.from(part.data, "base64"), part.mime),
+          name: part.name,
+          providerPayload: part.providerPayload,
+        })
+      : part,
+  );
+  return withParts(message, parts);
+}
+
+/**
+ * Return `request` with each file media part given its bytes inline (`data`, read from the
+ * file's `uri`); its type, name and payload stay. This is the form sent to a provider, so
+ * provider adapters never see a file reference.
+ *
+ * A request without file media is returned as is.
+ *
+ * @throws Error (as a rejection) naming the path when a file can't be read.
+ */
+export async function fileToInline(request: Request): Promise<Request> {
+  const filed = (part: Part): part is MediaPart => part instanceof MediaPart && part.file !== null;
+  if (!request.messages.some((message) => message.parts.some(filed))) return request;
+  const messages: Message[] = [];
+  for (const message of request.messages) {
+    if (!message.parts.some(filed)) {
+      messages.push(message);
+      continue;
+    }
+    const parts: Part[] = [];
+    for (const part of message.parts) {
+      if (!filed(part)) {
+        parts.push(part);
+        continue;
+      }
+      const path = part.file!.uri;
+      let bytes: Buffer;
+      try {
+        bytes = await readFile(path);
+      } catch (error) {
+        throw new Error(`media file ${path} can't be read: ${error instanceof Error ? error.message : String(error)}`, {
+          cause: error,
+        });
+      }
+      parts.push(
+        new MediaPart({
+          mime: part.mime,
+          data: bytes.toString("base64"),
+          name: part.name,
+          providerPayload: part.providerPayload,
+        }),
+      );
+    }
+    messages.push(withParts(message, parts));
+  }
+  return new Request({
+    messages,
+    tools: request.tools,
+    toolChoice: request.toolChoice,
+    parallelToolCalls: request.parallelToolCalls,
+    outputFormat: request.outputFormat,
+  });
 }

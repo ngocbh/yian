@@ -61,10 +61,12 @@ const leaf = (id: string) =>
 const leafOut = (id: string) => `id: ${id}\nname: ${id}\nnodes: {}\noutput: ${id}\n`;
 
 const ROOT = caller("root", "child", "lib/child");
-/** A child flow whose CODE node runs `./fn.ts:up`, a file beside the child. */
-const CODE_CHILD =
-  "id: child\nname: child\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ./fn.ts:up\n" +
+/** A flow `id` taking `q` whose CODE node runs `ref`. */
+const codeFlow = (id: string, ref: string) =>
+  `id: ${id}\nname: ${id}\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ${ref}\n` +
   "    input:\n      q: ${input.q}\n    output: str\noutput: ${up.output}\n";
+/** A child flow whose CODE node runs `./fn.ts:up`, a file beside the child. */
+const CODE_CHILD = codeFlow("child", "./fn.ts:up");
 const UP = "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n";
 const CHILD = leaf("child");
 const NESTED_CHILD = caller("child", "grand", "grand");
@@ -327,11 +329,6 @@ test("a flow built in code, or loaded over one, has no source", async () => {
   expect(over.source).toBeNull();
 });
 
-/** A flow `id` taking `q` whose CODE node runs `ref`. */
-const codeFlow = (id: string, ref: string) =>
-  `id: ${id}\nname: ${id}\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ${ref}\n` +
-  "    input:\n      q: ${input.q}\n    output: str\noutput: ${up.output}\n";
-
 test("loadFlowSource with codeRoot refuses a recorded file whose CODE reference resolves outside it", async () => {
   const dir = freshDir("code-root");
   const other = freshDir("code-out");
@@ -366,7 +363,7 @@ test("loadFlowSource with codeRoot checks a recorded child file outside flow.dir
   expect((await loadFlowSource(source, { codeRoot: tmp })).compiled.flowId).toBe("root");
 });
 
-test("a host child loads with codeRoot on disk, but its recorded file is checked by loadFlowSource", async () => {
+test("a host child outside codeRoot loads, but loadFlowSource refuses its recorded file", async () => {
   const dir = freshDir("code-root");
   const other = freshDir("code-out");
   writeTree(other, { "child.yaml": codeFlow("child", "./h.ts:up"), "h.ts": UP });

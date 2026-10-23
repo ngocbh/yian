@@ -639,8 +639,8 @@ interface LoadOptions {
  * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
- *   too; a `childResolver`'s flow is the host's to load with its own `codeRoot`. Inline bodies
- *   are not confined. `null` or absent confines nothing.
+ *   too; a `childResolver`'s flow is the host's to load with its own `codeRoot`. An inline `code:`
+ *   body is not confined. `null` or absent confines nothing.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
  *   without `env` loads under the caller's.

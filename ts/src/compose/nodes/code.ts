@@ -193,9 +193,9 @@ export interface CodeCheckOptions {
  * @throws LoadError when the check fails, its cause the original error.
  */
 export async function checkCodeNode(node: CodeNode, options: CodeCheckOptions): Promise<void> {
-  const { diagnostics, resolveOrigin } = options;
+  const { diagnostics, resolveOrigin, codeRoot } = options;
   try {
-    await node.check({ codeRoot: options.codeRoot ?? null });
+    await node.check({ codeRoot });
   } catch (error) {
     const origin = selectInlineCodeOrigin(error instanceof TypeStripError ? error.line : null, {
       codeOrigin: node.codeOrigin,

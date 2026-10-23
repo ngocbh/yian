@@ -428,6 +428,8 @@ export interface PendingCommit {
  * anything else is a miss.
  *
  * @throws ExpressionError when a dotted segment of `path` is empty.
+ * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
+ *   every pool name.
  */
 export function resolveFromPool(
   path: string,
@@ -459,7 +461,8 @@ export function resolveFromPool(
     value = next;
   }
   const seq = producers.get(name);
-  return new ResolvedValue(value, true, seq === undefined ? null : new SourceRef(runId, seq, projection));
+  if (seq === undefined) throw new RangeError(`pool name ${reprText(name)} has no pool_commit in the producer index`);
+  return new ResolvedValue(value, true, new SourceRef(runId, seq, projection));
 }
 
 /**

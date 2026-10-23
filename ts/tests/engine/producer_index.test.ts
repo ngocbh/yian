@@ -35,7 +35,8 @@ import {
   type RecordEnvelope,
   type RunRecord,
 } from "../../src/runtime/log.ts";
-import type { RunState } from "../../src/runtime/state.ts";
+import { resolveFromPool, type RunState } from "../../src/runtime/state.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 import { crashAfter, NO_ENV, startedRun } from "./run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-producer-index-"));
@@ -462,4 +463,48 @@ test("a derived node's route names exactly the pool names its binding reads", as
   expect(names.get("count#0/step/__end__")).toEqual(["count#0/step/inc"]);
   expect(names.get("count#0/__end__")).toEqual(["count#0/step"]);
   expect(names.get("count~1")).toEqual(["count#0/__end__"]);
+});
+
+/** A flow whose END reads a node's output and a system value. */
+const READS_SYSTEM = `
+id: sys
+name: sys
+nodes:
+  c: {kind: code, code: "return 1", output: int}
+output: {n: "\${c.output}", rid: "\${system.run_id}"}
+`;
+
+test("a derived binding reading a system value: without a trace its leaf names the run-start commit; the trace gives none", async () => {
+  const plain = await capturedRun(READS_SYSTEM);
+  const end = plain.captured.find(({ nodeId }) => nodeId === EndNode.ID)!;
+  const runIdCommit = plain.records.find(({ kind, payload }) => kind === "pool_commit" && payload["key"] === "system.run_id")!;
+  expect(runIdCommit.seq).toBeLessThan(5);
+  const plainLeaves = captureLeaves(end.capture);
+  expect(plainLeaves.map((leaf) => leaf.executionSeq)).toContain(runIdCommit.seq);
+  expect(readNames([end], (leaf) => commitName(plain.records, leaf))).toEqual([[EndNode.ID, ["c", "system.run_id"]]]);
+  // The retained trace resolves a system value with no source, so the learnable route has no leaf for it.
+  const learnable = await capturedRun(READS_SYSTEM, { learnable: true });
+  const learnedEnd = learnable.captured.find(({ nodeId }) => nodeId === EndNode.ID)!;
+  expect(readNames([learnedEnd], (leaf) => startName(learnable.records, leaf))).toEqual([[EndNode.ID, ["c"]]]);
+});
+
+test("a pool name missing from the producer index is a RangeError", () => {
+  const pool = new VariablePool(StartNode.ID);
+  pool.set("a", { x: 1n });
+  pool.addSystem("run_id", "r1");
+  expect(() => resolveFromPool("a.output.x", pool, new Map(), "r1")).toThrow(RangeError);
+  expect(() => resolveFromPool("a.output.x", pool, new Map(), "r1")).toThrow(
+    "pool name 'a' has no pool_commit in the producer index",
+  );
+  expect(() => resolveFromPool("system.run_id", pool, new Map(), "r1")).toThrow(RangeError);
+  // A miss is still a miss, not an error.
+  expect(resolveFromPool("b.output", pool, new Map(), "r1").present).toBe(false);
+  expect(resolveFromPool("a.output.y", pool, new Map([["a", 7]]), "r1").present).toBe(false);
+  const found = resolveFromPool("a.output.x", pool, new Map([["a", 7]]), "r1");
+  expect([found.value, found.present, (found.source as SourceRef).executionSeq, (found.source as SourceRef).path]).toEqual([
+    1n,
+    true,
+    7,
+    ["x"],
+  ]);
 });

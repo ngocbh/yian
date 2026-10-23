@@ -6,9 +6,9 @@
  * At load it clears `XDG_CONFIG_HOME`, every defaults variable, `YIAN_DEFAULT_PROVIDER` and
  * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on) and keeps that
  * environment as the baseline. Before each test, `process.env` is put back to the baseline, with
- * `YIAN_AUTH_FILE` at `auth.json` (not created) in a fresh dir inside one per-process `yian-test-*`
- * dir and `HOME` at its `home/`, and the cached defaults are dropped, so the next `current()` reads
- * the built-in ones.
+ * `YIAN_AUTH_FILE` at `auth.json` (not created) and `HOME` at `home/`, both in a fresh dir inside
+ * one per-process `yian-test-*` dir, and the cached defaults are dropped, so the next `current()`
+ * reads the built-in ones.
  *
  * Changed: Python sets `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL` for every test; TS clears them
  * (no TS test relied on a suite-wide default model). Python points `HOME` at a fresh directory for
@@ -70,13 +70,14 @@ function removeRoot(): void {
 
 // Removed once at the end rather than after each test: Bun and Node order a file's `afterEach`
 // hooks differently against the preload's, and a test's own cleanup may still need its dir.
-// Bun runs every file in one process and never runs `exit` handlers under `bun test`, but runs the
-// preload's `afterAll` after the last file's own hooks.
+// By default Bun runs every file in one process and never runs `exit` handlers under `bun test`,
+// but runs the preload's `afterAll` after the last file's own hooks.
 // Node runs each file in its own process and runs the preload's `afterAll` before the file's own,
 // so there removal waits for `exit`.
 // A killed run, or a Bun run stopped by `--bail` (which runs neither hook), leaves that one dir.
 if (isMainThread) {
-  if (runtime === "bun") afterAll(removeRoot);
+  // A full run's dirs can take longer to remove than Bun's default 5 s hook timeout.
+  if (runtime === "bun") afterAll(removeRoot, 600_000);
   else process.on("exit", removeRoot);
 
   // Module-level code and `beforeAll` hooks run before any `beforeEach`. Bun loads the preload

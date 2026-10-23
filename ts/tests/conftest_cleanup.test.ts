@@ -48,7 +48,7 @@ test("a run keeps its tests' dirs in one yian-test dir and removes it at the end
     // Its own timeout, since Node's test timeout can't interrupt a sync spawn.
     const result = spawnSync(process.execPath, args, { cwd: work, env, encoding: "utf8", timeout: 50_000 });
     const output = `${result.stdout}\n${result.stderr}`;
-    expect(result.status, `status ${result.status}, signal ${result.signal}\n${output}`).toBe(0);
+    expect(result.status, `status ${result.status}, signal ${result.signal}, error ${result.error}\n${output}`).toBe(0);
 
     // Unanchored: Node's TAP reporter prints a test's output as `# HOME=...`.
     const homes = [...output.matchAll(/HOME=(\S+)/g)].map((match) => relative(tmp, match[1]!).split(sep));

@@ -298,8 +298,7 @@ export class TextPart {
 
 /**
  * An image or file, given inline as base64, by URL, or as a file reference; exactly one of the
- * three. A run log holds media only as file references, so its lines stay small; the bytes go to
- * the provider inline.
+ * three. A run keeps the media it receives inline as file references, so its log lines stay small.
  */
 export class MediaPart {
   readonly type = "media" as const;

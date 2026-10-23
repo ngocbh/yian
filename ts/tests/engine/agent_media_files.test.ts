@@ -117,6 +117,18 @@ test("inlineToFile returns a message without inline media, or any message withou
   expect(inlineToFile(inline, null)).toBe(inline);
 });
 
+test("inlineToFile refuses inline data that isn't base64, storing nothing", () => {
+  const dir = folder();
+  for (const data of ["not base64!", "a-b_"]) {
+    const message = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data })] });
+    expect(() => inlineToFile(message, dir)).toThrow(new RangeError("image/png media data isn't base64"));
+  }
+  // Unpadded base64 is still base64.
+  const unpadded = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: "YWI" })] });
+  expect((inlineToFile(unpadded, dir).parts[0] as MediaPart).file).not.toBeNull();
+  expect(readdirSync(join(dir, "media"))).toHaveLength(1);
+});
+
 test("fileToInline gives each file media part its bytes back as data; other parts stay", async () => {
   const filed = inlineToFile(reply(), folder());
   const tool = new ToolSpec({ name: "noop", description: "Do nothing.", parameters: { type: "object" } });

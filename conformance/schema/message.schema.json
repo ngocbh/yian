@@ -40,7 +40,7 @@
       }
     },
     "media": {
-      "description": "An image or file, given inline as base64 data, by url, or as a file reference; exactly one of the three. A run log holds media only as file references.",
+      "description": "An image or file, given inline as base64 data, by url, or as a file reference; exactly one of the three. A run keeps the media it receives inline as file references.",
       "type": "object",
       "required": ["type", "mime"],
       "additionalProperties": false,
@@ -60,7 +60,7 @@
       ]
     },
     "file": {
-      "description": "A file holding a media part's content: the FileRef form. A run writes the bytes it receives under <run folder>/media/<sha256>.<ext> and refers to them with the file's absolute path as uri.",
+      "description": "A file holding a media part's content: the FileRef form (TS yian only; the Python reference reads data or url). A run writes the bytes it receives under <run folder>/media/<sha256>.<ext> and refers to them with the file's absolute path as uri.",
       "type": "object",
       "required": ["uri"],
       "additionalProperties": false,

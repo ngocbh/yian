@@ -174,7 +174,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
-  mkdirSync(media, { mode: 0o700, recursive: true });
+  // A new `media` entry is durable only once the run folder holding it is synced.
+  if (mkdirSync(media, { mode: 0o700, recursive: true }) !== undefined) syncFolder(resolve(dir));
   const ext = MEDIA_EXTENSIONS.get(mime.split(";")[0]!.trim().toLowerCase()) ?? "bin";
   const name = `${createHash("sha256").update(bytes).digest("hex")}.${ext}`;
   const path = join(media, name);
@@ -195,13 +196,32 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
       if (existsSync(temporary)) unlinkSync(temporary);
     }
   }
-  const folder = openSync(media, "r");
-  try {
-    fsyncSync(folder);
-  } finally {
-    closeSync(folder);
-  }
+  syncFolder(media);
   return new FileRef({ uri: path, mime, name });
+}
+
+/** Flush folder `path`'s entries to disk. */
+function syncFolder(path: string): void {
+  const fd = openSync(path, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Return the bytes of a media part's base64 `data`.
+ *
+ * @throws RangeError when `data` isn't base64 (padding may be left out), since decoding it
+ *   anyway would store, and later send, different bytes.
+ */
+function base64Bytes(data: string, mime: string): Buffer {
+  const bytes = Buffer.from(data, "base64");
+  if (bytes.toString("base64").replace(/=+$/, "") !== data.replace(/=+$/, "")) {
+    throw new RangeError(`${mime} media data isn't base64`);
+  }
+  return bytes;
 }
 
 /** Return `message` with `parts` in place of its parts, everything else kept. */
@@ -215,19 +235,25 @@ function withParts(message: Message, parts: readonly Part[]): Message {
  *
  * A message without inline media, or any message when `dir` is `null` (a run without a log), is
  * returned as is.
+ *
+ * @throws RangeError when a part's `data` isn't base64; nothing is stored then.
  */
 export function inlineToFile(message: Message, dir: string | null): Message {
   if (dir === null || !message.parts.some((part) => part instanceof MediaPart && part.data !== null)) return message;
-  const parts = message.parts.map((part) =>
-    part instanceof MediaPart && part.data !== null
-      ? new MediaPart({
-          mime: part.mime,
-          file: writeRunFile(dir, Buffer.from(part.data, "base64"), part.mime),
-          name: part.name,
-          providerPayload: part.providerPayload,
-        })
-      : part,
+  // Every part is decoded before any file is written.
+  const decoded = message.parts.map((part) =>
+    part instanceof MediaPart && part.data !== null ? base64Bytes(part.data, part.mime) : null,
   );
+  const parts = message.parts.map((part, index) => {
+    const bytes = decoded[index];
+    if (!(part instanceof MediaPart) || bytes === null || bytes === undefined) return part;
+    return new MediaPart({
+      mime: part.mime,
+      file: writeRunFile(dir, bytes, part.mime),
+      name: part.name,
+      providerPayload: part.providerPayload,
+    });
+  });
   return withParts(message, parts);
 }
 

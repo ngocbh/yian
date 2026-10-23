@@ -161,7 +161,7 @@ loadFlow(text: string, options?: {
 See [`load_flow`][docs/api.md#load_flow]. `baseDir` is the directory a CODE node's `./file.ts:fn`
 reference resolves against (default: the first search path, else the current directory). With
 `codeRoot`, a reference whose file's real path is outside the real path of `codeRoot` is a
-`LoadError`; inline bodies aren't confined. A malformed
+`LoadError`; an inline `code:` body isn't confined. A malformed
 flow rejects with `LoadError` (a `RangeError`), whose `diagnostic` is a `Diagnostic` located in the
 source.
 

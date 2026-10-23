@@ -118,8 +118,8 @@ as its `baseDir`. With `codeRoot`, a CODE node's `./file.ts:fn` reference whose 
 path is outside the real path of `codeRoot` (symlinks are followed on both sides) is a
 `LoadError` at the `code:` value. This covers the files the search path reads. A flow a
 `childResolver` returns was checked by its own load, so a resolver that loads a file passes
-`codeRoot` on. Inline bodies and a module's own imports aren't confined; without `codeRoot`,
-nothing is. A relative `codeRoot` resolves against the current directory. The check runs at
+`codeRoot` on. An inline `code:` body and a module's own imports aren't confined; without
+`codeRoot`, nothing is. A relative `codeRoot` resolves against the current directory. The check runs at
 load: the file is imported by path when the node runs, so a file replaced after the load isn't
 checked again. `env` is the environment this load reads the `YIAN_*` values from. The
 default is the process environment, or the calling load's when a `childResolver` calls

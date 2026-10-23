@@ -531,23 +531,15 @@ export class RetainedTrace {
    * @throws ExpressionError when a dotted segment of `path` is empty.
    */
   resolve(path: string): ResolvedValue {
-    const parts = path.trim().split(".");
-    if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
-    const [head, ...rest] = parts as [string, ...string[]];
-    let entry = this._currentWriters.get(head);
-    let projection: string[];
-    if (entry !== undefined && rest[0] === "output") {
-      projection = rest.slice(1);
-    } else if (head === "input" && rest.length) {
-      entry = this._currentWriters.get(this.startId);
-      projection = rest;
-    } else if (head === "system") {
-      const encoded = rest.length ? this.system.get(rest[0]!) : undefined;
+    const read = sourcePath(path, this.startId, (name) => this._currentWriters.has(name));
+    if (read === null) return new ResolvedValue(null, false);
+    const { name, projection } = read;
+    if (name.startsWith(SYSTEM_PREFIX)) {
+      const encoded = this.system.get(name.slice(SYSTEM_PREFIX.length));
       if (encoded === undefined) return new ResolvedValue(null, false);
       return new ResolvedValue(decodeTyped(encoded).toObject(), true);
-    } else {
-      return new ResolvedValue(null, false);
     }
+    const entry = this._currentWriters.get(name);
     if (entry === undefined) return new ResolvedValue(null, false);
     let value = entry.value;
     for (const part of projection) {
@@ -748,6 +740,27 @@ const OUTCOME_RECORDS = [NodeSucceededRecord, NodeRoutedRecord, NodeExpandedReco
 
 /** The key prefix of a system value's run-start commit: `system.<name>`. */
 export const SYSTEM_PREFIX = "system.";
+
+/**
+ * Parse a `${path}` lookup into the pool name it reads and the field path inside that value, or
+ * `null` for a miss: `<id>.output...` reads `<id>` when `holds(id)`, `input...` the START's value
+ * (`startId`) and `system.<key>` the system value `system.<key>`, which is read whole.
+ *
+ * @throws ExpressionError when a dotted segment of `path` is empty.
+ */
+export function sourcePath(
+  path: string,
+  startId: string,
+  holds: (name: string) => boolean,
+): { name: string; projection: string[] } | null {
+  const parts = path.trim().split(".");
+  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
+  const [head, ...rest] = parts as [string, ...string[]];
+  if (holds(head) && rest[0] === "output") return { name: head, projection: rest.slice(1) };
+  if (head === "input" && rest.length) return { name: startId, projection: rest };
+  if (head === "system" && rest.length) return { name: `${SYSTEM_PREFIX}${rest[0]}`, projection: [] };
+  return null;
+}
 
 /** The options of `prepareTrace`. */
 export interface PrepareTraceOptions {

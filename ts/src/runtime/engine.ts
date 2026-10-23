@@ -518,9 +518,9 @@ export class FlowEngine {
     const { state, onEvent, onStream } = this;
     const trace = state.trace;
     const node = state.flow.nodes.get(nodeId)!;
-    // A derived node's input route names the commits its binding read in every run; without a
-    // trace it comes from the pool and the producer index, stays in memory with the outcome and
-    // is dropped after the commit.
+    // A derived node gets an input route in every run: from the retained trace when there is one,
+    // else from the pool and the producer index (sources are pool_commit seqs), kept in memory with
+    // the outcome and dropped after the commit.
     const derived = node.derived;
     const sourceResolver: SourceResolver | null =
       trace !== null

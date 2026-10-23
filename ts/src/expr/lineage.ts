@@ -31,8 +31,9 @@ export type RoutePath = readonly (string | number)[];
 /**
  * One accepted execution's value, or a path inside that value.
  *
- * Sequence zero addresses run inputs; other sequences identify the accepted node-start record.
- * Values themselves remain in the caller's source store. A `SourceRef` is frozen and compares by
+ * From a retained trace, sequence zero addresses run inputs and other sequences identify the
+ * accepted node-start record. A run with no trace uses the seq of the producing `pool_commit`
+ * instead (the START inputs get their run-start commit's seq, not zero). Values themselves remain in the caller's source store. A `SourceRef` is frozen and compares by
  * identity; match one by its `runId`, `executionSeq` and `path`, and key maps and sets by
  * `sourceKey(ref)`.
  */

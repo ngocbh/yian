@@ -190,6 +190,17 @@ function lastWriters(records: readonly RecordEnvelope[]): Map<string, number> {
   return writers;
 }
 
+/** The run start's commits, by key: those after `run_started` through the START inputs'. */
+function runStart(records: readonly RecordEnvelope[]): Map<string, number> {
+  const commits = new Map<string, number>();
+  for (const { kind, seq, payload } of records.slice(1)) {
+    expect(kind).toBe("pool_commit");
+    commits.set(payload["key"] as string, seq);
+    if (payload["key"] === StartNode.ID) return commits;
+  }
+  throw new Error("the log has no START inputs commit");
+}
+
 /** Every name `state`'s pool holds: its store keys and `system.<name>` for each system value. */
 const poolNames = (state: RunState) =>
   [...state.pool.store.keys(), ...[...state.pool.system.keys()].map((name) => `system.${name}`)].sort();
@@ -205,18 +216,21 @@ test("each pool name maps to the seq of the accepted pool_commit that last wrote
     expect(records[seq]!.payload["key"]).toBe(name);
   }
   // Run inputs and system values map to their run-start commits.
-  expect(["system.now", "system.run_id", "system.today"].map((name) => state.producers.get(name))).toEqual([1, 2, 3]);
+  const start = runStart(records);
+  for (const name of ["system.now", "system.run_id", "system.today"]) {
+    expect([name, state.producers.get(name)]).toEqual([name, start.get(name)!]);
+  }
 });
 
 test("the run start's commits enter the index at once; START's own commit replaces its inputs'", async () => {
-  const { live } = await liveRun(DOUBLES, { inputs: { xs: [1n, 2n] } });
-  expect(live.get(4)).toEqual([
-    [StartNode.ID, 4],
-    ["system.now", 1],
-    ["system.run_id", 2],
-    ["system.today", 3],
-  ]);
-  expect(live.get(7)).toContainEqual([StartNode.ID, 6]);
+  const { live, records } = await liveRun(DOUBLES, { inputs: { xs: [1n, 2n] } });
+  const start = runStart(records);
+  const inputs = start.get(StartNode.ID)!;
+  expect(live.get(inputs)).toEqual([...start].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  const success = records.find(({ kind, payload }) => kind === "node_succeeded" && payload["node_id"] === StartNode.ID)!;
+  const commit = Number(success.payload["commit"]);
+  expect(commit).toBeGreaterThan(inputs);
+  expect(live.get(success.seq)).toContainEqual([StartNode.ID, commit]);
 });
 
 test("an orphan commit never enters the index", async () => {
@@ -477,10 +491,9 @@ output: {n: "\${c.output}", rid: "\${system.run_id}"}
 test("a derived binding reading a system value: without a trace its leaf names the run-start commit; the trace gives none", async () => {
   const plain = await capturedRun(READS_SYSTEM);
   const end = plain.captured.find(({ nodeId }) => nodeId === EndNode.ID)!;
-  const runIdCommit = plain.records.find(({ kind, payload }) => kind === "pool_commit" && payload["key"] === "system.run_id")!;
-  expect(runIdCommit.seq).toBeLessThan(5);
+  const runIdCommit = runStart(plain.records).get("system.run_id")!;
   const plainLeaves = captureLeaves(end.capture);
-  expect(plainLeaves.map((leaf) => leaf.executionSeq)).toContain(runIdCommit.seq);
+  expect(plainLeaves.map((leaf) => leaf.executionSeq)).toContain(runIdCommit);
   expect(readNames([end], (leaf) => commitName(plain.records, leaf))).toEqual([[EndNode.ID, ["c", "system.run_id"]]]);
   // The retained trace resolves a system value with no source, so the learnable route has no leaf for it.
   const learnable = await capturedRun(READS_SYSTEM, { learnable: true });
@@ -492,9 +505,8 @@ test("a pool name missing from the producer index is a RangeError", () => {
   const pool = new VariablePool(StartNode.ID);
   pool.set("a", { x: 1n });
   pool.addSystem("run_id", "r1");
-  expect(() => resolveFromPool("a.output.x", pool, new Map(), "r1")).toThrow(RangeError);
   expect(() => resolveFromPool("a.output.x", pool, new Map(), "r1")).toThrow(
-    "pool name 'a' has no pool_commit in the producer index",
+    new RangeError("pool name 'a' has no pool_commit in the producer index"),
   );
   expect(() => resolveFromPool("system.run_id", pool, new Map(), "r1")).toThrow(RangeError);
   // A miss is still a miss, not an error.

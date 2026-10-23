@@ -124,6 +124,7 @@ import {
   SourceEntry,
   sameSourceEntry,
   SYSTEM_PREFIX,
+  sourcePath,
   TraceDelta,
   TraceOccurrence,
   TraceTerminal,
@@ -422,10 +423,8 @@ export interface PendingCommit {
  * Pair one lookup's value and presence in `pool` with the commit that wrote it, as
  * `RetainedTrace.resolve` pairs them from the retained trace, but with the seq of the name's
  * accepted `PoolCommitRecord` (`producers`) as its source, so a run without a trace can build a
- * node's input route.
- *
- * `<id>.output...` reads `<id>`, `input...` the START's value and `system.<key>` a system value;
- * anything else is a miss.
+ * node's input route. The paths read the same names (`sourcePath`). The one difference: a system
+ * value gets its run-start commit as its source, where the trace gives it none.
  *
  * @throws ExpressionError when a dotted segment of `path` is empty.
  * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
@@ -437,22 +436,12 @@ export function resolveFromPool(
   producers: ReadonlyMap<string, number>,
   runId: string,
 ): ResolvedValue {
-  const parts = path.trim().split(".");
-  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
-  const [head, ...rest] = parts as [string, ...string[]];
-  let name: string;
-  let projection: string[];
-  let typed: TypedValue | undefined;
-  if (pool.store.has(head) && rest[0] === "output") {
-    [name, projection, typed] = [head, rest.slice(1), pool.store.get(head)];
-  } else if (head === "input" && rest.length) {
-    [name, projection, typed] = [pool.startId, rest, pool.store.get(pool.startId)];
-  } else if (head === "system" && rest.length) {
-    // A system value is read whole, as the trace and the pool read it.
-    [name, projection, typed] = [`${SYSTEM_PREFIX}${rest[0]}`, [], pool.system.get(rest[0]!)];
-  } else {
-    return new ResolvedValue(null, false);
-  }
+  const read = sourcePath(path, pool.startId, (name) => pool.store.has(name));
+  if (read === null) return new ResolvedValue(null, false);
+  const { name, projection } = read;
+  const typed = name.startsWith(SYSTEM_PREFIX)
+    ? pool.system.get(name.slice(SYSTEM_PREFIX.length))
+    : pool.store.get(name);
   if (typed === undefined) return new ResolvedValue(null, false);
   let value = typed.toObject();
   for (const part of projection) {

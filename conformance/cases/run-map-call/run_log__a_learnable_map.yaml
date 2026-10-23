@@ -1,4 +1,4 @@
-# A learnable MAP over three items, so the redesign (#996) rebuilds each item's seed.
+# A learnable MAP over three items. The golden log pins each item's seed and capture.
 kind: run
 rules: [run-log]
 flow: |

@@ -1,4 +1,4 @@
-# A loop inside a loop's body, counting to four, so the redesign (#996) keeps nested expansion.
+# A loop inside a loop's body, counting to four. The golden log pins the nested expansion.
 kind: run
 rules: [run-log]
 flow: |

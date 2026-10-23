@@ -643,7 +643,7 @@ A case lists in `rules` the TS-era rules its expectation depends on (design #736
 | `llm` | how the TS LLM layer builds requests |
 | `code` | TS CODE bodies and their failures |
 | `failure-codes` | decision 36's TS-only failure codes |
-| `run-log` | the TS run log redesign (#996): the trace shows the TS log as written |
+| `run-log` | the TS run log redesign: the trace shows the TS log as written |
 
 ## Groups
 

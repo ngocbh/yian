@@ -1,7 +1,7 @@
-# A learnable AGENT run whose evidence and steps the run log redesign (#996) rebuilds. Reply 1
-# makes two unsafe calls, which run one at a time; reply 2 mixes two safe calls (`lookup` is
-# marked concurrency_safe) and an unsafe one; reply 3 is the text. Every tool call id is
-# scripted, so the golden log holds no made-up id.
+# A learnable AGENT run. Reply 1 makes two unsafe calls, which run one at a time; reply 2 mixes
+# two safe calls (`lookup` is marked concurrency_safe) and an unsafe one; reply 3 is the text.
+# The golden log pins the agent's recorded evidence: its interactions in that order and its
+# rendered prompt. Every tool call id is scripted, so the log holds no made-up id.
 kind: run
 rules: [run-log]
 flow: |

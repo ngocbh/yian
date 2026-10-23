@@ -1,5 +1,5 @@
-# A learnable loop whose body CALLs another def, so the redesign (#996) rebuilds a seed route
-# through a LOOP and a CALL.
+# A learnable loop whose body CALLs another def. The golden log pins the captures and seed
+# routes through a LOOP and a CALL.
 kind: run
 rules: [run-log]
 flow: |

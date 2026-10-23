@@ -1,6 +1,6 @@
 # A learnable chat loop whose turn output appends to the history with `+` and to the log with a
-# template, so the redesign (#996) rebuilds transforming bindings: the last turn's END binding
-# holds six messages (four carried in, two appended).
+# template. The golden log pins the captured transforming bindings: the last turn's END binding
+# holds six messages (four carried in, two appended) and an interpolation route.
 kind: run
 rules: [run-log]
 flow: |

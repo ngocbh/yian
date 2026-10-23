@@ -1374,8 +1374,12 @@ export async function main(
       });
       if (failure === undefined && rewrites !== undefined && rewrites.size > 0) {
         const path = join(casesDir, `${entry.id}.yaml`);
-        writeFileSync(path, rewriteCase(readFileSync(path, "utf8"), rewrites));
-        write(`wrote ${entry.id}: ${[...rewrites.keys()].join(", ")}`);
+        try {
+          writeFileSync(path, rewriteCase(readFileSync(path, "utf8"), rewrites));
+          write(`wrote ${entry.id}: ${[...rewrites.keys()].join(", ")}`);
+        } catch (error) {
+          failure = `--write-expect can't write expect back: ${failureText(error)}`;
+        }
       }
       if (Object.hasOwn(entry.case_, "pending")) {
         if (failure !== undefined) {
@@ -2607,13 +2611,13 @@ const BY_VALUE: ReadonlySet<string> = new Set(["events", "stream", "tool_calls"]
 
 /**
  * Throw a `CaseFailure` unless the results in `actual` are the ones `expect` holds: the raised
- * error, or the output, which compares numbers by value for a success. Results named in `skip`
- * aren't compared.
+ * error, or the output, which compares numbers by value for a success. With `rewrites`, each
+ * `REWRITTEN` result that differs goes there by name instead of failing.
  */
 function checkResults(
   expect: Case,
   actual: Record<string, unknown>,
-  skip: ReadonlySet<string> = new Set(),
+  rewrites?: Map<string, unknown>,
 ): void {
   if (Object.hasOwn(expect, "raises") && !Object.hasOwn(actual, "raises")) {
     const expected = str(get(expect["raises"] as Case, "class"));
@@ -2628,9 +2632,12 @@ function checkResults(
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
   }
   for (const name of [...REWRITTEN, "backward", "memory"]) {
+    if (!Object.hasOwn(expect, name)) continue;
     // The trace keeps kinds.
     const byValue = BY_VALUE.has(name);
-    if (Object.hasOwn(expect, name) && !skip.has(name)) {
+    if (rewrites !== undefined && REWRITTEN.includes(name)) {
+      if (!same(actual[name], expect[name], { byValue })) rewrites.set(name, actual[name]);
+    } else {
       compare(name, actual[name], expect[name], { byValue });
     }
   }
@@ -2811,6 +2818,34 @@ const OUTCOMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Return the node outcome entries of a run log's trace `entries`, each capture source's
+ * `execution_seq` replaced by the kind and node of the record it names: a learnable run's captures
+ * name a source's record by its seq, and a resume adds records, so a crash sweep compares the
+ * record instead.
+ */
+export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
+  const rename = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(rename);
+    if (!isMapping(value)) return;
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "execution_seq" && typeof item === "bigint") {
+        // The trace has one entry per log line, and a record's seq is its line index.
+        const entry = entries[Number(item)];
+        if (entry === undefined) {
+          throw new CaseFailure(`a capture source names seq ${item}, which the log doesn't hold`);
+        }
+        value[key] = `${String(entry[0])} ${String(entry[1])}`;
+      } else {
+        rename(item);
+      }
+    }
+  };
+  const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
+  rename(kept);
+  return kept;
+}
+
+/**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
  * `pending`, with no `host.models`, `host.steering`, `host.memory` or `host.stop`.
  */
@@ -2859,24 +2894,7 @@ export async function crashSweep(
   const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
-    const entries = trace(lines, flow);
-    // A learnable run's captures name each source's record by its seq, and a resume adds records,
-    // so a source is compared by the record's kind and node instead.
-    const rename = (value: unknown): void => {
-      if (Array.isArray(value)) value.forEach(rename);
-      if (!isMapping(value)) return;
-      for (const [key, item] of Object.entries(value)) {
-        if (key === "execution_seq" && typeof item === "bigint") {
-          const [kind, node] = entries[Number(item)] ?? [];
-          value[key] = `${String(kind)} ${String(node)}`;
-        } else {
-          rename(item);
-        }
-      }
-    };
-    const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
-    rename(kept);
-    return kept;
+    return sourcesByRecord(trace(lines, flow));
   };
   const expected = outcomes(uncutLog);
   const count = readRunLog(uncutLog).length;
@@ -2915,18 +2933,7 @@ export async function crashSweep(
  * instead of failing the case.
  */
 async function runRun(case_: Case, ctx: CaseContext): Promise<void> {
-  const expect = case_["expect"] as Case;
-  const actual = await actualRun(case_, ctx);
-  const rewrites = ctx.rewrites;
-  if (rewrites !== undefined) {
-    for (const name of REWRITTEN) {
-      const byValue = BY_VALUE.has(name);
-      if (Object.hasOwn(expect, name) && !same(actual[name], expect[name], { byValue })) {
-        rewrites.set(name, actual[name]);
-      }
-    }
-  }
-  checkResults(expect, actual, new Set(rewrites?.keys()));
+  checkResults(case_["expect"] as Case, await actualRun(case_, ctx), ctx.rewrites);
   if (ctx.crashSweep === true && sweepable(case_)) await crashSweep(case_, ctx);
 }
 
@@ -3008,9 +3015,12 @@ function updated(doc: Document, node: unknown, value: Value, flags: SameFlags): 
           : Math.max(kept[i + 1]![j]!, kept[i]![j + 1]!);
       }
     }
-    // A new item is in flow style when an old one holds a collection in flow style.
+    // A new item is in flow style when an old item is a flow collection holding a collection.
     const flow = olds.some(
-      (old) => isCollection(old) && old.flow && old.items.some((inner) => !isScalar(inner)),
+      (old) =>
+        isCollection(old) &&
+        old.flow &&
+        old.items.some((inner) => isCollection(isMap(old) ? (inner as { value: unknown }).value : inner)),
     );
     const items: unknown[] = [];
     let gone: unknown[] = [];
@@ -3022,8 +3032,9 @@ function updated(doc: Document, node: unknown, value: Value, flags: SameFlags): 
         gone = [];
         i += 1;
         j += 1;
-      } else if (j < value.length && (i === olds.length || kept[i]![j + 1]! >= kept[i + 1]![j]!)) {
-        // A new item between two matches takes the place of an old one dropped there, if any.
+      } else if (j < value.length && (i === olds.length || kept[i]![j + 1]! > kept[i + 1]![j]!)) {
+        // Between two matches, old items are dropped first, so a new item takes the place of a
+        // dropped one, if any, and keeps what of its text still holds.
         const old = gone.shift();
         items.push(old === undefined ? caseNode(doc, value[j]!, flow) : updated(doc, old, value[j]!, flags));
         j += 1;
@@ -3069,7 +3080,10 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
     return written.slice(start, end);
   };
   // Cases indent a list under a key one way or the other; keep the way `expect` has.
-  const indentSeq = cut(doc.toString(options(true)), "expect") === cut(text, "expect");
+  const indentSeq = [false, true].find(
+    (indent) => cut(doc.toString(options(indent)), "expect") === cut(text, "expect"),
+  );
+  if (indentSeq === undefined) throw new CaseFailure("the writer doesn't reproduce its text");
   for (const pair of (doc.get("expect") as YAMLMap).items) {
     const name = (pair.key as { value: string }).value;
     const value = results.get(name) as Value | undefined;

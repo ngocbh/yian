@@ -27,6 +27,7 @@ import {
   checkCase,
   compare,
   crashSweep,
+  sourcesByRecord,
   decode,
   expectRaises,
   KINDS as RUNNERS,
@@ -1466,6 +1467,35 @@ describe("main", () => {
     expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
   });
 
+  test("--write-expect changes a block entry in place, keeping its comment and style", async () => {
+    const kinds = { run: RUNNERS.run! };
+    const block = FORMS.replace(
+      "  - [node_succeeded, __end__, {value: {big: 9007199254740993, f: 2.0, id: <id:1>}}]\n",
+      "  - - node_succeeded\n    - __end__\n    # The output, as the flow binds it.\n" +
+        "    - value: {big: 9007199254740993, f: 2.0, id: <id:1>}\n",
+    );
+    expect(block).not.toBe(FORMS);
+    const edited = block.replace("    - value: {big: 9007199254740993,", "    - value: {big: 1,");
+    expect(edited).not.toBe(block);
+    const written = await run(["--write-expect"], { "a/forms.yaml": edited }, {}, kinds);
+    expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
+    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    expect(text).toBe(block.replace("kind: run\n", "kind: run\nrules: [run-log]\n"));
+  });
+
+  test("--write-expect fails a case whose expect it can't write back in its own text", async () => {
+    const kinds = { run: RUNNERS.run! };
+    // Padding inside braces is a spelling the writer doesn't keep.
+    const padded = FORMS.replace("{value: 1}]", "{ value: 2 }]");
+    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": padded }, {}, kinds);
+    expect(code).toBe(1);
+    expect(out[0]).toBe(
+      "FAIL a/forms: --write-expect can't write expect back: the writer doesn't reproduce its text",
+    );
+    expect(out.at(-1)).toBe("1 case: 0 passed, 1 failed, 0 pending");
+    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(padded);
+  });
+
   test("--write-expect leaves a case whose output differs as it is, and fails it", async () => {
     const kinds = { run: RUNNERS.run! };
     const wrong = FORMS.replace("output: {id: <id:1>, f: 2.0,", "output: {id: <id:1>, f: 3.0,")
@@ -1518,6 +1548,27 @@ run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: xy}
 `;
+
+describe("sourcesByRecord", () => {
+  test("names each capture source by its record's kind and node", () => {
+    const source = (seq: bigint) => ({ route: { kind: "source", source: { execution_seq: seq } } });
+    const entries = [
+      ["run_started", null],
+      ["node_started", "a"],
+      ["node_succeeded", "a", { forward_capture: source(1n) }],
+    ];
+    expect(sourcesByRecord(entries)).toEqual([
+      ["node_succeeded", "a", { forward_capture: { route: { kind: "source", source: { execution_seq: "node_started a" } } } }],
+    ]);
+  });
+
+  test("fails on a source naming a seq the log doesn't hold", () => {
+    const entries = [["node_succeeded", "a", { route: { source: { execution_seq: 7n } } }]];
+    expect(() => sourcesByRecord(entries)).toThrow(
+      new CaseFailure("a capture source names seq 7, which the log doesn't hold"),
+    );
+  });
+});
 
 describe("crashSweep", () => {
   const made: string[] = [];

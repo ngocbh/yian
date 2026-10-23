@@ -275,8 +275,9 @@ export function inlineToFile(message: Message, dir: string | null): Message {
  *
  * A request without file media is returned as is.
  *
- * @throws RangeError (as a rejection) when a `uri`, with symlinks followed, names no file inside
- *   the run's `media` folder (an absolute path elsewhere, a `..` escape, a symlink out, the log).
+ * @throws RangeError (as a rejection) when a `uri`, as written or with symlinks followed, names
+ *   no path inside the run's `media` folder (an absolute path elsewhere, a `..` escape, the log, a
+ *   symlink out, or a `media` folder that is itself a symlink).
  * @throws Error (as a rejection) naming the path when a file can't be read.
  */
 export async function fileToInline(request: Request, runDir: string): Promise<Request> {
@@ -296,14 +297,16 @@ export async function fileToInline(request: Request, runDir: string): Promise<Re
       }
       const uri = part.file!.uri;
       const path = resolve(runDir, uri);
+      const outside = new RangeError(`media file ${uri} is not inside the run's media folder`);
+      // Checked on the path as written first, so an escaping uri is refused whether or not it exists.
+      if (!path.startsWith(resolve(runDir, "media") + sep)) throw outside;
       let bytes: Buffer;
       try {
-        // Real paths, so a symlink can't lead a read out of the media folder.
-        const media = await realpath(join(runDir, "media"));
+        // Then on real paths, with only the run folder resolved, so neither a symlinked `media`
+        // folder nor a symlink inside it can lead a read out of the folder.
+        const media = join(await realpath(runDir), "media");
         const real = await realpath(path);
-        if (!real.startsWith(media + sep)) {
-          throw new RangeError(`media file ${uri} is not inside the run's media folder`);
-        }
+        if (!real.startsWith(media + sep)) throw outside;
         bytes = await readFile(real);
       } catch (error) {
         if (error instanceof RangeError) throw error;

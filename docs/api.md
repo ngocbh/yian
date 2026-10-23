@@ -2846,8 +2846,8 @@ place of `data` or `url`. A run's media files live in `<run folder>/media/<sha25
 (mode `0600`, the `media` folder `0700`), and a reference names one by its path relative to
 the run folder (`media/<sha256>.<ext>`), so a run folder copied elsewhere keeps its
 references. A request sent to a provider gets the bytes inline again, read from the run
-folder; a `uri` that names no file inside the run's `media` folder (symlinks followed) is
-refused. Nothing writes media files yet: the AGENT will store the media in its replies this
+folder; a `uri` that names no path inside the run's `media` folder, as written or with
+symlinks followed (a symlinked `media` folder included), is refused. Nothing writes media files yet: the AGENT will store the media in its replies this
 way.
 
 ## Blocking human interaction

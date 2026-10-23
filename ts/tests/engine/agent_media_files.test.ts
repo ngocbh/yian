@@ -210,10 +210,18 @@ test("a run folder copied elsewhere still inlines its media", async () => {
 });
 
 /**
- * A run folder `run` with a `media` folder, a log, and a file `outside.png` beside the run folder;
- * `escape` is a symlink under `media` to that outside file.
+ * A run folder `run` with a `media` folder and a log, a file `outside.png` beside it, and a
+ * symlink `media/escape.png` to that file; and a run folder `linked` whose `media` is a symlink
+ * to an outside folder holding `secret.png`.
  */
-function escapes(): { run: string; outside: string } {
+interface Escapes {
+  run: string;
+  outside: string;
+  linked: string;
+}
+
+/** Make the `Escapes` folders under a fresh folder. */
+function escapes(): Escapes {
   const base = folder();
   const run = join(base, "run");
   mkdirSync(join(run, "media"), { recursive: true });
@@ -221,20 +229,29 @@ function escapes(): { run: string; outside: string } {
   const outside = join(base, "outside.png");
   writeFileSync(outside, PNG);
   symlinkSync(outside, join(run, "media", "escape.png"));
-  return { run, outside };
+  const secret = join(base, "secret");
+  mkdirSync(secret);
+  writeFileSync(join(secret, "secret.png"), PNG);
+  const linked = join(base, "linked");
+  mkdirSync(linked);
+  symlinkSync(secret, join(linked, "media"));
+  return { run, outside, linked };
 }
 
 test.each([
-  ["an absolute uri", (outside: string) => outside],
-  ["a uri with a .. segment", () => "media/../../outside.png"],
-  ["a uri that is only ..", () => ".."],
-  ["a symlink under media to an outside file", () => "media/escape.png"],
-  ["the run's log", () => "log.jsonl"],
-])("fileToInline refuses %s, which isn't a file in the run's media folder", async (_, uri) => {
-  const { run, outside } = escapes();
-  const part = new MediaPart({ mime: "image/png", file: { uri: uri(outside) } });
-  const error = await rejection(fileToInline(new Request({ messages: [new Message({ role: "user", parts: [part] })] }), run));
-  expect(error).toEqual(new RangeError(`media file ${uri(outside)} is not inside the run's media folder`));
+  ["an absolute uri", ({ outside }: Escapes) => outside, ({ run }: Escapes) => run],
+  ["a uri with a .. segment", () => "media/../../outside.png", ({ run }: Escapes) => run],
+  ["a uri that is only ..", () => "..", ({ run }: Escapes) => run],
+  ["a .. uri naming no file", () => "media/../../missing.png", ({ run }: Escapes) => run],
+  ["a symlink under media to an outside file", () => "media/escape.png", ({ run }: Escapes) => run],
+  ["the run's log", () => "log.jsonl", ({ run }: Escapes) => run],
+  ["a file under a media folder that is a symlink out", () => "media/secret.png", ({ linked }: Escapes) => linked],
+])("fileToInline refuses %s, which isn't a file in the run's media folder", async (_, uri, runDir) => {
+  const fixture = escapes();
+  const part = new MediaPart({ mime: "image/png", file: { uri: uri(fixture) } });
+  const request = new Request({ messages: [new Message({ role: "user", parts: [part] })] });
+  const error = await rejection(fileToInline(request, runDir(fixture)));
+  expect(error).toEqual(new RangeError(`media file ${uri(fixture)} is not inside the run's media folder`));
 });
 
 // --- the run folder reaches the AGENT --- //

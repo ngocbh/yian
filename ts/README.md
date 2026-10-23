@@ -1359,6 +1359,10 @@ YIAN_UPDATE_LICENSES=1 bun test tests/packaging.test.ts   # rewrite src/cli/lice
 `bun test` starts in `ts/`. `test:node` needs Node >= 22.18: it loads `tests/node_runner.ts`, which
 runs the `bun:test` files on `node:test`, then the same preload.
 
+The preload gives each test a fresh dir inside one `yian-test-*` dir per process under `$TMPDIR`,
+removed when the run ends (on Bun by the preload's `afterAll`, on Node at exit). A killed run, or a
+Bun run stopped by `--bail`, leaves that one dir.
+
 `tests/packaging.test.ts` checks `src/cli/licenses.ts`, the text `yian --licenses` prints, against
 `NOTICE`, Bun's license, the license files of the packages the binaries bundle (read from
 `node_modules`) and those of the packages copied into their `dist/`. After a dependency change,

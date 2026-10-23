@@ -64,6 +64,9 @@
  * yields, rejecting with its reason within 5 s; an already-aborted signal rejects before a worker
  * starts; a process whose spinning body was stopped exits on its own, on Bun and, with
  * `YIAN_TEST_NODE`, built on Node; and in a pooled run a busy CODE node doesn't block a sibling.
+ * With a `codeRoot`, the load check passes a reference inside it (a `../` that stays inside
+ * included) and refuses one outside it, by `../` or through a symlinked file or directory; without
+ * one it confines nothing.
  *
  * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
  * (Python `ast`; TS has no load-time `return` check);
@@ -78,7 +81,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -971,6 +974,65 @@ test("the load check refuses a reference to a missing file", async () => {
 
   expect((error as Error).constructor).toBe(RangeError);
   expect((error as Error).message).toBe(`\`code:\` file './missing.ts' does not exist in '${helpers}'`);
+});
+
+/** A temporary directory holding a code root (`root/`) and a file outside it (`out/h.ts`). */
+let confined: string;
+
+beforeAll(() => {
+  confined = mkdtempSync(join(tmpdir(), "yian-code-root-"));
+  for (const dir of ["root/in", "root/sub", "out"]) mkdirSync(join(confined, dir), { recursive: true });
+  for (const file of ["root/in/h.ts", "out/h.ts"]) {
+    writeFileSync(join(confined, file), "export function fn(inputs) { return 1 }\n");
+  }
+  symlinkSync(join(confined, "out", "h.ts"), join(confined, "root", "link.ts"));
+  symlinkSync(join(confined, "out"), join(confined, "root", "lib"));
+});
+
+afterAll(() => {
+  rmSync(confined, { recursive: true, force: true });
+});
+
+test("the load check passes a reference inside codeRoot", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+
+  await new CodeNode("r", { code: "./h.ts:fn", baseDir: join(confined, "root", "in") }).check({ codeRoot });
+  await new CodeNode("r", { code: "../in/h.ts:fn", baseDir: join(confined, "root", "sub") }).check({ codeRoot });
+});
+
+test("the load check refuses a ../ reference outside codeRoot", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const node = new CodeNode("r", { code: "../out/h.ts:fn", baseDir: join(confined, "root") });
+
+  const error = await rejected(node.check({ codeRoot }));
+
+  expect((error as Error).constructor).toBe(RangeError);
+  const real = realpathSync(join(confined, "out", "h.ts"));
+  expect((error as Error).message).toBe(
+    `\`code:\` file '../out/h.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
+  );
+});
+
+test("the load check refuses a symlink pointing outside codeRoot", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const link = new CodeNode("r", { code: "./link.ts:fn", baseDir: join(confined, "root") });
+
+  const error = await rejected(link.check({ codeRoot }));
+
+  expect((error as Error).constructor).toBe(RangeError);
+  const real = realpathSync(join(confined, "out", "h.ts"));
+  expect((error as Error).message).toBe(
+    `\`code:\` file './link.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
+  );
+  const dir = new CodeNode("r", { code: "./lib/h.ts:fn", baseDir: join(confined, "root") });
+  expect(await rejected(dir.check({ codeRoot }))).toBeInstanceOf(RangeError);
+});
+
+test("the load check without codeRoot passes a reference outside any root", async () => {
+  const node = new CodeNode("r", { code: "../out/h.ts:fn", baseDir: join(confined, "root") });
+
+  await node.check();
+  await node.check({ codeRoot: null });
 });
 
 test("the load check passes a reference to an existing file, ../ included, and imports nothing", async () => {

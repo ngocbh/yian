@@ -1,0 +1,31 @@
+# TS-only: a list `prompt:` must hold at least one message.
+kind: load
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  input:
+    history: !list(Msg)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt: []
+  output: ${reply.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'reply' (kind=agent): `prompt:` must hold at least one message"
+      frames:
+      - label: flow.yaml
+        range: [18, 13, 18, 15]

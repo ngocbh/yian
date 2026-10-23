@@ -18,22 +18,32 @@
  * The profile learner is the backend's `createModel` option, reading the test's current `Learner`
  * (Python patches `profile.model_from_config`). The killed attempt's store throws a plain `Error`
  * after its write, a host failure that rejects `backward` (Python raises `SystemExit`).
+ *
+ * New (TS only): a host `MarkdownStore` whose versions are git blob ids, through the package root's
+ * `ProfileMemory`: the round trip, the `run_started` snapshot, the read of the recorded version
+ * by a resumed run's backward, and a store that dropped it.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
+import { type MarkdownStore, MarkdownVersionMismatch, ProfileMemory } from "../../src/index.ts";
 import { EventStream } from "../../src/llm/events.ts";
 import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import type { JsonObject } from "../../src/memory/contracts.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
+import { type JsonObject, MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
-import { JsonlRunLog, MemoryCommitFailedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
+import {
+  BackwardStartedRecord,
+  JsonlRunLog,
+  MemoryCommitFailedRecord,
+  RunStartedRecord,
+} from "../../src/runtime/log.ts";
 import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "./run_state_fixtures.ts";
 
 const CHAT = `id: chat
@@ -116,7 +126,11 @@ nodes:
 output: \${reply.output}
 `;
 
-const LEARNER_CONFIG = { provider: "ollama", model: "local-profiler" };
+// Typed as `runFlow`'s `llmConfig`: a host passes ProfileMemory the same config it passes a run.
+const LEARNER_CONFIG: Readonly<Record<string, unknown>> = {
+  provider: "ollama",
+  model: "local-profiler",
+};
 
 /** Stub profile learner that can await a side effect before replying (Python's `_Learner`). */
 class Learner extends ScriptedModel {
@@ -163,7 +177,7 @@ afterEach(() => {
 });
 
 /** A profile backend over `store`, learned by the test's current `learner`. */
-function backend(store: FileMarkdownStore): ProfileMemory {
+function backend(store: MarkdownStore): ProfileMemory {
   return new ProfileMemory(store, {
     llmConfig: LEARNER_CONFIG,
     env,
@@ -383,4 +397,155 @@ test("an attempt killed after its write is unknown and findable in provenance", 
   expect([input["seen_profile"], input["current_profile"]]).toEqual(["# Ada\n", "# Ada\n- Brief.\n"]);
   expect((await store.read())[0]).toBe("# Ada\n- Brief.\n");
   expect(provenance()).toHaveLength(2);
+});
+
+/** Git's blob id of `text`'s UTF-8 bytes: hex SHA-1 of `"blob <length>\0"` and the bytes. */
+function blobId(text: string): string {
+  return createHash("sha1").update(`blob ${Buffer.byteLength(text, "utf8")}\0${text}`, "utf8").digest("hex");
+}
+
+/** Hex SHA-256 of `text`'s UTF-8 bytes. */
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** A git-like host store: versions are blob ids, and every version it handed out stays readable. */
+class BlobStore implements MarkdownStore {
+  readonly versions = new Map<string, string>();
+  current: string;
+  readonly reads: (string | null)[] = [];
+
+  constructor() {
+    // Seeded, so the empty document's version was really handed out.
+    this.current = blobId("");
+    this.versions.set(this.current, "");
+  }
+
+  // Synchronous, as a host may answer at once.
+  read(version: string | null = null): readonly [string, string] {
+    this.reads.push(version);
+    if (version === null) return [this.versions.get(this.current)!, this.current];
+    const text = this.versions.get(version);
+    if (text === undefined) throw new RangeError("unknown version");
+    return [text, version];
+  }
+
+  // Async, to cover the promise form.
+  async write(text: string, { baseVersion }: { baseVersion: string }): Promise<string> {
+    if (baseVersion !== this.current) throw new MarkdownVersionMismatch(baseVersion, this.current);
+    this.current = blobId(text);
+    this.versions.set(this.current, text);
+    return this.current;
+  }
+
+  /** Drop `version`, as a store breaking the keep-every-version contract would. */
+  forget(version: string): void {
+    this.versions.delete(version);
+  }
+}
+
+const SEED = "# Ada\n- Works on reefs.\n";
+const EDITED = "# Ada\n- Edited later.\n";
+
+test("a host store with blob id versions round-trips through a public run", async () => {
+  expect(blobId("")).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+  const store = new BlobStore();
+  await store.write(SEED, { baseVersion: store.current });
+  const memory = backend(store);
+  const model = chat(["Hello."]);
+  const registry = new Map([["profile", memory]]);
+  const result = await runWith(await loadFlow(CHAT), { message: "hi" }, registry, model, { learnable: true, env });
+  expect(model.requests[0]!.messages[0]!.text()).toContain(JSON.stringify(SEED));
+
+  learner = new Learner("# Ada\n- Works on reefs.\n- Prefers brief replies.");
+  const outcome = await result.backward("Keep replies brief.");
+  expect(outcome.failure).toBeNull();
+  expect(outcome.status).toBe("succeeded");
+  const updated = "# Ada\n- Works on reefs.\n- Prefers brief replies.\n";
+  expect(store.versions.get(store.current)).toBe(updated);
+  expect(store.current).toBe(blobId(updated));
+  expect(store.current).toMatch(/^[0-9a-f]{40}$/);
+  expect(await memory.read()).toEqual([updated, blobId(updated)]);
+  for (const text of ["", SEED, updated]) {
+    expect(await memory.read(blobId(text))).toEqual([text, blobId(text)]);
+  }
+});
+
+test("the run started snapshot is a reference and a hash, never the text", async () => {
+  const store = new BlobStore();
+  await store.write(SEED, { baseVersion: store.current });
+  const path = join(dir, "run.jsonl");
+  const registry = new Map([["profile", backend(store)]]);
+  await runWith(await loadFlow(CHAT), { message: "hi" }, registry, chat(["Hello."], 0), { log: path, env });
+  const log = JsonlRunLog.resume(path);
+  try {
+    const started = log.records()[0]!.record as RunStartedRecord;
+    expect(started.memorySnapshots).toHaveLength(1);
+    expect(started.memorySnapshots![0]!.snapshot).toEqual({
+      format: "yian.profile_memory",
+      version: 1n,
+      profile_version: blobId(SEED),
+      text_sha256: sha256(SEED),
+    });
+  } finally {
+    log[Symbol.dispose]();
+  }
+  // Only the first line: later lines, the AGENT's evidence, do hold the text.
+  const first = readFileSync(path, "utf8").split("\n")[0]!;
+  expect(JSON.parse(first).kind).toBe("run_started");
+  expect(first).not.toContain("Works on reefs");
+});
+
+test("backward after resuming a finished run asks the host store for the recorded blob version", async () => {
+  const store = new BlobStore();
+  await store.write(SEED, { baseVersion: store.current });
+  const flow = await loadFlow(CHAT);
+  const path = join(dir, "run.jsonl");
+  const registry = new Map([["profile", backend(store)]]);
+  await runWith(flow, { message: "hi" }, registry, chat(["Hello."], 0), { log: path, learnable: true, env });
+  await store.write(EDITED, { baseVersion: blobId(SEED) });
+  store.reads.length = 0;
+
+  const resumed = await resumeWith(flow, path, new Map([["profile", backend(store)]]), chat([]), { env });
+  // A finished run opens no memory on resume; backward does.
+  expect(store.reads).toEqual([]);
+  learner = new Learner("# Ada\n- Edited later.\n- Brief.");
+  const outcome = await resumed.backward("Be brief.");
+  expect(outcome.failure).toBeNull();
+  expect(outcome.status).toBe("succeeded");
+  expect(store.reads).toEqual([blobId(SEED), null]);
+  const input = material(learner);
+  expect(input["seen_profile"]).toBe(SEED);
+  expect(input["current_profile"]).toBe(EDITED);
+  expect(store.versions.get(store.current)).toBe("# Ada\n- Edited later.\n- Brief.\n");
+});
+
+test("a host store that dropped the recorded version cannot reopen the run", async () => {
+  const store = new BlobStore();
+  await store.write(SEED, { baseVersion: store.current });
+  const flow = await loadFlow(CHAT);
+  const path = join(dir, "run.jsonl");
+  const registry = new Map([["profile", backend(store)]]);
+  await runWith(flow, { message: "hi" }, registry, chat(["Hello."], 0), { log: path, learnable: true, env });
+  await store.write(EDITED, { baseVersion: blobId(SEED) });
+  store.forget(blobId(SEED));
+
+  const resumed = await resumeWith(flow, path, new Map([["profile", backend(store)]]), chat([]), { env });
+  const error = await rejected(resumed.backward("Be brief."));
+  expect(error).toBeInstanceOf(MemorySetupError);
+  expect((error as MemorySetupError).message).toBe(
+    "memory 'profile' could not open its run session: recorded profile version cannot be restored",
+  );
+  const cause = (error as MemorySetupError).cause as MemoryOperationError;
+  expect(cause).toBeInstanceOf(MemoryOperationError);
+  expect([cause.stage, cause.code]).toEqual(["open_run", "profile.snapshot_unavailable"]);
+  expect(cause.cause).toBeInstanceOf(RangeError);
+  expect((cause.cause as RangeError).message).toBe("unknown version");
+  expect(resumed.backwardOutcome).toBeNull();
+  const log = JsonlRunLog.resume(path);
+  try {
+    expect(log.records().some((envelope) => envelope.record.constructor === BackwardStartedRecord)).toBe(false);
+  } finally {
+    log[Symbol.dispose]();
+  }
 });

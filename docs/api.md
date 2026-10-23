@@ -2819,6 +2819,14 @@ Changed (TS yian): `JsonlRunLog` also creates the empty lock file `<log>.lock` b
 the log when it is missing, with mode `0600` narrowed by the umask, and leaves it in
 place.
 
+Changed (TS yian): a run gets a folder of its own. Fresh `yian run FLOW` writes
+`~/.yian/runs/<run_id>/log.jsonl`, making the run's folder with mode `0700`. A library
+host gets the same layout under its own runs folder from `runLogPath(runsDir, runId)`
+(`@ngocbh/yian/run`), which makes `<runsDir>/<runId>` and returns its `log.jsonl`
+path. A run's folder is the folder that holds its log, and the files the run writes
+beside the log (today its lock file) go only there, so a host that passes a `log`
+path of its own keeps one run per folder.
+
 ## Blocking human interaction
 
 An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the

@@ -17,15 +17,12 @@
  * plain questions gate) is a cross-node desugar and stays a graph stage; this descriptor only
  * checks the block's shape and carries it as written.
  *
- * Knows about: diagnostics, compose source and helpers, expr (template scanning), the AGENT reader
+ * Knows about: diagnostics, compose source and helpers, the AGENT reader
  *              (`MODE_REMOVED_FIX`, `retriesError`), nodes (contracts and human_input) and typesys.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { ExpressionError } from "../../expr/expressions.ts";
-import { isBareName, type Tree } from "../../expr/grammar.ts";
-import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts";
 import { isExactly, ValueContract } from "../../nodes/contracts.ts";
 import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
 import { pythonTypeName } from "../../typesys/types.ts";
@@ -48,8 +45,10 @@ import {
   NodeDescriptor,
   type NodeDescriptorFields,
   notTextError,
+  rangeAt,
   rejectNonText,
   siteKey,
+  wholeRefName,
 } from "./base.ts";
 
 /** The keys the adaptive desugar reads from an `adaptive_questions:` block. */
@@ -358,22 +357,6 @@ function nonTextQuestionField(questions: readonly unknown[]): [(string | number)
 }
 
 /**
- * Return the range of the value at `path` under `cursor`, or `null` when it has none.
- *
- * `null` also covers a path the cursor can't walk (such as past a recursive alias cut), so the
- * caller's error falls back to an enclosing range.
- */
-function rangeAt(cursor: SourceCursor, path: readonly (string | number)[]): SourceRange | null {
-  try {
-    for (const step of path) cursor = cursor.child(step);
-  } catch (error) {
-    if (error instanceof SourceAccessError) return null;
-    throw error;
-  }
-  return cursor.range;
-}
-
-/**
  * Return the range of `key` in the mapping under `cursor`, or `null` when it has none.
  *
  * `null` also covers a mapping past a recursive alias cut, so the caller's error falls back to
@@ -386,25 +369,6 @@ function keyRange(cursor: SourceCursor, key: string): SourceRange | null {
     if (error instanceof SourceAccessError) return null;
     throw error;
   }
-}
-
-/**
- * Return the input name when `text` is exactly one `${name}` span, else `null`.
- *
- * `null` also covers surrounding text, a dotted path, a call, an operator, and a span that does
- * not parse.
- */
-function wholeRefName(text: string): string | null {
-  let segments: TemplateSegment[];
-  try {
-    segments = scanTemplate(text);
-  } catch (error) {
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
-  const [segment] = segments;
-  if (segments.length !== 1 || !(segment instanceof Span) || !isBareName(segment.tree)) return null;
-  return String((segment.tree as Tree).children[0]);
 }
 
 /** Return the answer-schema entry for field `name` of type `typ`. */

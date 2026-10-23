@@ -63,7 +63,15 @@ import {
 } from "../../nodes/contracts.ts";
 import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isListKind, isRecord, jsTypeName, listElementKind, Type } from "../../typesys/values.ts";
+import {
+  canonicalTypeLabel,
+  isListKind,
+  isRecord,
+  jsTypeName,
+  listElementKind,
+  Type,
+  ValueKind,
+} from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { type Env, envReadType, narrowedReadError } from "../helpers/narrowing_facts.ts";
@@ -79,6 +87,37 @@ import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
 import type { Narrowing } from "./narrowing.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
+
+/**
+ * Return whether a value of `typ` can be a prompt message (a record with non-null `role` and
+ * `text: str`) or, with `list`, a list of them. `object` and `Any` can; a union can when every member can.
+ */
+function holdsMessages(typ: Type, list: boolean): boolean {
+  if (typ.variants !== undefined) return typ.variants.every((variant) => holdsMessages(variant, list));
+  if (typ.kind === ValueKind.ANY) return true;
+  if (typ.kind === ValueKind.OBJECT) {
+    if (typ.fields === undefined) return true;
+    const role = typ.fields.get("role");
+    const text = typ.fields.get("text");
+    // A nullable `role` or `text` could splice a null, which the render refuses.
+    return role?.kind === ValueKind.STRING && !role.nullable && text?.kind === ValueKind.STRING && !text.nullable;
+  }
+  if (list && (typ.kind === ValueKind.LIST_OBJECT || typ.kind === ValueKind.LIST_ANY)) {
+    return typ.element === undefined || holdsMessages(typ.element, false);
+  }
+  return false;
+}
+
+/**
+ * Return the type label of a spliced prompt local whose declared type can't hold messages, or
+ * `null` when it can or its type isn't known.
+ */
+function spliceTypeError(local: LocalInput | undefined): string | null {
+  if (local === undefined || local.alternatives.length === 0) return null;
+  const types = local.alternatives.map((contract) => outputContractType(contract));
+  if (types.some((typ) => typ === null || holdsMessages(typ, true))) return null;
+  return canonicalTypeLabel(types[0]!);
+}
 
 /**
  * Heads forbidden in a strict prompt (always trigger the bespoke hint). `input`/`system`/`item` are
@@ -424,22 +463,44 @@ export function validateReferences(
       for (const variable of node.variables) {
         if (variable.contract !== null) promptContracts.set(variable.name, new LocalInput([variable.contract]));
       }
-      for (const [fieldName, template] of [
-        ["prompt", node.prompt],
-        ["system_prompt", node.systemPrompt],
-      ] as const) {
-        if (!template) continue;
+      const promptSite = {
+        noun: "input or variable",
+        hintTail: "a strict AGENT prompt",
+        contracts: promptContracts,
+        partialUnionFields,
+      };
+      const promptRange = franges.get(siteKey("field", "prompt")) ?? nodeRange;
+      if (typeof node.prompt === "string") {
+        const where = result.siteName(nodeId, "prompt");
+        if (node.prompt) checkTemplate(where, node.prompt, declared, promptRange, promptSite);
+      } else {
+        // A list prompt: each message's text is a template; a splice names a local holding messages.
+        node.prompt.forEach((item, index) => {
+          const where = `${result.siteName(nodeId, "prompt")}[${index}]`;
+          const rng = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
+          if ("text" in item) {
+            if (item.text) checkTemplate(where, item.text, declared, rng, promptSite);
+            return;
+          }
+          const ref = `\${${item.splice}}`;
+          checkTemplate(where, ref, declared, rng, promptSite);
+          const label = declared.has(item.splice) ? spliceTypeError(promptContracts.get(item.splice)) : null;
+          if (label !== null) {
+            errors.push([
+              `${where}: ${ref} is \`${label}\`, which can't hold messages; splice a record with \`role\` and ` +
+                "`text: str`, or a list of them",
+              rng,
+            ]);
+          }
+        });
+      }
+      if (node.systemPrompt) {
         checkTemplate(
-          result.siteName(nodeId, fieldName),
-          template,
+          result.siteName(nodeId, "system_prompt"),
+          node.systemPrompt,
           declared,
-          franges.get(siteKey("field", fieldName)) ?? nodeRange,
-          {
-            noun: "input or variable",
-            hintTail: "a strict AGENT prompt",
-            contracts: promptContracts,
-            partialUnionFields,
-          },
+          franges.get(siteKey("field", "system_prompt")) ?? nodeRange,
+          promptSite,
         );
       }
     } else if (node instanceof HumanInputNode) {

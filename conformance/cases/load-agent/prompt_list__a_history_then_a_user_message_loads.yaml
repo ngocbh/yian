@@ -1,0 +1,27 @@
+# TS-only: an AGENT `prompt:` may be a list: a spliced history, then a user message.
+kind: load
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  input:
+    history: !list(Msg)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - ${history}
+        - user: ${message}
+  output: ${reply.output}
+expect:
+  load: ok

@@ -1,0 +1,35 @@
+# TS-only: a spliced `${name}` must name an input or variable of the node.
+kind: load
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  input:
+    history: !list(Msg)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - ${transcript}
+        - user: ${message}
+  output: ${reply.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'reply' prompt[0]: ${transcript} is not a declared input or variable
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 19, 22]

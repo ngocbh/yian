@@ -32,6 +32,7 @@ import {
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../../src/skills/tool.ts";
@@ -166,7 +167,8 @@ function agent(
   };
   const ctx: AgentRunContext = {
     nodeId: options.nodeId ?? "n",
-    prompt: "go",
+    messages: [userMessage("go")],
+    promptText: "go",
     tools,
     llmConfig: CONFIG,
     outputType: null,

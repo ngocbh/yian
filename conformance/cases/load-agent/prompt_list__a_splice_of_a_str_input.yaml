@@ -1,0 +1,35 @@
+# TS-only: a spliced input whose type can't hold messages is refused, naming the type.
+kind: load
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  input:
+    history: !str
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - ${history}
+        - user: ${message}
+  output: ${reply.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'reply' prompt[0]: ${history} is `str`, which can't hold messages; splice a record with `role` and `text: str`, or a list of them
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 19, 19]

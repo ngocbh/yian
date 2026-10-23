@@ -1,0 +1,89 @@
+# TS-only: an AGENT `prompt:` list sends the system message, then the spliced history's turns
+# with their roles, then the user message, as separate messages.
+# The flow returns the history with the new turn appended.
+kind: run
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  defs:
+    respond:
+      input:
+        history: !list(Msg)
+        message: !str
+      nodes:
+        reply:
+          kind: agent
+          input:
+            history: ${input.history}
+            message: ${input.message}
+          output: str
+          system_prompt: You are a helpful conversational assistant.
+          prompt:
+            - ${history}
+            - user: ${message}
+      output:
+        history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    history: !list(Msg)
+    message: !str
+  nodes:
+    turn:
+      kind: call
+      call: respond
+      input:
+        history: ${input.history}
+        message: ${input.message}
+  output: ${turn.output}
+inputs:
+  history:
+  - {role: user, text: Hi}
+  - {role: assistant, text: 'Hello! How can I help?'}
+  message: What is 2 + 2?
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    turn/reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '4'
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are a helpful conversational assistant.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Hi
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: Hello! How can I help?
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: What is 2 + 2?
+expect:
+  output:
+    status: succeeded
+    output:
+      history:
+      - {role: user, text: Hi}
+      - {role: assistant, text: 'Hello! How can I help?'}
+      - {role: user, text: 'What is 2 + 2?'}
+      - {role: assistant, text: '4'}

@@ -1,0 +1,33 @@
+# TS-only: a prompt list item can't be `system:`; the system message is `system_prompt:`.
+kind: load
+python_skip: "the prompt: list style is TS-only (#1002)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Msg:
+      role: Literal(user, assistant)
+      text: str
+  input:
+    history: !list(Msg)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - system: Be brief.
+        - user: ${message}
+  output: ${reply.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'reply' (kind=agent): a prompt list item can't be `system:`; use `system_prompt:`"
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 20, 7]

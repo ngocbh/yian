@@ -43,8 +43,10 @@ export class ToolIterationLimitError extends AgentLoopError {
 /** What the AGENT loop receives to run one invocation. */
 export interface AgentRunContext {
   readonly nodeId: string;
-  /** The prompt, already rendered. */
-  readonly prompt: string;
+  /** The rendered prompt's messages, after the system message; the last is the user's. */
+  readonly messages: readonly Message[];
+  /** The last message's text, which evidence records as the prompt. */
+  readonly promptText: string;
   /** The granted tool and group ids. */
   readonly tools: readonly string[];
   /** The effective model config, or `null`. */

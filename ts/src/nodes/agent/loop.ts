@@ -68,8 +68,9 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * `ReplayDegraded`. Model calls are numbered from 1 in call order; with `ctx.steps`, each retry
  * of call `n` first records a `model_attempt` step for it (`retrySettings`).
  *
- * The model reads the system prompt (with the recalled memory sections), the prompt, then each
- * iteration's steers, replies and tool results; a final structured call after tools reads them all.
+ * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
+ * then each iteration's steers, replies and tool results; a final structured call after tools
+ * reads them all.
  *
  * @returns The checked structured value, or the final reply's visible text; after a host
  *   interrupt, the latest reply's visible text (`""` before any).
@@ -85,7 +86,6 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
 export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   const systemPrompt = systemPromptWithMemory(ctx.baseSystemPrompt, ctx.memoryContext.sections);
   const system = new Message({ role: "system", parts: [new TextPart(systemPrompt)] });
-  const user = userMessage(ctx.prompt);
   const live = liveSinks(ctx);
   checkStopped(ctx);
   // Each turn's request replays every earlier one, so a reason would otherwise repeat per turn.
@@ -112,8 +112,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   // Every model call of this start, chat or structured, takes the next call number.
   let modelCalls = 0;
   const nextCall = () => retrySettings(ctx, ++modelCalls);
-  const messages = [system, user];
-  ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.prompt, ctx.memoryContext.sections);
+  const messages = [system, ...ctx.messages];
+  ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.promptText, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
   const structuredOptions = {
     retries: ctx.retries,

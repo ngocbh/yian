@@ -27,7 +27,9 @@ import {
   reprText,
   type SourceRange,
 } from "../../diagnostics.ts";
-import { wholeSpanInterior } from "../../expr/grammar.ts";
+import { ExpressionError } from "../../expr/expressions.ts";
+import { isBareName, type Tree, wholeSpanInterior } from "../../expr/grammar.ts";
+import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts";
 import type { ValidationError } from "../../llm_clients/provider_blocks.ts";
 import type { Node } from "../../nodes/base.ts";
 import {
@@ -47,7 +49,7 @@ import { readType } from "../helpers/types.ts";
 import { checkEnvValues } from "../helpers/value_nesting.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
-import type { SourceCursor } from "../source/index.ts";
+import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import type { ChildResolver } from "./resolver.ts";
 
 /**
@@ -238,6 +240,41 @@ export function rejectNonText(
       { range },
     );
   }
+}
+
+/**
+ * Return the range of the value at `path` under `cursor`, or `null` when it has none.
+ *
+ * `null` also covers a path the cursor can't walk (such as past a recursive alias cut), so the
+ * caller's error falls back to an enclosing range.
+ */
+export function rangeAt(cursor: SourceCursor, path: readonly (string | number)[]): SourceRange | null {
+  try {
+    for (const step of path) cursor = cursor.child(step);
+  } catch (error) {
+    if (error instanceof SourceAccessError) return null;
+    throw error;
+  }
+  return cursor.range;
+}
+
+/**
+ * Return the input name when `text` is exactly one `${name}` span, else `null`.
+ *
+ * `null` also covers surrounding text, a dotted path, a call, an operator, and a span that does
+ * not parse.
+ */
+export function wholeRefName(text: string): string | null {
+  let segments: TemplateSegment[];
+  try {
+    segments = scanTemplate(text);
+  } catch (error) {
+    if (error instanceof ExpressionError) return null;
+    throw error;
+  }
+  const [segment] = segments;
+  if (segments.length !== 1 || !(segment instanceof Span) || !isBareName(segment.tree)) return null;
+  return String((segment.tree as Tree).children[0]);
 }
 
 /**

@@ -172,6 +172,23 @@ test("one file reached by two paths is recorded once", async () => {
   });
 });
 
+test("a root given as text that uses the file on disk under its own name records both", async () => {
+  const dir = freshDir("self");
+  writeTree(dir, { "flow.yaml": leafOut("old") });
+  const root =
+    "id: root\nname: root\nuses:\n  old: flow\nnodes:\n  c:\n    kind: call\n    call: old\noutput: ${c.output}\n";
+
+  const loaded = await loadFlow(root, { searchPaths: [dir], baseDir: dir, sourceLabel: "flow.yaml" });
+
+  expect(sourceOf(loaded)).toEqual({
+    root: "flow.yaml",
+    dir: realpathSync(dir),
+    files: { "flow.yaml": file(root, { flow: "flow.yaml~1" }), "flow.yaml~1": file(leafOut("old")) },
+  });
+  const again = await loadFlowSource(loaded.source!);
+  expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
+});
+
 test("a chain 50 files deep, and imports shared along several paths, record each file once", async () => {
   const dir = freshDir("chain");
   /** A flow `name` importing each of `refs`, calling none. */

@@ -767,7 +767,9 @@ async function flowSource(
     }
     return node;
   };
-  const root = diskNode(join(dir, basename(sourceLabel)), rootFile);
+  // Built apart from the disk files: a file on disk may share the root's path with other text.
+  const root: SourceNode = { path: join(dir, basename(sourceLabel)), text: rootFile.text, refs: new Map() };
+  for (const [ref, real] of rootFile.refs) root.refs.set(ref, diskNode(real, ctx.read.get(real)!));
   for (const [ref, child] of hosted) {
     if (!(child instanceof ComposedFlow) || child.source === null) return null;
     root.refs.set(ref, sourceNodes(child.source));

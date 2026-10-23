@@ -197,7 +197,8 @@ A callback that throws, or returns a promise that rejects, stops the run, which 
 error.
 
 Each run gets a folder of its own: a run's folder is the folder that holds its `log`, and the files
-the run writes beside the log (today the writer's lock, `<log>.lock`) go only there. Pass
+the run writes beside the log (the writer's lock, `<log>.lock`, and media files under
+`media/<sha256>.<ext>`) go only there. Pass
 `log: runLogPath(runsDir, runId)` with the same `runId` to get `<runsDir>/<runId>/log.jsonl`;
 `runLogPath` makes the new run folder with mode 0700 (the runs folder too, when missing), creates
 no file, throws `EEXIST` when anything already holds the run folder's path, and throws a
@@ -707,13 +708,14 @@ Node 22, and so does every unit test; a change keeps both green.
   every read.
 - `src/nodes/base.ts` holds `Node`. `run(inputs, caps)` is async and resolves to one `Output`,
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
-  capabilities are one `NodeCaps` object (`signal`, `scheduler`, `random`, `bindItem`, `steps`,
-  `tools`, and AGENT's fields below). `tools` is the run's `ToolSet`, for a node that declares
+  capabilities are one `NodeCaps` object (`signal`, `scheduler`, `random`, `runDir`, `bindItem`,
+  `steps`, `tools`, and AGENT's fields below). `tools` is the run's `ToolSet`, for a node that declares
   `needsTools` (TOOL, HUMAN_INPUT and AGENT). `signal` is
   optional in the type; the runtime's evaluator (`src/runtime/eval_node.ts`) gives every node its
   own. `scheduler` (the clock and cancellable sleep a node's waits run on; `realScheduler` when
-  absent) and `random` (a draw in [0, 1) for backoff jitter; `Math.random` when absent) go to
-  every node when `evalNode` or `FlowEngine` is given them.
+  absent), `random` (a draw in [0, 1) for backoff jitter; `Math.random` when absent) and `runDir`
+  (the run's folder, where its files go) go to every node when `evalNode` or `FlowEngine` is given
+  them; `runFlow` and `resumeFlow` give `runDir` the log's folder, and none without a log.
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
   constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
   which gives a fresh copy per read).

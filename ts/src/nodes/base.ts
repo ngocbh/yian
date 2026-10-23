@@ -787,6 +787,8 @@ export interface NodeCaps {
   readonly scheduler?: Scheduler;
   /** A draw in [0, 1) for backoff jitter; `Math.random` when absent. */
   readonly random?: () => number;
+  /** The run's folder (its log's folder), where the run's files go; absent when the run keeps no log. */
+  readonly runDir?: string | null;
   /** Binds one element's input record; supplied to a node that binds per item (MAP). */
   readonly bindItem?: (element: Value, index: number) => ValueRecord;
   /** The node's durable steps; supplied to a node that records them (`needsSteps`). */

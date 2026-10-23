@@ -82,6 +82,8 @@ export interface AgentRunContext {
   readonly scheduler?: Scheduler;
   /** A draw in [0, 1) for model-retry backoff jitter; `Math.random` when absent. */
   readonly random?: () => number;
+  /** The run's folder, where its media files go (`writeRunFile`); `null` or absent without a log. */
+  readonly runDir?: string | null;
 }
 
 /** Return the credentials `ctx`'s model sends, or none when the read fails. */

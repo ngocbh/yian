@@ -7,18 +7,28 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { MediaPart, Message, Request, TextPart, ToolSpec } from "../../src/llm/messages.ts";
-import { fileToInline, inlineToFile, writeRunFile } from "../../src/nodes/agent/context.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { type AgentRunContext, fileToInline, inlineToFile, writeRunFile } from "../../src/nodes/agent/context.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { resumeFlow, runFlow } from "../../src/run.ts";
 import { FileRef } from "../../src/typesys/values.ts";
+import { hostEnv } from "./mcp_helpers.ts";
+import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-media-files-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
+afterEach(forget);
 
 /** Return a fresh empty folder under the test root. */
 function folder(): string {
@@ -142,4 +152,68 @@ test("fileToInline rejects naming the path of a missing file", async () => {
   );
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain(path);
+});
+
+// --- the run folder reaches the AGENT --- //
+
+const FLOW = `\
+id: media
+name: media
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  message: !str
+nodes:
+  reply:
+    kind: agent
+    input: {message: "\${input.message}"}
+    prompt: \${message}
+    output: str
+output: \${reply.output}
+`;
+// The records before \`reply\`'s success: RunStarted, START's start and success, \`reply\`'s start.
+const BEFORE_REPLY_SUCCESS = 4;
+
+/** Run \`fn\` and return the \`runDir\` of each AGENT run context it built, in order. */
+async function runDirs(fn: () => Promise<unknown>): Promise<(string | null | undefined)[]> {
+  // \`runContext\` is private to the type checker only, so the test can watch what it returns.
+  const target = AgentNode.prototype as unknown as { runContext: (...args: unknown[]) => AgentRunContext };
+  const spy = spyOn(target, "runContext");
+  try {
+    await fn();
+    return spy.mock.results.map((result) => (result.value as AgentRunContext).runDir);
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run options serving a model that replies each of \`texts\` in turn, with no host credentials. */
+function served(...texts: string[]) {
+  const model = new ScriptedModel(texts.map(textReply), { provider: "anthropic", model: "claude-test" });
+  return { models: serving(model), env: hostEnv(folder()) };
+}
+
+test("an AGENT's run folder is the folder of the run's log", async () => {
+  const run = join(folder(), "r1");
+  mkdirSync(run);
+  const log = join(run, "log.jsonl");
+  const flow = await loadFlow(FLOW);
+  expect(await runDirs(() => runFlow(flow, { message: "hi" }, { log, ...served("ok") }))).toEqual([run]);
+});
+
+test("a run without a log gives its AGENT no run folder", async () => {
+  const flow = await loadFlow(FLOW);
+  expect(await runDirs(() => runFlow(flow, { message: "hi" }, served("ok")))).toEqual([null]);
+});
+
+test("a resumed run gives its AGENT the same run folder", async () => {
+  const run = join(folder(), "r1");
+  mkdirSync(run);
+  const log = join(run, "log.jsonl");
+  const flow = await loadFlow(FLOW);
+  await crashAfter(BEFORE_REPLY_SUCCESS, () => runFlow(flow, { message: "hi" }, { log, ...served("lost") }));
+  const dirs = await runDirs(async () => {
+    const resumed = await resumeFlow(flow, { log, ...served("ok") });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  });
+  expect(dirs).toEqual([run]);
 });

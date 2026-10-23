@@ -588,6 +588,8 @@ export interface EvalNodeOptions {
   scheduler?: Scheduler | null;
   /** A draw in [0, 1) for backoff jitter; every node gets it as `caps.random`. */
   random?: (() => number) | null;
+  /** The run's folder, where the run's files go; every node gets it as `caps.runDir`. */
+  runDir?: string | null;
   /**
    * The transient stream sink a node declaring `needsLiveEvents` receives; closed, dropping what
    * it gets, once the outcome is decided.
@@ -684,6 +686,7 @@ export async function evalNode(
     onFault = null,
     scheduler = null,
     random = null,
+    runDir = null,
   } = options;
   requireSteering(steering);
   requireModels(models);
@@ -723,6 +726,7 @@ export async function evalNode(
     throw new TypeError("scheduler must be a Scheduler or null");
   }
   if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
+  if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const trace = newEvaluationTrace(node, captureEvidence);
@@ -819,6 +823,7 @@ export async function evalNode(
       signal,
       scheduler,
       random,
+      runDir,
       collector,
       captureInputs: captureBindings ? captureInputs : null,
       captureRender: captureBindings && node.needsRenderCapture === true ? captureRender : null,
@@ -853,6 +858,7 @@ async function evaluateNode(
     signal: AbortSignal;
     scheduler: Scheduler | null;
     random: (() => number) | null;
+    runDir: string | null;
     /** Retains the bound values and routes, when capturing bindings. */
     collector: BindingCollector | null;
     /** Receives the completed input record before the body runs, when capturing bindings. */
@@ -881,7 +887,7 @@ async function evaluateNode(
   const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
     context;
   const { memoryScope, memoryContextOpener } = context;
-  const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random } = context;
+  const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
@@ -980,12 +986,13 @@ async function evaluateNode(
     pending,
   });
 
-  // Every node gets its signal and the given scheduler and random draw; the rest are node-owned and
-  // trait-gated. The deferred per-item binder throws the same binder-owned marker from inside the
+  // Every node gets its signal and the given scheduler, random draw and run folder; the rest are
+  // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker from inside the
   // body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
+  if (runDir !== null) caps.runDir = runDir;
   if (node.bindsPerItem) {
     const params = node.params ?? [];
     caps.bindItem = (element, index) => {

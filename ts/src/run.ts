@@ -25,7 +25,7 @@
 
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
@@ -944,6 +944,7 @@ async function startRun(
       signal,
       scheduler,
       random,
+      runDir: locator === null ? null : dirname(locator),
     });
     const events: RunEvent[] = [];
     publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));
@@ -1187,6 +1188,7 @@ export async function resumeFlow(flow: ComposedFlow, options: ResumeFlowOptions)
         signal,
         scheduler,
         random: options.random ?? null,
+        runDir: dirname(locator),
       });
       const events: RunEvent[] = [];
       const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];

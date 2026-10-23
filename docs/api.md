@@ -2837,8 +2837,14 @@ Changed (TS yian): a run gets a folder of its own. Fresh `yian run FLOW` writes
 host gets the same layout under its own runs folder from `runLogPath(runsDir, runId)`
 (`@ngocbh/yian/run`), which makes the new folder `<runsDir>/<runId>` (an existing one
 is refused) and returns its `log.jsonl` path. A run's folder is the folder that holds its log, and the files the run writes
-beside the log (today its lock file) go only there. A host that passes a `log` path
+beside the log (its lock file and media files) go only there. A host that passes a `log` path
 of its own must keep one run per folder; Yian doesn't check it.
+
+Changed (TS yian): a `yian.message.v1` media part may hold a file reference,
+`{"type": "media", "mime": ..., "file": {"uri": ..., "mime": ..., "name": ...}}`, in
+place of `data` or `url`. Media bytes a run keeps go to `<run folder>/media/<sha256>.<ext>`
+(mode `0600`, the `media` folder `0700`), and the run refers to each file by its absolute
+path; the bytes are inlined again only in the request sent to a provider.
 
 ## Blocking human interaction
 

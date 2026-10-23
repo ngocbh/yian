@@ -11,6 +11,7 @@
 
 import { current } from "../defaults.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
+import { FileRef } from "../typesys/values.ts";
 
 /** The format tag every message's JSON carries. */
 export const MESSAGE_FORMAT = "yian.message.v1";
@@ -296,7 +297,11 @@ export class TextPart {
   }
 }
 
-/** An image or file, given inline as base64 or by URL; exactly one of the two. */
+/**
+ * An image or file, given inline as base64, by URL, or as a file reference; exactly one of the
+ * three. A run log holds media only as file references, so its lines stay small; the bytes go to
+ * the provider inline.
+ */
 export class MediaPart {
   readonly type = "media" as const;
   /** The media type, e.g. `image/png`. */
@@ -305,6 +310,8 @@ export class MediaPart {
   readonly data: string | null;
   /** Where the content lives. */
   readonly url: string | null;
+  /** The file holding the content; its JSON is `{uri, mime, name}`, unset fields left out. */
+  readonly file: FileRef | null;
   /** A file name, if any. */
   readonly name: string | null;
   /** Opaque provider data, e.g. OpenAI's image `detail`. */
@@ -314,15 +321,21 @@ export class MediaPart {
     mime: string;
     data?: string | null;
     url?: string | null;
+    file?: FileRef | null;
     name?: string | null;
     providerPayload?: JsonObject | null;
   }) {
     this.mime = checkString(options.mime, "mime");
     this.data = optionalString(options.data, "data");
     this.url = optionalString(options.url, "url");
+    const file: unknown = options.file ?? null;
+    if (file !== null && !FileRef.isFileRef(file)) {
+      throw new MessageFormatError("file", `expected a FileRef, got ${typeName(file)}`);
+    }
+    this.file = file;
     this.name = optionalString(options.name, "name");
-    if ((this.data === null) === (this.url === null)) {
-      throw new MessageFormatError("", "media needs exactly one of data or url");
+    if ([this.data, this.url, this.file].filter((source) => source !== null).length !== 1) {
+      throw new MessageFormatError("", "media needs exactly one of data, url or file");
     }
     this.providerPayload = optionalObject(options.providerPayload, "provider_payload");
   }
@@ -333,10 +346,42 @@ export class MediaPart {
       mime: this.mime,
       data: this.data,
       url: this.url,
+      file: this.file === null ? null : fileJSON(this.file),
       name: this.name,
       provider_payload: this.providerPayload,
     });
   }
+}
+
+const FILE_KEYS: readonly string[] = ["uri", "mime", "name"];
+
+/** Return a file reference's JSON: `uri`, then `mime` and `name` unless `null`. */
+function fileJSON(file: FileRef): JsonObject {
+  const data: JsonObject = { uri: file.uri };
+  if (file.mime !== null) data["mime"] = file.mime;
+  if (file.name !== null) data["name"] = file.name;
+  return data;
+}
+
+/** Read a media part's `file` JSON strictly; errors name paths under `path`. */
+function fileFromJSON(data: unknown, path: string): FileRef {
+  if (!isPlainObject(data)) throw new MessageFormatError(path, `expected an object, got ${typeName(data)}`);
+  refuseSymbolKeys(data, path);
+  const record = ownRecord(data);
+  for (const key of Object.keys(record)) {
+    if (!FILE_KEYS.includes(key)) throw new MessageFormatError(join(path, segment(key)), "unknown key");
+  }
+  if (!Object.hasOwn(record, "uri")) throw new MessageFormatError(join(path, "uri"), "missing");
+  for (const key of ["mime", "name"]) {
+    if (Object.hasOwn(record, key) && record[key] === null) {
+      throw new MessageFormatError(join(path, key), "expected string, got null");
+    }
+  }
+  return new FileRef({
+    uri: checkString(record["uri"], join(path, "uri")),
+    mime: optionalString(record["mime"], join(path, "mime")),
+    name: optionalString(record["name"], join(path, "name")),
+  });
 }
 
 /**
@@ -509,13 +554,14 @@ const PART_READERS: ReadonlyMap<string, PartReader> = new Map<string, PartReader
   [
     "media",
     {
-      keys: ["mime", "data", "url", "name", "provider_payload"],
+      keys: ["mime", "data", "url", "file", "name", "provider_payload"],
       required: ["mime"],
       make: (d) =>
         new MediaPart({
           mime: d["mime"] as string,
           data: d["data"] as string,
           url: d["url"] as string,
+          file: d["file"] === undefined ? null : fileFromJSON(d["file"], "file"),
           name: d["name"] as string,
           providerPayload: d["provider_payload"] as JsonObject,
         }),
@@ -570,13 +616,14 @@ const PART_READERS: ReadonlyMap<string, PartReader> = new Map<string, PartReader
 ]);
 
 // The keys among `NULLABLE_KEYS` whose value is a JSON object rather than a string.
-const OBJECT_KEYS: ReadonlySet<string> = new Set(["provider_payload", "arguments"]);
+const OBJECT_KEYS: ReadonlySet<string> = new Set(["provider_payload", "arguments", "file"]);
 // Keys `toJSON` omits when `null`, so an explicit `null` is not JSON `toJSON` writes.
 const NULLABLE_KEYS: ReadonlySet<string> = new Set([
   "protocol",
   "provider_payload",
   "data",
   "url",
+  "file",
   "name",
   "arguments",
   "raw_arguments",

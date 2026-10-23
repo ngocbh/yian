@@ -35,6 +35,7 @@ import {
   Usage,
 } from "../../src/llm/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { FileRef } from "../../src/typesys/values.ts";
 import { type Case, decode, readCase, type Value } from "../conformance.ts";
 import { lintSchema, loadSchema, type Schema, validate } from "../schema.ts";
 
@@ -65,6 +66,7 @@ function fullMessage(): Message {
       }),
       new ToolResultPart({ callId: "call_2", name: "broken", content: "ok" }),
       new RefusalPart("I can't help with that", { id: "msg_2", phase: "final" }),
+      new MediaPart({ mime: "image/png", file: new FileRef({ uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" }) }),
     ],
     protocol: "anthropic_messages",
     providerPayload: { stop_sequence: null, meta: { k: "v" } },
@@ -85,6 +87,7 @@ function canonical(): Data {
       { type: "tool_result", call_id: "c1", name: "f", content: "r", is_error: true },
       { type: "tool_result", call_id: "c2", name: "g", content: "r" },
       { type: "refusal", text: "no", provider_payload: { id: "msg_1" } },
+      { type: "media", mime: "image/png", file: { uri: "/r/media/ab.png", mime: "image/png", name: "ab.png" } },
     ],
     protocol: "openai_responses",
     provider_payload: { id: "resp_1" },
@@ -121,6 +124,24 @@ describe("round trip", () => {
     expect(data["format"]).toBe("yian.message.v1");
     expect(Message.fromJSON(data)).toEqual(message);
     expect(throughCodec(message)).toEqual(message);
+  });
+
+  test("a media part's file form round-trips as a FileRef", () => {
+    const file = new FileRef({ uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" });
+    const part = new MediaPart({ mime: "image/png", file, name: "chart.png" });
+    expect([part.file, part.data, part.url]).toEqual([file, null, null]);
+    const message = new Message({ role: "assistant", parts: [part] });
+    expect(message.toJSON()["parts"]).toEqual([
+      { type: "media", mime: "image/png", file: { uri: "/runs/r1/media/ab.png", mime: "image/png", name: "ab.png" }, name: "chart.png" },
+    ]);
+    for (const read of [Message.fromJSON(message.toJSON()), throughCodec(message)]) {
+      const back = read.parts[0] as MediaPart;
+      expect(FileRef.isFileRef(back.file)).toBe(true);
+      expect(read.toJSON()).toEqual(message.toJSON());
+    }
+    // A file's unset fields are left out, as the message's own are.
+    const bare = new MediaPart({ mime: "image/png", file: new FileRef({ uri: "/a.png" }) });
+    expect(bare.toJSON()).toEqual({ type: "media", mime: "image/png", file: { uri: "/a.png" } });
   });
 
   test("the canonical form round-trips", () => {
@@ -210,8 +231,29 @@ describe("strict decode", () => {
     const data = canonical();
     delete data["parts"][2]["url"];
     expect(formatError(() => Message.fromJSON(data)).message).toBe(
-      "parts[2]: media needs exactly one of data or url",
+      "parts[2]: media needs exactly one of data, url or file",
     );
+  });
+
+  test("media with url and file", () => {
+    const data = canonical();
+    data["parts"][9]["url"] = "https://e.com/x.png";
+    expect(formatError(() => Message.fromJSON(data)).message).toBe(
+      "parts[9]: media needs exactly one of data, url or file",
+    );
+  });
+
+  test.each([
+    ["a file that isn't an object", (file: Data) => file, "/r/x.png", "parts[9].file: expected an object, got string"],
+    ["a file without uri", (file: Data) => (delete file["uri"], file), null, "parts[9].file.uri: missing"],
+    ["an unknown file key", (file: Data) => ({ ...file, size: 3n }), null, "parts[9].file.size: unknown key"],
+    ["a non-string uri", (file: Data) => ({ ...file, uri: 3n }), null, "parts[9].file.uri: expected string, got bigint"],
+    ["an explicit null file mime", (file: Data) => ({ ...file, mime: null }), null, "parts[9].file.mime: expected string, got null"],
+    ["an explicit null file name", (file: Data) => ({ ...file, name: null }), null, "parts[9].file.name: expected string, got null"],
+  ])("media with %s", (_, edit, replacement, message) => {
+    const data = canonical();
+    data["parts"][9]["file"] = replacement ?? edit(data["parts"][9]["file"]);
+    expect(formatError(() => Message.fromJSON(data)).message).toBe(message);
   });
 
   test("a tool call without arguments", () => {
@@ -367,8 +409,8 @@ describe("strict decode of odd objects", () => {
 describe("MessageFormatError", () => {
   test("the message is the path and reason, or the reason alone", () => {
     expect(new MessageFormatError("parts[1].text", "missing").message).toBe("parts[1].text: missing");
-    expect(new MessageFormatError("", "media needs exactly one of data or url").message).toBe(
-      "media needs exactly one of data or url",
+    expect(new MessageFormatError("", "media needs exactly one of data, url or file").message).toBe(
+      "media needs exactly one of data, url or file",
     );
   });
 
@@ -385,6 +427,8 @@ describe("construction", () => {
   test("invalid parts raise", () => {
     const makers = [
       () => new MediaPart({ mime: "image/png", data: "a", url: "https://e.com" }),
+      () => new MediaPart({ mime: "image/png", data: "a", file: new FileRef({ uri: "/a.png" }) }),
+      () => new MediaPart({ mime: "image/png", file: bad({ uri: "/a.png" }) }),
       () => new ToolCallPart({ id: "c", name: "f", arguments: null }),
       () => new TextPart(bad(3)),
       () => new TextPart("x", bad({ a: new Map() })),
@@ -1061,6 +1105,10 @@ describe("message schema", () => {
     ["another format", (data: Data) => (data["format"] = "yian.message.v0")],
     ["media with data and url", (data: Data) => (data["parts"][2]["data"] = "AAAA")],
     ["media with neither", (data: Data) => delete data["parts"][2]["url"]],
+    ["media with data and file", (data: Data) => (data["parts"][9]["data"] = "AAAA")],
+    ["a file without uri", (data: Data) => delete data["parts"][9]["file"]["uri"]],
+    ["an unknown file key", (data: Data) => (data["parts"][9]["file"]["size"] = 3n)],
+    ["an explicit null file mime", (data: Data) => (data["parts"][9]["file"]["mime"] = null)],
     ["a tool call with neither", (data: Data) => delete data["parts"][5]["raw_arguments"]],
     ["a wrong field type", (data: Data) => (data["parts"][1]["text"] = 3n)],
     ["is_error not a boolean", (data: Data) => (data["parts"][6]["is_error"] = "yes")],

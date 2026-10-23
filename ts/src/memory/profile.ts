@@ -224,7 +224,7 @@ export class ProfileMemory implements Memory {
   constructor(
     store: MarkdownStore,
     options: {
-      llmConfig?: JsonObject | null;
+      llmConfig?: Readonly<Record<string, unknown>> | null;
       maxChars?: number | bigint | null;
       inputBudgetChars?: number | bigint | null;
       env?: Env | null;

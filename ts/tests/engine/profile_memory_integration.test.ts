@@ -126,7 +126,11 @@ nodes:
 output: \${reply.output}
 `;
 
-const LEARNER_CONFIG = { provider: "ollama", model: "local-profiler" };
+// Typed as `runFlow`'s `llmConfig`: a host passes ProfileMemory the same config it passes a run.
+const LEARNER_CONFIG: Readonly<Record<string, unknown>> = {
+  provider: "ollama",
+  model: "local-profiler",
+};
 
 /** Stub profile learner that can await a side effect before replying (Python's `_Learner`). */
 class Learner extends ScriptedModel {
@@ -492,7 +496,7 @@ test("the run started snapshot is a reference and a hash, never the text", async
   expect(first).not.toContain("Works on reefs");
 });
 
-test("resume asks the host store for the recorded blob version", async () => {
+test("a resumed finished runs backward asks the host store for the recorded blob version", async () => {
   const store = new BlobStore();
   await store.write(SEED, { baseVersion: store.current });
   const flow = await loadFlow(CHAT);
@@ -509,7 +513,7 @@ test("resume asks the host store for the recorded blob version", async () => {
   const outcome = await resumed.backward("Be brief.");
   expect(outcome.failure).toBeNull();
   expect(outcome.status).toBe("succeeded");
-  expect(store.reads).toContain(blobId(SEED));
+  expect(store.reads).toEqual([blobId(SEED), null]);
   const input = material(learner);
   expect(input["seen_profile"]).toBe(SEED);
   expect(input["current_profile"]).toBe(EDITED);

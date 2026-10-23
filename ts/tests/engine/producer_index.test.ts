@@ -14,16 +14,21 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { buildGrow } from "../../src/compile/expand.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import type { SourceRef } from "../../src/expr/lineage.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { runFlow } from "../../src/run.ts";
-import { NO_ENV } from "./run_state_fixtures.ts";
+import { replayRunLog, runFlow } from "../../src/run.ts";
+import { FlowEngine } from "../../src/runtime/engine.ts";
+import { MemoryRunLog, readRunLog, type RecordEnvelope, type RunRecord } from "../../src/runtime/log.ts";
+import type { RunState } from "../../src/runtime/state.ts";
+import { crashAfter, NO_ENV, startedRun } from "./run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-producer-index-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -127,4 +132,109 @@ test("a derived kind's forward is synchronous: it returns no promise", async () 
   } finally {
     for (const spy of spies) spy.mockRestore();
   }
+});
+
+/** The producer index as sorted entries, for comparing. */
+const entries = (state: RunState) => [...state.producers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+/**
+ * Run `text` live on an in-memory log; return the final state, the records, and the producer
+ * index after each record from the run start's last commit on, by seq.
+ */
+async function liveRun(
+  text: string,
+  options: { inputs?: Record<string, unknown>; learnable?: boolean } = {},
+): Promise<{ state: RunState; records: readonly RecordEnvelope[]; live: Map<number, unknown> }> {
+  const log = new MemoryRunLog("r1");
+  const state = startedRun(await load(text), log, options);
+  const live = new Map<number, unknown>([[state.nextSequence - 1, entries(state)]]);
+  const append = log.append.bind(log);
+  // The state before each append is the state after the record before it.
+  log.append = (record: RunRecord) => {
+    live.set(state.nextSequence - 1, entries(state));
+    return append(record);
+  };
+  await new FlowEngine(state, log, { growBuilder: buildGrow, numWorkers: 0 }).run();
+  live.set(state.nextSequence - 1, entries(state));
+  return { state, records: log.records(), live };
+}
+
+/**
+ * The seq of the accepted commit that last wrote each pool name: the run start's commits at once,
+ * any other commit when a `node_succeeded` names it.
+ */
+function lastWriters(records: readonly RecordEnvelope[]): Map<string, number> {
+  const writers = new Map<string, number>();
+  let started = false;
+  for (const { kind, seq, payload } of records) {
+    if (kind === "pool_commit" && !started) {
+      writers.set(payload["key"] as string, seq);
+      started = payload["key"] === payload["node_id"];
+    } else if (kind === "node_succeeded") {
+      const commit = Number(payload["commit"]);
+      writers.set(records[commit]!.payload["key"] as string, commit);
+    }
+  }
+  return writers;
+}
+
+/** Every name `state`'s pool holds: its store keys and `system.<name>` for each system value. */
+const poolNames = (state: RunState) =>
+  [...state.pool.store.keys(), ...[...state.pool.system.keys()].map((name) => `system.${name}`)].sort();
+
+test("each pool name maps to the seq of the accepted pool_commit that last wrote it", async () => {
+  const { state, records } = await liveRun(CALL_IN_LOOP);
+  expect(state.trace).toBeNull();
+  const writers = lastWriters(records);
+  expect([...state.producers.keys()].sort()).toEqual(poolNames(state));
+  for (const [name, seq] of state.producers) {
+    expect([name, seq]).toEqual([name, writers.get(name)!]);
+    expect(records[seq]!.kind).toBe("pool_commit");
+    expect(records[seq]!.payload["key"]).toBe(name);
+  }
+  // Run inputs and system values map to their run-start commits.
+  expect(["system.now", "system.run_id", "system.today"].map((name) => state.producers.get(name))).toEqual([1, 2, 3]);
+});
+
+test("the run start's commits enter the index at once; START's own commit replaces its inputs'", async () => {
+  const { live } = await liveRun(DOUBLES, { inputs: { xs: [1n, 2n] } });
+  expect(live.get(4)).toEqual([
+    [StartNode.ID, 4],
+    ["system.now", 1],
+    ["system.run_id", 2],
+    ["system.today", 3],
+  ]);
+  expect(live.get(7)).toContainEqual([StartNode.ID, 6]);
+});
+
+test("an orphan commit never enters the index", async () => {
+  const flow = await load(CALL_IN_LOOP);
+  const uncut = freshLog();
+  await run(flow, uncut);
+  const envelopes = readRunLog(uncut);
+  const commits = envelopes.filter(({ kind, seq }) => kind === "pool_commit" && seq > 4).map(({ seq }) => seq);
+  for (const k of commits) {
+    const log = freshLog();
+    await crashAfter(k + 1, () => run(flow, log));
+    const cut = readRunLog(log);
+    const before = replayRunLog(flow, MemoryRunLog.fromRecords(cut.slice(0, k)));
+    const after = replayRunLog(flow, MemoryRunLog.fromRecords(cut));
+    expect([...after.producers.values()]).not.toContain(k);
+    expect(entries(after)).toEqual(entries(before));
+  }
+}, 60_000);
+
+test("in a learnable run, each name's commit is by the node whose start the retained trace names", async () => {
+  const { state, records } = await liveRun(CALL_IN_LOOP, { learnable: true });
+  const trace = state.trace!;
+  let checked = 0;
+  for (const [name, seq] of state.producers) {
+    if (name.startsWith("system.")) continue;
+    const source = trace.resolve(`${name}.output`).source as SourceRef;
+    const started = records[source.executionSeq]!;
+    expect(started.kind).toBe("node_started");
+    expect([name, records[seq]!.payload["node_id"]]).toEqual([name, started.payload["node_id"]]);
+    checked += 1;
+  }
+  expect(checked).toBeGreaterThan(1);
 });

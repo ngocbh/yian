@@ -545,13 +545,19 @@ test("every AGENT has needsSteps, call-time or not, also on a shallow copy", () 
 test("recordedLlmConfig returns a copy of the last recorded config", () => {
   const node = new AgentNode("chat");
   const last = { model: "m2", openai: { temperature: 0.5 } };
-  const steps = [{ effective_llm_config: { model: "m1" } }, { effective_llm_config: last }, { other: 1n }, "note"];
+  const steps = [
+    { kind: "llm_config", effective_llm_config: { model: "m1" } },
+    { kind: "llm_config", effective_llm_config: last },
+    { kind: "other", effective_llm_config: { model: "m3" } },
+    "note",
+  ];
   const recorded = node.recordedLlmConfig(steps);
   expect(recorded).toEqual(last);
   expect(recorded).not.toBe(last);
   expect(recorded!["openai"]).not.toBe(last.openai);
-  // A step that isn't a record, or whose config isn't one, records none.
-  expect(node.recordedLlmConfig(["note", { effective_llm_config: "m" }, [1n]])).toBeNull();
+  // A step that isn't a record, isn't of kind `llm_config`, or whose config isn't one, records none.
+  expect(node.recordedLlmConfig(["note", { kind: "llm_config", effective_llm_config: "m" }, [1n]])).toBeNull();
+  expect(node.recordedLlmConfig([{ effective_llm_config: { model: "m" } }])).toBeNull();
   expect(node.recordedLlmConfig([])).toBeNull();
 });
 
@@ -1201,14 +1207,14 @@ describe("forward", () => {
     const bound = structuredClone(BOUND);
     const result = await callTimeAgent().run({ [LLM_CONFIG_KEY]: bound }, { steps, models });
     expect((result as Output).value).toBe("ok");
-    expect(recorded).toEqual([{ effective_llm_config: BOUND }]);
+    expect(recorded).toEqual([{ kind: "llm_config", effective_llm_config: BOUND }]);
     expect((recorded[0] as Record<string, unknown>)["effective_llm_config"]).not.toBe(bound);
     expect(models.configs).toEqual([{ ...BOUND, api_key: "sk-host" }]);
   });
 
   test("a call-time agent's config differing from the recorded one is a host fault before any model is built", async () => {
     const recorded: unknown[] = [];
-    const prior = [{ effective_llm_config: { ...BOUND, model: "gpt-older" } }];
+    const prior = [{ kind: "llm_config", effective_llm_config: { ...BOUND, model: "gpt-older" } }];
     const steps = new NodeSteps(2, prior, (step) => void recorded.push(step));
     const models = access(new ScriptedModel([reply("ok")], NATIVE));
     const error = await rejected(callTimeAgent().run({ [LLM_CONFIG_KEY]: { ...BOUND } }, { steps, models }));
@@ -1224,7 +1230,7 @@ describe("forward", () => {
     // An equal config, even one with its keys in another order, records again.
     const same = { model: "gpt-older", [HOST_KEY_MARKER]: true, provider: "openai" };
     await callTimeAgent().run({ [LLM_CONFIG_KEY]: same }, { steps, models });
-    expect(recorded).toEqual([{ effective_llm_config: same }]);
+    expect(recorded).toEqual([{ kind: "llm_config", effective_llm_config: same }]);
   });
 });
 
@@ -1259,6 +1265,7 @@ describe("model_attempt steps through the engine", () => {
   }
 
   const ATTEMPT = {
+    kind: "model_attempt",
     model_attempt: {
       call: 1n,
       attempt: 1n,

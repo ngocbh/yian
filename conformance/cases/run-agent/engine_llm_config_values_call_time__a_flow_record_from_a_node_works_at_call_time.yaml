@@ -85,6 +85,8 @@ expect:
             source: missing
           model: whole
           provider: openai
+        kind: llm_config
+      n: 1
   - - pool_commit
     - chat
     - value: ok

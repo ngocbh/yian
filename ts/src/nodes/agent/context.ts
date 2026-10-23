@@ -120,6 +120,7 @@ export function retrySettings(ctx: AgentRunContext, call: number): RetrySettings
   const onRetry = (retry: RetryInfo): void => {
     const error = scrubCallCredentials(retry.error, ctx.llmConfig, { env: ctx.models.env, sent: sentCredentials(ctx) });
     steps.record({
+      kind: "model_attempt",
       model_attempt: {
         call: BigInt(call),
         attempt: BigInt(retry.attempt),

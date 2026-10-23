@@ -89,6 +89,8 @@ expect:
             source: environment
           model: c
           provider: anthropic
+        kind: llm_config
+      n: 1
   - - pool_commit
     - chat
     - value: ok

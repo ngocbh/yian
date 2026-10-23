@@ -86,6 +86,8 @@ expect:
           openai:
             temperature: 0.5
           provider: openai
+        kind: llm_config
+      n: 1
   - - pool_commit
     - chat
     - value: ok

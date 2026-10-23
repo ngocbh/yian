@@ -69,11 +69,15 @@ expect:
           type: TransientToolError
         event: failed
         retry_in: 1.0
+        kind: tool_attempt
+      n: 1
   - - node_step
     - call
     - step:
         attempt: 2
         event: started
+        kind: tool_attempt
+      n: 2
   - - pool_commit
     - call
     - value: ok

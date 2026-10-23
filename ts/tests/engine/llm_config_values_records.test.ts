@@ -565,7 +565,9 @@ test("resume recomputes the config of each defs call instance", async () => {
   expect(result.status).toBe("succeeded");
   const all = instanceSteps(log);
   expect(all).toHaveLength(3);
-  expect(all[2]).toEqual(second);
+  // The resumed start records the same step again, as the node's next step.
+  expect({ ...all[2], n: null }).toEqual({ ...second, n: null });
+  expect([Number(second["n"]), Number(all[2]!["n"])]).toEqual([1, 2]);
   expect(models.configs.map((config) => config["model"])).toEqual(["ok"]);
 });
 

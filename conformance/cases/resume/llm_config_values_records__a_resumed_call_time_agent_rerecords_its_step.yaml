@@ -86,6 +86,8 @@ expect:
             source: missing
           model: gpt-picked
           provider: openai
+        kind: llm_config
+      n: 1
   - - run_resumed
     - null
     - num_workers: 0
@@ -101,6 +103,8 @@ expect:
             source: missing
           model: gpt-picked
           provider: openai
+        kind: llm_config
+      n: 2
   - - pool_commit
     - chat
     - value: ok

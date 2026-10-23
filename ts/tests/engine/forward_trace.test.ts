@@ -2947,7 +2947,7 @@ function preparedTraceFrontier(kind: FrontierKind): {
   if (kind !== "started") {
     commitPrepared(log, state, prepared);
     if (kind === "resumed") prepared = prepareRunResumed(state, { numWorkers: 0 });
-    else if (kind === "step") prepared = prepareNodeStep(state, "router", { event: "progress" });
+    else if (kind === "step") prepared = prepareNodeStep(state, "router", { kind: "test", event: "progress" });
     else prepared = prepareRunStopped(state, "signal", "SIGTERM");
   }
   return { state, log, prepared, original };

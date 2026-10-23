@@ -88,6 +88,8 @@ import { OutputInvalidError } from "./structured.ts";
 
 /** The step key under which a call-time agent records the config it resolved. */
 const CONFIG_STEP = "effective_llm_config";
+/** The `kind` of the step a call-time agent records its config in. */
+const CONFIG_STEP_KIND = "llm_config";
 
 /** Whether an AGENT output contract is plain text: none, or an untagged `str`. */
 export function isTextOutput(contract: OutputContract | null): boolean {
@@ -448,13 +450,13 @@ export class AgentNode extends Node {
    * Return the config an earlier start of this agent recorded in its steps, if any.
    *
    * @param steps The node's recorded steps, in order.
-   * @returns A copy of the last recorded `effective_llm_config`, with no key or header value;
-   *   `null` when no step records one.
+   * @returns A copy of the `effective_llm_config` of the last `llm_config` step, with no key or
+   *   header value; `null` when no step records one.
    */
   recordedLlmConfig(steps: readonly unknown[]): Record<string, unknown> | null {
     for (let index = steps.length - 1; index >= 0; index -= 1) {
       const step = steps[index];
-      if (isRecord(step) && Object.hasOwn(step, CONFIG_STEP) && isRecord(step[CONFIG_STEP])) {
+      if (isRecord(step) && step["kind"] === CONFIG_STEP_KIND && isRecord(step[CONFIG_STEP])) {
         return copyValue(step[CONFIG_STEP]) as Record<string, unknown>;
       }
     }
@@ -728,7 +730,7 @@ export class AgentNode extends Node {
    * header values joined when it is marked for the host key; any other agent uses its run's
    * `llmConfig`. Before anything renders, a call-time agent checks the bound config against the
    * one an earlier start recorded in its steps, then records it as a step,
-   * `{effective_llm_config: <config>}`, which holds no key or header value. Each model retry is
+   * `{kind: "llm_config", effective_llm_config: <config>}`, which holds no key or header value. Each model retry is
    * first recorded as a `model_attempt` step; a later start restarts the agent and ignores them.
    *
    * The model is built through `caps.models`, else `defaultModelAccess()`. Every error from the
@@ -841,7 +843,7 @@ export class AgentNode extends Node {
         ),
       );
     }
-    steps.record({ [CONFIG_STEP]: copyValue(config as ValueRecord) });
+    steps.record({ kind: CONFIG_STEP_KIND, [CONFIG_STEP]: copyValue(config as ValueRecord) });
   }
 
   /**

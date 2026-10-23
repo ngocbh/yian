@@ -59,6 +59,8 @@ expect:
             error: {kind: server, message: The server is temporarily unavailable}
             partial: null
             retry_in: 0.5
+          kind: model_attempt
+        n: 1
     - [pool_commit, write, {value: A line.}]
     - [node_succeeded, write, {commit: 10}]
     - [node_started, __end__]

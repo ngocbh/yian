@@ -717,7 +717,7 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
     const seen: RunEvent[] = [];
     const { node, entered } = waiter("work", (signal, caps) => {
       // The call settled while the signal was live; the node reports it after the stop.
-      caps.steps!.record({ call: "call-1" }, { settled: true });
+      caps.steps!.record({ kind: "test", call: "call-1" }, { settled: true });
       caps.emitEvent!(new ToolCallFinished({ ...callFields, result: "ok" }));
       throw signal.reason;
     });
@@ -731,7 +731,7 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
     const records = built.log.records().map((envelope) => envelope.record);
     expect(records.slice(-2)).toEqual([
       new RunStoppedRecord("signal", "stop now", ["work"]),
-      new NodeStepRecord("work", { call: "call-1" }),
+      new NodeStepRecord("work", 1, { kind: "test", call: "call-1" }),
     ]);
     expect(seen.at(-1)).toEqual(new ToolCallFinished({ ...callFields, result: "ok" }));
   });
@@ -745,7 +745,7 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
     const { node, entered } = waiter("work", (signal, caps) => {
       nodeSignals.push(signal);
       try {
-        caps.steps!.record({ call: "call-1" });
+        caps.steps!.record({ kind: "test", call: "call-1" });
       } catch (error) {
         raised.push(error);
       }
@@ -856,7 +856,7 @@ test("a settled step and a ToolCallFinished are refused after a terminal result"
   const raised: unknown[] = [];
   const blocked = waiter("work", (signal, caps) => {
     try {
-      caps.steps!.record({ call: "call-1" }, { settled: true });
+      caps.steps!.record({ kind: "test", call: "call-1" }, { settled: true });
     } catch (error) {
       raised.push(error);
     }
@@ -878,7 +878,7 @@ test("a settled step and a ToolCallFinished are refused after a terminal result"
 test("a settled step and a ToolCallFinished are still recorded after a sibling's host fault", async () => {
   const seen: RunEvent[] = [];
   const blocked = waiter("work", (signal, caps) => {
-    caps.steps!.record({ call: "call-1" }, { settled: true });
+    caps.steps!.record({ kind: "test", call: "call-1" }, { settled: true });
     caps.emitEvent!(new ToolCallFinished({ ...callFields, result: "ok" }));
     throw signal.reason;
   });
@@ -898,7 +898,7 @@ test("a settled step and a ToolCallFinished are still recorded after a sibling's
   expect(await rejected(built.run())).toBe(refusal);
   expect(refusal).toBeInstanceOf(Error);
   expect(stops(built)).toEqual([]);
-  expect(lastRecord(built)).toEqual(new NodeStepRecord("work", { call: "call-1" }));
+  expect(lastRecord(built)).toEqual(new NodeStepRecord("work", 1, { kind: "test", call: "call-1" }));
   expect(seen.at(-1)).toEqual(new ToolCallFinished({ ...callFields, result: "ok" }));
 });
 
@@ -1070,7 +1070,7 @@ describe.each(MODES)("a poisoned log (%s)", (_, numWorkers) => {
     const node = new ScriptNode("work", (caps) => {
       failSync = "once";
       try {
-        caps.steps!.record({ call: "call-1" });
+        caps.steps!.record({ kind: "test", call: "call-1" });
       } catch {}
       host.abort(new Error("stop now"));
       return "done";

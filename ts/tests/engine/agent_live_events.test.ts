@@ -720,6 +720,7 @@ test("a retried model call records one model_attempt step before its failed atte
   expect(shape(log)).toEqual([
     ["ModelCallStarted", null],
     {
+      kind: "model_attempt",
       model_attempt: {
         call: 1n,
         attempt: 1n,

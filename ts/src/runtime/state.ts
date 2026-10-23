@@ -842,15 +842,16 @@ export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTra
 }
 
 /**
- * Prepare appending one step an in-flight node recorded while it runs.
+ * Prepare appending one step an in-flight node recorded while it runs, numbered as the node's
+ * next step (`n`, counting the steps of its earlier starts).
  *
  * @param state An initialized nonterminal state in which `nodeId` is in flight.
  * @param nodeId The exact id of the in-flight node recording the step.
- * @param step A JSON object nested no deeper than the value nesting limit; only the node gives
- *   it meaning.
+ * @param step A JSON object with a string `kind`, nested no deeper than the value nesting limit;
+ *   only the node gives it meaning.
  * @returns The canonical `NodeStepRecord` and a detached append-before-apply plan, with no
  *   observers.
- * @throws TypeError when `state`, `nodeId` or `step` has the wrong type.
+ * @throws TypeError when `state`, `nodeId` or `step` has the wrong type, or `step` has no kind.
  * @throws RangeError when the state is uninitialized or terminal, or `nodeId` isn't in flight.
  * @throws TypeCheckError when `step` nests too deep or isn't a JSON value.
  */
@@ -861,7 +862,9 @@ export function prepareNodeStep(state: RunState, nodeId: string, step: unknown):
   // Live steps only, like live outputs: replay folds recorded steps without the process limit,
   // so a log stays readable under a different limit.
   rejectDeepNesting(step, "node step");
-  return prepareRecord(state, new NodeStepRecord(nodeId, step));
+  // Steps outlive a resume, so `n` keeps counting across the node's starts.
+  const n = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
+  return prepareRecord(state, new NodeStepRecord(nodeId, n, step));
 }
 
 /**
@@ -2628,7 +2631,7 @@ function validateRunStopped(state: RunState, record: RunStoppedRecord): void {
   }
 }
 
-/** Require a step record to name an existing unknown in-flight node. */
+/** Require a step record to name an existing unknown in-flight node and be its next step. */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
   if (typeof nodeId !== "string") throw new TypeError("NodeStepRecord node_id must be a string");
@@ -2639,6 +2642,10 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
     throw new RangeError(`NodeStep node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
+  const expected = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
+  if (record.n !== expected) {
+    throw new RangeError(`node step n is not dense: node ${reprText(nodeId)} step ${record.n}, expected ${expected}`);
+  }
 }
 
 /**

@@ -184,6 +184,7 @@ function stepsByNode(path: string): Map<string, unknown[]> {
 
 /** The recorded step of a failed attempt that threw `type`. */
 const failed = (attempt: number, message: string, retryIn: number, type = "TimeoutError") => ({
+  kind: "tool_attempt",
   event: "failed",
   attempt: BigInt(attempt),
   error: { type, message },
@@ -191,7 +192,7 @@ const failed = (attempt: number, message: string, retryIn: number, type = "Timeo
 });
 
 /** The recorded step of a retried attempt's start. */
-const started = (attempt: number) => ({ event: "started", attempt: BigInt(attempt) });
+const started = (attempt: number) => ({ kind: "tool_attempt", event: "started", attempt: BigInt(attempt) });
 
 test("a crash inside attempt two resumes at attempt three with one retry used", async () => {
   const path = freshLog();

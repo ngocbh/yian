@@ -93,6 +93,8 @@ expect:
             source: missing
           model: flow-model
           provider: openai
+        kind: llm_config
+      n: 1
   - - pool_commit
     - chat
     - value: ok

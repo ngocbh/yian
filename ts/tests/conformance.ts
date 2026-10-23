@@ -1985,7 +1985,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
   ["node_started", ["node_id", []]],
-  ["node_step", ["node_id", ["step"]]],
+  ["node_step", ["node_id", ["n", "step"]]],
   ["pool_commit", ["node_id", ["key", "value"]]],
   ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],

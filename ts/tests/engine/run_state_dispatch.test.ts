@@ -872,7 +872,7 @@ test("after a stop, a step and a resume still commit, and the resume puts the st
 
   commitPrepared(log, state, prepareRunStopped(state, "signal", ""));
   expect(state.ready).toEqual(["ordinary"]);
-  commitPrepared(log, state, prepareNodeStep(state, "second", { event: "late", attempt: 1n }));
+  commitPrepared(log, state, prepareNodeStep(state, "second", { kind: "test", event: "late", attempt: 1n }));
   expect(state.ready).toEqual(["ordinary"]);
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 1 }));
 
@@ -884,13 +884,13 @@ test("after a stop, a step and a resume still commit, and the resume puts the st
       ["second", 1],
     ]),
   );
-  expect(state.nodeSteps).toEqual(new Map([["second", [{ attempt: 1n, event: "late" }]]]));
+  expect(state.nodeSteps).toEqual(new Map([["second", [{ attempt: 1n, event: "late", kind: "test" }]]]));
   expectCommittedPath(
     log,
     new NodeStartedRecord("first"),
     new NodeStartedRecord("second"),
     new RunStoppedRecord("signal", "", ["first", "second"]),
-    new NodeStepRecord("second", { event: "late", attempt: 1n }),
+    new NodeStepRecord("second", 1, { kind: "test", event: "late", attempt: 1n }),
     new RunResumedRecord(["first", "second"], 1),
   );
 });

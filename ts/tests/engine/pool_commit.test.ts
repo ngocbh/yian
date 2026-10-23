@@ -432,7 +432,7 @@ test("a run's pool_commit values with big ints, infinities and tag-shaped record
 
 test("iterRunRecords hands a host the pool_commit payload the public JSON form decodes", async () => {
   const log = freshLog();
-  await run(await load(VALUES), log, { when: "2026-10-23" });
+  expect((await run(await load(VALUES), log, { when: "2026-10-23" })).status).toBe("succeeded");
   let checked = 0;
   for (const { envelope } of iterRunRecords(log, { kinds: ["pool_commit"] })) {
     const { payload } = envelope;

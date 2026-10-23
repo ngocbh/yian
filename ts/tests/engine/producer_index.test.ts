@@ -138,25 +138,28 @@ test("a derived kind's forward is synchronous: it returns no promise", async () 
 const entries = (state: RunState) => [...state.producers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
 /**
- * Run `text` live on an in-memory log; return the final state, the records, and the producer
- * index after each record from the run start's last commit on, by seq.
+ * Run `text` live on an in-memory log; return the loaded flow, the final state, the records, and
+ * `look(state)` after each record from the run start's last commit on, by seq (the producer index
+ * by default).
  */
-async function liveRun(
+async function liveRun<T = unknown>(
   text: string,
-  options: { inputs?: Record<string, unknown>; learnable?: boolean } = {},
-): Promise<{ state: RunState; records: readonly RecordEnvelope[]; live: Map<number, unknown> }> {
+  options: { inputs?: Record<string, unknown>; learnable?: boolean; look?: (state: RunState) => T } = {},
+): Promise<{ loaded: ComposedFlow; state: RunState; records: readonly RecordEnvelope[]; live: Map<number, T> }> {
+  const { look = entries as (state: RunState) => T, ...start } = options;
+  const loaded = await load(text);
   const log = new MemoryRunLog("r1");
-  const state = startedRun(await load(text), log, options);
-  const live = new Map<number, unknown>([[state.nextSequence - 1, entries(state)]]);
+  const state = startedRun(loaded, log, start);
+  const live = new Map<number, T>([[state.nextSequence - 1, look(state)]]);
   const append = log.append.bind(log);
   // The state before each append is the state after the record before it.
   log.append = (record: RunRecord) => {
-    live.set(state.nextSequence - 1, entries(state));
+    live.set(state.nextSequence - 1, look(state));
     return append(record);
   };
   await new FlowEngine(state, log, { growBuilder: buildGrow, numWorkers: 0 }).run();
-  live.set(state.nextSequence - 1, entries(state));
-  return { state, records: log.records(), live };
+  live.set(state.nextSequence - 1, look(state));
+  return { loaded, state, records: log.records(), live };
 }
 
 /**
@@ -238,3 +241,47 @@ test("in a learnable run, each name's commit is by the node whose start the reta
   }
   expect(checked).toBeGreaterThan(1);
 });
+
+test.each([
+  ["a CALL in a loop", CALL_IN_LOOP, {}, false],
+  ["a CALL in a loop, learnable", CALL_IN_LOOP, {}, true],
+  ["a MAP", DOUBLES, { xs: [1n, 2n, 3n] }, false],
+] as const)("replaying the log cut at any record restores the live index: %s", async (_label, text, inputs, learnable) => {
+  const { loaded, records, live } = await liveRun(text, { inputs, learnable });
+  expect(records.at(-1)!.kind).toBe("node_succeeded");
+  // A cut inside the run start can't be replayed; every later cut can.
+  const first = Math.min(...live.keys());
+  expect(live.size).toBe(records.length - first);
+  for (const [seq, expected] of live) {
+    const replayed = replayRunLog(loaded, MemoryRunLog.fromRecords(records.slice(0, seq + 1)));
+    expect([seq, entries(replayed)]).toEqual([seq, expected]);
+  }
+}, 60_000);
+
+/** A non-learnable loop of `times` iterations whose body bumps a counter. */
+const counter = (times: number) => `
+id: counter
+name: counter
+defs:
+  bump:
+    input: {x: !int}
+    nodes:
+      inc: {kind: code, input: {x: "\${input.x}"}, output: int, code: "return inputs.x + 1"}
+    output: {x: "\${inc.output}"}
+nodes:
+  count: {kind: loop, call: bump, input: {x: 0}, times: ${times}}
+output: \${count.output.x}
+`;
+
+test("a 200-iteration non-learnable loop keeps no trace and a bounded index", async () => {
+  const { state, records, live } = await liveRun(counter(200), { look: (state) => state.producers.size });
+  expect(state.trace).toBeNull();
+  expect(state.result?.output).toBe(200n);
+  // The index after each body expansion, in iteration order.
+  const sizes = records
+    .filter(({ kind, payload }) => kind === "node_expanded" && /^count(~\d+)?$/.test(payload["spawner_id"] as string))
+    .map(({ seq }) => live.get(seq)!);
+  expect(sizes).toHaveLength(200);
+  expect(sizes[199]).toBe(sizes[9]!);
+  expect(state.producers.size).toBe(state.pool.store.size + state.pool.system.size);
+}, 60_000);

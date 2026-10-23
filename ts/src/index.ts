@@ -19,13 +19,13 @@
  * - `tools.errors`: `PermanentToolError`, `TransientToolError`, `ReportedToolError` (`tools/errors`).
  *
  * Added beside them: `Diagnostic` (`diagnostics`) and `registerTemplateFn` (`expr/builtins`);
- * `ToolAttemptsFailed` (`nodes/tool/node`, Python's `yian.nodes.tool`), beside the tool errors;
+ * `ToolAttemptsFailed` (`nodes/tool/node`, Python's `yian.nodes.tool`), beside the tool errors; and
  * Python's `yian.memory.storage` names `SQLiteStorage`, `checkStoragePath` (`memory/storage/sqlite`),
  * `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownStore`, `MarkdownVersionMismatch` and
- * `markdownVersion` (`memory/storage/markdown`); and `ProfileMemory` (`memory/profile`, Python's
- * `yian.memory.profile`, which Python's `yian` doesn't export), for hosts that keep the profile
- * document in their own `MarkdownStore`. `RunResult`, `BackwardOutcome` and `Steering` are on
- * `yian/run` (`run.ts`), as Python's `yian.run`.
+ * `markdownVersion` (`memory/storage/markdown`). `ProfileMemory` (`memory/profile`, Python's
+ * `yian.memory.profile`, which Python's `yian` doesn't export) is here for hosts that keep the
+ * profile document in their own `MarkdownStore`. `RunResult`, `BackwardOutcome` and `Steering` are
+ * on `yian/run` (`run.ts`), as Python's `yian.run`.
  *
  * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`,
  * `memory_host`, nodes, `run`, tools and typesys.

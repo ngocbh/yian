@@ -97,7 +97,7 @@ are internal: they serve the CLI and yian's own code, and may change without not
 
 | Import | Names |
 |---|---|
-| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion` |
+| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
 | `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
@@ -366,6 +366,12 @@ use or throws. A `MarkdownStore` (profile memory's document) has `read(version?)
 the new version (or a promise of it); `new FileMarkdownStore(path, { createParent })` and
 `new InMemoryMarkdownStore(text)` implement it, a stale `baseVersion` throws
 `MarkdownVersionMismatch`, and `markdownVersion(text)` is the `"sha256:<hex>"` version of a text.
+A store's versions are opaque strings; it must keep every version it hands out, since resume and
+backward read the recorded one, and it throws `RangeError` for a version it doesn't have.
+
+`new ProfileMemory(store, { llmConfig, maxChars, inputBudgetChars, env, createModel, onRetry })`
+keeps one profile document in any `MarkdownStore`. Pass it in `runFlow`'s `memory` `Map`, or in
+`buildMemories`' `supplied` for a declaration without YAML config.
 
 ## Skills
 

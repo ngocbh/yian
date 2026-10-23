@@ -228,6 +228,9 @@ profile = ProfileMemory(FileMarkdownStore("people/ada.md"))
 result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
 ```
 
+Changed (TS yian): import `ProfileMemory` from `@ngocbh/yian` and pass it in a `Map`
+(`memory: new Map([["about", profile]])`).
+
 - **Recall.** A run pins the version that is current when it starts. Every AGENT
   whose stack holds the profile's key sees the whole document, even while
   someone edits it. A profile memory is one key like any other. YAML `config`
@@ -260,7 +263,9 @@ result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
   not to repeat what the document already says.
 - **Recovery.** The session snapshot records only the version and a hash of the
   text. `resume_flow(..., memory=...)` and later backward reopen that exact
-  version; an unknown version is a `MemorySetupError`. The run log still holds
+  version, so the store must keep every version it handed out. An unknown
+  version is a `MemorySetupError`, from `resume_flow` for an unfinished run and
+  from the first `backward` for a finished one. The run log still holds
   profile text: AGENT evidence has the recalled document, and learning records
   have the proposed one. Keep run logs as private as the profile.
 - **Host edits.** `profile.read()` returns `(text, version)`, and
@@ -302,7 +307,9 @@ written. A crash while appending can
 leave a partial last line; readers should skip lines that are not valid JSON.
 Locking is single-host. Other storage implements the `MarkdownStore` protocol:
 `read(version=None) -> (text, version)` and
-`write(text, *, base_version, provenance=None) -> version`. It raises
+`write(text, *, base_version, provenance=None) -> version`. Versions are opaque
+strings the store chooses (a git blob id works), and `read(version)` returns
+that same version. It raises
 `MarkdownVersionMismatch` when `base_version` is stale (nothing was written),
 `LookupError` for an unknown version, `ValueError` for text it cannot decode, and
 `OSError` when storage cannot be reached.
@@ -312,7 +319,10 @@ Changed (TS yian): `read(version?)` returns `[text, version]`, and
 with a promise and `InMemoryMarkdownStore` answers at once; a host store may do either, and
 yian awaits. An unknown version, or stored text that isn't UTF-8, throws `RangeError`. Storage
 that can't be reached throws a Node system error, an `Error` with a string `code`: `ENOENT` for
-a missing parent directory, `EIO` when the lock fails. Bad provenance throws `TypeError` or
+a missing parent directory, `EIO` when the lock fails. An error other than a `RangeError`, a
+`TypeError`, a Node system error or `MarkdownVersionMismatch` passes through profile memory
+unchanged; on restore, a `RangeError`, a `TypeError` or a Node system error becomes
+`profile.snapshot_unavailable`. Bad provenance throws `TypeError` or
 `RangeError` naming `provenance`, and nothing is written. The document, the kept versions
 (`.<name>.versions/<sha256>.md`), and the write log are byte-compatible with Python yian's,
 so a profile directory written by Python opens in TS and continues. Each log line is exactly

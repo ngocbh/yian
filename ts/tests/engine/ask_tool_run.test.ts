@@ -102,8 +102,31 @@ test("an ask with no handler is refused before the log exists", async () => {
 // it throws this once the engine has ended waiting.
 const WAITING_UNREPORTED = "Error: engine returned without deriving a terminal run result";
 
-// A YAML take can't read an Inbox input until the loader lets it; tool_builtins_engine.test.ts
-// runs a take node through the engine.
+test("a YAML TOOL take passes the run-start checks with no tools and waits", async () => {
+  const path = freshLog();
+  const flow = `
+id: gate
+name: gate
+input:
+  m: !Inbox(str)
+nodes:
+  gate:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.m}
+output: \${gate.output}
+`;
+
+  const outcome = await run(flow, { log: path, tools: {} }).then(
+    (result) => result.status,
+    (error: unknown) => String(error),
+  );
+
+  expect(["waiting", WAITING_UNREPORTED]).toContain(outcome);
+  expect(readFileSync(path, "utf8")).toContain('"run_waiting"');
+});
+
 test("a YAML TOOL sleep passes the run-start checks with no tools and waits", async () => {
   const path = freshLog();
 

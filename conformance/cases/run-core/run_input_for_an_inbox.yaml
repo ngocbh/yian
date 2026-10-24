@@ -1,7 +1,6 @@
 # TS-only: a run takes no input for an inbox; the host sends its events by name.
 kind: run
 python_skip: "TS-only: inboxes and durable suspend (#1025)"
-pending: "the run-start check refuses take until the TOOL node runs the built-ins (#1055)"
 flow: |
   id: f
   name: f

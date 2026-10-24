@@ -361,7 +361,7 @@ test("with one worker, a woken agent waits for the running node's slot", async (
   });
   await gate.entered; // the agent pended and waits; slow holds the one slot
   await complete(log, "r/agent/1/0", { output: "yes" });
-  await Bun.sleep(5);
+  await new Promise((resolve) => setTimeout(resolve, 5));
   expect(kinds(log)).not.toContain("node_woken");
   gate.release();
   const result = await running;

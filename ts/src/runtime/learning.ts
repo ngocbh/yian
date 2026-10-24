@@ -148,7 +148,7 @@ export function takeMessages(pending: PendingMessages, source: SourceRef): Backw
  * Return feedback that reached an AGENT's new messages as feedback on its work, which its backward
  * reads against its output: text and null as they are; a selection lifted to the `list(Message)`
  * shape as one text, a line `new_messages<path>: <text>` per text leaf, lists by index and records
- * by key in code-unit order.
+ * by key in code-unit order, or null when it has no text leaf.
  *
  * @example
  * workFeedback([null, { parts: [{ text: "wrong tool" }] }]); // "new_messages[1].parts[0].text: wrong tool"
@@ -164,7 +164,7 @@ export function workFeedback(feedback: FeedbackValue): FeedbackValue {
     }
   };
   walk(feedback, NEW_MESSAGES);
-  return lines.join("\n");
+  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 /**

@@ -32,7 +32,7 @@ import { growthIndex } from "../../src/runtime/state.ts";
 import { advance, foldRunLog, replayRunLog, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { logJson } from "../../src/typesys/json.ts";
-import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-new-messages-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -85,9 +85,9 @@ function messagesSeqs(path: string): number[] {
 async function run(
   model: ChatModel,
   text: string,
-  options: { learnable?: boolean; inputs?: Record<string, unknown> } = {},
+  options: { learnable?: boolean; inputs?: Record<string, unknown>; log?: string } = {},
 ): Promise<{ log: string; flow: ComposedFlow; result: Awaited<ReturnType<typeof runFlow>> }> {
-  const log = join(mkdtempSync(join(root, "run-")), "log.jsonl");
+  const log = options.log ?? join(mkdtempSync(join(root, "run-")), "log.jsonl");
   const flow = await loadFlow(text);
   const result = await runFlow(flow, options.inputs ?? {}, {
     llmConfig: CONFIG,
@@ -166,6 +166,28 @@ test("replay rebuilds the reader's value from the messages commit", async () => 
     const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)));
     expect(logJson(state.pool.store.get("c")!.toWire())).toBe(logJson(folded.records[end.seq]!.value!.toWire()));
   }
+});
+
+test("a crash between a tool call and its result: the resumed reader's history holds the unknown result", async () => {
+  const uncut = await run(toolTurn(), TOP);
+  const callSeq = records(uncut.log).find(({ record }) => (record as { step?: { kind?: string } }).step?.kind === "model_call")!.seq;
+  const log = join(mkdtempSync(join(root, "run-")), "log.jsonl");
+  await crashAfter(callSeq + 1, () => run(toolTurn(), TOP, { log }));
+  const resumed = await advance({
+    log,
+    tools: TOOLS,
+    env: (name) => (name === "YIAN_MODEL_RETRIES" ? "0" : NO_ENV(name)),
+    scheduler: virtualScheduler(START + 60_000),
+    models: serving(new ScriptedModel([textReply("done")], CONFIG)),
+  });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  const history = (resumed.output as { history: MessageValue[] }).history;
+  expect(history.map((message) => message.role)).toEqual(["assistant", "tool", "assistant"]);
+  const result = history[1]!.parts[0] as { type: string; call_id: string; is_error?: boolean; content: string };
+  expect([result.type, result.call_id, result.is_error]).toEqual(["tool_result", "c1", true]);
+  expect(result.content).toContain("outcome is unknown");
+  checkConversation(history);
+  expect(messagesSeqs(log)).toHaveLength(1);
 });
 
 // --- a LOOP history --- //
@@ -348,7 +370,9 @@ test("workFeedback keeps text and flattens a selection of new messages to labell
   expect(workFeedback(null)).toBeNull();
   expect(workFeedback([null, { parts: [{ text: "wrong tool" }] }])).toBe("new_messages[1].parts[0].text: wrong tool");
   expect(workFeedback([{ role: "a", parts: "b" }])).toBe("new_messages[0].parts: b\nnew_messages[0].role: a");
-  expect(workFeedback([null, null])).toBe("");
+  // A selection with no text leaves carries no feedback.
+  expect(workFeedback([null, null])).toBeNull();
+  expect(workFeedback([{ parts: [null] }])).toBeNull();
 });
 
 test("takeOccurrenceMessages adds the messages sent to an AGENT's new messages, as work feedback, in order", async () => {

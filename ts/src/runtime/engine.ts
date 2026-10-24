@@ -139,6 +139,11 @@ export interface FlowEngineOptions {
   /** The run's folder (its log's folder), passed to every node; `null` for a run without a log. */
   runDir?: string | null;
   /**
+   * Whether the run has a durable log a host can answer pending calls in (`NodeSteps.durable`);
+   * `true` when omitted. A run without a log passes `false`, so a node's `pending()` fails it.
+   */
+  durable?: boolean;
+  /**
    * Gets each AGENT model call's start, chunks and end, and drops a node's calls when the node
    * settles; the run boundary hands it the appended records itself (`LiveChannel.wrap`).
    */
@@ -335,6 +340,8 @@ export class FlowEngine {
   readonly #controller = new AbortController();
   /** The host's stop, linked to the run's while `run()` runs. */
   readonly #hostSignal: AbortSignal | null;
+  /** Whether the run has a durable log a host can answer pending calls in. */
+  readonly #durable: boolean;
   /** The steering nodes receive: the host's interrupt signal, whose failures stop the run. */
   readonly #steering: Steering | null;
   /** The error that ended the run, once one did; the first wins. */
@@ -413,6 +420,7 @@ export class FlowEngine {
     this.runDir = runDir;
     this.live = live;
     this.#hostSignal = signal;
+    this.#durable = options.durable ?? true;
     const inbox = this.steering;
     this.#steering =
       inbox === null
@@ -696,7 +704,8 @@ export class FlowEngine {
     };
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, callViews(state, nodeId), state.runDefaults.maxEventBytes);
+    const calls = callViews(state, nodeId);
+    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable);
   }
 
   /**
@@ -833,8 +842,8 @@ export class FlowEngine {
   }
 
   /**
-   * Keep one scheduler sleep for the earliest open deadline of a waiting node; it nudges the
-   * dispatcher. `blocked` says a wakeable node waits for a worker slot.
+   * Keep one scheduler sleep for the earliest open deadline of a waiting node, at which that node
+   * is due; it nudges the dispatcher. `blocked` says a wakeable node waits for a worker slot.
    */
   #armTimer(blocked = false): void {
     const at = wakeAt(this.state.waits);
@@ -845,10 +854,9 @@ export class FlowEngine {
     const now = scheduler.now();
     const ms = recordTimeMs(at, "deadline") - now;
     if (ms <= 0) {
-      // The deadline passed since the dispatcher last looked: wake it now. A past deadline that
-      // isn't due waits on its node's other calls, and a timer for it would only spin.
-      // A due node that waits for a worker slot is looked at again once the next completion frees
-      // one, so nudging now would only spin.
+      // A deadline passed since the dispatcher last looked: wake its node now. A due node that
+      // waits for a worker slot is looked at again once the next completion frees one, so nudging
+      // now would only spin.
       if (!blocked && dueTimeouts(this.state.waits, now).size > 0) this.#queue?.nudge();
       return;
     }

@@ -62,7 +62,8 @@ const ASK_USER_DESCRIPTION =
   "sentences. When there are clear choices, pass 2-4 short `options`; the user can always type " +
   "their own answer.";
 
-// The schema Python's LangChain binding gives the model for `ask_user`, key order included.
+// The schema Python's LangChain binding gives the model for `ask_user`, key order included, plus
+// `timeout`, which TS yian adds.
 const ASK_USER_PARAMETERS: JsonObject = {
   properties: {
     question: { type: "string" },
@@ -71,9 +72,20 @@ const ASK_USER_PARAMETERS: JsonObject = {
       default: null,
       description: "Optional 2-4 short answer choices. The user can always type a different answer.",
     },
+    timeout: {
+      anyOf: [{ type: "string" }, { type: "null" }],
+      default: null,
+      description:
+        "Optional: how long to wait for an answer, such as 30m, 24h or 2d. After it the call returns 'timed out: no answer'.",
+    },
   },
   required: ["question"],
   type: "object",
+};
+
+// Set by the agent from `timeout`, never by the model: checked on the trusted path only.
+const ASK_USER_TRUSTED_PROPERTIES: JsonObject = {
+  deadline: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
 };
 
 const ASK_DESCRIPTION = "Ask a person and wait for the answer.";
@@ -326,8 +338,9 @@ function sortedIds(tools: ReadonlyMap<string, unknown>): string[] {
 /**
  * Wrap a host handler in the fixed `ask_user` tool.
  *
- * The model sees `question` and optional `options`. The handler receives the request fields, absent
- * ones `null`, the call's id with no deadline and no extras, and the call's context.
+ * The model sees `question`, optional `options` and optional `timeout`. The handler receives the
+ * request fields, absent ones `null`, the call's id, the `deadline` the agent computed from
+ * `timeout` (on the trusted path; `null` without one), no extras, and the call's context.
  */
 function askUserTool(handler: AskHandler): FunctionTool {
   return new FunctionTool({
@@ -344,7 +357,8 @@ function askUserTool(handler: AskHandler): FunctionTool {
           title: null,
           nodeId: null,
           callId: ctx.callId,
-          deadline: null,
+          // The agent turned the model's `timeout` into `deadline`; the handler never sees the text.
+          deadline: (args.deadline ?? null) as string | null,
           extra: {},
         },
         ctx,
@@ -546,6 +560,8 @@ export class ToolSet {
         built.set(ASK, ask);
         const properties = { ...(ask.parametersJsonSchema.properties as JsonObject), ...ASK_TRUSTED_PROPERTIES };
         trusted.set(ASK, { ...ask.parametersJsonSchema, properties });
+        const userProperties = { ...(ASK_USER_PARAMETERS.properties as JsonObject), ...ASK_USER_TRUSTED_PROPERTIES };
+        trusted.set(ASK_USER, { ...ASK_USER_PARAMETERS, properties: userProperties });
       } else if (RESERVED_TOOL_NAMES.has(key)) {
         throw new RangeError(`tools[${JSON.stringify(key)}]: the name is reserved by yian: ${reservedReason(key)}`);
       } else if (isFunctionTool(entry)) {
@@ -742,6 +758,22 @@ export class ToolSet {
   }
 
   /**
+   * Check one call as `validate` does, against the tool's full schema, host-injected fields
+   * included; only the ask tools have any (`ask_user`'s `deadline`, which the agent sets from the
+   * model's `timeout`).
+   *
+   * @returns The checked call, for `invoke` and `isConcurrencySafe`.
+   * @throws As `validate` throws, against the full schema.
+   */
+  async validateTrusted(
+    toolId: string,
+    inputs: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<CheckedCall> {
+    return await this.checkedCall(toolId, inputs, true, options?.signal);
+  }
+
+  /**
    * Call one tool: a call `validate` returned, or a tool id and its public arguments.
    *
    * `invoke(call, options)` runs the tool `validate` looked up, with this set's context, run id
@@ -789,8 +821,8 @@ export class ToolSet {
   /**
    * Check and call one tool through its full schema, including host-injected fields.
    *
-   * Only the ask tools have injected fields: `ask_user` takes `questions`, `answerSchema`, `title`
-   * and `nodeId`, and `ask` takes `answerSchema`, `title`, `nodeId` and `deadline`. Every other tool
+   * Only the ask tools have injected fields: `ask_user` takes `deadline`, and `ask` takes
+   * `answerSchema`, `title`, `nodeId` and `deadline`. Every other tool
    * is checked as `invoke` checks it, its validator included.
    *
    * @param toolId The id of the tool to call.

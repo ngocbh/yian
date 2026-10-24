@@ -238,7 +238,7 @@ test("agent binds and calls granted per-run tools", async () => {
 
   expect(outcome).toEqual(new Output("done"));
   expect(boundNames(model)).toEqual(["shout", "ask_user"]);
-  expect(Object.keys(model.requests[0]!.tools[1]!.parameters.properties as object).sort()).toEqual(["options", "question"]);
+  expect(Object.keys(model.requests[0]!.tools[1]!.parameters.properties as object).sort()).toEqual(["options", "question", "timeout"]);
   expect(model.requests[1]!.messages.at(-1)!.parts).toEqual([
     new ToolResultPart({ callId: "call-1", name: "shout", content: "HI" }),
   ]);

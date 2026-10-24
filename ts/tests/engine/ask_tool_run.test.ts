@@ -18,7 +18,8 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { pending } from "../../src/tools/context.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected } from "./run_state_fixtures.ts";
@@ -255,4 +256,28 @@ test.each([
   expect(result.status).toBe("succeeded");
   expect(result.output).toBeNull();
   expect(readFileSync(path, "utf8")).not.toContain('"node_waiting"');
+});
+
+test("an ask with no output: that nobody answers by its deadline fails tool.timeout", async () => {
+  const log = freshLog();
+  const flow = gateFlow("ask", '      prompt: "Ship?"\n      timeout: "1h"');
+  const tools = { ask: () => pending() };
+  const waiting = await run(flow, { log, scheduler: virtualScheduler(START), tools });
+  expect(waiting.status).toBe("waiting");
+
+  const result = await advance({ log, env: hostEnv(dir), scheduler: virtualScheduler(START + 2 * 3_600_000), tools });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure?.code).toBe("tool.timeout");
+  expect(result.failure?.message).toBe(
+    "TOOL node 'gate' (ask): nobody answered by 2026-10-23T01:00:00.000Z; declare output: Optional(...) to route on a timeout",
+  );
+});
+
+test("a run with no log refuses an ask's pending(): nothing could answer it", async () => {
+  const result = await run(gateFlow("ask", '      prompt: "Ship?"'), { log: null, tools: { ask: () => pending() } });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure?.nodeId).toBe("gate");
+  expect(result.failure?.message).toContain("returned pending() outside a durable run; give the run a log");
 });

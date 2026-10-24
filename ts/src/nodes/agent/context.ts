@@ -26,6 +26,7 @@ import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps, type SteerInbox, type Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
+import type { CloserReason } from "./memory.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =
@@ -154,9 +155,9 @@ export interface ToolResultFields {
   /**
    * Set only on a result yian wrote in place of running the call: `skipped` for one a host
    * interrupt skipped, `crashed` for one a resume closed because its run was cut off before its
-   * result.
+   * result, `timed_out` for an `ask_user` whose deadline passed.
    */
-  readonly closed?: "skipped" | "crashed";
+  readonly closed?: "skipped" | CloserReason;
 }
 
 /** A recorded step and its `n`. */
@@ -169,7 +170,7 @@ interface NumberedStep {
 export interface RecordedResult {
   readonly output: string;
   readonly isError: boolean;
-  /** `skipped` or `crashed` for a result yian wrote in place of running the call, else `null`. */
+  /** `skipped`, `crashed` or `timed_out` for a result yian wrote in place of running the call, else `null`. */
   readonly closed: string | null;
 }
 
@@ -479,18 +480,32 @@ export class AgentSteps {
 
   /**
    * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
-   * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`) and `index` (the call's
-   * place among the reply's runnable calls).
+   * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`), `index` (the call's
+   * place among the reply's runnable calls), and `deadline` (a record time) for an `ask_user` with a
+   * timeout.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
    */
-  pending(call: { callId: string; tool: string; toolCallId: string; reply: number; index: number }): number {
-    const { callId, tool, toolCallId, reply, index } = call;
-    return this.#record(
-      { kind: "pending", call_id: callId, tool, tool_call_id: toolCallId, reply: BigInt(reply), index: BigInt(index) },
-      { settled: true },
-    );
+  pending(call: {
+    callId: string;
+    tool: string;
+    toolCallId: string;
+    reply: number;
+    index: number;
+    deadline: string | null;
+  }): number {
+    const { callId, tool, toolCallId, reply, index, deadline } = call;
+    const step: ValueRecord = {
+      kind: "pending",
+      call_id: callId,
+      tool,
+      tool_call_id: toolCallId,
+      reply: BigInt(reply),
+      index: BigInt(index),
+    };
+    if (deadline !== null) step["deadline"] = deadline;
+    return this.#record(step, { settled: true });
   }
 
   /** The fields every `model_call` step starts with. */

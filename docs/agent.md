@@ -254,7 +254,10 @@ host answers each call with `complete(log, callId, {output} | {error})`, or list
 with `pendingCalls`; the call id is `<run id>/<node>/<n>/<index>`. Once every call is answered
 the agent wakes, replays its recorded model calls and tool results without making them again,
 and its next request reads every result of the reply in call order. A pended call is observed as
-a `ToolCallStarted` with no `ToolCallFinished`. Memory recalled at the wake doesn't change the
+a `ToolCallStarted` with no `ToolCallFinished`. The model may give `ask_user` a `timeout`, such as
+`30m`, `24h` or `2d`; when nobody answers in time it reads `timed out: no answer` as the call's
+error result, and if the run was cut off while a call waited it reads that the call's outcome is
+unknown. A run needs a log for a call to wait. Memory recalled at the wake doesn't change the
 replayed calls: a request's recorded digest leaves the recalled sections out, and the new call
 after the wake reads the fresh recall. See
 [Blocking human interaction](api.md#blocking-human-interaction).

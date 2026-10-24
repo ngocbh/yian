@@ -12,7 +12,9 @@
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
  * (`AgentSteps`). A resumed start replays them: each recorded reply is taken in place of its model
  * call, and each tool call with a recorded result gets it without running; a replayed call with no
- * result is closed as `crashed`, its outcome unknown. Live calls follow the last recorded one.
+ * result is closed with the word of the record that closed it (`crashed` when none did: its
+ * outcome is unknown), or pended again while the run still holds it open. Live calls follow the
+ * last recorded one.
  *
  * A tool call whose handler returns `pending()` is written as a `pending` step, which registers it
  * with the run under its call id `<run>/<node>/<n>/<index>`; the reply's other calls still run, and
@@ -52,9 +54,10 @@ import {
 import { realScheduler, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
-import { isPending } from "../../tools/context.ts";
-import { isReportedToolError } from "../../tools/errors.ts";
+import { ASK_USER, isPending } from "../../tools/context.ts";
+import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
+import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
 import { Output, Pending, type SteerInbox } from "../base.ts";
 import {
@@ -81,7 +84,7 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, TOOL_OUTCOME_UNKNOWN, toolText } from "./memory.ts";
+import { closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
 import { steerMessages } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
@@ -404,6 +407,8 @@ interface PlannedCall {
   readonly index: number;
   /** The call's yian id, which a `pending` step names; `undefined` outside a run or for `load_skill`. */
   readonly callId: string | undefined;
+  /** When an `ask_user` call times out (a record time), from the model's `timeout`; else `null`. */
+  readonly deadline: string | null;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
@@ -460,11 +465,14 @@ interface ReplayedCall {
 
 /**
  * Give a replayed reply's tool calls their results without running any, appending a tool message
- * per call in call order. A call keeps the result an earlier start recorded. A call with none (its
- * run was cut off before its result was written) is checked as live: a failed check fails the
- * node as live; otherwise it is closed, its `tool_result` step written as `crashed`, an error
- * reading `TOOL_OUTCOME_UNKNOWN`. Unparsed calls are not in `turn.calls`, so they get nothing, as
- * live.
+ * per call in call order. A call keeps the result an earlier start recorded. A call with none is
+ * checked as live: a failed check fails the node as live. Otherwise a call the run still holds
+ * open (it pended and waits on, beside a sibling a deadline closed) is pended again, with no
+ * closer and no handler call, and gets no tool message: the loop then returns `Pending`. Any other
+ * call is closed with the word of the record that closed it (`closerResult`: `timed_out` for an
+ * ask whose deadline passed), `crashed` when none did (its run was cut off before its result),
+ * the closer written as its `tool_result` step. Unparsed calls are not in `turn.calls`, so they get
+ * nothing, as live.
  *
  * Every call is checked, so the calls form the groups they formed live and their results commit
  * in the same order; a call with a recorded result keeps it whatever its check says now.
@@ -498,8 +506,15 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
         commit();
         return await failCall(turn, call, index, check);
       }
-      result = { output: TOOL_OUTCOME_UNKNOWN, isError: true, closed: "crashed" };
-      steps.toolResult({ callId: call.id, startedAt: null, output: result.output, isError: true, closed: "crashed" });
+      const callId = agentCallId(turn, index);
+      const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+      if (callId !== undefined && view?.state === "open") {
+        turn.pended.set(index, callId);
+        continue;
+      }
+      const { output, closed } = closerResult(view?.closedReason === "timed_out" ? "timed_out" : "crashed");
+      result = { output, isError: true, closed };
+      steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     }
     if ("planned" in check && check.safe) {
       group.push({ call, result });
@@ -547,7 +562,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   if (skills.size > 0 && call.name === LOAD_SKILL) {
     // `load_skill` only reads the granted skills.
     const invoke = async () => invokeLoadSkill(skills, args);
-    return { planned: { call, index, callId: undefined, invoke }, safe: true };
+    return { planned: { call, index, callId: undefined, deadline: null, invoke }, safe: true };
   }
   if (!turn.granted.includes(call.name)) {
     const error = new AgentLoopError(
@@ -556,15 +571,29 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     );
     return { error, granted: false };
   }
+  // An ask's deadline is fixed before its handler runs, which gets it; the pending step records it.
+  let deadline: string | null = null;
+  if (call.name === ASK_USER && typeof args["timeout"] === "string") {
+    try {
+      deadline = formatRecordTime((ctx.scheduler ?? realScheduler).now() + parseDuration(args["timeout"]) * 1000);
+    } catch (error) {
+      if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
+      const reported = new ReportedToolError(`ask_user timeout: ${error.message}`);
+      return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(reported) }, safe: false };
+    }
+  }
   let checked: CheckedCall;
   try {
-    checked = await toolset.validate(call.name, args, { signal: ctx.signal });
+    checked =
+      deadline === null
+        ? await toolset.validate(call.name, args, { signal: ctx.signal })
+        : await toolset.validateTrusted(call.name, { ...args, deadline }, { signal: ctx.signal });
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
     checkNodeStopped(turn);
     // Python checks the arguments inside the call, where a reported error is the call's result.
     if (isReportedToolError(error)) {
-      return { planned: { call, index, callId: undefined, invoke: () => Promise.reject(error) }, safe: false };
+      return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(error) }, safe: false };
     }
     return { error, granted: true };
   }
@@ -572,10 +601,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // and a resumed start numbers its steps after the recorded ones, so a key never names two
   // calls that ran: a reply a crash cut before its `model_call` was written ran no tool. Outside a
   // run (no run id) the tool set gives each call a fresh id.
-  const runId = toolset.runId;
-  const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
+  const callId = agentCallId(turn, index);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
-  return { planned: { call, index, callId, invoke }, safe: toolset.isConcurrencySafe(checked) };
+  return { planned: { call, index, callId, deadline, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
@@ -646,7 +674,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
    * `pending` step.
    */
   const settle = (planned: PlannedCall, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
-    const { call, index, callId } = planned;
+    const { call, index, callId, deadline } = planned;
     try {
       if (!reported && isPending(value)) {
         if (turn.interrupt !== undefined) {
@@ -656,14 +684,14 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
               "the host's interrupt signal can't wait for a later answer yet; answer it inline",
           );
         }
-        if (callId === undefined || turn.ctx.steps === undefined) {
+        if (callId === undefined || turn.ctx.steps === undefined || !turn.ctx.steps.durable) {
           throw new AgentLoopError(
             `agent node ${reprText(turn.ctx.nodeId)}: tool ${reprText(call.name)} returned pending() outside a durable run; ` +
               "give the run a log",
           );
         }
         if (!signal?.aborted) {
-          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index });
+          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline });
           turn.pended.set(index, callId);
         }
         return { pending: callId };
@@ -726,6 +754,12 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     signal?.removeEventListener("abort", relay);
   }
   return false;
+}
+
+/** The yian id of call `index` of the turn's reply, `<run>/<node>/<n>/<index>`; `undefined` outside a run. */
+function agentCallId(turn: ToolTurn, index: number): string | undefined {
+  const runId = turn.toolset.runId;
+  return runId ? `${runId}/${turn.ctx.nodeId}/${turn.n}/${index}` : undefined;
 }
 
 /** The node's stop signal: the context's, else the tool set's run signal. */

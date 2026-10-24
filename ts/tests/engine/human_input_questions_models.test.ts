@@ -17,7 +17,7 @@
 
 import { expect, test } from "bun:test";
 
-import { parseQuestions, QuestionSpecError } from "../../src/nodes/human_input/questions.ts";
+import { parseQuestions, QuestionSpecError } from "../../src/nodes/tool/questions.ts";
 
 /** Expect `parseQuestions(raw)` to throw a `QuestionSpecError` reading `message`. */
 function expectRejected(raw: unknown, message: string): void {

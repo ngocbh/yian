@@ -33,7 +33,7 @@ import { type RunEvent, RunFailed } from "../../src/events.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
-import { QuestionSpecError } from "../../src/nodes/human_input/questions.ts";
+import { QuestionSpecError } from "../../src/nodes/tool/questions.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { type AskHandler, type AskRequest, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
 import { engine, graph, rejected } from "./run_state_fixtures.ts";

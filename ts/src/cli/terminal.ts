@@ -7,7 +7,7 @@ import { emitKeypressEvents } from "node:readline";
 
 import { reprText } from "../diagnostics.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import type { QuestionSpec } from "../nodes/human_input/questions.ts";
+import type { QuestionSpec } from "../nodes/tool/questions.ts";
 import type { ToolContext } from "../tools/context.ts";
 import type { AskUserRequest } from "../tools/registry.ts";
 import { type JsonValue, JSONDecodeError, parseJson } from "../typesys/json.ts";

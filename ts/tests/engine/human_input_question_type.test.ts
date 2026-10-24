@@ -24,7 +24,7 @@ import { RunSucceeded } from "../../src/events.ts";
 import { typeToSchema } from "../../src/nodes/agent/structured.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
-import { questionListType } from "../../src/nodes/human_input/questions.ts";
+import { questionListType } from "../../src/nodes/tool/questions.ts";
 import { runFlow } from "../../src/run.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";

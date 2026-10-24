@@ -47,7 +47,7 @@
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { ValueContract } from "../../nodes/contracts.ts";
-import { questionListType } from "../../nodes/human_input/questions.ts";
+import { questionListType } from "../../nodes/tool/questions.ts";
 import { ASK } from "../../tools/context.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { AgentDescriptor, type AgentDescriptorFields } from "../nodes/agent.ts";

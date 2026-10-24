@@ -1,5 +1,5 @@
 /**
- * Typed specs for human-input questions and a validating parser.
+ * Typed specs for an `ask`'s questions and a validating parser.
  *
  * A question is one prompt the host shows a person: free text by default, or a choice over
  * `options` (single- or multi-select). `parseQuestions` turns the raw list authored in a flow

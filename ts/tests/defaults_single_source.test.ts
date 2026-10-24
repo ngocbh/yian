@@ -658,5 +658,5 @@ test("oauth callback cap is not inline", () => {
 });
 
 test("question count cap is not inline", () => {
-  expect(comparesLengthTo(readFileSync(join(SRC, "nodes/human_input/questions.ts"), "utf8"), 4n)).toBe(false);
+  expect(comparesLengthTo(readFileSync(join(SRC, "nodes/tool/questions.ts"), "utf8"), 4n)).toBe(false);
 });

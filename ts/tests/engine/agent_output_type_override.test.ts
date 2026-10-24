@@ -11,7 +11,7 @@ import { expect, test } from "bun:test";
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
-import { questionListType } from "../../src/nodes/human_input/questions.ts";
+import { questionListType } from "../../src/nodes/tool/questions.ts";
 
 test("contract override wins without invoking the output reader", () => {
   const contract = new ValueContract(questionListType());

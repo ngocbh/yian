@@ -12,7 +12,7 @@
  * backoff with jitter on its scheduler, and records each retried attempt's failure and start as
  * node steps in the run log, so a resumed run continues the attempt count.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/human_input/questions, defaults,
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/tool/questions, defaults,
  *                diagnostics, platform, tools and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
@@ -52,7 +52,7 @@ import {
 } from "../base.ts";
 import { BindingError } from "../binding.ts";
 import { type CallView, HostToolCall, outputContractType } from "../contracts.ts";
-import { parseQuestions } from "../human_input/questions.ts";
+import { parseQuestions } from "./questions.ts";
 
 /**
  * A TOOL call failed after at least one retry; the message lists every attempt.

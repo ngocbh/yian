@@ -17,7 +17,7 @@ import { current } from "../../defaults.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.ts";
 import { siteLabel } from "../../nodes/human_input/node.ts";
-import { parseQuestions, QuestionSpecError } from "../../nodes/human_input/questions.ts";
+import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";

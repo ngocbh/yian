@@ -5,7 +5,7 @@
  * through the trusted metadata path, and returns the handler's answer as its one `Output`. The
  * worker remains occupied until the host answers or raises.
  *
- * Knows about:   nodes/base, nodes/human_input/questions, diagnostics, expr, tools and typesys.
+ * Knows about:   nodes/base, nodes/tool/questions, diagnostics, expr, tools and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
@@ -14,7 +14,7 @@ import { renderTemplateRecord } from "../../expr/template.ts";
 import { ToolSet } from "../../tools/registry.ts";
 import { isList, isRecord, type ValueRecord } from "../../typesys/values.ts";
 import { checkNamedPrompt, hostOutput, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
-import { parseQuestions, type QuestionSpec } from "./questions.ts";
+import { parseQuestions, type QuestionSpec } from "../tool/questions.ts";
 
 /**
  * A structural gate that blocks its worker until a person answers.

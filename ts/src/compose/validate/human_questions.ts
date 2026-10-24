@@ -15,7 +15,7 @@
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { HumanInputNode } from "../../nodes/human_input/node.ts";
-import { parseQuestions, QuestionSpecError } from "../../nodes/human_input/questions.ts";
+import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 

@@ -29,7 +29,7 @@ import { expect, test } from "bun:test";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { NodeKind, Output } from "../../src/nodes/base.ts";
 import { HumanInputNode, siteLabel, templateSites } from "../../src/nodes/human_input/node.ts";
-import { QuestionSpecError } from "../../src/nodes/human_input/questions.ts";
+import { QuestionSpecError } from "../../src/nodes/tool/questions.ts";
 import { type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
 import { rejected } from "./run_state_fixtures.ts";
 

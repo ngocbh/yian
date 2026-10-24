@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { parseQuestions } from "../../src/nodes/human_input/questions.ts";
+import { parseQuestions } from "../../src/nodes/tool/questions.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import type { AskUserRequest } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";

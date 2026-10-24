@@ -1,0 +1,93 @@
+# From tests/engine/test_resolve_until.py::test_non_date_error_is_origin_neutral_for_raw_and_wrapped_sources.
+# A sleep `until` that resolves to a non-text value fails contract.input at the node. The input is
+# `!Any`: an int-typed reference is refused at load.
+kind: run
+rules: [run-log]
+flow: |
+  id: wait_int
+  name: wait_int
+  input:
+    n: !Any
+  nodes:
+    settle:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: ${input.n}
+  output: ${settle.output}
+inputs:
+  n: 5
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      message: 'sleep `until` did not resolve to a date/datetime: 5'
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 9]
+      node: settle
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {n: 5}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        n: 5
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, settle]
+  - - node_failed
+    - settle
+    - failure:
+        code: contract.input
+        message: 'sleep `until` did not resolve to a date/datetime: 5'
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        node: settle
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        n: 5
+  - - NodeStarted
+    - node_id: settle
+  - - NodeFailed
+    - failure:
+        code: contract.input
+        message: 'sleep `until` did not resolve to a date/datetime: 5'
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        node: settle
+  - - RunFailed
+    - failure:
+        code: contract.input
+        message: 'sleep `until` did not resolve to a date/datetime: 5'
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        node: settle

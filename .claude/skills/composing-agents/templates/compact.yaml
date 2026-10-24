@@ -7,8 +7,8 @@
 # (auto-wired by name, so you refer to it bare in the prompt); the flow `output:`
 # is the node's output TYPE, re-exported as the flow output.
 #
-# Allowed only for the value-producing LEAF kinds: agent, code, tool,
-# human_input. case/call/map reference other nodes a one-node flow has none of —
+# Allowed only for the value-producing LEAF kinds: agent, code, tool.
+# case/call/map reference other nodes a one-node flow has none of —
 # use the full `nodes:` form (see minimal.yaml) for those.
 
 id: greet

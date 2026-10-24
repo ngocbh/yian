@@ -18,21 +18,16 @@ ${extra}output: null
 
 const refused = (text: string) => loadError(() => assembleText(text)).message;
 
-test("tool_id: ask_user stays a plain tool call", () => {
+test("tool_id: ask_user is the ask built-in, its old name", () => {
   const text = toolFlow(
     "ask_user",
-    `    retries: 2
-    input:
-      question: Ship it?
-      options:
-        - yes
-        - no
+    `    input:
+      prompt: Ship?
 `,
   );
   const node = assembleText(text).flow.compiled.nodes.get("t") as ToolNode;
-  expect(node.toolId).toBe("ask_user");
-  expect(node.builtin).toBeNull();
-  expect(node.retries).toBe(2);
+  expect(node.toolId).toBe("ask");
+  expect(node.builtin).toBe("ask");
 });
 
 test("load_skill is refused as a tool id", () => {
@@ -61,6 +56,17 @@ test.each([
   ["output", "    output: str\n", "take's output is inferred ({events: list(T), closed: bool}); remove `output:`"],
 ])("take refuses %s", (_label, extra, message) => {
   expect(refused(takeFlow(extra))).toContain(message);
+});
+
+// An untyped producer leaves the value's type unproven, but a container is never a date.
+test.each([
+  ["a list", "        - \${a.output}\n"],
+  ["a mapping", "        at: \${a.output}\n"],
+])("a sleep until written as %s holding a reference is refused", (shape, body) => {
+  const text =
+    "id: f\nname: f\nnodes:\n  a:\n    kind: code\n    code: return '2030-01-01'\n" +
+    `  t:\n    kind: tool\n    tool_id: sleep\n    input:\n      until:\n${body}output: null\n`;
+  expect(refused(text)).toContain(`input 'until': must be a date or datetime, but the value is ${shape}`);
 });
 
 test("sleep refuses output", () => {

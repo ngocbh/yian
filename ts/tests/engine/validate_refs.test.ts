@@ -27,7 +27,8 @@
  * then cases, as Python's `_load` does, with an empty registry where Python's `_load` passes the
  * producer map in the `BuildContext` registry slot. The `load_flow` rows assemble with
  * `assembleText`. Python's `tests/engine/_fakes` `stamp_reads`/`derive_wiring` are the local
- * `withReads` and `wiringOf`. The inline CODE bodies are JavaScript (`String(inputs["t"])`). The
+ * `withReads` and `wiringOf`. TS yian has no `wait`, so the two wait-until rows bind a `sleep`'s
+ * `until` input. The inline CODE bodies are JavaScript (`String(inputs["t"])`). The
  * bad-producer row pins the whole `TypeError` message, and the pool-ref prompt row the whole
  * `LoadError` message.
  *
@@ -149,7 +150,7 @@ test.each(["load-agent/seed_01_structured_agent", "load-case/seed_02_case", "loa
   },
 );
 
-const WAIT_REFERENCE_FLOW = `\
+const SLEEP_REFERENCE_FLOW = `\
 id: wait_refs
 name: wait_refs
 input:
@@ -161,8 +162,10 @@ nodes:
     code: |
       return "2026-01-01T00:00:00Z"
   settle:
-    kind: wait
-    until: SOURCE
+    kind: tool
+    tool_id: sleep
+    input:
+      until: SOURCE
 output: \${settle.output}
 `;
 
@@ -171,17 +174,17 @@ test.each([
   ["${input.missing}", "unknown flow input 'missing'"],
   ["${system.tomorrow}", "unknown system ambient 'tomorrow'"],
   ["${item}", "unknown namespace 'item'"],
-])("wait until rejects the invalid reference %s at load", (source, message) => {
-  const error = loadError(() => assembleText(WAIT_REFERENCE_FLOW.replace("SOURCE", source)));
+])("sleep until rejects the invalid reference %s at load", (source, message) => {
+  const error = loadError(() => assembleText(SLEEP_REFERENCE_FLOW.replace("SOURCE", source)));
 
   expect(error.message).toContain(message);
-  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(13);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(15);
 });
 
 test.each(["2026-01-01T00:00:00Z", "${input.deadline}", "${clock.output}", "${system.now}"])(
-  "wait until accepts the valid source %s",
+  "sleep until accepts the valid source %s",
   (source) => {
-    assembleText(WAIT_REFERENCE_FLOW.replace("SOURCE", source));
+    assembleText(SLEEP_REFERENCE_FLOW.replace("SOURCE", source));
   },
 );
 

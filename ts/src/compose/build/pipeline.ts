@@ -76,7 +76,6 @@ import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts"
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
-import { HumanInputDescriptor } from "../nodes/human_input.ts";
 import { ToolDescriptor } from "../nodes/tool.ts";
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
 import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
@@ -117,7 +116,6 @@ import { nth } from "../helpers/source.ts";
 import { builtinFieldErrors, constructorErrors } from "../validate/constructors.ts";
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
-import { validateHumanQuestions } from "../validate/human_questions.ts";
 import { validateReferences } from "../validate/references.ts";
 import { checkReservedSources } from "../validate/reserved_sources.ts";
 import { stampToolInputTypes } from "../validate/tool_inputs.ts";
@@ -810,7 +808,7 @@ export function splitTypedInputs(
 /**
  * Read each AGENT's and adaptive asking node's `llm_config:` with the values and tags in it.
  *
- * An AGENT's own layer and the `adaptive_questions.llm_config` of an adaptive gate or TOOL `ask`
+ * An AGENT's own layer and the `adaptive_questions.llm_config` of a TOOL `ask`
  * are read. A layer
  * holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one value),
  * and the value range of each key in it lands in the descriptor's `fieldRanges` under
@@ -850,7 +848,8 @@ function splitTypedLlmConfig(
         written = descriptor.llmConfig;
         prefix = `node ${reprText(nodeId)}: llm_config`;
       } else if (
-        (descriptor instanceof HumanInputDescriptor || (descriptor instanceof ToolDescriptor && descriptor.toolId === ASK)) &&
+        descriptor instanceof ToolDescriptor &&
+        descriptor.toolId === ASK &&
         isRecord(descriptor.adaptiveQuestions)
       ) {
         path = ["adaptive_questions", "llm_config"];
@@ -901,7 +900,7 @@ function splitTypedLlmConfig(
  * re-namespacing treat the values as any other binding, and a dropped value adds no edge.
  *
  * The agent's runtime binding errors about the key name its `llm_config` field (an adaptive
- * composer's, the gate's `adaptive_questions.llm_config`).
+ * composer's, the ask's `adaptive_questions.llm_config`).
  *
  * @param buildResults Built nodes keyed by final descriptor id.
  * @param flowWiring Mutable binding maps keyed by node id.
@@ -1966,8 +1965,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
-  // Lower each `human_input` `adaptive_questions:` block into a synth composer agent + the
-  // rewritten gate. A descriptor-level pass (the `desugarInlineCalls` precedent above): runs
+  // Lower each `ask` node's `adaptive_questions:` block into a synth composer agent + the
+  // rewritten ask. A descriptor-level pass (the `desugarInlineCalls` precedent above): runs
   // BEFORE the build loop so the synth agent flows through build + prompt-scope validation + ref
   // wiring like any author-written agent.
   descriptors = desugarAdaptiveQuestions(descriptors, { diagnostics });
@@ -2260,9 +2259,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     resolveOrigin,
     diagnostics,
   });
-  // human_input gates: structurally check a literal `questions:` list at load, and pin a
-  // ref-form `questions: ${name}` to a declared input (the prompt-scope rule).
-  validateHumanQuestions(buildResults, { diagnostics });
   // Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post + stamp
   // onto each built leaf/call node. Shared by defs (a def's internal nodes too).
   validateNodeAsserts(nodesBuilt, descriptors, {

@@ -22,16 +22,16 @@ Copy, rename, and edit.
 | [`typed_output.yaml`](templates/typed_output.yaml) | AGENT node with a record `output:` — structured generation + `retries:` |
 | [`branching.yaml`](templates/branching.yaml) | classify → `case` route → `${route.output}` |
 | [`tool-use.yaml`](templates/tool-use.yaml) | a TOOL node (no LLM) feeding an AGENT node |
-| [`human-in-loop.yaml`](templates/human-in-loop.yaml) | a blocking `human_input` gate (typed approve/revise answer) |
-| [`human-questions.yaml`](templates/human-questions.yaml) | a `human_input` gate with multiple questions — static `questions:` + `adaptive_questions:` |
-| [`wait-until.yaml`](templates/wait-until.yaml) | an absolute UTC WAIT ordered before downstream CODE |
+| [`human-in-loop.yaml`](templates/human-in-loop.yaml) | an `ask` TOOL node (typed approve/revise answer) |
+| [`human-questions.yaml`](templates/human-questions.yaml) | `ask` with multiple questions — static `questions:` + `adaptive_questions:` |
+| [`sleep-until.yaml`](templates/sleep-until.yaml) | a `sleep` TOOL node until an absolute UTC deadline, ordered before downstream CODE |
 | [`child-summarize.yaml`](templates/child-summarize.yaml) | a reusable CHILD flow |
 | [`call-child.yaml`](templates/call-child.yaml) | `call` a sibling flow once (via `uses:`) |
 | [`expr-and-call.yaml`](templates/expr-and-call.yaml) | `${a + b}` arithmetic in a binding + inline `call(...)` over an in-file `defs:` callee |
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
-| [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → CASE (exit routes to a `!Turn` value entry, else a reply call), with flow-owned exit, the shape `yian chat` runs |
+| [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — an `ask` each turn |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL on an `Inbox(str)` — `take: all` → CASE (a closed inbox routes to a `!Turn` value entry, else a reply call), the shape of `examples/chat.yaml` |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -111,7 +111,7 @@ A child-flow call written as a binding's **whole value** (or a `case`
 anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only,
 each at most once; a bare arg is one plain scalar read with the flow's YAML value
 rules (`x=1e3` is a float, `x=None` text), and a quoted arg is text;
-every authored node `input:` mapping participates, including HUMAN_INPUT context
+every authored node `input:` mapping participates, including `ask` inputs
 and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`). The synth
 node runs only when its host node can: it carries the host's `case` routes, `depends_on:`,
 and `runs_after:` (inner calls of a nested branch call carry the branch), and waits for the
@@ -269,7 +269,7 @@ typedefs:
 
 **Typed slots.** A slot's type is a YAML tag on its value: `name: !T value`, or
 `name: !T` with no value (an empty tagged scalar, not null). Slots are flow inputs,
-node `input:` bindings (LOOP seeds, HUMAN_INPUT context, CALL/MAP/inline-body
+node `input:` bindings (LOOP seeds, `ask` inputs, CALL/MAP/inline-body
 arguments), flow `output:` fields and a single `output: !T ${x}`, agent
 `variables:` (always with a value), and records or lists nested in any of these.
 `output: !T {...}` is one typed value. Inside a tag there are no commas: name a
@@ -313,8 +313,8 @@ see `docs/defaults.md`), counting each record and list. A binding or MAP
 `contract.output`, naming the path; `${[x]}`, a record flow output, or a MAP's result
 list around a 100-level value is one level too deep. A run input may nest 100 levels.
 A value written out in the flow file is checked at load with the same counting, YAML
-aliases included: a node input (LOOP seeds, MAP per-item inputs), MAP `over:`, WAIT
-`until:`, a value entry, an input or AGENT variable default, a flow `output:` (a record
+aliases included: a node input (LOOP seeds, MAP per-item inputs), MAP `over:`,
+a value entry, an input or AGENT variable default, a flow `output:` (a record
 output's fields sit one level in), or a flow, `defs:`, or node `env:` value nested deeper
 is a load error at that value (an `env:` value at its key);
 an `env:` value that contains itself through a YAML alias is a load error at its key too;
@@ -420,30 +420,37 @@ searched `case` whose `when:` reads a node only under such a default doesn't pas
 node's narrowing to its branches.
 
 **Order without data flow.** When node B must run after A but consumes no value
-from it (a `wait`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A
+from it (a `sleep`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A
 skipped) or `runs_after: [a]` (orders only; B still runs).
 
-**Wait until an absolute deadline.** Give `wait` a `date` (`2026-05-21`) or
-`datetime` (`2026-05-21T14:30[:00][Z|+07:00]`) via `until:`. Dates mean midnight
-UTC, naive datetimes are UTC, and aware datetimes are normalized to UTC. WAIT
-blocks one worker and returns `None` at the deadline; that value is committed as its
-ordinary node output. See `wait-until.yaml`.
+**Sleep until a deadline.** A `tool` node with `tool_id: sleep` takes exactly one input:
+`until:`, a `date` (`2026-05-21`) or `datetime` (`2026-05-21T14:30[:00][Z|+07:00]`), or
+`for:`, a duration (`90s`, `30m`, `24h`, `2d`). Dates mean midnight UTC, naive datetimes
+are UTC, and aware datetimes are normalized to UTC. The sleep holds no worker; when nothing
+else can run the run ends `waiting`, and `advance` after the deadline wakes it. Its output
+is `None`. See `sleep-until.yaml`.
 
-**Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
-worker until the host answers). For "ask only if the model decides it needs to",
-give an AGENT node `tools: [ask_user]`. Both calls stay inside their live
-node execution. A `human_input` gate can present multiple-choice questions
-(static `questions:`), have an LLM compose them
-(`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load;
-the composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`, and waits
-for the gate's other inputs), or read
-them from an upstream node (`questions: ${name}`); the answer is then a record
-keyed by each question's `header`. The adaptive desugar owns the `__questions`
-input name, so authors cannot bind that name on an adaptive gate.
+**Ask the human.** For a *guaranteed* question use a `tool` node with `tool_id: ask`
+(`prompt:`, `questions:` and `timeout:` in its `input:`; `output:` is the answer type). For
+"ask only if the model decides it needs to", give an AGENT node `tools: [ask_user]`. One
+handler, the run's ask slot, serves both. An `ask` can present multiple-choice questions
+(a literal `questions:` list), have an LLM compose them (`adaptive_questions:`, which
+desugars to a synthetic composer AGENT node at load; the composer carries the ask's `case`
+routes, `depends_on:`, and `runs_after:`, and waits for the ask's other inputs), or read
+them from an upstream node (`questions: ${composer.output}`); the answer is then a record
+keyed by each question's `header`. The adaptive desugar owns the `__questions` input name,
+so authors cannot bind it. An `ask`'s handler may answer later (`pending()`): with
+`timeout:` and `output: Optional(T)`, nobody answering in time gives null, which a `case`
+routes on; any other output fails with `tool.timeout`. Any input beyond `prompt`,
+`questions` and `timeout` is a host extra the host declares.
 
-These are live authoring surfaces: the AGENT node has no authored `entry:`/`controls:`
-fields, HUMAN_INPUT has no control fields, and WAIT has no event-watch form. Each
-completes through the ordinary node-output path in the active run.
+**Read what a host sends.** Declare an `Inbox(T)` input and read it with a `tool` node
+`tool_id: take` (`from: ${input.<inbox>}`, `take: one | all`, optional `timeout:`). Its
+output is `{events: list(T), closed: bool}`; a take with nothing unread waits for a send,
+the inbox's close, or its timeout.
+
+The AGENT node has no authored `entry:`/`controls:` fields. Python yian still has
+`human_input` and `wait`.
 
 **Reuse a child flow.** Factor the repeated work into its own flow file, bind it with
 `uses: <alias>: <filename>`, and `call:` it (once) or `map:` it (per list element).
@@ -461,8 +468,8 @@ predicate goes false); `until: done` is a POST-check / do-while (1+ runs, stop
 when the predicate becomes TRUE); `times: N` runs exactly N times with no
 predicate. Predicates use the canonical bare form (no `${}`). `max:` is an optional runaway guard
 for `while:`/`until:` (without it the loop runs until its predicate ends it) — but
-REDUNDANT and REJECTED with `times:`. A body that blocks
-(a `human_input` leaf) makes the loop a live chat REPL — the same run threads each
+REDUNDANT and REJECTED with `times:`. A body that asks (an `ask` node) or
+takes from an inbox (a `take` node) makes the loop a chat — the same run threads each
 answered turn. Each continuing iteration PRUNES the previous iteration's body nodes and
 the nodes grown under them by a nested CALL, MAP, or LOOP, so the live graph stays about
 one iteration, whatever the body; the run log still keeps every iteration. The next
@@ -473,16 +480,17 @@ iteration prunes it, and the run waits for it before it ends. The node budget
 iteration's size, not the iteration count. See
 `loop.yaml`.
 
-**Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
-`ask` (`human_input`), then a CASE picks the carried 2-field record
-`{transcript: str, exited: bool}` (`'a -> 'a`). Exact `/exit` and `/quit` route to
-`exited: !Turn {...}`, a value entry that keeps the transcript and sets `exited: true`;
-`else:` calls a `respond` def whose `reply` (`agent`) and fold CODE node append the
-message and reply. The body's output is `!Turn ${route.output}`; the tag is required, as
-it types whichever branch ran as the carried record. Typed exit is flow-owned; only
-terminal EOF is normalized by the bundled host. The loop body's `output:` may return
-only the fields that change; a field it omits keeps its value. This is the shape
-`yian chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).
+**Conversational REPL (LOOP + take).** A chat flow takes `messages: !Inbox(str)` and a
+`loop` carries it into every turn. The body's `take: all` reads every message sent since
+the last turn, then a CASE picks the carried 2-field record
+`{transcript: str, closed: bool}` (`'a -> 'a`). A take with no events means the inbox
+closed with nothing left: it routes to `ended: !Turn {...}`, a value entry that keeps the
+transcript and sets `closed: true`; `else:` calls a `respond` def whose `reply` (`agent`)
+and `turn_end` value entry append the messages and reply. The body's output is
+`!Turn ${route.output}`; the tag is required, as it types whichever branch ran as the
+carried record. Ending is the host's `close` of the inbox. The loop body's `output:` may
+return only the fields that change; a field it omits keeps its value. See `chat.yaml`
+(and `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas
 
@@ -561,7 +569,7 @@ only the fields that change; a field it omits keeps its value. This is the shape
   `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` (not `Any`). `list(...)`/
   `Optional(...)` need an alias. Constructors `${T(...)}` take only typedef names
   (`${int(x)}` is an unknown function). It is not a prompt function: compute it in an
-  input binding. WAIT `until:` and MAP `over:` reject it.
+  input binding. MAP `over:` rejects it.
 - **A member-only union field fails to load outside its branch.** `${d.output.qty}`
   where only `Buy` has `qty` must sit under `when: buy` (or an `isinstance` case).
   A `when:` value that isn't a tag of the union is a load error (``case node 'route':
@@ -659,7 +667,7 @@ nodes:
   every check; a missing or mistyped input it reads raises `ValueError` before the
   log, naming the field. Others resolve just before the model call; a refused config
   fails the node with `contract.input` (`binding.type` for a broken tag), message
-  `node 'b' llm_config.<field>: ...` (a composer: `node '<gate>'
+  `node 'b' llm_config.<field>: ...` (a composer: `node '<ask>'
   adaptive_questions.llm_config.<field>`). The run log records the resolved config;
   resume and backward use it.
 - Values read the flow they are written in. Node > own flow > outer flows > CLI/host >

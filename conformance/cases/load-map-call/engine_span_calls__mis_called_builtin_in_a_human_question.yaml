@@ -1,5 +1,24 @@
 kind: load
+rules: [messages]
 flow: |2
+
+  id: f
+  name: f
+  input: {v: !str }
+  nodes:
+    ask:
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: '${input.v}'
+        questions:
+          - question: '${upper(input.v, 1)}'
+            header: H
+            options:
+              - label: '${input.v}'
+                description: '${input.v}'
+  output: ${ask.output}
+python_flow: |2
 
   id: f
   name: f
@@ -17,6 +36,16 @@ flow: |2
               description: '${t}'
   output: ${ask.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'ask' input 'questions' from: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [12, 21, 12, 43]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

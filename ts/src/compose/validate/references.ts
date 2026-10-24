@@ -9,8 +9,7 @@
  *
  * **Prompt scope**: an AGENT `prompt:` or `system_prompt:` may interpolate this node's inputs and
  * variables as bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in either is a located
- * error. A HUMAN_INPUT `prompt:` and its question text (`question`, option `label`/`description`)
- * follow the same rule, reading the gate's declared inputs. Each `${name.f}` read is field-checked
+ * error. Each `${name.f}` read is field-checked
  * against the name's proven contracts (its binding's, under the node's narrowing, or a typed
  * variable's), and is an error only when all of them reject it.
  *
@@ -21,15 +20,14 @@
  * Located parse metadata: each error anchors on the referencing field's `SourceRange`, read from
  * the transient Compose `BuildResult` (the per-binding `input` entry, else the node's `input:`
  * mapping, else the node header, for an input-binding ref; its `prompt:` or `system_prompt:` for a
- * template ref). A HUMAN_INPUT question-text error anchors on its own `text` `questions[i]...`
- * string range, else the `questions:` block. A field or input a desugar authored under another
- * node is named by its `BuildResult.fieldLabels` entry: an adaptive gate's brief is reported as the
- * gate's `adaptive_questions.prompt` and anchors on the brief, and a gate input its composer copies
- * is reported as the gate's input. A plain input binding whose site name, source, and range were
+ * template ref). A field or input a desugar authored under another node is named by its
+ * `BuildResult.fieldLabels` entry: an adaptive ask's brief is reported as the ask's
+ * `adaptive_questions.prompt` and anchors on the brief, and an ask input its composer copies is
+ * reported as the ask's input. A plain input binding whose site name, source, and range were
  * already scanned is skipped, so such a copied binding is reported once.
  *
  * Knows about: `compile/validation` (the leaf namespace checker), `expr` (the binding and template
- * parsers), `nodes` (node behaviour, the AGENT, HUMAN_INPUT and CASE nodes, and the binding
+ * parsers), `nodes` (node behaviour, the AGENT and CASE nodes, and the binding
  * carriers), `typesys` (`Type`, for a list's element type), `compose/helpers` (closed-path
  * projection, binding-contract resolution, narrowed reads, and errors), and `compose/validate`
  * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
@@ -65,7 +63,6 @@ import {
   ValueContract,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
-import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { TAKE } from "../../tools/context.ts";
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
@@ -259,12 +256,11 @@ function itemContract(
  * Each error anchors on the referencing site's `SourceRange`, resolved from its
  * `BuildResult.fieldRanges`: the OFFENDING ENTRY where one exists (`input` `<name>`, stamped per
  * binding by the parse loop for every kind), else the enclosing block (the `inputs` block, or the
- * `prompt:` field), else the node header. A HUMAN_INPUT question-text error anchors on its `text`
- * `questions[i]...` string range, else the `questions:` block. An AGENT prompt site and a plain
- * input site are named by `BuildResult.siteName`: the `fieldLabels` entry when a desugar authored
- * the field or binding under another node (an adaptive gate's composer brief reads
- * `node '<gate>' adaptive_questions.prompt` and anchors on the brief; its copied input reads
- * `node '<gate>' input '<p>'`), else `node '<id>' <site>`. A plain input binding whose site name,
+ * `prompt:` field), else the node header. An AGENT prompt site and a plain input site are named by
+ * `BuildResult.siteName`: the `fieldLabels` entry when a desugar authored the field or binding
+ * under another node (an adaptive ask's composer brief reads `node '<ask>'
+ * adaptive_questions.prompt` and anchors on the brief; its copied input reads
+ * `node '<ask>' input '<p>'`), else `node '<id>' <site>`. A plain input binding whose site name,
  * source text, and range match one already scanned is skipped, so a binding a desugar copied onto
  * a synth node is reported once. A string nested in a value template is located at its own
  * authored site instead, resolved through `resolveOrigin`. The aggregate carries the first
@@ -277,7 +273,7 @@ function itemContract(
  * checked unnarrowed.
  *
  * With `localContracts` (`localInputContracts`, keyed by node id then param), each prompt read
- * `${name.f}` of an AGENT or HUMAN_INPUT input is field-checked against that name's alternatives,
+ * `${name.f}` of an AGENT input is field-checked against that name's alternatives,
  * and an AGENT read of a typed variable against its declared type; a name with no entry is not
  * field-checked.
  *
@@ -545,8 +541,7 @@ export function validateReferences(
     // Prompt scope: a strict AGENT prompt or system prompt may interpolate ONLY this node's
     // declared inputs and variables as `${name}` (or a builtin-call argument); a pool ref in either
     // is loud, and an unknown builtin or malformed span is rejected here (via `promptRefs`, the
-    // renderer's compile-time companion). A HUMAN_INPUT `prompt:` and its question text (`question`,
-    // option `label`/`description`) follow the same rule, reading the gate's declared inputs.
+    // renderer's compile-time companion).
     const nodeLocals = localContracts.get(nodeId) ?? new Map<string, LocalInput>();
     if (node instanceof AgentNode) {
       const declared = new Set((node.params ?? []).map((param) => param.name));
@@ -593,19 +588,6 @@ export function validateReferences(
           declared,
           franges.get(siteKey("field", "system_prompt")) ?? nodeRange,
           promptSite,
-        );
-      }
-    } else if (node instanceof HumanInputNode) {
-      const declared = new Set((node.params ?? []).map((param) => param.name));
-      for (const [path, text] of templateSites(node.prompt, node.questions)) {
-        if (!text) continue;
-        const label = siteLabel(path);
-        checkTemplate(
-          `node ${reprText(nodeId)} ${label}`,
-          text,
-          declared,
-          franges.get(siteKey("text", label)) ?? franges.get(siteKey("field", String(path[0]))) ?? nodeRange,
-          { noun: "input", hintTail: "human_input text", contracts: nodeLocals, partialUnionFields },
         );
       }
     }

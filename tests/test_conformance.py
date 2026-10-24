@@ -197,7 +197,7 @@ _ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
 _RUN_KEYS = {"run_id", "num_workers", "learnable", "llm_config", "context"}
 _RESUME_KEYS = {"num_workers", "api_key", "headers", "context"}
 # Host keys the format reserves and this runner doesn't support yet.
-_RESERVED_HOST_KEYS = ("stop", "skills")
+_RESERVED_HOST_KEYS = ("stop", "skills", "sends")
 _HOST_KEYS = {"tools", "human", "jitter", "models", "memory", "steering", *_RESERVED_HOST_KEYS}
 # `host.models` consumers, besides `memory:<key>` under `_LEARNER_NODE`.
 _CONSUMERS = ("agent", "structured_retry", "compose", "backward", "summary")

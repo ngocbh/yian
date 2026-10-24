@@ -1,5 +1,24 @@
 kind: load
+rules: [messages]
 flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: str
+      code: "return null"
+    settle:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: ${step.output.at}
+  output: ${step.output}
+python_flow: |
   id: p
   name: p
   input:
@@ -16,6 +35,16 @@ flow: |
       until: ${step.output.at}
   output: ${step.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'settle' input 'until' from: reference ${step.output.at} reads field 'at' on type str, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [16, 14, 16, 31]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

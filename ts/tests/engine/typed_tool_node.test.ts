@@ -31,9 +31,11 @@
  * `test_every_missing_required_input_is_named`; by
  * `run-leaves/typed_tool_node__an_omitted_optional_input_runs`: `test_an_omitted_optional_input_runs`;
  * by `run-leaves/typed_tool_node__a_binding_disjoint_from_a_schema_maximum_fails_at_run_start`:
- * `test_a_tagged_binding_disjoint_from_a_json_schema_maximum_fails_at_run_start`; by
- * `run-leaves/typed_tool_node__ask_user_with_string_options_runs`:
- * `test_ask_user_with_string_options_runs`.
+ * `test_a_tagged_binding_disjoint_from_a_json_schema_maximum_fails_at_run_start`.
+ *
+ * Not ported: `test_ask_user_with_string_options_runs`. In TS `tool_id: ask_user` is the `ask`
+ * built-in, which takes no `options`; the agent surface's option cleanup is covered in
+ * `run_tools.test.ts`.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -528,19 +530,18 @@ name: asking
 nodes:
   ask:
     kind: tool
-    tool_id: ask_user
+    tool_id: ask
     input:
-      question: Proceed?
-      options: "yes, no"
+      prompt: Proceed?
 output: \${ask.output}
 `;
 
-test("a tool node naming ask user without a handler fails at run start", async () => {
+test("a tool node naming ask without a handler fails at run start", async () => {
   const path = freshLog();
 
   const message = await refused(run(ASK_FLOW, {}, { log: path, tools: {} }));
 
-  expect(message).toContain("TOOL node 'ask' names 'ask_user': no ask handler for this run");
+  expect(message).toContain("TOOL node 'ask' names 'ask': no ask handler for this run");
   expect(existsSync(path)).toBe(false);
 });
 

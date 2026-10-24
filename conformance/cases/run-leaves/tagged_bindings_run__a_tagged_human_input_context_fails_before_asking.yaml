@@ -1,9 +1,24 @@
 # From tests/engine/test_tagged_bindings_run.py::test_tagged_human_input_context_fails_before_asking.
-# A tagged gate input (`!int`) over an untyped value "three" fails binding.type before the gate asks;
-# an `!Any` flow input stands in for the test's untyped CODE source.
+# A tagged ask input (`!int`, a context input the host declares) over an untyped value "three"
+# fails binding.type before the ask asks; an `!Any` flow input stands in for the test's untyped
+# CODE source.
 kind: run
 rules: [messages, run-log]
 flow: |
+  id: tagged_gate
+  name: tagged_gate
+  input:
+    n: !Any
+  nodes:
+    ask:
+      kind: tool
+      tool_id: ask
+      input:
+        count: !int ${input.n}
+        prompt: "Proceed with ${input.n} items?"
+  output: ${ask.output}
+# Python yian has no ask built-in: it runs the human_input gate.
+python_flow: |
   id: tagged_gate
   name: tagged_gate
   input:
@@ -31,7 +46,7 @@ expect:
       message: 'binding ''count'': "three" does not match declared type int'
       frames:
       - label: flow.yaml
-        range: [9, 14, 9, 29]
+        range: [10, 14, 10, 29]
       node: ask
   trace:
   - - run_started
@@ -66,7 +81,7 @@ expect:
         message: 'binding ''count'': "three" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [9, 14, 9, 29]
+          range: [10, 14, 10, 29]
         node: ask
   events:
   - [RunStarted]
@@ -84,7 +99,7 @@ expect:
         message: 'binding ''count'': "three" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [9, 14, 9, 29]
+          range: [10, 14, 10, 29]
         node: ask
   - - RunFailed
     - failure:
@@ -92,7 +107,7 @@ expect:
         message: 'binding ''count'': "three" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [9, 14, 9, 29]
+          range: [10, 14, 10, 29]
         node: ask
 python_expect:
   output:

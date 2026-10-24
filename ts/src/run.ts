@@ -2537,7 +2537,7 @@ function checkConditions(flow: CompiledFlow): void {
  * Checks every static flow level: each template string of a wiring source (END's is the flow's
  * output) must parse, pass each builtin arguments it takes, and name only constructors in the
  * type table the binder evaluates it with (the reading node's; none for a reserved key such as
- * WAIT `until` or MAP `over`); each node checks its prompts. A YAML flow can't hold such a span
+ * MAP `over`); each node checks its prompts. A YAML flow can't hold such a span
  * (Compose rejects it at load); this catches values set in code.
  *
  * @param flow A compiled flow or a static child flow.

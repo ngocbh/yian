@@ -1,0 +1,30 @@
+# From tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_included_kind_field.
+# An ask's question text is identity.
+kind: fingerprint
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
+flow: |
+  id: human
+  name: human
+  nodes:
+    node:
+      kind: tool
+      tool_id: ask
+      input:
+        questions:
+          - question: first
+            header: Answer
+  output: ${node.output}
+other: |
+  id: human
+  name: human
+  nodes:
+    node:
+      kind: tool
+      tool_id: ask
+      input:
+        questions:
+          - question: second
+            header: Answer
+  output: ${node.output}
+expect:
+  fingerprint: different

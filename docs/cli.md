@@ -577,6 +577,12 @@ source rather than the prompt's blank path.
 
 ## Blocking interactions
 
+Changed (TS yian): `human_input` and `wait` are removed. A TOOL `ask` prompts at the
+terminal in `yian run`, answered inline as below. A run that reaches a `take` or a `sleep`
+whose time hasn't come ends `waiting` and exits 0 (see [Durable logs and
+recovery](#durable-logs-and-recovery)). The rest of this section is Python yian's, apart
+from its TS notes.
+
 `human_input` and an AGENT node's authored `ask_user` tool are blocking interactions
 inside live node calls. They are separate from initial input gathering and are
 unchanged by its non-TTY omission policy. `yian` runs the flow behind a main-thread
@@ -661,6 +667,8 @@ yian run examples/debate.yaml \
   TOOL waiting to retry occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
   With `-w 0` a TOOL waiting to retry blocks the whole run until its wait ends.
+  (TS yian has no HUMAN_INPUT or WAIT; a waiting `take`, `sleep` or pending call holds no
+  worker.)
 
 The dispatcher appends every node start and outcome to the selected authoritative
 log before publishing the progress event that the CLI renders.

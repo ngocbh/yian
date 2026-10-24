@@ -1,27 +1,21 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
-      prompt: "${proj}"
-      questions:
-        - question: "${proj}"
-          header: Framework
-          options:
-            - label: "${proj}"
-              description: "${isinstance(proj, str)}"
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "${input.proj}"
+        questions:
+          - question: "${input.proj}"
+            header: Framework
+            options:
+              - label: "${input.proj}"
+                description: "${isinstance(input.proj, str)}"
   output: ${ask.output}
 expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        flow has unresolved references:
-          node 'ask' questions[0].options[0].description: isinstance is not a prompt function; compute it in an input binding
-      frames:
-      - label: flow.yaml
-        range: [14, 26, 14, 52]
+  load: ok

@@ -87,6 +87,13 @@
  * and kind-field rows.
  *
  * Changed:
+ * - TS yian has no HUMAN_INPUT or WAIT kind, so their rows are the `ask` and `sleep` TOOL
+ *   built-ins'. `test_flow_fingerprint_covers_each_included_kind_field` keeps HUMAN_INPUT's answer
+ *   schema as an ask row; an ask's prompt and questions are inputs, identity through its wiring
+ *   like the WAIT `until` row's (now a `sleep`'s). In
+ *   `test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel` an ask's title
+ *   (its `node_name:`) is identity, as Python's HUMAN_INPUT title is; another tool's is display
+ *   metadata.
  * - Node, wiring and type tables are `Map`s, so "shuffle mapping order" rebuilds `Map`s and
  *   records in reverse insertion order. Carriers are frozen: Python's `replace(param, ...)` builds
  *   a new `Parameter`, and `object.__setattr__(carrier, "future_field", True)` is a forged carrier
@@ -130,8 +137,8 @@
  * subclass, a non-Flow, a wiring value that isn't a `Binding`, a node wiring that isn't a `Map`,
  * node and wiring tables that aren't `Map`s, a non-string node, wiring or parameter key, an edge
  * that isn't an `Edge`, a forged `Edge`, a `flowLlmConfig` that isn't a record, edges, outputs and
- * memories that aren't arrays and an output that isn't a `FlowOutput` refused; the HUMAN_INPUT
- * fields as typed values, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
+ * memories that aren't arrays and an output that isn't a `FlowOutput` refused; an ask's answer
+ * schema as a typed value and its title left out, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
  * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop),
  * forged LOOP counts, a CASE branch that isn't a `Case` and CASE `cases` that isn't an array
  * refused, forged memory scopes and segments and a non-`ExecutionScope` scope refused, and the
@@ -211,12 +218,10 @@ import { CallNode } from "../../src/nodes/call/node.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { type BuiltinCode, CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
-import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
@@ -2025,7 +2030,7 @@ test.each([
   expectError(() => flowManifest(flow), cls, message);
 });
 
-// ---- CASE, HUMAN_INPUT, WAIT, CALL, MAP and LOOP ---------------------------------------------
+// ---- CASE, the ask and sleep built-ins, CALL, MAP and LOOP -----------------------------------
 
 /** A LOOP node `node` over a baked `fragment()` body, with `options` on top. */
 function loopNode(options: Partial<ConstructorParameters<typeof LoopNode>[1]> = {}): LoopNode {
@@ -2085,29 +2090,9 @@ test.each([
     () => new CaseNode("node", [new Case("second", { when: "y" }), new Case("first", { when: "x" })]),
   ],
   [
-    "human-prompt",
-    () => new HumanInputNode("node", { prompt: "first" }),
-    () => new HumanInputNode("node", { prompt: "second" }),
-  ],
-  [
-    "human-answer-schema",
-    () => new HumanInputNode("node", { prompt: "p", answerSchema: [{ name: "first" }] }),
-    () => new HumanInputNode("node", { prompt: "p", answerSchema: [{ name: "second" }] }),
-  ],
-  [
-    "human-questions",
-    () => new HumanInputNode("node", { questions: [{ question: "first" }] }),
-    () => new HumanInputNode("node", { questions: [{ question: "second" }] }),
-  ],
-  [
-    "human-questions-input",
-    () => new HumanInputNode("node", { questionsInput: "first" }),
-    () => new HumanInputNode("node", { questionsInput: "second" }),
-  ],
-  [
-    "human-title",
-    () => new HumanInputNode("node", { prompt: "p", title: "first" }),
-    () => new HumanInputNode("node", { prompt: "p", title: "second" }),
+    "ask-answer-schema",
+    () => new ToolNode("node", { toolId: "ask", answerSchema: [{ name: "first" }] }),
+    () => new ToolNode("node", { toolId: "ask", answerSchema: [{ name: "second" }] }),
   ],
   [
     "call-flow-id",
@@ -2161,25 +2146,38 @@ test("test_flow_manifest_covers_remaining_kind_execution_fields", () => {
 });
 
 test("test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel", () => {
-  const firstHuman = new HumanInputNode("node", { prompt: "answer", title: "First title" });
-  const secondHuman = new HumanInputNode("node", { prompt: "answer", title: "Second title" });
+  // An ask sends its title (its `node_name:`) to the host, as HUMAN_INPUT did.
+  const firstAsk = new ToolNode("node", { toolId: "ask", title: "First title" });
+  const secondAsk = new ToolNode("node", { toolId: "ask", title: "Second title" });
   const serialMap = new MapNode("node", { flowId: "child", child: fragment(), parallel: false });
   const parallelMap = new MapNode("node", { flowId: "child", child: fragment(), parallel: true });
 
-  expect(flowFingerprint(singleNodeFlow(firstHuman))).not.toBe(flowFingerprint(singleNodeFlow(secondHuman)));
+  expect(flowFingerprint(singleNodeFlow(firstAsk))).not.toBe(flowFingerprint(singleNodeFlow(secondAsk)));
   expect(flowFingerprint(singleNodeFlow(serialMap))).toBe(flowFingerprint(singleNodeFlow(parallelMap)));
 });
 
-test("a HUMAN_INPUT node writes each field as a value", () => {
-  const node = new HumanInputNode("node", { prompt: "p", questionsInput: "qs", title: "T" });
+test("an ask's prompt and questions are identity through its wiring", () => {
+  const ask = (key: string, value: unknown) => wiredNodeFlow(new ToolNode("node", { toolId: "ask" }), [[key, value]]);
+
+  expect(flowFingerprint(ask("prompt", new Binding("first")))).not.toBe(
+    flowFingerprint(ask("prompt", new Binding("second"))),
+  );
+  expect(flowFingerprint(ask("questions", new ValueTemplate([{ question: "first" }])))).not.toBe(
+    flowFingerprint(ask("questions", new ValueTemplate([{ question: "second" }]))),
+  );
+});
+
+test("an ask TOOL node writes its answer schema as a value", () => {
+  const node = new ToolNode("node", { toolId: "ask", answerSchema: [{ name: "answer", type: "str" }], title: "T" });
 
   expect(nodeManifest(singleNodeFlow(node), "node")).toMatchObject({
-    answer_schema: { items: [], type: "list" },
-    prompt: { type: "str", value: "p" },
-    questions: { type: "null" },
-    questions_input: { type: "str", value: "qs" },
+    tool_id: "ask",
+    answer_schema: { type: "list" },
     title: { type: "str", value: "T" },
   });
+  // Another tool's title is display metadata.
+  const plain = new ToolNode("node", { toolId: "search", title: "T" });
+  expect(nodeManifest(singleNodeFlow(plain), "node")).not.toHaveProperty("title");
 });
 
 test("test_flow_manifest_allows_shared_child_aliases_but_rejects_child_cycles", () => {
@@ -2220,8 +2218,9 @@ test("a CALL child that isn't a Flow is refused", () => {
 });
 
 test("test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring", () => {
-  const first = wiredNodeFlow(new WaitNode("node"), [["until", new Binding("2026-01-01T00:00:00+00:00")]]);
-  const second = wiredNodeFlow(new WaitNode("node"), [["until", new Binding("2026-01-02T00:00:00+00:00")]]);
+  const sleep = () => new ToolNode("node", { toolId: "sleep" });
+  const first = wiredNodeFlow(sleep(), [["until", new Binding("2026-01-01T00:00:00+00:00")]]);
+  const second = wiredNodeFlow(sleep(), [["until", new Binding("2026-01-02T00:00:00+00:00")]]);
 
   expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
   expect(expansionDigest(first)).not.toBe(expansionDigest(second));

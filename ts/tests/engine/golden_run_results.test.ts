@@ -2,7 +2,7 @@
  * Run-result and static edge-id goldens for CODE-only flows: a port of
  * `tests/engine/test_golden_run_results.py`.
  *
- * A blocking HUMAN_INPUT answered by its host and a past WAIT finish in one run; a single
+ * An `ask` answered by its host and a `sleep` until a past date finish in one run; a single
  * `${input.x}` reader has only its START data edge and its END edge; a defaulted input fills inside
  * START while `RunResult.input` keeps what the caller passed; and the three output shapes (no
  * `output:`, a bare `output:`, a name map) give null, the value, and a record.
@@ -12,7 +12,8 @@
  * `test_golden_inputs_defaults_and_multi_output_surface`, `test_golden_output_arity_0`,
  * `test_golden_output_arity_1` and `test_golden_output_arity_2`. Ints read as `bigint`s (decision
  * 4a); the CODE references are TS's (`./fixtures/compose_codefns.ts:make_report`,
- * `./fixtures/seeds.ts:confirm_action`).
+ * `./fixtures/seeds.ts:confirm_action`). Changed: the first row's gate is a TOOL `ask` and its
+ * wait a TOOL `sleep`, where Python's are HUMAN_INPUT and WAIT nodes (TS yian has neither kind).
  *
  * Already ported: `test_golden_call_run_result`, `test_golden_map_run_result` and
  * `test_golden_static_edge_ids_case_and_call_and_map`, in `graph_growth_e2e.test.ts`'s
@@ -41,7 +42,7 @@ async function run(
   return runFlow(await loadConformanceFlow(text, { env }), inputs, { env, ...options });
 }
 
-// --- a blocking HUMAN_INPUT followed by an absolute UTC WAIT: seed 17's shape, agent-free --- //
+// --- an `ask` followed by a `sleep` until a UTC date: seed 17's shape, agent-free --- //
 
 const EFFECTS = `
 id: e
@@ -52,8 +53,10 @@ input:
   settle_at: !date
 nodes:
   approve:
-    kind: human_input
-    prompt: "approve? (approve/reject)"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "approve? (approve/reject)"
     output: Approval
   gate:
     kind: case
@@ -63,8 +66,10 @@ nodes:
         then: settle
     else: abort
   settle:
-    kind: wait
-    until: \${input.settle_at}
+    kind: tool
+    tool_id: sleep
+    input:
+      until: \${input.settle_at}
   confirm:
     kind: code
     depends_on: [settle]
@@ -82,8 +87,8 @@ output: \${confirm.output | abort.output}
 `;
 
 test("golden human input then past wait completes in one run", async () => {
-  // HUMAN_INPUT completes through its host; the past WAIT returns in the same run.
-  const result = await run(EFFECTS, { settle_at: "2000-01-01" }, { tools: { ask_user: () => "approve" } });
+  // The ask completes through its host; the past sleep returns in the same run.
+  const result = await run(EFFECTS, { settle_at: "2000-01-01" }, { tools: { ask: () => "approve" } });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("approve");
 });

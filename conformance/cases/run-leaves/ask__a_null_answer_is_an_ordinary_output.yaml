@@ -1,0 +1,82 @@
+# From tests/engine/test_blocking_human_input.py::test_none_answer_is_an_ordinary_output.
+# A null answer is the ask's output, not a cancellation.
+kind: run
+rules: [run-log]
+flow: |
+  id: optional
+  name: optional
+  nodes:
+    optional:
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "Anything to add?"
+  output: ${optional.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  human:
+    optional: [null]
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, optional]
+  - [pool_commit, optional]
+  - - node_succeeded
+    - optional
+    - {commit: 9}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 12}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+  - - NodeStarted
+    - node_id: optional
+  - - NodeSucceeded
+    - node_id: optional
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+  - [RunSucceeded]
+  tool_calls:
+    ask:
+    - args:
+        question: Anything to add?
+        node_id: optional
+      call_id: r1/optional
+      attempt: 1
+      node: optional

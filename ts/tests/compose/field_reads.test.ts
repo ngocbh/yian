@@ -10,7 +10,8 @@
  * `test_field_on_str_in_any_reference_form_is_a_load_error`,
  * `test_nested_field_on_a_record_field_of_type_str_is_a_load_error`,
  * `test_undeclared_record_field_keeps_its_message`, `test_field_on_str_in_map_over_is_a_load_error`,
- * `test_field_on_str_in_wait_until_is_a_load_error`, `test_field_on_a_bare_call_output_is_a_load_error`,
+ * `test_field_on_str_in_wait_until_is_a_load_error` (on a sleep's `until` input),
+ * `test_field_on_a_bare_call_output_is_a_load_error`,
  * `test_field_on_a_map_output_is_a_load_error`, `test_field_on_str_in_a_flow_assert_is_a_load_error`,
  * `test_partial_record_output_checks_names_and_typed_fields`,
  * `test_node_assert_on_a_partial_record_output_checks_typed_fields`,
@@ -216,9 +217,14 @@ test("a field on str in map over is a load error", () => {
   );
 });
 
-test("a field on str in wait until is a load error", () => {
-  const text = flow("str", "  settle:\n    kind: wait\n    until: ${step.output.at}\noutput: ${step.output}\n");
-  expect(failure(text)).toContain("node 'settle' wait until: reference ${step.output.at} reads field 'at' on type str");
+test("a field on str in a sleep's until is a load error", () => {
+  const text = flow(
+    "str",
+    "  settle:\n    kind: tool\n    tool_id: sleep\n    input:\n      until: ${step.output.at}\noutput: ${step.output}\n",
+  );
+  expect(failure(text)).toContain(
+    "node 'settle' input 'until' from: reference ${step.output.at} reads field 'at' on type str",
+  );
 });
 
 const BARE_CHILD =

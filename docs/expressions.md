@@ -204,7 +204,8 @@ with 400 digits before the decimal point is out of range; write inf for infinity
 
 The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
 searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the
-AGENT or HUMAN_INPUT node whose prompt can't render.
+AGENT or HUMAN_INPUT node whose prompt can't render. (TS yian has no HUMAN_INPUT; an `ask`'s
+`prompt:` is an input binding.)
 
 ### Non-finite results
 
@@ -406,7 +407,9 @@ It is a load error in:
 
 - prompts and HUMAN_INPUT question text: `isinstance is not a prompt function; compute it
   in an input binding`;
-- WAIT `until:` and MAP `over:`: `isinstance is not supported in a wait node's until:`;
+- WAIT `until:` and MAP `over:`: `isinstance is not supported in a wait node's until:`
+  (TS yian has no WAIT or HUMAN_INPUT; an `ask`'s and a `sleep`'s inputs are bindings, as
+  above);
 - a `call` or `loop` node's own asserts, which run on the child flow's END:
   `isinstance in a call node's asserts is not supported; assert inside the child flow`.
 

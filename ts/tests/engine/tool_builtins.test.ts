@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { Output, Pending } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { type CallView, NodeSteps, ValueContract } from "../../src/nodes/contracts.ts";
-import { QuestionSpecError } from "../../src/nodes/human_input/questions.ts";
+import { QuestionSpecError } from "../../src/nodes/tool/questions.ts";
 import { CompletedError, ToolNode, ToolTimeoutError } from "../../src/nodes/tool/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { pending } from "../../src/tools/context.ts";

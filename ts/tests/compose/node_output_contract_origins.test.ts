@@ -241,7 +241,8 @@ input:
   topic: !str
 nodes:
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
       topic: \${input.topic}
     adaptive_questions:
@@ -518,16 +519,18 @@ nodes:
     kind: code
     code: return "ok"
     output: str
-  human_leaf:
-    kind: human_input
-    prompt: continue?
+  ask_leaf:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: continue?
     output: str
 output: \${code_leaf.output}
 `;
   const nodes = SourceDocument.parse(text, "leaves.yaml").root.child("nodes");
   const { flow, builder } = assembleText(text, "leaves.yaml");
 
-  for (const nodeId of ["agent_leaf", "code_leaf", "human_leaf"]) {
+  for (const nodeId of ["agent_leaf", "code_leaf", "ask_leaf"]) {
     const contract = flow.compiled.nodes.get(nodeId)!.outputContract as ValueContract;
     expect(contract.constructor).toBe(ValueContract);
     expect(contract.origins.entries).toEqual([]);

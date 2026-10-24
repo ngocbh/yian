@@ -36,7 +36,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-const ASK = '  ask:\n    kind: human_input\n    prompt: "Proceed?"\n    output: str\n';
+const ASK = '  ask:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "Proceed?"\n    output: str\n';
 
 /** A flow whose nodes are `nodes` (YAML lines) and whose output is `output`. */
 function flowFile(nodes: string, output: string): string {

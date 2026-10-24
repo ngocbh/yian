@@ -1,5 +1,18 @@
 kind: load
+rules: [messages]
 flow: |
+  id: w
+  name: w
+  input:
+    when: !date
+  nodes:
+    w:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: ${isinstance(input.when, date)}
+  output: ${w.output}
+python_flow: |
   id: w
   name: w
   input:
@@ -10,6 +23,14 @@ flow: |
       until: ${isinstance(input.when, date)}
   output: ${w.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is bool; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      frames:
+      - label: flow.yaml
+        range: [10, 14, 10, 45]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

@@ -1,5 +1,33 @@
 kind: load
+rules: [messages]
 flow: |
+  id: f
+  name: f
+  defs:
+    pause:
+      input:
+        n: !int
+      nodes:
+        w:
+          kind: tool
+          tool_id: sleep
+          input:
+            until: ${input.n}
+        after:
+          kind: code
+          depends_on: [w]
+          output: int
+          code: |
+            return 1
+      output: ${after.output}
+  nodes:
+    a:
+      kind: call
+      call: pause
+      input:
+        n: 1
+  output: ${a.output}
+python_flow: |
   id: f
   name: f
   defs:
@@ -25,6 +53,17 @@ flow: |
         n: 1
   output: ${a.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "defs entry 'pause': node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is int; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 20, 1]
+        note: definition 'pause'
+      - label: flow.yaml
+        range: [12, 18, 12, 28]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

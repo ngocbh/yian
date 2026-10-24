@@ -127,6 +127,8 @@ what `run` returns:
 - An ordinary **value-producing leaf** does one thing and returns `Output`.
   `ask_user` on an AGENT node, HUMAN_INPUT, and WAIT may block inside the live invocation, but
   still return `Output`. WAIT returns `None` after its absolute UTC deadline.
+  Changed (TS yian): there is no `human_input` or `wait` kind; a TOOL node runs the `ask` and
+  `sleep` built-ins, and one that waits records `node_waiting` and frees its worker.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edges with that handle (the target and any node the loader lifted out of
   it; siblings skip-flood); on no match a `case` routes to the `#else`
@@ -178,10 +180,10 @@ branching on kind.
 | Trait / hook | Set by | Purpose |
 |---|---|---|
 | `binds_per_item` | map | bind inputs per element via `caps["bind_item"]`, not once up front |
-| `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
+| `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks (TS yian: map only) |
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
-| `needs_stop_event` | agent, wait, tool | receive the run-owned cooperative stop event (TS yian: `caps.signal`, every node) |
-| `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools, tool groups, and `ask_user` handler) |
+| `needs_stop_event` | agent, wait (Python), tool | receive the run-owned cooperative stop event (TS yian: `caps.signal`, every node) |
+| `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools, tool groups, and `ask_user` handler; TS yian: tool and agent, and the ask slot) |
 | `granted_tools()` | base; agent overrides | tool and group ids the run boundary checks against the run's tools before the run starts |
 | `needs_steps` | tool (TS yian: also every agent, which records each model call as a `model_call` step and each tool result as a `tool_result` step; see [Authoritative run logs](api.md#authoritative-run-logs)) | receive `caps["steps"]`, a `NodeSteps`: the node's start count, the steps its earlier starts recorded, and `record(step)`, which appends a step to the run log and returns once it is applied (TS yian: a step has a string `kind`; `record` returns the step's number within the node; once the run stops, `record` throws and appends nothing, except `record(step, { settled: true })` for an effect that settled before the stop, while the run has no terminal result) |
 | `needs_live_events` | agent | receive transient `emit_stream`/`emit_event` sinks for the host callbacks that exist |

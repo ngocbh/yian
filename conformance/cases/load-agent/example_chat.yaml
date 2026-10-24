@@ -1,84 +1,71 @@
 # From examples/chat.yaml.
-# A `loop` over a `defs:` body holding HUMAN_INPUT, a typed value entry, and a `case ... on`
-# whose `else:` is an inline `call(...)` loads.
-# Its header's `yian chat` is the Python CLI; TS yian drops that command.
+# A `loop` over a `defs:` body holding a `take` on the flow's `Inbox(str)` input, a typed value
+# entry, and a searched `case` whose `else:` is an inline `call(...)` loads. `python_flow` keeps
+# Python yian's chat example, which still asks with HUMAN_INPUT.
 kind: load
 flow: |
-  # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
+  # chat — a turn-by-turn conversational assistant (agent without tools; deterministic history).
   #
-  # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-  # Exact exit text routes to the `exited` value entry, which keeps the transcript and sets
-  # `exited: true`. Anything else calls `respond`, where the AGENT fills the reply and a CODE
-  # node folds it into the transcript. The LLM only fills the reply.
-  # Run it with:  yian chat examples/chat.yaml
+  # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
+  # them and takes everything sent since the last turn. Closing the inbox (/exit in `yian chat`)
+  # ends the loop once the queued messages are answered: a closed inbox with nothing left routes
+  # to the `ended` value entry, which keeps the history and sets `closed: true`. Anything else
+  # calls `respond`, where the AGENT sends the history as messages and replies; `respond`'s output
+  # binding appends the turn's two messages. The AGENT outputs only its reply and a binding does
+  # the append, so the run log grows linearly with the conversation.
+  # The `prompt:` list style, `Inbox(str)` and `take` are TS-only.
   id: chat
   name: chat
   description: A turn-by-turn conversational assistant (one model call per turn, no tools).
 
   input:
-    opening: !str            # seed transcript; the CLI passes "" (empty)
+    messages: !Inbox(str)
 
   typedefs:
-    Turn:                   # the carried record, and each turn's result
-      transcript: str
-      exited: bool
+    Msg:                    # one message of the history the AGENT sends
+      role: Literal(user, assistant)
+      text: str
+    Turn: {history: list(Msg), closed: bool}   # the carried record, and each turn's result
 
   defs:
     respond:                # a CASE result is the routed node's output, so the reply chain is a def
-      input:
-        transcript: !str
-        message: !str
+      input: {history: !list(Msg), message: !str}
       nodes:
         reply:
           kind: agent
           input:
-            transcript: ${input.transcript}
-            message:    ${input.message}
-          output: str
-          prompt: |-
-            You are a helpful conversational assistant.
-
-            Conversation so far:
-            ${transcript}
-
-            User: ${message}
-        fold:
-          kind: code
-          input:
-            transcript: ${input.transcript}
+            history: ${input.history}
             message: ${input.message}
-            reply: ${reply.output}
-          output: Turn
-          code: |
-            return {
-                "transcript": inputs["transcript"]
-                + "\n\nUser: " + inputs["message"]
-                + "\n\nAssistant: " + inputs["reply"],
-                "exited": false,
-            }
-      output: ${fold.output}
+          output: str                      # only this turn's reply is recorded
+          system_prompt: You are a helpful conversational assistant.
+          prompt:
+            - ${history}
+            - user: ${message}
+      output: !Turn
+        history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+        closed: false
 
-    turn:                   # body: 'a -> 'a over {transcript, exited}
+    turn:                   # body: 'a -> 'a over {history, closed, messages}
       input:
-        transcript: !str
-        exited: !bool
+        history: !list(Msg)
+        closed: !bool
+        messages: !Inbox(str)
       nodes:
-        ask:
-          kind: human_input       # blocks a worker until the broker returns the message
-          prompt: "You:"
-          output: str
-        exited: !Turn             # a value entry: the exit record itself
-          transcript: ${input.transcript}
-          exited: true
+        heard:
+          kind: tool
+          tool_id: take                    # waits until a message arrives or the inbox closes
+          input:
+            from: ${input.messages}
+            take: all
+        ended: !Turn                       # a value entry: the closing record
+          history: ${input.history}
+          closed: true
         route:
           kind: case
-          on: ${ask.output}
           cases:
-            - when: /exit
-              then: exited
-            - when: /quit
-              then: exited
-          else: call(respond, transcript=${input.transcript}, message=${ask.output})
+            - when: ${heard.output.events == []}   # closed, nothing left to answer
+              then: ended
+          else: call(respond, history=${input.history}, message=${join(heard.output.events)})
       output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
   nodes:
@@ -86,12 +73,11 @@ flow: |
       kind: loop
       call: turn
       input:
-        transcript: ${input.opening}
-        exited: false                 # the `exited` entry sets true for exact /exit or /quit
-      while: not exited               # a carried-field predicate
-  output: ${chat.output.transcript}
-# The CODE body differs by language: `flow` holds the TS body, this the Python one.
-# Its `False` is `false` in the TS body.
+        history: []
+        closed: false
+        messages: ${input.messages}
+      while: not closed
+  output: ${chat.output.history}
 python_flow: |
   # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
   #

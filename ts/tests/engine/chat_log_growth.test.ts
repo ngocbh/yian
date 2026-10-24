@@ -2,6 +2,9 @@
  * TS-only: an 80-turn `examples/chat.yaml` run log grows linearly with the conversation, learnable
  * or not.
  *
+ * Each turn's message is sent to the run's `messages` inbox and the run advanced; closing the
+ * inbox ends it.
+ *
  * Each turn's AGENT outputs only its reply, and `respond`'s output binding appends the turn's two
  * messages to the history. The bindings' values (each turn's END, the expansion's child STARTs,
  * the stopping LOOP driver) are derived commits holding `from` pointers, not the history, so a
@@ -17,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { runFlow } from "../../src/run.ts";
+import { advance, close, runFlow, send } from "../../src/run.ts";
 import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-chat-log-growth-"));
@@ -29,23 +32,22 @@ const MESSAGE = 100;
 const REPLY = 200;
 
 /**
- * Run `examples/chat.yaml` for `turns` turns of fixed-size messages and replies, then `/exit`;
- * return the log's size.
+ * Run `examples/chat.yaml` for `turns` turns of fixed-size messages and replies, then close its
+ * inbox; return the log's size.
  */
 async function logBytes(turns: number, learnable: boolean): Promise<number> {
   const flow = await loadFlow(readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8"), { searchPaths: [EXAMPLES_DIR] });
   const replies = Array.from({ length: turns }, (_, k) => textReply(`${k}`.padEnd(REPLY, "r")));
-  let asked = 0;
   const log = join(tmp, `chat-${turns}-${learnable}.jsonl`);
-  const result = await runFlow(flow, {}, {
-    env: NO_ENV,
-    log,
-    numWorkers: 0,
-    learnable,
-    llmConfig: CONFIG,
-    models: serving(new ScriptedModel(replies, CONFIG)),
-    tools: { ask_user: () => (asked < turns ? `${asked++}`.padEnd(MESSAGE, "m") : "/exit") },
-  });
+  const models = serving(new ScriptedModel(replies, CONFIG));
+  let result = await runFlow(flow, {}, { env: NO_ENV, log, numWorkers: 0, learnable, llmConfig: CONFIG, models });
+  for (let k = 0; k < turns; k += 1) {
+    expect(result.status).toBe("waiting");
+    await send(log, "messages", `${k}`.padEnd(MESSAGE, "m"), { env: NO_ENV });
+    result = await advance({ log, env: NO_ENV, numWorkers: 0, models });
+  }
+  await close(log, "messages", { env: NO_ENV });
+  result = await advance({ log, env: NO_ENV, numWorkers: 0, models });
   expect(result.status).toBe("succeeded");
   expect((result.output as unknown[]).length).toBe(2 * turns);
   return statSync(log).size;

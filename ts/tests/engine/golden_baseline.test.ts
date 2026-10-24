@@ -88,7 +88,7 @@ const GOLDEN_EDGE_IDS: Record<string, string[]> = {
     "research_each->__end__#0",
     "research_each->compare#0",
   ],
-  // human_input + absolute WAIT: CASE gate control edges + the `~>` ordering separator
+  // ask + absolute sleep: CASE gate control edges + the `~>` ordering separator
   "17-effects-human-wait.yaml": [
     "__start__->propose#0",
     "__start__->settle#0",
@@ -136,7 +136,8 @@ const GOLDEN_EDGE_TUPLES: Record<string, [id: string, inputGroup: string | null,
   ],
   "17-effects-human-wait.yaml": [
     ["__start__->propose#0", "topic", false],
-    ["propose->approve#0", "action", false],
+    // The ask's prompt embeds `${propose.output}` in text, so its edge doesn't co-skip.
+    ["propose->approve#0", "prompt", true],
     ["__start__->settle#0", "until", false],
     ["propose->confirm#0", "action", false],
     ["propose->abort#0", "action", false],

@@ -28,12 +28,11 @@
  * `test_per_item_wrapper_default_keeps_binding_stage`.
  *
  * Ported (adapted): `test_map_over_accepts_a_binding_carrier`,
- * `test_wait_until_accepts_a_binding_carrier`,
  * `test_unbaked_composite_is_a_setup_fault`,
  * `test_case_without_predicate_is_a_setup_fault`,
  * `test_case_with_non_string_predicate_is_a_setup_fault`,
  * `test_map_over_not_a_list_message_is_byte_identical` (on the node and through the evaluator),
- * `test_missing_reserved_wiring_is_an_ir_fault` (2 rows; the node's plain `Error`, where Python
+ * `test_missing_reserved_wiring_is_an_ir_fault` (its MAP row; the node's plain `Error`, where Python
  * raises `KeyError`), `test_malformed_parameter_carrier_is_an_ir_fault` (`params` that isn't an
  * array, where Python uses a tuple), `test_wrapper_assertion_failure_uses_assertion_stage_and_origin`
  * (the traceback is the assertion error's stack, with no marker name),
@@ -46,15 +45,16 @@
  * throws the host fault Python's `__deepcopy__` bomb raises).
  *
  * Not ported: `test_malformed_result_context_is_an_ir_fault`: a template string can't fail on a
- * malformed `kind`.
+ * malformed `kind`. `test_wait_until_accepts_a_binding_carrier` and the WAIT rows of the reserved
+ * wiring tests: TS yian has no WAIT kind (`sleep` is a TOOL built-in with ordinary inputs).
  *
  * Changed: the shared `drive` evaluates the node in a one-node `CompiledFlow` (`nodeFlow`) whose
  * wiring is a `FuncNode`'s `reads` or the given sources, as Python's stub flow derives it. Python's `RuntimeError` is a
  * plain `Error` (cause type `Error`) and its `ValueError` a `RangeError`. The non-NodeResult
  * message names the JS type (`Object`). In `test_binding_carrier_unwraps_exactly_one_layer` the
  * inner carrier isn't a yian value, so binding refuses it (`binding.evaluate`) where Python passes
- * it through as data. The MAP and WAIT carrier rows also check the resolved `over` and `until`
- * through `bindReserved`, then the `Grow` and the `Output` through the evaluator. The setup faults go
+ * it through as data. The MAP carrier row also checks the resolved `over` through `bindReserved`,
+ * then the `Grow` through the evaluator. The setup faults go
  * through `run`, which rejects with the node's own error; the non-string `when` is a cast. The
  * not-a-list message is pinned as the golden format's text.
  *
@@ -107,7 +107,6 @@ import {
 } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
@@ -153,16 +152,6 @@ test("map over accepts a binding carrier", async () => {
 
   expect(node.bindReserved(wiring, new VariablePool())).toEqual({ over: ["first", "second"] });
   expect(await drive(node, { flow: nodeFlow(node, { over: source }) })).toEqual(new Grow([{}, {}]));
-});
-
-test("wait until accepts a binding carrier", async () => {
-  // WAIT's dedicated resolver accepts the carrier shape it bypasses elsewhere.
-  const node = new WaitNode("wait");
-  const source = new Binding("2000-01-01T00:00:00+00:00", { origin: new OriginRef("wait-until") });
-  const wiring = new Map([["until", source]]);
-
-  expect(node.bindReserved(wiring, new VariablePool())).toEqual({ until: "2000-01-01T00:00:00+00:00" });
-  expect(await drive(node, { flow: nodeFlow(node, { until: source }) })).toEqual(new Output(null));
 });
 
 for (const [label, make, inputs] of [
@@ -344,7 +333,6 @@ test("bad return type returns clear evaluation failure", async () => {
 
 for (const [label, make, message] of [
   ["map", () => new MapNode("map", { flowId: "child", child: {} }), "MAP node 'map' has no `over` wiring"],
-  ["wait", () => new WaitNode("wait"), "WAIT node 'wait' has no `until` wiring"],
 ] as const) {
   test(`missing reserved wiring is an ir fault (${label})`, async () => {
     // A validated compiled graph has every trait-declared reserved key.
@@ -362,7 +350,6 @@ test("malformed parameter carrier is an ir fault", async () => {
 
 for (const [label, make, field, value] of [
   ["map", () => new MapNode("map", { flowId: "child", child: {} }), "over", "not-a-list"],
-  ["wait", () => new WaitNode("wait"), "until", "not-an-iso-date"],
 ] as const) {
   test(`reserved input rejection is an input contract failure (${label})`, async () => {
     // An expected reserved-value rejection keeps its authored binding origin.

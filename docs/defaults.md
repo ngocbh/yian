@@ -269,6 +269,8 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_QUESTION_OPTION_CHARS` | input cap | 80 | 2 or more | Longest question option shown to the user |
 | `YIAN_MAX_KEY_PROMPTS` | input cap | 3 | 1 or more | Times the CLI asks for an API key before giving up |
 
+Changed (TS yian): HUMAN_INPUT is removed; `YIAN_MAX_QUESTIONS` caps the questions of an `ask`.
+
 Episodic and reflective memories record their limits in each snapshot and refuse a
 changed request, so their defaults apply only to a store that has no recorded limits
 yet.

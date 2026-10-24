@@ -7,7 +7,7 @@
  * bound-input record is the flow's run-arguments object (the standalone `inputs` namespace is
  * retired). The one side namespace is `system` (host-injected ambient: run id / clock / tenant;
  * reserved, run-global). There is no engine-private key-addressed namespace; live
- * AGENT/HUMAN_INPUT/WAIT effects all return the leaf's ordinary Output.
+ * AGENT and TOOL effects all return the leaf's ordinary Output.
  *
  * Two responsibilities:
  * - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values are typed

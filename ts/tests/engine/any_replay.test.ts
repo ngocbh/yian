@@ -8,9 +8,10 @@
  * resume must see the same values a straight run sees.
  *
  * Ported: every row. The CODE bodies are written in JS: `big` returns `2n ** 80n`, and `seen`
- * names each input's JS `typeof` (`null` for null), where Python names its class. A host stop is
- * the `ask_user` handler aborting the run's signal and throwing its reason, where Python raises
- * `_HostStop`; the run rejects with that reason. The committed values are read with the TS log
+ * names each input's JS `typeof` (`null` for null), where Python names its class. The gate is a
+ * TOOL `ask` that runs after the `Any` nodes, where Python's is a HUMAN_INPUT reading them (TS yian
+ * has no HUMAN_INPUT kind). A host stop is the `ask` handler aborting the run's signal and throwing
+ * its reason, where Python raises `_HostStop`; the run rejects with that reason. The committed values are read with the TS log
  * codec's `decodeRecord`, which also checks every record, where Python reads the raw JSON after
  * `decode_record`.
  *
@@ -80,16 +81,11 @@ nodes:
     code: |
       return {"v": [1, true]}
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
+    runs_after: [mixed, obj, big, flt, items, nothing, rec]
     input:
-      mixed: \${mixed.output}
-      obj: \${obj.output}
-      big: \${big.output}
-      flt: \${flt.output}
-      items: \${items.output}
-      nothing: \${nothing.output}
-      rec: \${rec.output}
-    prompt: "Go on?"
+      prompt: "Go on?"
     output: str
   seen:
     kind: code
@@ -179,7 +175,7 @@ function committed(path: string): Record<string, { kind: string; value: unknown 
 
 /** Run the flow to completion with a log at `path`. */
 async function straightRun(path: string): Promise<RunResult> {
-  const result = await runFlow(await loadFlow(ANY_FLOW, { env }), INPUT, { env, log: path, tools: { ask_user: answer } });
+  const result = await runFlow(await loadFlow(ANY_FLOW, { env }), INPUT, { env, log: path, tools: { ask: answer } });
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
   return result;
@@ -211,7 +207,7 @@ test("resuming a completed any run returns the same output", async () => {
   const first = await straightRun(path);
   const before = readFileSync(path);
 
-  const resumed = await advance({ log: path, env, tools: { ask_user: answer } });
+  const resumed = await advance({ log: path, env, tools: { ask: answer } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");
@@ -234,12 +230,12 @@ test("a node after resume reads replayed any values unchanged", async () => {
   };
 
   const caught = await rejected(
-    runFlow(await loadFlow(ANY_FLOW, { env }), INPUT, { env, log: path, signal: host.signal, tools: { ask_user: interrupt } }),
+    runFlow(await loadFlow(ANY_FLOW, { env }), INPUT, { env, log: path, signal: host.signal, tools: { ask: interrupt } }),
   );
   expect(caught).toBe(interruption);
   expect(committed(path)).toStrictEqual(committed(straight));
 
-  const resumed = await advance({ log: path, env, tools: { ask_user: answer } });
+  const resumed = await advance({ log: path, env, tools: { ask: answer } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");

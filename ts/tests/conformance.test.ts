@@ -298,8 +298,17 @@ describe("checkCase", () => {
     [`${RUN}host: {human: {n: a}}`, "`host.human` maps node ids to lists of answers"],
     [
       `${RUN}host: {human: {}, tools: {ask_user: {parameters: {}, results: []}}}`,
-      "a case with `host.human` declares no `ask_user` tool",
+      "a case with `host.human` declares no `ask` or `ask_user` tool",
     ],
+    [
+      `${RUN}host: {human: {}, tools: {ask: {parameters: {}, results: []}}}`,
+      "a case with `host.human` declares no `ask` or `ask_user` tool",
+    ],
+    [`${RUN}host: {sends: 1}`, "`host.sends` must be a list"],
+    ...["[1]", "[{inbox: m}]", "[{close: m, inbox: m}]", "[{inbox: 1, event: a}]", "[{close: [m]}]"].map(
+      (items) => [`${RUN}host: {sends: ${items}}`, "`host.sends` items are {inbox, event} or {close}"],
+    ),
+    [`${LOAD}host: {sends: []}`, "`host` is not a key of a `load` case"],
     [`${RUN}host: {models: 1}`, "`host.models` must be a mapping"],
     [`${RUN}host: {models: {n: 1}}`, "`host.models.n` must be a mapping"],
     [
@@ -970,6 +979,57 @@ describe("run", () => {
     "  models: {chat: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
     "parts: [{type: text, text: done}]}}]}}\n" +
     `expect: {output: {status: succeeded, output: ${output}}}\n`;
+
+  /**
+   * A `run` case of one TOOL `ask` node `n` passing `prompt: Ship?` and the extra `inputs`,
+   * answered `yes` by `host.human`, expecting `tool_calls`.
+   */
+  const ASK_CASE = (inputs: string, toolCalls: string) =>
+    "kind: run\nflow: |\n  id: f\n  name: f\n  input:\n    plan: !str\n  nodes:\n    n:\n" +
+    "      kind: tool\n      tool_id: ask\n      input:\n        prompt: Ship?\n" +
+    inputs +
+    "      output: str\n  output: ${n.output}\n" +
+    "inputs: {plan: p1}\nrun: {run_id: r1, num_workers: 0}\nhost: {human: {n: [yes]}}\n" +
+    `expect:\n  output: {status: succeeded, output: "yes"}\n  tool_calls: ${toolCalls}\n`;
+
+  /** The answer schema a TOOL `ask` typed `str` sends. */
+  const SCHEMA = "[{name: answer, type: str, required: true}]";
+  const CALL = "call_id: r1/n, attempt: 1, node: n";
+
+  test("`host.human` answers a TOOL `ask` through the ask slot, recorded under `ask`", async () => {
+    const calls =
+      `{ask: [{args: {question: Ship?, answer_schema: ${SCHEMA}, node_id: n}, ${CALL}}]}`;
+    await runCase(ASK_CASE("", calls));
+  });
+
+  test("`host.human` declares the extra inputs a TOOL `ask` passes", async () => {
+    const calls =
+      `{ask: [{args: {question: Ship?, answer_schema: ${SCHEMA}, node_id: n, ctx: p1}, ${CALL}}]}`;
+    await runCase(ASK_CASE("        ctx: |-\n          ${input.plan}\n", calls));
+  });
+
+  /** A `run` case whose flow takes every message sent to inbox `m` until it closes. */
+  const SENDS_CASE = (sends: string, output: string) =>
+    "kind: run\nflow: |\n  id: sends\n  name: sends\n  input:\n    m: !Inbox(str)\n" +
+    "  defs:\n    turn:\n      input:\n        got: !list(str)\n        closed: !bool\n" +
+    "        m: !Inbox(str)\n      nodes:\n        heard:\n          kind: tool\n" +
+    "          tool_id: take\n          input:\n            from: ${input.m}\n" +
+    "            take: all\n      output:\n        got: ${input.got + heard.output.events}\n" +
+    "        closed: ${heard.output.closed}\n  nodes:\n    chat:\n      kind: loop\n" +
+    "      call: turn\n      input:\n        got: []\n        closed: false\n" +
+    "        m: ${input.m}\n      while: not closed\n  output: ${chat.output.got}\n" +
+    `run: {num_workers: 0}\nhost: {sends: ${sends}}\n` +
+    `expect: {output: {status: succeeded, output: ${output}}}\n`;
+
+  test("`host.sends` delivers each item while the run waits", async () => {
+    await runCase(SENDS_CASE("[{inbox: m, event: a}, {inbox: m, event: b}, {close: m}]", "[a, b]"));
+  });
+
+  test("a run still waiting after `host.sends` ran out fails the case", async () => {
+    const waiting = runCase(SENDS_CASE("[{inbox: m, event: a}]", "[a]"));
+    await expect(waiting).rejects.toBeInstanceOf(CaseFailure);
+    await expect(waiting).rejects.toThrow("the run is still waiting after host.sends ran out");
+  });
 
   // test_steering_unreached_action_fails
   test("an action whose point the run never reaches fails the case after the comparisons", async () => {

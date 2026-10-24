@@ -12,7 +12,8 @@
  * `test_synthesized_agent_without_model_names_its_llm_config` (2),
  * `test_run_records_the_layer_that_wins` and
  * `test_default_model_without_provider_is_named_only_when_needed`. Changed: the refusals are
- * `RangeError`s (Python's `ValueError`).
+ * `RangeError`s (Python's `ValueError`); the adaptive gate is a TOOL `ask` where Python's is a
+ * HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind), so its run passes an ask handler.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -30,7 +31,7 @@ import { ApiKeyCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { connectionSnapshot, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { runFlow } from "../../src/run.ts";
+import { type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
 const FIXES = ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"];
@@ -116,9 +117,13 @@ const forbidden = {
 };
 
 /** The `RangeError` a run of `loaded` on `inputs` rejects with, with no model built. */
-async function startError(loaded: ComposedFlow, inputs: Record<string, unknown> = {}): Promise<RangeError> {
+async function startError(
+  loaded: ComposedFlow,
+  inputs: Record<string, unknown> = {},
+  options: RunFlowOptions = {},
+): Promise<RangeError> {
   const log = join(home, "r.jsonl");
-  const error = await rejected(runFlow(loaded, inputs, { log, env, models: forbidden }));
+  const error = await rejected(runFlow(loaded, inputs, { log, env, models: forbidden, ...options }));
   expect(error).toBeInstanceOf(RangeError);
   expect(existsSync(log)).toBe(false);
   return error as RangeError;
@@ -139,11 +144,11 @@ test("provider without model names that provider", async () => {
   expect((await startError(nested)).message).toContain("Agent 'review/draft' has no model for provider 'anthropic'");
 });
 
-/** A flow whose HUMAN_INPUT `ask` composes its question with `adaptive_questions`. */
+/** A flow whose TOOL `ask` composes its question with `adaptive_questions`. */
 function gateFlow(adaptiveQuestions: string): Promise<ComposedFlow> {
   return loadFlow(
-    "id: f\nname: f\ninput: {proj: !str }\nnodes:\n  ask:\n    kind: human_input\n" +
-      "    input: {proj: '${input.proj}'}\n" +
+    "id: f\nname: f\ninput: {proj: !str }\nnodes:\n  ask:\n    kind: tool\n    tool_id: ask\n" +
+      "    input:\n      proj: ${input.proj}\n" +
       `    adaptive_questions: ${adaptiveQuestions}\n` +
       "output: ${ask.output}\n",
   );
@@ -153,7 +158,9 @@ test.each([
   ["{prompt: 'Q ${proj}', llm_config: {provider: anthropic}}", "has no model for provider 'anthropic'"],
   ["{prompt: 'Q ${proj}'}", "has no provider or model"],
 ])("synthesized agent without model names its llm_config: %s", async (adaptiveQuestions, subject) => {
-  const message = (await startError(await gateFlow(adaptiveQuestions), { proj: "x" })).message;
+  // The ask handler declares the gate's context input `proj`; it is never reached.
+  const tools = { ask: { handler: () => "unused", inputs: { proj: { type: "string" } } } };
+  const message = (await startError(await gateFlow(adaptiveQuestions), { proj: "x" }, { tools })).message;
   expect(message).toStartWith(`Node 'ask' adaptive_questions.llm_config ${subject}; `);
   expect(message).not.toContain("ask__compose");
 });

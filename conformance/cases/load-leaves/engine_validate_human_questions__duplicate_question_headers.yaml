@@ -7,6 +7,19 @@ flow: |2
   name: f
   nodes:
     ask:
+      kind: tool
+      tool_id: ask
+      input:
+        questions:
+          - {question: "dup", header: "H"}
+          - {question: "dup2", header: "H"}
+  output: ${ask.output}
+python_flow: |2
+
+  id: f
+  name: f
+  nodes:
+    ask:
       kind: human_input
       questions:
         - {question: "dup", header: "H"}
@@ -16,12 +29,10 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: |-
-        flow has invalid human_input questions:
-          node 'ask' (kind=human_input): question headers must be unique, got ["H","H"]
+      message: 'node ''ask'' (tool_id: ask) input ''questions'': question headers must be unique, got ["H","H"]'
       frames:
       - label: flow.yaml
-        range: [8, 7, 10, 1]
+        range: [10, 9, 12, 1]
 python_expect:
   load:
     diagnostics:

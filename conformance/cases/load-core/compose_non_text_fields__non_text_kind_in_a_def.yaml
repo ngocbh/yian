@@ -1,4 +1,5 @@
 kind: load
+rules: [messages]
 flow: |
   id: f
   name: f
@@ -13,6 +14,17 @@ flow: |
       call: sub
   output: ${a.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''sub'': node ''sub'': `kind:` must be text, but YAML read it as a list; write one of agent, call, case, code, loop, map, tool'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 8, 1]
+        note: definition 'sub'
+      - label: flow.yaml
+        range: [5, 11, 5, 14]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

@@ -10,8 +10,9 @@
  * Ported: every row. The CODE functions Python patches onto its codefns module to count calls are
  * inline JS CODE here, and the rows read which CODE nodes ran from the result's `NodeStarted`
  * events (a finished log publishes none on resume), where Python counts the calls. A host stop is
- * the `ask_user` handler aborting the run's signal and throwing its reason, where Python raises
- * `_HostStop`; the run rejects with that reason. A refused resume is a `RangeError` (a
+ * the `ask` handler aborting the run's signal and throwing its reason, where Python raises
+ * `_HostStop`; the run rejects with that reason. The gate is a TOOL `ask` where Python's is a
+ * HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind). A refused resume is a `RangeError` (a
  * `TypeCheckError` for the recovered END value), where Python raises `ValueError`. Ints read as
  * `bigint`s (decision 4a). Resume compiles the flow the run recorded, so a changed binding type
  * is an edit of the recorded text (Python passes the changed flow).
@@ -105,8 +106,10 @@ id: typed-gate-replay
 name: typed_gate_replay
 nodes:
   ask:
-    kind: human_input
-    prompt: "How many?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "How many?"
   use:
     kind: code
     input:
@@ -127,11 +130,11 @@ async function interruptThenResume(answer: unknown): Promise<RunResult> {
   };
 
   const caught = await rejected(
-    runFlow(await loadFlow(GATE_FLOW, { env }), {}, { env, log: path, signal: host.signal, tools: { ask_user: interrupt } }),
+    runFlow(await loadFlow(GATE_FLOW, { env }), {}, { env, log: path, signal: host.signal, tools: { ask: interrupt } }),
   );
   expect(caught).toBe(interruption);
 
-  return advance({ log: path, env, tools: { ask_user: () => answer } });
+  return advance({ log: path, env, tools: { ask: () => answer } });
 }
 
 test("typed consumer after resume rejects a mistyped answer", async () => {

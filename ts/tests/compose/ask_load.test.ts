@@ -57,6 +57,18 @@ test.each([
   expect(refused(askFlow(body))).toContain(message);
 });
 
+test("tool_id: ask_user asks like ask: a lone question is a host extra, not something to ask", () => {
+  const body = "    input:\n      question: Ship?\n";
+  expect(refused(askFlow(body, "ask_user"))).toContain(
+    "node 'q' (tool_id: ask): ask needs input prompt:, input questions:, or adaptive_questions:",
+  );
+});
+
+test("tool_id: ask_user takes adaptive_questions as ask does", () => {
+  const node = assembleText(askFlow(ADAPTIVE, "ask_user")).flow.compiled.nodes.get("q") as ToolNode;
+  expect(node.builtin).toBe("ask");
+});
+
 test("adaptive_questions is refused on a take", () => {
   const body = `    input:\n      from: \${input.m}\n${ADAPTIVE}`;
   expect(refused(askFlow(body, "take"))).toContain("`adaptive_questions:` applies only to tool_id: ask");

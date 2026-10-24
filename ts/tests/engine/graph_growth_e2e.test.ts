@@ -2,8 +2,8 @@
  * The engine's graph growth end to end: a port of `tests/engine/test_graph_growth_e2e.py`.
  *
  * A MAP run grows the live graph (each element splices its namespaced child START..END, the MAP
- * fans into one list END, and every synthesized reference is a bare `${<id>.output}`), a
- * HUMAN_INPUT inside a called child passes its namespaced id to the host and completes in one run,
+ * fans into one list END, and every synthesized reference is a bare `${<id>.output}`), an
+ * `ask` inside a called child passes its namespaced id to the host and completes in one run,
  * and the representative seeds load with a runnable entry.
  *
  * Ported: `test_live_graph_grows_under_a_map_run`, `test_start_end_splice_is_exercised`,
@@ -41,7 +41,7 @@ import { buildGrow } from "../../src/compile/expand.ts";
 import { RunSucceeded } from "../../src/events.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { runFlow } from "../../src/run.ts";
-import type { AskUserRequest } from "../../src/tools/registry.ts";
+import type { AskRequest } from "../../src/tools/registry.ts";
 import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { childResolver, engine } from "./run_state_fixtures.ts";
@@ -172,16 +172,16 @@ test("synthesized refs are bare outputs", async () => {
 // --- a nested blocking interaction reaches terminal --- //
 
 test("nested human input reaches terminal", async () => {
-  // Seed 25: a HUMAN_INPUT inside a called child invokes the host with its live namespaced id and
+  // Seed 25: an ask inside a called child invokes the host with its live namespaced id and
   // completes in one run.
   const loaded = await loadSeed("load-map-call/seed_25_nested_suspension");
-  const requests: AskUserRequest[] = [];
+  const requests: AskRequest[] = [];
   const result = await runFlow(
     loaded,
     { action: "order 10 units" },
     {
       tools: {
-        ask_user: (request) => {
+        ask: (request) => {
           requests.push(request);
           return "approve";
         },

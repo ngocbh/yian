@@ -1,20 +1,25 @@
-# chat — a turn-by-turn conversational REPL (agent without tools; deterministic history).
+# chat — a turn-by-turn conversational assistant (agent without tools; deterministic history).
 #
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-# Exact exit text routes to the `exited` value entry, which keeps the history and sets
-# `exited: true`. Anything else calls `respond`, where the AGENT sends the history as messages
-# and replies; `respond`'s output binding appends the turn's two messages. The AGENT outputs only
-# its reply and a binding does the append, so the run log grows linearly with the conversation.
-# The `prompt:` list style is TS-only.
+# The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
+# them and takes everything sent since the last turn. Closing the inbox (/exit in `yian chat`)
+# ends the loop once the queued messages are answered: a closed inbox with nothing left routes
+# to the `ended` value entry, which keeps the history and sets `closed: true`. Anything else
+# calls `respond`, where the AGENT sends the history as messages and replies; `respond`'s output
+# binding appends the turn's two messages. The AGENT outputs only its reply and a binding does
+# the append, so the run log grows linearly with the conversation.
+# The `prompt:` list style, `Inbox(str)` and `take` are TS-only.
 id: chat
 name: chat
 description: A turn-by-turn conversational assistant (one model call per turn, no tools).
+
+input:
+  messages: !Inbox(str)
 
 typedefs:
   Msg:                    # one message of the history the AGENT sends
     role: Literal(user, assistant)
     text: str
-  Turn: {history: list(Msg), exited: bool}   # the carried record, and each turn's result
+  Turn: {history: list(Msg), closed: bool}   # the carried record, and each turn's result
 
 defs:
   respond:                # a CASE result is the routed node's output, so the reply chain is a def
@@ -22,7 +27,9 @@ defs:
     nodes:
       reply:
         kind: agent
-        input: {history: "${input.history}", message: "${input.message}"}
+        input:
+          history: ${input.history}
+          message: ${input.message}
         output: str                      # only this turn's reply is recorded
         system_prompt: You are a helpful conversational assistant.
         prompt:
@@ -30,20 +37,38 @@ defs:
           - user: ${message}
     output: !Turn
       history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-      exited: false
+      closed: false
 
-  turn:                   # body: 'a -> 'a over {history, exited}
-    input: {history: !list(Msg), exited: !bool}
+  turn:                   # body: 'a -> 'a over {history, closed, messages}
+    input:
+      history: !list(Msg)
+      closed: !bool
+      messages: !Inbox(str)
     nodes:
-      ask: {kind: human_input, prompt: "You:", output: str}
-      exited: !Turn {history: "${input.history}", exited: true}   # a value entry: the exit record
+      heard:
+        kind: tool
+        tool_id: take                    # waits until a message arrives or the inbox closes
+        input:
+          from: ${input.messages}
+          take: all
+      ended: !Turn                       # a value entry: the closing record
+        history: ${input.history}
+        closed: true
       route:
         kind: case
-        on: ${ask.output}
-        cases: [{when: /exit, then: exited}, {when: /quit, then: exited}]
-        else: call(respond, history=${input.history}, message=${ask.output})
+        cases:
+          - when: ${heard.output.events == []}   # closed, nothing left to answer
+            then: ended
+        else: call(respond, history=${input.history}, message=${join(heard.output.events)})
     output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
 nodes:
-  chat: {kind: loop, call: turn, input: {history: [], exited: false}, while: not exited}
+  chat:
+    kind: loop
+    call: turn
+    input:
+      history: []
+      closed: false
+      messages: ${input.messages}
+    while: not closed
 output: ${chat.output.history}

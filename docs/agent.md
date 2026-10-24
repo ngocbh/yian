@@ -31,7 +31,8 @@ even “one external call.” For example, one AGENT node may make several model
 tool calls before returning. The scheduler still sees one node evaluation with
 one outcome. For example, other node kinds provide different atomic behavior:
 CODE runs a Python function, TOOL invokes a registered capability, CASE chooses
-a route, HUMAN_INPUT asks a person, and WAIT blocks until a deadline.
+a route, HUMAN_INPUT asks a person, and WAIT blocks until a deadline. (TS yian: a TOOL
+node's `ask` asks a person and its `sleep` waits for a time.)
 
 The concrete **AGENT node** (`kind: agent`) is the LLM-backed atomic behavior.
 Its model request deserves a closer look because prompt text, memory, tools, and

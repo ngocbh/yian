@@ -15,14 +15,15 @@ import pytest
 from yian.compose.loader import load_flow
 
 EXAMPLES = sorted((Path(__file__).resolve().parents[2] / "examples").glob("*.yaml"))
-# TS-only examples: chat.yaml renders its history with the `prompt:` list style.
-TS_ONLY = {"chat.yaml"}
+# TS-only examples: they use TS-only built-ins and syntax (chat.yaml also renders its history
+# with the `prompt:` list style). tests/cli/chat_example.yaml is Python yian's chat example.
+TS_ONLY = {"approve-plan.yaml", "chat.yaml", "human-approval.yaml"}
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
 def test_example_loads_and_compiles(path: Path):
     if path.name in TS_ONLY:
-        pytest.skip("TS-only example: the prompt: list style")
+        pytest.skip("uses TS-only built-ins (#1025)")
     loaded = load_flow(path.read_text(), search_paths=[path.parent])
     assert loaded.compiled is not None
     assert loaded.input is not None

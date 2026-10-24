@@ -1,23 +1,22 @@
 # From tests/seeds/26-human-questions.yaml.
-# A HUMAN_INPUT's static questions get an answer record keyed by header; CODE reads its label.
+# An ask's static questions get an answer record keyed by header; CODE reads its label.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define `question` for a questions-only gate.
 kind: run
 rules: [run-log]
 flow: |
-  # 26 — HUMAN_INPUT questions: the three question surfaces.
+  # 26 — ask questions: the three question surfaces.
   #
-  # A `human_input` gate blocks its worker for a person and collects a STRUCTURED
-  # answer keyed by each question's `header` in the same live call. It carries questions in one
-  # of three forms:
+  # A `tool_id: ask` node asks a person and collects a STRUCTURED answer keyed by each
+  # question's `header`. It carries questions in one of three forms:
   #
-  #   static   — a literal `questions:` list written in the YAML (THIS seed).
-  #   upstream — a `code`/agent node produces the list, fed via
-  #              `input: {qs: ${src.output}}` + `questions: ${qs}`.
-  #   adaptive — an `adaptive_questions:` block `{prompt: <brief>, ...}` that
-  #              desugars at load into a synth compose-agent + the gate.
+  #   static   — a literal `questions` input list written in the YAML (THIS seed).
+  #   upstream — a `code`/agent node produces the list, bound as the input
+  #              `questions: ${src.output}`.
+  #   adaptive — an `adaptive_questions:` block (a `prompt:` brief, ...) that
+  #              desugars at load into a synth compose-agent + the ask.
   #
   # This seed pins the static form: two questions (one single-select with options, one
-  # free-text), `${proj}` templated into a question to prove rendering. The gate's
+  # free-text), `${input.proj}` templated into a question to prove rendering. The ask's
   # output defaults to `object` — a record keyed by header (e.g. {Framework: React,
   # Notes: "..."}) — and the flow routes its terminal value on that answer.
 
@@ -30,19 +29,19 @@ flow: |
 
   nodes:
     ask:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       input:
-        proj: ${input.proj}            # context the question text may reference (bare ${proj})
-      questions:
-        - question: "Which framework for ${proj}?"   # ${proj} renders against the bound input
-          header: Framework                          # the answer key — {Framework: <label>}
-          options:
-            - label: React
-              description: A component library.
-            - label: Vue
-              description: A progressive framework.
-        - question: "Any notes for the build?"       # no options -> a free-text question
-          header: Notes
+        questions:
+          - question: "Which framework for ${input.proj}?"   # renders against the pool
+            header: Framework                                # the answer key — {Framework: <label>}
+            options:
+              - label: React
+                description: A component library.
+              - label: Vue
+                description: A progressive framework.
+          - question: "Any notes for the build?"             # no options -> a free-text question
+            header: Notes
       # output omitted -> defaults to `object`: the answer record keyed by header.
 
     pick:
@@ -53,7 +52,8 @@ flow: |
       code: ./fixtures/seeds.ts:chosen_framework
 
   output: ${pick.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+# The flows differ by language: `flow` names the TS function and asks with tool_id: ask; this
+# names the Python one and asks with the human_input gate Python yian keeps.
 python_flow: |
   # 26 — HUMAN_INPUT questions: the three question surfaces.
   #

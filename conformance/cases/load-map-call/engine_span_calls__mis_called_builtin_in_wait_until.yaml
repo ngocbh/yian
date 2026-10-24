@@ -1,5 +1,18 @@
 kind: load
+rules: [messages]
 flow: |2
+
+  id: f
+  name: f
+  input: {d: !str }
+  nodes:
+    w:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: '${upper(input.d, 1)}'
+  output: ok
+python_flow: |2
 
   id: f
   name: f
@@ -8,6 +21,16 @@ flow: |2
     w: {kind: wait, until: '${upper(input.d, 1)}'}
   output: ok
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'w' input 'until' from: expression function 'upper' takes (s): too many positional arguments
+      frames:
+      - label: flow.yaml
+        range: [10, 14, 10, 36]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

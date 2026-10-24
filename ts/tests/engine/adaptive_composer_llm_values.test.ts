@@ -9,7 +9,8 @@
  *
  * Changed: the run-start error is a `RangeError` where Python raises `ValueError`; a run with no
  * call-time agent writes `call_time_llm: null` in its `run_started` record, where Python leaves
- * the key out (TS starts its own versioned logs, decisions 8, 16).
+ * the key out (TS starts its own versioned logs, decisions 8, 16). The gate is a TOOL `ask` where
+ * Python's is a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind); its handler declares `proj`.
  *
  * `engine_adaptive_composer_llm_values__a_composer_call_time_error_names_the_gate` and
  * `__an_error_in_a_call_names_the_callsite` don't cover their tests: neither pins that no model
@@ -25,7 +26,7 @@ import { afterAll, expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
-import type { AskUserRequest } from "../../src/tools/registry.ts";
+import type { AskRequest } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -62,8 +63,10 @@ name: f
 ${typedefs}input: ${inputs}
 nodes:
 ${pick}  ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
     adaptive_questions:
       prompt: "Q \${proj}"
       llm_config: ${llmConfig}
@@ -71,20 +74,29 @@ output: \${ask.output}
 `;
 }
 
+/** The ask handler's declared extras: the gate's context input `proj`. */
+const ASK_INPUTS = { proj: { type: "string" } };
+
+/** An ask handler for runs that fail before the gate asks. */
+const UNUSED_ASK = { ask: { handler: () => "unused", inputs: ASK_INPUTS } };
+
 let runs = 0;
 
-/** Run `text` on `inputs` with a JSONL log; return the result, the log's records and the `ask_user` requests. */
+/** Run `text` on `inputs` with a JSONL log; return the result, the log's records and the `ask` requests. */
 async function run(text: string, inputs: Record<string, unknown>, models: ReturnType<typeof composing>) {
   const log = join(dir, `run${runs++}.jsonl`);
-  const requests: AskUserRequest[] = [];
+  const requests: AskRequest[] = [];
   const result = await runFlow(await loadFlow(text, { env }), inputs, {
     log,
     env,
     models,
     tools: {
-      ask_user: (request: AskUserRequest) => {
-        requests.push(request);
-        return { DB: "Postgres" };
+      ask: {
+        handler: (request: AskRequest) => {
+          requests.push(request);
+          return { DB: "Postgres" };
+        },
+        inputs: ASK_INPUTS,
       },
     },
   });
@@ -110,7 +122,7 @@ function composerSteps(records: { kind: string; payload: Record<string, any> }[]
 }
 
 /** The questions of a request. */
-const questionsOf = (request: AskUserRequest) => request.questions as { question: string; header: string }[];
+const questionsOf = (request: AskRequest) => request.questions as { question: string; header: string }[];
 
 /** The `[provider, model]` of a config. */
 const selection = (config: Readonly<Record<string, unknown>>) => [config["provider"], config["model"]];
@@ -177,7 +189,11 @@ test("a composer run start error names the gate", async () => {
   const models = composing();
   const text = gate("{provider: '${input.p}', model: m}", { inputs: "{proj: !str , p: !str }" });
   const error = await rejected(
-    runFlow(await loadFlow(text, { env }), { proj: "x", p: "nope" }, { log: join(dir, `run${runs++}.jsonl`), env, models }),
+    runFlow(
+      await loadFlow(text, { env }),
+      { proj: "x", p: "nope" },
+      { log: join(dir, `run${runs++}.jsonl`), env, models, tools: UNUSED_ASK },
+    ),
   );
   expect(error).toBeInstanceOf(RangeError);
   const message = (error as RangeError).message;
@@ -189,7 +205,7 @@ test("a composer run start error names the gate", async () => {
 /** Run `text` on `inputs` with the composing models; expect it failed and no model built. */
 async function failed(text: string, inputs: Record<string, unknown> = {}) {
   const models = composing();
-  const result = await runFlow(await loadFlow(text, { env }), inputs, { env, models });
+  const result = await runFlow(await loadFlow(text, { env }), inputs, { env, models, tools: UNUSED_ASK });
   expect(result.status).toBe("failed");
   expect(models.configs).toEqual([]);
   return result.failure!;
@@ -221,7 +237,8 @@ defs:
     input: {p: !str }
     nodes:
       ask:
-        kind: human_input
+        kind: tool
+        tool_id: ask
         adaptive_questions:
           prompt: "Q"
           llm_config: {provider: '\${input.p}', model: m}
@@ -244,7 +261,8 @@ defs:
     input: {m: !Optional(str) }
     nodes:
       ask:
-        kind: human_input
+        kind: tool
+        tool_id: ask
         adaptive_questions:
           prompt: "Q"
           llm_config: {model: !str '\${input.m}'}

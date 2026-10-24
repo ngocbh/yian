@@ -12,7 +12,9 @@
  * The loader rows (`test_loader_accepts_builtin_call_over_declared_input`,
  * `test_loader_rejects_undeclared_input_inside_call`, `test_loader_rejects_unknown_builtin`) load
  * with `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`;
- * `test_prompt_default_fires_in_a_running_flow` runs through `loadFlow` and `runFlow`.
+ * `test_prompt_default_fires_in_a_running_flow` runs through `loadFlow` and `runFlow`, on an
+ * AGENT's prompt (a scripted model) where Python's is a HUMAN_INPUT node's (TS yian has no
+ * HUMAN_INPUT kind).
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -28,9 +30,12 @@ import {
 import { evalExpr, ResolveMode, resolveInRecord } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ExpressionError, evalBinding, promptRefs, RequiredError, renderTemplateRecord } from "../../src/expr/index.ts";
+import type { TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
 import { assembleText, loadError } from "../compose/declarations.ts";
+import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const REC: ValueRecord = { briefs: ["ab", "adf"], name: "zeta", sig: { value: 0.8 } };
 
@@ -188,26 +193,23 @@ test("a strict prompt's miss error names the reference", () => {
 test("a prompt default fires in a running flow", async () => {
   const flow = await loadFlow(`id: p
 name: p
+llm_config: {provider: ollama, model: test}
 input:
   note: !Optional(str)
 nodes:
-  ask:
-    kind: human_input
+  write:
+    kind: agent
     input:
       note: \${input.note}
     prompt: 'Note: \${note :- "none"}'
     output: str
-output: \${ask.output}
+output: \${write.output}
 `);
-  const asked: string[] = [];
-  const ask = (request: { question: string }) => {
-    asked.push(request.question);
-    return "ok";
-  };
+  const model = new ScriptedModel([textReply("ok")], { provider: "ollama", model: "test" });
 
-  const result = await runFlow(flow, {}, { tools: { ask_user: ask } });
+  const result = await runFlow(flow, {}, { env: NO_ENV, models: serving(model) });
   expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(asked).toEqual(["Note: none"]);
+  expect((model.requests[0]!.messages.at(-1)!.parts[0] as TextPart).text).toBe("Note: none");
 });
 
 // --- render: plain references --- //

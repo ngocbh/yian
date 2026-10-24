@@ -23,7 +23,8 @@
  * Changed: `meet` is an inline CODE body that awaits a short timer, where Python's waits on a
  * barrier shared with the other `meet`; CODE bodies run in worker threads (decision 47), so
  * `test_sibling_calls_from_one_host_run_in_parallel` checks, with two workers, that both bodies
- * started before either succeeded.
+ * started before either succeeded. The adaptive gate is a TOOL `ask` where Python's is a
+ * HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind); its handler declares the context inputs.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -36,7 +37,7 @@ import { NodeSkipped, NodeStarted, NodeSucceeded, type RunEvent } from "../../sr
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
-import type { AskUserRequest } from "../../src/tools/registry.ts";
+import type { AskRequest } from "../../src/tools/registry.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { serving, startedIds, textReply } from "./run_state_fixtures.ts";
@@ -546,7 +547,8 @@ const ADAPTIVE = `
         then: ask
     else: done
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
       ctx: \${input.go}
     adaptive_questions:
@@ -558,19 +560,23 @@ const ADAPTIVE = `
 `;
 
 /**
- * Run an adaptive flow; return the flow, the result, the composer's model calls and the human
- * asks. With `fail`, the composer's model has no reply, so a composer call fails.
+ * Run an adaptive flow; return the flow, the result, the composer's model calls and the `ask`
+ * requests. With `fail`, the composer's model has no reply, so a composer call fails.
  */
 async function adaptive(nodes: string, go: boolean, other = false, fail = false) {
   const model = new ScriptedModel(fail ? [] : [textReply(JSON.stringify({ items: COMPOSED }))]);
-  const asked: AskUserRequest[] = [];
+  const asked: AskRequest[] = [];
   const { flow: loaded, result } = await run(flow(nodes, "  r: ${router.output}\n"), go, other, {
     models: serving(model, env),
     llmConfig: { provider: "openai", model: "m" },
     tools: {
-      ask_user: (request) => {
-        asked.push(request);
-        return { DB: "Postgres" };
+      ask: {
+        handler: (request: AskRequest) => {
+          asked.push(request);
+          return { DB: "Postgres" };
+        },
+        // The gate's context inputs.
+        inputs: { ctx: {}, note: {} },
       },
     },
   });
@@ -599,7 +605,7 @@ test("adaptive composer runs on the taken route", async () => {
 });
 
 test("adaptive composer runs after the gate runs after", async () => {
-  const nodes = PREP + ADAPTIVE.replace("    kind: human_input\n", "    kind: human_input\n    runs_after: [prep]\n");
+  const nodes = PREP + ADAPTIVE.replace("    tool_id: ask\n", "    tool_id: ask\n    runs_after: [prep]\n");
   const { flow: loaded, result, calls } = await adaptive(nodes, true);
   const ordering = edge(loaded, "prep~>ask__compose#0");
   expect(ordering.ordering && ordering.optional).toBe(true);
@@ -608,7 +614,7 @@ test("adaptive composer runs after the gate runs after", async () => {
 });
 
 test("adaptive composer is skipped with the gate depends on", async () => {
-  const nodes = MAYBE + ADAPTIVE.replace("    kind: human_input\n", "    kind: human_input\n    depends_on: [maybe]\n");
+  const nodes = MAYBE + ADAPTIVE.replace("    tool_id: ask\n", "    tool_id: ask\n    depends_on: [maybe]\n");
   const { result, calls, asked } = await adaptive(nodes, true, false);
   expect([calls, asked]).toEqual([0, []]);
   expect(neverRan(result, "ask__compose")).toBe(true);
@@ -618,8 +624,8 @@ test("adaptive gate with an inline call gates both lifted nodes", async () => {
   const nodes =
     PREP +
     ADAPTIVE.replace("      ctx: ${input.go}\n", '      ctx: call(side, tag="ctx")\n').replace(
-      "    kind: human_input\n",
-      "    kind: human_input\n    runs_after: [prep]\n",
+      "    tool_id: ask\n",
+      "    tool_id: ask\n    runs_after: [prep]\n",
     );
   const { flow: loaded, result, calls, asked } = await adaptive(nodes, false);
   expect([calls, asked, recorded(result)]).toEqual([0, [], ["prep"]]);
@@ -632,7 +638,7 @@ test("reading a lifted node in the hosts runs after is a cycle", async () => {
   // `audit` reads the composer, and the gate orders after `audit`: the composer now orders after
   // `audit` too, so the two wait on each other.
   const nodes =
-    ADAPTIVE.replace("    kind: human_input\n", "    kind: human_input\n    runs_after: [audit]\n") +
+    ADAPTIVE.replace("    tool_id: ask\n", "    tool_id: ask\n    runs_after: [audit]\n") +
     `
   audit:
     kind: code

@@ -21,8 +21,9 @@
  * (decision 4a); the CODE reference is the TS fixture's (`./fixtures/compose_codefns.ts:double`).
  *
  * Ported through `runFlow` and `advance`, in `hostEnv`: `test_spawner_post_assert_fires_after_log_recovery`.
- * Changed: the interruption before the human answer is the run's `signal`, which the `ask_user`
- * handler aborts (Python: the handler raises `_HostStop`).
+ * Changed: the interruption before the human answer is the run's `signal`, which the `ask`
+ * handler aborts (Python: the handler raises `_HostStop`); the child's gate is a TOOL `ask` where
+ * Python's is a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -160,7 +161,7 @@ test("declared input post assert violating fails", async () => {
 
 // --- 3. recovery safety: the lowered spawner post-assert survives log replay --- //
 
-// A child whose live HUMAN_INPUT can be interrupted after its durable start.
+// A child whose live `ask` can be interrupted after its durable start.
 const BLOCKING_CHILD = `
 id: approver
 name: approver
@@ -168,16 +169,16 @@ input:
   v: !int
 nodes:
   approve:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
-      v: \${input.v}
-    prompt: "value \${v}?"
+      prompt: "value \${input.v}?"
     output: int
 output: \${approve.output}
 `;
 
 // The call carries a node-level `output < 100` post-assert, which the rebuilt child END checks
-// after recovery retries the unfinished HUMAN_INPUT.
+// after recovery retries the unfinished ask.
 const BLOCKING_PARENT = `
 id: recovery-parent
 name: recovery_parent
@@ -201,8 +202,8 @@ function loadBlocking(): Promise<ComposedFlow> {
 }
 
 test("spawner post assert fires after log recovery", async () => {
-  // Interrupt the HUMAN_INPUT after its NodeStarted is durable; recovery replays the expansion,
-  // retries the input node and delivers 120, which the rebuilt child END's post-assert rejects.
+  // Interrupt the ask after its NodeStarted is durable; recovery replays the expansion,
+  // retries the ask and delivers 120, which the rebuilt child END's post-assert rejects.
   const path = join(dir, "spawner-post-assert.jsonl");
   const interruption = new Error("interrupt before human answer");
   const host = new AbortController();
@@ -211,11 +212,11 @@ test("spawner post assert fires after log recovery", async () => {
     throw interruption;
   };
   const caught = await rejected(
-    runFlow(await loadBlocking(), { v: 1 }, { log: path, signal: host.signal, tools: { ask_user: interrupt }, env: hostEnv(dir) }),
+    runFlow(await loadBlocking(), { v: 1 }, { log: path, signal: host.signal, tools: { ask: interrupt }, env: hostEnv(dir) }),
   );
   expect(caught).toBe(interruption);
 
-  const res = await advance({ log: path, tools: { ask_user: () => 120 }, env: hostEnv(dir) });
+  const res = await advance({ log: path, tools: { ask: () => 120 }, env: hostEnv(dir) });
 
   expect(res.status).toBe("failed");
   const failed = res.events.filter((event) => event instanceof RunFailed);

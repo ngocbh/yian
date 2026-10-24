@@ -2,7 +2,7 @@
  * Validate: load-time `flow.wiring` / `params` key parity for every node.
  *
  * A loader post-build pass. Every node's `flow.wiring` keys must equal its declared `params`
- * names plus the kind's reserved wiring keys (`until` for WAIT, `over` for a mapped `call`). Its
+ * names plus the kind's reserved wiring keys (`over` for a mapped `call`). Its
  * range anchor comes from the node's transient Compose `BuildResult.fieldRanges` entry for the
  * `inputs` field (the coarse `input:` mapping span), else the authored node range.
  *
@@ -17,7 +17,7 @@ import { type BuildResult, siteKey } from "../nodes/base.ts";
 
 /**
  * Check that every node's `flow.wiring` keys equal its declared `params` names plus the kind's
- * reserved keys (`until` for WAIT, `over` for a mapped `call`).
+ * reserved keys (`over` for a mapped `call`).
  *
  * Closes the duplicate-param hole by construction (a nested-map wiring cannot hold a duplicate
  * param) and turns an orphan source (a wiring key with no param), a missing source (a param with

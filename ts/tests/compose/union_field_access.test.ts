@@ -3,7 +3,7 @@
  * `tests/compose/test_union_field_access.py::test_shared_walk_allows_member_only_fields_when_asked`,
  * `::test_member_only_hint_names_the_union_root` and
  * `::test_shared_field_one_member_does_not_require_reads_as_optional` and
- * `::test_human_input_answer_schema_for_a_union_is_one_object_entry`; and the child-signature
+ * `::test_human_input_answer_schema_for_a_union_is_one_object_entry` (an ask's); and the child-signature
  * rows `::test_tag_field_reads_as_the_merged_literal`,
  * `::test_shared_field_of_one_type_reads_as_that_type`,
  * `::test_shared_field_optional_in_one_member_reads_as_optional`,
@@ -60,9 +60,9 @@ import { Edge, GrowthRejected } from "../../src/compile/model.ts";
 import { canonicalizeInlineType } from "../../src/compose/build/inline_inputs.ts";
 import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
-import { answerSchema } from "../../src/compose/nodes/human_input.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
+import { answerSchema } from "../../src/compose/nodes/tool.ts";
 import { Grow } from "../../src/nodes/base.ts";
 import {
   Binding,
@@ -116,7 +116,7 @@ test("shared walk allows member-only fields when asked", () => {
   );
 });
 
-test("human_input answer schema for a union is one object entry", () => {
+test("ask answer schema for a union is one object entry", () => {
   expect(answerSchema(decision())).toEqual([{ name: "answer", type: "object", required: true }]);
 });
 

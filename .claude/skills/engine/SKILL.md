@@ -604,6 +604,11 @@ Most are just the functional model (above) made enforceable:
   node checks the run-owned stop event between external model/tool effects, and
   WAIT blocks on that event until its absolute UTC deadline.
   All three return `Output`; none creates continuation topology.
+  Changed (TS yian): there is no HUMAN_INPUT or WAIT. A TOOL node reaches the
+  built-ins `ask` (served by the run's ask slot, `tools: {ask: handler}`, which also
+  serves the AGENT's `ask_user`), `sleep` and `take` with `tool_id:`. A TOOL node may
+  return `Pending` (a `take` or `sleep` wait, or a host's `pending()`): the node waits
+  holding no worker, and the run can end `waiting` until `advance` wakes it.
 - **Dependency-light core (with a deliberate exception)** — keep the engine free
   of a DB and heavy frameworks; external capabilities enter through **injected
   seams** (plain callables). **Exception (by decision):** the AGENT node is *not*

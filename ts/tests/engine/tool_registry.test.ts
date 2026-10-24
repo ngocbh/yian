@@ -513,37 +513,24 @@ describe("ask_user invocation", () => {
     });
   }
 
-  test("test_trusted_invocation_passes_structured_metadata", async () => {
+  // TS-only: the HUMAN_INPUT node that sent `questions`, `answerSchema`, `title` and `nodeId` on
+  // the trusted path is gone, so that path takes only the public `question` and `options`.
+  test("the trusted ask_user path passes the question and options", async () => {
     const seen: AskUserRequest[] = [];
-    const metadata = {
-      question: "Review the proposal",
-      questions: [{ id: "decision", prompt: "Approve?" }],
-      answerSchema: [{ name: "decision", type: "bool" }],
-      title: "Human review",
-      nodeId: "approval",
-    };
-    const tools = new ToolSet({ ask_user: recordingHandler(seen, { decision: true }) });
+    const tools = new ToolSet({ ask_user: recordingHandler(seen, "B") });
 
-    expect(await tools.invokeTrusted("ask_user", metadata)).toEqual({ decision: true });
+    expect(await tools.invokeTrusted("ask_user", { question: "Which?", options: ["A", "B"] })).toBe("B");
 
-    expect(seen).toEqual([{ ...metadata, options: null, ...CALL_FIELDS }]);
+    expect(seen).toEqual([{ ...NO_FIELDS, question: "Which?", options: ["A", "B"] }]);
   });
 
-  test("test_trusted_invocation_rejects_unknown_metadata", async () => {
+  test("the trusted ask_user path refuses the old HUMAN_INPUT metadata", async () => {
     const tools = new ToolSet({ ask_user: recordingHandler([]) });
 
-    const inputs = { question: "Approve?", not_metadata: "model supplied" };
+    const inputs = { question: "Approve?", questions: [], answerSchema: [], title: "T", nodeId: "n" };
     expect(await rejected(tools.invokeTrusted("ask_user", inputs), RangeError)).toBe(
-      "tool 'ask_user' received unsupported argument(s) [\"not_metadata\"] on its trusted invocation path; " +
-        'allowed: ["answerSchema","nodeId","options","question","questions","title"]',
-    );
-  });
-
-  test("the trusted path checks the metadata's types", async () => {
-    const tools = new ToolSet({ ask_user: recordingHandler([]) });
-
-    await expect(tools.invokeTrusted("ask_user", { question: "Approve?", title: 3 })).rejects.toThrow(
-      /^tool 'ask_user' argument 'title': /,
+      'tool \'ask_user\' received unsupported argument(s) ["answerSchema","nodeId","questions","title"] on its ' +
+        'trusted invocation path; allowed: ["options","question"]',
     );
   });
 

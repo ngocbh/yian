@@ -21,7 +21,8 @@
  * validator or the cycle check raises, pinned at the end, the cycle and reference cases with `full`
  * (every frame and the notes).
  *
- * Changed: the flows assemble with `assembleText`, where Python loads them. A text value reads
+ * Changed: the flows assemble with `assembleText`, where Python loads them. The gate is a TOOL
+ * `ask`, so its prompt is the input `prompt:`, whose errors are a reference's. A text value reads
  * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
  * message ("Extra inputs are not permitted") where pydantic adds its `extra_forbidden` type. Each
  * bad-config row, the typed-input row, the unknown-type row and the skipped-arithmetic row pin the
@@ -48,15 +49,17 @@ import {
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 
-/** Return the adaptive-gate flow with the `llm_config:` lines `llmConfig`; its value starts on line 10. */
+/** Return the adaptive-gate flow with the `llm_config:` lines `llmConfig`; its value starts on line 12. */
 const flow = (llmConfig = "") => `\
 id: f
 name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
     adaptive_questions:
       prompt: "Q \${proj}"
 ${llmConfig}output: \${ask.output}
@@ -86,7 +89,7 @@ test.each([
 ])("bad llm config is named and located at the llm config: %s", (_id, config, message) => {
   const error = loadError(() => assembleText(flow(`      llm_config: ${config}\n`)));
   expect(error.message).toBe(message);
-  expect(lineOf(error)).toBe(10);
+  expect(lineOf(error)).toBe(12);
 });
 
 test("block llm config error is located at its first key", () => {
@@ -94,7 +97,7 @@ test("block llm config error is located at its first key", () => {
   expect(error.message).toBe(
     `${LLM_SITE}: 1 validation error for LLMConfig\nbogus\n  Extra inputs are not permitted`,
   );
-  expect(lineOf(error)).toBe(11);
+  expect(lineOf(error)).toBe(13);
 });
 
 test("valid llm config loads", () => {
@@ -107,7 +110,8 @@ test("a compact flow's llm config error names the flow node", async () => {
 id: f
 name: f
 input: {proj: !str }
-kind: human_input
+kind: tool
+tool_id: ask
 adaptive_questions:
   prompt: "Q \${proj}"
   llm_config: {temparature: 1}
@@ -115,12 +119,12 @@ adaptive_questions:
   );
   expect(error.message.startsWith("node 'f' adaptive_questions.llm_config")).toBe(true);
   expect(error.message).not.toContain("f__compose");
-  expect(lineOf(error)).toBe(7);
+  expect(lineOf(error)).toBe(8);
 });
 
 /**
- * Return the flow whose gate `ask` has the `input:` lines `inputs`, the brief `brief` and the gate
- * `prompt:` line `gatePrompt` (default none).
+ * Return the flow whose gate `ask` has the `input:` lines `inputs`, the brief `brief` and the
+ * input `prompt:` line `gatePrompt` (default none); its first input is on line 13.
  */
 const inputFlow = (inputs: string, brief = "Q ${proj}", gatePrompt = "") => `\
 id: f
@@ -132,7 +136,8 @@ nodes:
     output: int
     code: "return 1"
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
 ${inputs}${gatePrompt}    adaptive_questions:
       prompt: "${brief}"
@@ -163,7 +168,7 @@ test.each([
   expect(lines[0]!.startsWith("node 'ask' input 'proj' from: ")).toBe(true);
   expect(lines[0]).toContain(fragment);
   expect(error.message).not.toContain("ask__compose");
-  expect(lineOf(error)).toBe(12);
+  expect(lineOf(error)).toBe(13);
 });
 
 test("two inputs with the same bad source are both reported", () => {
@@ -184,17 +189,17 @@ test("a bad brief and a bad input are each reported once", () => {
 
 test("a bad input is listed before a bad gate prompt", () => {
   const error = loadError(() =>
-    assembleText(inputFlow("      proj: ${input.nope}\n", "Q ${proj}", '    prompt: "${nope}"\n')),
+    assembleText(inputFlow("      proj: ${input.nope}\n", "Q ${proj}", '      prompt: "${nope}"\n')),
   );
 
-  expect(sites(error)).toEqual(["node 'ask' input 'proj' from", "node 'ask' prompt"]);
+  expect(sites(error)).toEqual(["node 'ask' input 'proj' from", "node 'ask' input 'prompt' from"]);
   expect(error.message).not.toContain("ask__compose");
 });
 
 test("typed input mismatch names the gate", () => {
   const error = loadError(() => assembleText(inputFlow("      proj: !list(int) ${input.proj}\n", "Q ${proj}")));
   expect(error.message).toBe("node 'ask' input 'proj': declared list(int), but the value is str");
-  expect(lineOf(error)).toBe(12);
+  expect(lineOf(error)).toBe(13);
 });
 
 test("isinstance unknown type names the gate", () => {
@@ -203,7 +208,7 @@ test("isinstance unknown type names the gate", () => {
     "node 'ask' input 'proj': unknown type 'Nope'; isinstance takes a typedefs: name or one of str, int, float, " +
       "bool, date, datetime, object",
   );
-  expect(lineOf(error)).toBe(12);
+  expect(lineOf(error)).toBe(13);
 });
 
 test("literal inputs still load", () => {
@@ -242,7 +247,8 @@ nodes:
     code: |
       return {"qty": 1}
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
       q: \${order.output.qty * 2}
     adaptive_questions:
@@ -254,7 +260,7 @@ output: \${ask.output}
     "node 'ask' input 'q': ${order.output.qty * 2} does arithmetic on order.output.qty, which is null when " +
       "node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)",
   );
-  expect(lineOf(error)).toBe(19);
+  expect(lineOf(error)).toBe(20);
 });
 
 test("a defs body's input error names the gate", async () => {
@@ -270,7 +276,8 @@ defs:
       topic: !str
     nodes:
       ask:
-        kind: human_input
+        kind: tool
+        tool_id: ask
         input:
           proj: \${input.nope}
         adaptive_questions:
@@ -290,7 +297,7 @@ output: \${run.output}
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("node 'ask' input 'proj' from: ");
   expect(error.message).not.toContain("ask__compose");
-  expect(lineOf(error)).toBe(13);
+  expect(lineOf(error)).toBe(14);
 });
 
 // ---------- cycles: the gate is named, not its composer, unless an author reads the composer ----------
@@ -305,9 +312,12 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${ask.output}'}
-    adaptive_questions: {prompt: "Q \${proj}"}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${ask.output}
+    adaptive_questions:
+      prompt: "Q \${proj}"
 `;
 
 /** Return the 1-based line of the first line of `text` that starts with `needle`. */
@@ -336,12 +346,16 @@ input: {proj: !str }
 nodes:
   b:
     kind: agent
-    input: {a: '\${${bReads}}'}
+    input:
+      a: \${${bReads}}
     prompt: "x \${a}"
   ask:
-    kind: human_input
-${gateExtra}    input: {proj: '\${${gateReads}}'}
-    adaptive_questions: {prompt: "Q \${proj}"}
+    kind: tool
+    tool_id: ask
+${gateExtra}    input:
+      proj: \${${gateReads}}
+    adaptive_questions:
+      prompt: "Q \${proj}"
 output: \${ask.output}
 `;
 
@@ -374,7 +388,9 @@ test("a composer read outside the cycle still names only the gate", () => {
       q: \${ask__compose.output}
     output: int
     code: return inputs["q"].length
-output: {a: '\${ask.output}', q: '\${ask__compose.output}'}
+output:
+  a: \${ask.output}
+  q: \${ask__compose.output}
 `;
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(cycleMessage(["ask"]));
@@ -385,10 +401,15 @@ output: {a: '\${ask.output}', q: '\${ask__compose.output}'}
 test("two self-reading gates each name only the gate", () => {
   const text = `${SELF_READING}\
   ask2:
-    kind: human_input
-    input: {proj: '\${ask2.output}'}
-    adaptive_questions: {prompt: "Q \${proj}"}
-output: {a: '\${ask.output}', b: '\${ask2.output}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${ask2.output}
+    adaptive_questions:
+      prompt: "Q \${proj}"
+output:
+  a: \${ask.output}
+  b: \${ask2.output}
 `;
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(cycleMessage(["ask", "ask2"]));
@@ -407,9 +428,13 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}', x: '\${ask__compose.output}'}
-    adaptive_questions: {prompt: "Q \${proj} \${x}"}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
+      x: \${ask__compose.output}
+    adaptive_questions:
+      prompt: "Q \${proj} \${x}"
 output: \${ask.output}
 `;
   const error = loadError(() => assembleText(text));
@@ -429,7 +454,8 @@ defs:
       topic: !str
     nodes:
       ask:
-        kind: human_input
+        kind: tool
+        tool_id: ask
         input:
           proj: \${ask.output}
         adaptive_questions:

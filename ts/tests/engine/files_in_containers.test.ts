@@ -63,8 +63,10 @@
  * float binding's int is 2^60, so the body sees a `bigint` (an int up to 2^53 and a float both
  * arrive as a `number`; Python reads `type(n).__name__`), and a body writes a missing value as
  * `String(x)`, `null` (Python's `repr`, `None`); the interruption before
- * the human answer is the run's `signal`, which the `ask_user` handler aborts (Python: the
- * handler raises `_HostStop`).
+ * the human answer is the run's `signal`, which the `ask` handler aborts (Python: the
+ * handler raises `_HostStop`). The gates are TOOL `ask` nodes where Python's are HUMAN_INPUT
+ * nodes (TS yian has no HUMAN_INPUT kind), so the prompt row reads the file in the ask's prompt
+ * template.
  *
  * Not ported: the hash half of `test_a_source_entry_with_a_record_reading_type_is_hashable`, since
  * a `SourceEntry` has no hash (maps key sources by `sourceKey`); the `field_of` rows on dict
@@ -1179,9 +1181,9 @@ test("a template binding reads the uri of a file", async () => {
 
 test("a prompt reads the name of a file", async () => {
   const text = fileFlow(
-    '  b:\n    kind: human_input\n    prompt: "u=${f.uri} k=${f.name}"\n' + "    input:\n      f: ${n.output}\n    output: str\n",
+    '  b:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "u=${n.output.uri} k=${n.output.name}"\n    output: str\n',
   );
-  const output = await okRun(text, { tools: { ask_user: (request: { question: string }) => request.question } });
+  const output = await okRun(text, { tools: { ask: (request: { question: string }) => request.question } });
   expect(output).toBe("u=f k=a.txt");
 });
 
@@ -1521,8 +1523,10 @@ nodes:
     code: |
       return [${F}, ${F}]
   ask:
-    kind: human_input
-    prompt: "Go?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Go?"
   b:
     kind: code
     input:
@@ -1542,14 +1546,14 @@ async function interruptedRun(name: string, text: string, learnable: boolean): P
     host.abort(interruption);
     throw interruption;
   };
-  const caught = await rejected(runText(text, {}, { log: path, learnable, signal: host.signal, tools: { ask_user: interrupt } }));
+  const caught = await rejected(runText(text, {}, { log: path, learnable, signal: host.signal, tools: { ask: interrupt } }));
   expect(caught).toBe(interruption);
   return path;
 }
 
 test.each([false, true])("a reader after resume sees the files of a replayed output: learnable %p", async (learnable) => {
   const path = await interruptedRun(`gated-${learnable}`, GATED_READER_FLOW, learnable);
-  const resumed = await resumeText(GATED_READER_FLOW, path, { tools: { ask_user: () => "y" } });
+  const resumed = await resumeText(GATED_READER_FLOW, path, { tools: { ask: () => "y" } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.output).toEqual(["FileRef", "FileRef"]);
@@ -1565,7 +1569,7 @@ test.each([false, true])(
     const events: unknown[] = [];
     const resumed = await resumeText(text, path, {
       onEvent: (event) => void events.push(event),
-      tools: { ask_user: () => "y" },
+      tools: { ask: () => "y" },
     });
 
     expect(resumed.failure).toBeNull();

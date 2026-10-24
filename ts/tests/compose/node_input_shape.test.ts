@@ -3,13 +3,14 @@
  * binding noun and showing a fix: the parse half of `tests/compose/test_node_input_shape.py`
  * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
  * `inputs` as the parse phase does: the registered `LoopDescriptor`, `CallDescriptor`,
- * `MapDescriptor`, `CodeDescriptor`, `ToolDescriptor`, `AgentDescriptor` and
- * `HumanInputDescriptor`. The harvested `whole_reference_input_{agent,call,code}` and
+ * `MapDescriptor`, `CodeDescriptor`, `ToolDescriptor` (which an `ask` is) and `AgentDescriptor`. The
+ * harvested `whole_reference_input_{agent,call,code}` and
  * `{empty_list,expression,number,whole_record}_loop_seed` cases are pinned at the end. A text
  * value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
  *
  * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
- * as text).
+ * as text), and the human_input row of `test_whole_reference_input_is_a_load_error_for_every_kind`
+ * (an `ask` is a TOOL node, which the tool row covers).
  *
  * Ported through `assembleText`: `test_inline_loop_whole_reference_keeps_its_message` (inline
  * body extraction refuses the `input:` before any node parses), with its harvested case
@@ -31,7 +32,6 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
-import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
@@ -57,7 +57,6 @@ const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, Descriptor
   ["code", CodeDescriptor],
   ["tool", ToolDescriptor],
   ["agent", AgentDescriptor],
-  ["human_input", HumanInputDescriptor],
 ]);
 
 /** Parse node `nodeId` of `text`'s `nodes:` with the class its `kind:` names. */
@@ -98,7 +97,6 @@ test.each([
   ["code", "code: return 1", PARAMETERS],
   ["tool", "tool_id: http_get", PARAMETERS],
   ["agent", "prompt: hi", PARAMETERS],
-  ["human_input", "prompt: hi", PARAMETERS],
 ] as const)("a whole-reference input is a load error for %s", (kind, fields, [noun, verb]) => {
   const text = `nodes:\n  under_test:\n    kind: ${kind}\n    ${fields}\n    input: \${seed.output}\n`;
   expect(loadError(() => parseNode(text, "under_test")).diagnostic.message).toBe(

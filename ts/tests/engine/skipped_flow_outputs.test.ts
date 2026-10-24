@@ -66,7 +66,9 @@
  * module to fingerprint the flow without the rewrite; a test can't stub a function another ES
  * module imports, so it puts the authored output source back on a fresh assembly by hand (END's
  * edge keeps the optional stance the rewrite gave it, so only the output source differs). The
- * error rows pin the whole message where Python checks fragments.
+ * error rows pin the whole message where Python checks fragments. TS yian has no `wait`, so
+ * `test_arithmetic_in_a_wait_until_names_wait_until` uses a `sleep`, whose message names its
+ * `until` input.
  *
  * Ported, reading a `defs:` child's own output contract (through `assembleText`, whose callable
  * scope builds the def): `test_call_output_of_a_skipped_branch_is_optional`,
@@ -912,13 +914,13 @@ test("arithmetic in a map over: names map over", () => {
   expect(errorLines(error, text)).toEqual([lineOf(text, over)]);
 });
 
-test("arithmetic in a wait until: names wait until", () => {
-  // A WAIT `until:` that does arithmetic on a skipped value is rejected as `wait until`.
-  const until = "    until: ${order.output.s + '-01-01'}";
-  const text = flow(`${ITEMS}  w:\n    kind: wait\n${until}\n`, "\n  r: ${rejected.output}");
+test("arithmetic in a sleep until: names the until input", () => {
+  // A sleep's `until:` that does arithmetic on a skipped value is rejected at its input.
+  const until = "      until: ${order.output.s + '-01-01'}";
+  const text = flow(`${ITEMS}  w:\n    kind: tool\n    tool_id: sleep\n    input:\n${until}\n`, "\n  r: ${rejected.output}");
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    `node 'w' wait until: ${arithmetic("${order.output.s + '-01-01'}", "order.output.s", "node 'order' is")}`,
+    `node 'w' input 'until': ${arithmetic("${order.output.s + '-01-01'}", "order.output.s", "node 'order' is")}`,
   );
   expect(errorLines(error, text)).toEqual([lineOf(text, until)]);
 });

@@ -9,6 +9,9 @@
  * `test_nested_case_output_expands_in_inputs_and_outputs` (both rows); the load half of
  * `test_nested_references_in_a_map_child_run_after_growth`, whose run is covered by
  * `run-core/compose_nested_template_walkers__nested_references_in_a_map_child`.
+ *
+ * Not ported: `test_wait_until_container_with_a_span_fails_at_the_container`. TS yian has no
+ * `wait`; a `sleep`'s `until` is a tool input.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -126,26 +129,6 @@ test("unknown nested isinstance name fails", () => {
   const error = loadError(() => assembleText(codeFlow("{ok: '${isinstance(p.output, Nope)}'}")));
 
   expect(error.diagnostic.message).toContain("unknown type 'Nope'");
-});
-
-test("wait until container with a span fails at the container", () => {
-  const text = `
-id: w
-name: w
-nodes:
-  a:
-    kind: code
-    code: return '2030-01-01'
-  w:
-    kind: wait
-    until:
-      - \${a.output}
-output: \${w.output}
-`;
-  const error = loadError(() => assembleText(text));
-
-  expect(error.diagnostic.message).toContain("wait node 'w' until: a value holding ${...} can't be a list or mapping");
-  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "      - ${a.output}"));
 });
 
 test.each(["\n      - ${a.output}\n      - 2", "\n      x: ${a.output}"])(
@@ -363,7 +346,6 @@ test.each([
 
 test.each<CaseRow>([
   { id: "load-core/compose_nested_template_walkers__map_over_container_with_a_span", call: parsedNodes },
-  { id: "load-core/compose_nested_template_walkers__wait_until_container_with_a_span", call: parsedNodes },
 ])("parseNodes: $id", runCase);
 
 // The inline-call desugar raises the retired call before the `sub` callee resolves.

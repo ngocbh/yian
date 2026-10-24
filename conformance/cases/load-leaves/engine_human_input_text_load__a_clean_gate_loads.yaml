@@ -1,19 +1,21 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
-      prompt: "Cost $$5 for ${proj}"
-      questions:
-        - question: "${proj}"
-          header: Framework
-          options:
-            - label: "${proj}"
-              description: "${proj}"
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "Cost $$5 for ${input.proj}"
+        questions:
+          - question: "${input.proj}"
+            header: Framework
+            options:
+              - label: "${input.proj}"
+                description: "${input.proj}"
   output: ${ask.output}
 expect:
   load: ok

@@ -94,8 +94,7 @@ defs:
       c: {kind: code, input: {x: "\${input.x}"}, output: int, code: "return inputs.x"}
     output: {x: "\${c.output}"}
 nodes:
-  ask: {kind: human_input, prompt: "q?", output: str}
-  w: {kind: wait, until: "2030-01-01T00:00:00Z"}
+  ask: {kind: tool, tool_id: ask, input: {prompt: "q?"}, output: str}
   route:
     kind: case
     cases:

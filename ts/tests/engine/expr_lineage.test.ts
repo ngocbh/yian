@@ -31,13 +31,9 @@
  *
  * Ported: `test_reserved_map_over_uses_the_same_capture_path`.
  *
- * Ported (adapted): `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
- * is `WAIT capture retains the delivered value`: the source is a date string, which WAIT delivers
- * unchanged, so it checks the outcome, the bound input, the read and the routed feedback.
- *
  * Not ported:
- * - The normalization half of `test_wait_capture_retains_the_delivered_iso_value_after_normalization`
- *   (one `isoformat()` call): TS WAIT has no `isoformat` object to normalize.
+ * - `test_wait_capture_retains_the_delivered_iso_value_after_normalization`: TS yian has no WAIT
+ *   kind; the `sleep` built-in reads `until` as an ordinary input.
  * - Temporaries `fromHost` refuses, so a builtin can't return them: the NaN row of
  *   `test_nonfinite_temporary_keeps_a_valid_final_interpolation`, the lone-surrogate
  *   `test_noncanonical_unicode_temporary_preserves_comparison_and_partial_snapshot`,
@@ -73,10 +69,9 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";
-import { Grow, Output } from "../../src/nodes/base.ts";
+import { Grow } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { validateRoute } from "../../src/runtime/contracts.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import { FileRef, isRecord, type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
@@ -676,21 +671,6 @@ test("equal MAP items get distinct recorded indices", async () => {
     expect(messages(routed)).toEqual([[expectedSource, expectedFeedback]]);
     expect(routed.contributions[0]!.context.map((context) => context.operand)).toContainEqual([index]);
   }
-});
-
-test("WAIT capture retains the delivered value", async () => {
-  const sources = new Sources({ deadline: "2000-01-01T00:00:00+00:00" });
-  const evaluated = await evalNode(new WaitNode("wait"), null, new VariablePool(), {
-    wiringOverride: { until: "${deadline}" },
-    captureBindings: true,
-    sourceResolver: sources.resolve,
-  });
-  expect(evaluated.outcome).toEqual(new Output(null));
-  expect(evaluated.bindings!.boundInputs).toEqual({ until: "2000-01-01T00:00:00+00:00" });
-  expect(sources.reads).toEqual(["deadline"]);
-  expect(messages(routeFeedback(evaluated.bindings!.route, { until: "Too early." }, sources.lookup))).toEqual([
-    [sources.identities.deadline!, "Too early."],
-  ]);
 });
 
 test("direct projection lifts feedback into source shape", () => {

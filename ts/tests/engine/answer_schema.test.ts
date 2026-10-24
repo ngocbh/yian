@@ -1,5 +1,5 @@
 /**
- * `answerSchema` derives a light answer schema from a HUMAN_INPUT output type: a port of
+ * `answerSchema` derives a light answer schema from an `ask` node's output type: a port of
  * `tests/engine/test_answer_schema.py`, where TS exports the helper Python keeps private.
  *
  * TS-only: an enum is sorted by code units, whatever order the `Literal` lists its values in.
@@ -8,7 +8,7 @@
 import { expect, test } from "bun:test";
 
 import { readType } from "../../src/compose/helpers/types.ts";
-import { answerSchema } from "../../src/compose/nodes/human_input.ts";
+import { answerSchema } from "../../src/compose/nodes/tool.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 
 const REGISTRY = readTypedefs({});

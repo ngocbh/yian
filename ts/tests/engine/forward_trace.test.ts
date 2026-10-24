@@ -4408,7 +4408,7 @@ defs:
   turn:
     input: {history: !list(Msg), log: !str}
     nodes:
-      ask: {kind: human_input, prompt: "You:", output: str}
+      ask: {kind: tool, tool_id: ask, input: {prompt: "You:"}, output: str}
       reply:
         kind: agent
         input: {history: "\${input.history}", message: "\${ask.output}"}
@@ -4438,7 +4438,7 @@ test("an occurrence's bound inputs are rebuilt from its route: a template and a 
     numWorkers: 0,
     learnable: true,
     models: serving(new ScriptedModel([textReply("A"), textReply("B"), textReply("C")], config)),
-    tools: { ask_user: () => answers.shift()! },
+    tools: { ask: () => answers.shift()! },
   });
   expect(result.status).toBe("succeeded");
   const reopened = JsonlRunLog.resume(log);
@@ -4459,7 +4459,8 @@ test("an occurrence's bound inputs are rebuilt from its route: a template and a 
     history: second,
     log: "\nUser: a\nAssistant: A\nUser: b\nAssistant: B",
   });
-  expect(of("chat#0/ask").boundInputs).toEqual({});
+  // The ask's prompt is one of its inputs.
+  expect(of("chat#0/ask").boundInputs).toEqual({ prompt: "You:" });
 });
 
 /** A run-log line as plain JSON. */
@@ -4476,7 +4477,7 @@ test("a replayed derived record holding a forward capture is refused (TS-only)",
     numWorkers: 0,
     learnable: true,
     models: serving(new ScriptedModel([textReply("A"), textReply("B"), textReply("C")], config)),
-    tools: { ask_user: () => answers.shift()! },
+    tools: { ask: () => answers.shift()! },
   });
   expect(result.status).toBe("succeeded");
   const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);

@@ -1,0 +1,55 @@
+# approve-plan — ask the lead, then escalate to the manager when the lead doesn't answer.
+#
+# Each `ask` TOOL node asks with a deadline (`timeout:`). The host answers at once, or returns
+# `pending()` and answers later with `complete()`; a call still open at its deadline closes
+# with output `null`. `Optional(Approval)` makes that null an ordinary answer, so `escalate`
+# routes on it: when the lead answered, no branch runs and `manager` is skipped.
+#
+# `to:` is a host extension of `ask`: yian's `ask` has no recipient. A host that routes asks
+# to people declares it in its ask tool's `inputs` (`AskTool.inputs`); yian checks the value
+# against that declaration and passes it through in the request.
+#
+# The flow output is the lead's answer, else the manager's, else null when neither answered
+# in time. With strict outputs (`output: Approval`), a timeout fails the node with
+# `tool.timeout` instead.
+#
+# Exercises: `ask` with `timeout:` and a host extension, an Optional answer, a routing-only
+# searched `case` with no `else:`, and a coalesce over a skipped branch.
+
+id: approve_plan
+name: approve_plan
+typedefs:
+  Approval:
+    decision: Literal(approve, reject)
+    note: Optional(str)
+input:
+  plan: !str
+nodes:
+  lead:
+    kind: tool
+    tool_id: ask
+    input:
+      to: lead                           # host extension: who answers
+      prompt: |-
+        Approve this plan?
+
+        ${input.plan}
+      timeout: 24h
+    output: Optional(Approval)           # null: the lead didn't answer in time
+  escalate:
+    kind: case
+    cases:
+      - when: ${lead.output == null}
+        then: manager
+  manager:
+    kind: tool
+    tool_id: ask
+    input:
+      to: manager
+      prompt: |-
+        No answer from the lead in 24h. Approve this plan?
+
+        ${input.plan}
+      timeout: 48h
+    output: Optional(Approval)
+output: !Optional(Approval) ${lead.output | manager.output}

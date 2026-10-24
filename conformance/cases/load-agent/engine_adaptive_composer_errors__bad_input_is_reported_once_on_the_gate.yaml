@@ -1,4 +1,5 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
@@ -9,7 +10,8 @@ flow: |
       output: int
       code: "return 1"
     ask:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       input:
         proj: "${input.nope}"
       adaptive_questions:
@@ -24,4 +26,4 @@ expect:
           node 'ask' input 'proj' from: reference ${input.nope} points to unknown flow input 'nope'
       frames:
       - label: flow.yaml
-        range: [12, 13, 12, 28]
+        range: [13, 13, 13, 28]

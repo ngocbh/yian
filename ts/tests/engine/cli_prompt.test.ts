@@ -366,10 +366,10 @@ test("run error multi frame three levels", async () => {
 });
 
 test("run error multi frame on nested human input failure", async () => {
-  // Seed 25 asks from a HUMAN_INPUT inside a called `defs:` child (`gate/approve`); an answer
+  // Seed 25 asks from inside a called `defs:` child (`gate/approve`); an answer
   // outside `Approval` fails the typed write, framed at the `gate:` CALL, then the child's `output:`.
   const loaded = await loadSeed("run-map-call/seed_25_nested_suspension", "25-nested-suspension.yaml");
-  const result = await runFlow(loaded, { action: "ship it" }, { env, tools: { ask_user: () => "maybe" } });
+  const result = await runFlow(loaded, { action: "ship it" }, { env, tools: { ask: () => "maybe" } });
   expect(result.status).toBe("failed");
   const out = await rendered(result, loaded);
   expect(out).toContain("source locations:");

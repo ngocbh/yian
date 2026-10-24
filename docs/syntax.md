@@ -182,6 +182,8 @@ document ...`). A value written out where the flow reads a value (a node input, 
 100 levels; a deeper one is a load error at that value (see [Operators inside `${...}`](#operators-inside) and
 [Types → Nesting limit](typing.md#nesting-limit)).
 
+Changed (TS yian): there is no WAIT node; a `sleep` TOOL node's `until:` is a node input.
+
 Changed: a file nested deeper than about 330 (mappings) to 490 (lists) levels used to
 crash with a raw `RecursionError`; one between 201 levels and that depth used to load
 and is now a load error.
@@ -247,6 +249,9 @@ WAIT `until:`, and the flow `output:` are values, not text; `over:` must be a li
 `until:` a date or datetime, checked at load (see
 [`wait`](#wait-block-until-an-absolute-utc-deadline) and
 [`call` / `map`](#call-map-composition-over-child-flows)).
+
+Changed (TS yian): WAIT is removed; a `sleep`'s `until:` input is checked the same way (see
+[Built-in tools](#built-in-tools-take-sleep-ask)).
 
 Changed: a non-text value in these fields used to crash with a raw Python error
 (`code:`, CASE `on:`, `call:`, a list or mapping `kind:`, a `defs:` assert), load
@@ -324,6 +329,9 @@ Rules:
   `human_input`. `case`/`call`/`map` reference other nodes a one-node flow has none
   of, so they need the full `nodes:` form.
 
+Changed (TS yian): `human_input` is removed, so the compact kinds are `agent`, `code` and
+`tool`.
+
 ## References — naming a value
 
 Everywhere you wire data you use a `${...}` reference:
@@ -338,6 +346,10 @@ Everywhere you wire data you use a `${...}` reference:
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
+
+Changed (TS yian): `human_input` is removed. An `ask` TOOL node's `prompt:` and `questions:`
+are inputs, so their text reads pool references (`${draft.output}`), like any binding; its
+`adaptive_questions.prompt:` reads the node's input names, bare.
 
 Changed (TS yian): stringified in the text form (see
 [Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
@@ -361,6 +373,9 @@ AGENT's `system_prompt:`, a `human_input` question's text and
 `asserts:`. Reading a declared field through an `Optional(...)` record still gives
 `null` when the whole value is null, and values whose type isn't known at load
 (`object`, `Any`, an untyped output, or anything below them) aren't checked.
+
+Changed (TS yian): with `human_input` removed, an `ask`'s `prompt:` and question text are
+checked as bindings, and its `adaptive_questions.prompt:` as above.
 
 A node's local name is typed by what it is bound to: a typed binding by its declared
 type, a literal by its value, and any other binding by the type the loader infers for
@@ -452,6 +467,9 @@ the member first with `isinstance(r, <Type>) and ...`
     all of them, so an unknown name, a pool reference, an unknown function, a builtin
     called with arguments it doesn't take, or a span that doesn't parse is a load
     error at that text.
+
+    Changed (TS yian): `human_input` is removed. An `ask` TOOL node's `prompt:` is an
+    input, so it reads pool references directly (`${draft.output}`).
 
 Changed: a non-text `prompt:` used to crash the loader with a raw `TypeError` (AGENT, an
 adaptive brief), load silently (AGENT `0`, `false`, `[]`, `{}`; `human_input` lists and
@@ -718,6 +736,8 @@ didn't run; it is now a load error. One built deep through YAML aliases could cr
 load with a raw `RecursionError`; it is now the same load error. WAIT `until:` had no
 nesting check and now has one.
 
+Changed (TS yian): there is no WAIT node; a `sleep`'s `until:` is a node input.
+
 An expression nests at most 100 levels too: each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and chain of operators is a level, so `a + b - c` is one
 level at any length. A deeper expression is a load error at its field; split it into
@@ -814,6 +834,9 @@ One rule says where a type goes. A **type definition** is written as a type: a
 (`output: Optional(OrderResult)`). A **slot**, a place that holds a value, takes its
 type as a YAML tag on the value (`qty: !int ${size.output.qty}`); see
 [Typed slots](#typed-slots-yaml-tags).
+
+Changed (TS yian): there is no HUMAN_INPUT node; an `ask` TOOL node's `output:` is its answer
+type.
 
 Numeric domains may add an inclusive range: `int(1..12)` or `float(0.0..1.0)`. Either
 end may be left open: `int(0..)` (0 or more), `int(..100)` (at most 100), `float(0.0..)`.
@@ -1065,6 +1088,9 @@ Tags go on slots:
 - a value entry in `nodes:` (see [Values in `nodes:`](#values-in-nodes));
 - records and lists nested in any of these.
 
+Changed (TS yian): HUMAN_INPUT is removed; an `ask` node's context inputs (`count: !int ...`)
+are ordinary `input:` bindings and take tags the same way.
+
 `output: !T {...}` is one typed value of type `T`, not a record of fields. An untagged
 `output: {...}` stays a record of fields. `call(...)` keyword arguments take no tag.
 
@@ -1254,7 +1280,8 @@ nodes:
   span renders a skipped value as empty text. In a flow output, a skipped nested read
   gives `null` at that position, and its type there is `Optional`.
 - MAP `over:` and WAIT `until:` take one expression. A literal list with `${` there is a
-  load error: write the list as an expression, `${[a, b]}`.
+  load error: write the list as an expression, `${[a, b]}`. (TS yian has no WAIT; a
+  `sleep`'s `until:` is a node input.)
 - Flow input defaults and agent variable values are literal text, nested ones included.
 
 Changed: strings nested in a literal list or mapping used to stay literal, so
@@ -2790,7 +2817,7 @@ a `date` or `datetime` input, fails here, though the tool would have converted i
 Before any of these, a `tool_id:` the run's tools lack fails, naming a close match
 when there is one:
 `TOOL node 'place' names tool 'place_ordr', which isn't in this run's tools; known tools: ['place_order']; did you mean 'place_order'?`.
-A `tool_id:` naming a tool group, or `ask_user` with no handler, fails the same way.
+A `tool_id:` naming a tool group, or `ask` with no handler, fails the same way.
 How yian reads a host tool's types is in
 [Typed tools](api.md#typed-tools).
 
@@ -2844,7 +2871,7 @@ run starts. `output:` is the answer's type and gives the request's answer schema
 questions ask without one answers an `object`, and a prompt-only one is free form.
 `asserts:` apply; `retries:` fails, since the host owns retries of a call it holds.
 
-`tool_id: ask_user` still calls the agent's `ask_user` surface as a plain tool for now.
+`tool_id: ask_user` is an alias of `ask` (its old name).
 
 **Durations.** `timeout:` and `for:` take a positive integer and a unit, `s`, `m`, `h` or
 `d` (`90s`, `30m`, `24h`, `2d`), expanded to seconds at load, so `24h` and `86400s` give
@@ -2855,7 +2882,8 @@ duration from a `${...}` reference must be typed `str` (tag it: `timeout: !str $
 is read when the node runs. A literal duration takes no tag (`timeout: !str 5m` fails).
 
 The escalation example asks the lead, then the manager when the lead doesn't answer in a
-day. `to:` is this host's extra input:
+day. `to:` is this host's extra input (see
+[Examples → `approve-plan.yaml`](examples.md#approve-planyaml-escalation)):
 
 ```yaml
 id: approve_plan
@@ -2872,7 +2900,10 @@ nodes:
     tool_id: ask
     input:
       to: lead
-      prompt: "Approve this plan?\n\n${input.plan}"
+      prompt: |-
+        Approve this plan?
+
+        ${input.plan}
       timeout: 24h
     output: Optional(Approval)       # null: the lead didn't answer in time
   escalate:
@@ -2885,7 +2916,10 @@ nodes:
     tool_id: ask
     input:
       to: manager
-      prompt: "No answer from the lead in 24h. Approve this plan?\n\n${input.plan}"
+      prompt: |-
+        No answer from the lead in 24h. Approve this plan?
+
+        ${input.plan}
       timeout: 48h
     output: Optional(Approval)
 output: !Optional(Approval) ${lead.output | manager.output}
@@ -3495,8 +3529,11 @@ input. The `else:` still sees the value as `Optional`.
 
 ### `human_input` — a deterministic human gate
 
-Changed (TS yian): a TOOL node with `tool_id: ask` takes this node's question surface as
-inputs and waits for the answer durably (see [Built-in tools](#built-in-tools-take-sleep-ask)).
+Changed (TS yian): removed; ask a person with `kind: tool`, `tool_id: ask` (see
+[Built-in tools](#built-in-tools-take-sleep-ask)), with `adaptive_questions:` on the ask
+node. Loading `kind: human_input` is a load error that names the replacement. The question
+surface below (`prompt`, `questions`, the question limit, the answer record) carries over as
+the ask's inputs, and the answer waits durably. The rest of this section is Python yian's.
 
 A `human_input` node **always** invokes the run's `ask_user` handler at a
 fixed point and blocks its worker until the human answers. The answer is
@@ -3647,6 +3684,11 @@ anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
 load error. Put free text in `prompt:`.
 
 ### `wait` — block until an absolute UTC deadline
+
+Changed (TS yian): removed; `kind: tool`, `tool_id: sleep` with `until:` or `for:` (see
+[Built-in tools](#built-in-tools-take-sleep-ask)); the run waits without holding a worker and
+survives a restart. Loading `kind: wait` is a load error that names the replacement. `until:`
+keeps the forms below. The rest of this section is Python yian's.
 
 ```yaml
 settle:
@@ -3949,7 +3991,8 @@ Declaring a whole `call` node for a one-off child call is verbose. The `call(...
 **directive** is sugar: written as a binding's **whole value**, it desugars at
 load into an anonymous `call` node, and the host binding is rewritten to reference
 that node's output. This applies to every authored node `input:` mapping, including
-HUMAN_INPUT context bindings and LOOP carried-record seeds.
+HUMAN_INPUT context bindings and LOOP carried-record seeds. (TS yian has no HUMAN_INPUT; an
+`ask` node's `input:` is an ordinary node input mapping.)
 
 ```yaml
 # on a node `brief` (routed by a case, with `runs_after: [fetch]`) —
@@ -4189,6 +4232,10 @@ nodes:
     while: not exited
 ```
 
+Changed (TS yian): `human_input` is removed, so a chat body doesn't ask inside the loop. The
+flow takes an `Inbox(str)` input and each turn runs a TOOL `take` with `take: all`; see
+`examples/chat.yaml` ([Examples → `chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat)).
+
 **`while:` — pre-check (0+ runs).** A predicate evaluated on the carried record
 *before* each iteration; 0 iterations run if the seed already fails it. It is a
 record-scoped boolean over bare refs — every ref must name a **carried record
@@ -4248,6 +4295,10 @@ node's id once the loop stops).
 A body may itself block (e.g. a `human_input` leaf): the worker stays inside that
 live iteration until the host answers, then the same run advances into the next
 iteration. This is the shape a chat REPL takes.
+
+Changed (TS yian): a body's `take`, `sleep` or pending `ask` doesn't hold a worker: the run
+ends `waiting` and `advance` continues the same iteration (see
+[Built-in tools](#built-in-tools-take-sleep-ask)).
 
 Each continuing iteration **prunes** the previous iteration's body nodes from the
 live graph, along with the nodes grown under them by a nested CALL, MAP, or LOOP. So
@@ -4344,12 +4395,12 @@ reply:
     - user: ${message}
 output: !Turn
   history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-  exited: false
+  closed: false
 ```
 
 A node that returns the whole history every turn makes the log grow quadratically again. So does
 a value entry that carries it: a value entry lowers to a CODE node (see "How a value entry runs"),
-which records its value. `chat.yaml`'s `exited` entry runs once, on the last turn.
+which records its value. `chat.yaml`'s `ended` entry runs once, on the last turn.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 
@@ -4383,6 +4434,11 @@ All three authorable blocking surfaces are live calls: `ask_user` returns the
 human's answer to the same model/tool loop, HUMAN_INPUT returns it as the node's
 output, and WAIT returns `None` at its deadline.
 There is no authored `entry:`/`controls:` surface on an AGENT node and no event-mode WAIT.
+
+Changed (TS yian): HUMAN_INPUT and WAIT are removed. For a guaranteed question use a TOOL
+`ask`, and to wait for a time a TOOL `sleep` (see
+[Built-in tools](#built-in-tools-take-sleep-ask)); a pending `ask` and a `sleep` wait without
+holding a worker. An AGENT's `ask_user` call stays a live call, answered inline.
 
 ## Expression contexts
 

@@ -1,6 +1,7 @@
 # From tests/seeds/errors/e10-unknown-node-kind.yaml.
 # An unknown node kind fails at the `kind:` value, listing the kinds.
 kind: load
+rules: [messages]
 flow: |
   # e10 — unknown node kind. COMPILE: "unknown kind 'llm'".
   id: err-unknown-kind
@@ -16,6 +17,12 @@ flow: |
       prompt: "Rate ${topic}."
   output: ${note.output}
 expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'note': unknown kind 'llm' (allowed: agent, call, case, code, loop, map, tool)"
+        frames: [{label: flow.yaml, range: [8, 11, 8, 14]}]
+python_expect:
   load:
     diagnostics:
       - code: compose.load

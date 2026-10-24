@@ -6,6 +6,10 @@ HUMAN_INPUT, and WAIT stay inside live node calls; their enclosing nodes return
 ordinary outputs. For the node/flow/agent distinction, start with
 [Agent](agent.md).
 
+Changed (TS yian): HUMAN_INPUT and WAIT are removed. A TOOL node's `ask` and `sleep` built-ins
+can wait without holding a worker, and the run ends `waiting` (see
+[Blocking human interaction](#blocking-human-interaction)).
+
 ```python
 from pathlib import Path
 
@@ -552,7 +556,7 @@ The call id depends on who calls the tool:
 - A TOOL node's call id is `"<run_id>/<node>"`, such as `run-7f3a/loop#3/place`.
   Each LOOP iteration and MAP item has its own expanded node id, so its own call
   id. A resumed run re-runs an interrupted TOOL node under the same call id.
-- A HUMAN_INPUT node's `ask_user` call uses the same form.
+- A HUMAN_INPUT node's `ask_user` call uses the same form (TS yian: a TOOL `ask` node's call).
 - Changed (TS yian): a host tool a TOOL node calls may return `pending()`, exported from the
   package root, when its answer comes later. The node records the call and its arguments
   (a recorded step over `YIAN_MAX_EVENT_BYTES` is refused) and waits, and the host answers with `complete` under
@@ -1322,7 +1326,7 @@ is for debugging only; don't branch on it.
 |------|-------------|-----------------------|-------------|
 | `binding.evaluate` | A node input's `${...}` binding or default can't be evaluated, or a required input is unbound. | Fix the flow or its inputs. | No |
 | `binding.type` | A tagged binding (`!int ${...}`) holds a value that breaks its tag. | Fix the flow or its inputs. | No |
-| `contract.input` | A value supplied to a node input breaks the input's declared type, or a MAP `over:`, WAIT `until:`, or AGENT `llm_config` value has the wrong shape. | Fix the flow or its inputs. | No |
+| `contract.input` | A value supplied to a node input breaks the input's declared type, or a MAP `over:`, WAIT `until:` (TS yian: a `sleep`'s `until:`), or AGENT `llm_config` value has the wrong shape. | Fix the flow or its inputs. | No |
 | `assertion.failed` | A node's or the flow's `asserts:` condition is false. (TS yian: an `asserts:` condition that fails to evaluate is `condition.evaluate`.) | Treat the result as rejected; fix the flow or its inputs. | Only if the asserted values vary between runs |
 | `node.execute` | A node's body raised and no finer code applies: a CODE node's exception, a tool's error, an AGENT's model error, an ungranted tool request. (TS yian: exhausted structured-output corrections and rate-limit, quota, outage, context-length, and refusal errors have their own codes below; other provider errors, such as a bad request, an unknown model, a redirect, or a malformed reply, stay `node.execute`.) | Read `failure.message`. | Sometimes: transient errors such as a timeout or a rate limit (TS yian: a tool's; a model call's have their own codes) |
 | `contract.node_result` | A node returned something other than `Output`, `Route`, or `Grow`, or a node that isn't CALL, MAP, or LOOP returned `Grow`. | Report a bug in that node's implementation. | No |
@@ -3543,6 +3547,9 @@ returns `pending()` fails the agent, so answer inline or ask from a TOOL node. W
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as
 `extra`, so the handler's `AskTool` declares them.
 
+Changed (TS yian): `human_input` is removed; a TOOL `ask` node calls the handler as above. The
+rest of this section is Python yian's, apart from its TS notes.
+
 An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the
 run's `ask_user` handler synchronously. A library host passes the handler with each
 run as `tools={"ask_user": handler}`; the calling node remains active until the
@@ -3601,18 +3608,23 @@ asks, a flow whose AGENT grants `ask_user` fails before the run starts, and
 Changed (TS yian): the handler is `(request, ctx) => answer`, always given the call's
 `ToolContext` second, and may return a Promise. `request` is camelCase, `{ question,
 options, questions, answerSchema, title, nodeId }`, with `null` for an absent field;
-`invokeTrusted("ask_user", ...)` takes the same keys. Each item of `questions` is a parsed
+`invokeTrusted("ask_user", ...)` takes only `question` and `options`; the other fields come
+from a TOOL `ask` node, through the same handler. Each item of `questions` is a parsed
 spec `{ question, header, options: [{ label, description }], multiSelect }` with defaults
 filled. There is no signature check: any function is accepted as the handler.
 
 CODE nodes cannot ask. A CODE function does not see the run's tools, so
-`invoke_tool("ask_user", ...)` inside it fails. Ask through a `human_input` node,
-or pass a per-run tool and call it from a TOOL node.
+`invoke_tool("ask_user", ...)` inside it fails. Ask through a `human_input` node (TS yian: a
+TOOL `ask` node), or pass a per-run tool and call it from a TOOL node.
 
 An authored WAIT needs no host handler. It blocks one worker until its absolute
 UTC `until:` deadline, returns `None`, and can be woken cooperatively when the host
 stops the run. Changed (TS yian): the wait re-reads the wall clock at least hourly,
 so a deadline survives a sleeping machine.
+
+Changed (TS yian): WAIT is removed; a TOOL `sleep` (`until:` or `for:`) needs no handler and
+holds no worker. When nothing else can run, the run ends `waiting`, and `advance` once the
+deadline is due wakes it.
 
 ## `RunResult`
 

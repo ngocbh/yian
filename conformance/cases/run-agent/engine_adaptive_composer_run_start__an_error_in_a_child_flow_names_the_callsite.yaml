@@ -8,6 +8,31 @@ flow: |
       input: {proj: !str }
       nodes:
         ask:
+          kind: tool
+          tool_id: ask
+          input:
+            proj: ${input.proj}
+          adaptive_questions:
+            prompt: "Q ${proj}"
+            llm_config: {provider: azure, model: d}
+      output: ${ask.output}
+  nodes:
+    sub:
+      kind: call
+      call: child
+      input:
+        proj: ${input.proj}
+  output: ${sub.output}
+# Python yian has no ask built-in: it runs the human_input gate.
+python_flow: |
+  id: p
+  name: p
+  input: {proj: !str }
+  defs:
+    child:
+      input: {proj: !str }
+      nodes:
+        ask:
           kind: human_input
           input: {proj: '${input.proj}'}
           adaptive_questions:
@@ -24,6 +49,9 @@ inputs:
   proj: x
 run:
   num_workers: 0
+# A run with an ask needs the ask handler; run start fails before the ask asks.
+host:
+  human: {}
 expect:
   raises:
     class: ValueError

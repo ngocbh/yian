@@ -1,17 +1,17 @@
 # From tests/seeds/25-nested-suspension.yaml.
-# A HUMAN_INPUT inside a called child asks and answers under growth; the child returns the answer.
+# An ask inside a called child asks and is answered under growth; the child returns the answer.
 # The header's `review/approve` is stale: the CALL node `gate` namespaces the leaf, `gate/approve`.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 kind: run
 rules: [run-log]
 flow: |
-  # 25 — Nested interaction: a HUMAN_INPUT inside a called child.
+  # 25 — Nested interaction: an ask inside a called child.
   #
-  # The parent `call`s an in-file `defs:` callable whose body blocks on HUMAN_INPUT. The
+  # The parent `call`s an in-file `defs:` callable whose body asks (tool_id: ask). The
   # engine grows the live graph via Grow, then the namespaced leaf (`review/approve`) calls
-  # the host-owned ask_user tool and stays live until the handler returns. Its ordinary typed
-  # Output feeds the next child node. Shows: blocking interaction under graph growth, a
-  # HUMAN_INPUT in a child, and the child re-exporting its confirmed value to the parent.
+  # the host's ask handler, which answers or holds the call. Its ordinary typed
+  # Output feeds the next child node. Shows: an interaction under graph growth, an
+  # ask in a child, and the child re-exporting its confirmed value to the parent.
   # No checkpoint pause or synthetic continuation is involved.
   # The source layout stays stable because diagnostic tests pin its nested frame locations.
 
@@ -26,15 +26,15 @@ flow: |
     action: !str
 
   defs:
-    review:                       # an in-file callable that BLOCKS on a HUMAN_INPUT
+    review:                       # an in-file callable that asks
       input:
         action: !str
       nodes:
         approve:
-          kind: human_input
+          kind: tool
+          tool_id: ask
           input:
-            action: ${input.action}
-          prompt: "Approve this action? ${action}  (approve / reject)"
+            prompt: "Approve this action? ${input.action}  (approve / reject)"
           output: Approval       # the injected answer, validated against Approval's tags
         record:
           kind: code
@@ -52,7 +52,8 @@ flow: |
         action: ${input.action}
 
   output: ${gate.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+# The flows differ by language: `flow` names the TS function and asks with tool_id: ask; this
+# names the Python one and asks with the human_input gate Python yian keeps.
 python_flow: |
   # 25 — Nested interaction: a HUMAN_INPUT inside a called child.
   #

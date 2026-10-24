@@ -96,6 +96,8 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
   `human_input` gate block in their live node call; `wait` blocks until an absolute UTC
   deadline. `ask_user` returns its answer into the same model/tool loop; the graph sees each
   leaf's eventual ordinary output instead of a graph rewrite or continuation.
+  Changed (TS yian): `human_input` and `wait` are removed; a TOOL node's `ask` and `sleep`
+  built-ins wait without holding a worker, and the run ends `waiting` until it is advanced.
 
 ## Where to go next
 

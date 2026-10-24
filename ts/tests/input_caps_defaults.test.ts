@@ -20,7 +20,7 @@ import { request } from "../src/llm_clients/auth/http.ts";
 import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import { validateBaseUrl } from "../src/llm_clients/config.ts";
-import { parseQuestions, QuestionSpecError } from "../src/nodes/human_input/questions.ts";
+import { parseQuestions, QuestionSpecError } from "../src/nodes/tool/questions.ts";
 import { realScheduler } from "../src/platform.ts";
 import { checkSkillName } from "../src/skills/catalog.ts";
 import { Skill, SkillError } from "../src/skills/index.ts";

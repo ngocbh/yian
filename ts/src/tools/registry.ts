@@ -2,8 +2,8 @@
  * The tool registry and the tools one run can use.
  *
  * `registerTool` stores a host `FunctionTool` in `TOOL_REGISTRY`. A run's `ToolSet` reads this
- * registry when the host passes no `tools` mapping; the TOOL, HUMAN_INPUT and AGENT nodes look
- * tools up by id through that `ToolSet`.
+ * registry when the host passes no `tools` mapping; the TOOL and AGENT nodes look tools up by id
+ * through that `ToolSet`.
  *
  * This is the package's tool seam: the core ships no domain tools, and a host registers its own.
  * Tool ids must be unique across everything registered into the process. `ToolSet` holds one
@@ -74,19 +74,6 @@ const ASK_USER_PARAMETERS: JsonObject = {
   },
   required: ["question"],
   type: "object",
-};
-
-// The full schema a trusted call (a HUMAN_INPUT node) is checked against: the public one plus the
-// host-injected question and display metadata, which the model never sees.
-const ASK_USER_TRUSTED_PARAMETERS: JsonObject = {
-  ...ASK_USER_PARAMETERS,
-  properties: {
-    ...(ASK_USER_PARAMETERS.properties as JsonObject),
-    questions: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
-    answerSchema: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
-    title: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
-    nodeId: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
-  },
 };
 
 const ASK_DESCRIPTION = "Ask a person and wait for the answer.";
@@ -352,10 +339,10 @@ function askUserTool(handler: AskHandler): FunctionTool {
         {
           question: args.question as string,
           options: (args.options ?? null) as string[] | null,
-          questions: (args.questions ?? null) as unknown[] | null,
-          answerSchema: (args.answerSchema ?? null) as unknown[] | null,
-          title: (args.title ?? null) as string | null,
-          nodeId: (args.nodeId ?? null) as string | null,
+          questions: null,
+          answerSchema: null,
+          title: null,
+          nodeId: null,
           callId: ctx.callId,
           deadline: null,
           extra: {},
@@ -557,7 +544,6 @@ export class ToolSet {
         const ask = askTool(spec);
         built.set(ASK_USER, askUserTool(spec.handler));
         built.set(ASK, ask);
-        trusted.set(ASK_USER, ASK_USER_TRUSTED_PARAMETERS);
         const properties = { ...(ask.parametersJsonSchema.properties as JsonObject), ...ASK_TRUSTED_PROPERTIES };
         trusted.set(ASK, { ...ask.parametersJsonSchema, properties });
       } else if (RESERVED_TOOL_NAMES.has(key)) {

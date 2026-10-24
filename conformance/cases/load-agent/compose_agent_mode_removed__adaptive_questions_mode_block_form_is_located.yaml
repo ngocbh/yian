@@ -1,10 +1,12 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: gate
   name: gate
   nodes:
     ask:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       adaptive_questions:
         prompt: Ask
         mode: plain
@@ -13,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''ask'' (kind=human_input): `adaptive_questions.mode:` was removed: an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line'
+      message: "node 'ask' (tool_id: ask): `adaptive_questions.mode:` was removed: an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line"
       frames:
       - label: flow.yaml
-        range: [8, 7, 8, 11]
+        range: [9, 7, 9, 11]

@@ -86,20 +86,24 @@ import {
 import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
 import { buildMemories, type MemoryRegistry } from "../src/memory_host.ts";
+import { ToolNode } from "../src/nodes/tool/node.ts";
 import { virtualScheduler } from "../src/platform.ts";
 import {
   inspectRun,
   replayRunLog,
   type AdvanceOptions,
   advance,
+  close,
   type RunInspection,
   type RunFlowOptions,
   type RunResult,
   runFlow,
+  send,
+  staticNodes,
 } from "../src/run.ts";
 import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
-import type { ToolContext } from "../src/tools/context.ts";
+import { ASK, type ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
   ReportedToolError,
@@ -107,7 +111,7 @@ import {
   TransientToolError,
 } from "../src/tools/errors.ts";
 import { tool } from "../src/tools/function_tools.ts";
-import type { AskHandler, AskRequest, ToolEntry } from "../src/tools/registry.ts";
+import type { AskRequest, AskTool, ToolEntry } from "../src/tools/registry.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
@@ -201,7 +205,7 @@ const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "hea
 // Host keys the format reserves and this runner doesn't support yet.
 const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "memory", "steering", "stop", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "memory", "steering", "stop", "sends", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -617,6 +621,18 @@ function checkStop(stop: Value | undefined): void {
   }
 }
 
+/** Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` and `{close}` items. */
+function checkSends(value: Value | undefined): void {
+  if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
+  for (const item of value) {
+    const fields = isMapping(item) ? Object.keys(item).sort(compareCodeUnits).join(",") : null;
+    const valid =
+      (fields === "event,inbox" && typeof (item as Case)["inbox"] === "string") ||
+      (fields === "close" && typeof (item as Case)["close"] === "string");
+    if (!valid) throw new Error("`host.sends` items are {inbox, event} or {close}");
+  }
+}
+
 /**
  * Throw unless `value`, the host, its tools, models and their scripts and its steering use only
  * the format's keys.
@@ -671,12 +687,13 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkSteering(get(host, "steering", {}));
   checkStop(get(host, "stop", {}));
+  checkSends(get(host, "sends", []));
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
   }
-  if (Object.hasOwn(host, "human") && Object.hasOwn(tools, "ask_user")) {
-    throw new Error("a case with `host.human` declares no `ask_user` tool");
+  if (Object.hasOwn(host, "human") && (Object.hasOwn(tools, "ask") || Object.hasOwn(tools, "ask_user"))) {
+    throw new Error("a case with `host.human` declares no `ask` or `ask_user` tool");
   }
   const jitter = get(host, "jitter", []);
   if (
@@ -1748,6 +1765,9 @@ function snakeCase(name: string): string {
   return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
 }
 
+/** The inputs of yian's own `ask` surface; any other input of a TOOL `ask` is a host extra. */
+const ASK_SURFACE: ReadonlySet<string> = new Set(["prompt", "questions", "timeout", "__questions"]);
+
 /**
  * Return an ask request as a case writes its `args`: snake_case keys, each question's too, null
  * fields left out, and the host's extras flattened in. The call id is left out: the call record
@@ -1780,7 +1800,7 @@ function nextSequence(path: string): number {
 
 /** A case's scripted host: what `runFlow` gets from it, what it records, and its check. */
 interface Host {
-  /** A stub per `host.tools` entry, and `ask_user` for `host.human`. */
+  /** A stub per `host.tools` entry, and the ask slot for `host.human`. */
   tools: Record<string, ToolEntry>;
   /** The draws retry backoffs take, from `host.jitter`; `null` for the implementation's own. */
   random: (() => number) | null;
@@ -1806,13 +1826,15 @@ interface Host {
 
 /**
  * Return the case's host: each stub tool call is recorded and takes its script's next entry, as
- * each `ask_user` call takes the next `host.human` answer of its node and each backoff the next
+ * each ask (a TOOL `ask` or an agent's `ask_user`) takes the next `host.human` answer of its node,
+ * recorded under the name it was called by, and each backoff the next
  * `host.jitter` draw and each model call the next `host.models` entry of its node and consumer.
  * Every model the run builds is the scripted one, after its config is resolved and checked with
  * `env`. Each stub call reaches its `host.steering` point once it takes its entry. `log` is the
- * run's log file.
+ * run's log file. The ask slot declares, as extras, every input the `flow`'s TOOL `ask` nodes pass
+ * beyond yian's ask surface, such as an `adaptive_questions:` brief's context.
  */
-function host(case_: Case, log: string, env: Env): Host {
+function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   const spec = get(case_, "host", {}) as Case;
   const calls = new Map<string, Case[]>();
   const problems: string[] = [];
@@ -1881,9 +1903,16 @@ function host(case_: Case, log: string, env: Env): Host {
     tools.push([name, tool({ name, description, parameters, execute, isConcurrencySafe })]);
   }
   if (Object.hasOwn(spec, "human")) {
-    const askUser: AskHandler = (request, ctx) =>
-      call("ask_user", `host.human.${ctx.node}`, ctx, askUserArgs(request));
-    tools.push(["ask_user", askUser]);
+    const inputs: JsonObject = {};
+    for (const [, node] of staticNodes(flow)) {
+      if (!(node instanceof ToolNode) || node.builtin !== ASK) continue;
+      for (const { name } of node.params ?? []) if (!ASK_SURFACE.has(name)) inputs[name] = {};
+    }
+    const ask: AskTool = {
+      handler: (request, ctx) => call(ctx.toolName, `host.human.${ctx.node}`, ctx, askUserArgs(request)),
+      inputs,
+    };
+    tools.push([ASK, ask]);
   }
   let random: (() => number) | null = null;
   if (Object.hasOwn(spec, "jitter")) {
@@ -2168,12 +2197,16 @@ export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
   });
 }
 
-/** Return `result` in the form of `expect.output`. */
+/**
+ * Return `result` in the form of `expect.output`. A waiting or cancelled run has no failure, so
+ * its form is its status alone, which no expectation matches.
+ */
 function output(result: RunResult, flow: ComposedFlow): Case {
   if (result.status === "succeeded") {
     return { status: "succeeded", output: dataForm(result.output as YianValue) };
   }
-  return { status: result.status, failure: failureForm(result.failure!, flow) };
+  if (result.failure === null) return { status: result.status };
+  return { status: result.status, failure: failureForm(result.failure, flow) };
 }
 
 /**
@@ -2486,7 +2519,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const log = join(ctx.dir, "run.jsonl");
   const env = caseEnv(ctx);
   const spec = get(case_, "host", {}) as Case;
-  const scripted = host(case_, log, env);
+  const scripted = host(case_, log, env, flow);
   const { tools, models, inbox, stop, calls, check } = scripted;
   const run = get(case_, "run", {}) as Case;
   const resume = get(case_, "resume", {}) as Case;
@@ -2516,6 +2549,11 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
   let start = (memory: MemoryRegistry | null) =>
     runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory });
+  // After each `host.sends` item, the run moves on with the arguments `advance` shares with `run`.
+  const sharedArgs = Object.fromEntries(
+    Object.entries(run).filter(([key]) => Object.hasOwn(RESUME_OPTIONS, key)),
+  );
+  let advanceArguments = runOptions<AdvanceOptions>(sharedArgs, RESUME_OPTIONS);
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
   inbox.armed = true;
@@ -2537,17 +2575,30 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       events.length = 0;
       chunks.length = 0;
       const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
+      advanceArguments = resumeArguments;
       start = (memory) => advance({ ...resumeArguments, ...hooks, memory });
     }
   }
   let outcomes: Value[] = [];
   if (!Object.hasOwn(caught, "raises")) {
     let memory: MemoryRegistry | null = null;
+    const sends = [...(get(spec, "sends", []) as Case[])];
     try {
       memory = await memories();
       result = await start(memory);
+      // Each item is delivered while the run waits; the same collectors see every `advance`.
+      while (result.status === "waiting" && sends.length > 0) {
+        const item = sends.shift()!;
+        if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+        else await send(log, item["inbox"] as string, item["event"], { env });
+        result = await advance({ ...advanceArguments, ...hooks, ...signal, memory });
+      }
     } catch (error) {
       caught = { raises: raised(error), error };
+    }
+    if (Object.hasOwn(spec, "sends") && result?.status === "waiting") {
+      await memory?.close();
+      throw new CaseFailure("the run is still waiting after host.sends ran out");
     }
     // The memories stay open for the backward calls, and close even when one fails the case; the
     // close is outside the run's `try`, so a close error never replaces its `raises`.
@@ -2885,7 +2936,7 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.steering`, `host.memory` or `host.stop`.
+ * `pending`, with no `host.steering`, `host.memory`, `host.stop` or `host.sends`.
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
@@ -2894,7 +2945,7 @@ export function sweepable(case_: Case): boolean {
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["steering", "memory", "stop"].some((key) => Object.hasOwn(spec, key))
+    !["steering", "memory", "stop", "sends"].some((key) => Object.hasOwn(spec, key))
   );
 }
 
@@ -2930,7 +2981,7 @@ export async function crashSweep(
   const inputs = get(case_, "inputs", {}) as Case;
   const args = runOptions<RunFlowOptions>(get(case_, "run", {}) as Case, RUN_OPTIONS);
   const uncutLog = join(ctx.dir, "sweep.jsonl");
-  const uncutHooks = runHooks(case_, uncutLog, env, host(case_, uncutLog, env), start);
+  const uncutHooks = runHooks(case_, uncutLog, env, host(case_, uncutLog, env, flow), start);
   const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
@@ -2947,7 +2998,7 @@ export async function crashSweep(
   for (let k = 0; k <= count - 2; k += 1) {
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
-    const scripted = host(case_, log, env);
+    const scripted = host(case_, log, env, flow);
     const hooks = runHooks(case_, log, env, scripted, start);
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });

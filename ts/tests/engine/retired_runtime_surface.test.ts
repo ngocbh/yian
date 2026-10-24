@@ -9,7 +9,8 @@
  * of `test_agent_continuation_packages_and_builders_are_gone` (Python modules and attributes; the
  * descriptor-field half is the load row here), `test_shipped_blocking_node_packages_cannot_construct_pause`
  * (an AST scan of Python packages) and `test_shipped_blocking_node_bodies_are_typed_to_output`
- * (Python type hints; TS checks this statically). `test_effect_nodes_drop_scratch_keys` and
+ * (Python type hints; TS checks this statically), and `test_retired_wait_authoring_fields_are_rejected`
+ * (TS yian has no `wait` kind). `test_effect_nodes_drop_scratch_keys` and
  * `test_wait_event_mode_and_the_watchdog_are_gone` are recorded in `resolve_until.test.ts`.
  *
  * Ported: the `build_grow` row of `test_agent_continuation_packages_and_builders_are_gone`
@@ -63,7 +64,7 @@ import { PermanentToolError, ReportedToolError, TransientToolError } from "../..
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { InboxRef } from "../../src/typesys/values.ts";
-import { assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../compose/declarations.ts";
+import { assembleText, loadError } from "../compose/declarations.ts";
 
 test.each(["entry", "controls"])("retired agent authoring field %s is rejected", (field) => {
   const text = `
@@ -77,22 +78,6 @@ nodes:
     output: str
     ${field}: retired
 output: \${agent.output}
-`;
-
-  expect(loadError(() => assembleText(text)).message).toContain(`field '${field}' is not allowed`);
-});
-
-test.each(["event", "event_spec", "poll", "is_timed"])("retired wait authoring field %s is rejected", (field) => {
-  const text = `
-id: retired-wait-${field}
-name: retired_wait_${field}
-input: {}
-nodes:
-  wait:
-    kind: wait
-    until: 2000-01-01
-    ${field}: retired
-output: \${wait.output}
 `;
 
   expect(loadError(() => assembleText(text)).message).toContain(`field '${field}' is not allowed`);
@@ -247,10 +232,3 @@ test("yian/run re-exports BackwardOutcome and Steering", () => {
   const steering = (inbox: base.Steering): run.Steering => inbox;
   expect(typeof steering).toBe("function");
 });
-
-// ---------- harvested conformance cases ----------
-
-test.each<CaseRow>([{ id: "load-core/engine_retired_runtime_surface__retired_wait_field", call: parsedNodes }])(
-  "parseNodes: $id",
-  runCase,
-);

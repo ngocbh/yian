@@ -15,12 +15,11 @@
 import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.ts";
-import { siteLabel } from "../../nodes/human_input/node.ts";
-import { parseQuestions, QuestionSpecError } from "../../nodes/human_input/questions.ts";
+import { bindingSource, isExactly, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
+import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
-import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
+import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
@@ -46,6 +45,7 @@ import {
   rangeAt,
   rejectNonText,
   siteKey,
+  siteLabel,
 } from "./base.ts";
 
 /** The fields `ToolDescriptor`'s constructor takes: the common ones and the TOOL's own. */
@@ -120,7 +120,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const toolId = cursor.get("tool_id");
     if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
-      if (toolId !== ASK) {
+      if (toolId !== ASK && toolId !== ASK_USER) {
         throw diagnostics.error(
           `node ${reprText(nodeId)} (tool_id: ${toolId}): \`adaptive_questions:\` applies only to tool_id: ask`,
           { range: cursor.keyRangeOf("adaptive_questions") },
@@ -144,7 +144,8 @@ export class ToolDescriptor extends NodeDescriptor {
    * built-in refuses, and a bad `retries:`; store `retries` as a `number`, then run the base checks.
    *
    * `take` and `sleep` refuse `retries:`, `asserts:` and `output:` (they make no tool call, and
-   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user` is a plain tool call.
+   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user`, `ask`'s old name, is
+   * rewritten to `ask` first, so the node and its manifest are an `ask`'s.
    *
    * @throws LoadError at the field for a bad shape or a refused field.
    */
@@ -159,6 +160,7 @@ export class ToolDescriptor extends NodeDescriptor {
     rejectNonText(this.kind, nodeId, "tool_id", fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics, {
       required: true,
     });
+    if (fields["toolId"] === ASK_USER) fields["toolId"] = ASK;
     const toolId = fields["toolId"] as string;
     if (toolId === LOAD_SKILL) {
       throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {
@@ -256,7 +258,7 @@ export class ToolDescriptor extends NodeDescriptor {
       this.checkAskInputs(ctx);
       this.wireDuration(ctx, wiring, "timeout");
       node.outputContract = this.outputContract(ctx);
-      // A questions ask with no declared answer gets a free-form record, as human_input does.
+      // A questions ask with no declared answer gets a free-form record.
       const asksQuestions = [QUESTIONS_INPUT, "questions"].some((name) => Object.hasOwn(this.inputs, name));
       if (node.outputContract === null && (asksQuestions || this.adaptiveQuestions !== null)) {
         node.outputContract = new ValueContract(Type.scalar(ValueKind.OBJECT));
@@ -336,7 +338,8 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Check a sleep's inputs: exactly one of `until` and `for`. A literal `until` must be a date or
-   * datetime, and a reference's type must not be disjoint from both `date` and `datetime`.
+   * datetime, a reference's type must not be disjoint from both `date` and `datetime`, and a list
+   * or mapping holding `${...}` is refused.
    *
    * @throws LoadError for any other input, both or neither, or a bad `until`.
    */
@@ -368,7 +371,16 @@ export class ToolDescriptor extends NodeDescriptor {
       });
     }
     const typ = this.inputType(ctx, "until");
-    if (typ === null || typeRelation(typ, DATE) !== "disjoint" || typeRelation(typ, DATETIME) !== "disjoint") return;
+    if (typ === null) {
+      // A list or mapping holding `${...}` is unproven, yet it can never be a date or datetime.
+      const source = this.inputs["until"];
+      if (!(source instanceof ValueTemplate)) return;
+      const shape = isList(source.value) ? "a list" : "a mapping";
+      throw ctx.diagnostics.error(`${subject}: must be a date or datetime, but the value is ${shape}; ${UNTIL_FIX}`, {
+        range,
+      });
+    }
+    if (typeRelation(typ, DATE) !== "disjoint" || typeRelation(typ, DATETIME) !== "disjoint") return;
     throw ctx.diagnostics.error(
       `${subject}: must be a date or datetime, but the value is ${canonicalTypeLabel(typ)}; ${UNTIL_FIX}`,
       { range },
@@ -524,7 +536,7 @@ export const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config
 /**
  * Check an authored `adaptive_questions:` block's keys and brief, before the template parse.
  *
- * @param label The node's kind or tool id as messages name it, such as `kind=human_input`.
+ * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError when the block authors `mode:` or a key other than `prompt`/`llm_config`/
  *   `retries` (at the key), or its brief is not text or holds a lone surrogate (at the brief).
  */
@@ -581,7 +593,7 @@ export function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor)
  * Check a parsed `adaptive_questions:` block: a mapping with its own `prompt:` (the LLM brief)
  * and a valid `retries:`.
  *
- * @param label The node's kind or tool id as messages name it, such as `kind=human_input`.
+ * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError at `range` for the first rule broken.
  */
 export function checkAdaptiveFields(

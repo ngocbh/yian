@@ -60,7 +60,7 @@ import {
   OutputInvalidError,
   typeToSchema,
 } from "../../src/nodes/agent/structured.ts";
-import { questionListType } from "../../src/nodes/human_input/questions.ts";
+import { questionListType } from "../../src/nodes/tool/questions.ts";
 import { runFlow } from "../../src/run.ts";
 import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";

@@ -1,13 +1,16 @@
 # No `message`: it is pydantic's text (with a versioned URL), which yian doesn't write.
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
+      kind: tool
+      tool_id: ask
+      input:
+        proj: ${input.proj}
       adaptive_questions:
         prompt: "Q ${proj}"
         llm_config: {temparature: 1}
@@ -18,4 +21,4 @@ expect:
     - code: compose.load
       frames:
       - label: flow.yaml
-        range: [10, 19, 10, 35]
+        range: [12, 19, 12, 35]

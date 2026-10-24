@@ -1,18 +1,14 @@
 # Loop — iterate a body until a predicate goes false (the engine's `while`).
 # The loop threads ONE carried record from each turn into the next: the body reads
 # the carried record and returns the fields that change ('a -> 'a); the loop re-runs it
-# while `while:` holds. Here the body BLOCKS each turn on a human_input leaf, so
-# this is the shape a live chat REPL takes: one run threads answer -> turn -> answer.
+# while `while:` holds. Here the body asks a person each turn through an `ask` TOOL node,
+# so one run threads answer -> turn -> answer. (For a chat fed by a host's sends, take
+# from an inbox instead: see chat.yaml.)
 #
 # The contract ('a -> 'a): the body's `output:` returns a SUBSET of the carried record
 # (the loop `input:`); each omitted field keeps its previous value. The names the body
 # reads must be a SUBSET of the carried names too. Field NAMES are checked at build; each
 # returned field keeps its carried TYPE (load), enforced at runtime/replay.
-#
-# Customize: point `code:` at an importable `module:function` on your PYTHONPATH.
-#   def fold_turn(inputs: dict) -> dict:      # receives its bound input record
-#       messages = inputs["messages"] + [inputs["msg"]]
-#       return {"messages": messages, "exited": inputs["msg"] == "bye"}
 #
 # Pick EXACTLY ONE driver per loop node:
 #   while: not exited   # PRE-check: 0+ runs, stop when the predicate goes false; max: optional
@@ -21,7 +17,7 @@
 
 id: loop
 name: loop
-description: Chat-shaped loop — block per turn, fold the message, stop on "bye".
+description: Chat-shaped loop — ask per turn, fold the message, stop on "bye".
 
 defs:
   chat_turn:                       # the body flow ('a -> 'a over {messages, exited})
@@ -29,19 +25,14 @@ defs:
       messages: !list(str)          # a subset of the carried names is fine
     nodes:
       ask:
-        kind: human_input
-        prompt: "your message (type 'bye' to end)"
-        output: str                # the typed answer
-      fold:
-        kind: code
+        kind: tool
+        tool_id: ask
         input:
-          messages: ${input.messages}
-          msg: ${ask.output}       # this turn's human message
-        output:                    # carried fields only; here it returns both
-          messages: list(str)
-          exited: bool
-        code: your_package.chat:fold_turn
-    output: ${fold.output}
+          prompt: "your message (type 'bye' to end)"
+        output: str                # the typed answer
+    output:                        # carried fields only; here it returns both
+      messages: ${input.messages + [ask.output]}   # this turn's message appended
+      exited: ${ask.output == "bye"}
 
 nodes:
   loop:

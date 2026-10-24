@@ -63,7 +63,7 @@ defs:
   turn:
     input: {history: !list(Msg), log: !str}
     nodes:
-      ask: {kind: human_input, prompt: "You:", output: str}
+      ask: {kind: tool, tool_id: ask, input: {prompt: "You:"}, output: str}
       reply:
         kind: agent
         input: {history: "\${input.history}", message: "\${ask.output}"}
@@ -101,7 +101,7 @@ function chatOptions(log: string, learnable = false, events: RunEvent[] = []) {
     learnable,
     llmConfig: CONFIG,
     models: serving(new ScriptedModel([textReply("A"), textReply("B"), textReply("C")], CONFIG)),
-    tools: { ask_user: () => answers.shift()! },
+    tools: { ask: () => answers.shift()! },
   };
 }
 

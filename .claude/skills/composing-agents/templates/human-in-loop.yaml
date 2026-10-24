@@ -1,12 +1,13 @@
-# Human in the loop — draft, BLOCK for a person, then finalize.
-# A `human_input` node ALWAYS blocks its worker for a typed answer (validated
-# against its `output:`). `yian run` serves the prompt while the flow remains live.
+# Human in the loop — draft, ask a person, then finalize.
+# An `ask` TOOL node ALWAYS asks, through the run's ask handler, for a typed answer
+# (validated against its `output:`). The host answers at once (`yian run` asks in the
+# terminal), or returns `pending()` and answers later while the run waits.
 # For "ask only if the model decides it needs to", grant an AGENT node the `ask_user`
 # tool instead (see ask-user in examples/).
 
 id: human-in-loop
 name: human_in_loop
-description: Draft, gate on a human approve/revise decision, then finalize.
+description: Draft, ask a person to approve or revise, then finalize.
 
 typedefs:
   Decision: Literal(approve, revise)
@@ -23,15 +24,15 @@ nodes:
     prompt: "Draft a short announcement about ${topic}."
 
   review:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
-      draft: ${draft.output}       # context the prompt may reference (bare ${draft})
-    prompt: |-
-      Here is the draft:
+      prompt: |-                   # a wiring template: it reads the pool, not local names
+        Here is the draft:
 
-      ${draft}
+        ${draft.output}
 
-      Approve as-is or revise? (approve / revise)
+        Approve as-is or revise? (approve / revise)
     output: Decision               # the typed answer
 
   finalize:

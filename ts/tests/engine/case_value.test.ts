@@ -41,7 +41,6 @@ import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
-import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
@@ -161,9 +160,9 @@ test("case value in tool inputs expands", () => {
   expect(inputOf(out, "t", "q")).toBe("${pro.output | caut.output}");
 });
 
-test("case value in human input and loop inputs expands", () => {
+test("case value in ask and loop inputs expands", () => {
   const hosts = [
-    new HumanInputDescriptor({ id: "human", prompt: "Continue?", inputs: { q: "${gate.output}" } }),
+    new ToolDescriptor({ id: "ask", toolId: "ask", inputs: { prompt: "Continue?", q: "${gate.output}" } }),
     new LoopDescriptor({ id: "loop", call: "body", inputs: { q: "${gate.output}" } }),
   ];
   for (const host of hosts) {

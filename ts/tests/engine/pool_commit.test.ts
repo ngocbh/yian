@@ -400,8 +400,10 @@ test("every pool_commit line of the conformance golden logs round-trips byte for
     if (!name.endsWith(".log.jsonl")) continue;
     for (const line of lines(join(cases, name))) {
       const { kind, payload } = parseJson(line, "codec") as { kind: string; payload: JsonObject };
-      // The conformance masks `system.now` and `system.today`; a derived commit holds no value.
-      if (kind !== "pool_commit" || payload["value"] === "<masked>" || Object.hasOwn(payload, "from")) continue;
+      // The conformance masks `system.now` and `system.today`; a derived commit holds no value, nor
+      // does a take commit, which names the events it took by seq.
+      const valueless = Object.hasOwn(payload, "from") || Object.hasOwn(payload, "events");
+      if (kind !== "pool_commit" || payload["value"] === "<masked>" || valueless) continue;
       expect(roundTrip(line)).toBe(line);
       kinds.add(payload["kind"] as string);
       checked++;

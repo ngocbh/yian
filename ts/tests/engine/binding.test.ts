@@ -31,8 +31,10 @@
  * Ported (adapted): the four rows of
  * `test_binding_failure_keeps_partial_context_without_usable_inputs` pass Python's
  * `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a JSON
- * record and the `reserved` row's `until` source holds a `Binding`; the other rows use the same
- * fixture for uniformity. In the `ordinary` row, Python's bare `Node` is a minimal subclass.
+ * record and the `reserved` row's `at` source holds a `Binding`; the other rows use the same
+ * fixture for uniformity. In the `ordinary` row, Python's bare `Node` is a minimal subclass. The
+ * `reserved` row's node is a test-local one reserving `at`, where Python uses a WAIT (TS yian has
+ * no WAIT kind).
  * `test_evaluator_capture_preserves_typed_values_before_node_mutation` also binds through
  * `nodeFlow`, and binds a list where Python binds a tuple, so it doesn't check the tuple type.
  *
@@ -53,10 +55,10 @@ import {
   BindingCollector,
   BindingError,
   bindParams,
+  type ReservedBinder,
 } from "../../src/nodes/binding.ts";
 import { Assertion, Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { FileRef, Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { nodeFlow } from "./run_state_fixtures.ts";
@@ -216,6 +218,31 @@ class CodeNode extends Node {
   readonly kind: NodeKind = NodeKind.CODE;
 }
 
+/** A node reserving `at`, whose normalizer refuses anything but a date string as `contract.input`. */
+class ReservedAtNode extends Node {
+  readonly kind: NodeKind = NodeKind.CODE;
+
+  override reservedWiringKeys(): ReadonlySet<string> {
+    return new Set(["at"]);
+  }
+
+  override bindReserved(
+    nodeWiring: ReadonlyMap<string, unknown>,
+    _pool: VariablePool,
+    options: { bind?: ReservedBinder | null } = {},
+  ): Record<string, unknown> {
+    const source = nodeWiring.get("at");
+    const normalize = (value: unknown) => {
+      if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+      throw new BindingError("`at` is not a date", {
+        failureCode: "contract.input",
+        origin: source instanceof Binding ? source.origin : null,
+      });
+    };
+    return { at: options.bind!("at", source, normalize) };
+  }
+}
+
 describe("binding failure keeps partial context without usable inputs", () => {
   const origin = new OriginRef("bad-input");
   const rows: [string, () => [Node, Record<string, unknown>, string[]]][] = [
@@ -230,9 +257,9 @@ describe("binding failure keeps partial context without usable inputs", () => {
     [
       "reserved",
       () => {
-        const node = new WaitNode("node");
+        const node = new ReservedAtNode("node");
         node.params = [new Parameter("ok")];
-        return [node, { ok: { safe: [1n] }, until: new Binding("wrong", { origin }) }, ["ok", "until"]];
+        return [node, { ok: { safe: [1n] }, at: new Binding("wrong", { origin }) }, ["ok", "at"]];
       },
     ],
     [

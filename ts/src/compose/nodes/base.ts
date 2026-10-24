@@ -15,7 +15,7 @@
  * an `input:` that is not a mapping, so every kind reports those mistakes in the same words.
  *
  * Knows about: diagnostics, typesys, the compile model, llm_clients (provider blocks), nodes
- *              (base, contracts and human_input), compose source and helpers, and expr.
+ *              (base and contracts), compose source and helpers, and expr.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
@@ -39,7 +39,6 @@ import {
   validateOptionalOrigin,
   ValueContract,
 } from "../../nodes/contracts.ts";
-import { siteLabel } from "../../nodes/human_input/node.ts";
 import { pythonTypeName, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -53,8 +52,22 @@ import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import type { ChildResolver } from "./resolver.ts";
 
 /**
+ * A key path written as an author reads it, such as `questions[0].options[1].label`: the string
+ * steps (field names) joined with `.`, each number step (a list index) written as `[i]`.
+ */
+export function siteLabel(path: readonly (string | number)[]): string {
+  let label = "";
+  for (const step of path) {
+    if (typeof step === "number") label += `[${step}]`;
+    else label += label ? `.${step}` : step;
+  }
+  return label;
+}
+
+/**
  * Return the key of a descriptor's `fieldRanges` entry for the site named `name`: a field, an
- * `input:` binding, an `llm_config` field, or a text a HUMAN_INPUT renders as a template.
+ * `input:` binding, an `llm_config` field, or a text rendered as a template (an
+ * `adaptive_questions:` brief).
  *
  * Example: `siteKey("field", "inputs")` is `"field:inputs"`;
  * `siteKey("text", "questions[0].question")` is `"text:questions[0].question"`.

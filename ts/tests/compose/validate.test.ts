@@ -14,7 +14,7 @@
  * `test_reject_cycles_alias_keeps_other_members`,
  * `test_reject_cycles_keeps_a_synth_node_read_inside_the_cycle`,
  * `test_reject_cycles_ignores_synth_out_edges_outside_the_component`);
- * `test_check_wiring_parity_moved` and `test_validate_human_questions_diag_has_range`;
+ * `test_check_wiring_parity_moved`;
  * `test_check_call_map_types_is_owned_by_call_validation`, `test_check_loop_type_contract_moved`,
  * `test_check_loop_type_contract_tolerates_a_loop_without_child_inputs` and
  * `test_type_validators_reject_noncanonical_contract_maps_before_walking` (direct calls over
@@ -29,6 +29,9 @@
  * is no positional form to refuse. The cycle message writes its node list in the text form
  * (`["a"]`, rule `messages`). The CODE references are TS's
  * (`./fixtures/compose_codefns.ts:pick_pro`).
+ *
+ * Not ported: `test_validate_human_questions_diag_has_range`. TS yian has no `human_input`; an
+ * `ask`'s literal questions are checked at its `questions` input.
  *
  * Also ported here: `test_a_case_output_over_a_1000_link_alias_chain_is_rejected_as_a_case_output`
  * from `tests/compose/test_record_type_nesting.py` (whose other rows are in
@@ -70,7 +73,6 @@ import { BuildContext, BuildResult, siteKey } from "../../src/compose/nodes/base
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
 import { rejectCycles } from "../../src/compose/validate/cycles.ts";
-import { validateHumanQuestions } from "../../src/compose/validate/human_questions.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { validateReferences } from "../../src/compose/validate/references.ts";
 import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
@@ -78,7 +80,6 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { type OutputContract, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -308,22 +309,6 @@ describe("located pass errors", () => {
       }),
     );
     expect(error.message).toContain("key parity");
-    expect(error.diagnostic.frames[0]!.range).toEqual(range);
-  });
-
-  test("validateHumanQuestions anchors an invalid literal list at the questions: field", () => {
-    // An empty list is refused ("expected 1..4 questions, got 0"); the frame carries the gate's
-    // `questions:` field span.
-    const range = new SourceRange(5, 5, 6, 20);
-    const result = new BuildResult({
-      node: new HumanInputNode("ask", { questions: [] }),
-      wiring: new Map(),
-      fieldRanges: new Map([[siteKey("field", "questions"), range]]),
-    });
-    const error = loadError(() =>
-      validateHumanQuestions(new Map([["ask", result]]), { diagnostics: rangeDiagnostics() }),
-    );
-    expect(error.message).toContain("questions");
     expect(error.diagnostic.frames[0]!.range).toEqual(range);
   });
 });

@@ -1,35 +1,62 @@
 # A learnable chat loop whose turn output appends to the history with `+` and to the log with a
-# template. The golden log pins the captured transforming bindings: the last turn's END binding
-# holds six messages (four carried in, two appended) and an interpolation route.
+# template; each turn takes the message the host sent to the `messages` inbox. The golden log
+# pins the captured transforming bindings: the last turn's END binding holds six messages (four
+# carried in, two appended) and an interpolation route.
 kind: run
 rules: [run-log]
+python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
 flow: |
   id: chat
   name: chat
   llm_config: {provider: anthropic, model: claude-test}
+  input:
+    messages: !Inbox(str)
   typedefs:
     Msg: {role: str, text: str}
   defs:
     turn:
-      input: {history: !list(Msg), log: !str}
+      input:
+        history: !list(Msg)
+        log: !str
+        messages: !Inbox(str)
       nodes:
-        ask: {kind: human_input, prompt: "You:", output: str}
+        heard:
+          kind: tool
+          tool_id: take
+          input:
+            from: ${input.messages}
+            take: all
         reply:
           kind: agent
-          input: {history: "${input.history}", message: "${ask.output}"}
+          input:
+            history: ${input.history}
+            message: ${join(heard.output.events)}
           output: str
           prompt: |-
             Conversation so far: ${history}
             User: ${message}
       output:
-        history: ${input.history + [Msg(role="user", text=ask.output), Msg(role="assistant", text=reply.output)]}
-        log: "${input.log}\nUser: ${ask.output}\nAssistant: ${reply.output}"
+        history: ${input.history + [Msg(role="user", text=join(heard.output.events)), Msg(role="assistant", text=reply.output)]}
+        log: |-
+          ${input.log}
+          User: ${join(heard.output.events)}
+          Assistant: ${reply.output}
   nodes:
-    chat: {kind: loop, call: turn, input: {history: [], log: ""}, times: 3}
+    chat:
+      kind: loop
+      call: turn
+      input:
+        history: []
+        log: ""
+        messages: ${input.messages}
+      times: 3
   output: ${chat.output.log}
 run: {run_id: r1, num_workers: 0, learnable: true}
 host:
-  human: {"chat#0/ask": [a], "chat#1/ask": [b], "chat#2/ask": [c]}
+  sends:
+    - {inbox: messages, event: a}
+    - {inbox: messages, event: b}
+    - {inbox: messages, event: c}
   models:
     "chat#0/reply":
       agent:

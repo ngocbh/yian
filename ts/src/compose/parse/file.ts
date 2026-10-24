@@ -92,7 +92,6 @@ const COMPACT_KINDS: ReadonlySet<string> = new Set([
   "agent",
   "code",
   "tool",
-  "human_input",
 ]);
 
 /** The fields of a `ComposeFile`; an absent optional field takes its default. */

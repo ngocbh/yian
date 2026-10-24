@@ -7,8 +7,10 @@
  * located on the typed binding.
  *
  * Ported: every row. The CODE bodies are Python's, which read the same in JS (decision 11), but for
- * the gate's producer, which parses digits with a regular expression and `Number`. The `ask_user`
- * request is camelCase.
+ * the gate's producer, which parses digits with a regular expression and `Number`. The ask
+ * request is camelCase. The gates are TOOL `ask` nodes where Python's are HUMAN_INPUT nodes (TS
+ * yian has no HUMAN_INPUT kind): the typed `count` is an ask input the handler declares, and the
+ * prompt reads `${src.output}`.
  *
  * Changed: `test_matching_typed_input_passes_the_value_through` reads the int as the `bigint` `5n`
  * (decision 4a). `test_typed_input_does_not_convert_an_int_declared_float`: the int stays an int
@@ -26,7 +28,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
-import type { AskUserRequest } from "../../src/tools/registry.ts";
+import type { AskRequest } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-run-"));
@@ -129,22 +131,26 @@ nodes:
     code: |
       return /^[0-9]+$/.test(inputs["n"]) ? Number(inputs["n"]) : inputs["n"]
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
+      prompt: "Proceed with \${src.output} items?"
       count: !int \${src.output}
-    prompt: "Proceed with \${count} items?"
 output: \${ask.output}
 `;
 
-/** An `ask_user` handler that records each request in `asked` and answers `yes`. */
-const recording = (asked: AskUserRequest[]) => (request: AskUserRequest) => {
-  asked.push(request);
-  return "yes";
-};
+/** An ask handler that records each request in `asked` and answers `yes`; it declares `count`. */
+const recording = (asked: AskRequest[]) => ({
+  handler: (request: AskRequest) => {
+    asked.push(request);
+    return "yes";
+  },
+  inputs: { count: { type: "integer" } },
+});
 
 test("typed human input context binding fails before asking", async () => {
-  const asked: AskUserRequest[] = [];
-  const result = await run(HUMAN_FLOW, { n: "three" }, { tools: { ask_user: recording(asked) } });
+  const asked: AskRequest[] = [];
+  const result = await run(HUMAN_FLOW, { n: "three" }, { tools: { ask: recording(asked) } });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("binding.type");
@@ -153,8 +159,8 @@ test("typed human input context binding fails before asking", async () => {
 });
 
 test("typed human input context binding passes a matching value", async () => {
-  const asked: AskUserRequest[] = [];
-  const result = await run(HUMAN_FLOW, { n: "3" }, { tools: { ask_user: recording(asked) } });
+  const asked: AskRequest[] = [];
+  const result = await run(HUMAN_FLOW, { n: "3" }, { tools: { ask: recording(asked) } });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");
@@ -176,7 +182,8 @@ nodes:
     code: |
       return /^[0-9]+$/.test(inputs["n"]) ? Number(inputs["n"]) : inputs["n"]
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
       count: !int \${src.output}
     adaptive_questions:

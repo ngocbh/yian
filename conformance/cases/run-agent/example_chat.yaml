@@ -1,29 +1,33 @@
 # From examples/chat.yaml.
-# Turn 0's message takes the `else:` call to `respond`, whose AGENT gets the history as messages
-# (the `prompt:` list style) and replies; `respond`'s output binding appends both messages. Turn
-# 1's `/exit` takes the `exited` entry, and the loop stops on `not exited`.
-# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
+# One turn: the host sends "Hi" to the `messages` inbox, the turn's `take` reads it, `respond`'s
+# AGENT replies, and its output binding appends both messages to the history; closing the inbox
+# routes the next turn to the `ended` value entry and ends the loop.
 kind: run
 rules: [run-log]
-python_skip: "the prompt: list style is TS-only (#1002)"
+python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
 flow: |
-  # chat — a turn-by-turn conversational REPL (agent without tools; deterministic history).
+  # chat — a turn-by-turn conversational assistant (agent without tools; deterministic history).
   #
-  # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-  # Exact exit text routes to the `exited` value entry, which keeps the history and sets
-  # `exited: true`. Anything else calls `respond`, where the AGENT sends the history as messages
-  # and replies; `respond`'s output binding appends the turn's two messages. The AGENT outputs only
-  # its reply and a binding does the append, so the run log grows linearly with the conversation.
-  # The `prompt:` list style is TS-only (#1002).
+  # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
+  # them and takes everything sent since the last turn. Closing the inbox (/exit in `yian chat`)
+  # ends the loop once the queued messages are answered: a closed inbox with nothing left routes
+  # to the `ended` value entry, which keeps the history and sets `closed: true`. Anything else
+  # calls `respond`, where the AGENT sends the history as messages and replies; `respond`'s output
+  # binding appends the turn's two messages. The AGENT outputs only its reply and a binding does
+  # the append, so the run log grows linearly with the conversation.
+  # The `prompt:` list style, `Inbox(str)` and `take` are TS-only.
   id: chat
   name: chat
   description: A turn-by-turn conversational assistant (one model call per turn, no tools).
+
+  input:
+    messages: !Inbox(str)
 
   typedefs:
     Msg:                    # one message of the history the AGENT sends
       role: Literal(user, assistant)
       text: str
-    Turn: {history: list(Msg), exited: bool}   # the carried record, and each turn's result
+    Turn: {history: list(Msg), closed: bool}   # the carried record, and each turn's result
 
   defs:
     respond:                # a CASE result is the routed node's output, so the reply chain is a def
@@ -31,7 +35,9 @@ flow: |
       nodes:
         reply:
           kind: agent
-          input: {history: "${input.history}", message: "${input.message}"}
+          input:
+            history: ${input.history}
+            message: ${input.message}
           output: str                      # only this turn's reply is recorded
           system_prompt: You are a helpful conversational assistant.
           prompt:
@@ -39,30 +45,48 @@ flow: |
             - user: ${message}
       output: !Turn
         history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-        exited: false
+        closed: false
 
-    turn:                   # body: 'a -> 'a over {history, exited}
-      input: {history: !list(Msg), exited: !bool}
+    turn:                   # body: 'a -> 'a over {history, closed, messages}
+      input:
+        history: !list(Msg)
+        closed: !bool
+        messages: !Inbox(str)
       nodes:
-        ask: {kind: human_input, prompt: "You:", output: str}
-        exited: !Turn {history: "${input.history}", exited: true}   # a value entry: the exit record
+        heard:
+          kind: tool
+          tool_id: take                    # waits until a message arrives or the inbox closes
+          input:
+            from: ${input.messages}
+            take: all
+        ended: !Turn                       # a value entry: the closing record
+          history: ${input.history}
+          closed: true
         route:
           kind: case
-          on: ${ask.output}
-          cases: [{when: /exit, then: exited}, {when: /quit, then: exited}]
-          else: call(respond, history=${input.history}, message=${ask.output})
+          cases:
+            - when: ${heard.output.events == []}   # closed, nothing left to answer
+              then: ended
+          else: call(respond, history=${input.history}, message=${join(heard.output.events)})
       output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
   nodes:
-    chat: {kind: loop, call: turn, input: {history: [], exited: false}, while: not exited}
+    chat:
+      kind: loop
+      call: turn
+      input:
+        history: []
+        closed: false
+        messages: ${input.messages}
+      while: not closed
   output: ${chat.output.history}
 env: {OPENAI_API_KEY: "<key:1>"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
-  # Each turn's HUMAN_INPUT, by expanded id: one message, then the exit text.
-  human:
-    "chat#0/ask": [Hi]
-    "chat#1/ask": [/exit]
+  # Each line the user types, sent to the `messages` inbox; closing it ends the chat.
+  sends:
+    - {inbox: messages, event: Hi}
+    - {close: messages}
   models:
     "chat#0/__call_0/reply":
       agent:
@@ -93,14 +117,14 @@ expect:
     - [node_started, __start__]
     - - pool_commit
       - __start__
-      - value: {}
+      - value: {messages: {inbox: messages}}
     - - node_succeeded
       - __start__
       - {commit: 6}
     - [node_started, chat]
     - - pool_commit
       - chat
-      - from: {}
+      - from: {__start__: 6}
         key: chat#0/__start__
     - - node_expanded
       - chat
@@ -109,13 +133,17 @@ expect:
     - - node_succeeded
       - chat#0/__start__
       - {commit: 9}
-    - [node_started, chat#0/ask]
-    - - pool_commit
-      - chat#0/ask
-      - {value: Hi}
-    - - node_succeeded
-      - chat#0/ask
-      - {commit: 14}
+    - [node_started, chat#0/heard]
+    - - node_waiting
+      - chat#0/heard
+      - {call_ids: [r1/chat#0/heard], waits: [{call_id: r1/chat#0/heard, inbox: messages, mode: all, tool: take}]}
+    - - run_waiting
+      - null
+      - {node_ids: [chat#0/heard]}
+    - [pool_commit, __start__, {key: __start__.messages, value: Hi}]
+    - [node_woken, chat#0/heard]
+    - [pool_commit, chat#0/heard, {closed: false, events: [16], inbox: messages}]
+    - [node_succeeded, chat#0/heard, {commit: 18}]
     - [node_started, chat#0/route]
     - - node_routed
       - chat#0/route
@@ -123,7 +151,7 @@ expect:
     - [node_started, chat#0/__call_0]
     - - pool_commit
       - chat#0/__call_0
-      - from: {chat#0/__start__: 9, chat#0/ask: 14}
+      - from: {chat#0/__start__: 9, chat#0/heard: 18}
         key: chat#0/__call_0/__start__
     - - node_expanded
       - chat#0/__call_0
@@ -131,7 +159,7 @@ expect:
     - [node_started, chat#0/__call_0/__start__]
     - - node_succeeded
       - chat#0/__call_0/__start__
-      - {commit: 19}
+      - {commit: 23}
     - [node_started, chat#0/__call_0/reply]
     - - node_step
       - chat#0/__call_0/reply
@@ -154,71 +182,75 @@ expect:
       - {value: "Hello! How can I help?"}
     - - node_succeeded
       - chat#0/__call_0/reply
-      - {commit: 25}
+      - {commit: 29}
     - [node_started, chat#0/__call_0/__end__]
     - - pool_commit
       - chat#0/__call_0/__end__
-      - from: {chat#0/__call_0/__start__: 19, chat#0/__call_0/reply: 25}
+      - from: {chat#0/__call_0/__start__: 23, chat#0/__call_0/reply: 29}
         key: chat#0/__call_0
     - - node_succeeded
       - chat#0/__call_0/__end__
-      - {commit: 28}
+      - {commit: 32}
     - [node_started, chat#0/__end__]
     - - pool_commit
       - chat#0/__end__
-      - from: {chat#0/__call_0: 28}
+      - from: {chat#0/__call_0: 32}
     - - node_succeeded
       - chat#0/__end__
-      - {commit: 31}
+      - {commit: 35}
     - [node_started, chat~1]
     - - pool_commit
       - chat~1
-      - from: {chat#0/__end__: 31}
+      - from: {chat#0/__end__: 35}
         key: chat#1/__start__
     - - node_expanded
       - chat~1
-      - prune_ids: [chat#0/__call_0, chat#0/__end__, chat#0/__start__, chat#0/ask, chat#0/exited, chat#0/route, chat~1]
+      - prune_ids: [chat#0/__call_0, chat#0/__end__, chat#0/__start__, chat#0/ended, chat#0/heard, chat#0/route, chat~1]
     - [node_started, chat#1/__start__]
     - - node_succeeded
       - chat#1/__start__
-      - {commit: 34}
-    - [node_started, chat#1/ask]
-    - - pool_commit
-      - chat#1/ask
-      - {value: /exit}
-    - - node_succeeded
-      - chat#1/ask
-      - {commit: 39}
+      - {commit: 38}
+    - [node_started, chat#1/heard]
+    - - node_waiting
+      - chat#1/heard
+      - {call_ids: [r1/chat#1/heard], waits: [{call_id: r1/chat#1/heard, inbox: messages, mode: all, tool: take}]}
+    - - run_waiting
+      - null
+      - {node_ids: [chat#1/heard]}
+    - [inbox_closed, null, {inbox: messages}]
+    - [node_woken, chat#1/heard]
+    - [pool_commit, chat#1/heard, {closed: true, events: [], inbox: messages}]
+    - [node_succeeded, chat#1/heard, {commit: 47}]
     - [node_started, chat#1/route]
     - - node_routed
       - chat#1/route
-      - {handle: exited}
-    - [node_started, chat#1/exited]
+      - {handle: ended}
+    - [node_started, chat#1/ended]
     - - pool_commit
-      - chat#1/exited
+      - chat#1/ended
       - value:
-          exited: true
           history:
             - {role: user, text: Hi}
             - {role: assistant, text: "Hello! How can I help?"}
+          closed: true
     - - node_succeeded
-      - chat#1/exited
-      - {commit: 44}
+      - chat#1/ended
+      - {commit: 52}
     - [node_started, chat#1/__end__]
     - - pool_commit
       - chat#1/__end__
-      - from: {chat#1/exited: 44}
+      - from: {chat#1/ended: 52}
     - - node_succeeded
       - chat#1/__end__
-      - {commit: 47}
+      - {commit: 55}
     - [node_started, chat~2]
     - - pool_commit
       - chat~2
-      - from: {chat#1/__end__: 47}
+      - from: {chat#1/__end__: 55}
         key: chat
     - - node_succeeded
       - chat~2
-      - {commit: 50}
+      - {commit: 58}
     - [node_started, __end__]
     - - pool_commit
       - __end__
@@ -227,4 +259,4 @@ expect:
           - {role: assistant, text: "Hello! How can I help?"}
     - - node_succeeded
       - __end__
-      - {commit: 53}
+      - {commit: 61}

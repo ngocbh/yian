@@ -18,12 +18,10 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
-import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/index.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
-import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
 // The author-written kinds (as `docs/syntax.md` lists them; the loader makes `start` and `end`).
@@ -32,11 +30,9 @@ const AUTHORED_KINDS: readonly string[] = [
   "call",
   "case",
   "code",
-  "human_input",
   "loop",
   "map",
   "tool",
-  "wait",
 ];
 
 /** Expect `KINDS` and `BINDING_FIELDS` to name the same kinds, each with its class's fields. */
@@ -57,8 +53,6 @@ test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("agent")).toBe(AgentDescriptor);
   expect(KINDS.get("code")).toBe(CodeDescriptor);
   expect(KINDS.get("tool")).toBe(ToolDescriptor);
-  expect(KINDS.get("human_input")).toBe(HumanInputDescriptor);
-  expect(KINDS.get("wait")).toBe(WaitDescriptor);
   expect(KINDS.get("case")).toBe(CaseDescriptor);
   expect(KINDS.get("call")).toBe(CallDescriptor);
   expect(KINDS.get("map")).toBe(MapDescriptor);

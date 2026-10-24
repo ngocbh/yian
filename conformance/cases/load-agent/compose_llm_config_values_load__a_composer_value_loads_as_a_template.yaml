@@ -1,12 +1,15 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str , m: !str , t: !float }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
+      kind: tool
+      tool_id: ask
+      input:
+        proj: ${input.proj}
       adaptive_questions:
         prompt: "Q ${proj}"
         llm_config:

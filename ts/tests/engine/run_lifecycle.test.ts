@@ -43,11 +43,13 @@
  * - `test_callback_exception_drains_waiter_reraises_exactly_and_unlocks`,
  *   `test_callback_exception_drains_real_blocked_human_interaction_and_unlocks` and
  *   `test_host_interruption_drains_then_durable_resume_retries_to_terminal`: the trigger is a TOOL
- *   node whose tool waits for the WAIT's sleep (or the `ask_user` call) to start, through a
- *   scheduler whose sleeps wait for their signal (Python's `_TrackingStopEvent`); a host stop is
- *   the run's `signal`, which the interrupting tool aborts, and the run rejects with its reason
- *   (Python: `_HostStop` raised by a CODE node); the recovered WAIT reads a clock past its deadline
- *   from `scheduler`. TS records the stop as `run_stopped`, and nothing is named `RunAborted`.
+ *   node whose tool waits for the blocked call to start. TS yian has no WAIT or HUMAN_INPUT kind,
+ *   so Python's WAIT is a TOOL `waiter` whose call waits for its signal (Python's
+ *   `_TrackingStopEvent`), and the human interaction is a TOOL `ask` whose handler does; a host
+ *   stop is the run's `signal`, which the interrupting tool aborts, and the run rejects with its
+ *   reason (Python: `_HostStop` raised by a CODE node); the recovered `waiter` returns `"done"`
+ *   where Python's WAIT, past its deadline, returns null. TS records the stop as `run_stopped`, and
+ *   nothing is named `RunAborted`.
  *
  * TS-only: a resume after a crash publishes `RunResumed` then one `NodeAttemptResumed` per retried
  * node with its crashed count (2 after a second crash), and the result holds the counts; a
@@ -103,7 +105,7 @@ import type { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 import {
   inspectRun,
   type AdvanceOptions,
@@ -315,8 +317,8 @@ nodes:
     kind: tool
     tool_id: trigger
   waiter:
-    kind: wait
-    until: "2099-01-01T00:00:00+00:00"
+    kind: tool
+    tool_id: waiter
 output:
   trigger: \${trigger.output}
   waiter: \${waiter.output}
@@ -330,8 +332,10 @@ nodes:
     kind: tool
     tool_id: trigger
   human:
-    kind: human_input
-    prompt: "Approve?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Approve?"
     output: str
 output:
   trigger: \${trigger.output}
@@ -346,8 +350,8 @@ nodes:
     kind: tool
     tool_id: interrupter
   waiter:
-    kind: wait
-    until: "2099-01-01T00:00:00+00:00"
+    kind: tool
+    tool_id: waiter
 output:
   interrupter: \${interrupter.output}
   waiter: \${waiter.output}
@@ -392,30 +396,27 @@ function noArgTool(name: string, body: (ctx: { signal: AbortSignal }) => unknown
 }
 
 /**
- * A scheduler reading `now` whose sleeps wait for their signal: `entered` resolves at the first
- * sleep, and `released` turns true once a sleep ends on its signal.
+ * A no-argument tool `waiter` whose call waits for its signal: `entered` resolves when it is
+ * called, and `released` turns true once the signal ends the call. After `disarm()` a call returns
+ * `"done"` at once.
  */
-function blockingScheduler(now: number): { scheduler: Scheduler; entered: Promise<void>; released: () => boolean } {
-  let enter!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    enter = resolve;
-  });
+function blockingWaiter() {
+  const { promise: entered, resolve: enter } = Promise.withResolvers<void>();
   let released = false;
-  const scheduler: Scheduler = {
-    now: () => now,
-    sleep(_ms, signal) {
-      enter();
-      return new Promise<void>((_resolve, reject) => {
-        const abort = () => {
-          released = true;
-          reject(signal!.reason);
-        };
-        if (signal?.aborted) abort();
-        else signal?.addEventListener("abort", abort, { once: true });
-      });
-    },
-  };
-  return { scheduler, entered, released: () => released };
+  let armed = true;
+  const waiter = noArgTool("waiter", (ctx) => {
+    if (!armed) return "done";
+    enter();
+    return new Promise<never>((_resolve, reject) => {
+      const abort = () => {
+        released = true;
+        reject(ctx.signal.reason);
+      };
+      if (ctx.signal.aborted) abort();
+      else ctx.signal.addEventListener("abort", abort, { once: true });
+    });
+  });
+  return { waiter, entered, released: () => released, disarm: () => void (armed = false) };
 }
 
 /** Write RunStarted, complete START, then leave the `started` nodes in flight, in order. */
@@ -861,7 +862,7 @@ test("test_terminal_resume_never_calls_the_hook", async () => {
 
 test("test_callback_exception_drains_waiter_reraises_exactly_and_unlocks", async () => {
   const path = join(dir, "callback-interruption.jsonl");
-  const { scheduler, entered, released } = blockingScheduler(Date.UTC(2026, 0, 1));
+  const { waiter, entered, released } = blockingWaiter();
   const expected = new Error("observer rejected a durable outcome");
   const reject = (event: RunEvent) => {
     if (event instanceof NodeSucceeded && event.nodeId === "trigger") throw expected;
@@ -873,8 +874,8 @@ test("test_callback_exception_drains_waiter_reraises_exactly_and_unlocks", async
       runId: RUN_ID,
       numWorkers: 2,
       onEvent: reject,
-      scheduler,
       tools: {
+        waiter,
         trigger: noArgTool("trigger", async () => {
           await entered;
           return "triggered";
@@ -892,7 +893,7 @@ test("test_callback_exception_drains_waiter_reraises_exactly_and_unlocks", async
 
 test("test_callback_exception_drains_real_blocked_human_interaction_and_unlocks", async () => {
   const path = join(dir, "human-callback-interruption.jsonl");
-  const expected = new Error("observer rejected while ask_user was blocked");
+  const expected = new Error("observer rejected while ask was blocked");
   let enter!: () => void;
   const entered = new Promise<void>((resolve) => {
     enter = resolve;
@@ -916,7 +917,7 @@ test("test_callback_exception_drains_real_blocked_human_interaction_and_unlocks"
       numWorkers: 2,
       onEvent: reject,
       tools: {
-        ask_user: answer as never,
+        ask: answer as never,
         trigger: noArgTool("trigger", async () => {
           await entered;
           return "triggered";
@@ -935,7 +936,7 @@ test("test_callback_exception_drains_real_blocked_human_interaction_and_unlocks"
 
 test("test_host_interruption_drains_then_durable_resume_retries_to_terminal", async () => {
   const path = join(dir, "host-interruption.jsonl");
-  const { scheduler, entered, released } = blockingScheduler(Date.UTC(2026, 0, 1));
+  const { waiter, entered, released, disarm } = blockingWaiter();
   const host = new AbortController();
   const interruption = new Error("host interrupted the run");
   let armed = true;
@@ -949,7 +950,7 @@ test("test_host_interruption_drains_then_durable_resume_retries_to_terminal", as
   const flow = await load(HOST_DRAIN_FLOW);
 
   const error = await rejected(
-    run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 2, signal: host.signal, scheduler, tools: { interrupter } }),
+    run(flow, {}, { log: path, runId: RUN_ID, numWorkers: 2, signal: host.signal, tools: { interrupter, waiter } }),
   );
 
   expect(error).toBe(interruption);
@@ -958,11 +959,11 @@ test("test_host_interruption_drains_then_durable_resume_retries_to_terminal", as
   expect(interrupted.some((record) => isOutcomeOf(record, ["interrupter", "waiter"]))).toBe(false);
   expect(interrupted.at(-1)).toBeInstanceOf(RunStoppedRecord);
 
-  const later: Scheduler = { now: () => Date.UTC(2100, 0, 1), sleep: () => Promise.resolve() };
-  const resumed = await resume(await load(HOST_DRAIN_FLOW), { log: path, scheduler: later, tools: { interrupter } });
+  disarm();
+  const resumed = await resume(await load(HOST_DRAIN_FLOW), { log: path, tools: { interrupter, waiter } });
 
   expect(resumed.status).toBe("succeeded");
-  expect(resumed.output).toEqual({ interrupter: "recovered", waiter: null });
+  expect(resumed.output).toEqual({ interrupter: "recovered", waiter: "done" });
   expectResumedSegment(resumed.events);
   expect(durableRecords(path)).toContainEqual(new RunResumedRecord(["interrupter", "waiter"], 2));
 });

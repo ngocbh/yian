@@ -3253,7 +3253,9 @@ unchanged, and the TOOL built-in `ask`. It receives an `AskRequest`: the six fie
 `extra` (the declared extras the call passed, by name; `{}` when none). A run without a handler
 fails with `no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to
 runFlow or advance`. `take`, `sleep`, `ask`, `ask_user` and `load_skill` are reserved: no
-registered tool, `tools` key (other than the ask slot), group tool or MCP server may take one.
+registered tool, `tools` key (other than the ask slot), group tool or MCP server may take one. An
+AGENT can't grant `take`, `sleep` or `ask` (it asks through `ask_user`), and in this version a
+TOOL node naming one is refused at run start.
 `pending()`, exported from the package root, is the marker a host handler returns when the
 answer comes later; yian passes it through unchecked.
 

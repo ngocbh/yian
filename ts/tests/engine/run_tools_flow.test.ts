@@ -510,3 +510,62 @@ for (const [name, tools, message] of [
     expect(existsSync(path)).toBe(false);
   });
 }
+
+/** A flow whose one AGENT grants `tool`. */
+const grantFlow = (tool: string) => `
+id: grant_builtin
+name: grant_builtin
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [${tool}]
+output: \${agent.output}
+`;
+
+for (const [tool, message] of [
+  ["take", "AGENT node 'agent' grants 'take': an engine built-in a TOOL node reaches with tool_id: take"],
+  ["sleep", "AGENT node 'agent' grants 'sleep': an engine built-in a TOOL node reaches with tool_id: sleep"],
+  ["ask", "AGENT node 'agent' grants 'ask': grant ask_user; ask is a TOOL-node built-in in this version"],
+] as const) {
+  test(`an AGENT can't grant the built-in ${tool}`, async () => {
+    const path = freshLog();
+
+    const error = await rejected(run(grantFlow(tool), {}, { log: path, tools: { ask: answerWithQuestion }, models: chats }));
+
+    expect(error).toEqual(new RangeError(message));
+    expect(existsSync(path)).toBe(false);
+  });
+}
+
+/** A flow whose one TOOL node names `tool`. */
+const builtinFlow = (tool: string) => `
+id: tool_builtin
+name: tool_builtin
+nodes:
+  gate:
+    kind: tool
+    tool_id: ${tool}
+output: \${gate.output}
+`;
+
+for (const [tool, tools, message] of [
+  ["take", {}, "TOOL node 'gate' names 'take': an engine built-in this version of yian doesn't run yet"],
+  ["sleep", {}, "TOOL node 'gate' names 'sleep': an engine built-in this version of yian doesn't run yet"],
+  ["ask", { ask: answerWithQuestion }, "TOOL node 'gate' names 'ask': an engine built-in this version of yian doesn't run yet"],
+  [
+    "ask",
+    {},
+    "TOOL node 'gate' names 'ask': no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
+  ],
+] as const) {
+  test(`a TOOL node naming the built-in ${tool} fails at run start (${Object.keys(tools).length} tools)`, async () => {
+    const path = freshLog();
+
+    const error = await rejected(run(builtinFlow(tool), {}, { log: path, tools }));
+
+    expect(error).toEqual(new RangeError(message));
+    expect(existsSync(path)).toBe(false);
+  });
+}

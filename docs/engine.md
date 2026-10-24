@@ -483,13 +483,16 @@ classifying it as a failure.
 When a capability fails with a host fault (a stream or event sink, steering, the memory opener,
 render capture, `steps.record`), the first such fault is what the evaluation rejects with once
 the node settles, even if the node caught it and returned; capability promises the node
-started are awaited first. A node declaring `needsEvaluationTrace` gets a write-only
-`evaluationTrace` (`recordPrompt`, `recordInteraction`), and one declaring `needsMemoryContext`
-gets `openMemoryContext(baseSystemPrompt, renderedPrompt)`; the memory opener the engine is
-given takes `(scope, recall, { signal })`, where `recall` is the node's `RecallContext`, and
-resolves to a `MemoryContext` of recalled sections. There is no transcript to close: the
-capability only refuses opens once the outcome is decided, as the steps capability and render
-capture refuse their calls.
+started are awaited first. A node declaring `needsMemoryContext` gets
+`openMemoryContext(baseSystemPrompt, renderedPrompt)`; the memory opener the engine is given
+takes `(scope, recall, { signal })`, where `recall` is the node's `RecallContext`, and resolves
+to a `MemoryContext` of recalled sections. There is no transcript to close: the capability only
+refuses opens once the outcome is decided, as the steps capability and render capture refuse
+their calls. A node records nothing for learning while it runs. The backward driver
+(`learningMaterials` in `ts/src/runtime/backward.ts`) rebuilds what learning reads of each
+occurrence through its node's `Node.learningMaterial(inputs, steps, caps)` hook, from the steps
+the node recorded, its render with the recorded skills and a recall against the recorded memory
+snapshots; an AGENT checks each rebuilt request against the digest its step recorded.
 
 The pattern is a small set of traits and hooks around the shared run/body pair.
 Runtime may read `NodeKind` for diagnostic text, but behavior and scheduling never

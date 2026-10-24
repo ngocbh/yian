@@ -1475,6 +1475,12 @@ structured agent's model is built, never called, to read its structured-output p
 of a tool group is expanded with the run's tools (a finished run that `resumeFlow` reopened has
 none, so its grants are read as tool names).
 
+Since recall is rebuilt, it must give the same text each time for the same snapshot and context.
+A custom memory's `recall`, and the `rewriteQuery()` a subclass of `EpisodicMemory` or
+`ReflectiveMemory` overrides, must return the same result for the same `RecallContext` every time.
+Otherwise a rebuilt request can differ from the recorded one: each occurrence the memory is scoped
+to whose request differs drops out of learning and is reported as `rebuilt_request_differs`.
+
 Known callback/result failures return a failed outcome without partial root
 feedback. A later learner or commit failure retains already completed feedback.
 Host errors, cancellation, setup errors, and log faults propagate while leaving

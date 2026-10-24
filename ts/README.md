@@ -999,8 +999,9 @@ Node 22, and so does every unit test; a change keeps both green.
   agent (`callTime` set) also records its config as an `llm_config` step.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`,
-  `evaluationTrace`, `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent
-  authored `steerable: true`).
+  `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent authored
+  `steerable: true`). It records nothing for learning; the backward driver rebuilds what learning
+  reads from its steps (`AgentNode.learningMaterial`).
 - AGENT `forward` (`node.ts` → `loop.ts` `runAgent` → `structured.ts` `generateStructured` or
   `live.ts` `callModel`) reaches models only through `caps.models`, a `ModelAccess`
   (`defaultModelAccess(env)` in `src/llm_clients/factory.ts`; tests pass one returning a
@@ -1128,8 +1129,11 @@ Node 22, and so does every unit test; a change keeps both green.
 - A host memory is any object with `openRun({ snapshot })` and `reset()` (`isMemory` checks it, as
   Python's `isinstance(value, Memory)`). Every method of a host memory interface (`Memory`,
   `MemorySession`, `MarkdownStore.read/write`) may return a value or a promise, and yian always
-  awaits it, as for tools; the `snapshot` read and the engine's `EvaluationTrace` stay
-  synchronous. A run session has no `with` form: the caller calls `close()` in `finally`.
+  awaits it, as for tools; the `snapshot` read stays synchronous. Nodes hand memory no trace
+  while they run: the backward driver builds each episode's prompts, sections and interactions
+  from the occurrence's steps through `Node.learningMaterial` (`learningMaterials` in
+  `src/runtime/backward.ts`). A run session has no `with` form: the caller calls `close()` in
+  `finally`.
 - Changed: `RecallContext.inputs` follows the value number rule (NaN refused, `±Infinity` kept,
   `-0` read as `0`).
 - `src/memory/storage/sqlite.ts` holds `SQLiteStorage`, the single-owner SQLite state file, opened

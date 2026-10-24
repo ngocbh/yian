@@ -1105,7 +1105,8 @@ export class AgentNode extends Node {
         return { model, typ: contract.type };
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        // A model that can't be built now can't give the plan; the requests stay unchecked.
+        // A model that can't be built now can't give the plan, so its structured requests can't
+        // be checked: `null` fails the digest, and the occurrence is left out and reported.
         return null;
       }
     };

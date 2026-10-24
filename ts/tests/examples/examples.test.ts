@@ -5,9 +5,9 @@
  * Ported: `test_example_loads_and_compiles` (one test per `examples/*.yaml`, loaded with the
  * examples directory as the search path), `test_examples_present` and
  * `test_debate_agents_are_tool_free`. TS-only: the shape of `human-approval.yaml`'s `ask` gate,
- * `chat.yaml` on its `Inbox(str)` input, run end to end on a scripted model, and
- * `compact_history.yaml` alone (pass-through, `keep`, a failed summary), and a learnable chat
- * whose reply feedback reaches the summarizer.
+ * `chat.yaml` on its `Inbox(Message)` input with a steerable `Optional(str)` reply, run end to
+ * end on a scripted model, and `compact_history.yaml` alone (pass-through, `keep`, a budget of
+ * text parts, a failed summary), and a learnable chat whose reply feedback reaches the summarizer.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -19,12 +19,14 @@ import { fileURLToPath } from "node:url";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import type { AgentNode } from "../../src/nodes/agent/node.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { advance, close, runFlow, send } from "../../src/run.ts";
+import { advance, close, runFlow, send, staticNodes } from "../../src/run.ts";
 import { BackwardReadyRecord, JsonlRunLog, NodeStartedRecord } from "../../src/runtime/log.ts";
 import { ASK } from "../../src/tools/context.ts";
-import { isInboxType, ValueKind } from "../../src/typesys/values.ts";
+import { builtinType } from "../../src/typesys/types.ts";
+import { isInboxType, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import {
   NO_ENV,
   PromptModel,
@@ -74,13 +76,29 @@ test("human-approval's approve is a TOOL ask answered with the Approval enum", a
   ]);
 });
 
-test("chat's one input is the `messages` inbox of text", async () => {
+/** A user message holding `text`, as a host sends it and the history keeps it. */
+const user = (text: string) => ({ role: "user", parts: [{ type: "text", text }] });
+/** An assistant message holding `text`. */
+const assistant = (text: string) => ({ role: "assistant", parts: [{ type: "text", text }] });
+
+test("chat's one input is the `owner_messages` inbox of messages", async () => {
   const loaded = await load("chat.yaml");
   const input = loaded.input!;
-  expect(input.map((param) => param.name)).toEqual(["messages"]);
+  expect(input.map((param) => param.name)).toEqual(["owner_messages"]);
   const type = input[0]!.contract!.type;
   expect(isInboxType(type)).toBe(true);
-  expect(type!.element?.kind).toBe(ValueKind.STRING);
+  expect(typeEquals(type!.element!, builtinType("Message")!)).toBe(true);
+});
+
+test("chat's reply is a steerable Optional(str) agent with no tools", async () => {
+  const replies = staticNodes(await load("chat.yaml")).filter(([path]) => path.endsWith("/reply"));
+  expect(replies).toHaveLength(1);
+  const reply = replies[0]![1];
+  expect(reply).toBeInstanceOf(AgentNode);
+  const output = (reply as AgentNode).outputContract as ValueContract;
+  expect([output.type.kind, output.type.nullable]).toEqual([ValueKind.STRING, true]);
+  expect((reply as AgentNode).steerInbox).toBe(true);
+  expect((reply as AgentNode).tools).toEqual([]);
 });
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-examples-"));
@@ -94,48 +112,38 @@ test("chat waits for each message, answers it, and ends when its inbox closes", 
   const options = { env: NO_ENV, numWorkers: 0, models };
   let result = await runFlow(loaded, {}, { ...options, log, llmConfig: config });
   expect(result.status).toBe("waiting");
-  await send(log, "messages", "hi", { env: NO_ENV });
+  await send(log, "owner_messages", user("hi"), { env: NO_ENV });
   result = await advance({ ...options, log });
   expect(result.status).toBe("waiting");
-  await close(log, "messages", { env: NO_ENV });
+  await close(log, "owner_messages", { env: NO_ENV });
   result = await advance({ ...options, log });
   expect(result.status).toBe("succeeded");
-  expect(result.output).toEqual({
-    summary: "",
-    history: [
-      { role: "user", text: "hi" },
-      { role: "assistant", text: "hello" },
-    ],
-  });
+  expect(result.output).toEqual({ summary: "", history: [user("hi"), assistant("hello")] });
 }, 30_000);
 
-test("chat joins the messages one take reads with newlines before the model sees them", async () => {
+test("chat sends each message one take reads as its own user message", async () => {
   const loaded = await load("chat.yaml");
   const config = { provider: "anthropic", model: "claude-test" };
-  const models = serving(new ScriptedModel([textReply("ok")], config));
+  const model = new PromptModel({ reply: "ok", summary: "unused" });
   const log = join(tmp, "chat-joined.jsonl");
-  const options = { env: NO_ENV, numWorkers: 0, models };
+  const options = { env: NO_ENV, numWorkers: 0, models: serving(model) };
   expect((await runFlow(loaded, {}, { ...options, log, llmConfig: config })).status).toBe("waiting");
-  await send(log, "messages", "a", { env: NO_ENV });
-  await send(log, "messages", "b", { env: NO_ENV });
-  await close(log, "messages", { env: NO_ENV });
+  await send(log, "owner_messages", user("a"), { env: NO_ENV });
+  await send(log, "owner_messages", user("b"), { env: NO_ENV });
+  await close(log, "owner_messages", { env: NO_ENV });
   const result = await advance({ ...options, log });
   expect(result.status).toBe("succeeded");
-  expect(result.output).toEqual({
-    summary: "",
-    history: [
-      { role: "user", text: "a\nb" },
-      { role: "assistant", text: "ok" },
-    ],
-  });
+  expect(result.output).toEqual({ summary: "", history: [user("a"), user("b"), assistant("ok")] });
+  const sent = model.requests[0]!.messages.filter((m) => m.role !== "system");
+  expect(sent.map((m) => [m.role, m.text()])).toEqual([
+    ["user", "a"],
+    ["user", "b"],
+  ]);
 }, 30_000);
 
 const config = { provider: "anthropic", model: "claude-test" };
 const opts = { env: NO_ENV, numWorkers: 0, llmConfig: config };
-const turn = (u: string, a: string) => [
-  { role: "user", text: u },
-  { role: "assistant", text: a },
-];
+const turn = (u: string, a: string) => [user(u), assistant(a)];
 
 test("compact_history passes through under budget with no model call", async () => {
   const flow = await load("compact_history.yaml");
@@ -155,6 +163,35 @@ test("compact_history keeps up to `keep` turns even over budget", async () => {
   expect(result.output).toEqual({ summary: "s", history });
 });
 
+test("compact_history's budget counts only the messages' text parts", async () => {
+  const flow = await load("compact_history.yaml");
+  // A long tool call and its long result are no text; the 6 characters of text are under 10.
+  const big = "x".repeat(100);
+  const history = [
+    [
+      user("a1"),
+      { role: "assistant", parts: [{ type: "tool_call", id: "c1", name: "look", arguments: { q: big } }] },
+      { role: "tool", parts: [{ type: "tool_result", call_id: "c1", name: "look", content: big }] },
+      assistant("b1"),
+    ],
+    turn("a2", "b2"),
+  ];
+  const under = await runFlow(
+    flow,
+    { summary: "s", history, budget: 10n, keep: 0n },
+    { ...opts, models: serving(new ScriptedModel([], config)) },
+  );
+  expect(under.status).toBe("succeeded");
+  expect((under.output as { history: unknown[] }).history).toHaveLength(2);
+  // At a 5-character budget the same history folds, and the summarizer reads only text parts.
+  const model = new PromptModel({ reply: "unused", summary: "S" });
+  const over = await runFlow(flow, { summary: "", history, budget: 5n, keep: 0n }, { ...opts, models: serving(model) });
+  expect(over.output).toEqual({ summary: "S", history: [] });
+  const prompt = model.requests[0]!.messages.at(-1)!.text();
+  for (const line of ["user: a1", "assistant: b1", "user: a2", "assistant: b2"]) expect(prompt).toContain(line);
+  expect(prompt).not.toContain(big);
+});
+
 test.each([
   [0n, 0],
   [1n, 1],
@@ -168,8 +205,8 @@ test.each([
   // The summarizer saw the old summary and exactly the folded turns, as `role: text` lines.
   const prompt = model.requests[0]!.messages.at(-1)!.text();
   expect(prompt).toContain("old");
-  for (const t of history.slice(0, history.length - kept)) expect(prompt).toContain(`user: ${t[0]!.text}`);
-  for (const t of history.slice(history.length - kept)) expect(prompt).not.toContain(`user: ${t[0]!.text}`);
+  for (const t of history.slice(0, history.length - kept)) expect(prompt).toContain(`user: ${t[0]!.parts[0]!.text}`);
+  for (const t of history.slice(history.length - kept)) expect(prompt).not.toContain(`user: ${t[0]!.parts[0]!.text}`);
 });
 
 test("a failed summary fails the run with the provider's code", async () => {
@@ -193,7 +230,7 @@ test("chat folds the older turns into a summary once nine long turns pass the bu
   const message = (n: number) => `${n}:`.padEnd(2000, "m");
   expect((await runFlow(loaded, {}, { ...options, log, llmConfig: config })).status).toBe("waiting");
   for (let n = 1; n <= 10; n++) {
-    await send(log, "messages", message(n), { env: NO_ENV });
+    await send(log, "owner_messages", user(message(n)), { env: NO_ENV });
     expect((await advance({ ...options, log })).status).toBe("waiting");
   }
   // Nine replies, the summary the 10th turn's `compacted` writes (9 turns are 36,000 characters),
@@ -232,10 +269,10 @@ test("in a learnable chat, feedback on a reply reaches the summarizer through th
   // folds again.
   for (let n = 1; n <= 6; n++) {
     expect(result.status).toBe("waiting");
-    await send(log, "messages", `${n}:`.padEnd(30, "m"), { env: NO_ENV });
+    await send(log, "owner_messages", user(`${n}:`.padEnd(30, "m")), { env: NO_ENV });
     result = await advance({ ...options, log });
   }
-  await close(log, "messages", { env: NO_ENV });
+  await close(log, "owner_messages", { env: NO_ENV });
   result = await advance({ ...options, log });
   expect(result.status).toBe("succeeded");
   const history = (result.output as { history: unknown[] }).history;

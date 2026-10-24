@@ -330,7 +330,7 @@ async function driveOpenedBackward(
  * @param options.models Builds the model a callback calls (AGENT backward); `computeBackward`'s.
  * @param options.onEvent Receives the transient events callbacks publish; `computeBackward`'s.
  * @returns The exact accepted Finished disposition. An unfinished earlier attempt, including one
- *   with unconfirmed commit requests, is first closed as interrupted; all callbacks and proposals
+ *   with unconfirmed commit requests, is first closed as unfinished; all callbacks and proposals
  *   are recomputed.
  * @throws TypeError (as a rejection, as are all below) when `state` isn't exactly a `RunState`,
  *   `log` isn't a `RunLog`, the feedback is malformed, or the opener returns something other than
@@ -354,8 +354,8 @@ export async function driveBackward(
   const started = new BackwardStartedRecord(state.backwardState.attempts.length + 1, rootFeedback);
   seedBackward(state.trace!, started.feedback);
   const backward = state.backwardState;
-  const interrupted = backward.started !== null && backward.finished === null;
-  const first = interrupted ? new BackwardFinishedRecord(backward.started!.attemptId, backward.outcome!) : started;
+  const unfinished = backward.started !== null && backward.finished === null;
+  const first = unfinished ? new BackwardFinishedRecord(backward.started!.attemptId, backward.outcome!) : started;
   // A gate only: `seedBackward` already refused the learn-disabled and terminal cases; this
   // refuses a record that passes that check but can't be prepared (e.g. feedback that isn't
   // canonical JSON) before the opener runs. The record is prepared again with its commit, since
@@ -382,7 +382,7 @@ export async function driveBackward(
       }
     }
     acceptBackward(state, log, first);
-    if (interrupted) acceptBackward(state, log, started);
+    if (unfinished) acceptBackward(state, log, started);
     return await driveOpenedBackward(state, log, memory, { models: options.models, onEvent: options.onEvent });
   } catch (error) {
     primary = { error };

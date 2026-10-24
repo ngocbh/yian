@@ -911,15 +911,15 @@ function failed(memory: string, id = 1): MemoryCommitFailedRecord {
 }
 
 /** The failure of an interrupted attempt. */
-const INTERRUPTED = new BackwardFailure(
+const UNFINISHED = new BackwardFailure(
   "backward",
   "backward.interrupted",
   "backward attempt interrupted before completion",
 );
 
 /** A Finished of attempt `id` that interrupted before Ready. */
-function interruptedFinish(id = 1): BackwardFinishedRecord {
-  return new BackwardFinishedRecord(id, new BackwardOutcome("failed", { failure: INTERRUPTED }));
+function unfinishedFinish(id = 1): BackwardFinishedRecord {
+  return new BackwardFinishedRecord(id, new BackwardOutcome("failed", { failure: UNFINISHED }));
 }
 
 test.each<[string, () => unknown, ErrorClass, string]>([
@@ -949,7 +949,7 @@ test.each<[string, () => unknown, ErrorClass, string]>([
   ],
   [
     "a Finished of another attempt",
-    () => new BackwardAttempt(started(), { finished: interruptedFinish(2) }),
+    () => new BackwardAttempt(started(), { finished: unfinishedFinish(2) }),
     RangeError,
     "backward attempt record identities disagree",
   ],
@@ -1157,7 +1157,7 @@ test("an unfinished attempt reads its records and derives the interrupted outcom
   expect(state.policyOutcomes).toEqual(policies);
   const learning = new LearningResult("incomplete", { policies });
   const feedback = attempt.ready!.rootResult;
-  expect(state.outcome).toEqual(new BackwardOutcome("failed", { feedback, failure: INTERRUPTED, learning }));
+  expect(state.outcome).toEqual(new BackwardOutcome("failed", { feedback, failure: UNFINISHED, learning }));
   expect(state.outcome!.feedback).toBe(attempt.ready!.rootResult);
 });
 
@@ -1206,9 +1206,9 @@ test("a finished history admits a start and keeps the accepted outcome", () => {
     ready: ready(1),
     requests: [requested("a")],
     observations: [failed("a")],
-    finished: interruptedFinish(1),
+    finished: unfinishedFinish(1),
   });
-  const second = new BackwardAttempt(started(2), { finished: interruptedFinish(2) });
+  const second = new BackwardAttempt(started(2), { finished: unfinishedFinish(2) });
   const state = new RuntimeBackwardState(["a", "b"], [first, second]);
   expect(state.current).toBe(second);
   expect(state.finished).toBe(second.finished);
@@ -1229,7 +1229,7 @@ function twoAttempts(
   last: BackwardStartedRecord = started(2),
   options: { ready?: BackwardReadyRecord | null } = { ready: ready(2) },
 ): RuntimeBackwardState {
-  const first = new BackwardAttempt(started(1), { finished: interruptedFinish(1) });
+  const first = new BackwardAttempt(started(1), { finished: unfinishedFinish(1) });
   return new RuntimeBackwardState(memories, [first, new BackwardAttempt(last, options)]);
 }
 
@@ -1308,7 +1308,7 @@ function succeededFinish(learning: LearningResult = SUCCEEDED_LEARNING): Backwar
 }
 
 /** The interrupted Finished of attempt 1 before Ready. */
-const chainInterrupted = () => failedFinish(INTERRUPTED, { learning: INCOMPLETE });
+const chainUnfinished = () => failedFinish(UNFINISHED, { learning: INCOMPLETE });
 
 /** The options of a `BackwardFailure`. */
 type FailureOptions = ConstructorParameters<typeof BackwardFailure>[3];
@@ -1376,13 +1376,13 @@ test("the reducer accepts a full attempt Started → Ready → Requested → Suc
 });
 
 test.each<[string, () => BackwardRecord[]]>([
-  ["an interrupted attempt before Ready", () => [started(), chainInterrupted()]],
+  ["an interrupted attempt before Ready", () => [started(), chainUnfinished()]],
   [
     "an interrupted attempt after Ready, with its results",
     () => [
       started(),
       chainReady(),
-      failedFinish(INTERRUPTED, { feedback: CHAIN_ROOT, learning: INCOMPLETE }, chainResults()),
+      failedFinish(UNFINISHED, { feedback: CHAIN_ROOT, learning: INCOMPLETE }, chainResults()),
     ],
   ],
   [
@@ -1458,7 +1458,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   ],
   [
     "a record after Finished",
-    (trace) => reduced([started(), chainInterrupted(), chainReady()], trace),
+    (trace) => reduced([started(), chainUnfinished(), chainReady()], trace),
     RangeError,
     "backward record requires its matching unfinished attempt",
   ],
@@ -1550,7 +1550,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   [
     "Finished feedback that differs from Ready",
     (trace) => {
-      const finish = failedFinish(INTERRUPTED, { feedback: new BackwardResult(), learning: INCOMPLETE });
+      const finish = failedFinish(UNFINISHED, { feedback: new BackwardResult(), learning: INCOMPLETE });
       return reduced([started(), chainReady(), finish], trace);
     },
     RangeError,
@@ -1560,7 +1560,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
     "Finished attribution that differs from Ready",
     (trace) => {
       const unreachedResults = [S, P, E].map(unreached);
-      const finish = failedFinish(INTERRUPTED, { feedback: CHAIN_ROOT, learning: INCOMPLETE }, unreachedResults);
+      const finish = failedFinish(UNFINISHED, { feedback: CHAIN_ROOT, learning: INCOMPLETE }, unreachedResults);
       return reduced([started(), chainReady(), finish], trace);
     },
     RangeError,
@@ -1589,13 +1589,13 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   ],
   [
     "an interrupted Finished with other learning",
-    (trace) => reduced([started(), failedFinish(INTERRUPTED)], trace),
+    (trace) => reduced([started(), failedFinish(UNFINISHED)], trace),
     RangeError,
     "interrupted Finished must exactly project the accepted prefix",
   ],
   [
     "an interrupted Finished before Ready with results",
-    (trace) => reduced([started(), failedFinish(INTERRUPTED, { learning: INCOMPLETE }, chainResults())], trace),
+    (trace) => reduced([started(), failedFinish(UNFINISHED, { learning: INCOMPLETE }, chainResults())], trace),
     RangeError,
     "interrupted Finished must exactly project the accepted prefix",
   ],

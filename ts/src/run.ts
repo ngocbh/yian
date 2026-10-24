@@ -254,7 +254,7 @@ export class RunResult {
    * Run one new explicit backward attempt over the retained accepted execution.
    *
    * Each call appends a new attempt, whatever earlier attempts did; an unfinished earlier attempt
-   * (from a killed process, say) is first recorded as interrupted. The forward fields never change.
+   * (from a killed process, say) is first recorded as unfinished. The forward fields never change.
    *
    * @param feedback Ordinary text or structured feedback on the flow's output, taken through host
    *   intake (`{n: 3}` holds the int `3n`).

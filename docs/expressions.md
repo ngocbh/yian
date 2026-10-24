@@ -73,6 +73,43 @@ within a bound, the escapes work as before, so a default in a bound needs parent
 | `xs[0]` | ``indexing `xs[i]` is not supported; `xs[i:i + 1]` gives a one-item list`` |
 | `xs[1:].a` | `unexpected '.'`: a list has no fields |
 
+Changed (TS yian): **list comprehensions.** `[elem for x in xs]`, then any mix of `for y in ys`
+and `if cond` clauses, as in Python: `[m.text for t in history for m in t if m.role == "user"]`.
+The leftmost `for` is the outermost loop. A target is one bare name (yian has no tuples). The
+elem is a full expression, escapes included. Each iterable and each condition is Python's
+`or_test`, the `or` level and above, so an escape there needs parentheses:
+`[m for m in (input.history :- [])]`. The tree is `list_comp[elem, clause, ...]` with clauses in
+source order, each `comp_for[NAME, iterable, SOURCE]` (`SOURCE` keeps the iterable's text for
+messages) or `comp_if[cond]`.
+
+`for` and `if` are keywords only where an operator is expected, right after a complete operand,
+at any bracket depth: in a list's brackets `for` after the first element starts a comprehension,
+and `if` after an iterable or a condition adds a filter. Where an operand is expected they stay
+names, so `[for, if]` is still a two-item list.
+
+Scoping is lexical, as in Python. A variable is in scope in the elem and in every clause after
+its own `for`, nested comprehensions included; the first iterable runs in the enclosing scope, so
+`[x for x in x.items]` iterates the outer `x`. Inside the comprehension the variable wins over
+any outer name: it may share a name with a node, an input, a typedef, a LOOP field or a
+builtin, and a call such as `len(...)` or `Msg(...)` is never a variable read. Every parse ends
+with a pass that turns each variable read into a `comp_var` node, so reference walks (edges,
+name checks, guards, CASE renames) skip variables and see only the outer reads. These are parse
+errors, each naming the fix:
+
+| Text | Message |
+|---|---|
+| `[a, b for x in xs]` | ``a comprehension has one element before `for`; write `[[a, b] for x in xs]` `` |
+| `(x for x in xs)`, `f(x for x in xs)` | `` `for` makes a list comprehension only: write `[x for x in xs]` `` |
+| `[x if c else y for x in xs]`, `(a if c else b)` | ``conditional expressions (`a if c else b`) aren't supported yet`` |
+| `[x for 1 in xs]`, `[x for in in xs]`, `[x for a#0 in xs]` | ``a comprehension's `for` takes a name, then `in` `` |
+| `[x for x in a :- []]`, `[x for x in xs if a \| b]` | ``a comprehension's iterable and `if` stop before `:-`, `:?` and `\|`; write `(a :- [])` `` |
+| `[x for item in xs]`, `[x for __x in xs]` | `'item' can't be a comprehension variable: input, system, item, output and names starting with __ are reserved` |
+| `[x for x in a for x in b]`, `[[x for x in a] for x in b]` | `comprehension variable 'x' is already bound here; rename one` |
+
+The reserved names are the keywords, `input`, `system`, `item`, `output` and names starting with
+`__` (CASE's generated locals use that prefix). `[x for x in [x for x in a]]` is allowed: the
+inner comprehension sits in the first iterable, which runs in the enclosing scope.
+
 `and`, `or`, `not`, and `in` are reserved operators and cannot be the exact root
 name of a reference. They remain legal as dotted field names, such as
 `record.output.in`.
@@ -93,7 +130,8 @@ An expression nests at most 100 levels, the same bound as a
 [value](typing.md#nesting-limit), so `YIAN_MAX_VALUE_NESTING` sets both (see
 [Defaults and limits](defaults.md)). Each call, list literal, unary operator
 (`-`, `not`), comparison, escape (`|`, `:-`, `:?`), `and`/`or` chain, and operator chain is
-one level (in TS yian, so is a subscript, like a call); a plain reference adds none, and
+one level (in TS yian, so is a subscript, like a call, and a comprehension, like a list; its
+clauses and variable reads add none); a plain reference adds none, and
 parentheses add none of their own. Mixing
 precedence nests: `a * b + c` is a `product` inside a `sum`, two levels, and
 `((a + b) + c) + d` is three chains, three levels. `-1` is one level. `parse_expr` checks
@@ -141,6 +179,25 @@ bool counts as 0 or 1, as in arithmetic.
 | the base is text, a record or a number | raises `slicing takes a list, got str` | same |
 | a bound is `null` or misses | raises `slice bound is null; omit it to mean the end` | same |
 | a bound is a float or text | raises `slice bounds take int, got float` | same |
+
+Changed (TS yian): **comprehension semantics.** The first iterable is evaluated in the
+enclosing scope; each later clause runs once per binding of the clauses before it and sees
+those variables. An `if` keeps a binding when its condition is truthy, and after the last clause
+the elem is appended, so the result is a new list in iteration order. Variables are local:
+`[[y for y in xs], y]` reads the outer `y` (a miss if there is none). An item is returned as
+is, as in Python, so `[x for x in [null, 1]]` gives `[null, 1]`; `.field` on a null item misses,
+as on any null. The clauses run in a loop, not by recursion, so any number of them evaluates.
+
+| Case | Binding / condition | Strict (prompt) |
+|---|---|---|
+| the elem misses | a `null` item, as `[a, 1]` gives `[null, 1]` | raises `unresolved reference ${m.text} in expression` |
+| a condition misses | `null`, falsy: the item is dropped | raises |
+| an iterable is `null` or misses | raises ``comprehension `for m in input.history` iterates over null; give a default, e.g. `(input.history :- [])` `` | same |
+| an iterable is text, a record or a number | raises ``comprehension `for c in name` takes a list, got str`` | same |
+
+A comprehension never misses, so `${[...] :- []}` never falls back. A flow output that
+iterates a node a `case` may skip, `${[x for x in maybe.output]}`, loads, and fails at run time
+with the null-iterable error when `maybe` is skipped; write `(maybe.output :- [])`.
 
 Quote a YAML value that holds a slice: in a plain scalar `xs[a: b]` (a space after the colon)
 breaks the scalar, and in an unquoted flow mapping the `[` and `]` break it. Write
@@ -514,13 +571,39 @@ and retain local context; literal/default inputs have no invented upstream sourc
 
 In TS yian, a list slice keeps a `list` route of its base's route projected to each kept
 index, so feedback on a slice item reaches that item of the base. `len`, like every builtin
-call, is an `opaque` route.
+call, is an `opaque` route. A list comprehension keeps a `list` route of its elems' routes, and
+while it runs a variable carries its item's route (the iterable's route projected to the item),
+so feedback on `[m.text for t in history for m in t]`'s item reaches `history[i][j].text`. Its
+`if` conditions aren't part of the route, as a CASE condition isn't.
+
+Changed (TS yian): **where to compute.** A non-derived node (AGENT, TOOL, CODE) records its
+binding's routes in learnable runs: a computed list as a `list` route with one child per item,
+a computed scalar (`m.role + ": " + m.text`, `len(...)`) as a route that records its value.
+Derived nodes (START, END, CALL, LOOP, MAP) build their routes in memory and commit pointers,
+prompts are rebuilt rather than recorded, and a CASE `when:` is evaluated untraced. So computed
+values belong in prompts, `when:` or derived bindings, and an AGENT binding should be a plain
+reference: flatten a history in a CALL's binding and measure it in a `when:`. Computed bases
+cost more: a slice or comprehension over a computed list (`a.output + b.output`) in a learnable
+non-derived binding records the base's route once per item, since only a `source` route stays
+flat when projected. There, iterate a plain reference, or move the computation into a derived
+node.
 
 Changed (TS yian): where `len()` and list slicing differ from Python. Yian refuses slicing text,
 `len` of a record, a `null` slice bound, a step and an index, where Python gives a value; each
 message names the fix. A slice of `null` or a miss is a miss (`:-` catches it), where Python
 raises. `len(obj=x)` works, since a builtin has no positional-only parameters. A prompt can't
 call `len` (`unknown prompt function 'len'; prompts call only formatting builtins ...`).
+
+Changed (TS yian): where list comprehensions differ from Python. Yian refuses iterating text
+or a record, generator expressions, tuple targets, conditional expressions (`a if c else b`),
+the reserved variable names, rebinding a variable within a comprehension, a target holding `#`
+or `/` (graph-expansion separators), and an escape in an iterable or `if` without parentheses;
+each message names the fix. Yian gives a value where Python raises: an elem miss is a `null`
+item and a condition miss is falsy outside strict mode, and a name read in a clause before its
+own `for` reads the outer name (`[y for x in xs if y for y in ys]`), where Python raises
+`UnboundLocalError`; in a flow the name checks usually make that an unknown-name load error.
+Reads through a variable aren't type-checked at load yet: `m.txt` on a `list(Msg)` loads and
+misses at run time.
 
 Feedback is ordinary text, a partial record, an exact-length positional list, or
 `None`. Whole-value text stays unchanged; interpretation context accompanies it

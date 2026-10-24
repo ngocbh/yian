@@ -1,0 +1,26 @@
+# From tests/engine/test_flow_identity.py::test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring.
+# A sleep's `until` deadline is identity.
+kind: fingerprint
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
+flow: |
+  id: wait
+  name: wait
+  nodes:
+    node:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: "2026-01-01T00:00:00+00:00"
+  output: ${node.output}
+other: |
+  id: wait
+  name: wait
+  nodes:
+    node:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: "2026-01-02T00:00:00+00:00"
+  output: ${node.output}
+expect:
+  fingerprint: different

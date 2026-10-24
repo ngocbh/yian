@@ -1040,7 +1040,7 @@ export function roots(state: RunState): unknown[] {
     state.ready,
     state.inFlight,
     state.acceptedStarts,
-    state.interruptedAttempts,
+    state.crashedAttempts,
     state.depth,
     state.wiringOverrides,
     state.input,
@@ -1056,7 +1056,7 @@ export interface Snapshot {
 
 /**
  * Return `state`'s snapshot: `stateSnapshot` with the latch, start counts, steps,
- * interrupted-attempt counts and last stop sequence as well.
+ * crashed-attempt counts and last stop sequence as well.
  */
 export function snapshot(state: RunState): Snapshot {
   return {
@@ -1065,7 +1065,7 @@ export function snapshot(state: RunState): Snapshot {
       terminalUnreachableFailure: state.terminalUnreachableFailure,
       nodeStarts: [...state.nodeStarts],
       nodeSteps: [...state.nodeSteps],
-      interruptedAttempts: [...state.interruptedAttempts],
+      crashedAttempts: [...state.crashedAttempts],
       lastStopSequence: state.lastStopSequence,
     },
     roots: roots(state),

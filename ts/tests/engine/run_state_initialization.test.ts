@@ -44,7 +44,7 @@
  * refuses the pristine state; a hand-built growth plan holding a RunStarted record fails the growth
  * commit's record check. The log stays empty.
  *
- * TS-only, for the interrupted-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
+ * TS-only, for the crashed-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
  * count or a last stop sequence on the fresh state, and an initialized state refuses a wrong
  * container, a count that isn't a positive integer by node id, or a stop sequence that isn't an
  * integer in `[1, nextSequence)`.
@@ -807,14 +807,14 @@ test("a growth plan requires its NodeExpandedRecord at commit", () => {
 });
 
 test.each([
-  ["interrupted attempts", (state: RunState) => state.interruptedAttempts.set("work", 1)],
+  ["crashed attempts", (state: RunState) => state.crashedAttempts.set("work", 1)],
   [
     "last stop sequence",
     (state: RunState): void => {
       state.lastStopSequence = 1;
     },
   ],
-] as const)("prepareRunStarted refuses a state with interrupted-attempt history: %s", (_name, mutate) => {
+] as const)("prepareRunStarted refuses a state with crashed-attempt history: %s", (_name, mutate) => {
   const owned = flow();
   const state = new RunState(owned);
   mutate(state);
@@ -826,21 +826,21 @@ test.each([
   );
 });
 
-const COUNTS = /^interrupted attempt counts must be positive integers by node$/;
+const COUNTS = /^crashed attempt counts must be positive integers by node$/;
 const LAST_STOP = /^last stop sequence must be null or an earlier accepted sequence$/;
 
 test.each([
   [
     "a plain-object container",
     (state: RunState): void => {
-      state.interruptedAttempts = {} as never;
+      state.crashedAttempts = {} as never;
     },
     /^transition requires initialized reducer containers$/,
   ],
-  ["a zero count", (state: RunState) => state.interruptedAttempts.set("work", 0), COUNTS],
-  ["a negative count", (state: RunState) => state.interruptedAttempts.set("work", -1), COUNTS],
-  ["a fractional count", (state: RunState) => state.interruptedAttempts.set("work", 1.5), COUNTS],
-  ["a non-string node id", (state: RunState) => state.interruptedAttempts.set(1 as never, 1), COUNTS],
+  ["a zero count", (state: RunState) => state.crashedAttempts.set("work", 0), COUNTS],
+  ["a negative count", (state: RunState) => state.crashedAttempts.set("work", -1), COUNTS],
+  ["a fractional count", (state: RunState) => state.crashedAttempts.set("work", 1.5), COUNTS],
+  ["a non-string node id", (state: RunState) => state.crashedAttempts.set(1 as never, 1), COUNTS],
   [
     "a zero stop sequence",
     (state: RunState): void => {
@@ -862,7 +862,7 @@ test.each([
     },
     LAST_STOP,
   ],
-] as const)("an initialized state refuses broken interrupted-attempt history: %s", (_name, mutate, message) => {
+] as const)("an initialized state refuses broken crashed-attempt history: %s", (_name, mutate, message) => {
   const { state } = initializedAndStarted(flow());
   mutate(state);
 
@@ -871,7 +871,7 @@ test.each([
 
 test("an initialized state accepts counts by node and an earlier stop sequence", () => {
   const { state } = initializedAndStarted(flow());
-  state.interruptedAttempts.set("work", 2);
+  state.crashedAttempts.set("work", 2);
   state.lastStopSequence = state.nextSequence - 1;
 
   expect(prepareRunStopped(state, "signal", "").expectedSequence).toBe(state.nextSequence);

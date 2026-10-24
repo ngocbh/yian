@@ -94,10 +94,10 @@
  *
  * TS-only:
  * - a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`;
- * - a growth that retires a node keeps its interrupted-attempt count;
+ * - a growth that retires a node keeps its crashed-attempt count;
  * - every pruning test that grows also checks the kept growth index against a rebuild
  *   (`expectIndexMatchesRebuild`, a port of `_require_index_matches_rebuild` from
- *   `test_growth_index.py`); the deferral and retirement tests and the interrupted-attempt test
+ *   `test_growth_index.py`); the deferral and retirement tests and the crashed-attempt test
  *   all replay the record on an identical setup and expect equal observers, state and topology,
  *   as Python's two grown-subtree tests do.
  *
@@ -1732,11 +1732,11 @@ test("growth retires a settled prune id the kept work doesn't read", () => {
   assertReplaysEqual(state, prepared, observers, setup);
 });
 
-test("a growth that retires a counted node keeps its interrupted-attempt count", () => {
+test("a growth that retires a counted node keeps its crashed-attempt count", () => {
   const setup = () => {
     const { state, log } = initializedSpawner();
     const oldIds = installSettledOverlay(state);
-    state.interruptedAttempts.set(oldIds[0]!, 2);
+    state.crashedAttempts.set(oldIds[0]!, 2);
     return { state, log, oldIds };
   };
   const { state, log, oldIds } = setup();
@@ -1745,7 +1745,7 @@ test("a growth that retires a counted node keeps its interrupted-attempt count",
   const observers = commitPrepared(log, state, prepared);
 
   assertRetired(state, oldIds);
-  expect(state.interruptedAttempts.get(oldIds[0]!)).toBe(2);
+  expect(state.crashedAttempts.get(oldIds[0]!)).toBe(2);
   expectIndexMatchesRebuild(state);
   assertReplaysEqual(state, prepared, observers, setup);
 });

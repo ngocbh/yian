@@ -162,7 +162,7 @@ function isRunLog(log: unknown): log is RunLog {
  */
 export function resumedAttemptEvents(state: RunState, record: RunResumedRecord): NodeAttemptResumed[] {
   return record.retryNodeIds.map(
-    (nodeId) => new NodeAttemptResumed({ nodeId, interrupted: state.interruptedAttempts.get(nodeId) ?? 0 }),
+    (nodeId) => new NodeAttemptResumed({ nodeId, interrupted: state.crashedAttempts.get(nodeId) ?? 0 }),
   );
 }
 

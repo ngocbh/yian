@@ -98,7 +98,7 @@ import {
   runFlow,
 } from "../src/run.ts";
 import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
-import { addInterruptedAttempts } from "../src/runtime/state.ts";
+import { addCrashedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -2780,8 +2780,8 @@ async function checkInvariants(
   const state = replay(envelopes.length);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
-  const counts = new Map(state.interruptedAttempts);
-  if (finished === null) addInterruptedAttempts(counts, state.acceptedStarts, state.lastStopSequence);
+  const counts = new Map(state.crashedAttempts);
+  if (finished === null) addCrashedAttempts(counts, state.acceptedStarts, state.lastStopSequence);
   const first = envelopes[0]!;
   const started = first.record as RunStartedRecord;
   const expected = {

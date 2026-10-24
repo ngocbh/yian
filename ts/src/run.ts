@@ -131,7 +131,7 @@ import {
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import {
-  addInterruptedAttempts,
+  addCrashedAttempts,
   commitInitialPool,
   commitPrepared,
   prepareRunResumed,
@@ -1553,7 +1553,7 @@ export function inspectRun(
   else if (finished !== null) status = finished;
   else status = lastStop === null ? "interrupted" : "stopped";
   // A running run's attempts are still running, and a finished run's are abandoned.
-  if (status === "interrupted" || status === "stopped") addInterruptedAttempts(interrupted, starts, lastStop);
+  if (status === "interrupted" || status === "stopped") addCrashedAttempts(interrupted, starts, lastStop);
   const inFlight = status === "succeeded" || status === "failed" ? [] : [...starts.keys()];
   const { started } = scan;
   return {
@@ -2112,7 +2112,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
       lastStop = seq;
     } else if (record instanceof RunResumedRecord) {
       // The resume retries exactly the nodes in flight.
-      addInterruptedAttempts(interrupted, starts, lastStop);
+      addCrashedAttempts(interrupted, starts, lastStop);
       starts.clear();
       lastStop = null;
     }
@@ -2137,7 +2137,7 @@ function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]):
   if (state.result !== null) finished = state.result instanceof RunSucceeded ? "succeeded" : "failed";
   return {
     starts: new Map(state.acceptedStarts),
-    interrupted: new Map(state.interruptedAttempts),
+    interrupted: new Map(state.crashedAttempts),
     lastStop: state.lastStopSequence,
     finished,
     failure: state.result instanceof RunFailed ? state.result.failure : null,
@@ -2264,7 +2264,7 @@ function resultFromState(
     runId: requiredStateRunId(state),
     log: path,
     events,
-    interruptedAttempts: new Map(state.interruptedAttempts),
+    interruptedAttempts: new Map(state.crashedAttempts),
     backwardOutcome: handle === null ? state.backwardState.outcome : handle.outcome,
   };
   let result: RunResult;

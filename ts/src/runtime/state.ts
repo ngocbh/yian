@@ -297,7 +297,7 @@ export class RunState {
    * `RunStopped` covering them. Log history by node id: never decremented, and kept after the
    * node's outcome and after a prune.
    */
-  interruptedAttempts = new Map<string, number>();
+  crashedAttempts = new Map<string, number>();
   /** The sequence of the last `RunStopped` since the last `RunResumed`, or `null` when none. */
   lastStopSequence: number | null = null;
   /** The derived terminal result, or `null` while the run is live. */
@@ -2048,7 +2048,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "resumed":
       // The retries are exactly the in-flight nodes, which `acceptedStarts` holds in start order.
-      addInterruptedAttempts(state.interruptedAttempts, state.acceptedStarts, state.lastStopSequence);
+      addCrashedAttempts(state.crashedAttempts, state.acceptedStarts, state.lastStopSequence);
       state.lastStopSequence = null;
       // Steps and start counts outlive the segment: a retried node reads them back. One `unshift`
       // per id, last first, puts the retries ahead in order without spreading a wide list.
@@ -2377,11 +2377,11 @@ function requireAuthorityCoordinates(
  * pick up. A stop names every in-flight node, and an attempt stays in flight until its outcome or
  * the next resume, so an attempt is covered exactly when it started before the segment's last stop.
  *
- * @param counts The interrupted counts by node id, updated in place.
+ * @param counts The crashed counts by node id, updated in place.
  * @param starts The accepted start sequence of each in-flight node.
  * @param lastStop The sequence of the segment's last `RunStopped`, or `null`.
  */
-export function addInterruptedAttempts(
+export function addCrashedAttempts(
   counts: Map<string, number>,
   starts: ReadonlyMap<string, number>,
   lastStop: number | null,
@@ -2443,7 +2443,7 @@ function requireInitialized(state: RunState): void {
     isExactly(state.nodeSteps, Map) &&
     isExactly(state.pendingCommits, Map) &&
     isExactly(state.producers, Map) &&
-    isExactly(state.interruptedAttempts, Map) &&
+    isExactly(state.crashedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
@@ -2483,11 +2483,11 @@ function requireInitialized(state: RunState): void {
     throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
   if (
-    [...state.interruptedAttempts].some(
+    [...state.crashedAttempts].some(
       ([nodeId, count]) => typeof nodeId !== "string" || !Number.isSafeInteger(count) || count < 1,
     )
   ) {
-    throw new RangeError("interrupted attempt counts must be positive integers by node");
+    throw new RangeError("crashed attempt counts must be positive integers by node");
   }
   const lastStop = state.lastStopSequence;
   if (lastStop !== null && !(Number.isSafeInteger(lastStop) && 1 <= lastStop && lastStop < state.nextSequence)) {
@@ -4335,7 +4335,7 @@ function requirePristine(state: RunState): void {
     isExactly(state.nodeSteps, Map) &&
     isExactly(state.pendingCommits, Map) &&
     isExactly(state.producers, Map) &&
-    isExactly(state.interruptedAttempts, Map) &&
+    isExactly(state.crashedAttempts, Map) &&
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
@@ -4364,7 +4364,7 @@ function requirePristine(state: RunState): void {
     state.pendingCommits.size === 0 &&
     state.producers.size === 0 &&
     state.inputsCommitted === false &&
-    state.interruptedAttempts.size === 0 &&
+    state.crashedAttempts.size === 0 &&
     state.lastStopSequence === null &&
     state.result === null &&
     state.terminalUnreachableFailure === null &&

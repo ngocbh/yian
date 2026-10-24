@@ -5,6 +5,7 @@
  */
 import { expect, test } from "bun:test";
 import { Failure } from "../../src/diagnostics.ts";
+import type { WaitRequest } from "../../src/nodes/base.ts";
 import {
   canonicalTyped,
   InboxClosedRecord,
@@ -26,6 +27,7 @@ import {
 import {
   applyWaitsRecord,
   availableUnread,
+  decideWait,
   dueTimeouts,
   isWakeable,
   nodeCalls,
@@ -314,4 +316,92 @@ test("waitInfos lists each waiting node's calls, settled or not", () => {
     { node: "ask", callId: "r/ask/1", tool: "ask", inbox: null, deadline: null, settled: false },
   ]);
   expect(waitInfos(fold(...START))).toEqual([]);
+});
+
+const AT9 = Date.UTC(2026, 9, 24, 9);
+const takeOne = (timeoutSeconds: number | null = null): WaitRequest => ({ tool: "take", inbox: "msgs", mode: "one", timeoutSeconds });
+const takeAll = (timeoutSeconds: number | null = null): WaitRequest => ({ tool: "take", inbox: "msgs", mode: "all", timeoutSeconds });
+const sleepFor = (forSeconds: number): WaitRequest => ({ tool: "sleep", until: null, forSeconds });
+const sleepUntil = (until: string): WaitRequest => ({ tool: "sleep", until, forSeconds: null });
+
+test.each<[string, RunRecord[], WaitRequest, unknown]>([
+  ["unread x, y; take one", [send("msgs", "x"), send("msgs", "y")], takeOne(), { kind: "take", commit: { inbox: "msgs", events: [2], closed: false } }],
+  ["unread x, y; take all", [send("msgs", "x"), send("msgs", "y")], takeAll(), { kind: "take", commit: { inbox: "msgs", events: [2, 3], closed: false } }],
+  ["unread x on a closed inbox; take all", [send("msgs", "x"), new InboxClosedRecord("msgs")], takeAll(), { kind: "take", commit: { inbox: "msgs", events: [2], closed: true } }],
+  [
+    "unread x, y on a closed inbox; take one",
+    [send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs")],
+    takeOne(),
+    { kind: "take", commit: { inbox: "msgs", events: [2], closed: false } },
+  ],
+  ["a closed empty inbox; take one with a timeout", [new InboxClosedRecord("msgs")], takeOne(60), { kind: "take", commit: { inbox: "msgs", events: [], closed: true } }],
+  ["an empty inbox; timeout 0", [], takeOne(0), { kind: "take", commit: { inbox: "msgs", events: [], closed: false } }],
+  [
+    "an empty inbox; take all for 1800 s",
+    [],
+    takeAll(1800),
+    { kind: "wait", entry: { callId: "r/heard", tool: "take", inbox: "msgs", mode: "all", deadline: "2026-10-24T09:30:00.000Z" } },
+  ],
+  [
+    "an empty inbox; take one, no timeout",
+    [],
+    takeOne(),
+    { kind: "wait", entry: { callId: "r/heard", tool: "take", inbox: "msgs", mode: "one", deadline: null } },
+  ],
+  [
+    "unread x held by another pending take commit",
+    [send("msgs", "x"), new NodeStartedRecord("other"), takeCommit("other", [2])],
+    takeOne(),
+    { kind: "wait", entry: { callId: "r/heard", tool: "take", inbox: "msgs", mode: "one", deadline: null } },
+  ],
+  [
+    "sleep for 90 s",
+    [],
+    sleepFor(90),
+    { kind: "wait", entry: { callId: "r/heard", tool: "sleep", inbox: null, mode: null, deadline: "2026-10-24T09:01:30.000Z" } },
+  ],
+  [
+    "sleep until tomorrow",
+    [],
+    sleepUntil("2026-10-25T00:00:00.000Z"),
+    { kind: "wait", entry: { callId: "r/heard", tool: "sleep", inbox: null, mode: null, deadline: "2026-10-25T00:00:00.000Z" } },
+  ],
+  ["sleep until a past time", [], sleepUntil("2026-10-24T08:00:00.000Z"), { kind: "slept" }],
+  ["sleep until now", [], sleepUntil("2026-10-24T09:00:00.000Z"), { kind: "slept" }],
+  ["sleep for 0 s", [], sleepFor(0), { kind: "slept" }],
+])("decideWait: %s", (_name, records, request, decision) => {
+  const w = fold(...START, ...records);
+  expect(decideWait(w, "r/heard", request, AT9)).toEqual(decision as never);
+});
+
+test("decideWait refuses a sleep until a time that isn't a record time", () => {
+  expect(() => decideWait(fold(...START), "r/nap", sleepUntil("tomorrow"), AT9)).toThrow(
+    "sleep until must be a UTC time such as 2026-10-20T14:02:11.123Z, found 'tomorrow'",
+  );
+});
+
+test("decideWait reuses a held take or sleep call", () => {
+  const answered = fold(...START, takeWait("heard", "one"), send("msgs", "x"), new NodeWokenRecord("heard"));
+  expect(decideWait(answered, "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3], closed: false } });
+  const all = fold(...START, takeWait("heard", "all"), send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs"), new NodeWokenRecord("heard"));
+  expect(decideWait(all, "r/heard", takeAll(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3, 4], closed: true } });
+  // take: one with a later unread event: the inbox is closed, but not drained.
+  const later = fold(...START, takeWait("heard", "one"), send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs"), new NodeWokenRecord("heard"));
+  expect(decideWait(later, "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3], closed: false } });
+  const byClose = fold(...START, takeWait("heard", "one"), new InboxClosedRecord("msgs"), new NodeWokenRecord("heard"));
+  expect(decideWait(byClose, "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
+  const timedOut = fold(...START, takeWait("heard", "one", "msgs", T9), new NodeWokenRecord("heard", ["r/heard"]), send("msgs", "x"));
+  expect(decideWait(timedOut, "r/heard", takeOne(60), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: false } });
+  const slept = fold(...START, sleepWait("heard", T9), new NodeWokenRecord("heard", ["r/heard"]));
+  expect(decideWait(slept, "r/heard", sleepFor(60), AT9)).toEqual({ kind: "slept" });
+});
+
+test("decideWait refuses a call still open or one that isn't a take or sleep", () => {
+  expect(() => decideWait(fold(...START, takeWait("heard", "one")), "r/heard", takeOne(), AT9)).toThrow(
+    "call 'r/heard' is still open; its node can't decide its wait",
+  );
+  const ask = fold(...START, pending("heard", 1, "r/heard"));
+  expect(() => decideWait(ask, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' isn't a take or sleep (tool 'ask')");
+  const cancelled = fold(...START, takeWait("heard", "one"), new RunCancelledRecord());
+  expect(() => decideWait(cancelled, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' was closed (cancelled)");
 });

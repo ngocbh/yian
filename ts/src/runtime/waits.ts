@@ -3,13 +3,16 @@
  * `inspectRun` and the run index, so each reads the same waits from the same records; run status
  * stays with the run scan (`runtime/run_index.ts`).
  *
- * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/start (the
- * START id).
+ * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/base
+ * (`WaitRequest`), nodes/start (the START id), diagnostics.
  * Never imports: runtime/state, engine, run.
  */
 
+import { reprText } from "../diagnostics.ts";
+import type { WaitRequest } from "../nodes/base.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import {
+  formatRecordTime,
   InboxClosedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -26,7 +29,9 @@ import {
   RunResumedRecord,
   RunStoppedRecord,
   RunWaitingRecord,
+  recordTimeMs,
   type TakeCommit,
+  type WaitEntry,
 } from "./log.ts";
 
 export { CLOSE_REASONS, type CloseReason } from "../events.ts";
@@ -370,7 +375,7 @@ export function availableUnread(w: WaitsState, inbox: string): readonly number[]
 
 /** Return a call's deadline in epoch milliseconds, or `null` when it has none. */
 function deadlineMs(call: Call): number | null {
-  return call.deadline === null ? null : Date.parse(call.deadline);
+  return call.deadline === null ? null : recordTimeMs(call.deadline, "deadline");
 }
 
 /**
@@ -422,4 +427,64 @@ export function waitInfos(w: WaitsState): readonly WaitInfo[] {
     }
   }
   return infos;
+}
+
+/** What a take or sleep does when its node commits: take now, end the sleep, or wait. */
+export type WaitDecision =
+  | { readonly kind: "take"; readonly commit: TakeCommit }
+  | { readonly kind: "slept" }
+  | { readonly kind: "wait"; readonly entry: WaitEntry };
+
+/**
+ * Decide the take or sleep `request` of call `callId` when its node commits, at `nowMs`.
+ *
+ * A call the node already waited on (a restart after its `node_woken`) is reused: an answered take
+ * takes its assigned events, closed when its inbox is closed with nothing left to read; a timed-out
+ * take takes nothing; a timed-out sleep is done. A new take reads the unread events no other
+ * pending take commit holds: `take: one` takes the oldest, `take: all` takes them all, closed when
+ * that drains a closed inbox; with none, a closed inbox or a zero timeout takes nothing at once,
+ * and otherwise the node waits, until `nowMs` plus the timeout when there is one. A new sleep waits
+ * until its `until` or `nowMs` plus its seconds, or is done when that time isn't after `nowMs`.
+ *
+ * @throws RangeError when `callId` is registered but still open, closed, or not a take or sleep
+ *   call, or a sleep's `until` isn't a record time.
+ */
+export function decideWait(w: WaitsState, callId: string, request: WaitRequest, nowMs: number): WaitDecision {
+  const held = w.calls.get(callId);
+  if (held !== undefined) return heldDecision(w, held);
+  if (request.tool === "take") {
+    const inbox = w.inboxes.get(request.inbox);
+    const closed = inbox?.closed ?? false;
+    const available = availableUnread(w, request.inbox);
+    if (available.length > 0) {
+      const events = request.mode === "one" ? available.slice(0, 1) : [...available];
+      return take(request.inbox, events, closed && events.length === available.length);
+    }
+    if (closed || (request.timeoutSeconds !== null && request.timeoutSeconds <= 0)) return take(request.inbox, [], closed);
+    const deadline = request.timeoutSeconds === null ? null : formatRecordTime(nowMs + request.timeoutSeconds * 1000);
+    return { kind: "wait", entry: { callId, tool: "take", inbox: request.inbox, mode: request.mode, deadline } };
+  }
+  const deadline =
+    request.until !== null ? request.until : formatRecordTime(nowMs + request.forSeconds! * 1000);
+  if (recordTimeMs(deadline, "sleep until") <= nowMs) return { kind: "slept" };
+  return { kind: "wait", entry: { callId, tool: "sleep", inbox: null, mode: null, deadline } };
+}
+
+/** Return the decision a held take or sleep call has already reached. */
+function heldDecision(w: WaitsState, call: Call): WaitDecision {
+  if (call.tool !== "take" && call.tool !== "sleep") {
+    throw new RangeError(`call ${reprText(call.callId)} isn't a take or sleep (tool ${reprText(call.tool)})`);
+  }
+  if (call.state === "open") throw new RangeError(`call ${reprText(call.callId)} is still open; its node can't decide its wait`);
+  if (call.state === "closed") throw new RangeError(`call ${reprText(call.callId)} was closed (${call.closedReason})`);
+  if (call.tool === "sleep") return { kind: "slept" };
+  const inbox = call.inbox!;
+  if (call.state === "timed_out") return take(inbox, [], false);
+  const closed = (w.inboxes.get(inbox)?.closed ?? false) && availableUnread(w, inbox).length === 0;
+  return take(inbox, [...call.assigned], closed);
+}
+
+/** Return a take decision. */
+function take(inbox: string, events: readonly number[], closed: boolean): WaitDecision {
+  return { kind: "take", commit: { inbox, events, closed } };
 }

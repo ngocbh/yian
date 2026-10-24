@@ -59,8 +59,8 @@ import {
 import { CompiledFlow, Edge, Flow, FlowOutput, validateGrowthMetadata } from "./model.ts";
 
 // Fields common to every concrete Node. Most are emitted below, `kind` among them; title is emitted
-// only for HUMAN_INPUT because other node kinds use it as display metadata, and types only when
-// non-empty.
+// only for HUMAN_INPUT and a TOOL `ask`, which send it to the person asked, because other nodes use
+// it as display metadata; types only when non-empty.
 // Keeping both sets explicit is the fail-loud field policy.
 const COMMON_NODE_FIELDS = [
   "id",
@@ -867,6 +867,10 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       // Left out when empty, as for every tool but an ask with an `output:`.
       if (tool.answerSchema.length > 0) {
         manifest.answer_schema = canonicalValue(tool.answerSchema, ctx, `${path}.answerSchema`);
+      }
+      // An ask sends its title to the host; left out when unset, as for every other tool.
+      if (tool.builtin === "ask" && tool.title !== null) {
+        manifest.title = canonicalValue(tool.title, ctx, `${path}.title`);
       }
       break;
     }

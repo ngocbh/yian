@@ -2873,16 +2873,16 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.models`, `host.steering`, `host.memory` or `host.stop`.
+ * `pending`, with no `host.steering`, `host.memory` or `host.stop`.
  */
-function sweepable(case_: Case): boolean {
+export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
   return (
     case_["kind"] === "run" &&
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["models", "steering", "memory", "stop"].some((key) => Object.hasOwn(spec, key))
+    !["steering", "memory", "stop"].some((key) => Object.hasOwn(spec, key))
   );
 }
 
@@ -2961,9 +2961,13 @@ export async function crashSweep(
     beforeResume(log);
     let resumed: RunResult;
     try {
-      // The cut run's `context`, which the log doesn't hold, as a `resume` case passes it again.
+      // The cut run's `context`, host key and header values, which the log doesn't hold, as a
+      // `resume` case passes them again.
       const context = args.context === undefined ? {} : { context: args.context };
-      resumed = await resumeFlow({ ...hooks, ...context });
+      const { api_key: apiKey, headers } = (args.llmConfig ?? {}) as Pick<ResumeFlowOptions, "headers"> & {
+        api_key?: string;
+      };
+      resumed = await resumeFlow({ ...hooks, ...context, apiKey, headers });
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }

@@ -40,6 +40,7 @@ import {
   runCli,
   same,
   setUp,
+  sweepable,
 } from "./conformance.ts";
 import type { Case, CaseContext, Kind, KindRunner } from "./conformance.ts";
 import { lintSchema, loadSchema, validate } from "./schema.ts";
@@ -1660,6 +1661,49 @@ expect:
     const ctx = setUp(case_, join(CASES, "..", "fixtures"));
     made.push(ctx.dir);
     await crashSweep(case_, ctx);
+  });
+
+  test("a host.models case is swept: each cut resumes with the replies after it put back, and passes", async () => {
+    // The agent's first reply calls `lookup`, its second answers. A cut after the first model_call
+    // replays that reply and takes the second from the script again; a cut before it takes both.
+    const text = `kind: run
+flow: |
+  id: m
+  name: m
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Look up x."
+  output: \${research.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {q: {type: string}}, required: [q]}
+      results:
+      - return: X1
+  models:
+    research:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: found X1}]}
+expect:
+  output: {status: succeeded, output: found X1}
+`;
+    const case_ = prepare(checkCase(readCase(text)));
+    expect(sweepable(case_)).toBe(true);
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    expect(cuts.length).toBeGreaterThan(0);
   });
 
   test("fails the strong oracle when a recorded value changes before the resume", async () => {

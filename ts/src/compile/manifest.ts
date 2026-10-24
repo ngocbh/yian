@@ -48,6 +48,7 @@ import { canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.
 import {
   canonicalUnionOrder,
   FileRef,
+  InboxRef,
   isList,
   isRecord,
   jsTypeName,
@@ -493,6 +494,10 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
     // A partial LOOP driver's default for an omitted `file` field encodes as its JSON form.
     const fields = { uri: value.uri, mime: value.mime, name: value.name };
     return mappingManifest(Object.entries(fields), value, ctx, path, canonicalValue);
+  }
+  if (InboxRef.isInboxRef(value)) {
+    // A partial LOOP driver's default for an omitted inbox field encodes as its JSON form.
+    return mappingManifest([["inbox", value.inbox]], value, ctx, path, canonicalValue);
   }
   if (isList(value)) return { items: canonicalSequence(value, ctx, path), type: "list" };
   if (isRecord(value)) return mappingManifest(Object.entries(value), value, ctx, path, canonicalValue);

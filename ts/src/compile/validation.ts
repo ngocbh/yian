@@ -19,6 +19,7 @@
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
 import {
   type Bound,
   buildValueAs,
@@ -450,7 +451,9 @@ function relateFields(inferred: Type, declared: Type): TypeRelation {
  *
  * - `${input.X}` closed-checks against the flow's declared inputs.
  * - `${<node>.output[.X]}` (node-first) checks against real node ids; the second segment MUST
- *   be the literal `output` (the syntactic discriminator).
+ *   be the literal `output` (the syntactic discriminator), or `new_messages` for a node whose
+ *   pool name `<node>.new_messages` the caller lists among `validTargets` (an AGENT, where its
+ *   new messages may be read).
  * - `${system.X}` is the strict clock ambient namespace; each ambient is a scalar, so a field
  *   read below it is an error.
  * - `extraHeads` is a per-call set of body-local scopes (e.g. MAP's `${item}`).
@@ -501,6 +504,14 @@ export function classifyPath(
   if (validTargets.has(head)) {
     // The 1-segment form `${<node>}` is an error (must say `<node>.output[.path]`).
     if (parts.length < 2) return `${ref} must be ${head}.output[.path]`;
+    // An AGENT's second value: the caller lists `<node>.new_messages` for each node it may be read from.
+    if (parts[1] === NEW_MESSAGES) {
+      if (validTargets.has(messagesKey(head))) return null;
+      return (
+        `${ref} reads new_messages, which only an AGENT node has, from a node input, flow output or ` +
+        `flow assert; node ${reprText(head)} isn't one there`
+      );
+    }
     // The second segment MUST be the literal `output` (the discriminator).
     if (parts[1] !== "output") {
       return (

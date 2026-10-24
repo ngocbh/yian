@@ -61,6 +61,7 @@ import {
   setField,
   type Type,
   TypeCheckError,
+  type TypedValue,
   type Value,
   type ValueRecord,
   writeAsJson,
@@ -1004,6 +1005,12 @@ export abstract class Node {
    */
   readonly wakesWithoutWorker: boolean = false;
   /**
+   * Declares "my success also commits the messages my evaluation added" (AGENT): the engine writes
+   * a messages commit after my output commit, from `messageSteps`, and the reducer rebuilds its
+   * value with `rebuildMessages`.
+   */
+  readonly producesMessages: boolean = false;
+  /**
    * Declares "I read the host's steering inbox": the evaluator supplies steering only when the
    * run boundary injected it and this is set. Writable: AGENT sets it from its `steerable:` flag.
    */
@@ -1249,6 +1256,27 @@ export abstract class Node {
    */
   skippedOutputTarget(): string {
     return this.commitAs ?? this.id;
+  }
+
+  /**
+   * Return the `n`s (from 1) of the steps, among `steps` (this node's recorded steps across its
+   * starts, in order), that make up its new messages, ascending. Pure: the reducer calls it on
+   * every append and replay.
+   *
+   * @throws TypeError for a node that doesn't produce messages.
+   */
+  messageSteps(_steps: readonly Readonly<JsonObject>[]): number[] {
+    throw new TypeError(`node ${reprText(this.id)} produces no messages`);
+  }
+
+  /**
+   * Rebuild this node's new messages from `steps`, the bodies `messageSteps` picked, in order, and
+   * `output`, the value its output commit holds, as a typed value. Pure and deterministic.
+   *
+   * @throws TypeError for a node that doesn't produce messages.
+   */
+  rebuildMessages(_steps: readonly Readonly<JsonObject>[], _output: TypedValue | null): TypedValue {
+    throw new TypeError(`node ${reprText(this.id)} produces no messages`);
   }
 
   /**

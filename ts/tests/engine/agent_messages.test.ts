@@ -11,12 +11,14 @@ import {
   MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
 import {
-  checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, toModelMessage,
+  checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, messageSteps,
+  rebuildMessages, toModelMessage,
 } from "../../src/nodes/agent/messages.ts";
-import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { messagesKey, NEW_MESSAGES, VariablePool } from "../../src/typesys/pool.ts";
 import { newMessagesType, typeFor } from "../../src/typesys/types.ts";
-import { FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
+import { buildValue, buildValueAs, FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import { loadSchema } from "../schema.ts";
 
 const FILE = { uri: "media/abc.png", mime: "image/png", name: null };
@@ -267,4 +269,141 @@ test("${x.new_messages[.path]} reads the pool name x.new_messages", () => {
   expect(pool.resolve("x", ["new_messages"])).toEqual(said);
   expect(pool.resolve("y", ["new_messages"])).toBeNull();
   expect(pool.resolve("x", ["new_messages", "role"])).toBeNull();
+});
+
+/** A chat `model_call` step whose reply arrived, as `AgentSteps` writes it. */
+const replyStep = (message: ModelMessage, extra: Record<string, unknown> = {}): JsonObject =>
+  ({ kind: "model_call", purpose: "chat", output: message.toJSON(), finish: "stop", ...extra }) as JsonObject;
+/** A `tool_result` step. */
+const resultStep = (callId: string, output: string, extra: Record<string, unknown> = {}): JsonObject =>
+  ({ kind: "tool_result", call_id: callId, started_at: null, output, is_error: false, ...extra }) as JsonObject;
+/** An assistant reply calling `look` once per id. */
+const calling = (...ids: string[]) =>
+  new ModelMessage({ role: "assistant", parts: ids.map((id) => new ToolCallPart({ id, name: "look", arguments: { q: id } })) });
+const saying = (text: string) => new ModelMessage({ role: "assistant", parts: [new TextPart(text)] });
+const callPart = (id: string) => ({ type: "tool_call", id, name: "look", arguments: { q: id } });
+/** A tool result part as a `Message` holds it: `is_error` only when set. */
+const resultPart = (id: string, content: string, isError = false) =>
+  ({ type: "tool_result", call_id: id, name: "look", content, ...(isError ? { is_error: true } : {}) });
+
+test("AGENT produces messages through the module's functions", () => {
+  const node = new AgentNode("chat");
+  expect(node.producesMessages).toBe(true);
+  const steps = [replyStep(saying("hi"))];
+  expect(node.messageSteps(steps)).toEqual([1]);
+  expect(node.rebuildMessages(steps, null).toObject()).toEqual([{ role: "assistant", parts: [{ type: "text", text: "hi" }] }]);
+});
+
+describe("an AGENT's new messages", () => {
+  const steps: JsonObject[] = [
+    { kind: "llm_config", llm_config: {} }, // 1: not the loop's
+    { kind: "model_call", purpose: "chat", output: null, error: { kind: "rate_limit", message: "x" }, retry_in: 1 }, // 2: a failed attempt
+    replyStep(calling("a", "b")), // 3
+    resultStep("b", "B"), // 4: results are recorded in finish order
+    resultStep("a", "A"), // 5
+    replyStep(saying("done")), // 6
+    { kind: "model_call", purpose: "structured_fallback", output: saying("nope").toJSON() }, // 7: an invalid structured attempt
+    { kind: "model_call", purpose: "structured_fallback", output: saying('{"a":1}').toJSON() }, // 8: the accepted one
+  ] as JsonObject[];
+  const output = buildValue({ a: 1n });
+  const answer = { role: "assistant", parts: [{ type: "text", text: '{"a":1}' }] };
+
+  test("messageSteps picks each chat reply that arrived, every tool result and the accepted structured call", () => {
+    expect(messageSteps(steps)).toEqual([3, 4, 5, 6, 8]);
+    expect(messageSteps(steps.slice(0, 6))).toEqual([3, 4, 5, 6]);
+    expect(messageSteps([])).toEqual([]);
+  });
+
+  test("rebuildMessages gives each reply, its results in call order, then the structured value as JSON", () => {
+    const picked = messageSteps(steps).map((n) => steps[n - 1]!);
+    const value = rebuildMessages(picked, output);
+    expect(value.kind).toBe(ValueKind.LIST_OBJECT);
+    const messages = value.toObject() as Message[];
+    expect(messages).toEqual([
+      { role: "assistant", parts: [callPart("a"), callPart("b")] },
+      { role: "tool", parts: [resultPart("a", "A")] },
+      { role: "tool", parts: [resultPart("b", "B")] },
+      { role: "assistant", parts: [{ type: "text", text: "done" }] },
+      answer,
+    ] as unknown as Message[]);
+    checkConversation(messages);
+  });
+
+  test("a tool-less structured agent's messages are its value as JSON; a native reply's output-tool call never shows", () => {
+    const native = { kind: "model_call", purpose: "structured_native", output: calling("out").toJSON() } as JsonObject;
+    expect(messageSteps([native])).toEqual([1]);
+    expect(rebuildMessages([native], output).toObject()).toEqual([answer]);
+    const text = buildValueAs(typeFor("str", new Map()), "plain");
+    expect(rebuildMessages([native], text).toObject()).toEqual([{ role: "assistant", parts: [{ type: "text", text: '"plain"' }] }]);
+  });
+
+  test("a structured call that isn't the last model_call, failed, or was cut is not picked", () => {
+    const cut = { kind: "model_call", purpose: "structured_native", output: saying("").toJSON(), finish: "interrupted" } as JsonObject;
+    const failed = { kind: "model_call", purpose: "structured_native", output: null, error: { kind: "x", message: "y" } } as JsonObject;
+    expect(messageSteps([steps[7]!, cut])).toEqual([]);
+    expect(messageSteps([steps[7]!, failed])).toEqual([]);
+  });
+
+  test("the accepted structured call needs the output value", () => {
+    expect(() => rebuildMessages([steps[7]!], null)).toThrow(
+      new RangeError("the accepted structured call of an AGENT needs its output value"),
+    );
+  });
+
+  test("a call with no result is dropped, and a message left empty with it", () => {
+    const unparsed = new ModelMessage({
+      role: "assistant",
+      parts: [new TextPart("trying"), new ToolCallPart({ id: "z", name: "look", arguments: null, rawArguments: "{oops" })],
+    });
+    const messages = rebuildMessages([replyStep(unparsed), replyStep(calling("q"), { finish: "interrupted" })], null).toObject();
+    expect(messages).toEqual([{ role: "assistant", parts: [{ type: "text", text: "trying" }] }]);
+  });
+
+  test("closer results (skipped, crashed) count as results", () => {
+    const messages = rebuildMessages([replyStep(calling("a")), resultStep("a", "x", { is_error: true, closed: "crashed" })], null)
+      .toObject() as Message[];
+    expect(messages[1]).toEqual({ role: "tool", parts: [resultPart("a", "x", true)] } as unknown as Message);
+  });
+
+  test("ids repeated across replies pair within their reply", () => {
+    const messages = rebuildMessages(
+      [replyStep(calling("c0")), resultStep("c0", "1"), replyStep(calling("c0")), resultStep("c0", "2"), replyStep(saying("ok"))],
+      null,
+    ).toObject() as Message[];
+    expect(messages.filter((m) => m.role === "tool").map((m) => (m.parts[0] as { content: string }).content)).toEqual(["1", "2"]);
+    checkConversation(messages);
+  });
+
+  test("inline media (a run with no folder) is dropped; file media is kept", () => {
+    const media = new ModelMessage({
+      role: "assistant",
+      parts: [
+        new TextPart("look"),
+        new MediaPart({ mime: "image/png", data: "iVBORw0KGgo=" }),
+        new MediaPart({ mime: "image/png", file: { uri: "media/abc.png", mime: "image/png" } }),
+      ],
+    });
+    const inline = new ModelMessage({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: "iVBORw0KGgo=" })] });
+    const messages = rebuildMessages([replyStep(media), replyStep(inline)], null).toObject() as Message[];
+    expect(messages).toEqual([
+      {
+        role: "assistant",
+        parts: [
+          { type: "text", text: "look" },
+          { type: "media", mime: "image/png", file: new FileRef({ uri: "media/abc.png", mime: "image/png", name: null }) },
+        ],
+      },
+    ] as unknown as Message[]);
+  });
+
+  test("a reply keeps its author and protocol", () => {
+    const authored = new ModelMessage({ role: "assistant", author: "ada", protocol: "anthropic_messages", parts: [new TextPart("hi")] });
+    expect(rebuildMessages([replyStep(authored)], null).toObject()).toEqual([
+      { role: "assistant", author: "ada", protocol: "anthropic_messages", parts: [{ type: "text", text: "hi" }] },
+    ]);
+  });
+
+  test("no steps give the empty list", () => {
+    expect(rebuildMessages([], null).toObject()).toEqual([]);
+  });
 });

@@ -134,8 +134,15 @@ test("a new node starts with empty fields and every trait off", () => {
     node.needsSteering,
     node.needsModels,
     node.derived,
-  ]).toEqual(Array(12).fill(false));
+    node.producesMessages,
+  ]).toEqual(Array(13).fill(false));
   expect([node.itemSourceKey, node.growDepthDelta]).toEqual([null, null]);
+});
+
+test("a node that produces no messages refuses the message methods", () => {
+  const node = new FuncNode("n");
+  expect(() => node.messageSteps([])).toThrow(new TypeError("node 'n' produces no messages"));
+  expect(() => node.rebuildMessages([], null)).toThrow(new TypeError("node 'n' produces no messages"));
 });
 
 test("node rejects an origin that isn't an OriginRef", () => {

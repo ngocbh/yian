@@ -1,5 +1,33 @@
 kind: load
+rules: [messages]
 flow: |
+  id: f
+  name: f
+  input:
+    d: !date
+  defs:
+    items:
+      nodes:
+        c:
+          kind: code
+          output: list(str)
+          code: |
+            return ["a", "b"]
+      output: ${c.output}
+  nodes:
+    w:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: '2026-13-01'
+    after:
+      kind: code
+      depends_on: [w]
+      output: int
+      code: |
+        return 1
+  output: ${after.output}
+python_flow: |
   id: f
   name: f
   input:
@@ -25,6 +53,14 @@ flow: |
         return 1
   output: ${after.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''w'' (tool_id: sleep) input ''until'': must be a date or datetime, got "2026-13-01"; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`'
+      frames:
+      - label: flow.yaml
+        range: [19, 14, 19, 26]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

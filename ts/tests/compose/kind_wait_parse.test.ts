@@ -21,7 +21,7 @@ import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
-import { assembled, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, type CaseRow, loadError, runCase } from "./declarations.ts";
 
 const FLOW = `nodes:
   hold:
@@ -129,13 +129,8 @@ test("build passes the title to the node", () => {
 
 test.each<CaseRow>([
   // tests/compose/test_map_wait_source_types.py
-  { id: "load-leaves/compose_map_wait_source_types__call_text_under_until_is_not_a_directive", call: parsedNodes },
-  { id: "load-leaves/compose_map_wait_source_types__integer_until_literal", call: parsedNodes },
-  { id: "load-leaves/compose_map_wait_source_types__month_13_text_until_is_not_a_date", call: parsedNodes },
-  { id: "load-leaves/compose_map_wait_source_types__null_until_is_empty", call: parsedNodes },
-])("parseNodes: $id", runCase);
-
-test.each<CaseRow>([
-  // tests/compose/test_map_wait_source_types.py
+  { id: "load-leaves/compose_map_wait_source_types__integer_until_literal", call: assembled },
+  { id: "load-leaves/compose_map_wait_source_types__month_13_text_until_is_not_a_date", call: assembled },
+  { id: "load-leaves/compose_map_wait_source_types__null_until_is_empty", call: assembled },
   { id: "load-leaves/compose_map_wait_source_types__literal_until_check_in_an_inline_body", call: assembled },
 ])("assemble: $id", runCase);

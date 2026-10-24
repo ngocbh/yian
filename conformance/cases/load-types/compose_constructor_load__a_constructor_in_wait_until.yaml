@@ -1,5 +1,23 @@
 kind: load
+rules: [messages]
 flow: |
+  id: w
+  name: w
+  typedefs:
+    Buy: {action: Literal(buy), conviction: float}
+    Sell: {action: Literal(sell), price: float}
+    Decision: Union(Buy, Sell)
+    Size: Literal(s, m, l)
+  input:
+    when: !date
+  nodes:
+    w:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: ${Size(input.when)}
+  output: ${w.output}
+python_flow: |
   id: w
   name: w
   typedefs:
@@ -15,6 +33,14 @@ flow: |
       until: ${Size(input.when)}
   output: ${w.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is Literal(l, m, s); write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      frames:
+      - label: flow.yaml
+        range: [15, 14, 15, 33]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

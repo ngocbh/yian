@@ -11,6 +11,23 @@ flow: |
       code: |
         return "2026-01-01T00:00:00Z"
     settle:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: ${clock.output}
+  output: ${settle.output}
+python_flow: |
+  id: wait_refs
+  name: wait_refs
+  input:
+    deadline: !datetime
+  nodes:
+    clock:
+      kind: code
+      output: datetime
+      code: |
+        return "2026-01-01T00:00:00Z"
+    settle:
       kind: wait
       until: ${clock.output}
   output: ${settle.output}

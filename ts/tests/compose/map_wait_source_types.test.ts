@@ -26,11 +26,10 @@
  * `over: 2026-01-01T10:00:00` are read as text (Python: "a date", "a date and time"), and the
  * unquoted `until:` dates load as text that parses as a date.
  *
- * Pinned elsewhere: `kind_map_parse.test.ts` and `kind_wait_parse.test.ts` pin this file's nine
- * parse-stage cases (`compose_map_wait_source_types__{date_over_literal,int_over_literal,
- * null_over_is_empty,quoted_call_over_is_text,call_text_under_until_is_not_a_directive,
- * integer_until_literal,month_13_text_until_is_not_a_date,null_until_is_empty,
- * literal_until_check_in_an_inline_body}`).
+ * Pinned elsewhere: `kind_map_parse.test.ts` and `kind_wait_parse.test.ts` pin this file's eight
+ * literal cases (`compose_map_wait_source_types__{date_over_literal,int_over_literal,
+ * null_over_is_empty,quoted_call_over_is_text,integer_until_literal,
+ * month_13_text_until_is_not_a_date,null_until_is_empty,literal_until_check_in_an_inline_body}`).
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -626,7 +625,6 @@ test.each(["over", "until"])("a case branch narrows the source (%s)", (field) =>
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  { id: "load-leaves/compose_map_wait_source_types__int_until_reference", call: assembled },
   {
     id: "load-map-call/compose_map_wait_source_types__call_directive_over_with_a_str_output",
     call: assembled,

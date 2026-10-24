@@ -1,6 +1,7 @@
 /**
- * The inbox, call and run-status state a run's records build. One fold maintains it for the
- * reducer, `inspectRun` and the run index, so each reads the same waits from the same records.
+ * The inbox and call state a run's records build. One fold maintains it for the reducer,
+ * `inspectRun` and the run index, so each reads the same waits from the same records; run status
+ * stays with the run scan (`runtime/run_index.ts`).
  *
  * Knows about: runtime/log (record types), events (`CloseReason`).
  * Never imports: runtime/state, engine, run.
@@ -75,10 +76,7 @@ export interface WaitInfo {
   readonly settled: boolean;
 }
 
-/**
- * The waits state a run's records build: the waiting set, the registered calls, the inboxes, and
- * the records-only facts a reader needs for the run's status.
- */
+/** The waits state a run's records build: the waiting set, the registered calls and the inboxes. */
 export class WaitsState {
   /** The waiting nodes, in `node_waiting` order. */
   readonly waiting = new Map<string, WaitingNode>();
@@ -93,20 +91,6 @@ export class WaitsState {
    * outcome); `null` before any.
    */
   lastFrontier: string | null = null;
-  /** The in-flight nodes and the seq that put each in flight (`node_started` or `node_woken`), in order. */
-  readonly starts = new Map<string, number>();
-  /** The seq of the last `run_stopped` since the last `run_resumed`, or `null`. */
-  lastStop: number | null = null;
-  /** Whether END succeeded. */
-  endSucceeded = false;
-  /** Whether a route made the terminal output unreachable. */
-  unreachable = false;
-  /** Whether a node failed. */
-  nodeFailed = false;
-  /** Whether a `run_failed` ended the run. */
-  runFailed = false;
-  /** Whether a `run_cancelled` ended the run. */
-  cancelled = false;
   /** @internal Whether the run-start input commit was read. */
   _inputsCommitted = false;
   /** @internal Each unsettled node's last `node_woken` seq. */

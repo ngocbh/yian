@@ -533,7 +533,7 @@ they are, except as the rules below say), and an empty payload is left out.
 | Record | Node | Payload fields |
 |---|---|---|
 | `run_started` | null | `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
-| `run_resumed` | null | `retry_node_ids`, `num_workers` |
+| `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls` (TS only) |
 | `run_stopped` (TS only) | null | `reason` (the reason's kind), `node_ids` |
 | `node_waiting` (TS only) | `node_id` | `call_ids`, `waits`, `steer_inbox` |
 | `node_woken` (TS only) | `node_id` | `timed_out` |
@@ -585,8 +585,8 @@ For example:
 - A take commit (TS schema 18) holds no `value` but `inbox`, `events` (the seqs of the send
   commits it consumed, in order) and `closed` (whether it saw the inbox closed); its node's
   success rebuilds the value from those sends.
-- `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits` and `timed_out`
-  are left out when empty or absent.
+- `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits`, `timed_out` and
+  `closed_calls` are left out when empty or absent.
 - Deadlines are times: a `node_waiting` wait entry's `deadline` and a `pending` step's
   `deadline` are left out.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from

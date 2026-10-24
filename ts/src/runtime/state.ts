@@ -4829,6 +4829,14 @@ function requirePristine(state: RunState): void {
     state.deferredPrune.size === 0 &&
     state.wiringOverrides.size === 0 &&
     state.inboxEvents.size === 0 &&
+    state.waits.waiting.size === 0 &&
+    state.waits.calls.size === 0 &&
+    state.waits.inboxes.size === 0 &&
+    state.waits.interrupts.size === 0 &&
+    state.waits.lastFrontier === null &&
+    !state.waits._inputsCommitted &&
+    state.waits._lastWoken.size === 0 &&
+    state.waits._pendingTakes.size === 0 &&
     state.runId === null &&
     state.flowFingerprint === null &&
     state.nextSequence === 0 &&

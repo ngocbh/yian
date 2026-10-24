@@ -825,14 +825,14 @@ export interface TakeCommit {
  * @throws TypeError when `take` isn't an object, the inbox isn't a string or `closed` isn't a
  *   boolean.
  * @throws RangeError when the inbox is empty, or the events aren't strictly increasing
- *   non-negative safe integers.
+ *   positive safe integers.
  */
 function validatedTake(take: unknown): TakeCommit {
   if (!isRecord(take)) throw new TypeError("take must be an object");
   const inbox = requireNonemptyString(take["inbox"], "take inbox");
   const events = take["events"];
-  if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0)) {
-    throw new RangeError("take events must be non-negative integers");
+  if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
+    throw new RangeError("take events must be positive integers");
   }
   const seqs = [...events] as number[];
   if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {

@@ -30,10 +30,10 @@ import {
   RunWaitingRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { prepareRecord, RunState } from "../../src/runtime/state.ts";
+import { prepareRecord, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
 import { eventBytes, logJson } from "../../src/typesys/json.ts";
-import { commitStartSuccess, flow, initializedAndStarted } from "./run_state_fixtures.ts";
+import { commitStartSuccess, flow, initializedAndStarted, startData } from "./run_state_fixtures.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
 const DEADLINE = "2026-10-24T09:00:00.000Z";
@@ -277,7 +277,13 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "a negative event",
     () => new PoolCommitRecord("e", "e", null, { take: { inbox: "m", events: [-1], closed: false } }),
     RangeError,
-    "take events must be non-negative integers",
+    "take events must be positive integers",
+  ],
+  [
+    "event seq 0, the run start",
+    () => new PoolCommitRecord("e", "e", null, { take: { inbox: "m", events: [0, 4], closed: false } }),
+    RangeError,
+    "take events must be positive integers",
   ],
   [
     "an empty inbox",
@@ -327,14 +333,10 @@ test("the record-time helpers are exported", () => {
 test("a fresh RunState holds an empty waits fold and no inbox events", () => {
   const state = new RunState(flow());
   expect(state.waits).toBeInstanceOf(WaitsState);
-  for (const map of [state.waits.waiting, state.waits.calls, state.waits.inboxes, state.waits.interrupts, state.waits.starts]) {
+  for (const map of [state.waits.waiting, state.waits.calls, state.waits.inboxes, state.waits.interrupts]) {
     expect(map.size).toBe(0);
   }
   expect(state.waits.lastFrontier).toBeNull();
-  expect(state.waits.lastStop).toBeNull();
-  expect([state.waits.endSucceeded, state.waits.unreachable, state.waits.nodeFailed, state.waits.runFailed, state.waits.cancelled]).toEqual([
-    false, false, false, false, false,
-  ]);
   expect(state.inboxEvents.size).toBe(0);
 });
 
@@ -406,4 +408,17 @@ test("the reducer refuses a resume closing a call no record opened", () => {
     `RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: expected [], found ["r/x/1"]`,
   );
   expect(prepareRecord(state, new RunResumedRecord([StartNode.ID], 2)).record).toEqual(new RunResumedRecord([StartNode.ID], 2));
+});
+
+test.each<[string, (state: RunState) => void]>([
+  ["a waiting node", (state) => state.waits.waiting.set("work", { seq: 3, callIds: ["r/work"], steerInbox: null })],
+  ["a call", (state) => state.waits.calls.set("r/work", {} as never)],
+  ["an inbox", (state) => state.waits.inboxes.set("msgs", { unread: [], closed: false, absorbing: [] })],
+  ["an interrupt", (state) => state.waits.interrupts.set("msgs", 4)],
+  ["a frontier kind", (state) => (state.waits.lastFrontier = "node_started")],
+  ["an inbox event", (state) => state.inboxEvents.set(4, null as never)],
+])("a run doesn't start on a state holding %s", (_name, dirty) => {
+  const state = new RunState(flow());
+  dirty(state);
+  expectError(() => prepareRunStarted(state, startData()), RangeError, "RunStarted requires a pristine RunState at sequence 0");
 });

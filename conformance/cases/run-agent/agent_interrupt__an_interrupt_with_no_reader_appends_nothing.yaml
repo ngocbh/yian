@@ -1,10 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupted_stream_reports_the_usage_received_so_far.
-# A text-free first chunk carries the input usage (as Anthropic streams it); an interrupt set
-# once chunk 3 (" big") is delivered keeps "hello big", and the one ModelCallFinished reports
-# the usage received so far (1000/1/1001) with no error.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_non_steerable_agent_never_calls_the_inbox.
+# An AGENT without `steer_inbox:` reads no inbox: an interrupt of the inbox during its model call
+# appends nothing (no `interrupted` record), and a send during it goes to the take after it.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 flow: |
   id: steer
   name: steer
@@ -14,37 +14,50 @@ flow: |
   nodes:
     chat:
       kind: agent
-      steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
       output: str
-  output: ${chat.output}
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+      depends_on: [chat]
+  output:
+    answer: ${chat.output}
+    heard: ${heard.output.events}
 run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - after:
-        model_call: 1
-        chunk: 3
-      interrupt: true
+  sends:
+  - {inbox: notes, event: for the take, after: {node: chat, model_call: 1, chunk: 1}}
+  - {interrupt: notes, after: {node: chat, model_call: 1, chunk: 1}}
   models:
     chat:
       agent:
-      - chunks:
-        - usage:
-            input_tokens: 1000
-            output_tokens: 1
-            total_tokens: 1001
-        - text: hello
-        - text: ' big'
-        - text: ' world'
-        - finish: stop
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Help the user.
 expect:
   output:
     status: succeeded
-    output: hello big
+    output: {answer: done, heard: [for the take]}
   trace:
   - - run_started
     - null
@@ -78,38 +91,52 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: for the take}
   - - node_step
     - chat
     - n: 1
       step:
-        finish: interrupted
+        finish: null
         kind: model_call
         model: gpt-5.5
         output:
           format: yian.message.v1
           parts:
-          - {text: hello big, type: text}
+          - {text: done, type: text}
           role: assistant
         purpose: chat
         request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
         response_id: null
-        usage: {cache_read_tokens: null, input_tokens: 1000, output_tokens: 1, reasoning_tokens: null}
+        usage: null
   - - pool_commit
     - chat
-    - value: hello big
+    - value: done
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9]}
+    - {key: chat.new_messages, steps: [10]}
   - - node_succeeded
     - chat
-    - {commit: 10, messages: 11}
+    - {commit: 11, messages: 12}
+  - [node_started, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [9]
+      inbox: notes
+  - - node_succeeded
+    - heard
+    - {commit: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: hello big
+    - value:
+        answer: done
+        heard: [for the take]
   - - node_succeeded
     - __end__
-    - {commit: 14}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -130,40 +157,38 @@ expect:
       node_id: chat
       provider: openai
       purpose: chat
-      usage:
-        cache_creation_tokens: null
-        cache_read_tokens: null
-        input_tokens: 1000
-        output_tokens: 1
-        reasoning_tokens: null
-        total_tokens: 1001
       n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: hello big
+      output: done
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        events: [for the take]
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: hello big
+      output:
+        answer: done
+        heard: [for the take]
   - - RunSucceeded
-    - output: hello big
+    - output:
+        answer: done
+        heard: [for the take]
   stream:
-  - chunk: hello
+  - chunk: done
     final: false
     key: text
     node_id: chat
     n: 1
     index: 0
-  - chunk: ' big'
-    final: false
-    key: text
-    node_id: chat
-    n: 1
-    index: 1
   - chunk: ''
     final: true
     key: text
     node_id: chat
     n: 1
-    index: 2
+    index: 1

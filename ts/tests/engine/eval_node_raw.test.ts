@@ -41,9 +41,8 @@
  * or a custom `run`) rejects `evalNode` with the reason, not a failure; a node that returns after
  * the abort still resolves.
  *
- * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
- * capability's checks on what the host returns, a steering fault the node catches still rejecting
- * `evalNode`, the first of two faults the node catches winning (and the only one `onFault` sees,
+ * TS-only: the `EvaluatedOutcome` constructor checks, a steer inbox fault the node catches still
+ * rejecting `evalNode`, the first of two faults the node catches winning (and the only one `onFault` sees,
  * when it is raised).
  */
 
@@ -61,7 +60,7 @@ import {
   type NodeResult,
   Output,
   Route,
-  type Steering,
+  type SteerInbox,
 } from "../../src/nodes/base.ts";
 import { BindingCollector } from "../../src/nodes/binding.ts";
 import { ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
@@ -71,8 +70,6 @@ import {
   EvaluationFailure,
   evalNode,
   rebuildNodeData,
-  requireSteering,
-  SteeringCapability,
 } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { drive, FailNode, FuncNode, nodeFlow, rejected, StreamNode } from "./run_state_fixtures.ts";
@@ -517,60 +514,11 @@ describe("EvaluatedOutcome checks its fields", () => {
   });
 });
 
-describe("requireSteering", () => {
-  const inbox: Steering = { interruptSignal: () => new AbortController().signal };
-
-  test("returns null or the steering itself", () => {
-    expect(requireSteering(null)).toBeNull();
-    expect(requireSteering(inbox)).toBe(inbox);
-  });
-
-  test("refuses anything without interruptSignal", () => {
-    const message = "steering must provide interruptSignal(nodeId), or be null";
-    for (const bad of [undefined, {}, "steering", { drain: () => [] }, { interruptSignal: true }]) {
-      expect(thrown(() => requireSteering(bad))).toEqual(new TypeError(message));
-    }
-  });
-});
-
-describe("the steering capability", () => {
-  /** Wrap a host whose interrupt signal is `interruptSignal`'s answer. */
-  function wrap(interruptSignal: (id: string) => unknown = () => new AbortController().signal): Steering {
-    return new SteeringCapability({ interruptSignal } as Steering, () => {}, () => false);
-  }
-
-  test("passes the node id and returns the host's signal", () => {
-    const signal = new AbortController().signal;
-    const seen: string[] = [];
-    const steering = wrap((id) => (seen.push(id), signal));
-
-    expect(steering.interruptSignal("n")).toBe(signal);
-    expect(seen).toEqual(["n"]);
-  });
-
-  test("an interrupt signal that isn't an AbortSignal is a capability fault", () => {
-    for (const bad of [true, null, {}]) {
-      const fault = thrown(() => wrap(() => bad).interruptSignal("n"));
-      expect(fault).toBeInstanceOf(CapabilityFault);
-      expect((fault as CapabilityFault).original).toEqual(
-        new TypeError("steering.interruptSignal must return an AbortSignal"),
-      );
-    }
-  });
-
-  test("a host throw is a capability fault keeping the original", () => {
-    const expected = new Error("inbox failed");
-    const fault = thrown(() => wrap(() => { throw expected; }).interruptSignal("n"));
-    expect(fault).toBeInstanceOf(CapabilityFault);
-    expect((fault as CapabilityFault).original).toBe(expected);
-  });
-
-  /** A host whose `interruptSignal` throws `error`. */
-  function failing(error: unknown): Steering {
-    return {
-      interruptSignal: () => {
-        throw error;
-      },
+describe("the steer inbox capability's faults", () => {
+  /** An engine steer inbox opener whose opening fails with `error`, as a capability fault. */
+  function failing(error: unknown): (inbox: string) => SteerInbox {
+    return () => {
+      throw new CapabilityFault(error);
     };
   }
 
@@ -592,17 +540,17 @@ describe("the steering capability", () => {
     }
   }
 
-  test("a node catching a steering fault still rejects evalNode with the host's error", async () => {
+  test("a node catching a steer inbox fault still rejects evalNode with the host's error", async () => {
     const expected = new Error("inbox failed");
     const node = new SteeredNode("work", (caps, nodeId) => {
       try {
-        caps.steering!.interruptSignal(nodeId);
+        caps.openSteerInbox!(nodeId);
       } catch {
         // Swallowed here; evalNode still reports it.
       }
     });
 
-    expect(await rejected(drive(node, { steering: failing(expected) }))).toBe(expected);
+    expect(await rejected(drive(node, { steerInbox: failing(expected) }))).toBe(expected);
   });
 
   test("of two faults the node catches, the first is thrown", async () => {
@@ -610,7 +558,7 @@ describe("the steering capability", () => {
     const node = new SteeredNode("work", (caps, nodeId) => {
       for (const fail of [
         () => caps.emitStream!(new StreamChunk({ nodeId, key: "output", chunk: "a" })),
-        () => caps.steering!.interruptSignal(nodeId),
+        () => caps.openSteerInbox!(nodeId),
       ]) {
         try {
           fail();
@@ -622,7 +570,7 @@ describe("the steering capability", () => {
 
     const error = await rejected(
       drive(node, {
-        steering: failing(new Error("inbox failed")),
+        steerInbox: failing(new Error("inbox failed")),
         emitStream: () => {
           throw first;
         },
@@ -638,7 +586,7 @@ describe("the steering capability", () => {
     const node = new SteeredNode("work", (caps, nodeId) => {
       for (const fail of [
         () => caps.emitStream!(new StreamChunk({ nodeId, key: "output", chunk: "a" })),
-        () => caps.steering!.interruptSignal(nodeId),
+        () => caps.openSteerInbox!(nodeId),
       ]) {
         try {
           fail();
@@ -653,14 +601,9 @@ describe("the steering capability", () => {
 
     expect(
       await rejected(
-        drive(node, { steering: failing(new Error("inbox failed")), emitStream, onFault: (original) => void seen.push(original) }),
+        drive(node, { steerInbox: failing(new Error("inbox failed")), emitStream, onFault: (original) => void seen.push(original) }),
       ),
     ).toBe(first);
     expect(seen).toEqual([first, "returned"]);
-  });
-
-  test("a capability fault from the host passes through", () => {
-    const carried = new CapabilityFault(new Error("inner"));
-    expect(thrown(() => wrap(() => { throw carried; }).interruptSignal("n"))).toBe(carried);
   });
 });

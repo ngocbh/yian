@@ -883,7 +883,6 @@ export class AgentNode extends Node {
       emitEvent: caps.emitEvent,
       baseSystemPrompt: options.baseSystemPrompt,
       skills: options.skills,
-      steering: caps.steering,
       steerInbox: options.steerInbox,
       renderSteer: this.steerRenderer() ?? undefined,
       models: options.models,
@@ -949,7 +948,7 @@ export class AgentNode extends Node {
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
    *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
-   *   tools, live sinks, skills, the steer inbox and the host's interrupt signal, model access and
+   *   tools, live sinks, skills, the steer inbox (with its interrupt signal), model access and
    *   steps.
    * @returns The model's answer, or Pending when a tool call waits for a later answer; null after a
    *   host interrupt when the declared output allows it (`Optional(...)`).

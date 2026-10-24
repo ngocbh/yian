@@ -117,7 +117,6 @@ test("only the final log-only runtime and run API remain", () => {
     learnable: true,
     tools: true,
     skills: true,
-    steering: true,
     context: true,
     signal: true,
     env: true,
@@ -126,7 +125,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(19);
+  expect(Object.keys(options)).toHaveLength(18);
   expect(run.runFlow.length).toBe(2);
   const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
@@ -139,7 +138,6 @@ test("only the final log-only runtime and run API remain", () => {
     memory: true,
     tools: true,
     skills: true,
-    steering: true,
     apiKey: true,
     headers: true,
     context: true,
@@ -150,7 +148,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(20);
+  expect(Object.keys(advanceOptions)).toHaveLength(19);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
@@ -227,9 +225,8 @@ test("the package root exports exactly its documented root list plus the memory 
   expect(m.parts).toEqual([]);
 });
 
-test("yian/run re-exports BackwardOutcome and Steering", () => {
+test("yian/run re-exports BackwardOutcome; Steering is gone, replaced by interrupt(run, inbox)", () => {
   expect(run.BackwardOutcome).toBe(BackwardOutcome);
-  // The type re-export, checked by `tsc`.
-  const steering = (inbox: base.Steering): run.Steering => inbox;
-  expect(typeof steering).toBe("function");
+  // `Steering` was a type, so its removal is checked by `tsc`: nothing here may name it.
+  expect(typeof run.interrupt).toBe("function");
 });

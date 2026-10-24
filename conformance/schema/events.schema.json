@@ -249,7 +249,7 @@
           "description": "The provider's own token count, or null when it reported none; a cut stream reports the usage received so far.",
           "oneOf": [{"$ref": "#/$defs/token_usage"}, {"type": "null"}]
         },
-        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or a steering interrupt cut its stream."}
+        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or an interrupt cut its stream."}
       }
     },
     "ToolCallStarted": {
@@ -276,7 +276,7 @@
         "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
         "name": {"type": "string", "description": "The tool's name."},
         "result": {"type": ["string", "null"], "description": "The tool's result text; null when it raised or was skipped."},
-        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, or \"interrupted\" for a call a steering interrupt skipped (the tool did not run); null when it returned."}
+        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, or \"interrupted\" for a call an interrupt skipped (the tool did not run); null when it returned."}
       }
     },
     "ReplayDegraded": {

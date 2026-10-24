@@ -24,7 +24,7 @@ import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
-import { CapabilityFault, type NodeCaps, type SteerInbox, type Steering } from "../base.ts";
+import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 import type { CloserReason } from "./memory.ts";
 import type { SteerRender } from "./messages.ts";
@@ -75,9 +75,7 @@ export interface AgentRunContext {
   readonly baseSystemPrompt: string;
   /** The granted skills served by `load_skill`, sorted by name. */
   readonly skills: readonly Skill[];
-  /** The host's interrupt signal; present only for a node with a steer inbox. */
-  readonly steering?: Steering;
-  /** The steer inbox this invocation reads; absent without `steer_inbox`. */
+  /** The steer inbox this invocation reads, and its interrupt signal; absent without `steer_inbox`. */
   readonly steerInbox?: SteerInbox;
   /** Renders each steer event to text (the agent's `render:`); absent for the default rendering. */
   readonly renderSteer?: SteerRender;
@@ -606,11 +604,6 @@ export function recordedResponse(step: ValueRecord): Response {
 /** Unwind before starting another external effect once the host stopped the invocation. */
 export function checkStopped(ctx: Pick<AgentRunContext, "signal">): void {
   ctx.signal?.throwIfAborted();
-}
-
-/** Return the signal the host aborts to interrupt this node; `undefined` without an inbox. */
-export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | undefined {
-  return ctx.steering?.interruptSignal(ctx.nodeId);
 }
 
 // --------------------------------------------------------------------------------------- //

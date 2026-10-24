@@ -469,7 +469,6 @@ describe("evalNode checks its arguments", () => {
       tools: new ToolSet(),
       steps: new NodeSteps(1, [], () => 1),
       signal: new AbortController().signal,
-      steering: { interruptSignal: () => new AbortController().signal },
       models: MODELS,
       onFault: () => {},
     };

@@ -2,8 +2,8 @@
  * The conformance runner's own unit tests: reading a case file, the format check, case values,
  * comparison, the case directory, selection and the report. Not a port of
  * `tests/test_conformance.py`, which `conformance.ts` is, except for
- * `test_steering_unreached_action_fails`, which no case can cover (a passing case reaches every
- * action). Not ported: `test_memory_expect_refuses_a_session_key` (TS yian has no session memory).
+ * `test_steering_unreached_action_fails` (on an interrupt item), which no case can cover (a
+ * passing case reaches every point). Not ported: `test_memory_expect_refuses_a_session_key` (TS yian has no session memory).
  * TS-only: an undeclared `expect.memory` key fails the case, a `host.memory.before` entry whose
  * backward call raises fails it, and the inbox and wait records' trace rows and masked deadlines.
  */
@@ -166,11 +166,8 @@ const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: te
 /** A `run` case whose `host.models.n.agent` script is the one `entry`. */
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
 const AT = "host.models.n.agent[0]";
-/** A `run` case whose `host.steering` gives node `chat` the `actions`. */
-const STEER = (actions: string) => `${RUN}host: {steering: {chat: ${actions}}}\n`;
-const MOVED = "`host.steering` steers moved to `host.sends` with `after:`";
-const SENDS = "`host.sends` items are {inbox, event, after?|down?}, {close} or {complete, output | error}";
-const COUNTS = "`host.steering.chat[0].after` counts must be ints from 1";
+const SENDS = "`host.sends` items are {inbox, event, after?|down?}, {close}, {interrupt, after?} or {complete, output | error}";
+const COUNTS = "`host.sends[0].after` counts must be ints from 1";
 const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
 const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
 const MEMORY_CONSUMER = "consumers go under `__memory__`, and `__memory__` holds only them";
@@ -322,8 +319,14 @@ describe("checkCase", () => {
       "[{inbox: m, event: a, down: true}]",
       "[{inbox: m, event: a, after: 1}]",
       "[{inbox: m, event: a, after: {node: chat, tool_call: 1}, down: true}]",
+      "[{interrupt: 1}]",
+      "[{interrupt: m, after: 1}]",
+      "[{interrupt: m, inbox: m}]",
+      "[{interrupt: m, down: true}]",
     ].map((items) => [`${RUN}host: {sends: ${items}}`, SENDS]),
     [`${RUN}host: {sends: [{inbox: m, event: a, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
+    [`${RUN}host: {sends: [{interrupt: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
+    [`${RUN}host: {sends: [{interrupt: m, after: {node: chat, tool_call: 0}}]}`, COUNTS],
     [
       `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, chunk: 1}}]}`,
       "`host.sends[0].after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
@@ -475,26 +478,9 @@ describe("checkCase", () => {
       MODEL(`{reply: ${TEXT_REPLY}, request: {messages: [], schema: 1}}`),
       `\`${AT}.request.schema\` must be a mapping`,
     ],
-    [`${RUN}host: {steering: 1}`, "`host.steering` must be a mapping"],
-    [STEER("{steer: [x]}"), "`host.steering` maps node ids to lists of actions"],
-    [STEER("[1]"), "`host.steering.chat[0]` must be a mapping"],
-    [STEER("[{steer: [x], interrupt: true}]"), MOVED],
-    [STEER("[{interrupt: true}, {steer: [x], after: {model_call: 1}}]"), MOVED],
-    [STEER("[{after: {model_call: 1}}]"), "`host.steering.chat[0].interrupt` is required"],
-    [STEER("[{interrupt: false}]"), "`host.steering.chat[0].interrupt` must be `true`"],
-    [STEER("[{stop: true}]"), "unknown key `host.steering.chat[0].stop`"],
-    [STEER("[{after: 1, interrupt: true}]"), "`host.steering.chat[0].after` must be a mapping"],
-    [
-      STEER("[{after: {chunk: 1}, interrupt: true}]"),
-      "`host.steering.chat[0].after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
-    ],
-    [
-      STEER("[{interrupt: true}, {after: {model_call: 1, tool_call: 1}, interrupt: true}]"),
-      "`host.steering.chat[1].after` is",
-    ],
-    [STEER("[{after: {tool_call: 0}, interrupt: true}]"), COUNTS],
-    [STEER("[{after: {model_call: true}, interrupt: true}]"), COUNTS],
-    [STEER("[{after: {model_call: 1, chunk: 1.0}, interrupt: true}]"), COUNTS],
+    [`${RUN}host: {steering: {}}`, "unknown key `host.steering`"],
+    [`${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, model_call: true}}]}`, COUNTS],
+    [`${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, model_call: 1, chunk: 1.0}}]}`, COUNTS],
     [`${RUN}host: {jitter: 0.5}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [`${RUN}host: {jitter: [1]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [`${RUN}host: {jitter: [-0.1]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
@@ -591,8 +577,7 @@ describe("checkCase", () => {
       "backward: [{feedback: f, api_key: k, headers: {}}]}]}}",
     `${RUN}host: {models: {__memory__: {"memory:a/b": []}, n: {compose: [], ` +
       "structured_retry: []}}}",
-    STEER("[{interrupt: true}, {after: {model_call: 1, chunk: 2}, interrupt: true}, " +
-      "{after: {tool_call: 1}, interrupt: true}]"),
+    `${RUN}host: {sends: [{interrupt: m, after: {node: chat, model_call: 1, chunk: 2}}, {interrupt: m}]}`,
     `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, model_call: 1, chunk: 2}}, {close: m}]}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, sends: [{inbox: m, event: a, down: true}]}`,
     EXPECT("events: [[ModelCallStarted, {node_id: a, n: 1}]], stream: [{node_id: a, n: 1, index: 0}]"),
@@ -979,17 +964,17 @@ describe("run", () => {
   }
 
   /**
-   * A `run` case of one AGENT `chat` reading steer inbox `notes` and replying `done`, whose
-   * `host.steering` gives it the `actions`, expecting the output `output`.
+   * A `run` case of one AGENT `chat` reading steer inbox `notes` and replying `done`, expecting the
+   * output `output`; a test adds `host.sends`.
    */
-  const STEERING_CASE = (actions: string, output: string) =>
+  const STEER_CASE = (output: string) =>
     "kind: run\nflow: |\n  id: steer\n  name: steer\n" +
     "  llm_config: {provider: openai, model: gpt-5.5}\n  input:\n    notes: !Inbox(str)\n" +
     "  nodes:\n    chat:\n      kind: agent\n      steer_inbox: ${input.notes}\n      tools: []\n" +
-    "      system_prompt: Help.\n      prompt: Go.\n      output: str\n" +
+    "      system_prompt: Help.\n      prompt: Go.\n      output: Optional(str)\n" +
     "  output: ${chat.output}\n" +
     "run: {num_workers: 0}\n" +
-    `host:\n  steering: {chat: ${actions}}\n  tools: {}\n` +
+    "host:\n  tools: {}\n" +
     "  models: {chat: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
     "parts: [{type: text, text: done}]}}]}}\n" +
     `expect: {output: {status: succeeded, output: ${output}}}\n`;
@@ -1067,17 +1052,38 @@ describe("run", () => {
   });
 
   // test_steering_unreached_action_fails
-  test("an action whose point the run never reaches fails the case after the comparisons", async () => {
-    const actions = "[{after: {model_call: 1}, interrupt: true}, {after: {tool_call: 1}, interrupt: true}]";
+  test("an interrupt item whose point the run never reaches fails the case after the comparisons", async () => {
+    const text = (output: string) =>
+      STEER_CASE(output).replace("host:\n", "host:\n  sends: [{interrupt: notes, after: {node: chat, tool_call: 1}}]\n");
     // A divergence shows first.
-    await expect(runCase(STEERING_CASE(actions, "other"))).rejects.toThrow("output differs");
-    const unreached = runCase(STEERING_CASE(actions, "done"));
+    await expect(runCase(text("other"))).rejects.toThrow("output differs");
+    const unreached = runCase(text("done"));
     await expect(unreached).rejects.toBeInstanceOf(CaseFailure);
-    await expect(unreached).rejects.toThrow("`host.steering.chat[1]` was never reached");
+    await expect(unreached).rejects.toThrow("`host.sends[0]` was never reached");
+  });
+
+  test("an interrupt item with `after` is delivered live when the run reaches it", async () => {
+    // At the end of the only reply, which arrived whole: the answer stands, the record is logged.
+    const text = STEER_CASE("done").replace("host:\n", "host:\n  sends: [{interrupt: notes, after: {node: chat, model_call: 1}}]\n");
+    await runCase(text);
+    const kinds = readFileSync(join(made.at(-1)!, "run.jsonl"), "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => decodeRecord(line).kind);
+    expect(kinds).toContain("interrupted");
+  });
+
+  test("an interrupt item without `after` is delivered while the run waits", async () => {
+    const text = PENDING_CASE("[{interrupt: notes}]", "null")
+      .replace("  nodes:\n", "  input:\n    notes: !Inbox(str)\n  nodes:\n")
+      .replace("      output: str\n", "      steer_inbox: ${input.notes}\n      output: Optional(str)\n")
+      // The woken agent honors the interrupt instead of calling the model again.
+      .replace(/ {6}- reply: \{[^\n]*text: done\}\]\}\n/, "");
+    await runCase(text);
   });
 
   test("a `host.sends` item whose point the run never reaches fails the case", async () => {
-    const text = STEERING_CASE("[]", "done").replace(
+    const text = STEER_CASE("done").replace(
       "host:\n",
       "host:\n  sends: [{inbox: notes, event: late, after: {node: chat, tool_call: 1}}]\n",
     );
@@ -1089,7 +1095,7 @@ describe("run", () => {
   test("a `host.sends` item with `after` is sent live when the run reaches it", async () => {
     // Sent at the first chunk of the first reply, so the agent reads it late, after that reply,
     // and calls the model again.
-    const text = STEERING_CASE("[]", "done")
+    const text = STEER_CASE("done")
       .replace("host:\n", "host:\n  sends: [{inbox: notes, event: late, after: {node: chat, model_call: 1, chunk: 1}}]\n")
       .replace(
         "{agent: [{reply:",

@@ -831,18 +831,6 @@ export class CapabilityFault extends Error {
   }
 }
 
-/**
- * The host's interrupt signal for a node reading a steer inbox, keyed by its node id.
- *
- * The id is the node's expanded id: an expanded LOOP or MAP node has its own id per occurrence.
- * The host aborts the node's interrupt signal to stop its loop and return now. The signal is
- * separate from the node's own `caps.signal`, so an interrupt never aborts a running tool.
- */
-export interface Steering {
-  /** The signal the host aborts to interrupt node `nodeId` (its expanded id). */
-  interruptSignal(nodeId: string): AbortSignal;
-}
-
 /** One read of a node's steer inbox: the `steer` step's `n`, the sends it consumed (their seqs) and their values, oldest first. */
 export interface SteerRead {
   readonly n: number;
@@ -937,8 +925,6 @@ export interface NodeCaps {
    * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
   readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
-  /** The host's interrupt signal; supplied to a node that declares `readsSteerInbox`. */
-  readonly steering?: Steering;
   /**
    * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
    * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.

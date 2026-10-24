@@ -27,7 +27,7 @@
  * `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownStore`, `MarkdownVersionMismatch` and
  * `markdownVersion` (`memory/storage/markdown`). `ProfileMemory` (`memory/profile`, Python's
  * `yian.memory.profile`, which Python's `yian` doesn't export) is here for hosts that keep the
- * profile document in their own `MarkdownStore`. `RunResult`, `BackwardOutcome` and `Steering` are
+ * profile document in their own `MarkdownStore`. `RunResult` and `BackwardOutcome` are
  * on `yian/run` (`run.ts`), as Python's `yian.run`. `Message`, `MessagePart`, `checkMessage`,
  * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
  * and the conversation a model route can send, are also on `yian/run`. `InboxRef`

@@ -45,7 +45,6 @@ import {
   Pending,
   Route,
   type SteerInbox,
-  type Steering,
 } from "../nodes/base.ts";
 import { copyValue, type SourceResolver } from "../nodes/binding.ts";
 import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
@@ -62,7 +61,6 @@ import {
   evaluationFailure,
   type MemoryContextOpener,
   requireModels,
-  requireSteering,
 } from "./eval_node.ts";
 import { LiveChannel } from "./live.ts";
 import {
@@ -132,11 +130,6 @@ export interface FlowEngineOptions {
   tools?: ToolSet | null;
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
-  /**
-   * The host's interrupt signal, passed to nodes declaring `readsSteerInbox`; a method that
-   * throws stops the run with that error.
-   */
-  steering?: Steering | null;
   /** The run's environment and model builder, passed to nodes declaring `needsModels`. */
   models?: ModelAccess | null;
   /** The host's stop: aborting it stops the run with its reason. */
@@ -350,7 +343,6 @@ export class FlowEngine {
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
   readonly skills: ReadonlyMap<string, Skill> | null;
-  readonly steering: Steering | null;
   readonly scheduler: Scheduler | null;
   readonly random: (() => number) | null;
   readonly models: ModelAccess | null;
@@ -362,8 +354,6 @@ export class FlowEngine {
   readonly #hostSignal: AbortSignal | null;
   /** Whether the run has a durable log a host can answer pending calls in. */
   readonly #durable: boolean;
-  /** The steering nodes receive: the host's interrupt signal, whose failures stop the run. */
-  readonly #steering: Steering | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
   /**
@@ -390,14 +380,14 @@ export class FlowEngine {
    *
    * @throws TypeError when `state` isn't exactly a `RunState`, `log` lacks `append`, `runId` or
    *   `nextSequence`, `growBuilder` or a given callback isn't a function, `numWorkers` isn't a safe
-   *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `steering` or `models`
-   *   lacks its methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now`
+   *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `models` lacks its
+   *   methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now`
    *   and `sleep` are functions, `random` isn't a function, or `runDir` isn't a string.
    * @throws RangeError when `numWorkers` is negative.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
     const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
-    const { tools = null, skills = null, steering = null, models = null, signal = null, scheduler = null, random = null } =
+    const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
     const { runDir = null, live = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
@@ -433,7 +423,6 @@ export class FlowEngine {
     this.memoryContextOpener = memoryContextOpener;
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
     this.skills = skills;
-    this.steering = requireSteering(steering);
     this.scheduler = scheduler;
     this.random = random;
     this.models = requireModels(models);
@@ -441,13 +430,6 @@ export class FlowEngine {
     this.live = live;
     this.#hostSignal = signal;
     this.#durable = options.durable ?? true;
-    const inbox = this.steering;
-    this.#steering =
-      inbox === null
-        ? null
-        : {
-            interruptSignal: (nodeId) => this.#callHost((id: string) => inbox.interruptSignal(id), nodeId),
-          };
   }
 
   /**
@@ -525,8 +507,8 @@ export class FlowEngine {
    * @throws RangeError when the state is uninitialized, its run id, sequence or worker count
    *   differs from the log's or the engine's, or it has unfinished starts.
    * @throws The host signal's reason when it aborts (before any start when it is already aborted).
-   * @throws The error of a failing host callback (`onEvent`, `onStream` or a steering method
-   *   throwing, or a promise one returned rejecting), or of a host fault: a log or reducer refusal,
+   * @throws The error of a failing host callback (`onEvent` or `onStream` throwing, or a promise
+   *   one returned rejecting), or of a host fault: a log or reducer refusal,
    *   or a fault `evalNode` rejects with.
    */
   async run(): Promise<readonly RunEvent[]> {
@@ -1019,7 +1001,6 @@ export class FlowEngine {
         memoryContextOpener: this.memoryContextOpener,
         tools: this.tools,
         skills: this.skills,
-        steering: this.#steering,
         scheduler: this.scheduler,
         random: this.random,
         runDir: this.runDir,

@@ -1,9 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply.
-# A steer sent and an interrupt set once tool call 1 returns are seen at the top of the next
-# iteration: the interrupt wins before the steer inbox is read, so there is no second model call,
-# the steer stays unread, and the output is the latest reply's text.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls
+# (Python's node keeps the reply's text; TS yian's output is null). An interrupt delivered once
+# model call 1 has finished skips both of the reply's tool calls (ToolCallFinished error
+# `interrupted`), then the agent writes `interrupted {by}`; the Optional(str) agent succeeds null.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -18,19 +19,14 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
   output: ${chat.output}
 run:
   run_id: r1
   num_workers: 0
 host:
   sends:
-  - {inbox: notes, event: too late, after: {node: chat, tool_call: 1}}
-  steering:
-    chat:
-    - after:
-        tool_call: 1
-      interrupt: true
+  - {interrupt: notes, after: {node: chat, model_call: 1}}
   tools:
     lookup:
       description: Look up a topic.
@@ -40,8 +36,7 @@ host:
           topic:
             type: string
         required: [topic]
-      results:
-      - return: found
+      results: []
   models:
     chat:
       agent:
@@ -50,16 +45,21 @@ host:
           role: assistant
           parts:
           - type: text
-            text: Looking.
+            text: Checking both.
           - type: tool_call
             id: call-1
             name: lookup
             arguments:
               topic: a
+          - type: tool_call
+            id: call-2
+            name: lookup
+            arguments:
+              topic: b
 expect:
   output:
     status: succeeded
-    output: Looking.
+    output: null
   trace:
   - - run_started
     - null
@@ -93,6 +93,10 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
   - - node_step
     - chat
     - n: 1
@@ -103,9 +107,13 @@ expect:
         output:
           format: yian.message.v1
           parts:
-          - {text: Looking., type: text}
+          - {text: Checking both., type: text}
           - arguments: {topic: a}
             id: call-1
+            name: lookup
+            type: tool_call
+          - arguments: {topic: b}
+            id: call-2
             name: lookup
             type: tool_call
           role: assistant
@@ -113,29 +121,32 @@ expect:
         request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
         usage: null
-  - - pool_commit
-    - __start__
-    - {key: __start__.notes, value: too late}
   - - node_step
     - chat
     - n: 2
-      step: {call_id: call-1, is_error: false, kind: tool_result, output: found}
+      step: {call_id: call-1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+  - - node_step
+    - chat
+    - n: 3
+      step: {call_id: call-2, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+  - - node_step
+    - chat
+    - n: 4
+      step: {by: 9, kind: interrupted}
   - - pool_commit
     - chat
-    - value: Looking.
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9, 11]}
+    - {key: chat.new_messages, steps: [10, 11, 12, 13]}
   - - node_succeeded
     - chat
-    - {commit: 12, messages: 13}
+    - {commit: 14, messages: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: Looking.
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -167,23 +178,35 @@ expect:
       n: 1
   - - ToolCallFinished
     - call_index: 0
+      error: interrupted
       name: lookup
       node_id: chat
-      result: found
       tool_call_id: call-1
+      n: 1
+  - - ToolCallStarted
+    - arguments:
+        topic: b
+      call_index: 1
+      name: lookup
+      node_id: chat
+      tool_call_id: call-2
+      n: 1
+  - - ToolCallFinished
+    - call_index: 1
+      error: interrupted
+      name: lookup
+      node_id: chat
+      tool_call_id: call-2
       n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: Looking.
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: Looking.
   - - RunSucceeded
-    - output: Looking.
   stream:
-  - chunk: Looking.
+  - chunk: Checking both.
     final: false
     key: text
     node_id: chat
@@ -195,10 +218,3 @@ expect:
     node_id: chat
     n: 1
     index: 1
-  tool_calls:
-    lookup:
-    - args:
-        topic: a
-      attempt: 1
-      call_id: r1/chat/1/0
-      node: chat

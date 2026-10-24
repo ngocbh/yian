@@ -1,10 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupt_for_a_finished_node_is_ignored.
-# The test sets `chat`'s interrupt during the next node's model call; a case's points count the
-# acting node's own calls, so here it is set once `chat`'s final reply (a reply with no tool
-# calls) has been taken, after the AGENT's last poll. It changes nothing: `chat` succeeds with
-# "chat done" and the next AGENT's request renders it ("summarize: chat done").
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupted_node_succeeds_and_the_flow_continues
+# (Python's node succeeds with ""; TS yian's Optional(str) agent succeeds with null). An interrupt
+# delivered once `chat`'s reply arrives skips its tool call and ends it null; the flow goes on: the
+# next AGENT renders the draft's default ("summarize: (interrupted)") and its reply is the output.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -16,25 +16,31 @@ flow: |
     chat:
       kind: agent
       steer_inbox: ${input.notes}
+      tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
     after:
       kind: agent
       input: {draft: "${chat.output}"}
       system_prompt: Help.
-      prompt: "summarize: ${draft}"
+      prompt: 'summarize: ${draft :- "(interrupted)"}'
       output: str
   output: ${after.output}
 run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - after:
-        model_call: 1
-      interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1}}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties: {topic: {type: string}}
+        required: [topic]
+      results: []
   models:
     chat:
       agent:
@@ -43,7 +49,12 @@ host:
           role: assistant
           parts:
           - type: text
-            text: chat done
+            text: Checking.
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: a
     after:
       agent:
       - reply:
@@ -63,7 +74,7 @@ host:
             role: user
             parts:
             - type: text
-              text: 'summarize: chat done'
+              text: 'summarize: (interrupted)'
 expect:
   output:
     status: succeeded
@@ -108,31 +119,28 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
   - - node_step
     - chat
-    - n: 1
-      step:
-        finish: null
-        kind: model_call
-        model: gpt-5.5
-        output:
-          format: yian.message.v1
-          parts:
-          - {text: chat done, type: text}
-          role: assistant
-        purpose: chat
-        request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
-        response_id: null
-        usage: null
+    - {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Checking., type: text}, {arguments: {topic: a}, id: call-1, name: lookup, type: tool_call}], role: assistant}, purpose: chat, request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6, response_id: null, usage: null}}
+  - - node_step
+    - chat
+    - {n: 2, step: {call_id: call-1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}}
+  - - node_step
+    - chat
+    - n: 3
+      step: {by: 9, kind: interrupted}
+  - [pool_commit, chat]
   - - pool_commit
     - chat
-    - value: chat done
-  - - pool_commit
-    - chat
-    - {key: chat.new_messages, steps: [9]}
+    - key: chat.new_messages
+      steps: [10, 11, 12]
   - - node_succeeded
     - chat
-    - {commit: 10, messages: 11}
+    - {commit: 13, messages: 14}
   - [node_started, after]
   - - node_step
     - after
@@ -147,7 +155,7 @@ expect:
           - {text: summary, type: text}
           role: assistant
         purpose: chat
-        request_sha256: f00ecd6b8e198032b2999410d1d6658d699a957395beaff48fa75783b23eed15
+        request_sha256: 2dd029df165785e76fd2e55441521dc4accba1981f16c121eba1b6d8e49d7799
         response_id: null
         usage: null
   - - pool_commit
@@ -155,17 +163,17 @@ expect:
     - value: summary
   - - pool_commit
     - after
-    - {key: after.new_messages, steps: [14]}
+    - {key: after.new_messages, steps: [17]}
   - - node_succeeded
     - after
-    - {commit: 15, messages: 16}
+    - {commit: 18, messages: 19}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: summary
   - - node_succeeded
     - __end__
-    - {commit: 19}
+    - {commit: 22}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -176,20 +184,24 @@ expect:
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
-    - model: gpt-5.5
-      node_id: chat
-      provider: openai
-      purpose: chat
-      n: 1
-  - - ModelCallFinished
-    - model: gpt-5.5
-      node_id: chat
-      provider: openai
-      purpose: chat
-      n: 1
-  - - NodeSucceeded
     - node_id: chat
-      output: chat done
+      n: 1
+      purpose: chat
+      provider: openai
+      model: gpt-5.5
+  - - ModelCallFinished
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ToolCallStarted
+    - node_id: chat
+      n: 1
+      call_index: 0
+      tool_call_id: call-1
+      name: lookup
+      arguments: {topic: a}
+  - - ToolCallFinished
+    - {node_id: chat, n: 1, call_index: 0, tool_call_id: call-1, name: lookup, error: interrupted}
+  - - NodeSucceeded
+    - {node_id: chat}
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted
@@ -215,18 +227,8 @@ expect:
   - - RunSucceeded
     - output: summary
   stream:
-  - chunk: chat done
-    final: false
-    key: text
-    node_id: chat
-    n: 1
-    index: 0
-  - chunk: ''
-    final: true
-    key: text
-    node_id: chat
-    n: 1
-    index: 1
+  - {node_id: chat, key: text, chunk: Checking., final: false, n: 1, index: 0}
+  - {node_id: chat, key: text, chunk: '', final: true, n: 1, index: 1}
   - chunk: summary
     final: false
     key: text

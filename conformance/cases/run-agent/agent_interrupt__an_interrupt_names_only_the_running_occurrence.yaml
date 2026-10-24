@@ -1,10 +1,11 @@
-# From tests/engine/test_agent_steering.py::test_interrupted_agent_in_a_loop_lets_the_loop_continue.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupted_agent_in_a_loop_lets_the_loop_continue
 # (tests/engine/test_agent_in_loop.py's FLOW, with the fold CODE replaced by the body's output
-# template). The first occurrence `loop#0/reply` is interrupted once its model call finishes: it
-# keeps "partial" and skips its ping call; the interrupt stays with that occurrence, so
-# `loop#1/reply` runs normally ("turn2"), and the loop continues: "s|partial|turn2".
+# template). Both LOOP occurrences read inbox `notes`; an interrupt delivered once
+# `loop#0/reply`'s model call finishes names only that running occurrence: it skips its ping call
+# and ends null (folded as "-"); `loop#1/reply` runs normally ("turn2"): "s|-|turn2".
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: t
@@ -27,9 +28,9 @@ flow: |
             transcript: ${input.transcript}
           system_prompt: Help.
           prompt: "history ${transcript}"
-          output: str
+          output: Optional(str)
       output:
-        transcript: "${input.transcript}|${reply.output}"
+        transcript: '${input.transcript}|${reply.output :- "-"}'
   nodes:
     loop:
       kind: loop
@@ -45,11 +46,8 @@ run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    loop#0/reply:
-    - after:
-        model_call: 1
-      interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: loop#0/reply, model_call: 1}}
   tools:
     ping:
       description: Ping.
@@ -81,7 +79,7 @@ host:
 expect:
   output:
     status: succeeded
-    output: s|partial|turn2
+    output: s|-|turn2
   trace:
   - - run_started
     - null
@@ -129,6 +127,10 @@ expect:
     - loop#0/__start__
     - commit: 9
   - [node_started, loop#0/reply]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [loop#0/reply]
   - - node_step
     - loop#0/reply
     - n: 1
@@ -153,26 +155,29 @@ expect:
     - loop#0/reply
     - n: 2
       step: {call_id: p-1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+  - - node_step
+    - loop#0/reply
+    - n: 3
+      step: {by: 14, kind: interrupted}
   - - pool_commit
     - loop#0/reply
-    - value: partial
   - - pool_commit
     - loop#0/reply
-    - {key: loop#0/reply.new_messages, steps: [14, 15]}
+    - {key: loop#0/reply.new_messages, steps: [15, 16, 17]}
   - - node_succeeded
     - loop#0/reply
-    - {commit: 16, messages: 17}
+    - {commit: 18, messages: 19}
   - [node_started, loop#0/__end__]
   - - pool_commit
     - loop#0/__end__
-    - from: {loop#0/__start__: 9, loop#0/reply: 16}
+    - from: {loop#0/__start__: 9, loop#0/reply: 18}
   - - node_succeeded
     - loop#0/__end__
-    - {commit: 20}
+    - {commit: 22}
   - [node_started, loop~1]
   - - pool_commit
     - loop~1
-    - from: {loop#0/__end__: 20}
+    - from: {loop#0/__end__: 22}
       key: loop#1/__start__
   - - node_expanded
     - loop~1
@@ -180,7 +185,7 @@ expect:
   - [node_started, loop#1/__start__]
   - - node_succeeded
     - loop#1/__start__
-    - commit: 23
+    - commit: 25
   - [node_started, loop#1/reply]
   - - node_step
     - loop#1/reply
@@ -195,7 +200,7 @@ expect:
           - {text: turn2, type: text}
           role: assistant
         purpose: chat
-        request_sha256: f7a225c3f82d79756ce5c23b59ddab45cf374e8fd6a3d2ffff961c21ac0f228b
+        request_sha256: a7a4456f043640b762fba1491cdc9a485731033383ff459c53def2272ec63b93
         response_id: null
         usage: null
   - - pool_commit
@@ -203,32 +208,32 @@ expect:
     - value: turn2
   - - pool_commit
     - loop#1/reply
-    - {key: loop#1/reply.new_messages, steps: [28]}
+    - {key: loop#1/reply.new_messages, steps: [30]}
   - - node_succeeded
     - loop#1/reply
-    - {commit: 29, messages: 30}
+    - {commit: 31, messages: 32}
   - [node_started, loop#1/__end__]
   - - pool_commit
     - loop#1/__end__
-    - from: {loop#1/__start__: 23, loop#1/reply: 29}
+    - from: {loop#1/__start__: 25, loop#1/reply: 31}
   - - node_succeeded
     - loop#1/__end__
-    - {commit: 33}
+    - {commit: 35}
   - [node_started, loop~2]
   - - pool_commit
     - loop~2
     - key: loop
-      from: {loop#1/__end__: 33}
+      from: {loop#1/__end__: 35}
   - - node_succeeded
     - loop~2
-    - {commit: 36}
+    - {commit: 38}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: s|partial|turn2
+    - value: s|-|turn2
   - - node_succeeded
     - __end__
-    - {commit: 39}
+    - {commit: 41}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -285,20 +290,19 @@ expect:
       n: 1
   - - NodeSucceeded
     - node_id: loop#0/reply
-      output: partial
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
     - node_id: loop#0/__end__
       output:
-        transcript: s|partial
+        transcript: s|-
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
     - grow:
         prune: [loop#0/__end__, loop#0/__start__, loop#0/reply, loop~1]
         seed:
-        - transcript: s|partial
+        - transcript: s|-
           notes: {inbox: notes}
         - 1
       node_id: loop~1
@@ -307,7 +311,7 @@ expect:
   - - NodeSucceeded
     - node_id: loop#1/__start__
       output:
-        transcript: s|partial
+        transcript: s|-
         notes: {inbox: notes}
   - - NodeStarted
     - node_id: loop#1/reply
@@ -331,21 +335,21 @@ expect:
   - - NodeSucceeded
     - node_id: loop#1/__end__
       output:
-        transcript: s|partial|turn2
+        transcript: s|-|turn2
   - - NodeStarted
     - node_id: loop~2
   - - NodeSucceeded
     - commit_as: loop
       node_id: loop~2
       output:
-        transcript: s|partial|turn2
+        transcript: s|-|turn2
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: s|partial|turn2
+      output: s|-|turn2
   - - RunSucceeded
-    - output: s|partial|turn2
+    - output: s|-|turn2
   stream:
   - chunk: partial
     final: false

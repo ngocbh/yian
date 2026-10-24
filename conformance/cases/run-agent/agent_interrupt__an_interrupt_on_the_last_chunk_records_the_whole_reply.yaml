@@ -1,9 +1,11 @@
-# From tests/engine/test_agent_steering.py::test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls.
-# Also ::test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply (a reply streams as one chunk).
-# An interrupt set once model call 1 has finished keeps that reply's text as the output and runs
-# none of its two tool calls: each is reported as a ToolCallFinished with error `interrupted`.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupt_on_the_last_chunk_keeps_the_complete_reply
+# (Python keeps the text as the output; TS yian's output is null). The tool-call and usage chunks
+# come first, then the text; an interrupt delivered once the last chunk is read leaves nothing to
+# cut: the model_call holds the whole "ok go" and usage 500/20/520, and the reply's tool call is
+# skipped, so lookup never runs.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -18,17 +20,14 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
   output: ${chat.output}
 run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - after:
-        model_call: 1
-      interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1, chunk: 5}}
   tools:
     lookup:
       description: Look up a topic.
@@ -42,26 +41,23 @@ host:
   models:
     chat:
       agent:
-      - reply:
-          format: yian.message.v1
-          role: assistant
-          parts:
-          - type: text
-            text: Checking both.
-          - type: tool_call
+      - chunks:
+        - tool_call:
+            index: 0
             id: call-1
             name: lookup
-            arguments:
-              topic: a
-          - type: tool_call
-            id: call-2
-            name: lookup
-            arguments:
-              topic: b
+            arguments: '{"topic": "a"}'
+        - usage:
+            input_tokens: 500
+            output_tokens: 20
+            total_tokens: 520
+        - text: ok
+        - text: ' go'
+        - finish: tool_calls
 expect:
   output:
     status: succeeded
-    output: Checking both.
+    output: null
   trace:
   - - run_started
     - null
@@ -95,30 +91,30 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
   - - node_step
     - chat
     - n: 1
       step:
-        finish: null
+        finish: tool_calls
         kind: model_call
         model: gpt-5.5
         output:
           format: yian.message.v1
           parts:
-          - {text: Checking both., type: text}
+          - {text: ok go, type: text}
           - arguments: {topic: a}
             id: call-1
-            name: lookup
-            type: tool_call
-          - arguments: {topic: b}
-            id: call-2
             name: lookup
             type: tool_call
           role: assistant
         purpose: chat
         request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
-        usage: null
+        usage: {cache_read_tokens: null, input_tokens: 500, output_tokens: 20, reasoning_tokens: null}
   - - node_step
     - chat
     - n: 2
@@ -126,23 +122,21 @@ expect:
   - - node_step
     - chat
     - n: 3
-      step: {call_id: call-2, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+      step: {by: 9, kind: interrupted}
   - - pool_commit
     - chat
-    - value: Checking both.
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9, 10, 11]}
+    - {key: chat.new_messages, steps: [10, 11, 12]}
   - - node_succeeded
     - chat
-    - {commit: 12, messages: 13}
+    - {commit: 13, messages: 14}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: Checking both.
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -163,6 +157,13 @@ expect:
       node_id: chat
       provider: openai
       purpose: chat
+      usage:
+        cache_creation_tokens: null
+        cache_read_tokens: null
+        input_tokens: 500
+        output_tokens: 20
+        reasoning_tokens: null
+        total_tokens: 520
       n: 1
   - - ToolCallStarted
     - arguments:
@@ -179,41 +180,29 @@ expect:
       node_id: chat
       tool_call_id: call-1
       n: 1
-  - - ToolCallStarted
-    - arguments:
-        topic: b
-      call_index: 1
-      name: lookup
-      node_id: chat
-      tool_call_id: call-2
-      n: 1
-  - - ToolCallFinished
-    - call_index: 1
-      error: interrupted
-      name: lookup
-      node_id: chat
-      tool_call_id: call-2
-      n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: Checking both.
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: Checking both.
   - - RunSucceeded
-    - output: Checking both.
   stream:
-  - chunk: Checking both.
+  - chunk: ok
     final: false
     key: text
     node_id: chat
     n: 1
     index: 0
+  - chunk: ' go'
+    final: false
+    key: text
+    node_id: chat
+    n: 1
+    index: 1
   - chunk: ''
     final: true
     key: text
     node_id: chat
     n: 1
-    index: 1
+    index: 2

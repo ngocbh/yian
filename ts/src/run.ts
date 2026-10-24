@@ -10,9 +10,9 @@
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
- * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and
- * `Steering` (`nodes/base.ts`). Hosts reach a run by its log through `send`, `complete`, `close`, `interrupt`,
- * `cancel` and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
+ * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`). Hosts
+ * reach a run by its log through `send`, `complete`, `close`, `interrupt`, `cancel` and
+ * `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
  * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
@@ -103,7 +103,7 @@ import {
   sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
-import type { BackwardOptions, CompleteResult, Node, Steering } from "./nodes/base.ts";
+import type { BackwardOptions, CompleteResult, Node } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
   type HostToolCall,
@@ -119,7 +119,7 @@ import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
 import { LiveChannel } from "./runtime/live.ts";
-import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
+import { addNote, requireModels } from "./runtime/eval_node.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -201,7 +201,6 @@ export {
   type Message,
   type MessagePart,
 } from "./nodes/agent/messages.ts";
-export type { Steering } from "./nodes/base.ts";
 export { staticPathOf } from "./nodes/ids.ts";
 export {
   LiveChannel,
@@ -896,8 +895,6 @@ export interface RunFlowOptions {
   tools?: Readonly<Record<string, ToolEntry>> | null;
   /** The skills this run can grant, keyed by `Skill.name`. */
   skills?: ReadonlyMap<string, Skill> | null;
-  /** The host's interrupt signal for AGENT nodes with a `steer_inbox`. */
-  steering?: Steering | null;
   /** The host's app object a tool receives as `ctx.context`; never recorded. */
   context?: unknown;
   /**
@@ -941,8 +938,7 @@ export interface RunFlowOptions {
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `learnable` isn't a boolean, `signal`
  *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), `llmConfig` is a primitive
  *   or an array, a `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its
- *   name, `steering` lacks its methods, `scheduler` lacks `now` or `sleep`, `random` isn't a
- *   function, `models` lacks `env` or `createModel`, or `memory` isn't a `Map` of memories.
+ *   name, `scheduler` lacks `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, or `memory` isn't a `Map` of memories.
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
@@ -973,7 +969,7 @@ export async function runFlow(
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     const runDefaults = current();
-    const { learnable = false, tools = null, steering = null, context, signal = null } = options;
+    const { learnable = false, tools = null, context, signal = null } = options;
     if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
     if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
     if (signal !== null && !(signal instanceof AbortSignal)) {
@@ -989,7 +985,6 @@ export async function runFlow(
     checkConditions(flow.compiled);
     checkTemplates(flow.compiled);
     const skills = checkSkills(flow.compiled, options.skills ?? null);
-    requireSteering(steering);
     checkTestOptions(options);
     const runServers = await openRunServers(unopened, signal);
     try {
@@ -1254,7 +1249,7 @@ async function startRun(
 ): Promise<RunResult> {
   const { log = null, runId = null, numWorkers = 8, onEvent = null, onStream = null, memory = null } = options;
   const live = options.live ?? null;
-  const { learnable = false, tools = null, skills = null, steering = null, context, signal = null } = options;
+  const { learnable = false, tools = null, skills = null, context, signal = null } = options;
   const random = options.random ?? null;
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
@@ -1404,7 +1399,6 @@ async function startRun(
         runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
       tools: runTools,
       skills,
-      steering,
       models,
       signal,
       scheduler,
@@ -1543,8 +1537,6 @@ export interface AdvanceOptions {
    * granted one with its recorded description and instructions.
    */
   skills?: ReadonlyMap<string, Skill> | null;
-  /** The host's interrupt signal for AGENT nodes with a `steer_inbox`. */
-  steering?: Steering | null;
   /**
    * The provider key of a run started with `llmConfig.api_key`, for the agents the log marks for it
    * (and a call-time agent resolving to its provider); never recorded. A log that marks no agent
@@ -1608,7 +1600,7 @@ export interface AdvanceOptions {
  * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`, a `tools`
- *   entry is malformed, `skills`, `steering`, `scheduler`, `random` or `models` is malformed, a
+ *   entry is malformed, `skills`, `scheduler`, `random` or `models` is malformed, a
  *   worker count isn't an integer, or a recorded carrier has the wrong type.
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
@@ -1647,7 +1639,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const {
       log,
       tools = null,
-      steering = null,
       context,
       signal = null,
       flow: hostFlow = null,
@@ -1669,7 +1660,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
     let apiKey = rawKey === null ? null : secretKey(rawKey);
     let headers = rawHeaders === null ? null : secretHeaders(rawHeaders);
-    requireSteering(steering);
     checkTestOptions(options);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
@@ -1795,7 +1785,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
           runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
         tools: runTools,
         skills,
-        steering,
         models,
         signal,
         scheduler,

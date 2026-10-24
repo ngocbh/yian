@@ -66,7 +66,6 @@ import type {
   JsonValue,
   Message,
   MessagePart,
-  Steering,
   StorageKind,
   Value,
   ValueRecord,
@@ -280,7 +279,6 @@ describe("entry points", () => {
   test("the type-only names are exported", () => {
     // The check is `bun run typecheck`: the imports above fail to compile without the names.
     const names = [] as [
-      Steering?,
       StorageKind?,
       Value?,
       ValueRecord?,

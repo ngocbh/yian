@@ -1,11 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupt_before_a_tool_call_skips_only_the_remaining_calls.
-# Also ::test_skipped_tool_calls_reach_the_host_as_interrupted_tool_events.
-# An interrupt set while tool call 1 runs (README: an interrupt before tool call 2 is
-# after: {tool_call: 1}) lets call 1 finish and skips call 2: one model call, one tool call,
-# the reply's text as the output, and the events Started/Finished for call-1 (result "found a")
-# then Started/Finished for call-2 with error `interrupted`, all under the reply's step.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupt_before_a_tool_call_skips_only_the_remaining_calls
+# and ::test_skipped_tool_calls_reach_the_host_as_interrupted_tool_events (Python returns the
+# reply's text; TS yian's output is null). An interrupt delivered while tool call 1 runs lets it
+# finish and skips call 2 (ToolCallFinished error `interrupted`), then the honor step.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -20,17 +19,14 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
   output: ${chat.output}
 run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - after:
-        tool_call: 1
-      interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: chat, tool_call: 1}}
   tools:
     lookup:
       description: Look up a topic.
@@ -64,7 +60,7 @@ host:
 expect:
   output:
     status: succeeded
-    output: Checking both.
+    output: null
   trace:
   - - run_started
     - null
@@ -122,6 +118,10 @@ expect:
         request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
         usage: null
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
   - - node_step
     - chat
     - n: 2
@@ -130,22 +130,24 @@ expect:
     - chat
     - n: 3
       step: {call_id: call-2, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+  - - node_step
+    - chat
+    - n: 4
+      step: {by: 10, kind: interrupted}
   - - pool_commit
     - chat
-    - value: Checking both.
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9, 10, 11]}
+    - {key: chat.new_messages, steps: [9, 11, 12, 13]}
   - - node_succeeded
     - chat
-    - {commit: 12, messages: 13}
+    - {commit: 14, messages: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: Checking both.
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -199,14 +201,11 @@ expect:
       n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: Checking both.
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: Checking both.
   - - RunSucceeded
-    - output: Checking both.
   stream:
   - chunk: Checking both.
     final: false

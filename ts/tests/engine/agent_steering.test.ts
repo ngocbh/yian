@@ -259,16 +259,6 @@ test.each([
   expect(outcome).toEqual(new Output(type.kind === ValueKind.STRING ? "ok" : { answer: 1n }));
 });
 
-test.each([
-  ["an object", {}],
-  ["drain only", { drain: () => [] }],
-])("the run boundary rejects an object without interruptSignal: %s", async (_name, bad) => {
-  const log = join(dir, "boundary.jsonl");
-  const error = await rejected(runFlow(await loadFlow(steerFlow()), {}, { steering: bad as never, log }));
-  expect(error).toEqual(new TypeError("steering must provide interruptSignal(nodeId), or be null"));
-  expect(existsSync(log)).toBe(false);
-});
-
 // --- steer messages ----------------------------------------------------------- //
 
 test("steers are sent as one user message per read at the top of each iteration", async () => {

@@ -336,12 +336,8 @@ export function renderAgentPrompt(
   let messages: PromptMessage[];
   let systemPrompt: string;
   try {
-    const inputNames = new Set([...Object.keys(inputs), ...(node.params ?? []).map((parameter) => parameter.name)]);
-    for (const variable of node.variables) {
-      if (inputNames.has(variable.name)) {
-        throw new RangeError(`variable ${reprText(variable.name)} collides with an input name`);
-      }
-    }
+    const colliding = collidingVariable(node, inputs);
+    if (colliding !== null) throw new RangeError(`variable ${reprText(colliding)} collides with an input name`);
     if (captured !== null) {
       captured["variable_domains"] = captureValue(() =>
         Object.fromEntries(
@@ -384,18 +380,18 @@ export function renderAgentPrompt(
   };
 }
 
+/** Return the first local variable of `node` named like a declared or delivered input, or `null`. */
+function collidingVariable(node: AgentNode, inputs: Readonly<Record<string, unknown>>): string | null {
+  const inputNames = new Set([...Object.keys(inputs), ...(node.params ?? []).map((parameter) => parameter.name)]);
+  return node.variables.find((variable) => inputNames.has(variable.name))?.name ?? null;
+}
+
 /**
- * Whether `error` is a render's or recall's refusal (a template error, a missing skill, a variable
- * colliding with an input, a refused recall), which leaves an invocation's prompt unrebuilt; any
- * other error is a fault and escapes.
+ * Whether `error` is a render's or recall's refusal (a template error, a missing skill, a refused
+ * recall), which leaves an invocation's prompt unrebuilt; any other error is a fault and escapes.
  */
 function isRebuildRefusal(error: unknown): boolean {
-  return (
-    error instanceof ExpressionError ||
-    error instanceof SkillError ||
-    error instanceof MemoryRecallError ||
-    error instanceof RangeError
-  );
+  return error instanceof ExpressionError || error instanceof SkillError || error instanceof MemoryRecallError;
 }
 
 /** Return `make()`; its error is a capability fault, since the render capture is the host's. */
@@ -1080,6 +1076,8 @@ export class AgentNode extends Node {
   ): Promise<LearningMaterial> {
     const none = { interactions: [], baseSystemPrompt: null, prompt: null, memorySections: [], digestOk: true };
     if (inputs === null || !steps.some((step) => step["kind"] === "model_call")) return none;
+    // The run refused this render; any other RangeError while rebuilding is a fault.
+    if (collidingVariable(this, inputs) !== null) return { ...none, digestOk: false };
     let rendered: AgentPrompt;
     let memoryContext: MemoryContext;
     try {

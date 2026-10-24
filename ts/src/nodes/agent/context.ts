@@ -173,6 +173,14 @@ export interface RecordedResult {
   readonly closed: string | null;
 }
 
+/**
+ * A model call an earlier start recorded, as `takeRecorded` gives it back: its reply, or the
+ * error (`{kind, message}`, as recorded) it failed with, and the `n` of that step.
+ */
+export type RecordedCall =
+  | { readonly n: number; readonly response: Response }
+  | { readonly n: number; readonly failure: { readonly kind: string; readonly message: string } };
+
 /** Attempts of a model call that an earlier start made and lost: their count, and the last one's wait. */
 export interface PriorAttempts {
   readonly attempts: number;
@@ -187,9 +195,9 @@ export interface PriorAttempts {
  * engine steps (direct loop tests) it records nothing and numbers the steps itself.
  *
  * It also replays what earlier starts recorded (`NodeSteps.prior`), in order: each successful
- * `model_call` is one logical call to take back (`takeRecorded`) in place of calling the model,
- * the failed attempts before it belong to it, and failed attempts after the last one are the next
- * live call's (`priorAttempts`). Each `tool_result` is found by its call id (`recordedResult`).
+ * `model_call`, and each failed one that wasn't to be retried, ends one logical call to take back
+ * (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
+ * failed attempts after the last one are the next live call's (`priorAttempts`). Each `tool_result` is found by its call id (`recordedResult`).
  * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
  * and are skipped.
  */
@@ -201,11 +209,11 @@ export class AgentSteps {
   readonly #scrub: (error: unknown) => unknown;
   readonly #nodeId: string;
   #count = 0;
-  /** The recorded logical calls, each its failed attempts then its reply. */
+  /** The recorded logical calls, each its failed attempts then its reply or its last failure. */
   readonly #calls: (readonly NumberedStep[])[] = [];
   /** How many of `#calls` were taken. */
   #taken = 0;
-  /** The failed attempts recorded after the last reply. */
+  /** The retried failed attempts recorded after the last logical call. */
   #trailing: readonly NumberedStep[];
   readonly #results = new Map<string, ValueRecord>();
 
@@ -233,7 +241,8 @@ export class AgentSteps {
     for (const [index, step] of (steps?.prior ?? []).entries()) {
       if (step["kind"] === "model_call") {
         attempts.push({ n: index + 1, step });
-        if (!Object.hasOwn(step, "error")) {
+        // A reply, or a failure with no retry after it, ends the call.
+        if (!Object.hasOwn(step, "error") || step["retry_in"] == null) {
           this.#calls.push(attempts);
           attempts = [];
         }
@@ -244,34 +253,36 @@ export class AgentSteps {
     this.#trailing = attempts;
   }
 
-  /** Whether a recorded reply is still to be taken, so the loop is replaying. */
+  /** Whether a recorded call is still to be taken, so the loop is replaying. */
   replaying(): boolean {
     return this.#taken < this.#calls.length;
   }
 
   /**
-   * Take the next recorded reply, in place of a model call for `purpose` whose request has digest
+   * Take the next recorded call, in place of a model call for `purpose` whose request has digest
    * `digest`.
    *
-   * @returns The reply as recorded (media in file form) and its step's `n`; `null` once every
-   *   recorded reply was taken.
+   * @returns The reply as recorded (media in file form) or the recorded error of a call that
+   *   failed, and its step's `n`; `null` once every recorded call was taken.
    * @throws CapabilityFault carrying a RangeError when the reply or an attempt before it recorded
    *   another purpose or digest: the host or the yian version rebuilds a different request, so
    *   the recorded reply doesn't answer it. Nothing is taken or written; the run stays resumable.
    */
-  takeRecorded(purpose: string, digest: string): { response: Response; n: number } | null {
+  takeRecorded(purpose: string, digest: string): RecordedCall | null {
     const call = this.#calls[this.#taken];
     if (call === undefined) return null;
     this.#check(call, purpose, digest);
     this.#taken += 1;
     const { n, step } = call.at(-1)!;
-    return { response: recordedResponse(step), n };
+    if (!Object.hasOwn(step, "error")) return { n, response: recordedResponse(step) };
+    const { kind, message } = step["error"] as { kind: string; message: string };
+    return { n, failure: { kind, message } };
   }
 
   /**
-   * Take the failed attempts recorded after the last reply, for the first live call (`purpose`,
-   * digest `digest`) to continue: their count, and the last one's `retry_in` (`0` when it wasn't
-   * to be retried, so the call is tried again at once).
+   * Take the failed attempts recorded after the last logical call, each to be retried, for the
+   * first live call (`purpose`, digest `digest`) to continue: their count, and the last one's
+   * `retry_in`.
    *
    * @returns `null` while replaying, without such attempts, or once they were taken.
    * @throws CapabilityFault as `takeRecorded`.
@@ -281,9 +292,8 @@ export class AgentSteps {
     const trailing = this.#trailing;
     this.#check(trailing, purpose, digest);
     this.#trailing = [];
-    const retryIn = trailing.at(-1)!.step["retry_in"];
     // A whole number of seconds reads back from the log as an int.
-    return { attempts: trailing.length, retryIn: retryIn == null ? 0 : Number(retryIn) };
+    return { attempts: trailing.length, retryIn: Number(trailing.at(-1)!.step["retry_in"]) };
   }
 
   /** Return the result an earlier start recorded for tool call `callId`, or `null`. */

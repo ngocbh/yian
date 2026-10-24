@@ -288,7 +288,7 @@ test("the replay cursor takes the recorded replies in order and finds each resul
     resultStep("c2", "two"),
   ]);
   expect(steps.replaying()).toBe(true);
-  const first = steps.takeRecorded("chat", D1)!;
+  const first = steps.takeRecorded("chat", D1) as { n: number; response: Response };
   expect(first.n).toBe(2);
   expect(first.response.message.text()).toBe("first");
   expect(first.response.responseId).toBe("resp-first");
@@ -296,7 +296,7 @@ test("the replay cursor takes the recorded replies in order and finds each resul
   expect(first.response.usage).toEqual(new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6 }));
   expect(steps.replaying()).toBe(true);
   // The failed attempt before the second reply is part of that call, so its reply is step 6.
-  const second = steps.takeRecorded("chat", D2)!;
+  const second = steps.takeRecorded("chat", D2) as { n: number; response: Response };
   expect(second.n).toBe(6);
   expect(second.response.message.text()).toBe("second");
   expect(steps.replaying()).toBe(false);
@@ -316,10 +316,13 @@ test("failed attempts after the last reply are the next call's prior attempts, t
   expect(steps.priorAttempts("chat", D2)).toBeNull();
 });
 
-test("a last attempt that wasn't to be retried is tried again at once, still counted", () => {
-  const steps = replaying([failedStep(D1, null)]);
+test("an attempt that wasn't to be retried is a recorded call that failed, replayed as its failure", () => {
+  const steps = replaying([callStep(D1, "first"), failedStep(D2, 1), failedStep(D2, null)]);
+  expect(steps.takeRecorded("chat", D1)).not.toBeNull();
+  expect(steps.replaying()).toBe(true);
+  expect(steps.takeRecorded("chat", D2)).toEqual({ n: 3, failure: { kind: "server", message: "boom" } });
   expect(steps.replaying()).toBe(false);
-  expect(steps.priorAttempts("chat", D1)).toEqual({ attempts: 1, retryIn: 0 });
+  expect(steps.priorAttempts("chat", D2)).toBeNull();
 });
 
 test("a recorded call whose digest or purpose differs is a host fault naming the node, n and both", () => {
@@ -465,6 +468,38 @@ test("a crash in a retry wait waits the recorded delay again, and the attempt co
   expect(steps(again).map((step) => [step["n"], step["retry_in"]])).toEqual([
     [1, 2],
     [2, null],
+  ]);
+});
+
+test("a crash after a call's last failed attempt fails the node with the recorded error, no model call", async () => {
+  const failure = () => new ProviderError("context_length", "too long", { status: 400 });
+  const uncut = await run(new ScriptedModel([failure()], CONFIG), { flow: flowText([]) });
+  expect(uncut.result.status).toBe("failed");
+  const log = await cutRun(seqOf(uncut.log, "model_call") + 1, new ScriptedModel([failure()], CONFIG), {
+    flow: flowText([]),
+  });
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resume(log, model);
+  expect(resumed.status).toBe("failed");
+  expect(model.requests.length).toBe(0);
+  const { code, message, causeType } = resumed.failure!;
+  expect({ code, message, causeType }).toEqual({
+    code: uncut.result.failure!.code,
+    message: uncut.result.failure!.message,
+    causeType: "ProviderError",
+  });
+  expect(code).toBe("provider.context_length");
+  // A non-provider error keeps its name; its code is the one any model failure gets.
+  const odd = () => Object.assign(new Error("socket closed"), { name: "ConnectionError" });
+  const oddRun = await run(new ScriptedModel([odd()], CONFIG), { flow: flowText([]) });
+  const oddLog = await cutRun(seqOf(oddRun.log, "model_call") + 1, new ScriptedModel([odd()], CONFIG), {
+    flow: flowText([]),
+  });
+  const oddResumed = await resume(oddLog, new ScriptedModel([], CONFIG));
+  expect([oddResumed.failure!.code, oddResumed.failure!.message, oddResumed.failure!.causeType]).toEqual([
+    oddRun.result.failure!.code,
+    "socket closed",
+    "ConnectionError",
   ]);
 });
 

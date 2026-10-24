@@ -32,11 +32,11 @@ import {
   ToolCallFinished,
   ToolCallStarted,
 } from "../../events.ts";
-import { type ErrorKind, ProviderError } from "../../llm/errors.ts";
+import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../llm/errors.ts";
 import { type ChatModel, ReplyAssembler, TextDelta, UsageReport } from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
 import { Message, type Request, Response, TextPart } from "../../llm/messages.ts";
-import { isAuthFailure } from "../../llm_clients/auth/common.ts";
+import { AuthError, isAuthFailure } from "../../llm_clients/auth/common.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
@@ -86,6 +86,30 @@ export function modelFailureCode(error: unknown): FailureCode | null {
   if (typeof error !== "object" || error === null || !modelFailures.has(error)) return null;
   if (isAuthFailure(error)) return "provider.auth";
   return (error instanceof ProviderError ? PROVIDER_CODES[error.kind] : undefined) ?? "node.execute";
+}
+
+/**
+ * An error of a name yian rebuilds from a recorded failure without its own class: the name and
+ * message are the recorded ones.
+ */
+class RecordedCallError extends Error {
+  override name: string;
+
+  constructor(name: string, message: string) {
+    super(message);
+    this.name = name;
+  }
+}
+
+/**
+ * Return the error a failed `model_call` step recorded as `{kind, message}`: a `ProviderError` of
+ * that kind (not retryable), an `AuthError`, or an error of that name, each with the message.
+ */
+function recordedFailure({ kind, message }: { kind: string; message: string }): Error {
+  if ((ERROR_KINDS as readonly string[]).includes(kind)) {
+    return new ProviderError(kind as ErrorKind, message, { retryable: false });
+  }
+  return kind === "AuthError" ? new AuthError(message) : new RecordedCallError(kind, message);
 }
 
 /** The transient sinks of one AGENT invocation plus its effective model identity. */
@@ -142,7 +166,8 @@ export function errorName(error: unknown): string {
  *
  * With `record`, a reply an earlier start recorded for this call is returned first, as recorded,
  * with nothing emitted or written (`AgentSteps.takeRecorded`); a recorded reply a host interrupt
- * cut throws `ReplyInterrupted` with its text. The first live call after the replay continues the
+ * cut throws `ReplyInterrupted` with its text, and a recorded call that failed throws its error
+ * again (rebuilt from its kind and message, marked). The first live call after the replay continues the
  * failed attempts recorded after the last reply: it waits the last one's `retry_in` and numbers
  * its attempts after them (`AgentSteps.priorAttempts`).
  *
@@ -188,6 +213,11 @@ export async function callModel(
   let prior: PriorAttempts | undefined;
   if (record !== undefined) {
     const recorded = record.steps.takeRecorded(purpose, record.digest);
+    if (recorded !== null && "failure" in recorded) {
+      const error = recordedFailure(recorded.failure);
+      markModelFailure(error);
+      throw error;
+    }
     if (recorded !== null) {
       const { response, n } = recorded;
       // A reply a host interrupt cut ends the call as that interrupt did.

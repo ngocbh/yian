@@ -38,6 +38,7 @@ import {
 } from "../../typesys/types.ts";
 import {
   boundText,
+  isInboxType,
   isRecord,
   renderValuePath,
   Type,
@@ -154,6 +155,11 @@ function readTypeAndSites(
       throw diagnostics.error(`bad type expression ${reprText(node)}: ${error.message}`, {
         range,
         cause: error,
+      });
+    }
+    if (isInboxType(typ)) {
+      throw diagnostics.error(`an output can't be an inbox (\`Inbox(...)\` declares a flow input)`, {
+        range,
       });
     }
     if (levels) {
@@ -410,6 +416,7 @@ function readTaggedParameter(
     diagnostics,
     ledger: catalogBuilder.consumedTags,
     literalOnly: true,
+    inbox: declarationLabel === "input",
   });
   const contract = slot.contract!;
   if (requireDefault && !slot.hasValue) {

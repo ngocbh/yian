@@ -34,6 +34,9 @@
  * - `test_public_replay_rejects_complete_record_corruption_before_any_new_effects`: the line is
  *   rewritten in the log's codec (`parseJson`, `logJson`).
  * - Python's `ValueError` is a `RangeError`.
+ *
+ * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
+ * `backward.interrupted`.
  */
 
 import fs, { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";

@@ -66,6 +66,9 @@
  * (`backward/backward_recovery__invalid_root_feedback_appends_nothing`) and
  * `test_failed_forward_and_successful_backward_have_separate_statuses`
  * (`backward/run_backward__a_failed_forward_and_a_successful_backward`).
+ *
+ * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
+ * `backward.interrupted`.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";

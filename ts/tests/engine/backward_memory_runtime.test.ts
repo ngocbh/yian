@@ -78,7 +78,7 @@
  * TS only: driving with an inexact `RunState` or a non-log refuses before opening; feedback that
  * passes the feedback check but can't be prepared (a lone surrogate) is refused before the opener
  * runs; an async opener resolves before the first record; a drive overtaken by another drive while
- * it awaits its opener (fresh and interrupted prior attempt) or its handler (the handler then
+ * it awaits its opener (fresh and unfinished prior attempt) or its handler (the handler then
  * throws, or its learner fails) is refused by the reducer, appends nothing and closes its runtime,
  * and one overtaken while its commit is pending is refused the same way and appends nothing
  * further; a drive whose handler throws or whose learner fails while a newer drive is mid-attempt
@@ -105,6 +105,9 @@
  *   `test_cleanup_unwraps_host_failure_after_closing_all_sessions`: TS has no such classes.
  * - The `inner_payload` cells of `test_commit_batch_is_detached_from_every_accepted_authority`: TS
  *   has no private payload tree.
+ *
+ * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
+ * `backward.interrupted`.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -793,7 +796,7 @@ test("a known precommit failure allows a fresh complete pass without prior propo
   expect(memory.get("B")!.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["new-second"]);
 });
 
-test("a failed resource setup does not close an interrupted attempt", async () => {
+test("a failed resource setup does not close an unfinished attempt", async () => {
   const mismatch = "opened memory runtime does not match the recorded memory table and snapshots";
   const rows: [string, new (...args: never[]) => Error, string][] = [
     ["table", RangeError, mismatch],
@@ -1350,7 +1353,7 @@ test("a drive overtaken during its handler is refused by the reducer", async () 
     });
     const pending = drive(built, new Map([["A", stale]]), "stale");
     await entered.promise;
-    // The other drive closes the stale attempt as interrupted and completes its own.
+    // The other drive closes the stale attempt as unfinished and completes its own.
     expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
     const after = records(built);
     const finished = built.state.backwardState.finished!;
@@ -1388,7 +1391,7 @@ test("a drive overtaken while its commit is pending appends nothing further", as
     const pending = drive(built, new Map([["A", stale]]), "stale");
     await entered.promise;
     expect(records(built).at(-1)!.constructor).toBe(MemoryCommitRequestedRecord);
-    // The other drive closes the stale attempt as interrupted and completes its own.
+    // The other drive closes the stale attempt as unfinished and completes its own.
     expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
     const after = records(built);
     gate.resolve();
@@ -1421,7 +1424,7 @@ test("a stale drive can't finish a newer drive's attempt", async () => {
     });
     const pending = drive(built, new Map([["A", stale]]), "stale");
     await entered[0]!.promise;
-    // The newer drive closes attempt 1 as interrupted, starts attempt 2 and waits in its handler.
+    // The newer drive closes attempt 1 as unfinished, starts attempt 2 and waits in its handler.
     const newer = drive(built, new Map([["A", new FakeMemory()]]));
     await entered[1]!.promise;
     const after = records(built);

@@ -17,7 +17,7 @@
  * up once and not caching a failure; `takeMessages` order.
  *
  * TS-only, backward attempt state: one refusal per `BackwardAttempt` and `RuntimeBackwardState`
- * rule; the getters on empty, unfinished and finished histories; the interrupted outcome an
+ * rule; the getters on empty, unfinished and finished histories; the unfinished outcome an
  * unfinished attempt derives, with `prefixLearning`'s statuses and failure order;
  * `proposalBatches`' table order; and `sameRuntimeBackwardState`, true for separately built equal
  * states and false for a different memory order, a different last record and a `null` versus
@@ -25,7 +25,7 @@
  *
  * TS-only, the reducer over `chainTrace()` with memory key `notes` and ids from `memoryCommitId`:
  * a full attempt Started → Ready → Requested → Succeeded → Finished, then a second start; the
- * accepted Finished of each branch (interrupted before and after Ready, commit failure, learner
+ * accepted Finished of each branch (unfinished before and after Ready, commit failure, learner
  * failure with and without an attributed context failure, computation failure); and one refusal
  * per reducer, Finished and context-owner rule, the last record class refused through a forged
  * record of another class.
@@ -134,6 +134,9 @@
  * - `test_map_bounded_projected_file_lists_compose_before_stopping` (2 rows): `+ []` is ported;
  *   Python's `* 2` is list repetition, a type error in TS, so the second row adds the same 40-deep
  *   list to itself, with the same two-element feedback and the same single stop.
+ *
+ * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
+ * `backward.interrupted`.
  */
 
 import { afterEach, expect, spyOn, test } from "bun:test";
@@ -910,14 +913,14 @@ function failed(memory: string, id = 1): MemoryCommitFailedRecord {
   return new MemoryCommitFailedRecord(memory, `commit-${memory}`, OPERATION_FAILURE, id);
 }
 
-/** The failure of an interrupted attempt. */
+/** The failure of an unfinished attempt. */
 const UNFINISHED = new BackwardFailure(
   "backward",
   "backward.unfinished",
   "backward attempt did not finish",
 );
 
-/** A Finished of attempt `id` that interrupted before Ready. */
+/** A Finished of attempt `id` that ended unfinished before Ready. */
 function unfinishedFinish(id = 1): BackwardFinishedRecord {
   return new BackwardFinishedRecord(id, new BackwardOutcome("failed", { failure: UNFINISHED }));
 }
@@ -1136,7 +1139,7 @@ test("an empty history starts nothing and leaves every memory unrequested", () =
   expect(Object.isFrozen(state.memoryOrder)).toBe(true);
 });
 
-test("an unfinished attempt reads its records and derives the interrupted outcome with prefix learning", () => {
+test("an unfinished attempt reads its records and derives the unfinished outcome with prefix learning", () => {
   const attempt = new BackwardAttempt(started(), {
     ready: ready(),
     requests: [requested("a"), requested("b")],
@@ -1173,7 +1176,7 @@ test("prefix learning succeeds only when asked and every memory is confirmed", (
   expect(prefixLearning(state)).toEqual(new LearningResult("incomplete", { policies }));
 });
 
-test("an interrupted attempt before Ready has no feedback", () => {
+test("an unfinished attempt before Ready has no feedback", () => {
   const state = new RuntimeBackwardState(["a"], [new BackwardAttempt(started())]);
   const outcome = state.outcome!;
   expect(outcome.feedback).toBeNull();
@@ -1307,7 +1310,7 @@ function succeededFinish(learning: LearningResult = SUCCEEDED_LEARNING): Backwar
   return new BackwardFinishedRecord(1, new BackwardOutcome("succeeded", { feedback: CHAIN_ROOT, learning }));
 }
 
-/** The interrupted Finished of attempt 1 before Ready. */
+/** The unfinished Finished of attempt 1 before Ready. */
 const chainUnfinished = () => failedFinish(UNFINISHED, { learning: INCOMPLETE });
 
 /** The options of a `BackwardFailure`. */
@@ -1376,9 +1379,9 @@ test("the reducer accepts a full attempt Started → Ready → Requested → Suc
 });
 
 test.each<[string, () => BackwardRecord[]]>([
-  ["an interrupted attempt before Ready", () => [started(), chainUnfinished()]],
+  ["an unfinished attempt before Ready", () => [started(), chainUnfinished()]],
   [
-    "an interrupted attempt after Ready, with its results",
+    "an unfinished attempt after Ready, with its results",
     () => [
       started(),
       chainReady(),
@@ -1588,13 +1591,13 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
     "successful Finished learning must match accepted memory confirmations",
   ],
   [
-    "an interrupted Finished with other learning",
+    "an unfinished attempt's Finished with other learning",
     (trace) => reduced([started(), failedFinish(UNFINISHED)], trace),
     RangeError,
     "the Finished of an unfinished attempt must exactly project the accepted prefix",
   ],
   [
-    "an interrupted Finished before Ready with results",
+    "an unfinished attempt's Finished before Ready with results",
     (trace) => reduced([started(), failedFinish(UNFINISHED, { learning: INCOMPLETE }, chainResults())], trace),
     RangeError,
     "the Finished of an unfinished attempt must exactly project the accepted prefix",

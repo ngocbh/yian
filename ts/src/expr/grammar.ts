@@ -527,7 +527,10 @@ function nearestBracket(stack: Frame[]): Frame | undefined {
   return stack.findLast((frame) => frame.kind !== "prefix" && frame.kind !== "chain");
 }
 
-/** Parse `text` into a tree, or throw a `ParseError`; no post-parse checks. */
+/**
+ * Parse `text` into a tree and scope its comprehension variables (`scopeComprehensions`), or throw
+ * a `ParseError`; no other post-parse checks.
+ */
 function parseRaw(text: string): ExprNode {
   // Typed, so a `cursor.fail(...)` (which never returns) narrows the frame checked before it.
   const cursor: Cursor = new Cursor(text);
@@ -722,8 +725,8 @@ function scopeComprehensions(root: ExprNode, cursor: Cursor): ExprNode {
     }
     const callSuffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
     if (callSuffix !== undefined) {
-      const args = valueArgs(String(node.children[0]), callSuffix);
-      for (let i = 0; i < args.length; i++) visit(callSuffix, i, scope);
+      // An `arg` is never a reference itself, so it is walked rather than visited.
+      for (const arg of valueArgs(String(node.children[0]), callSuffix)) stack.push([arg, scope]);
       continue;
     }
     for (let i = 0; i < node.children.length; i++) visit(node, i, scope);
@@ -1081,7 +1084,8 @@ export function parseExpr(text: string): ExprNode {
       cause: error,
     });
   }
-  // First, as in Python: a too-deep expression reports the nesting limit before any other check.
+  // First, as in Python: a too-deep expression reports the nesting limit before any other
+  // post-parse check. (The comprehension scoping checks run inside the parse, without recursion.)
   rejectDeepExpression(tree);
   rejectOverflowingFloatLiterals(tree);
   rejectDottedCallee(tree);

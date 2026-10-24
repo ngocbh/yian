@@ -2,6 +2,5 @@ kind: expr
 python_skip: "TS-only: list comprehensions (#1086)"
 # An item is returned as is, as in Python; `.k` on a null item misses.
 expr: "[[x for x in [null, 1]], [x for x in [null, 1] if x], [x.k for x in [null]]]"
-values: {xs: [1, 2, 3, 4]}
 expect:
   value: [[null, 1], [1], [null]]

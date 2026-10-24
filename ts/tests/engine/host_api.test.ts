@@ -4,9 +4,22 @@
  * `RunBusyError`. TS-only: Python yian has no inboxes or pending calls.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import { FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -15,8 +28,10 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { FileLockError, lockFile } from "../../src/platform.ts";
+import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../../src/defaults.ts";
+import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted } from "../../src/events.ts";
 import {
   advance,
   cancel,
@@ -24,6 +39,7 @@ import {
   complete,
   DeliveryRefused,
   type DeliveryRefusal,
+  type PendingCall,
   pendingCalls,
   RunBusyError,
   runFlow,
@@ -33,7 +49,8 @@ import { PoolCommitRecord, readRunLog, RunCancelledRecord } from "../../src/runt
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { handClock } from "./inbox_fixtures.ts";
+import { gateTool, handClock } from "./inbox_fixtures.ts";
+import { processChatFlow, processEnv } from "./yian-host-api-child-hold.ts";
 import { graph, NO_ENV, rejected } from "./run_state_fixtures.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "host-api-"));
@@ -342,3 +359,228 @@ describe("bad arguments and logs, for every host call", () => {
     expect(await rejected(complete(log, "x", "yes" as never, { env, flow }))).toBeInstanceOf(TypeError);
   });
 });
+
+test("runFlow: a send from onEvent(RunStarted) reaches the engine", async () => {
+  const log = freshLog();
+  let sent: Promise<number> | null = null;
+  const result = await runFlow(chatFlow(), {}, {
+    log,
+    env,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof RunStarted) sent = send(log, "m", "hi");
+    },
+  });
+  expect([result.status, result.output]).toEqual(["succeeded", { events: ["hi"], closed: false }]);
+  const seq = await sent!;
+  expect(readRunLog(log)[seq]!.record).toBeInstanceOf(PoolCommitRecord);
+});
+
+test("a send during a live run wakes the take while another node runs", async () => {
+  const log = freshLog();
+  const gate = gateTool();
+  let sent: Promise<number> | null = null;
+  const result = await runFlow(chatFlow([new ToolNode("gate", { toolId: "gate" })]), {}, {
+    log,
+    env,
+    numWorkers: 2,
+    tools: { gate: gate.tool },
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeWaiting && event.nodeId === "heard") sent = send(log, "m", "hi");
+      // The gate is held until the take has woken and committed.
+      if (event instanceof NodeSucceeded && event.nodeId === "heard") gate.release();
+    },
+  });
+  expect([result.status, result.output]).toEqual(["succeeded", { events: ["hi"], closed: false }]);
+  const kinds = readRunLog(log).map((envelope) => envelope.kind);
+  expect(kinds).toContain("node_woken");
+  expect(kinds).not.toContain("run_waiting");
+  expect(typeof (await sent!)).toBe("number");
+});
+
+test("cancel during a live run returns the open ask and cancels the run", async () => {
+  const log = freshLog();
+  const askWaiting = Promise.withResolvers<void>();
+  let open = null as readonly PendingCall[] | null;
+  const canceller = new FunctionTool({
+    name: "gate",
+    description: "cancels the run once the ask waits",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: async () => {
+      await askWaiting.promise;
+      open = await cancel(log);
+      return "done";
+    },
+  });
+  const result = await runFlow(askFlow(null, [new ToolNode("gate", { toolId: "gate" })]), {}, {
+    log,
+    env,
+    numWorkers: 8,
+    tools: { ask: pendingAsk(), gate: canceller },
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeWaiting && event.nodeId === "ask") askWaiting.resolve();
+    },
+  });
+  expect(result.status).toBe("cancelled");
+  expect(open).toEqual([expect.objectContaining({ callId: `${result.runId}/ask`, node: "ask", tool: "ask" })]);
+  expect(result.events.filter((event) => event instanceof CallClosed)).toEqual([
+    new CallClosed({ callId: `${result.runId}/ask`, reason: "cancelled" }),
+  ]);
+});
+
+test("pendingCalls reads a log another writer holds", async () => {
+  const { log, callId } = await waitingAsk();
+  const holder = lockFile(`${realpathSync(log)}.lock`);
+  try {
+    expect(pendingCalls(log).map((call) => call.callId)).toEqual([callId]);
+  } finally {
+    holder.release();
+  }
+});
+
+test("codeRoot: an offline call refuses a CODE file outside it before any append; inside, it appends", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const root = join(dir, "..");
+  const out = mkdtempSync(join(ROOT, "out-"));
+  const log = freshLog();
+  const result = await runFlow(flow, {}, { log, env, tools: { ask: pendingAsk() } });
+  const code = readFileSync(join(dir, "fn.ts"));
+  renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
+  symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
+  const callId = `${result.runId}/ask`;
+  const options = { env, codeRoot: root };
+  const before = readFileSync(log);
+  for (const call of [
+    () => send(log, "m", "hi", options),
+    () => complete(log, callId, { output: "yes" }, options),
+    () => close(log, "m", options),
+    () => cancel(log, options),
+  ]) {
+    const error = await rejected(call());
+    expect(error).toBeInstanceOf(LoadError);
+    expect((error as Error).message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect(readFileSync(log).equals(before)).toBe(true);
+  }
+  unlinkSync(join(dir, "fn.ts"));
+  writeFileSync(join(dir, "fn.ts"), code);
+  expect(typeof (await complete(log, callId, { output: "yes" }, options))).toBe("number");
+  expect((await cancel(log, options)).map((call) => call.callId)).toEqual([]);
+  expect(readRunLog(log).at(-1)!.record).toBeInstanceOf(RunCancelledRecord);
+});
+
+const HOLD_SCRIPT = fileURLToPath(new URL("./yian-host-api-child-hold.ts", import.meta.url));
+const SEND_SCRIPT = fileURLToPath(new URL("./yian-host-api-child-send.ts", import.meta.url));
+// Without `--no-install`, Bun may try to install the script's imports from the network.
+const FLAGS = process.versions.bun === undefined ? [] : ["--no-install"];
+
+/** Spawn the child `script` with `args`, piping its stdio, killed after 20 seconds. */
+function child(script: string, args: readonly string[]): ChildProcess {
+  return spawn(process.execPath, [...FLAGS, script, ...args], { stdio: ["pipe", "pipe", "pipe"], timeout: 20_000 });
+}
+
+/** The first line `stream` writes; rejects if it closes or errors first. */
+function firstLine(stream: Readable): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let text = "";
+    const onData = (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+      const end = text.indexOf("\n");
+      if (end >= 0) {
+        stream.off("data", onData);
+        resolve(text.slice(0, end));
+      }
+    };
+    stream.on("data", onData);
+    stream.once("close", () => reject(new Error(`the stream closed before a line: ${JSON.stringify(text)}`)));
+    stream.once("error", reject);
+  });
+}
+
+/** The child's exit code, once it closes (resolves on `close`; rejects on `error`). */
+function exited(proc: ChildProcess): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      resolve(proc.exitCode);
+      return;
+    }
+    proc.once("close", (code) => resolve(code));
+    proc.once("error", reject);
+  });
+}
+
+/** Kill `proc` unless it has exited. */
+function reap(proc: ChildProcess): void {
+  if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+}
+
+test("a send while another process moves the run is RunBusyError; after it ends, the send lands", async () => {
+  const log = freshLog();
+  const proc = child(HOLD_SCRIPT, [log]);
+  try {
+    expect(await firstLine(proc.stdout!)).toBe("locked");
+    const flow = processChatFlow();
+    expect(await rejected(send(log, "m", "hi", { env: processEnv, flow }))).toBeInstanceOf(RunBusyError);
+    proc.stdin!.end("go\n");
+    // Its run ended waiting on the take.
+    expect(await exited(proc)).toBe(0);
+    expect(typeof (await send(log, "m", "hi", { env: processEnv, flow }))).toBe("number");
+    expect((await advance({ log, flow, env: processEnv, tools: { gate: openGate() } })).output).toEqual({
+      events: ["hi"],
+      closed: false,
+    });
+  } finally {
+    reap(proc);
+  }
+}, 30_000);
+
+/** A `gate` tool that opens at once. */
+function openGate(): FunctionTool {
+  return new FunctionTool({
+    name: "gate",
+    description: "opens at once",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: () => "opened",
+  });
+}
+
+test("a send from another process to a run this one left waiting: advance rebuilds and reads it", async () => {
+  const log = freshLog();
+  const flow = processChatFlow();
+  const tools = { gate: openGate() };
+  expect((await runFlow(flow, {}, { log, env: processEnv, tools })).status).toBe("waiting");
+  const proc = child(SEND_SCRIPT, [log, "send"]);
+  try {
+    proc.stdin!.end();
+    const line = firstLine(proc.stdout!);
+    expect(await exited(proc)).toBe(0);
+    expect(typeof JSON.parse(await line)).toBe("number");
+    const advanced = await advance({ log, flow, env: processEnv, tools });
+    expect([advanced.status, advanced.output]).toEqual(["succeeded", { events: ["from child"], closed: false }]);
+  } finally {
+    reap(proc);
+  }
+}, 30_000);
+
+test("registry hit: after advance waits, a call needs no recompile until another process appends", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const log = freshLog();
+  const tools = { ask: pendingAsk() };
+  const result = await runFlow(flow, {}, { log, env, tools });
+  expect((await advance({ log, env, tools })).status).toBe("waiting");
+  const code = readFileSync(join(dir, "fn.ts"));
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect(typeof (await complete(log, `${result.runId}/ask`, { output: "yes" }, { env }))).toBe("number");
+  writeFileSync(join(dir, "fn.ts"), code);
+  const proc = child(SEND_SCRIPT, [log, "cancel"]);
+  try {
+    proc.stdin!.end();
+    const line = firstLine(proc.stdout!);
+    expect(await exited(proc)).toBe(0);
+    expect(JSON.parse(await line)).toEqual([]);
+  } finally {
+    reap(proc);
+  }
+  unlinkSync(join(dir, "fn.ts"));
+  // The other process changed the log: the miss recompiles, and the CODE file is gone.
+  expect(await rejected(complete(log, `${result.runId}/ask`, { output: "yes" }, { env }))).toBeInstanceOf(LoadError);
+}, 30_000);

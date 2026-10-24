@@ -178,19 +178,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       throw error;
     }
   };
-  const toolset = ctx.toolset ?? new ToolSet();
-  // A granted id may name a host-filled group; grants are checked by tool name.
-  const granted = toolset.expand(ctx.tools);
-  if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) return await structured();
-
-  // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
-  const bound = toolset
-    .resolve(granted)
-    .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
-  const skills = new Map(ctx.skills.map((skill) => [skill.name, skill]));
-  if (skills.size > 0) bound.push(loadSkillTool());
-  let iterations = 0;
-  let reply: Message | null = null;
   const onDrop = (event: number, part: number) =>
     warn(`node ${reprText(ctx.nodeId)}: steer event ${event} part ${part} is media, which no route sends yet; dropped`);
   // The events are already consumed, so a render that fails for one sends its default text instead.
@@ -200,6 +187,25 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
         "sent as is",
     );
   const steerOptions = { render: ctx.renderSteer ?? null, onDrop, onFallback };
+  const toolset = ctx.toolset ?? new ToolSet();
+  // A granted id may name a host-filled group; grants are checked by tool name.
+  const granted = toolset.expand(ctx.tools);
+  if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) {
+    // One structured request: steers join it as they would a loop's first call, and an interrupt
+    // before it is honored, leaving the steers queued.
+    if (interruptRequested(interrupt, steps)) return honor(ctx, steps);
+    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
+    return await structured();
+  }
+
+  // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
+  const bound = toolset
+    .resolve(granted)
+    .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
+  const skills = new Map(ctx.skills.map((skill) => [skill.name, skill]));
+  if (skills.size > 0) bound.push(loadSkillTool());
+  let iterations = 0;
+  let reply: Message | null = null;
 
   while (true) {
     checkStopped(ctx);

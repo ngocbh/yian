@@ -1,0 +1,193 @@
+# TS-only: steer_inbox reads an Inbox, which Python yian doesn't have (#1025).
+# A tool-free structured AGENT read a steer (record 15) and the run crashed before its structured
+# call. The resumed agent replays the steer step with its value and sends it in the one structured
+# request, as the first start would have (its first call's reply, taken before the cut, is
+# lost with the crash; the second script entry answers the resumed call).
+kind: resume
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+rules: [run-log]
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    draft:
+      kind: agent
+      prompt: Draft.
+      output: str
+    score:
+      kind: agent
+      steer_inbox: ${input.notes}
+      depends_on: [draft]
+      prompt: Score it.
+      output: {score: int}
+  output: ${score.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  crash_after_record: 15
+  sends:
+  - {inbox: notes, event: be strict, after: {node: draft, model_call: 1}}
+  models:
+    draft:
+      agent:
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: a draft}]}
+    score:
+      agent:
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: '{"score": 3}'}]}
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - {type: text, text: Score it.}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - {type: text, text: be strict}
+          schema:
+            type: object
+            properties: {score: {type: integer}}
+            required: [score]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: '{"score": 3}'}]}
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - {type: text, text: Score it.}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - {type: text, text: be strict}
+          schema:
+            type: object
+            properties: {score: {type: integer}}
+            required: [score]
+expect:
+  output:
+    status: succeeded
+    output: {score: 3}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        draft:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+        score:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, draft]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: be strict}
+  - - node_step
+    - draft
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: a draft, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: e834c8b6603b09e28042111e09c7016bb8a98056020a77d8318ac454c02e7c1e
+        response_id: null
+        usage: null
+  - - pool_commit
+    - draft
+    - {value: a draft}
+  - - pool_commit
+    - draft
+    - key: draft.new_messages
+      steps: [10]
+  - - node_succeeded
+    - draft
+    - {commit: 11, messages: 12}
+  - [node_started, score]
+  - - node_step
+    - score
+    - n: 1
+      step:
+        from: [9]
+        inbox: notes
+        kind: steer
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [score]
+  - [node_started, score]
+  - - node_step
+    - score
+    - n: 2
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"score": 3}', type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: 84f1256c240214414d610ae3afa0451bf39696459628e215e3c3f5942b0fc804
+        response_id: null
+        usage: null
+  - - pool_commit
+    - score
+    - value: {score: 3}
+  - - pool_commit
+    - score
+    - key: score.new_messages
+      steps: [15, 18]
+  - - node_succeeded
+    - score
+    - {commit: 19, messages: 20}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value: {score: 3}
+  - - node_succeeded
+    - __end__
+    - {commit: 23}

@@ -372,6 +372,40 @@ test("a crash after a tool result replays the reply: the model and the tool run 
   expect(comparable(log)).toEqual(comparable(uncut.log));
 });
 
+test("a replayed reply whose arguments hold ints and floats matches its digest", async () => {
+  const reply = () =>
+    new ScriptedModel(
+      [
+        new Response({
+          message: new Message({
+            role: "assistant",
+            parts: [new ToolCallPart({ id: "call-a", name: "save", arguments: { topic: "a", n: 2n, f: 1.5, w: 3 } })],
+          }),
+          finishReason: "tool_calls",
+        }),
+        textReply("done"),
+      ],
+      CONFIG,
+    );
+  const save = () =>
+    new FunctionTool({
+      name: "save",
+      description: "Tool save.",
+      parametersJsonSchema: {
+        type: "object",
+        properties: { topic: { type: "string" }, n: { type: "integer" }, f: { type: "number" }, w: { type: "number" } },
+      },
+      execute: (args) => logJson(args),
+    });
+  const uncut = await run(reply(), { tools: { save: save() } });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  const log = await cutRun(seqOf(uncut.log, "tool_result") + 1, reply(), { tools: { save: save() } });
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const resumed = await resume(log, model, { tools: { save: save() } });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(steps(log)[2]!["request_sha256"]).toBe(steps(uncut.log)[2]!["request_sha256"]!);
+});
+
 test("a crash mid-call makes the call again under the same n", async () => {
   const uncut = await run(saveModel(), { tools: { save: topicTool("save") } });
   const tools = { save: topicTool("save") };

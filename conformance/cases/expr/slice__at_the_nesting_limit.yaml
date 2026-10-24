@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+# Two subscripts are two levels; the slice and an omitted bound add none.
+expr: "xs[1:][1:]"
+values: {xs: [1, 2, 3, 4]}
+env: {YIAN_MAX_VALUE_NESTING: "2"}
+expect:
+  value: [3, 4]

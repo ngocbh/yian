@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: "[(xs + ys)[1:], [1, 2, 3][1:], xs[1:][:1], len(xs[1:]) * 2]"
+values: {xs: [1, 2, 3, 4], ys: [5], a: 1, b: 1, m: 2, n: null, s: abc}
+expect:
+  value: [[2, 3, 4, 5], [2, 3], [2], 6]

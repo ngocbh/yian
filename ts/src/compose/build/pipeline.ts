@@ -2284,7 +2284,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const lowered = lowerFlowAsserts(
     assertsSection,
     flowInputs,
-    new Set(descriptors.keys()),
+    new Set([
+      ...descriptors.keys(),
+      ...[...nodesBuilt].filter(([, node]) => node.producesMessages).map(([nodeId]) => messagesKey(nodeId)),
+    ]),
     producers,
     flowAssertionRanges,
     { inputContracts: flowInputContracts, registry, diagnostics },

@@ -180,3 +180,37 @@ output: \${reader.output}`,
     ),
   );
 });
+
+/** A flow whose agent `reply` is checked by the flow assert `check`. */
+const ASSERTED = (check: string) => `${FLOW("", "${reply.output}")}asserts:
+  - ${check}
+`;
+
+test("a flow assert reading reply.new_messages loads, as a post-assert", async () => {
+  const flow = await loadFlow(ASSERTED("reply.new_messages != null"));
+  const end = flow.compiled.nodes.get("__end__")!;
+  expect(end.postAsserts.map((assertion) => assertion.expression)).toEqual(["__assert_reply_new_messages != null"]);
+  expect(flow.compiled.edges.some((edge) => edge.from === "reply" && edge.to === "__end__")).toBe(true);
+});
+
+test("a flow assert's field read into new_messages is checked against list(Message)", async () => {
+  const error = await loadErrorAsync(loadFlow(ASSERTED("reply.new_messages.nope == 'x'")));
+  expect(error.message).toContain("reads field 'nope' on type list(");
+});
+
+test("a flow assert reading new_messages of a CODE node is refused", async () => {
+  const flow = `${FLOW(CODE_READER("      history: ${reply.new_messages}"))}asserts:
+  - reader.new_messages != null
+`;
+  expect((await loadErrorAsync(loadFlow(flow))).message).toContain(NOT_AN_AGENT("reader"));
+});
+
+test("a node's own assert reading its new_messages is refused: it reads only its locals", async () => {
+  const flow = FLOW("", "${reply.output}").replace(
+    "    output: str\n",
+    "    output: str\n    asserts:\n      - reply.new_messages != null\n",
+  );
+  expect((await loadErrorAsync(loadFlow(flow))).message).toContain(
+    "${reply.new_messages} is not a declared input or `${output}`",
+  );
+});

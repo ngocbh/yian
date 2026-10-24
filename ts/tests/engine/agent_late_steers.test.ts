@@ -20,6 +20,7 @@ import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
+import { withWarnings } from "../../src/platform.ts";
 import { send } from "../../src/run.ts";
 import { NodeStepRecord, PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -333,4 +334,46 @@ test("a crash after the late model_call: replay takes it with a matching digest"
   expect(resumed.output).toBe("final");
   expect(model.requests).toEqual([]);
   expect(steps(log).filter((step) => step === "model_call")).toHaveLength(2);
+});
+
+test("a loaded render whose field is null at run time falls back for that event; the steer step stands", async () => {
+  const flow = `
+typedefs:
+  Note:
+    text: Optional(str)
+id: render
+name: render
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  notes: !Inbox(Note)
+nodes:
+  chat:
+    kind: agent
+    steer_inbox:
+      from: \${input.notes}
+      render: |-
+        Note: \${event.text}
+    system_prompt: Help.
+    prompt: Help the user.
+    output: str
+output: \${chat.output}
+`;
+  const log = freshLog();
+  const model = hooked(new ScriptedModel([textReply("draft"), textReply("final")], CONFIG), async (i) => {
+    if (i !== 1) return;
+    await send(log, "notes", { text: "use 2024" });
+    await send(log, "notes", { text: null });
+  });
+  const warned: string[] = [];
+  const result = await withWarnings(
+    (message) => warned.push(message),
+    async () => runWith(await loadFlow(flow), {}, null, model, { log }),
+  );
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(model.requests[1]!.messages.at(-1)!.parts.map((part) => (part as TextPart).text)).toEqual([
+    "Note: use 2024",
+    '{"text":null}',
+  ]);
+  expect(steps(log)).toEqual(["model_call", { kind: "steer", inbox: "notes", from: sendSeqs(log).map(BigInt) }, "model_call"]);
+  expect(warned.filter((message) => message.includes("didn't render"))).toHaveLength(1);
 });

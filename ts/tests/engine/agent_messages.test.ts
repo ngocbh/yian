@@ -246,6 +246,6 @@ describe("checkConversation over public Message values", () => {
     // `tsc` checks the directive: the public check takes Message values, not model messages.
     // @ts-expect-error
     const check = () => checkConversation(models);
-    expect(check).toBeFunction();
+    expect(typeof check).toBe("function");
   });
 });

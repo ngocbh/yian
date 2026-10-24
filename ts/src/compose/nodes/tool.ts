@@ -19,6 +19,7 @@ import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.t
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
+import { parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
   isInboxType,
@@ -152,8 +153,12 @@ export class ToolDescriptor extends NodeDescriptor {
     const retries = builtin ? 0 : this.retries;
     const node = new ToolNode(this.id, { toolId: this.toolId, title: this.nodeName, retries });
     const wiring = this.sinkWiring();
-    if (this.toolId === TAKE) node.outputContract = this.buildTake(ctx);
-    else node.outputContract = this.outputContract(ctx);
+    if (this.toolId === TAKE) {
+      node.outputContract = this.buildTake(ctx);
+      this.wireDuration(ctx, wiring, "timeout");
+    } else {
+      node.outputContract = this.outputContract(ctx);
+    }
     node.params = this.sinkParams();
     return this._finish(node, wiring);
   }
@@ -218,6 +223,40 @@ export class ToolDescriptor extends NodeDescriptor {
     throw ctx.diagnostics.error(
       `${subject}: must be one or all, but the value is ${canonicalTypeLabel(typ)}`,
       { range: this.inputRange("take") },
+    );
+  }
+
+  /**
+   * Rewrite duration input `name`'s wiring source, when present: a literal to its seconds (a
+   * bigint); a reference stays as written once its type is `str`, and is parsed when the node runs.
+   *
+   * @throws LoadError at the input for a malformed duration, a plain number, or a reference not
+   *   typed `str` (an unproven one included: tag it `!str`).
+   */
+  private wireDuration(ctx: BuildContext, wiring: Map<string, unknown>, name: string): void {
+    if (!wiring.has(name)) return;
+    const subject = this.inputSubject(name);
+    const range = this.inputRange(name);
+    const literal = literalValue(bindingSource(wiring.get(name)));
+    if (literal !== NOT_LITERAL) {
+      if (typeof literal !== "string") {
+        const hint = typeof literal === "bigint" ? `; write ${literal}s` : "";
+        throw ctx.diagnostics.error(`${subject}: a duration is text such as 24h, got ${valueRepr(literal)}${hint}`, {
+          range,
+        });
+      }
+      try {
+        wiring.set(name, BigInt(parseDuration(literal)));
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw ctx.diagnostics.error(`${subject}: ${error.message}`, { range, cause: error });
+      }
+      return;
+    }
+    if (this.inputType(ctx, name)?.kind === ValueKind.STRING) return;
+    throw ctx.diagnostics.error(
+      `${subject}: a duration reference must be typed str (tag it: \`${name}: !str \${...}\`)`,
+      { range },
     );
   }
 

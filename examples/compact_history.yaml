@@ -1,7 +1,7 @@
 # compact_history — keep a chat history's text under a budget by folding older turns into a
 # rolling summary. The history is a list of turns, each a list of messages; `keep` counts turns.
-# Msg is text-only for now; when chats carry tools (#1025 Phase 2), Msg becomes the built-in
-# Message and the budget and prompt read text parts, so this flow's interface changes then.
+# Msg is text-only for now; when chats carry tools, Msg becomes the built-in Message and the
+# budget and prompt read text parts, so this flow's interface changes then.
 # Comprehensions, len() and slices are TS-only.
 id: compact_history
 name: compact_history

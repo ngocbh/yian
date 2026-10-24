@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,7 @@ import {
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { NO_ENV, SUMMARIZER_FIRST_LINE } from "../engine/run_state_fixtures.ts";
+import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/run_state_fixtures.ts";
 import { CTRL_C, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
@@ -602,9 +602,6 @@ test(
   TIMEOUT,
 );
 
-/** The compaction flow examples/chat.yaml calls. */
-const EXAMPLE_COMPACT = fileURLToPath(new URL("../../../examples/compact_history.yaml", import.meta.url));
-
 /** A chat-completions stream of `text`, built like `SEVEN`. */
 const stream = (text: string) =>
   [
@@ -617,12 +614,7 @@ const stream = (text: string) =>
 test(
   "the summary a fold writes is never printed",
   async () => {
-    // examples/chat.yaml with a 200-character budget, beside compact_history.yaml.
-    const chatText = readFileSync(EXAMPLE_CHAT, "utf8");
-    const compactedInput = `input: {summary: "\${input.summary}", history: "\${input.history}"}`;
-    expect(chatText).toContain(compactedInput);
-    const path = flowFile(chatText.replace(compactedInput, `${compactedInput.slice(0, -1)}, budget: 200}`));
-    flowFile(readFileSync(EXAMPLE_COMPACT, "utf8"), "compact_history.yaml");
+    const path = writeSmallBudgetChat(tmp);
     const env = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
     const { io, stdin, stdout, stderr } = chatIo({ env });
     // Five turns of 51 characters (a 50-character line and the reply "7") pass 200 and keep 4,
@@ -641,6 +633,7 @@ test(
       expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
       expect(stdout()).toBe("7\n".repeat(5));
       expect(stdout()).not.toContain("SUMMARY-TEXT");
+      expect(stderr()).not.toContain("SUMMARY-TEXT");
       expect(calls).toBe(6);
       expect(inspectRun(log).status).toBe("succeeded");
     } finally {

@@ -1284,7 +1284,8 @@ A chat is a `loop` that carries an `Inbox(str)` input into every turn, with the 
 runs two nodes side by side: `take: all` reads every message sent since the last one, and
 `compacted` CALLs [`templates/compact_history.yaml`](templates/compact_history.yaml) (a `uses:`
 sibling), which passes the history through under its character budget or folds the older turns
-into the summary with one model call, so a fold runs while the run waits for the next message.
+into the summary with one model call. It runs after the reply, so the run ends `waiting` once
+any fold is done; in `yian chat` a fold delays the next prompt.
 A routing-only `case` sends a non-empty `events` to `answered`, a CALL of `respond`; a take
 that returns no events (the inbox closed with nothing left) skips it. `closed` comes from the
 take. Ending is the host's `close` (`/exit` in `yian chat`), so no text is special. See

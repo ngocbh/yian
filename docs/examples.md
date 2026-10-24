@@ -188,7 +188,7 @@ Each turn starts two nodes side by side, a TOOL `take` and a CALL of
 [`compact_history.yaml`](#compact_historyyaml-a-rolling-summary):
 
 ```yaml
-compacted:                      # beside `heard`: compacts the last reply's history
+compacted:                      # beside `heard`: compacts the history so far
   kind: call
   call: compact_history
   input: {summary: "${input.summary}", history: "${input.history}"}
@@ -200,9 +200,9 @@ heard:
     take: all
 ```
 
-`take: all` returns everything sent since the last turn as `{events, closed}`. While no
-message is waiting the run ends `waiting`, and `compacted` runs before it does, so a fold
-happens while the run waits for the next message. A routing-only `case` sends a non-empty
+`take: all` returns everything sent since the last turn as `{events, closed}`. `compacted`
+runs right after the reply, beside the take; while no message is waiting the run ends
+`waiting`, once any fold is done. A routing-only `case` sends a non-empty
 `events` to `answered`, a CALL of the `respond` def whose AGENT replies. `answered` gets the
 summary and the kept turns flattened into one list of messages
 (`${[m for t in compacted.output.history for m in t]}`), and the reply's system prompt ends
@@ -210,7 +210,8 @@ with `Conversation so far: ${summary}` (empty before the first fold). The turn's
 appends the new turn: `${compacted.output.history + (answered.output :- [])}`. `closed` comes
 from the take, so a take that returns events with `closed: true` is answered and then ends the
 loop, and a closed take with no events skips `answered`. The flow's output is
-`{summary, history}`, with the history flat.
+`{summary, history}`: the final summary and the kept recent turns, flattened into one list of
+messages (the folded turns live only in the summary).
 
 The AGENT records only its reply, and the history is built in derived bindings (CALL and END
 commits are pointers), so the run log grows linearly: per turn a constant, plus one summary
@@ -225,9 +226,8 @@ yian chat examples/chat.yaml
 #   → /exit (or Ctrl-D) closes the inbox and ends the chat
 ```
 
-On a turn that folds, the reply prints, and the next prompt appears once the summary is
-written: `yian chat` shows it after the run step returns (#1091). The summary itself is never
-printed.
+On a turn that folds, the reply prints, and the next prompt appears only once the summary is
+written. The summary itself is never printed.
 
 Changed (TS yian): the chat asked through a `human_input` node each turn and ended on
 `/exit`; TS yian removed that kind, so this file needs TS yian. It also uses list
@@ -261,11 +261,10 @@ never recorded, and the AGENT binds plain references, so a learnable run records
 routes. `keep: 0` (or less) folds every turn.
 
 The summarizer is an ordinary AGENT: after the normal model retries a failed summary fails the
-run, and a failed run is terminal, so the chat ends. A node fallback (`on_failure:`, #15) will
-let it keep the history and retry on the next turn. The AGENT is never named `reply`, because
+run, and a failed run is terminal, so a failed summary ends the chat. The AGENT is never named `reply`, because
 `yian chat` prints any node named `reply`.
 
-`Msg` is text-only (`{role, text}`) for now. When chats carry tools (#1025), `Msg` becomes the
+`Msg` is text-only (`{role, text}`) for now. When chats carry tools, `Msg` becomes the
 built-in `Message`, and the budget and the prompt read text parts, so this flow's interface
 changes then.
 

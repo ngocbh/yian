@@ -11,7 +11,7 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,7 @@ import {
   SUMMARIZER_FIRST_LINE,
   systemText,
   textReply,
+  writeSmallBudgetChat,
 } from "../engine/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
@@ -215,14 +216,8 @@ test("chat folds the older turns into a summary once nine long turns pass the bu
 }, 60_000);
 
 test("in a learnable chat, feedback on a reply reaches the summarizer through the summary", async () => {
-  // A copy of the chat with a 200-character budget, beside an unchanged compact_history.yaml.
   const dir = mkdtempSync(join(tmp, "small-budget-"));
-  const chatText = readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8");
-  const compactedInput = `input: {summary: "\${input.summary}", history: "\${input.history}"}`;
-  expect(chatText).toContain(compactedInput);
-  writeFileSync(join(dir, "chat.yaml"), chatText.replace(compactedInput, `${compactedInput.slice(0, -1)}, budget: 200}`));
-  writeFileSync(join(dir, "compact_history.yaml"), readFileSync(join(EXAMPLES_DIR, "compact_history.yaml"), "utf8"));
-  const loaded = await loadFlow(readFileSync(join(dir, "chat.yaml"), "utf8"), { searchPaths: [dir] });
+  const loaded = await loadFlow(readFileSync(writeSmallBudgetChat(dir), "utf8"), { searchPaths: [dir] });
   // A backward input_feedback value is a list of messages; a bare string fails the attempt.
   const KEEP_NAME = JSON.stringify({
     input_feedback: { summary: ["Keep the user's name."] },

@@ -489,8 +489,9 @@ iteration's size, not the iteration count. See
 list(list(Msg)), closed: bool}` (`'a -> 'a`; one inner list per turn). Each turn runs two
 nodes side by side: a `take: all` that reads every message sent since the last turn, and
 `compacted`, a CALL of `compact_history` (a `uses:` sibling) that passes the history through
-under its budget or folds the older turns into the summary with one model call, so a fold runs
-while the run waits for the next message. A routing-only CASE sends a non-empty `events` to
+under its budget or folds the older turns into the summary with one model call. It runs after
+the reply, so the run ends `waiting` once any fold is done; in `yian chat` a fold delays the
+next prompt. A routing-only CASE sends a non-empty `events` to
 `answered`, a CALL of a `respond` def whose `reply` (`agent`) gets the summary in its system
 prompt and the kept turns flattened in the CALL's binding
 (`${[m for t in compacted.output.history for m in t]}`); `respond` returns the one new turn.

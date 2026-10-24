@@ -12,7 +12,7 @@
  * `CrashAt`, `crashes`, `sentTexts`, `reply`, `backwardReply`,
  * `memorySections`, `memorySnapshot`) and the in-process `yian run` over a fake chat endpoint
  * (`runCli`, `ChatText`), and the chat examples' model that answers by system prompt
- * (`PromptModel`).
+ * (`PromptModel`) and small-budget copy (`writeSmallBudgetChat`).
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -525,6 +525,22 @@ export class PromptModel implements ChatModel {
         : (this.answers.backward?.shift() ?? textReply(NO_FEEDBACK));
     return new ScriptedModel([answer], this).stream(request, options);
   }
+}
+
+/**
+ * Write `examples/chat.yaml` with a 200-character compaction budget (passed to its `compacted`
+ * call) and an unchanged `examples/compact_history.yaml` beside it into `dir`; return the chat's
+ * path. Five 60-character turns pass that budget, so small tests fold.
+ */
+export function writeSmallBudgetChat(dir: string): string {
+  const examples = join(import.meta.dirname, "../../../examples");
+  const chatText = readFileSync(join(examples, "chat.yaml"), "utf8");
+  const compactedInput = `input: {summary: "\${input.summary}", history: "\${input.history}"}`;
+  expect(chatText).toContain(compactedInput);
+  const path = join(dir, "chat.yaml");
+  writeFileSync(path, chatText.replace(compactedInput, `${compactedInput.slice(0, -1)}, budget: 200}`));
+  writeFileSync(join(dir, "compact_history.yaml"), readFileSync(join(examples, "compact_history.yaml"), "utf8"));
+  return path;
 }
 
 /** One assistant reply calling `calls` (`[name, args, id]`), finished with `tool_calls`. */

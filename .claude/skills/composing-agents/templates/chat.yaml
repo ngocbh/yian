@@ -3,8 +3,9 @@
 # The host sends each line the person types to the `messages` inbox (`send`), and each
 # turn's `take` reads everything sent since the last one. A take with nothing to read
 # waits: the run ends `waiting` and holds no worker until the next send. Beside the take,
-# `compacted` CALLs compact_history on the turns so far (no model call under its budget),
-# so a fold runs while the run waits for the next message. `answered` calls `respond` with
+# `compacted` CALLs compact_history on the turns so far (no model call under its budget);
+# it runs after the reply, so the run ends `waiting` once any fold is done (a host that shows
+# the next prompt only then, such as `yian chat`, shows it after the fold). `answered` calls `respond` with
 # the summary and the kept turns flattened by a comprehension in the CALL's binding; the
 # reply's system prompt renders the summary. Closing the inbox (`close`) ends the loop once
 # the queued messages are answered: `closed` comes from the take, and a closed take with no
@@ -52,7 +53,9 @@ defs:
         prompt:
           - ${history}
           - user: ${message}
-    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}   # one new turn
+    # A one-turn list (hence the double brackets), so the body appends it with `+`, or `[]` when
+    # `answered` is skipped.
+    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
 
   turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
     input:
@@ -61,7 +64,7 @@ defs:
       closed: !bool
       messages: !Inbox(str)
     nodes:
-      compacted:          # beside `heard`: compacts the last reply's history
+      compacted:          # beside `heard`: compacts the history so far
         kind: call
         call: compact_history
         input: {summary: "${input.summary}", history: "${input.history}"}

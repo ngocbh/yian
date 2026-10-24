@@ -8,17 +8,13 @@ flow: |
   # (agent without tools; deterministic history).
   #
   # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
-  # them and takes everything sent since the last turn. Beside that wait, `compacted` calls
-  # compact_history.yaml on the turns so far: under its budget (32,000 characters of message text)
-  # it passes them through with no model call; over it, one model call folds the older turns into
-  # the summary and keeps the last 4 turns. `answered` then calls `respond` with the summary and the
-  # kept turns flattened into one list of messages (a comprehension in the CALL's binding); the
-  # reply's system prompt carries the summary as `Conversation so far: ...` (empty before the first
-  # fold). Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are
-  # answered: `closed` comes from the take, and a closed take with nothing left skips `answered`.
-  # The AGENT outputs only its reply, and the history is built in derived bindings (CALL and END
-  # commits are pointers), so the run log grows linearly: per turn a constant, plus one summary
-  # per fold, plus the flow's output once.
+  # them and takes everything sent since the last turn. Beside that take, `compacted` calls
+  # compact_history.yaml on the history so far: under its budget (32,000 characters of message
+  # text) it passes it through with no model call; over it, one model call folds the older turns
+  # into the summary and keeps the last 4 turns. `answered` calls `respond` with the summary and
+  # the kept turns flattened into one list of messages; the reply's system prompt carries the
+  # summary. Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are
+  # answered. The run log grows linearly (see "Growing a carried value" in docs/syntax.md).
   # Comprehensions, len(), slices, the `prompt:` list style, `Inbox(str)` and `take` are TS-only.
   id: chat
   name: chat
@@ -55,7 +51,9 @@ flow: |
           prompt:
             - ${history}
             - user: ${message}
-      output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}   # one new turn
+      # A one-turn list (hence the double brackets), so the body appends it with `+`, or `[]` when
+      # `answered` is skipped.
+      output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
 
     turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
       input:
@@ -64,7 +62,7 @@ flow: |
         closed: !bool
         messages: !Inbox(str)
       nodes:
-        compacted:          # beside `heard`: compacts the last reply's history
+        compacted:          # beside `heard`: compacts the history so far
           kind: call
           call: compact_history
           input: {summary: "${input.summary}", history: "${input.history}"}
@@ -104,8 +102,8 @@ files:
   compact_history.yaml: |
     # compact_history — keep a chat history's text under a budget by folding older turns into a
     # rolling summary. The history is a list of turns, each a list of messages; `keep` counts turns.
-    # Msg is text-only for now; when chats carry tools (#1025 Phase 2), Msg becomes the built-in
-    # Message and the budget and prompt read text parts, so this flow's interface changes then.
+    # Msg is text-only for now; when chats carry tools, Msg becomes the built-in Message and the
+    # budget and prompt read text parts, so this flow's interface changes then.
     # Comprehensions, len() and slices are TS-only.
     id: compact_history
     name: compact_history

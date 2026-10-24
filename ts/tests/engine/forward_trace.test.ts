@@ -71,6 +71,10 @@
  * names only; a resume clearing unfinished starts; an applied delta leaving earlier occurrences
  * alone; a `TraceDelta`'s defaults and frozen arrays.
  *
+ * TS-only (bound inputs from the route): a learnable chat's replayed trace rebuilds each
+ * occurrence's bound inputs by rebinding its node from the values its route read, a template
+ * binding (`reply`) and a `+` binding (`__end__`) after the loop pruned their nodes.
+ *
  * TS-only (frontier trace), on `learnableStarted` with START's `NodeStarted` committed: a learnable
  * `RunStopped` carries a sequence-only trace delta and commits; a forged stop plan whose trace
  * delta starts a node is refused; a frontier plan holding an outcome record is refused by the
@@ -246,7 +250,10 @@
  * of its path, and a forged unfrozen `["x"]` is the same selector).
  */
 
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildGrow, callSubgraph, cloneChild } from "../../src/compile/expand.ts";
 import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
@@ -313,6 +320,7 @@ import {
   canonicalTyped,
   decodeRecord,
   encodeRecord,
+  JsonlRunLog,
   type MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -334,6 +342,8 @@ import {
   type OutcomeRecord,
   type PrepareTraceOptions,
   prepareTrace,
+  type ReboundSource,
+  type Rebinder,
   RetainedTrace,
   SeedRoutes,
   SourceEntry,
@@ -390,7 +400,9 @@ import {
   textReply,
   traceSnapshot,
   prepareGrowth,
+  serving,
 } from "./run_state_fixtures.ts";
+import { replayRunLog, runFlow } from "../../src/run.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
 
@@ -1170,11 +1182,14 @@ function install(trace: RetainedTrace, target: string, entry: SourceEntry): void
   trace._currentWriters.set(target, entry);
 }
 
-/** Install the occurrence of `a` started at seq 1, accepted with `record` at seq 2. */
+/**
+ * Install the occurrence of `a` started at seq 1, accepted with `record` at seq 2, its bound inputs
+ * rebuilding to `{v: 1}`.
+ */
 function installOccurrence(trace: RetainedTrace, record: OutcomeRecord): TraceOccurrence {
   const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route);
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, null, new Set(), null, [], null, () => ({ v: 1n }));
   trace._occurrences.push(occurrence);
   trace.occurrenceBySource.set(sourceKey(occurrence.source), occurrence);
   return occurrence;
@@ -1660,7 +1675,14 @@ test("prepareTrace and apply build the trace record by record", () => {
   const succeeded = at(4, committedSuccess("a", "a", { kind: "int", value: 2n }, {
     forwardCapture: (learned!.record as NodeSucceededRecord).forwardCapture,
   }));
-  expect(step(trace, succeeded, node, { writerFiles: files })).toBe(trace);
+  // The rebinder gets each pool name the route read, with the producer's start, and reads the
+  // value it wrote from the trace's history.
+  let given: [ReadonlyMap<string, number>, ReboundSource] | null = null;
+  const rebinder: Rebinder = (sources, resolve) => {
+    given = [new Map(sources), resolve("__start__", 0)];
+    return { inputs: { v: 1n }, capture: new BindingCapture({ v: 1n }, ValueRoute.record([]), new Set()) };
+  };
+  expect(step(trace, succeeded, node, { writerFiles: files, rebinder })).toBe(trace);
   const source = new SourceRef(RUN, 2);
   const occurrence = trace.occurrences[0]!;
   expect(occurrence.source).toEqual(source);
@@ -1685,6 +1707,11 @@ test("prepareTrace and apply build the trace record by record", () => {
   const context = trace.backwardContext(source);
   handler(context, ["Review."]);
   expect(node.calls).toEqual([[context, ["Review."]]]);
+  expect(context.inputs).toEqual({ v: 1n });
+  const [names, read] = given!;
+  expect([...names]).toEqual([["__start__", 0]]);
+  expect(read.value.toObject()).toEqual({ x: 1n });
+  expect(read.source).toEqual(new SourceRef(RUN, 0));
 });
 
 test("the run start's commits install the system values and the START inputs, the root writer when START ends", () => {
@@ -2316,6 +2343,9 @@ function changedOccurrence(
     occurrence.inputRoute,
     changes.memoryScope === undefined ? occurrence.memoryScope : changes.memoryScope,
     occurrence.hiddenInputs,
+    occurrence.seed,
+    occurrence.steps,
+    occurrence.capture,
   );
 }
 
@@ -4478,12 +4508,18 @@ output: {left: '\${left.output}', right: '\${right.output}'}
   const forbidden = () => {
     throw new Error("replay tried to resolve, render, capture, or invoke a model");
   };
+  const capture = Node.prototype.captureBackwardContext;
   const spies = [
     spyOn(AgentNode.prototype, "forward").mockImplementation(forbidden),
     spyOn(AgentNode.prototype as unknown as { resolveVariables(): unknown }, "resolveVariables").mockImplementation(
       forbidden,
     ),
-    spyOn(Node.prototype, "captureBackwardContext").mockImplementation(forbidden),
+    // Replay rebuilds a derived record's capture from the flow, which asks the derived node for its
+    // backward material; an AGENT's is never captured again.
+    spyOn(Node.prototype, "captureBackwardContext").mockImplementation(function (this: Node) {
+      if (this instanceof AgentNode) return forbidden();
+      return capture.call(this);
+    }),
   ];
   try {
     const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
@@ -4505,4 +4541,69 @@ output: {left: '\${left.output}', right: '\${right.output}'}
   } finally {
     for (const spy of spies) spy.mockRestore();
   }
+});
+
+/** A chat loop of three scripted turns: `reply` binds a template, `__end__` appends with `+`. */
+const BOUND_CHAT = `
+id: chat
+name: chat
+llm_config: {provider: anthropic, model: claude-test}
+typedefs:
+  Msg: {role: str, text: str}
+defs:
+  turn:
+    input: {history: !list(Msg), log: !str}
+    nodes:
+      ask: {kind: human_input, prompt: "You:", output: str}
+      reply:
+        kind: agent
+        input: {history: "\${input.history}", message: "\${ask.output}"}
+        output: str
+        prompt: |-
+          Conversation so far: \${history}
+          User: \${message}
+    output:
+      history: \${input.history + [Msg(role="user", text=ask.output), Msg(role="assistant", text=reply.output)]}
+      log: "\${input.log}\\nUser: \${ask.output}\\nAssistant: \${reply.output}"
+nodes:
+  chat: {kind: loop, call: turn, input: {history: [], log: ""}, times: 3}
+output: \${chat.output.log}
+`;
+
+const boundDir = mkdtempSync(join(tmpdir(), "yian-forward-trace-"));
+afterAll(() => rmSync(boundDir, { recursive: true, force: true }));
+
+test("an occurrence's bound inputs are rebuilt from its route: a template and a + binding (TS-only)", async () => {
+  const log = join(boundDir, "chat.jsonl");
+  const config = { provider: "anthropic", model: "claude-test" };
+  const answers = ["a", "b", "c"];
+  const chat = await loadFlow(BOUND_CHAT, { sourceLabel: "flow.yaml" });
+  const result = await runFlow(chat, {}, {
+    env: NO_ENV,
+    log,
+    numWorkers: 0,
+    learnable: true,
+    models: serving(new ScriptedModel([textReply("A"), textReply("B"), textReply("C")], config)),
+    tools: { ask_user: () => answers.shift()! },
+  });
+  expect(result.status).toBe("succeeded");
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(chat, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  const of = (nodeId: string) => trace.occurrences.find((occurrence) => occurrence.nodeId === nodeId)!;
+  const first = [
+    { role: "user", text: "a" },
+    { role: "assistant", text: "A" },
+  ];
+  const second = [...first, { role: "user", text: "b" }, { role: "assistant", text: "B" }];
+  expect(of("chat#1/reply").boundInputs).toEqual({ history: first, message: "b" });
+  expect(of("chat#1/__end__").boundInputs).toEqual({
+    history: second,
+    log: "\nUser: a\nAssistant: A\nUser: b\nAssistant: B",
+  });
+  expect(of("chat#0/ask").boundInputs).toEqual({});
 });

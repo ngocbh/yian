@@ -66,7 +66,7 @@ import { VariablePool } from "../typesys/pool.ts";
 import { isList, isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
-import { resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
+import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
 
 /**
  * One raw node-evaluation failure for durable dispatcher preparation. Frozen.
@@ -1014,14 +1014,6 @@ function stageFailure(node: Node, error: unknown, usesBaseTemplate: boolean): Ev
   return evaluationFailure(node, node.exceptionCode(error), error, node.exceptionOrigin(error));
 }
 
-/** One value `rebind` reads for a source: the typed value a pool name held, and the producer it names. */
-export interface ReboundSource {
-  /** The value the pool name held when the binding read it. */
-  readonly value: TypedValue;
-  /** The producer the input route names for it, or `null` for none. */
-  readonly source: SourceRef | null;
-}
-
 /** The bound inputs, binder state and capabilities `rebind` and `rebuildDerived` share. */
 interface Rebound {
   inputs: Record<string, unknown>;
@@ -1113,6 +1105,9 @@ export function rebind(
  * Rebuild a derived node's outcome: `rebind`, then its pure, synchronous `forward`. With `from`
  * empty (a child START over its constant wiring), it binds from constants only.
  *
+ * @param options.capture Whether to collect the route and bound inputs too, with each item a MAP's
+ *   `forward` binds; defaults to `false`.
+ * @returns The outcome, and the capture (`null` unless `options.capture`).
  * @throws TypeError when `node` isn't derived, or its `forward` returns a promise or a route.
  * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
  */
@@ -1122,12 +1117,14 @@ export function rebuildDerived(
   from: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-): { outcome: Output | Grow } {
+  options: { capture?: boolean } = {},
+): { outcome: Output | Grow; capture: BindingCapture | null } {
   if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);
-  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride, false);
+  const { inputs, collector, caps } = bindFrom(node, flow, from, resolve, wiringOverride, options.capture === true);
   const outcome: unknown = node.forward(inputs, caps);
   if (!(outcome instanceof Output || outcome instanceof Grow)) {
     throw new TypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);
   }
-  return { outcome };
+  // Frozen after `forward`, which binds a MAP's items into the capture.
+  return { outcome, capture: collector === null ? null : collector.freeze() };
 }

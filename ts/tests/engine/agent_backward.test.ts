@@ -624,6 +624,8 @@ for (const [label, response, code] of FAILURE_ROWS) {
 
 test("AGENT backward reads no live render, model or variable state", async () => {
   const { node, trace } = await retainedEngine();
+  // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
+  for (const occurrence of trace.occurrences) void occurrence.boundInputs;
   node.prompt = "wrong";
   node.llmConfig = { provider: "wrong", model: "wrong" };
   node.variables = [];

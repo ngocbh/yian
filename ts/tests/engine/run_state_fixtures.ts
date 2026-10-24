@@ -72,6 +72,8 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
+import type { Rebinder } from "../../src/runtime/trace.ts";
+import { BindingCapture, BindingError } from "../../src/nodes/binding.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { NodeStarted, type RunEvent, type RunFailed, type RunSucceeded, StreamChunk } from "../../src/events.ts";
@@ -123,7 +125,7 @@ import { decodeTyped, type RetainedTrace } from "../../src/runtime/trace.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 
 /** The run id the run-state tests record. */
@@ -1227,6 +1229,17 @@ export function forwardCapture(node: Node, inputs: Readonly<Record<string, unkno
     Object.entries(inputs ?? {}).map(([name, value]) => [name, ValueRoute.literal(value)] as const),
   );
   return new ForwardCapture(inputs, route, { scope: node.executionScope });
+}
+
+/**
+ * A rebinder for an occurrence of a trace built by hand: it binds `inputs`, or for `null` fails as
+ * a binding that didn't finish.
+ */
+export function fixedRebinder(inputs: ValueRecord | null): Rebinder {
+  return () => {
+    if (inputs === null) throw new BindingError("the binding didn't finish", { failureCode: "binding.evaluate" });
+    return { inputs, capture: new BindingCapture(inputs, ValueRoute.record([]), new Set()) };
+  };
 }
 
 /** The root flow's declaration site. */

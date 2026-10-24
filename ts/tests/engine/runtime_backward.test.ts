@@ -256,6 +256,7 @@ import {
   commitStartSuccess,
   engine,
   feedbackEntries,
+  fixedRebinder,
   forwardCapture,
   FuncNode,
   graph,
@@ -270,6 +271,7 @@ import {
   terminalSkipRouteFlow,
   traceSnapshot,
 } from "./run_state_fixtures.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 
 /** The error classes the refusals throw; a failing log's append throws an `Error`. */
 type ErrorClass = typeof TypeError | typeof RangeError | typeof Error;
@@ -509,11 +511,18 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
   let trace = step(null, envelopes[0]!, null, { rootStartId: START_ID, rootEndId: END_ID, rootInputNames: ["x"] });
   trace = step(trace, envelopes[1]!, null, { initialCommit: true });
   const owners = [null, null, nodes.start, null, null, nodes.p, null, null, nodes.end];
+  // Each node's bound inputs, which its occurrence rebuilds.
+  const inputs = new Map<string, ValueRecord>([
+    [START_ID, { x: 1n }],
+    ["p", { v: 1n, w: 1n }],
+    [END_ID, { value: pOutput } as ValueRecord],
+  ]);
   for (const [index, owner] of owners.entries()) {
     const envelope = envelopes[index + 2]!;
     const record = envelope.record;
     const options: PrepareTraceOptions = {};
     if (record instanceof NodeSucceededRecord) {
+      options.rebinder = fixedRebinder(inputs.get(record.nodeId)!);
       const commit = envelopes[record.commit]!.record as PoolCommitRecord;
       options.committed = { key: commit.key, valueJson: logJson(commit.value) };
       if (record.nodeId === END_ID) {
@@ -2679,7 +2688,9 @@ test("opaque expression stops are recoverable without rerunning functions", asyn
   expect(recovered.stopped[0]!.feedback).toBe("review opaque");
   expect(recovered.stopped[0]!.context.at(-1)!.result).toBe("reefs");
   expect(root.inputFeedback).toEqual({});
-  expect(calls).toEqual(["reefs"]);
+  // Once live and once when learning rebinds the node to rebuild its bound inputs; the stop itself
+  // reruns nothing.
+  expect(calls).toEqual(["reefs", "reefs"]);
 });
 
 test("a backward context is trace-owned, detached and survives replay", async () => {
@@ -2748,7 +2759,8 @@ test.each([false, true])(
     expect(returned.map((entry) => entry.value)).toEqual([feedback]);
     const stopped = entries.filter((entry) => entry.channel === "stopped").map((entry) => entry.value);
     expect(stopped).toEqual(opaque ? [feedback] : []);
-    expect(calls).toEqual(opaque ? [null] : []);
+    // Once live and once when learning rebinds the node to rebuild its bound inputs.
+    expect(calls).toEqual(opaque ? [null, null] : []);
   },
 );
 
@@ -3036,6 +3048,8 @@ test("an AGENT's inventory is recorded and empty feedback does no backward work"
     }), { inputs: { topic: "reefs" }, learnable: true });
     await built.run();
     const trace = built.state.trace!;
+    // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
+    for (const occurrence of trace.occurrences) void occurrence.boundInputs;
     node.params = [];
     node.variables = [];
     node.captureBackwardContext = () => {
@@ -3212,8 +3226,9 @@ test.each([false, true])(
     const stopped = feedbackEntries(context!).filter((entry) => entry.channel === "stopped");
     expect(stopped.map((entry) => entry.value)).toEqual(stops);
     // The expansion checks its growth against the rebuild from its commits' `from`, which runs the
-    // MAP's binding, and so the builtin, once more; backward reevaluates nothing.
-    expect(calls).toEqual(opaque ? [null, null] : []);
+    // MAP's binding, and so the builtin, once more, and learning rebinds the MAP once to rebuild its
+    // bound inputs; backward reevaluates nothing.
+    expect(calls).toEqual(opaque ? [null, null, null] : []);
   },
 );
 

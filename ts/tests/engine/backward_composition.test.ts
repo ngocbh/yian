@@ -629,14 +629,17 @@ output: \${outer.output}
       ),
     ).toBe(true);
     // The feedback reads the captured route, not a reevaluation; the backward's replay rebuilds
-    // the CALL's seed from its binding, which calls the function once more.
-    expect(calls).toEqual([["same"], ["same"], ["same"]]);
+    // the CALL's seed from its binding, which calls the function once more, and learning rebinds
+    // the CALL once to rebuild its bound inputs.
+    expect(calls).toEqual([["same"], ["same"], ["same"], ["same"]]);
     const before = readFileSync(path);
     const inspected = await resume(flow, { log: path, memory });
     expect(inspected.backwardOutcome).toEqual(outcome);
     expect(inspected.events).toEqual([]);
     expect(readFileSync(path)).toEqual(before);
-    expect(calls).toEqual([["same"], ["same"], ["same"], ["same"]]);
+    // The replay rebuilds the seed, and checks the recorded backward results against the rebuilt
+    // bound inputs, which rebinds the CALL once more.
+    expect(calls).toEqual([["same"], ["same"], ["same"], ["same"], ["same"], ["same"]]);
   } finally {
     if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
     else TEMPLATE_FNS.set("composition_opaque", saved);

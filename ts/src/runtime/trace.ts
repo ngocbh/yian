@@ -20,7 +20,7 @@
  * Never imports: runtime state, learning or backward, engine or run, compile, compose, or the CLI.
  */
 
-import { compareCodeUnits, Failure } from "../diagnostics.ts";
+import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
 import { ExpressionError } from "../expr/expressions.ts";
 import { type FeedbackValue, ResolvedValue, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
 import {
@@ -42,7 +42,7 @@ import {
   retainFailure,
   validateDeclaredNames,
 } from "../nodes/base.ts";
-import { BindingCapture } from "../nodes/binding.ts";
+import { BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
   isExactly,
@@ -96,6 +96,23 @@ type MaterialHandler = (
   steps: readonly ValueRecord[],
   caps: MaterialCaps,
 ) => Promise<LearningMaterial | null>;
+
+/** One value `rebind` reads for a source: the typed value a pool name held, and the producer it names. */
+export interface ReboundSource {
+  /** The value the pool name held when the binding read it. */
+  readonly value: TypedValue;
+  /** The producer the input route names for it, or `null` for none. */
+  readonly source: SourceRef | null;
+}
+
+/**
+ * Bind an occurrence's node again from the values `resolve` gives for its sources (`rebind`, over
+ * the node and wiring it ran with), returning the bound inputs and capture.
+ */
+export type Rebinder = (
+  sources: ReadonlyMap<string, number>,
+  resolve: (name: string, seq: number) => ReboundSource,
+) => { inputs: Record<string, unknown>; capture: BindingCapture };
 
 /** @internal Decode a typed value from its canonical log text, a fresh copy. */
 export function decodeTyped(text: string): TypedValue {
@@ -240,7 +257,8 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
  * it from that node; it never replaces execution scope or adds memory ownership to the accepted
  * outcome payload. `hiddenInputs` names the bound inputs that node keeps from models, so memory
  * episodes leave them out. `steps` are the steps the node recorded across its starts, which
- * learning reads (`occurrenceMaterial`).
+ * learning reads (`occurrenceMaterial`). `capture` is the record's forward capture, or the one
+ * rebuilt for a derived record; `boundInputs` are rebuilt from its route on first read.
  */
 export class TraceOccurrence {
   /** The occurrence's accepted start. */
@@ -263,12 +281,21 @@ export class TraceOccurrence {
   readonly seed: JsonValue | null;
   /** The node's recorded steps across its starts, in order; read-only by contract. */
   readonly steps: readonly ValueRecord[];
+  /** The occurrence's forward capture: its record's, or the one rebuilt for a derived record. */
+  readonly capture: ForwardCapture;
+  /** Rebuilds the bound inputs, or `null` when none was given. */
+  readonly #rebind: (() => JsonObject | null) | null;
+  /** The rebuilt bound inputs, once read. */
+  #bound: { readonly inputs: JsonObject | null } | null = null;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
    *
-   * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope` or `memoryScope` isn't
-   *   `null` or exactly a `MemoryScope`.
+   * @param capture The occurrence's forward capture; defaults to the record's.
+   * @param rebind Rebuilds the bound inputs (`reboundInputs`); `null` leaves `boundInputs`
+   *   unreadable.
+   * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
+   *   `null` or exactly a `MemoryScope`, or there is no capture.
    */
   constructor(
     source: SourceRef,
@@ -280,12 +307,18 @@ export class TraceOccurrence {
     hiddenInputs: ReadonlySet<string> = new Set(),
     seed: JsonValue | null = null,
     steps: readonly ValueRecord[] = [],
+    capture: ForwardCapture | null = null,
+    rebind: (() => JsonObject | null) | null = null,
   ) {
     this.source = source;
     this.nodeId = nodeId;
     this.outcomeSeq = outcomeSeq;
     this.recordJson = encodeRecord(envelope);
     this.envelope = decodeRecord(this.recordJson);
+    const held = capture ?? (this.envelope.record as OutcomeRecord).forwardCapture;
+    if (!isExactly(held, ForwardCapture)) throw new TypeError("a trace occurrence requires its forward capture");
+    this.capture = held;
+    this.#rebind = rebind;
     this.inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
@@ -299,6 +332,78 @@ export class TraceOccurrence {
     // Occurrences are prepared only for outcome records.
     return this.envelope.record as OutcomeRecord;
   }
+
+  /**
+   * The bound inputs, canonical JSON rebuilt by binding the node again from the values its route
+   * read (`reboundInputs`), or `null` when its binding didn't finish. Built on the first read.
+   *
+   * @throws RangeError when the occurrence was made without a rebinder, or as `reboundInputs`.
+   */
+  get boundInputs(): JsonObject | null {
+    if (this.#bound === null) {
+      if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
+      this.#bound = { inputs: this.#rebind() };
+    }
+    return this.#bound.inputs;
+  }
+}
+
+/**
+ * Rebuild an occurrence's bound inputs: bind its node again (`rebind`) from the values its capture
+ * route read, each looked up in the trace's history by the producer the route names
+ * (`traceResolver`), so it works after the pool has moved on. The run's system values are added
+ * whole, since the route names no producer for them.
+ *
+ * @returns The canonical bound inputs, or `null` when the binding doesn't finish, as when it ran.
+ * @throws RangeError when a route source has no accepted producer.
+ */
+export function reboundInputs(trace: RetainedTrace, route: ValueRoute, rebind: Rebinder): JsonObject | null {
+  const sources = new Map<string, number>();
+  // System values never change within a run, so their seq isn't checked (`traceResolver`).
+  for (const key of trace.system.keys()) sources.set(`${SYSTEM_PREFIX}${key}`, 0);
+  const pending = [route];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    pending.push(...node.children);
+    if (node.source === null) continue;
+    const seq = node.source.executionSeq;
+    const name = trace._sourceNames.get(sourceKey(new SourceRef(node.source.runId, seq)));
+    if (name === undefined) throw new RangeError(`route source ${seq} names no accepted producer`);
+    // One binding reads each pool name from its one current producer.
+    sources.set(name, seq);
+  }
+  let capture: BindingCapture;
+  try {
+    capture = rebind(sources, traceResolver(trace)).capture;
+  } catch (error) {
+    if (error instanceof BindingError) return null;
+    throw error;
+  }
+  return canonicalSeed(capture.boundInputs)[1] as JsonObject | null;
+}
+
+/**
+ * Return a `rebind` resolver over the trace's history: pool name `name` as the producer whose
+ * accepted start is `seq` wrote it, read through its files type as the pool reads it; a system
+ * value is the run's, with no producer.
+ *
+ * @throws RangeError (from the resolver) when no accepted producer has start `seq`, or it wrote
+ *   another name, or the run has no system value `name`.
+ */
+export function traceResolver(trace: RetainedTrace): (name: string, seq: number) => ReboundSource {
+  return (name, seq) => {
+    if (name.startsWith(SYSTEM_PREFIX)) {
+      const text = trace.system.get(name.slice(SYSTEM_PREFIX.length));
+      if (text === undefined) throw new RangeError(`the run has no system value ${reprText(name)}`);
+      return { value: decodeTyped(text), source: null };
+    }
+    const key = sourceKey(new SourceRef(trace.runId, seq));
+    const entry = trace._sources.get(key);
+    if (entry === undefined || trace._sourceNames.get(key) !== name) {
+      throw new RangeError(`no accepted producer at seq ${seq} wrote ${reprText(name)}`);
+    }
+    return { value: normalizeTypedFiles(entry.files, decodeTyped(entry.valueJson)), source: entry.source };
+  };
 }
 
 /** One accepted expansion's child flow and its actual accepted endpoints. Frozen. */
@@ -407,6 +512,8 @@ export class RetainedTrace {
   occurrenceBySource = new Map<string, TraceOccurrence>();
   /** @internal Accepted source entries by `sourceKey`. */
   _sources = new Map<string, SourceEntry>();
+  /** @internal The pool name each accepted source entry wrote, by `sourceKey`. */
+  _sourceNames = new Map<string, string>();
   /** @internal Each current pool name's producer entry. */
   _currentWriters = new Map<string, SourceEntry>();
   /** @internal Accepted unfinished starts: node id to start sequence. */
@@ -530,8 +637,7 @@ export class RetainedTrace {
     const { downstreamContext = [], material = null } = options;
     const occurrence = this.occurrence(source);
     const record = occurrence.record;
-    // An accepted outcome holds its forward capture while learning.
-    const capture = record.forwardCapture!;
+    const capture = occurrence.capture;
     const captured = capture.nodeData ?? {};
     if (Object.hasOwn(captured, "_evaluation_evidence")) {
       throw new RangeError("captured node data uses reserved _evaluation_evidence");
@@ -541,7 +647,7 @@ export class RetainedTrace {
       : isExactly(record, NodeRoutedRecord)
         ? record.terminalFailure
         : null;
-    return new BackwardContext(capture.boundInputs, {
+    return new BackwardContext(occurrence.boundInputs, {
       inputNames: capture.inputNames,
       variableNames: capture.variableNames,
       output: isExactly(record, NodeSucceededRecord) ? this.lookupSource(source) : null,
@@ -590,12 +696,11 @@ export class RetainedTrace {
 }
 
 /**
- * Return the bound inputs `occurrence` showed models: its recorded bound inputs without the ones
- * its node keeps from models, or `null` when none were recorded.
+ * Return the bound inputs `occurrence` showed models: its bound inputs without the ones its node
+ * keeps from models, or `null` when its binding didn't finish.
  */
 export function visibleInputs(occurrence: TraceOccurrence): JsonObject | null {
-  // An accepted outcome holds its forward capture while learning.
-  const inputs = occurrence.record.forwardCapture!.boundInputs as JsonObject | null;
+  const inputs = occurrence.boundInputs;
   if (inputs === null || occurrence.hiddenInputs.size === 0) return inputs;
   return Object.fromEntries(Object.entries(inputs).filter(([name]) => !occurrence.hiddenInputs.has(name)));
 }
@@ -652,7 +757,7 @@ function interactionPayload(interaction: VisibleInteraction): JsonObject {
 
 /**
  * Rebuild what learning reads about one accepted occurrence: its node's `learningMaterial` over
- * its recorded bound inputs and steps.
+ * its bound inputs and recorded steps.
  *
  * @param source The accepted start of an executed occurrence.
  * @param caps The run's recorded skills and tool specs, model access and recall.
@@ -666,9 +771,7 @@ export async function occurrenceMaterial(
 ): Promise<LearningMaterial | null> {
   const occurrence = trace.occurrence(source);
   const build = trace._materialHandlers.get(sourceKey(source))!;
-  // An accepted outcome holds its forward capture while learning.
-  const inputs = occurrence.record.forwardCapture!.boundInputs;
-  return await build(inputs, occurrence.steps, caps);
+  return await build(occurrence.boundInputs, occurrence.steps, caps);
 }
 
 /** The optional parts of a `TraceDelta`; each defaults to `null`, `false` or an empty array. */
@@ -840,6 +943,7 @@ export class TraceDelta {
       trace._currentWriters.set(target, entry);
       // An outcome's writer always has its occurrence's source, and the START inputs' source 0.
       trace._sources.set(sourceKey(entry.source!), entry);
+      trace._sourceNames.set(sourceKey(entry.source!), target);
     }
     if (this.systemValue !== null) trace.system.set(this.systemValue[0], this.systemValue[1]);
     if (this.rootStartSource !== null) trace.rootStartSource = this.rootStartSource;
@@ -941,6 +1045,10 @@ export interface PrepareTraceOptions {
   seed?: JsonValue | null;
   /** The executing node's recorded steps across its starts, which a learnable occurrence keeps. */
   steps?: readonly ValueRecord[];
+  /** A derived record's forward capture, rebuilt from its sources, which the record leaves out. */
+  capture?: ForwardCapture | null;
+  /** Binds the executing node again, which rebuilds the occurrence's bound inputs. */
+  rebinder?: Rebinder | null;
 }
 
 /**
@@ -982,6 +1090,8 @@ export function prepareTrace(
     initialCommit = false,
     seed = null,
     steps = [],
+    capture: rebuilt = null,
+    rebinder = null,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -993,7 +1103,8 @@ export function prepareTrace(
     const initial = new RetainedTrace(envelope.runId, rootStartId, rootEndId, rootInputNames);
     return new TraceDelta(null, envelope.seq, { initialized: initial });
   }
-  const capture = (record as { forwardCapture?: ForwardCapture | null }).forwardCapture ?? null;
+  const recorded = (record as { forwardCapture?: ForwardCapture | null }).forwardCapture ?? null;
+  const capture = rebuilt ?? recorded;
   if (trace === null) {
     if (capture !== null) throw new RangeError("forward capture requires recorded learning");
     return null;
@@ -1065,6 +1176,8 @@ export function prepareTrace(
     node.modelHiddenInputs(),
     seed,
     steps,
+    capture,
+    rebinder === null ? null : () => reboundInputs(trace, capture.route, rebinder),
   );
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);

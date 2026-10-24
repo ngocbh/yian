@@ -131,6 +131,10 @@ expect:
   - - pool_commit
     - writer
     - value: recorded answer
+  - - pool_commit
+    - writer
+    - key: writer.new_messages
+      steps: [9]
   - - node_succeeded
     - writer
     - commit: 10
@@ -157,13 +161,14 @@ expect:
           occurrence_path: []
           static_path: [writer]
         variable_names: [tone]
+      messages: 11
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: recorded answer
   - - node_succeeded
     - __end__
-    - commit: 13
+    - commit: 14
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -217,7 +222,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 12
+            execution_seq: 13
             path: []
             run_id: r1
         feedback: [Explain the answer.]
@@ -247,7 +252,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 12
+          execution_seq: 13
           path: []
           run_id: r1
       proposals: []

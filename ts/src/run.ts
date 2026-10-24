@@ -25,7 +25,8 @@
  * (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
  * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
- * rebuilt from its `from` pointers and a take's from the sends it consumed, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
+ * rebuilt from its `from` pointers, a take's from the sends it consumed and an AGENT's new messages
+ * from its steps, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
  * it returns, and the built-in message value (`Message`, `MessagePart`, `checkMessage`, which reads
  * a decoded `Message` back with its files, `checkConversation` and `ConversationError`, from
  * `nodes/agent/messages.ts`).
@@ -157,7 +158,7 @@ import {
   waitInfos,
 } from "./runtime/waits.ts";
 import {
-  acceptedCommit,
+  acceptedCommits,
   addCrashedAttempts,
   commitInitialPool,
   commitPrepared,
@@ -2432,8 +2433,9 @@ export interface FoldedRecord {
   readonly entry: RunLogEntry;
   /**
    * For a `pool_commit` the run accepted, the value it writes: the one it holds (a send's too), for
-   * a derived commit the one rebuilt from its `from`, or for a take commit `{events, closed}` built
-   * from the sends it consumed. `null` for an orphan commit and any other record.
+   * a derived commit the one rebuilt from its `from`, for a take commit `{events, closed}` built
+   * from the sends it consumed, or for a messages commit the `list(Message)` rebuilt from its
+   * steps. `null` for an orphan commit and any other record.
    */
   readonly value: TypedValue | null;
 }
@@ -2474,8 +2476,7 @@ export async function foldRunLog(
   withEnv(env, () =>
     replayRunLog(flow, MemoryRunLog.fromRecords(entries.map((entry) => entry.envelope)), {
       onPrepared: (prepared) => {
-        const accepted = acceptedCommit(prepared);
-        if (accepted !== null) values.set(accepted.seq, accepted.value);
+        for (const { seq, value } of acceptedCommits(prepared)) values.set(seq, value);
       },
     }),
   );

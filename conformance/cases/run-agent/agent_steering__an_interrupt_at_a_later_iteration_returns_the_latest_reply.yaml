@@ -118,16 +118,19 @@ expect:
   - - pool_commit
     - chat
     - value: Looking.
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: [9, 10]}
   - - node_succeeded
     - chat
-    - {commit: 11}
+    - {commit: 11, messages: 12}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: Looking.
   - - node_succeeded
     - __end__
-    - {commit: 14}
+    - {commit: 15}
   events:
   - [RunStarted]
   - - NodeStarted

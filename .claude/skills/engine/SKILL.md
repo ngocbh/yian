@@ -550,7 +550,7 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend. TS yian
-  (schema 21) writes every pool write as a `pool_commit`: the run start's system
+  (schema 22) writes every pool write as a `pool_commit`: the run start's system
   values and START inputs right after `run_started` (applied at once; a log cut
   before the START inputs isn't resumable), and a node's output before the
   `node_succeeded` that names its seq; the success applies it, and a resume drops
@@ -564,7 +564,10 @@ Most are just the functional model (above) made enforceable:
   each seq against `producers`). An expansion first writes one such commit per START
   of its fragment, keyed by the child START; `node_expanded` holds no seed (replay
   rebuilds it from that `from` before the prune) and the child START's success names
-  its commit. The rule is kind-blind: the `derived` trait and the commit's key.
+  its commit. The rule is kind-blind: the `derived` trait and the commit's key. A
+  `producesMessages` node (AGENT) also writes a messages commit after its output
+  commit, holding only `steps` (the seqs `messageSteps` picks); the reducer
+  rebuilds `<id>.new_messages` with `rebuildMessages` and the success names it.
 - **Defaults are read once and recorded** — every predefined default and limit is an
   entry in `yian.defaults` (`docs/defaults.md`), overridable by `YIAN_<NAME>`.
   `current()` reads the environment once per process; the CLI callback, `load_flow`,

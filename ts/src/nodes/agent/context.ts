@@ -19,7 +19,7 @@ import { ProviderError } from "../../llm/errors.ts";
 import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
-import type { Scheduler } from "../../platform.ts";
+import { type Scheduler, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
@@ -357,6 +357,23 @@ export class AgentSteps {
    * @throws Whatever `NodeSteps.record` throws.
    */
   modelCall(call: ModelCallFields, options?: { settled?: boolean }): number {
+    // The reducer rebuilds new_messages purely, so it can't warn; the drop is reported here, live.
+    // Without steps the engine writes no messages commit, so nothing is dropped.
+    if (this.#steps !== undefined && call.purpose === "chat") {
+      const media = call.output.parts.filter((part): part is MediaPart => part instanceof MediaPart && part.file === null);
+      if (media.some((part) => part.data !== null)) {
+        warn(
+          `node ${reprText(this.#nodeId)} replied with media given inline, not as a run-folder file ` +
+            "(a run without a log keeps a reply's media inline); new_messages leaves it out",
+        );
+      }
+      if (media.some((part) => part.url !== null)) {
+        warn(
+          `node ${reprText(this.#nodeId)} replied with media given by URL, not as a run-folder file; ` +
+            "new_messages leaves it out",
+        );
+      }
+    }
     return this.#record(
       {
         ...this.#callStep(call),

@@ -36,6 +36,7 @@ import {
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { resolveFromPool, type RunState } from "../../src/runtime/state.ts";
+import { sourcePath } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { crashAfter, NO_ENV, startedRun } from "./run_state_fixtures.ts";
 
@@ -529,4 +530,12 @@ test("a pool name missing from the producer index is a RangeError", () => {
     7,
     ["x"],
   ]);
+});
+
+test("sourcePath reads x.new_messages[.path] as that pool name when it is held", () => {
+  const holds = (name: string) => name === "x" || name === "x.new_messages";
+  expect(sourcePath("x.new_messages.0", "__start__", holds)).toEqual({ name: "x.new_messages", projection: ["0"] });
+  expect(sourcePath("x.new_messages", "__start__", holds)).toEqual({ name: "x.new_messages", projection: [] });
+  expect(sourcePath("y.new_messages", "__start__", holds)).toBeNull();
+  expect(sourcePath("x.output", "__start__", holds)).toEqual({ name: "x", projection: [] });
 });

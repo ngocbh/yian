@@ -1,6 +1,6 @@
 /**
  * The inbox and wait record kinds (`node_waiting`, `node_woken`, `run_waiting`, `inbox_closed`,
- * `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
+ * `interrupted`, `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
  * their constructors' checks and their canonical wire; the waits fold's empty state on a fresh
  * `RunState`, the reducer refusing the new kinds until it applies them, and `eventBytes`, an
  * event's size. TS-only: Python yian has no inbox or suspension records.
@@ -15,6 +15,7 @@ import {
   encodeRecord,
   formatRecordTime,
   InboxClosedRecord,
+  InterruptedRecord,
   iterRunRecords,
   JsonlRunLog,
   NodeStartedRecord,
@@ -158,6 +159,7 @@ test.each([
   ["node_woken", new NodeWokenRecord("heard"), { node_id: "heard", timed_out: [] }],
   ["run_waiting", new RunWaitingRecord(["heard"]), { node_ids: ["heard"] }],
   ["inbox_closed", new InboxClosedRecord("msgs"), { inbox: "msgs" }],
+  ["interrupted", new InterruptedRecord("owner", ["turn#0/reply", "side"]), { inbox: "owner", nodes: ["turn#0/reply", "side"] }],
   ["run_cancelled", new RunCancelledRecord(), {}],
   ["run_failed", new RunFailedRecord(FAILURE), { failure: FAILURE.toJSON() }],
 ])("%s round trips under its wire kind", (kind, record, payload) => {
@@ -251,15 +253,15 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "a value and a take",
     () => new PoolCommitRecord("e", "e", { kind: "int", value: 2n }, { take: { inbox: "m", events: [], closed: false } }),
     RangeError,
-    "a pool_commit holds exactly one of value, from and take",
+    "a pool_commit holds exactly one of value, from, take and steps",
   ],
   [
     "from and a take",
     () => new PoolCommitRecord("e", "e", null, { from: new Map(), take: { inbox: "m", events: [], closed: false } }),
     RangeError,
-    "a pool_commit holds exactly one of value, from and take",
+    "a pool_commit holds exactly one of value, from, take and steps",
   ],
-  ["none", () => new PoolCommitRecord("e", "e", null), RangeError, "a pool_commit holds exactly one of value, from and take"],
+  ["none", () => new PoolCommitRecord("e", "e", null), RangeError, "a pool_commit holds exactly one of value, from, take and steps"],
   [
     "events out of order",
     () => new PoolCommitRecord("e", "e", null, { take: { inbox: "m", events: [12, 9], closed: false } }),
@@ -337,6 +339,27 @@ test("a fresh RunState holds an empty waits fold and no inbox events", () => {
   }
   expect(state.waits.lastFrontier).toBeNull();
   expect(state.inboxEvents.size).toBe(0);
+});
+
+test("interrupted names its inbox and the nodes it interrupts; frozen", () => {
+  const record = new InterruptedRecord("owner", ["turn#0/reply", "side"]);
+  expect([record.inbox, [...record.nodes]]).toEqual(["owner", ["turn#0/reply", "side"]]);
+  expect(Object.isFrozen(record)).toBe(true);
+  expect(Object.isFrozen(record.nodes)).toBe(true);
+  expectError(() => new InterruptedRecord("", ["a"]), RangeError, "inbox must be non-empty");
+  expectError(() => new InterruptedRecord("owner", []), RangeError, "nodes must be non-empty");
+  expectError(() => new InterruptedRecord("owner", ["a", "a"]), RangeError, "nodes must contain unique IDs");
+  expectError(() => new InterruptedRecord("owner", [""]), RangeError, "nodes must contain only non-empty strings");
+});
+
+test("the reducer refuses an interrupted record in this version", () => {
+  const { state, log } = initializedAndStarted(flow());
+  commitStartSuccess(state, log);
+  expectError(
+    () => prepareRecord(state, new InterruptedRecord("owner", ["work"])),
+    RangeError,
+    "interrupted records are not accepted yet",
+  );
 });
 
 test("a state whose waits fold was replaced is refused", () => {

@@ -151,20 +151,23 @@ expect:
   - - pool_commit
     - loop#0/reply
     - value: partial
+  - - pool_commit
+    - loop#0/reply
+    - {key: loop#0/reply.new_messages, steps: [14, 15]}
   - - node_succeeded
     - loop#0/reply
-    - {commit: 16}
+    - {commit: 16, messages: 17}
   - [node_started, loop#0/__end__]
   - - pool_commit
     - loop#0/__end__
     - from: {loop#0/__start__: 9, loop#0/reply: 16}
   - - node_succeeded
     - loop#0/__end__
-    - {commit: 19}
+    - {commit: 20}
   - [node_started, loop~1]
   - - pool_commit
     - loop~1
-    - from: {loop#0/__end__: 19}
+    - from: {loop#0/__end__: 20}
       key: loop#1/__start__
   - - node_expanded
     - loop~1
@@ -172,7 +175,7 @@ expect:
   - [node_started, loop#1/__start__]
   - - node_succeeded
     - loop#1/__start__
-    - commit: 22
+    - commit: 23
   - [node_started, loop#1/reply]
   - - node_step
     - loop#1/reply
@@ -193,31 +196,34 @@ expect:
   - - pool_commit
     - loop#1/reply
     - value: turn2
+  - - pool_commit
+    - loop#1/reply
+    - {key: loop#1/reply.new_messages, steps: [28]}
   - - node_succeeded
     - loop#1/reply
-    - {commit: 28}
+    - {commit: 29, messages: 30}
   - [node_started, loop#1/__end__]
   - - pool_commit
     - loop#1/__end__
-    - from: {loop#1/__start__: 22, loop#1/reply: 28}
+    - from: {loop#1/__start__: 23, loop#1/reply: 29}
   - - node_succeeded
     - loop#1/__end__
-    - {commit: 31}
+    - {commit: 33}
   - [node_started, loop~2]
   - - pool_commit
     - loop~2
     - key: loop
-      from: {loop#1/__end__: 31}
+      from: {loop#1/__end__: 33}
   - - node_succeeded
     - loop~2
-    - {commit: 34}
+    - {commit: 36}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: s|partial|turn2
   - - node_succeeded
     - __end__
-    - {commit: 37}
+    - {commit: 39}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -99,6 +99,8 @@ import {
   ConversationError,
   type ConversationMessage,
   type Message,
+  messageSteps,
+  rebuildMessages,
   toModelMessage,
 } from "./messages.ts";
 import { OutputInvalidError } from "./structured.ts";
@@ -348,6 +350,8 @@ export class AgentNode extends Node {
    * and reads back its config as an `llm_config` step.
    */
   override readonly needsSteps: boolean = true;
+  /** An AGENT's success also commits its new messages, rebuilt from its steps. */
+  override readonly producesMessages: boolean = true;
   /** The prompt template, or a list of messages and splices. */
   prompt: string | readonly PromptItem[];
   /** The system prompt template replacing the default one; `null` keeps the default. */
@@ -599,6 +603,16 @@ export class AgentNode extends Node {
   override boundLlmConfig(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
     const config = Object.hasOwn(inputs, LLM_CONFIG_KEY) ? inputs[LLM_CONFIG_KEY] : null;
     return isRecord(config) ? config : null;
+  }
+
+  /** Pick the steps of this agent's new messages (see `messageSteps` in `messages.ts`). */
+  override messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
+    return messageSteps(steps);
+  }
+
+  /** Rebuild this agent's new messages (see `rebuildMessages` in `messages.ts`). */
+  override rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
+    return rebuildMessages(steps, output);
   }
 
   /**

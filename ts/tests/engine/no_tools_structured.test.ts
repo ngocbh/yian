@@ -221,7 +221,8 @@ test("a granted skill binds load_skill", async () => {
 });
 
 test("a parsed tool call at a cap of 1 fails with ToolIterationLimitError", async () => {
-  const model = new ScriptedModel([reply(new TextPart("calling"), CALL, CALL)]);
+  const second = new ToolCallPart({ id: "c2", name: "lookup", arguments: { q: "y" } });
+  const model = new ScriptedModel([reply(new TextPart("calling"), CALL, second)]);
   const error = await rejection(runAgent(context(model, { nodeId: "n", maxToolIterations: 1 })));
   expect(error).toBeInstanceOf(ToolIterationLimitError);
   expect((error as Error).message).toBe(

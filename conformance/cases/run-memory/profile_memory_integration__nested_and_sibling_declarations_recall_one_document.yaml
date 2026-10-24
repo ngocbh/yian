@@ -151,9 +151,12 @@ expect:
   - - pool_commit
     - first
     - value: a
+  - - pool_commit
+    - first
+    - {key: first.new_messages, steps: [9]}
   - - node_succeeded
     - first
-    - {commit: 10}
+    - {commit: 10, messages: 11}
   - [node_started, second]
   - - node_step
     - second
@@ -174,16 +177,19 @@ expect:
   - - pool_commit
     - second
     - value: b
+  - - pool_commit
+    - second
+    - {key: second.new_messages, steps: [14]}
   - - node_succeeded
     - second
-    - {commit: 14}
+    - {commit: 15, messages: 16}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: a
   - - node_succeeded
     - __end__
-    - {commit: 17}
+    - {commit: 19}
   events:
   - [RunStarted]
   - - NodeStarted

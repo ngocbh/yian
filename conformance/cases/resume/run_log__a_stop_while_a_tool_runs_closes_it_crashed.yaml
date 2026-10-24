@@ -114,10 +114,11 @@ expect:
           response_id: null
           usage: null
     - [pool_commit, research, {value: lookup's outcome is unknown}]
-    - [node_succeeded, research, {commit: 15}]
+    - [pool_commit, research, {key: research.new_messages, steps: [9, 13, 14]}]
+    - [node_succeeded, research, {commit: 15, messages: 16}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: lookup's outcome is unknown}]
-    - [node_succeeded, __end__, {commit: 18}]
+    - [node_succeeded, __end__, {commit: 19}]
   stream:
     - {chunk: lookup's outcome is unknown, final: false, key: text, node_id: research, n: 3, index: 0}
     - {chunk: '', final: true, key: text, node_id: research, n: 3, index: 1}

@@ -260,6 +260,9 @@ Runtime and compile validation read these node members instead of branching on
 | `needs_steps: bool` | read boundary (`eval_node`): pass this start's `NodeSteps` as `caps['steps']` | `False` → `True` on tool |
 | `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
 | `needs_steering: bool` | read boundary (`eval_node`): pass the run's `Steering` inbox as `caps['steering']` when the host supplied one; faults and wrong return types escape as host faults | `False` → the AGENT's authored `steerable:` |
+| `producesMessages: boolean` (TS only) | engine (`#commitOutcome`) and reducer: the success also writes a messages commit under `<id>.new_messages` after the output commit, and the reducer refuses a success without one | `false` → `true` on agent |
+| `messageSteps(steps) -> number[]` (TS only) | reducer (`prepareMessagesCommit`, replay): the `n`s of the node's recorded steps its new messages are made of; pure | throws `TypeError` → AGENT: chat replies that arrived, tool results, the accepted structured call |
+| `rebuildMessages(steps, output) -> TypedValue` (TS only) | reducer: the `list(Message)` value of the picked steps (and, for a structured agent, its output value); pure | throws `TypeError` → AGENT (`nodes/agent/messages.ts`) |
 
 Changed (TS yian): no kind is `wait` or `human_input`. `sleep`'s `until:` is an ordinary
 TOOL input, so only `map` has reserved wiring.

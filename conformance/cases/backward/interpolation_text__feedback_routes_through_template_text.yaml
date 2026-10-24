@@ -71,7 +71,7 @@ host:
             role: user
             parts:
             - type: text
-              text: '{"forward":{"run_id":"r1","node_id":"drafter","node_started_seq":8,"inputs":{"topic":"reefs"},"input_names":["topic"],"output":"Reefs glow","failure":null,"variable_names":[],"prompt_template":"Draft a line about ${topic}.","rendered_prompt":"Draft a line about reefs.","variables":{},"variable_domains":{},"evaluation_evidence":{"scope":null,"bound_inputs":{"topic":"reefs"},"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","prompt":"Draft a line about reefs.","memory_sections":[],"interactions":[{"kind":"model_text","text":"Reefs glow"}]}},"feedback":["Keep the draft short."],"downstream_context":[{"message_index":0,"sender":{"run_id":"r1","execution_seq":12,"path":[]},"input_name":"draft","sender_message_index":0,"contribution_index":0,"parents":[0],"contexts":[{"expression":"","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":16,"path":[]},"value":"Final: Reefs glow at night."}],"role":"output","operand":[],"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"Final: ${writer.output}","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":12,"path":[]},"value":"Reefs glow at night."}],"role":"interpolation","operand":0,"positions":[],"span":[7,27],"result_type":null,"snapshot":null},{"expression":"writer.output","result":"Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":12,"path":[]},"value":"Reefs glow at night."}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"Polish this: ${drafter.output} (one line)","result":"Polish this: Reefs glow (one line)","sources":[{"source":{"run_id":"r1","execution_seq":8,"path":[]},"value":"Reefs glow"}],"role":"interpolation","operand":0,"positions":[],"span":[13,23],"result_type":null,"snapshot":null},{"expression":"drafter.output","result":"Reefs glow","sources":[{"source":{"run_id":"r1","execution_seq":8,"path":[]},"value":"Reefs glow"}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null}]}]}'
+              text: '{"forward":{"run_id":"r1","node_id":"drafter","node_started_seq":8,"inputs":{"topic":"reefs"},"input_names":["topic"],"output":"Reefs glow","failure":null,"variable_names":[],"prompt_template":"Draft a line about ${topic}.","rendered_prompt":"Draft a line about reefs.","variables":{},"variable_domains":{},"evaluation_evidence":{"scope":null,"bound_inputs":{"topic":"reefs"},"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","prompt":"Draft a line about reefs.","memory_sections":[],"interactions":[{"kind":"model_text","text":"Reefs glow"}]}},"feedback":["Keep the draft short."],"downstream_context":[{"message_index":0,"sender":{"run_id":"r1","execution_seq":13,"path":[]},"input_name":"draft","sender_message_index":0,"contribution_index":0,"parents":[0],"contexts":[{"expression":"","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":18,"path":[]},"value":"Final: Reefs glow at night."}],"role":"output","operand":[],"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"Final: ${writer.output}","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":13,"path":[]},"value":"Reefs glow at night."}],"role":"interpolation","operand":0,"positions":[],"span":[7,27],"result_type":null,"snapshot":null},{"expression":"writer.output","result":"Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":13,"path":[]},"value":"Reefs glow at night."}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"Polish this: ${drafter.output} (one line)","result":"Polish this: Reefs glow (one line)","sources":[{"source":{"run_id":"r1","execution_seq":8,"path":[]},"value":"Reefs glow"}],"role":"interpolation","operand":0,"positions":[],"span":[13,23],"result_type":null,"snapshot":null},{"expression":"drafter.output","result":"Reefs glow","sources":[{"source":{"run_id":"r1","execution_seq":8,"path":[]},"value":"Reefs glow"}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null}]}]}'
     writer:
       agent:
       - reply:
@@ -113,7 +113,7 @@ host:
             role: user
             parts:
             - type: text
-              text: '{"forward":{"run_id":"r1","node_id":"writer","node_started_seq":12,"inputs":{"draft":"Polish this: Reefs glow (one line)"},"input_names":["draft"],"output":"Reefs glow at night.","failure":null,"variable_names":[],"prompt_template":"${draft}","rendered_prompt":"Polish this: Reefs glow (one line)","variables":{},"variable_domains":{},"evaluation_evidence":{"scope":null,"bound_inputs":{"draft":"Polish this: Reefs glow (one line)"},"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","prompt":"Polish this: Reefs glow (one line)","memory_sections":[],"interactions":[{"kind":"model_text","text":"Reefs glow at night."}]}},"feedback":["Shorter."],"downstream_context":[{"message_index":0,"sender":{"run_id":"r1","execution_seq":16,"path":[]},"input_name":"result","sender_message_index":0,"contribution_index":0,"parents":[0],"contexts":[{"expression":"","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":16,"path":[]},"value":"Final: Reefs glow at night."}],"role":"output","operand":[],"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"Final: ${writer.output}","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":12,"path":[]},"value":"Reefs glow at night."}],"role":"interpolation","operand":0,"positions":[],"span":[7,27],"result_type":null,"snapshot":null},{"expression":"writer.output","result":"Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":12,"path":[]},"value":"Reefs glow at night."}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null}]}]}'
+              text: '{"forward":{"run_id":"r1","node_id":"writer","node_started_seq":13,"inputs":{"draft":"Polish this: Reefs glow (one line)"},"input_names":["draft"],"output":"Reefs glow at night.","failure":null,"variable_names":[],"prompt_template":"${draft}","rendered_prompt":"Polish this: Reefs glow (one line)","variables":{},"variable_domains":{},"evaluation_evidence":{"scope":null,"bound_inputs":{"draft":"Polish this: Reefs glow (one line)"},"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","prompt":"Polish this: Reefs glow (one line)","memory_sections":[],"interactions":[{"kind":"model_text","text":"Reefs glow at night."}]}},"feedback":["Shorter."],"downstream_context":[{"message_index":0,"sender":{"run_id":"r1","execution_seq":18,"path":[]},"input_name":"result","sender_message_index":0,"contribution_index":0,"parents":[0],"contexts":[{"expression":"","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":18,"path":[]},"value":"Final: Reefs glow at night."}],"role":"output","operand":[],"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"Final: ${writer.output}","result":"Final: Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":13,"path":[]},"value":"Reefs glow at night."}],"role":"interpolation","operand":0,"positions":[],"span":[7,27],"result_type":null,"snapshot":null},{"expression":"writer.output","result":"Reefs glow at night.","sources":[{"source":{"run_id":"r1","execution_seq":13,"path":[]},"value":"Reefs glow at night."}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null}]}]}'
 backward:
 - feedback: Shorter.
 expect:
@@ -195,6 +195,10 @@ expect:
   - - pool_commit
     - drafter
     - {value: Reefs glow}
+  - - pool_commit
+    - drafter
+    - key: drafter.new_messages
+      steps: [9]
   - - node_succeeded
     - drafter
     - commit: 10
@@ -215,6 +219,7 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [drafter]
+      messages: 11
   - [node_started, writer]
   - - node_step
     - writer
@@ -235,9 +240,13 @@ expect:
   - - pool_commit
     - writer
     - {value: Reefs glow at night.}
+  - - pool_commit
+    - writer
+    - key: writer.new_messages
+      steps: [14]
   - - node_succeeded
     - writer
-    - commit: 14
+    - commit: 15
       forward_capture:
         evaluated_keys: [draft]
         input_names: [draft]
@@ -259,13 +268,14 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [writer]
+      messages: 16
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - {value: 'Final: Reefs glow at night.'}
   - - node_succeeded
     - __end__
-    - commit: 17
+    - commit: 19
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -274,7 +284,7 @@ expect:
           - children:
             - kind: source
               source:
-                execution_seq: 12
+                execution_seq: 13
                 path: []
                 run_id: r1
             kind: interpolation
@@ -311,7 +321,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 12
+            execution_seq: 13
             path: []
             run_id: r1
         feedback: [Keep the draft short.]
@@ -330,7 +340,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 16
+            execution_seq: 18
             path: []
             run_id: r1
         feedback: [Shorter.]
@@ -341,7 +351,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 12
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -358,7 +368,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 16
+          execution_seq: 18
           path: []
           run_id: r1
       proposals: []

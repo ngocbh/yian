@@ -553,12 +553,13 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_woken` (TS only) | `node_id` | `timed_out` |
 | `run_waiting` (TS only) | null | `node_ids` |
 | `inbox_closed` (TS only) | null | `inbox` |
+| `interrupted` (TS only, schema 22; not accepted yet) | null | `inbox`, `nodes` |
 | `run_cancelled` (TS only) | null | none |
 | `run_failed` (TS only) | null | `failure` |
 | `node_started` | `node_id` | none |
 | `node_step` | `node_id` | `n` (TS only: the step's number within the node), `step` |
-| `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's) |
-| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `forward_capture` |
+| `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's), `steps` (a messages commit's) |
+| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `messages` (TS only: the seq of its messages commit), `forward_capture` |
 | `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
 | `node_expanded` | `spawner_id` | `prune_ids`, `forward_capture` |
 | `node_failed` | the failure's node | `failure`, `forward_capture` |
@@ -596,6 +597,10 @@ For example:
 - Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
   is written without the kind tag (a file as `{uri, mime, name}`); every other value
   (captures, feedback) is recorded plain already.
+- A messages commit (TS schema 22) holds no `value` but `steps`: the seqs of the AGENT's steps
+  its success rebuilds `<node>.new_messages` from (each chat reply that arrived, every tool
+  result, and a structured agent's accepted call). An AGENT writes it right after its output
+  commit, and `node_succeeded.messages` names it.
 - A take commit (TS schema 18) holds no `value` but `inbox`, `events` (the seqs of the send
   commits it consumed, in order) and `closed` (whether it saw the inbox closed); its node's
   success rebuilds the value from those sends.
@@ -670,9 +675,10 @@ run id gives `run_id`.
 
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
-order, each group keeping its order, and each `node_succeeded` leaves out its `commit` (the seq of
-the `pool_commit` just before it in its node's group, which depends on how the parallel nodes
-interleave). Placeholders are numbered and lists compared after that.
+order, each group keeping its order, each `node_succeeded` leaves out its `commit` and `messages`
+(the seqs of the `pool_commit`s just before it in its node's group) and each messages commit its
+`steps`, since those seqs depend on how the parallel nodes interleave. Placeholders are numbered
+and lists compared after that.
 Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
 `num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped
 when its own `num_workers` isn't 0.

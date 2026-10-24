@@ -6,15 +6,26 @@
  * snake_case keys, an omitted or `null` optional field, and media only as a run-folder file
  * (`FileRef`). Its role is `user`, `assistant` or `tool`: a system prompt is the agent's own.
  *
+ * An AGENT's new messages (`messageSteps`, `rebuildMessages`) are rebuilt from its recorded steps,
+ * so the reducer can rebuild them on every append and replay.
+ *
  * Knows about: llm (messages), diagnostics, typesys.
  * Never imports: compose, compile, runtime, the run boundary or the CLI.
  */
 
 import { reprText } from "../../diagnostics.ts";
-import { MediaPart, MESSAGE_FORMAT, MessageFormatError, Message as ModelMessage } from "../../llm/messages.ts";
+import {
+  MediaPart,
+  MESSAGE_FORMAT,
+  MessageFormatError,
+  Message as ModelMessage,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+} from "../../llm/messages.ts";
 import type { JsonObject } from "../../typesys/json.ts";
-import { builtinType } from "../../typesys/types.ts";
-import { buildValueAs, FileRef } from "../../typesys/values.ts";
+import { builtinType, newMessagesType } from "../../typesys/types.ts";
+import { buildValueAs, FileRef, type TypedValue, writeAsJson } from "../../typesys/values.ts";
 
 /** One part of a `Message`, told apart by `type`; `provider_payload` is opaque provider data, kept untouched. */
 export type MessagePart =
@@ -192,4 +203,88 @@ export function checkModelConversation(messages: readonly ConversationMessage[])
     }
   });
   if (open.size > 0) throw unanswered("the end of the list");
+}
+
+// --- An AGENT's new messages ------------------------------------------------------------------ //
+
+/** Whether a `model_call` step's `purpose` is a structured-output call's. */
+function isStructured(purpose: unknown): boolean {
+  return purpose === "structured_native" || purpose === "structured_fallback";
+}
+
+/**
+ * Return the `n`s of the AGENT steps its new messages are made of: each chat `model_call` whose
+ * reply arrived, every `tool_result`, and the accepted structured reply (the last `model_call`,
+ * when it is a structured call with no error that wasn't cut), in order. Failed attempts, earlier
+ * structured calls and steps of any other kind are left out.
+ *
+ * @param steps The agent's recorded steps across its starts; step `n` is `steps[n - 1]`.
+ */
+export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
+  const last = steps.findLastIndex((step) => step["kind"] === "model_call");
+  const picked: number[] = [];
+  steps.forEach((step, index) => {
+    const arrived = step["kind"] === "model_call" && !Object.hasOwn(step, "error");
+    const chat = arrived && step["purpose"] === "chat";
+    const accepted = arrived && index === last && isStructured(step["purpose"]) && step["finish"] !== "interrupted";
+    if (chat || accepted || step["kind"] === "tool_result") picked.push(index + 1);
+  });
+  return picked;
+}
+
+/**
+ * Rebuild an AGENT's new messages from the steps `messageSteps` picked: each reply, then a `tool`
+ * message per call it answered, in call order (results are recorded in finish order and filed
+ * under the reply before them). A call with no result (its arguments didn't parse, or its reply
+ * was cut) is left out, so every tool call has a result; so is media held inline, which only a
+ * run without a folder keeps. A message left with no parts is left out. The accepted structured
+ * call becomes one assistant message holding `output` as JSON text; its recorded reply (an
+ * internal output-tool call, or the raw JSON) isn't shown.
+ *
+ * @param output The node's output value, read only for a structured call.
+ * @returns The `list(Message)` value.
+ * @throws RangeError when a structured call is given with no output value.
+ */
+export function rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
+  const messages: Message[] = [];
+  let reply: ModelMessage | null = null;
+  let results = new Map<string, Readonly<JsonObject>>();
+  const flush = (): void => {
+    if (reply === null) return;
+    const answered = results;
+    const kept = reply.parts.filter((part) =>
+      part instanceof ToolCallPart ? answered.has(part.id) : !(part instanceof MediaPart && part.file === null),
+    );
+    if (kept.length > 0) {
+      const { author, protocol, providerPayload } = reply;
+      messages.push(fromModelMessage(new ModelMessage({ role: reply.role, parts: kept, author, protocol, providerPayload })));
+    }
+    for (const part of kept) {
+      if (!(part instanceof ToolCallPart)) continue;
+      const step = answered.get(part.id)!;
+      const content = step["output"] as string;
+      const answer = new ToolResultPart({ callId: part.id, name: part.name, content, isError: step["is_error"] === true });
+      messages.push(fromModelMessage(new ModelMessage({ role: "tool", parts: [answer] })));
+    }
+    reply = null;
+    results = new Map();
+  };
+  for (const step of steps) {
+    if (step["kind"] === "tool_result") {
+      results.set(step["call_id"] as string, step);
+      continue;
+    }
+    if (step["kind"] !== "model_call") continue;
+    flush();
+    if (isStructured(step["purpose"])) {
+      // The final value as the flow reads it, not the lowered reply that produced it.
+      if (output === null) throw new RangeError("the accepted structured call of an AGENT needs its output value");
+      const text = new TextPart(writeAsJson(output.toObject()));
+      messages.push(fromModelMessage(new ModelMessage({ role: "assistant", parts: [text] })));
+    } else {
+      reply = ModelMessage.fromJSON(step["output"]);
+    }
+  }
+  flush();
+  return buildValueAs(newMessagesType(), messages);
 }

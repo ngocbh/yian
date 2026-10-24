@@ -42,7 +42,7 @@ import type { Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+import { virtualScheduler, withWarnings } from "../../src/platform.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
@@ -199,6 +199,7 @@ test("an AGENT writes each model call, then each of its tool results, before the
     "tool_result 7",
     "model_call 8",
     "PoolCommitRecord",
+    "PoolCommitRecord",
     "NodeSucceededRecord",
   ]);
   const written = steps(log);
@@ -326,6 +327,18 @@ test("a reply whose arguments nest too deep still writes its model_call before t
   );
   const { log, result } = await run(model, { tools: { save: topicTool("save") }, flow: flowText(["save"]) });
   expect(result.status).toBe("failed");
+  expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
+});
+
+test("a reply that repeats a tool call id fails the node after its model_call, running no tool", async () => {
+  const seen: string[] = [];
+  const model = new ScriptedModel([calls(["call-1", "lookup", "a"], ["call-1", "lookup", "b"]), textReply("done")], CONFIG);
+  const { log, result } = await run(model, { tools: { lookup: topicTool("lookup", { log: seen }) }, flow: flowText(["lookup"]) });
+  expect(result.status).toBe("failed");
+  expect(result.failure?.message).toContain(
+    "the reply has two tool calls with id 'call-1' (lookup and lookup); each tool call in a reply needs its own id",
+  );
+  expect(seen).toEqual([]);
   expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
 });
 
@@ -549,6 +562,57 @@ test("a reply's media is a run file; the model_call and the next request hold it
   });
   expect(second!["request_sha256"]).toBe(requestSha256(filed, new Set()));
   expect(second!["request_sha256"]).not.toBe(requestSha256(model.requests[1]!, new Set()));
+});
+
+test("a reply's media that isn't a run-folder file is warned about: inline without a log, or by URL", async () => {
+  const pictured = (media: MediaPart) =>
+    new Response({ message: new Message({ role: "assistant", parts: [new TextPart("see"), media] }), finishReason: "stop" });
+  const inline = () => new MediaPart({ mime: "image/png", data: PNG });
+  const linked = () => new MediaPart({ mime: "image/png", url: "https://example.com/a.png" });
+  const INLINE =
+    "node 'writer' replied with media given inline, not as a run-folder file (a run without a log keeps a reply's " +
+    "media inline); new_messages leaves it out";
+  const LINKED = "node 'writer' replied with media given by URL, not as a run-folder file; new_messages leaves it out";
+  for (const [log, media, expected] of [
+    [null, inline(), [INLINE]],
+    [runLog(), inline(), []],
+    [runLog(), linked(), [LINKED]],
+  ] as const) {
+    const warnings: string[] = [];
+    const flow = await loadFlow(flowText([]));
+    const options = {
+      llmConfig: CONFIG,
+      env: retriesEnv(0),
+      scheduler: virtualScheduler(START),
+      models: serving(new ScriptedModel([pictured(media)], CONFIG)),
+      log,
+    };
+    const result = await withWarnings((message) => warnings.push(message), () => runFlow(flow, {}, options));
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(warnings).toEqual([...expected]);
+  }
+});
+
+test("an agent that records no steps writes no messages commit, so its media isn't warned about", () => {
+  const steps = new AgentSteps(undefined, () => START, null, (error) => error, "writer");
+  const output = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: PNG })] });
+  const warnings: string[] = [];
+  withWarnings(
+    (message) => warnings.push(message),
+    () =>
+      steps.modelCall({
+        purpose: "chat",
+        model: "m",
+        requestSha256: "d".repeat(64),
+        startedAt: START,
+        firstTokenAt: null,
+        output,
+        responseId: null,
+        finish: "stop",
+        usage: null,
+      }),
+  );
+  expect(warnings).toEqual([]);
 });
 
 // --- AgentSteps alone --- //

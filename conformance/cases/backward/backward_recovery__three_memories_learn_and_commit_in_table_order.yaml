@@ -165,6 +165,10 @@ expect:
   - - pool_commit
     - first
     - value: draft
+  - - pool_commit
+    - first
+    - key: first.new_messages
+      steps: [9]
   - - node_succeeded
     - first
     - commit: 10
@@ -185,6 +189,7 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [first]
+      messages: 11
   - [node_started, second]
   - - node_step
     - second
@@ -205,9 +210,13 @@ expect:
   - - pool_commit
     - second
     - value: answer
+  - - pool_commit
+    - second
+    - key: second.new_messages
+      steps: [14]
   - - node_succeeded
     - second
-    - commit: 14
+    - commit: 15
       forward_capture:
         evaluated_keys: [draft]
         input_names: [draft]
@@ -225,13 +234,14 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [second]
+      messages: 16
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: answer
   - - node_succeeded
     - __end__
-    - commit: 17
+    - commit: 19
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -239,7 +249,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 12
+              execution_seq: 13
               path: []
               run_id: r1
           kind: record
@@ -284,7 +294,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 12
+            execution_seq: 13
             path: []
             run_id: r1
         feedback: [draft review]
@@ -304,7 +314,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 16
+            execution_seq: 18
             path: []
             run_id: r1
         feedback: [Review.]
@@ -315,7 +325,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 12
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -332,7 +342,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 16
+          execution_seq: 18
           path: []
           run_id: r1
       proposals:
@@ -385,7 +395,7 @@ expect:
               entry_id: <id:3>
               episode:
                 base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-                execution_seq: 12
+                execution_seq: 13
                 failure: null
                 inputs:
                   draft: draft
@@ -409,7 +419,7 @@ expect:
               entry_id: <id:4>
               episode:
                 base_system_prompt: null
-                execution_seq: 16
+                execution_seq: 18
                 failure: null
                 inputs:
                   result: answer
@@ -500,7 +510,7 @@ expect:
             entry_id: <id:3>
             episode:
               base_system_prompt: You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.
-              execution_seq: 12
+              execution_seq: 13
               failure: null
               inputs:
                 draft: draft
@@ -524,7 +534,7 @@ expect:
             entry_id: <id:4>
             episode:
               base_system_prompt: null
-              execution_seq: 16
+              execution_seq: 18
               failure: null
               inputs:
                 result: answer
@@ -710,8 +720,8 @@ expect:
     A: |-
       {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"topic":"reefs"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"reefs"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
       {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":8,"failure":null,"inputs":{"topic":"reefs"},"interactions":[{"kind":"model_text","text":"draft"}],"memory_sections":[],"occurrence_path":[],"output":"draft","owner_static_path":["first"],"prompt":"Draft reefs","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:3>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":12,"failure":null,"inputs":{"draft":"draft"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[{"memory":"C","text":"# Reviews\n"}],"occurrence_path":[],"output":"answer","owner_static_path":["second"],"prompt":"Review draft","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":16,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:3>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":13,"failure":null,"inputs":{"draft":"draft"},"interactions":[{"kind":"model_text","text":"answer"}],"memory_sections":[{"memory":"C","text":"# Reviews\n"}],"occurrence_path":[],"output":"answer","owner_static_path":["second"],"prompt":"Review draft","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":18,"failure":null,"inputs":{"result":"answer"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"answer","owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
     B: '[topic] Name the topic.'
     C: |
       # Reviews

@@ -2374,17 +2374,17 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 21, and readers accept only schema 21. The schema
+Changed (TS yian): records use schema 22, and readers accept only schema 22. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 20 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 21 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
 backward attempt was `backward.unfinished`, before derived commits held `from` pointers,
 before outcome records dropped `evidence`, before the inbox and wait records, before
-forward captures dropped their bound inputs, before they dropped their interpolation text, or
-before they dropped their node data)
-with "run log schema N predates schema 21 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `21.0`); the "predates" message for schemas 7
+forward captures dropped their bound inputs, before they dropped their interpolation text,
+before they dropped their node data, or before an AGENT's success wrote a messages commit)
+with "run log schema N predates schema 22 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `22.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2460,6 +2460,33 @@ at once, and START is ready only after the last.
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
+
+Changed (TS yian, schema 22): an AGENT's success writes three records with nothing between them:
+its output `pool_commit`, then a messages commit, then `node_succeeded`, which names both. The
+messages commit, `pool_commit {node_id, key: "<node>.new_messages", steps: [seq, ...]}`, holds no
+value but `steps`: the seqs of the agent's own steps its new messages are made of, ascending:
+each chat `model_call` whose reply arrived, every `tool_result`, and for a structured agent its
+accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
+wasn't cut). Failed attempts, `llm_config` steps and earlier structured attempts are left out.
+`node_succeeded` gains `messages`, the messages commit's seq (`null` for every other node; always
+on the wire). The reducer derives `steps` itself (`Node.messageSteps`, which picks step `n`s that
+it maps to seqs) and refuses any other list, a messages commit by a node that produces none or
+under another key, one before the node's output commit or a second one, and an AGENT success
+that names none. It rebuilds the value, a `list(Message)` (`Node.rebuildMessages`), when the
+commit is prepared, so a value that doesn't rebuild appends nothing: each reply as recorded, then
+one `tool` message per call it answered, in the reply's call order (results are recorded in
+finish order). A tool call with no result (its arguments didn't parse, or a host interrupt cut its
+reply) is left out, so every tool call in the value has a result; so is media that isn't a
+run-folder file (a run without a log keeps a reply's media inline; the agent warns when it records
+such a reply), and a message left with no parts. A structured agent's value ends with one
+assistant message holding its final value as JSON text; the recorded structured reply (an
+internal output-tool call, or the raw JSON text) isn't shown. A tool-less text agent's value is
+its reply; with no reply it is `[]`. The success puts the value in the pool under
+`<node>.new_messages` and points the producer index there, and in a learnable run the retained
+trace gets a second current writer for it, sourced at the messages commit
+(`TraceOccurrence.messagesSource`); a prune drops both with the agent. A crash before the success
+leaves both commits as orphans, unread, and the agent reruns. Schema 22 also adds the run record
+kind `interrupted {inbox, nodes}`, which this version decodes but refuses to accept.
 
 Changed (TS yian, schema 21): a `forward_capture` holds no `node_data`. Learning rebuilds the node
 data backward reads (`TraceOccurrence.nodeData`, the `nodeData` of a `BackwardContext`) from the
@@ -2606,8 +2633,10 @@ non-learnable runs, so both write the same `from`.
   is a derived value, recorded as `from`.
 - `foldRunLog(log, { env, flow, codeRoot })` (from `yian/run`) replays a log through the run
   reducer and returns `{flow, records}`, each record with the `TypedValue` an accepted
-  `pool_commit` writes (held, a send's included; rebuilt from `from`; or, for a take commit, the
-  `{events, closed}` its success rebuilds), `null` for an orphan commit and any other record. It is how a host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`.
+  `pool_commit` writes (held, a send's included; rebuilt from `from`; for a take commit, the
+  `{events, closed}` its success rebuilds; or, for a messages commit, the `list(Message)` rebuilt
+  from its steps), `null` for an orphan commit and any other record. It is how a host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`, or an AGENT's new messages.
+  A reader without the reducer reads a messages commit's steps by seq with `runRecordOffsets`.
   A log whose flow was built in code needs `flow`. With `codeRoot`, it refuses a recorded CODE
   reference whose file's real path is now outside it with `LoadError` before the replay, as
   `advance` does; a run whose flow was built in code ignores it.
@@ -3254,7 +3283,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 21); a line of another schema raises
+- It reads every schema `advance` reads (schema 22); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 
@@ -3327,7 +3356,8 @@ Changed (TS yian): for hosts that read run-log values, `yian/run` exports the co
 them with: `TypedValue`, `FileRef` and `InboxRef`, `logJson`, `parseJson` and `JSONDecodeError`, and the types
 `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject` and `JsonMode`. A `pool_commit`
 payload is flat, `{node_id, key, kind, value}`, and its `kind` and `value` are the typed value's
-wire form. A derived commit holds `from` in their place; read its value with `foldRunLog`. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
+wire form. A derived commit holds `from` in their place, and an AGENT's messages commit `steps`;
+read their values with `foldRunLog`. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
 `kind` and `value`, `kind` must be a storage kind (not `Any`) and `value` of that kind, or it throws
 a `RangeError`. It checks the value's top level and a typed list's items, not nested contents, which
 it trusts `parseJson` to have read. Kind `file` gives a `FileRef`, kind `inbox` (a mapping with

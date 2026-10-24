@@ -19,6 +19,7 @@ import { buildGrow } from "../../src/compile/expand.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { checkConversation, type Message } from "../../src/nodes/agent/messages.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Grow, Node, Output } from "../../src/nodes/base.ts";
@@ -438,7 +439,9 @@ test("a derived commit holds from and no kind or value; node_expanded holds no s
   for (const { kind, payload } of payloads) {
     if (kind === "node_expanded") expect(Object.hasOwn(payload, "seed")).toBe(false);
     if (kind !== "pool_commit") continue;
-    if (Object.hasOwn(payload, "from")) {
+    if (Object.hasOwn(payload, "steps")) {
+      expect(Object.keys(payload).sort()).toEqual(["key", "node_id", "steps"]);
+    } else if (Object.hasOwn(payload, "from")) {
       derived += 1;
       expect(Object.keys(payload).sort()).toEqual(["from", "key", "node_id"]);
     } else {
@@ -510,31 +513,39 @@ test("decoding refuses a pool_commit with both forms and a node_expanded with a 
 });
 
 test("foldRunLog yields each accepted commit's value, rebuilt for a derived commit, as the log with values held it", async () => {
-  // The same chat run, written when derived commits also held their values (one line each).
-  const held = new Map(
-    readFileSync(fileURLToPath(new URL("../fixtures/derived/chat_commits_both_forms.jsonl", import.meta.url)), "utf8")
-      .split("\n")
-      .filter((line) => line !== "")
-      .map((line) => parseJson(line, "codec") as Record<string, any>)
-      .map((record) => [Number(record["seq"]), record["payload"]] as const),
-  );
+  // The same chat run, written when derived commits also held their values (one line each) and
+  // before an agent's success wrote a messages commit, so commits are compared in order, not by seq.
+  const held = readFileSync(fileURLToPath(new URL("../fixtures/derived/chat_commits_both_forms.jsonl", import.meta.url)), "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => (parseJson(line, "codec") as Record<string, any>)["payload"] as Record<string, any>);
   const log = freshLog();
   await runFlow(await load(CHAT), {}, chatOptions(log));
   const folded = await foldRunLog(log, { env: NO_ENV });
   let derived = 0;
+  let messages = 0;
+  let index = 0;
   for (const { entry, value } of folded.records) {
-    if (!(entry.envelope.record instanceof PoolCommitRecord)) {
+    const record = entry.envelope.record;
+    if (!(record instanceof PoolCommitRecord)) {
       expect(value).toBeNull();
       continue;
     }
-    const payload = held.get(entry.seq)!;
-    expect([entry.seq, payload["key"]]).toEqual([entry.seq, entry.envelope.record.key]);
-    if (entry.envelope.record.key === "system.now" || entry.envelope.record.key === "system.today") continue;
-    if (entry.envelope.record.from !== null) derived += 1;
+    if (record.steps !== null) {
+      messages += 1;
+      checkConversation(value!.toObject() as Message[]);
+      continue;
+    }
+    const payload = held[index++]!;
+    expect([index, payload["key"]]).toEqual([index, record.key]);
+    if (record.key === "system.now" || record.key === "system.today") continue;
+    if (record.from !== null) derived += 1;
     expect(value).not.toBeNull();
-    expect([entry.seq, logJson(value!.toWire())]).toEqual([entry.seq, logJson({ kind: payload["kind"], value: payload["value"] })]);
+    expect([index, logJson(value!.toWire())]).toEqual([index, logJson({ kind: payload["kind"], value: payload["value"] })]);
   }
+  expect(index).toBe(held.length);
   expect(derived).toBe(7);
+  expect(messages).toBe(3);
 });
 
 test("foldRunLog reads an inner LOOP __end__ value from a finished log", async () => {

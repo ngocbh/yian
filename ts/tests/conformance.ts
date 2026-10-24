@@ -2022,12 +2022,13 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["node_woken", ["node_id", ["timed_out"]]],
   ["run_waiting", [null, ["node_ids"]]],
   ["inbox_closed", [null, ["inbox"]]],
+  ["interrupted", [null, ["inbox", "nodes"]]],
   ["run_cancelled", [null, []]],
   ["run_failed", [null, ["failure"]]],
   ["node_started", ["node_id", []]],
   ["node_step", ["node_id", ["n", "step"]]],
-  ["pool_commit", ["node_id", ["key", "value", "from", "inbox", "events", "closed"]]],
-  ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
+  ["pool_commit", ["node_id", ["key", "value", "from", "inbox", "events", "closed", "steps"]]],
+  ["node_succeeded", ["node_id", ["commit", "messages", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
   ["node_expanded", ["spawner_id", ["prune_ids", "forward_capture"]]],
   ["node_failed", ["failure", ["failure", "forward_capture"]]],
@@ -2256,11 +2257,12 @@ function pooled(results: Record<string, unknown>): Record<string, unknown> {
     return (node ?? null) as string | null;
   };
   const toolCalls = results["tool_calls"] as Record<string, Case[]>;
-  // A success's `commit` is the seq of the `pool_commit` just before it in its node's group, a seq
-  // that depends on how the parallel nodes interleave, so a grouped trace leaves it out.
+  // A success's `commit` and `messages` are seqs of `pool_commit`s just before it in its node's
+  // group, and a messages commit's `steps` are seqs of its node's steps: seqs that depend on how the
+  // parallel nodes interleave, so a grouped trace leaves them out.
   const trace = (results["trace"] as Value[][]).map((entry) => {
-    if (entry[0] !== "node_succeeded" || entry[2] === undefined) return entry;
-    const { commit: _commit, ...rest } = entry[2] as Case;
+    if (!(entry[0] === "node_succeeded" || entry[0] === "pool_commit") || entry[2] === undefined) return entry;
+    const { commit: _commit, messages: _messages, steps: _steps, ...rest } = entry[2] as Case;
     return Object.keys(rest).length > 0 ? [entry[0], entry[1], rest] : [entry[0], entry[1]];
   });
   return {
@@ -2919,8 +2921,10 @@ const OUTCOMES: ReadonlySet<string> = new Set([
  * Return the node outcome entries of a run log's trace `entries`, each capture source's
  * `execution_seq` replaced by the kind and node of the record it names, and each success's
  * `commit` by the trace fields of the `pool_commit` it names, whose `from` seqs are replaced the
- * same way: captures, successes and `from` name records by seq, and a resume adds records, so a
- * crash sweep compares the records instead.
+ * same way, and its `messages` by the messages commit's fields, each of whose `steps` is given as
+ * its step's node and kind (a resumed call-time agent records its config again, so step numbers
+ * move): captures, successes, `from` and `steps` name records by seq, and a resume adds records,
+ * so a crash sweep compares the records instead.
  */
 export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   const rename = (value: unknown): void => {
@@ -2956,6 +2960,17 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
       );
     }
     (payload as Case)["commit"] = fields;
+    const messages = (payload as Case)["messages"];
+    if (typeof messages === "bigint") {
+      const commit = entries[Number(messages)];
+      if (commit?.[0] !== "pool_commit") throw new CaseFailure(`a success names messages ${messages}, which isn't a pool_commit`);
+      const steps = ((commit[2] as Case)["steps"] as bigint[]).map((seq) => {
+        const step = entries[Number(seq)];
+        const body = (((step?.[2] ?? {}) as Case)["step"] ?? {}) as Case;
+        return `${String(step?.[0])} ${String(step?.[1])} ${String(body["kind"])}`;
+      });
+      (payload as Case)["messages"] = { ...(commit[2] as Case), steps };
+    }
   }
   return kept;
 }

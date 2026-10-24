@@ -150,7 +150,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 21) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 22) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -420,8 +420,11 @@ another schema throws `RunLogSchemaError`. Every pool write is a `pool_commit` r
 system values and inputs right after `run_started`, and each node's output before the
 `node_succeeded` that names its seq (`commit`); `runRecordOffsets(log)` maps each seq to its line's
 byte offset, so a host reads the commit a success names with `iterRunRecords(log, { afterOffset })`.
-A crash between a commit and its success leaves an orphan the resume ignores (the node reruns); a
-log that ends inside its run start can't be resumed. See [Authoritative run
+An AGENT's success writes a messages commit between its output commit and its success
+(`messages`): it holds only `steps`, the seqs of the steps its new messages are made of, which the
+reducer rebuilds into `<node>.new_messages`, a `list(Message)`. A crash between a commit and its
+success leaves an orphan the resume ignores (the node reruns); a log that ends inside its run
+start can't be resumed. See [Authoritative run
 logs][docs/api.md#authoritative-run-logs].
 
 A derived commit holds no value, only `from`: a non-top `__end__`'s, the stopping LOOP driver's,
@@ -429,8 +432,8 @@ and the commits an expansion writes for its child STARTs before its `node_expand
 seed). Each pool name the binding read maps to the seq of the `pool_commit` that wrote it, and a
 replay rebuilds the value. `foldRunLog(log)` replays a log through the run reducer, as resume does,
 and returns `{flow, records}`: each record (`entry`, as `iterRunRecords` reads it) with `value`, the
-`TypedValue` an accepted `pool_commit` writes (held, or rebuilt from its `from`), or `null` for an
-orphan commit and any other record. A host reads a LOOP iteration's value, `<loop>#k/__end__`, this
+`TypedValue` an accepted `pool_commit` writes (held, rebuilt from its `from`, or for a messages
+commit rebuilt from its steps), or `null` for an orphan commit and any other record. A host reads a LOOP iteration's value, `<loop>#k/__end__`, this
 way (`PoolCommitRecord` is exported from `@ngocbh/yian/run` too):
 
 ```ts
@@ -1408,7 +1411,10 @@ first writes one commit per START of its fragment (`expansionCommits`, `prepareE
 each under the child START's id with the spawner's `from`; `node_expanded` admits them (each gets
 the value its START binds over its constant wiring) and the child START's success names its commit
 instead of writing one. Replay rebuilds the seed from that `from` before the prune applies
-(`rebuildExpansion`). `producers` maps each
+(`rebuildExpansion`). A node with `producesMessages` (AGENT) writes a messages commit after its
+output commit (`prepareMessagesCommit`): the reducer maps the `n`s its `messageSteps` picks to
+seqs through `nodeStepSeqs`, refuses any other `steps`, and holds the value `rebuildMessages`
+gives in `pendingMessages` until the success applies it under `<node>.new_messages`. `producers` maps each
 pool name (a store key, or `system.<name>`) to the seq of the accepted `pool_commit` that last wrote
 it: set when a commit is applied, deleted with its pool entry, rebuilt by replay, so it never grows
 past the pool. A `derived` node (START, END, LOOP, CALL, MAP) evaluates with binding capture in

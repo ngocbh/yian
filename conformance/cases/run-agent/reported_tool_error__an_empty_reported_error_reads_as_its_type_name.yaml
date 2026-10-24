@@ -165,16 +165,19 @@ expect:
   - - pool_commit
     - worker
     - value: the file is missing
+  - - pool_commit
+    - worker
+    - {key: worker.new_messages, steps: [9, 10, 11]}
   - - node_succeeded
     - worker
-    - {commit: 12}
+    - {commit: 12, messages: 13}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: the file is missing
   - - node_succeeded
     - __end__
-    - {commit: 15}
+    - {commit: 16}
   events:
   - [RunStarted]
   - - NodeStarted

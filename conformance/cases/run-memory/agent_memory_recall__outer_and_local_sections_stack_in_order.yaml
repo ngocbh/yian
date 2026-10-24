@@ -117,13 +117,16 @@ expect:
   - - pool_commit
     - reply
     - value: Hi.
+  - - pool_commit
+    - reply
+    - {key: reply.new_messages, steps: [9]}
   - - node_succeeded
     - reply
-    - {commit: 10}
+    - {commit: 10, messages: 11}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: Hi.
   - - node_succeeded
     - __end__
-    - {commit: 13}
+    - {commit: 14}

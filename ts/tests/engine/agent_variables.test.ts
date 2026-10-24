@@ -493,7 +493,7 @@ output: \${writer.output}
 
   const expected = "reefs: concise, ${absent.output}";
   expect(built.state.pool.get(END_ID)).toBe(expected);
-  expect(new Set(built.state.pool.store.keys())).toEqual(new Set([START_ID, "writer", END_ID]));
+  expect(new Set(built.state.pool.store.keys())).toEqual(new Set([START_ID, "writer", "writer.new_messages", END_ID]));
   expect(built.state.pool.get(START_ID)).toEqual({ topic: "reefs" });
   expect(built.state.pool.get("writer")).toBe(expected);
   expect(built.state.trace).toBeNull();

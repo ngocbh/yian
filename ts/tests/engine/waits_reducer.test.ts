@@ -7,7 +7,17 @@
 import { describe, expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
-import { CallClosed, NodeWaiting, NodeWoken, RunResumed, RunSucceeded, RunWaiting } from "../../src/events.ts";
+import {
+  CallClosed,
+  NodeFailed,
+  NodeWaiting,
+  NodeWoken,
+  RunCancelled,
+  RunFailed,
+  RunResumed,
+  RunSucceeded,
+  RunWaiting,
+} from "../../src/events.ts";
 import type { CompleteResult, Node } from "../../src/nodes/base.ts";
 import { type CallView, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -20,6 +30,7 @@ import {
   NodeStepRecord,
   NodeWaitingRecord,
   PoolCommitRecord,
+  RunFailedRecord,
   type RunLog,
   RunResumedRecord,
   RunStoppedRecord,
@@ -33,6 +44,8 @@ import {
   DeliveryRefused,
   prepareComplete,
   prepareInboxClosed,
+  prepareNodeFailed,
+  prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
@@ -41,6 +54,8 @@ import {
   preparePoolCommit,
   type PreparedTransition,
   prepareRecord,
+  prepareRunCancelled,
+  prepareRunFailed,
   prepareRunResumed,
   prepareRunStarted,
   prepareRunStopped,
@@ -54,7 +69,17 @@ import { availableUnread, wakeableNodes } from "../../src/runtime/waits.ts";
 import { eventBytes, type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { expectUnchanged, FINGERPRINT, FIXED_CLOCK, RUN_ID, snapshot, startData } from "./run_state_fixtures.ts";
+import {
+  expectUnchanged,
+  FINGERPRINT,
+  FIXED_CLOCK,
+  forwardCapture,
+  FuncNode,
+  nodeFailure,
+  RUN_ID,
+  snapshot,
+  startData,
+} from "./run_state_fixtures.ts";
 import { call, MSGS, paramFlow, started, succeed, tool, waitFlow, work } from "./waits_fixtures.ts";
 
 describe("DeliveryRefused", () => {
@@ -806,5 +831,124 @@ describe("inbox_closed", () => {
     expect(() => prepareNodeWaiting(state2, "heard", { callIds: [call("heard")], waits: [takeEntry("heard")] })).toThrow(
       /closed inbox/,
     );
+  });
+});
+
+/**
+ * START -> router; router -skip-> dead -> END (group `out`); router -go-> live, which reaches no
+ * END; START -> heard (a take) and START -> ask (an `AskNode`), neither reaching END. Routing `go`
+ * skips `dead`, so END is unreachable and the latch is set while `heard` and `ask` wait.
+ */
+function unreachableFlow(): CompiledFlow {
+  return CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID, { params: [MSGS] })],
+      ["router", new FuncNode("router", (inputs) => inputs)],
+      ["dead", new FuncNode("dead", (inputs) => inputs)],
+      ["live", new FuncNode("live", (inputs) => inputs)],
+      ["heard", tool("heard", "take")],
+      ["ask", new AskNode("ask")],
+      [END_ID, EndNode.record(END_ID, { outputNames: ["out"] })],
+    ]),
+    [
+      new Edge("start-router", START_ID, "router"),
+      new Edge("router-dead", "router", "dead", { sourceHandle: "skip" }),
+      new Edge("dead-end", "dead", END_ID, { inputGroup: "out" }),
+      new Edge("router-live", "router", "live", { sourceHandle: "go" }),
+      new Edge("start-heard", START_ID, "heard"),
+      new Edge("start-ask", START_ID, "ask"),
+    ],
+  );
+}
+
+/** Route `router` to `go` (END unreachable) with `heard` and `ask` waiting; `live` is ready. */
+function unreachableWaiting(options: { learnable?: boolean } = {}) {
+  const run = started(unreachableFlow(), { fingerprint: FINGERPRINT, learnable: options.learnable });
+  const { log, state } = run;
+  for (const node of ["router", "heard", "ask"]) start(log, state, node);
+  wait(log, state, "heard", takeEntry("heard"));
+  step(log, state, "ask", pendingStep("ask"));
+  commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
+  const capture = state.learnable ? forwardCapture(state.flow.nodes.get("router")!, {}) : null;
+  commitPrepared(log, state, prepareNodeRouted(state, "router", "go", { forwardCapture: capture }));
+  expect(state.result).toBeNull();
+  expect(state.terminalUnreachableFailure).not.toBeNull();
+  return run;
+}
+
+describe("run_cancelled and run_failed", () => {
+  test("a cancel ends the run and closes its open host calls; nothing follows it", () => {
+    const fresh = new RunState(waitFlow(tool("heard", "take")));
+    const freshLog = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
+    commitPrepared(freshLog, fresh, prepareRunStarted(fresh, startData()));
+    expect(refused(fresh, freshLog, () => prepareRunCancelled(fresh)).reason).toBe("not_started");
+
+    const { log, state } = askWaiting();
+    const prepared = prepareRunCancelled(state);
+    expect(prepared.observers).toEqual([new RunCancelled(), new CallClosed({ callId: call("ask"), reason: "cancelled" })]);
+    commitPrepared(log, state, prepared);
+    expect(state.result).toBeInstanceOf(RunCancelled);
+    expect(state.waits.calls.get(call("ask"))!.closedReason).toBe("cancelled");
+    expect(refused(state, log, () => prepareRunCancelled(state)).reason).toBe("ended");
+    expect(refused(state, log, () => prepareSend(state, "msgs", "late")).reason).toBe("ended");
+    expect(refused(state, log, () => prepareComplete(state, call("ask"), { output: "yes" })).reason).toBe("ended");
+    expect(refused(state, log, () => prepareInboxClosed(state, "msgs")).reason).toBe("ended");
+    expect(() => prepareRecord(state, new NodeStepRecord("ask", 2, resultStep("ask") as JsonObject))).toThrow(RangeError);
+  });
+
+  test("a run whose END is unreachable fails at quiescence while nodes wait, closing their host calls", () => {
+    const { log, state } = unreachableWaiting();
+    expect(() => prepareRunFailed(state)).toThrow(/in flight or ready/); // live is ready
+    start(log, state, "live");
+    expect(() => prepareRunFailed(state)).toThrow(/in flight or ready/);
+    succeed(log, state, "live", {});
+    expect(state.result).toBeNull();
+    const failure = state.terminalUnreachableFailure!;
+    expect(() => prepareRecord(state, new RunFailedRecord(nodeFailure("heard")))).toThrow(/proved END unreachable/);
+    const prepared = prepareRunFailed(state);
+    expect(prepared.observers).toEqual([new RunFailed({ failure }), new CallClosed({ callId: call("ask"), reason: "failed" })]);
+    commitPrepared(log, state, prepared);
+    expect(state.result).toEqual(new RunFailed({ failure }));
+  });
+
+  test("run_failed is refused with a wakeable node or no latch", () => {
+    const { log, state } = unreachableWaiting();
+    start(log, state, "live");
+    succeed(log, state, "live", {});
+    send(log, state, "hi");
+    expect(() => prepareRunFailed(state)).toThrow(/wakeable/);
+    const plain = started(waitFlow(tool("heard", "take")));
+    start(plain.log, plain.state, "heard");
+    wait(plain.log, plain.state, "heard", takeEntry("heard"));
+    expect(() => prepareRunFailed(plain.state)).toThrow(/proved END unreachable/);
+  });
+
+  test("a learnable run's failure at quiescence installs the failed terminal from the causal route", () => {
+    const { log, state } = unreachableWaiting({ learnable: true });
+    start(log, state, "live");
+    succeed(log, state, "live", {});
+    commitPrepared(log, state, prepareRunFailed(state));
+    const terminal = state.trace!.terminal!;
+    expect([terminal.succeeded, terminal.source, terminal.failure]).toEqual([
+      false,
+      state.trace!.causalRouteSource,
+      state.terminalUnreachableFailure,
+    ]);
+  });
+
+  test("a node failure while another node waits on a host call closes the call", () => {
+    const { log, state } = started(waitFlow(new AskNode("ask"), tool("work", "echo")), { fingerprint: FINGERPRINT });
+    start(log, state, "ask");
+    start(log, state, "work");
+    step(log, state, "ask", pendingStep("ask"));
+    commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
+    const failure = nodeFailure("work");
+    const prepared = prepareNodeFailed(state, failure);
+    expect(prepared.observers).toEqual([
+      new NodeFailed({ failure }),
+      new RunFailed({ failure }),
+      new CallClosed({ callId: call("ask"), reason: "failed" }),
+    ]);
+    expect(commitPrepared(log, state, prepared)).toEqual(prepared.observers);
   });
 });

@@ -78,6 +78,7 @@ import {
   NodeWokenRecord,
   PoolCommitRecord,
   type RecordEnvelope,
+  RunFailedRecord,
   RunResumedRecord,
   RunStartedRecord,
 } from "./log.ts";
@@ -1204,6 +1205,13 @@ export function prepareTrace(
   if (isExactly(record, NodeWokenRecord)) {
     if (!trace._parked.has(record.nodeId)) throw new RangeError("trace woken node requires its parked start");
     return new TraceDelta(trace, envelope.seq, { unparked: record.nodeId });
+  }
+  if (isExactly(record, RunFailedRecord)) {
+    // No node completes a failure at quiescence: the route that proved END unreachable caused it.
+    if (trace.causalRouteSource === null) throw new RangeError("trace run failure requires its causal route occurrence");
+    return new TraceDelta(trace, envelope.seq, {
+      terminal: new TraceTerminal(false, trace.causalRouteSource, null, record.failure),
+    });
   }
   if (!OUTCOME_RECORDS.some((cls) => isExactly<OutcomeRecord>(record, cls))) return new TraceDelta(trace, envelope.seq);
   if (!isExactly(capture, ForwardCapture)) {

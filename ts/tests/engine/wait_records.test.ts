@@ -25,7 +25,6 @@ import {
   requireRecordTime,
   RunCancelledRecord,
   RunFailedRecord,
-  type RunRecord,
   RunResumedRecord,
   RunWaitingRecord,
   SCHEMA_VERSION,
@@ -338,15 +337,6 @@ test("a fresh RunState holds an empty waits fold and no inbox events", () => {
   }
   expect(state.waits.lastFrontier).toBeNull();
   expect(state.inboxEvents.size).toBe(0);
-});
-
-test.each<[string, () => RunRecord]>([
-  ["RunCancelledRecord", () => new RunCancelledRecord()],
-  ["RunFailedRecord", () => new RunFailedRecord(FAILURE)],
-])("the reducer doesn't prepare a %s yet", (name, build) => {
-  const { state, log } = initializedAndStarted(flow());
-  commitStartSuccess(state, log);
-  expectError(() => prepareRecord(state, build()), TypeError, `unsupported run record for state preparation: ${name}`);
 });
 
 test("a state whose waits fold was replaced is refused", () => {

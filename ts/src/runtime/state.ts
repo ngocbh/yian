@@ -29,7 +29,7 @@ import {
   NodeSucceeded,
   NodeWaiting,
   NodeWoken,
-  type RunCancelled,
+  RunCancelled,
   RunFailed,
   RunResumed,
   RunStarted,
@@ -117,6 +117,8 @@ import {
   type RecordedTool,
   type RunLog,
   type RunParent,
+  RunCancelledRecord,
+  RunFailedRecord,
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
@@ -907,10 +909,21 @@ interface RoutePlan extends PlanAnchors {
   readonly terminal: TerminalDelta | null;
 }
 
-/** One canonical failure. */
+/** One canonical failure; `closedCalls` are the open host calls it closes. */
 interface FailurePlan extends PlanAnchors {
   readonly kind: "failure";
   readonly failure: Failure;
+  readonly closedCalls: readonly string[];
+}
+
+/**
+ * A run ending with no completing node: a cancel, or a failure at quiescence with nodes waiting
+ * (`failure` set). `closedCalls` are the open host calls it closes.
+ */
+interface EndingPlan extends PlanAnchors {
+  readonly kind: "ending";
+  readonly failure: Failure | null;
+  readonly closedCalls: readonly string[];
 }
 
 /** The scalar authority of one flat deterministic expansion. */
@@ -960,7 +973,16 @@ interface BackwardPlan extends PlanAnchors {
 }
 
 /** Every plan kind a `PreparedTransition` carries. */
-type PreparedPlan = RunStartedPlan | CommitPlan | FrontierPlan | SuccessPlan | RoutePlan | FailurePlan | GrowthPlan | BackwardPlan;
+type PreparedPlan =
+  | RunStartedPlan
+  | CommitPlan
+  | FrontierPlan
+  | SuccessPlan
+  | RoutePlan
+  | FailurePlan
+  | EndingPlan
+  | GrowthPlan
+  | BackwardPlan;
 
 /**
  * One canonical record plus its already validated total state-change plan. Frozen.
@@ -1262,6 +1284,42 @@ export function prepareInboxClosed(state: RunState, inbox: string): PreparedTran
   if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
   if (state.waits.inboxes.get(inbox)?.closed === true) return null;
   return prepareRecord(state, new InboxClosedRecord(inbox));
+}
+
+/**
+ * Prepare a host's cancel: `run_cancelled` ends the run, closing its open calls; every later record
+ * is refused.
+ *
+ * @param state The run's state.
+ * @returns The canonical `RunCancelledRecord` and its plan; its observers are `RunCancelled`, then
+ *   a `CallClosed` for each open host call (takes and sleeps get none).
+ * @throws TypeError when `state` has the wrong type.
+ * @throws DeliveryRefused `ended` once the run has a terminal result (a second cancel among them),
+ *   then `not_started` before its run start is complete.
+ */
+export function prepareRunCancelled(state: RunState): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunCancelled expects a RunState");
+  requireDeliverable(state);
+  return prepareRecord(state, new RunCancelledRecord());
+}
+
+/**
+ * Prepare ending the run failed at quiescence with nodes waiting, once a route proved END
+ * unreachable: whatever the waiting nodes do, the run can't succeed.
+ *
+ * @param state The run's state.
+ * @returns The canonical `RunFailedRecord` holding the terminal-unreachable failure, and its plan;
+ *   its observers are `RunFailed`, then a `CallClosed` for each open host call.
+ * @throws TypeError when `state` has the wrong type.
+ * @throws RangeError when no route proved END unreachable, or the run isn't quiescent with nodes
+ *   waiting and none wakeable.
+ */
+export function prepareRunFailed(state: RunState): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunFailed expects a RunState");
+  requireInitializedNonterminal(state);
+  const failure = state.terminalUnreachableFailure;
+  if (failure === null) throw new RangeError("RunFailed requires a route that proved END unreachable");
+  return prepareRecord(state, new RunFailedRecord(failure));
 }
 
 /**
@@ -1726,6 +1784,9 @@ export function prepareRecord(
   if (!state.inputsCommitted) {
     throw new RangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
   }
+  if (isExactly(record, RunCancelledRecord) || isExactly(record, RunFailedRecord)) {
+    return prepareEndingTransition(state, record);
+  }
   if (isExactly(record, NodeSucceededRecord)) {
     validateSuccessCommit(state, record);
     return prepareSuccessTransition(state, record);
@@ -2047,6 +2108,7 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
   if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeFailedRecord is not in canonical wire form");
 
   const failure = canonical.failure;
+  const closedCalls = openHostCalls(state);
   const startId = state.flow.startId;
   const endId = state.flow.endId;
   const plan: FailurePlan = Object.freeze({
@@ -2060,8 +2122,52 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
     endNode: state.flow.nodes.get(endId) ?? null,
     traceDelta: prepareRecordTrace(state, envelope, { terminalSucceeded: false, terminalFailure: failure }),
     failure,
+    closedCalls,
   });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, failureObservers(failure));
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, failureObservers(failure, closedCalls));
+}
+
+/**
+ * Freeze one ending record, a cancel or a failure at quiescence with nodes waiting, and its
+ * canonical public record.
+ */
+function prepareEndingTransition(state: RunState, record: RunCancelledRecord | RunFailedRecord): PreparedTransition {
+  if (isExactly(record, RunFailedRecord)) validateRunFailed(state, record);
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, RunCancelledRecord) && !isExactly(canonical, RunFailedRecord)) {
+    throw new TypeError("ending envelope decoded to a different record kind");
+  }
+  const failure = isExactly(canonical, RunFailedRecord) ? canonical.failure : null;
+  const closedCalls = openHostCalls(state);
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: EndingPlan = Object.freeze({
+    kind: "ending",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope),
+    failure,
+    closedCalls,
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, materializeEnding(plan).observers);
+}
+
+/** The open host calls of the run, in registration order: those a terminal record closes. */
+function openHostCalls(state: RunState): string[] {
+  return hostCalls(
+    state,
+    [...state.waits.calls.values()].filter((call) => call.state === "open").map((call) => call.callId),
+  );
 }
 
 /**
@@ -2459,6 +2565,7 @@ const PLAN_KINDS: ReadonlySet<string> = new Set([
   "success",
   "route",
   "failure",
+  "ending",
   "growth",
   "backward",
 ]);
@@ -2487,6 +2594,7 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
   const traceDelta = prepared._plan.traceDelta;
   if (kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
   else if (kind === "frontier") requireFrontierTraceDelta(state, prepared);
+  else if (kind === "ending") requireEndingTraceDelta(state, prepared);
   if (traceDelta !== null) traceDelta.validateOrigin(state.trace);
   let observers: readonly RunEvent[];
   switch (prepared._plan.kind) {
@@ -2507,6 +2615,9 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       break;
     case "failure":
       observers = commitFailure(log, state, prepared);
+      break;
+    case "ending":
+      observers = commitEnding(log, state, prepared);
       break;
     case "growth":
       observers = commitGrowth(log, state, prepared);
@@ -3106,7 +3217,7 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
   const nodeId: unknown = plan.failure.nodeId;
   if (typeof nodeId !== "string" || !nodeId) throw new RangeError("failure plan has no executing node");
-  const apply = materializeFailure(plan.failure);
+  const apply = materializeFailure(plan.failure, plan.closedCalls);
 
   appendAndVerify(log, prepared);
   state.nodeState.set(nodeId, NodeState.TAKEN);
@@ -3114,6 +3225,29 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.acceptedStarts.delete(nodeId);
   state.pendingCommits.delete(nodeId);
   forgetNodeSteps(state, nodeId);
+  state.result = apply.result;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
+}
+
+/** Validate, append and install one ending record: the run's terminal result. */
+function commitEnding(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "ending") throw new TypeError("ending commit requires an ending plan");
+  const record = prepared.record;
+  if (!isExactly(record, RunCancelledRecord) && !isExactly(record, RunFailedRecord)) {
+    throw new TypeError("ending plan requires a RunCancelledRecord or RunFailedRecord");
+  }
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  if ((isExactly(record, RunFailedRecord) ? record.failure : null) !== plan.failure) {
+    throw new RangeError("ending record and prevalidated failure disagree");
+  }
+  const apply = materializeEnding(plan);
+
+  appendAndVerify(log, prepared);
   state.result = apply.result;
   state.nextSequence = prepared.expectedSequence + 1;
   return apply.observers;
@@ -3263,6 +3397,61 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     lists.some((values) => !Array.isArray(values) || values.length !== 0)
   ) {
     throw new RangeError("frontier trace cannot change outcome or terminal history");
+  }
+}
+
+/**
+ * Permit only an ending's trace change before append: the sequence, plus for a `run_failed` the
+ * failed terminal from the causal route occurrence.
+ */
+function requireEndingTraceDelta(state: RunState, prepared: PreparedTransition): void {
+  const delta = prepared._plan.traceDelta;
+  const trace = state.trace;
+  if (trace === null) {
+    if (delta !== null) throw new RangeError("an unretained ending cannot carry a trace delta");
+    return;
+  }
+  if (!isExactly(delta, TraceDelta) || delta.originatingTrace !== trace || delta.sequence !== state.nextSequence) {
+    throw new RangeError("ending trace delta requires its exact accepted sequence");
+  }
+  const singles = [
+    delta.initialized,
+    delta.started,
+    delta.parked,
+    delta.unparked,
+    delta.occurrence,
+    delta.handler,
+    delta.material,
+    delta.writer,
+    delta.systemValue,
+    delta.consumedConnection,
+    delta.boundaryUpdate,
+    delta.rootStartSource,
+    delta.rootWriter,
+    delta.causalRouteSource,
+  ];
+  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
+  if (
+    delta.resumed !== false ||
+    singles.some((value) => value !== null) ||
+    lists.some((values) => !Array.isArray(values) || values.length !== 0)
+  ) {
+    throw new RangeError("ending trace can only install its terminal");
+  }
+  const record = prepared.record;
+  if (!isExactly(record, RunFailedRecord)) {
+    if (delta.terminal !== null) throw new RangeError("a cancel installs no terminal trace");
+    return;
+  }
+  const terminal = delta.terminal;
+  if (
+    !isExactly(terminal, TraceTerminal) ||
+    terminal.succeeded ||
+    trace.causalRouteSource === null ||
+    !sameOptional(terminal.source, trace.causalRouteSource, sameSource) ||
+    !sameOptional(terminal.failure, record.failure, sameFailure)
+  ) {
+    throw new RangeError("a run failure's terminal trace disagrees with its causal route occurrence");
   }
 }
 
@@ -3718,6 +3907,19 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
   }
   if (state.waits.inboxes.get(record.inbox)?.closed === true) {
     throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
+  }
+}
+
+/**
+ * Require a run failure at quiescence with nodes waiting and none wakeable, holding the failure of
+ * the route that proved END unreachable.
+ */
+function validateRunFailed(state: RunState, record: RunFailedRecord): void {
+  requireWaitingQuiescence(state, "RunFailed");
+  const latch = state.terminalUnreachableFailure;
+  if (latch === null) throw new RangeError("RunFailed requires a route that proved END unreachable");
+  if (!sameFailure(record.failure, latch)) {
+    throw new RangeError("RunFailedRecord failure must be the failure of the route that proved END unreachable");
   }
 }
 
@@ -5963,9 +6165,13 @@ function materializeTerminal(delta: TerminalDelta): TerminalApply {
   return { result: terminalObserver(delta), observer: terminalObserver(delta) };
 }
 
-/** Build the ordered observers, sharing one immutable failure. */
-function failureObservers(failure: Failure): RunEvent[] {
-  return [new NodeFailed({ failure }), new RunFailed({ failure })];
+/** Build the ordered observers, sharing one immutable failure, then one per closed host call. */
+function failureObservers(failure: Failure, closedCalls: readonly string[]): RunEvent[] {
+  return [
+    new NodeFailed({ failure }),
+    new RunFailed({ failure }),
+    ...closedCalls.map((callId) => new CallClosed({ callId, reason: "failed" })),
+  ];
 }
 
 /** The detached values one failure commit installs, all built before the durable append. */
@@ -5975,8 +6181,25 @@ interface FailureApply {
 }
 
 /** Build independent state and callback values before the durable append. */
-function materializeFailure(failure: Failure): FailureApply {
-  return { result: new RunFailed({ failure }), observers: failureObservers(failure) };
+function materializeFailure(failure: Failure, closedCalls: readonly string[]): FailureApply {
+  return { result: new RunFailed({ failure }), observers: failureObservers(failure, closedCalls) };
+}
+
+/** The detached values one ending installs, all built before the durable append. */
+interface EndingApply {
+  result: RunCancelled | RunFailed;
+  observers: readonly RunEvent[];
+}
+
+/** Build the ending's state result and its observers: the result event, then one per closed host call. */
+function materializeEnding(plan: EndingPlan): EndingApply {
+  const failure = plan.failure;
+  const reason = failure === null ? "cancelled" : "failed";
+  const event = () => (failure === null ? new RunCancelled() : new RunFailed({ failure }));
+  return {
+    result: event(),
+    observers: [event(), ...plan.closedCalls.map((callId) => new CallClosed({ callId, reason }))],
+  };
 }
 
 /** Build one independent canonical expansion observer. */

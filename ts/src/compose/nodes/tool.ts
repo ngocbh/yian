@@ -15,6 +15,8 @@
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
+import { LOAD_SKILL } from "../../skills/tool.ts";
+import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
 import { isList, isRecord, type Type, ValueKind } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -70,10 +72,13 @@ export class ToolDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject a non-text `tool_id:` (`null` included) and a bad `retries:`, store `retries` as a
-   * `number`, then run the base checks.
+   * Reject a non-text `tool_id:` (`null` included), the reserved `load_skill`, the fields a
+   * built-in refuses, and a bad `retries:`; store `retries` as a `number`, then run the base checks.
    *
-   * @throws LoadError at the field for a bad shape.
+   * `take` and `sleep` refuse `retries:`, `asserts:` and `output:` (they make no tool call, and
+   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user` is a plain tool call.
+   *
+   * @throws LoadError at the field for a bad shape or a refused field.
    */
   static override _validateFields(
     nodeId: string,
@@ -86,6 +91,26 @@ export class ToolDescriptor extends NodeDescriptor {
     rejectNonText(this.kind, nodeId, "tool_id", fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics, {
       required: true,
     });
+    const toolId = fields["toolId"] as string;
+    if (toolId === LOAD_SKILL) {
+      throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {
+        range: rangeOf("tool_id"),
+      });
+    }
+    if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
+      const refuse = (key: string, problem: string) => {
+        if (!Object.hasOwn(fields, key)) return;
+        throw diagnostics.error(`node ${reprText(nodeId)} (tool_id: ${toolId}): ${problem}`, { range: rangeOf(key) });
+      };
+      if (toolId === ASK) {
+        refuse("retries", "`retries:` doesn't apply to ask: the host owns retries of a call it holds");
+      } else {
+        refuse("retries", `\`retries:\` doesn't apply to ${toolId}: there is no tool call to retry`);
+        refuse("asserts", `\`asserts:\` doesn't apply to ${toolId}`);
+        const output = toolId === TAKE ? "inferred ({events: list(T), closed: bool})" : "None";
+        refuse("outputs", `${toolId}'s output is ${output}; remove \`output:\``);
+      }
+    }
     if (Object.hasOwn(fields, "retries")) {
       const problem = retriesError(fields["retries"]);
       if (problem !== null) {
@@ -107,7 +132,10 @@ export class ToolDescriptor extends NodeDescriptor {
    * @throws LoadError when `output:` isn't a valid type expression.
    */
   override build(ctx: BuildContext): BuildResult {
-    const node = new ToolNode(this.id, { toolId: this.toolId, title: this.nodeName, retries: this.retries });
+    const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
+    // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
+    const retries = builtin ? 0 : this.retries;
+    const node = new ToolNode(this.id, { toolId: this.toolId, title: this.nodeName, retries });
     node.outputContract = this.outputContract(ctx);
     node.params = this.sinkParams();
     return this._finish(node, this.sinkWiring());

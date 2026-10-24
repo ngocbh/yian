@@ -161,3 +161,12 @@ test.each([
 ])("ask refuses %s", (_label, inputs, message) => {
   expect(refused(askWith(inputs))).toContain(message);
 });
+
+test.each([
+  ["Optional(str)", [{ name: "answer", type: "str", required: true }]],
+  ["Optional(Literal(yes, no))", [{ name: "answer", type: "str", required: true, enum: ["no", "yes"] }]],
+])("the answer schema of output %s is its non-null type", (output, schema) => {
+  const text = askWith("      prompt: Ship?\n      timeout: 1h\n", `    output: ${output}\n`);
+  const node = assembleText(text).flow.compiled.nodes.get("q") as ToolNode;
+  expect(node.answerSchema).toEqual(schema);
+});

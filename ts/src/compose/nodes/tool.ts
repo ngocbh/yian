@@ -261,7 +261,9 @@ export class ToolDescriptor extends NodeDescriptor {
       if (node.outputContract === null && (asksQuestions || this.adaptiveQuestions !== null)) {
         node.outputContract = new ValueContract(Type.scalar(ValueKind.OBJECT));
       }
-      node.answerSchema = answerSchema(isExactly(node.outputContract, ValueContract) ? node.outputContract.type : null);
+      // The host answers `T` for `output: Optional(T)`: null means nobody answered in time.
+      const answer = isExactly(node.outputContract, ValueContract) ? node.outputContract.type : null;
+      node.answerSchema = answerSchema(answer === null ? null : answer.replace({ nullable: false }));
     } else {
       node.outputContract = this.outputContract(ctx);
     }

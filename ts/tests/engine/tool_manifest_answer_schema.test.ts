@@ -55,3 +55,9 @@ test("a plain tool flow keeps its fingerprint", async () => {
 test("duration spellings share a fingerprint", async () => {
   expect(await fingerprintOf(askFlow("bool", "24h"))).toBe(await fingerprintOf(askFlow("bool", "86400s")));
 });
+
+test("Optional(T) and T give one answer schema", async () => {
+  const optional = await nodeManifest(askFlow("Optional(str)"), "q");
+  const plain = await nodeManifest(askFlow("str"), "q");
+  expect(optional["answer_schema"]).toEqual(plain["answer_schema"]);
+});

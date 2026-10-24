@@ -12,23 +12,31 @@
  * backoff with jitter on its scheduler, and records each retried attempt's failure and start as
  * node steps in the run log, so a resumed run continues the attempt count.
  *
- * Knows about:   nodes/base, nodes/contracts, defaults, diagnostics, platform, tools and typesys.
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/human_input/questions, defaults,
+ *                diagnostics, platform, tools and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
 import { type FailureCode, reprText } from "../../diagnostics.ts";
 import { realScheduler } from "../../platform.ts";
-import { BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
-import { isPermanentToolError, isToolCheckError, isTransientToolError } from "../../tools/errors.ts";
+import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
+import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
 import { ToolSet } from "../../tools/registry.ts";
+import { eventBytes, type JsonObject } from "../../typesys/json.ts";
 import { deadlineUtc, formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import {
+  buildValue,
+  buildValueAs,
+  fromHost,
   inboxName,
+  jsonPart,
   jsonSafeText,
   jsTypeName,
   shownText,
   type Type,
+  TypeCheckError,
+  TypedValue,
   type ValueRecord,
   valueRepr,
 } from "../../typesys/values.ts";
@@ -38,11 +46,13 @@ import {
   Node,
   type NodeCaps,
   NodeKind,
+  type CompleteResult,
   Output,
   Pending,
 } from "../base.ts";
 import { BindingError } from "../binding.ts";
-import { HostToolCall, outputContractType } from "../contracts.ts";
+import { type CallView, HostToolCall, outputContractType } from "../contracts.ts";
+import { parseQuestions } from "../human_input/questions.ts";
 
 /**
  * A TOOL call failed after at least one retry; the message lists every attempt.
@@ -52,6 +62,16 @@ import { HostToolCall, outputContractType } from "../contracts.ts";
  */
 export class ToolAttemptsFailed extends Error {
   override name = "ToolAttemptsFailed";
+}
+
+/** A host completed the node's pending call with an error; final, never retried. */
+export class CompletedError extends Error {
+  override name = "CompletedError";
+}
+
+/** A TOOL `ask` timed out with no answer and its declared output doesn't allow null (`tool.timeout`). */
+export class ToolTimeoutError extends Error {
+  override name = "ToolTimeoutError";
 }
 
 /**
@@ -151,6 +171,17 @@ function durationSeconds(value: unknown, tool: string, name: string): number | n
   throw inputError(`${tool} \`${name}\` must be a duration, got ${valueRepr(value)}`);
 }
 
+/** Whether a value of type `typ` may be null. */
+function acceptsNull(typ: Type): boolean {
+  try {
+    buildValueAs(typ, null);
+    return true;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
+}
+
 /**
  * A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
  *
@@ -176,6 +207,16 @@ function durationSeconds(value: unknown, tool: string, name: string): number | n
  * `take` and `sleep` are engine built-ins, not tools: the node binds and checks their inputs and
  * returns `Pending` with the wait request, and the engine decides, when it commits the outcome,
  * whether the call completes at once or the node waits.
+ *
+ * A host tool, or the run's `ask` handler, may return `pending()`: the node records a
+ * `{kind: "pending", call_id, tool, arguments, deadline?}` step and returns `Pending([call_id])`,
+ * and the host answers later through `complete`. The call id is the same on every attempt and
+ * start, so a handler must be idempotent by `callId`: a crash before it returned calls it again.
+ * Every evaluation reads `caps.steps.calls` first: an open call waits again without calling the
+ * handler, an answered one returns its output or fails with its error (never retried), and an
+ * `ask` closed `timed_out` returns null when the declared output allows it, else fails with
+ * `tool.timeout`. `ask` sends yian's base surface (prompt, questions, a `timeout` as a deadline)
+ * plus the host's declared extras.
  *
  * `inputTypes` maps each input name to the type the loader proved its binding has (a literal's
  * exact type, a typed binding's declared type, or a reference's inferred type); an input whose
@@ -248,15 +289,20 @@ export class ToolNode extends Node {
     );
   }
 
-  /** A built-in's bad input keeps its `contract.input` code; everything else as the base classifies it. */
+  /**
+   * Return `tool.timeout` for an `ask` nobody answered in time, a built-in's bad input's own code
+   * (`contract.input`), and the base's code otherwise.
+   */
   override exceptionCode(error: unknown): FailureCode {
+    if (error instanceof ToolTimeoutError) return "tool.timeout";
     if (error instanceof BindingError) return error.failureCode;
     return super.exceptionCode(error);
   }
 
   /**
-   * Call the tool, retrying failed attempts, and return its result; for `take` and `sleep`, return
-   * the wait the engine decides.
+   * Call the tool, retrying failed attempts, and return its result, or `Pending` when the node
+   * waits: on a host call that returned `pending()`, or on the wait a `take` or `sleep` asks the
+   * engine to decide. A call held from an earlier evaluation is reused, never called again.
    *
    * `caps.tools` is the run's tool set (`new ToolSet()`, the global registry, when absent); the
    * backoff waits on `caps.scheduler` (`realScheduler` when absent) with `caps.signal`, and draws
@@ -270,12 +316,147 @@ export class ToolNode extends Node {
    * @throws HostOutputError when the result isn't a yian value; never retried.
    * @throws The reason of `caps.signal` once it aborts during a wait; a tool's error after a stop
    *   propagates unchanged, unretried and unrecorded.
-   * @throws BindingError classified `contract.input` when a `take` or `sleep` input is malformed.
+   * @throws BindingError classified `contract.input` when a `take`, `sleep` or `ask` duration or
+   *   a `take` or `sleep` input is malformed.
+   * @throws QuestionSpecError when an `ask`'s question list is invalid, before the handler runs.
+   * @throws ToolCheckError when a pending call's arguments are over the run's event size limit.
+   * @throws CompletedError when the host completed the held call with an error.
+   * @throws ToolTimeoutError when an `ask` timed out and the declared output doesn't allow null.
    */
   override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output | Pending> {
     if (this.builtin === TAKE) return this.takeRequest(inputs);
     if (this.builtin === SLEEP) return this.sleepRequest(inputs);
-    return await this.callTool(inputs, caps);
+    const tools = caps.tools ?? new ToolSet();
+    // Outside a run each call gets a fresh id, so there is no call to hold.
+    const callId = tools.runId === "" ? null : toolCallId(tools.runId, this.id);
+    const held = callId === null ? undefined : caps.steps?.calls.find((call) => call.callId === callId);
+    if (held !== undefined) return this.fromHeldCall(held);
+    if (this.builtin === ASK) return await this.ask(inputs, caps, tools, callId);
+    return await this.callTool(inputs, caps, tools, callId);
+  }
+
+  /**
+   * Return the result of the call this node holds from an earlier evaluation: wait again on an
+   * open call, return an answer or fail with a completed error, or return null for an `ask` that
+   * timed out (see `timedOut`).
+   *
+   * @throws CompletedError when the host completed the call with an error.
+   * @throws ToolTimeoutError when an `ask` timed out and the output doesn't allow null.
+   */
+  private fromHeldCall(held: CallView): Output | Pending {
+    if (held.state === "open") return new Pending([held.callId]);
+    if (held.state === "answered" && held.result !== null) {
+      const { result } = held;
+      if (Object.hasOwn(result, "error")) {
+        throw new CompletedError(String((result.error as Readonly<JsonObject>).message));
+      }
+      return new Output(TypedValue.fromWire(result.output).value);
+    }
+    if (held.state === "closed" && held.closedReason === "timed_out") return this.timedOut(held);
+    // TOOL calls aren't closed on a restart, and the terminal records end the run.
+    throw new Error(`call ${reprText(held.callId)} is ${held.state}; a TOOL node never re-enters it`);
+  }
+
+  /**
+   * Return null for an `ask` nobody answered in time when the declared output allows it (or
+   * none is declared).
+   *
+   * @throws ToolTimeoutError otherwise.
+   */
+  private timedOut(held: CallView): Output {
+    const typ = outputContractType(this.outputContract);
+    if (typ === null || acceptsNull(typ)) return new Output(null);
+    throw new ToolTimeoutError(
+      `TOOL node ${reprText(this.id)} (ask): nobody answered by ${held.deadline}; ` +
+        "declare output: Optional(...) to route on a timeout",
+    );
+  }
+
+  /**
+   * Record the `pending` step of a call whose handler returned `pending()`, and wait on it.
+   *
+   * @throws Error outside a durable run (no steps or no run id).
+   * @throws ToolCheckError when the arguments are over the run's event size limit; nothing is
+   *   recorded.
+   */
+  private registerPending(
+    caps: NodeCaps,
+    callId: string | null,
+    tool: string,
+    inputs: Record<string, unknown>,
+    deadline: string | null,
+  ): Pending {
+    const steps = caps.steps;
+    if (steps === undefined || callId === null) {
+      throw new Error(`tool ${reprText(tool)} returned pending() outside a durable run; give the run a log`);
+    }
+    const args = jsonPart(fromHost(inputs, `tool ${reprText(tool)} arguments`), [], "mapping") as ValueRecord;
+    const size = eventBytes(args);
+    if (size > steps.maxEventBytes) {
+      throw new ToolCheckError(
+        `tool ${reprText(tool)} pending call arguments are ${size} bytes, over the run's limit of ` +
+          `${steps.maxEventBytes} (YIAN_MAX_EVENT_BYTES)`,
+      );
+    }
+    steps.record({ kind: "pending", call_id: callId, tool, arguments: args, ...(deadline === null ? {} : { deadline }) });
+    return new Pending([callId]);
+  }
+
+  /**
+   * Ask through the run's ask handler: yian's base surface (`prompt`, `questions` or
+   * `__questions`, parsed first; `timeout` as a deadline) plus the host's extras. An inline answer
+   * is the output; `pending()` records the call with its deadline and waits.
+   *
+   * @throws QuestionSpecError when the question list is invalid, before the handler runs.
+   * @throws BindingError classified `contract.input` when `timeout` isn't a duration.
+   */
+  private async ask(
+    inputs: Record<string, unknown>,
+    caps: NodeCaps,
+    tools: ToolSet,
+    callId: string | null,
+  ): Promise<Output | Pending> {
+    const { prompt = null, questions = null, __questions = null, timeout = null, ...extra } = inputs;
+    const raw = questions ?? __questions;
+    const parsed = raw === null ? null : parseQuestions(raw);
+    const seconds = durationSeconds(timeout, ASK, "timeout");
+    // Computed before the handler runs so the request carries it; recorded only on pending().
+    const deadline =
+      seconds === null ? null : formatRecordTime((caps.scheduler ?? realScheduler).now() + seconds * 1000);
+    const answer = await tools.invokeTrusted(
+      ASK,
+      {
+        prompt,
+        questions: parsed,
+        ...extra,
+        answerSchema: this.answerSchema.length > 0 ? this.answerSchema : null,
+        title: this.title,
+        nodeId: this.id,
+        deadline,
+      },
+      { node: this.id, ...(callId === null ? {} : { callId }), attempt: caps.steps?.starts ?? 1, signal: caps.signal },
+    );
+    if (isPending(answer)) return this.registerPending(caps, callId, ASK, inputs, deadline);
+    return new Output(hostOutput(answer));
+  }
+
+  /**
+   * Shape the `tool_result` step for a host's `complete` on this node's call: the value checked
+   * against the declared output (for `ask`, the answer type without null), or the error.
+   *
+   * @throws TypeCheckError when the output isn't a yian value or fails that type.
+   */
+  override waitResultStep(call: CallView, result: CompleteResult): JsonObject {
+    if (Object.hasOwn(result, "error")) {
+      const message = shownText(jsonSafeText(String((result as { error: unknown }).error)));
+      return { kind: "tool_result", call_id: call.callId, error: { type: "CompletedError", message } };
+    }
+    const declared = outputContractType(this.outputContract);
+    // The host's answer schema is the declared type without null: null means nobody answered.
+    const typ = declared !== null && this.builtin === ASK ? declared.replace({ nullable: false }) : declared;
+    const output = fromHost((result as { output: unknown }).output, `complete(${reprText(call.callId)}) output`);
+    const value = typ === null ? buildValue(output) : buildValueAs(typ, output);
+    return { kind: "tool_result", call_id: call.callId, output: value.toWire() as JsonObject };
   }
 
   /**
@@ -321,9 +502,16 @@ export class ToolNode extends Node {
     return new Pending([], { wait: { tool: SLEEP, until: text, forSeconds: null } });
   }
 
-  /** Call the host tool, retrying failed attempts, and return its result. */
-  private async callTool(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
-    const tools = caps.tools ?? new ToolSet();
+  /**
+   * Call the host tool, retrying failed attempts, and return its result; a `pending()` result
+   * records the call and waits.
+   */
+  private async callTool(
+    inputs: Record<string, unknown>,
+    caps: NodeCaps,
+    tools: ToolSet,
+    callId: string | null,
+  ): Promise<Output | Pending> {
     const scheduler = caps.scheduler ?? realScheduler;
     const random = caps.random ?? Math.random;
     const { signal, steps } = caps;
@@ -344,7 +532,7 @@ export class ToolNode extends Node {
     let result: unknown;
     for (;;) {
       try {
-        result = await tools.invoke(call, { node: this.id, attempt, signal });
+        result = await tools.invoke(call, { node: this.id, ...(callId === null ? {} : { callId }), attempt, signal });
         break;
       } catch (error) {
         // A stop or a host fault is neither retried nor recorded.
@@ -362,7 +550,8 @@ export class ToolNode extends Node {
         record({ kind: STEP_KIND, event: "started", attempt: BigInt(attempt) });
       }
     }
-    // Outside the loop's `try`, so a result that isn't a yian value is never retried.
+    // Outside the loop's `try`, so a pending call or a result that isn't a yian value is never retried.
+    if (isPending(result)) return this.registerPending(caps, callId, this.toolId, inputs, null);
     return new Output(hostOutput(result));
   }
 }

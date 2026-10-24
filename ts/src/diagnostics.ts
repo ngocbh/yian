@@ -394,6 +394,7 @@ const CODES = [
   "provider.context_length",
   "provider.refused",
   "condition.evaluate",
+  "tool.timeout",
 ] as const;
 
 /**

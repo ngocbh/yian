@@ -1,11 +1,14 @@
 /**
  * The waits fold (`applyWaitsRecord`) over records alone, no reducer: sends, absorbing takes,
- * inline take commits, host calls, wakes, closes and settles; its queries; and `decideWait`.
+ * inline take commits, host calls, wakes, closes and settles; its queries; `decideWait`; and its
+ * JSON form, which resumes the fold at any cut.
  * TS-only: Python yian has no inboxes or waits.
  */
 import { expect, test } from "bun:test";
 import { Failure } from "../../src/diagnostics.ts";
 import type { WaitRequest } from "../../src/nodes/base.ts";
+import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { runStart, WAIT_LOGS } from "./wait_logs.ts";
 import {
   canonicalTyped,
   InboxClosedRecord,
@@ -405,3 +408,37 @@ test("decideWait refuses a call still open or one that isn't a take or sleep", (
   const cancelled = fold(...START, takeWait("heard", "one"), new RunCancelledRecord());
   expect(() => decideWait(cancelled, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' was closed (cancelled)");
 });
+
+test.each(Object.entries(WAIT_LOGS))("the fold resumes from its JSON form at every cut: %s", (_name, scenario) => {
+  const records = [...runStart(), ...scenario];
+  const whole = JSON.stringify(fold(...records));
+  for (let k = 1; k < records.length; k++) {
+    const head = fold(...records.slice(0, k));
+    const resumed = WaitsState.fromJSON(parseJson(logJson(head.toJSON()), "plain") as never);
+    records.slice(k).forEach((record, index) => applyWaitsRecord(resumed, { seq: k + index, record }));
+    expect(JSON.stringify(resumed)).toBe(whole);
+  }
+});
+
+test.each<[string, unknown, string]>([
+  ["not an object", [], "waits JSON must be an object"],
+  ["a missing key", { ...new WaitsState().toJSON(), calls: undefined }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes"],
+  ["an extra key", { ...new WaitsState().toJSON(), starts: [] }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes"],
+  ["a map that isn't entries", { ...new WaitsState().toJSON(), calls: {} }, "waits JSON calls must be an array of [key, value] entries"],
+  ["an entry with a non-text key", { ...new WaitsState().toJSON(), interrupts: [[1, 2]] }, "waits JSON interrupts must be an array of [key, value] entries"],
+  ["a seq that isn't an integer", { ...new WaitsState().toJSON(), lastWoken: [["a", "3"]] }, "waits JSON lastWoken 'a' must be an integer"],
+  ["a call that isn't an object", { ...new WaitsState().toJSON(), calls: [["r/a", 1]] }, "waits JSON calls 'r/a' must be a call"],
+  ["a call with an unknown state", { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "lost" }]] }, "waits JSON calls 'r/a' must be a call"],
+  ["an inbox without its queue", { ...new WaitsState().toJSON(), inboxes: [["msgs", { closed: false, absorbing: [] }]] }, "waits JSON inboxes 'msgs' must be an inbox"],
+  ["a waiting node without call ids", { ...new WaitsState().toJSON(), waiting: [["a", { seq: 3, steerInbox: null }]] }, "waits JSON waiting 'a' must be a waiting node"],
+  ["a pending take without events", { ...new WaitsState().toJSON(), pendingTakes: [["a", { seq: 3, inbox: "msgs", closed: false }]] }, "waits JSON pendingTakes 'a' must be a take commit"],
+  ["a non-text frontier", { ...new WaitsState().toJSON(), lastFrontier: 3 }, "waits JSON lastFrontier must be a string or null"],
+  ["a non-boolean flag", { ...new WaitsState().toJSON(), inputsCommitted: "yes" }, "waits JSON inputsCommitted must be a boolean"],
+])("WaitsState.fromJSON refuses %s", (_name, json, message) => {
+  expect(() => WaitsState.fromJSON(json as never)).toThrow(new RangeError(message));
+});
+
+/** A registered call's JSON form. */
+function callJson(): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(nodeCalls(fold(...START, takeWait("a", "one")), "a")[0]));
+}

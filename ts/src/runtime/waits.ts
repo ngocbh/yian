@@ -137,19 +137,158 @@ export class WaitsState {
     };
   }
 
-  /** Return the state `json` (a `toJSON` form, as `JSON.parse` gives it back) holds, with copies of its parts. */
+  /**
+   * Return the state `json` (a `toJSON` form, read back by `JSON.parse` or `parseJson`) holds,
+   * with fresh copies of its parts, keys in `toJSON`'s order. Ints may be numbers or `bigint`s.
+   *
+   * @throws RangeError when `json` isn't such a form.
+   */
   static fromJSON(json: WaitsJson): WaitsState {
+    if (!isObject(json)) throw new RangeError("waits JSON must be an object");
+    const keys = Object.keys(json);
+    if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
+      throw new RangeError(
+        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes",
+      );
+    }
     const w = new WaitsState();
-    for (const [node, waiting] of json.waiting) w.waiting.set(node, { ...waiting, callIds: [...waiting.callIds] });
-    for (const [callId, call] of json.calls) w.calls.set(callId, { ...call, assigned: [...call.assigned] });
-    for (const [name, inbox] of json.inboxes) w.inboxes.set(name, { unread: [...inbox.unread], closed: inbox.closed, absorbing: [...inbox.absorbing] });
-    for (const [node, seq] of json.interrupts) w.interrupts.set(node, seq);
+    for (const [node, waiting] of entries(json, "waiting")) w.waiting.set(node, waitingFromJson(waiting, `waiting ${reprText(node)}`));
+    for (const [callId, call] of entries(json, "calls")) w.calls.set(callId, callFromJson(call, `calls ${reprText(callId)}`));
+    for (const [name, inbox] of entries(json, "inboxes")) w.inboxes.set(name, inboxFromJson(inbox, `inboxes ${reprText(name)}`));
+    for (const [node, seq] of entries(json, "interrupts")) w.interrupts.set(node, int(seq, `interrupts ${reprText(node)}`));
+    if (json.lastFrontier !== null && typeof json.lastFrontier !== "string") {
+      throw new RangeError("waits JSON lastFrontier must be a string or null");
+    }
     w.lastFrontier = json.lastFrontier;
+    if (typeof json.inputsCommitted !== "boolean") throw new RangeError("waits JSON inputsCommitted must be a boolean");
     w._inputsCommitted = json.inputsCommitted;
-    for (const [node, seq] of json.lastWoken) w._lastWoken.set(node, seq);
-    for (const [node, take] of json.pendingTakes) w._pendingTakes.set(node, { ...take, events: [...take.events] });
+    for (const [node, seq] of entries(json, "lastWoken")) w._lastWoken.set(node, int(seq, `lastWoken ${reprText(node)}`));
+    for (const [node, take] of entries(json, "pendingTakes")) w._pendingTakes.set(node, takeFromJson(take, `pendingTakes ${reprText(node)}`));
     return w;
   }
+}
+
+/** The keys of a `WaitsJson`, in `toJSON`'s order. */
+const WAITS_JSON_KEYS = [
+  "waiting",
+  "calls",
+  "inboxes",
+  "interrupts",
+  "lastFrontier",
+  "inputsCommitted",
+  "lastWoken",
+  "pendingTakes",
+] as const;
+
+/** The call states, for checking a stored call. */
+const CALL_STATES: readonly string[] = ["open", "answered", "timed_out", "closed"];
+
+/** The close reasons, for checking a stored call. */
+const CLOSE_REASON_NAMES: readonly string[] = ["crashed", "interrupted", "timed_out", "cancelled", "failed"];
+
+/** Return whether `value` is a plain JSON object (not an array or null). */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Return `value`, an int as a number or a safe `bigint`, as a number; `null` when it isn't one. */
+function intOrNull(value: unknown): number | null {
+  const n = typeof value === "bigint" ? Number(value) : value;
+  return typeof n === "number" && Number.isSafeInteger(n) ? n : null;
+}
+
+/** Return the int `value` as a number. @throws RangeError naming `label` when it isn't one. */
+function int(value: unknown, label: string): number {
+  const n = intOrNull(value);
+  if (n === null) throw new RangeError(`waits JSON ${label} must be an integer`);
+  return n;
+}
+
+/** Return the ints of `value`, or `null` when it isn't an array of ints. */
+function ints(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const items = value.map(intOrNull);
+  return items.every((item): item is number => item !== null) ? items : null;
+}
+
+/** Return the strings of `value`, or `null` when it isn't an array of strings. */
+function texts(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? [...value] : null;
+}
+
+/** Return the `[key, value]` entries of the map field `name`. @throws RangeError when they aren't. */
+function entries(json: Record<string, unknown>, name: string): [string, unknown][] {
+  const value = json[name];
+  if (!Array.isArray(value) || !value.every((entry) => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string")) {
+    throw new RangeError(`waits JSON ${name} must be an array of [key, value] entries`);
+  }
+  return value as [string, unknown][];
+}
+
+/** Return a stored waiting node. @throws RangeError when it isn't one. */
+function waitingFromJson(value: unknown, label: string): WaitingNode {
+  const seq = isObject(value) ? intOrNull(value["seq"]) : null;
+  const callIds = isObject(value) ? texts(value["callIds"]) : null;
+  const steer = isObject(value) ? value["steerInbox"] : undefined;
+  if (seq === null || callIds === null || (steer !== null && typeof steer !== "string")) {
+    throw new RangeError(`waits JSON ${label} must be a waiting node`);
+  }
+  return { seq, callIds, steerInbox: steer };
+}
+
+/** Return a stored call. @throws RangeError when it isn't one. */
+function callFromJson(value: unknown, label: string): Call {
+  const bad = () => new RangeError(`waits JSON ${label} must be a call`);
+  if (!isObject(value)) throw bad();
+  const text = (key: string) => (typeof value[key] === "string" ? (value[key] as string) : undefined);
+  const textOrNull = (key: string) => (value[key] === null ? null : text(key));
+  const intOrNullField = (key: string) => (value[key] === null ? null : (intOrNull(value[key]) ?? undefined));
+  const call = {
+    callId: text("callId"),
+    nodeId: text("nodeId"),
+    tool: text("tool"),
+    resultKey: text("resultKey"),
+    inbox: textOrNull("inbox"),
+    mode: textOrNull("mode"),
+    deadline: textOrNull("deadline"),
+    seq: intOrNull(value["seq"]) ?? undefined,
+    pendingSeq: intOrNullField("pendingSeq"),
+    state: text("state"),
+    resultSeq: intOrNullField("resultSeq"),
+    assigned: ints(value["assigned"]) ?? undefined,
+    closedInbox: typeof value["closedInbox"] === "boolean" ? value["closedInbox"] : undefined,
+    closedReason: textOrNull("closedReason"),
+  };
+  if (
+    Object.values(call).some((field) => field === undefined) ||
+    (call.mode !== null && call.mode !== "one" && call.mode !== "all") ||
+    !CALL_STATES.includes(call.state!) ||
+    (call.closedReason !== null && !CLOSE_REASON_NAMES.includes(call.closedReason!))
+  ) {
+    throw bad();
+  }
+  return call as Call;
+}
+
+/** Return a stored inbox. @throws RangeError when it isn't one. */
+function inboxFromJson(value: unknown, label: string): InboxState {
+  const unread = isObject(value) ? ints(value["unread"]) : null;
+  const absorbing = isObject(value) ? texts(value["absorbing"]) : null;
+  const closed = isObject(value) ? value["closed"] : undefined;
+  if (unread === null || absorbing === null || typeof closed !== "boolean") throw new RangeError(`waits JSON ${label} must be an inbox`);
+  return { unread, closed, absorbing };
+}
+
+/** Return a stored pending take commit. @throws RangeError when it isn't one. */
+function takeFromJson(value: unknown, label: string): { readonly seq: number } & TakeCommit {
+  const seq = isObject(value) ? intOrNull(value["seq"]) : null;
+  const events = isObject(value) ? ints(value["events"]) : null;
+  const inbox = isObject(value) ? value["inbox"] : undefined;
+  const closed = isObject(value) ? value["closed"] : undefined;
+  if (seq === null || events === null || typeof inbox !== "string" || typeof closed !== "boolean") {
+    throw new RangeError(`waits JSON ${label} must be a take commit`);
+  }
+  return { seq, inbox, events, closed };
 }
 
 /** The plain JSON form of a `WaitsState`. */

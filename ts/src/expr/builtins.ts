@@ -178,29 +178,29 @@ function len(value: Value): bigint {
 }
 registerTemplateFn("len", { params: [{ name: "obj" }], call: len });
 
-// The shipped builtins that compute rather than format, keyed by the stored entry as `SHIPPED`
-// is, so a host that registers its own function under one of these names isn't refused.
-const NON_PROMPT_BUILTINS = new Set([TEMPLATE_FNS.get("len")!]);
+// The shipped `len` entry: a host that registers its own `len` replaces it, and a prompt may call
+// that one.
+const SHIPPED_LEN = TEMPLATE_FNS.get("len")!;
 
 /**
  * Return whether `name` names a shipped builtin a prompt can't call (`len`): it computes a value,
  * which belongs in an input binding. Bindings and conditions can call it.
  */
 export function isNonPromptBuiltin(name: string): boolean {
-  const fn = TEMPLATE_FNS.get(name);
-  return fn !== undefined && NON_PROMPT_BUILTINS.has(fn);
+  return TEMPLATE_FNS.get(name) === SHIPPED_LEN;
 }
 
-/** The builtins yian ships, by name; a typedef can't take one (typedef names are PascalCase). */
-export const SHIPPED_BUILTINS: readonly string[] = ["render_as_json", "join", "upper", "lower", "len"];
-
-// Each shipped builtin's result type, keyed by the stored entry, so a host that registers another
-// function under a shipped name gets no result type.
+// Each shipped builtin's result type, keyed by its stored entry, so a host that registers another
+// function under a shipped name gets no result type. Typedef names are PascalCase, so no typedef
+// can take one of these names.
 const SHIPPED = new Map<TemplateFn | undefined, Type>(
-  SHIPPED_BUILTINS.map((name) => [
-    TEMPLATE_FNS.get(name),
-    Type.scalar(name === "len" ? ValueKind.INTEGER : ValueKind.STRING),
-  ]),
+  Object.entries({
+    render_as_json: Type.scalar(ValueKind.STRING),
+    join: Type.scalar(ValueKind.STRING),
+    upper: Type.scalar(ValueKind.STRING),
+    lower: Type.scalar(ValueKind.STRING),
+    len: Type.scalar(ValueKind.INTEGER),
+  }).map(([name, type]) => [TEMPLATE_FNS.get(name), type]),
 );
 
 /**

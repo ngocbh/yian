@@ -1,16 +1,25 @@
-# chat — a turn-by-turn conversational assistant (agent without tools; deterministic history).
+# chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary
+# (agent without tools; deterministic history).
 #
 # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
-# them and takes everything sent since the last turn. Closing the inbox (/exit in `yian chat`)
-# ends the loop once the queued messages are answered: a closed inbox with nothing left routes
-# to the `ended` value entry, which keeps the history and sets `closed: true`. Anything else
-# calls `respond`, where the AGENT sends the history as messages and replies; `respond`'s output
-# binding appends the turn's two messages. The AGENT outputs only its reply and a binding does
-# the append, so the run log grows linearly with the conversation.
-# The `prompt:` list style, `Inbox(str)` and `take` are TS-only.
+# them and takes everything sent since the last turn. Beside that wait, `compacted` calls
+# compact_history.yaml on the turns so far: under its budget (32,000 characters of message text)
+# it passes them through with no model call; over it, one model call folds the older turns into
+# the summary and keeps the last 4 turns. `answered` then calls `respond` with the summary and the
+# kept turns flattened into one list of messages (a comprehension in the CALL's binding); the
+# reply's system prompt carries the summary as `Conversation so far: ...` (empty before the first
+# fold). Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are
+# answered: `closed` comes from the take, and a closed take with nothing left skips `answered`.
+# The AGENT outputs only its reply, and the history is built in derived bindings (CALL and END
+# commits are pointers), so the run log grows linearly: per turn a constant, plus one summary
+# per fold, plus the flow's output once.
+# Comprehensions, len(), slices, the `prompt:` list style, `Inbox(str)` and `take` are TS-only.
 id: chat
 name: chat
-description: A turn-by-turn conversational assistant (one model call per turn, no tools).
+description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.
+
+uses:
+  compact_history: compact_history        # examples/compact_history.yaml
 
 input:
   messages: !Inbox(str)
@@ -19,56 +28,69 @@ typedefs:
   Msg:                    # one message of the history the AGENT sends
     role: Literal(user, assistant)
     text: str
-  Turn: {history: list(Msg), closed: bool}   # the carried record, and each turn's result
+  State: {summary: str, history: list(list(Msg)), closed: bool}   # the carried record
+  Transcript: {summary: str, history: list(Msg)}                  # the flow's output
 
 defs:
-  respond:                # a CASE result is the routed node's output, so the reply chain is a def
-    input: {history: !list(Msg), message: !str}
+  respond:                # a def, so its CALL flattens the history in a derived binding
+    input: {summary: !str, history: !list(Msg), message: !str}
     nodes:
       reply:
         kind: agent
         input:
-          history: ${input.history}
+          summary: ${input.summary}
+          history: ${input.history}      # a plain reference: one route in a learnable capture
           message: ${input.message}
         output: str                      # only this turn's reply is recorded
-        system_prompt: You are a helpful conversational assistant.
+        system_prompt: |-
+          You are a helpful conversational assistant.
+
+          Conversation so far: ${summary}
         prompt:
           - ${history}
           - user: ${message}
-    output: !Turn
-      history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-      closed: false
+    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}   # one new turn
 
-  turn:                   # body: 'a -> 'a over {history, closed, messages}
+  turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
     input:
-      history: !list(Msg)
+      summary: !str
+      history: !list(list(Msg))
       closed: !bool
       messages: !Inbox(str)
     nodes:
+      compacted:          # beside `heard`: compacts the last reply's history
+        kind: call
+        call: compact_history
+        input: {summary: "${input.summary}", history: "${input.history}"}
       heard:
         kind: tool
         tool_id: take                    # waits until a message arrives or the inbox closes
         input:
           from: ${input.messages}
           take: all
-      ended: !Turn                       # a value entry: the closing record
-        history: ${input.history}
-        closed: true
       route:
         kind: case
         cases:
-          - when: ${heard.output.events == []}   # closed, nothing left to answer
-            then: ended
-        else: call(respond, history=${input.history}, message=${join(heard.output.events)})
-    output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
+          - when: ${heard.output.events != []}   # skipped when the inbox closed with nothing left
+            then: answered
+      answered:
+        kind: call
+        call: respond
+        input:
+          summary: ${compacted.output.summary}
+          history: ${[m for t in compacted.output.history for m in t]}
+          message: ${join(heard.output.events)}  # one line per send
+    output: !State
+      summary: ${compacted.output.summary}
+      history: ${compacted.output.history + (answered.output :- [])}
+      closed: ${heard.output.closed}
 
 nodes:
   chat:
     kind: loop
     call: turn
-    input:
-      history: []
-      closed: false
-      messages: ${input.messages}
+    input: {summary: "", history: [], closed: false, messages: "${input.messages}"}
     while: not closed
-output: ${chat.output.history}
+output: !Transcript
+  summary: ${chat.output.summary}
+  history: ${[m for t in chat.output.history for m in t]}

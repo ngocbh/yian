@@ -23,7 +23,15 @@ import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { advance, close, runFlow, send } from "../../src/run.ts";
 import { ASK } from "../../src/tools/context.ts";
 import { isInboxType, ValueKind } from "../../src/typesys/values.ts";
-import { NO_ENV, PromptModel, serving, textReply } from "../engine/run_state_fixtures.ts";
+import {
+  NO_ENV,
+  PromptModel,
+  REPLY_FIRST_LINE,
+  serving,
+  SUMMARIZER_FIRST_LINE,
+  systemText,
+  textReply,
+} from "../engine/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
 const EXAMPLES = readdirSync(EXAMPLES_DIR)
@@ -89,10 +97,13 @@ test("chat waits for each message, answers it, and ends when its inbox closes", 
   await close(log, "messages", { env: NO_ENV });
   result = await advance({ ...options, log });
   expect(result.status).toBe("succeeded");
-  expect(result.output).toEqual([
-    { role: "user", text: "hi" },
-    { role: "assistant", text: "hello" },
-  ]);
+  expect(result.output).toEqual({
+    summary: "",
+    history: [
+      { role: "user", text: "hi" },
+      { role: "assistant", text: "hello" },
+    ],
+  });
 }, 30_000);
 
 test("chat joins the messages one take reads with newlines before the model sees them", async () => {
@@ -107,10 +118,13 @@ test("chat joins the messages one take reads with newlines before the model sees
   await close(log, "messages", { env: NO_ENV });
   const result = await advance({ ...options, log });
   expect(result.status).toBe("succeeded");
-  expect(result.output).toEqual([
-    { role: "user", text: "a\nb" },
-    { role: "assistant", text: "ok" },
-  ]);
+  expect(result.output).toEqual({
+    summary: "",
+    history: [
+      { role: "user", text: "a\nb" },
+      { role: "assistant", text: "ok" },
+    ],
+  });
 }, 30_000);
 
 const config = { provider: "anthropic", model: "claude-test" };
@@ -166,3 +180,34 @@ test("a failed summary fails the run with the provider's code", async () => {
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("provider.auth");
 });
+
+test("chat folds the older turns into a summary once nine long turns pass the budget", async () => {
+  const loaded = await load("chat.yaml");
+  const SUMMARY = "s".repeat(2000);
+  const model = new PromptModel({ reply: "r".repeat(2000), summary: SUMMARY });
+  const log = join(tmp, "chat-fold.jsonl");
+  const options = { env: NO_ENV, numWorkers: 0, models: serving(model) };
+  const message = (n: number) => `${n}:`.padEnd(2000, "m");
+  expect((await runFlow(loaded, {}, { ...options, log, llmConfig: config })).status).toBe("waiting");
+  for (let n = 1; n <= 10; n++) {
+    await send(log, "messages", message(n), { env: NO_ENV });
+    expect((await advance({ ...options, log })).status).toBe("waiting");
+  }
+  // Nine replies, the summary the 10th turn's `compacted` writes (9 turns are 36,000 characters),
+  // then the 10th reply.
+  const kinds: string[] = model.requests.map((r) =>
+    systemText(r).startsWith(SUMMARIZER_FIRST_LINE) ? "summary" : "reply",
+  );
+  expect(kinds).toEqual([...Array<string>(9).fill("reply"), "summary", "reply"]);
+  const replies = model.requests.filter((r) => systemText(r).startsWith(REPLY_FIRST_LINE));
+  expect(replies).toHaveLength(10);
+  for (const r of replies.slice(0, 9)) expect(systemText(r).trimEnd().endsWith("Conversation so far:")).toBe(true);
+  expect(systemText(replies[9]!).trimEnd().endsWith(`Conversation so far: ${SUMMARY}`)).toBe(true);
+  // The 10th reply sees turns 6-9 verbatim, then its own message.
+  const messages = replies[9]!.messages.filter((m) => m.role !== "system");
+  const kept = [6, 7, 8, 9].flatMap((n) => [
+    ["user", message(n)],
+    ["assistant", "r".repeat(2000)],
+  ]);
+  expect(messages.map((m) => [m.role, m.text()])).toEqual([...kept, ["user", message(10)]]);
+}, 60_000);

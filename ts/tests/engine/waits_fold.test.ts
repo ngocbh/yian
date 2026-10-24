@@ -442,3 +442,38 @@ test.each<[string, unknown, string]>([
 function callJson(): Record<string, unknown> {
   return JSON.parse(JSON.stringify(nodeCalls(fold(...START, takeWait("a", "one")), "a")[0]));
 }
+
+test("wakeAt is the earliest of a take's timeout, a sleep and an ask's timeout", () => {
+  const take = "2026-10-24T09:05:00.000Z";
+  const sleep = "2026-10-24T09:03:00.000Z";
+  const ask = "2026-10-24T09:04:00.000Z";
+  const w = fold(
+    ...START,
+    takeWait("heard", "one", "msgs", take),
+    sleepWait("nap", sleep),
+    pending("ask", 1, "r/ask/1", { deadline: ask }),
+    new NodeWaitingRecord("ask", ["r/ask/1"]),
+  );
+  expect(wakeAt(w)).toBe(sleep);
+  applyWaitsRecord(w, { seq: 6, record: new NodeWokenRecord("nap", ["r/nap"]) });
+  expect(wakeAt(w)).toBe(ask);
+  applyWaitsRecord(w, { seq: 7, record: answer("ask", 2, "r/ask/1") });
+  expect(wakeAt(w)).toBe(take);
+  // Across a year and a month boundary, text order is still time order.
+  const early = fold(...START, sleepWait("a", "2026-12-31T23:59:59.999Z"), sleepWait("b", "2027-01-01T00:00:00.000Z"));
+  expect(wakeAt(early)).toBe("2026-12-31T23:59:59.999Z");
+});
+
+test.each<[unknown, typeof RangeError | typeof TypeError]>([
+  ["tomorrow", RangeError],
+  ["2026-10-24T09:00:00Z", RangeError],
+  ["2026-02-30T00:00:00.000Z", RangeError],
+  [5n, TypeError],
+])("a pending step's deadline that isn't a record time is refused: %p", (deadline, cls) => {
+  expect(() => fold(...START, pending("ask", 1, "r/ask/1", { deadline }))).toThrow(cls);
+});
+
+test("a pending step without a deadline, or with a null one, has none", () => {
+  const w = fold(...START, pending("ask", 1, "r/ask/1"), pending("ask", 2, "r/ask/2", { deadline: null }));
+  expect(nodeCalls(w, "ask").map((call) => call.deadline)).toEqual([null, null]);
+});

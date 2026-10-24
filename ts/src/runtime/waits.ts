@@ -30,6 +30,7 @@ import {
   RunStoppedRecord,
   RunWaitingRecord,
   recordTimeMs,
+  requireRecordTime,
   type TakeCommit,
   type WaitEntry,
 } from "./log.ts";
@@ -326,6 +327,8 @@ const FRONTIER_KINDS: ReadonlyMap<Function, string> = new Map<Function, string>(
  * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id` and `deadline`.
  *
  * @param envelope The record and its seq; a `RecordEnvelope` fits.
+ * @throws RangeError when a `pending` step's `deadline` is set but isn't a record time.
+ * @throws TypeError when it is set but isn't a string.
  */
 export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number; readonly record: RunRecord }): void {
   const { seq, record } = envelope;
@@ -400,8 +403,9 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
   const toolCallId = step["tool_call_id"];
   if (step["kind"] === "pending") {
     const tool = step["tool"];
-    const deadline = step["deadline"];
     if (typeof callId !== "string" || typeof tool !== "string") return;
+    // `wakeAt` compares deadlines as text, which is time order only for record times.
+    const deadline = step["deadline"] == null ? null : requireRecordTime(step["deadline"], `pending step ${reprText(callId)} deadline`);
     w.calls.set(callId, {
       callId,
       nodeId: record.nodeId,
@@ -409,7 +413,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       resultKey: typeof toolCallId === "string" ? toolCallId : callId,
       inbox: null,
       mode: null,
-      deadline: typeof deadline === "string" ? deadline : null,
+      deadline,
       seq,
       pendingSeq: seq,
       state: "open",

@@ -62,7 +62,7 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
-import type { TypeRegistry } from "../../typesys/types.ts";
+import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
   isListKind,
@@ -70,6 +70,7 @@ import {
   jsTypeName,
   listElementKind,
   Type,
+  typeEquals,
   ValueKind,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
@@ -89,13 +90,16 @@ import type { Narrowing } from "./narrowing.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /**
- * Return whether a value of `typ` can be a prompt message (a record with non-null `role` and
- * `text: str`) or, with `list`, a list of them. `object` and `Any` can; a union can when every member can.
+ * Return whether a value of `typ` can be a prompt message (the built-in `Message`, or a record with
+ * non-null `role` and `text: str`) or, with `list`, a list of them. `object` and `Any` can; a union
+ * can when every member can.
  */
 function holdsMessages(typ: Type, list: boolean): boolean {
   if (typ.variants !== undefined) return typ.variants.every((variant) => holdsMessages(variant, list));
   if (typ.kind === ValueKind.ANY) return true;
   if (typ.kind === ValueKind.OBJECT) {
+    // Compared without `nullable`, as a nullable `{role, text}` record loads: the render refuses a spliced null.
+    if (typeEquals(typ.replace({ nullable: false }), builtinType("Message")!)) return true;
     if (typ.fields === undefined) return true;
     const role = typ.fields.get("role");
     const text = typ.fields.get("text");
@@ -487,8 +491,8 @@ export function validateReferences(
           const label = declared.has(item.splice) ? spliceTypeError(promptContracts.get(item.splice)) : null;
           if (label !== null) {
             errors.push([
-              `${where}: ${ref} is \`${label}\`, which can't hold messages; splice a record with \`role\` and ` +
-                "`text: str`, or a list of them",
+              `${where}: ${ref} is \`${label}\`, which can't hold messages; splice a \`Message\`, a record ` +
+                "with `role` and `text: str`, or a list of them",
               rng,
             ]);
           }

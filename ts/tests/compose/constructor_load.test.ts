@@ -522,6 +522,13 @@ test("a builtin type name in a binding is not a conversion", () => {
   expect(errorLine(error)).toBe(lineOf(text, "x: ${int"));
 });
 
+test("Message, a built-in type, is not a constructor", () => {
+  const error = loadError(() => loadedNodes(consumer("${Message(d.output)}")));
+  expect(error.message).toContain(
+    "unknown expression function 'Message'; types in expressions are typedef names; `Message(...)` is not a conversion",
+  );
+});
+
 test("a builtin type name in a case when is not a conversion", () => {
   const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", "int(d.output) > 0");
 

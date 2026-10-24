@@ -130,6 +130,18 @@ test("an inline take holds its events until its success removes them from unread
   expect(w._pendingTakes.size).toBe(0);
 });
 
+test("a steer step removes its from from unread", () => {
+  const steer = (from: bigint[]) => new NodeStepRecord("chat", 1, { kind: "steer", inbox: "msgs", from });
+  const w = fold(...START, send("msgs", "a"), send("msgs", "b"), new NodeStartedRecord("chat"), steer([2n, 3n]));
+  expect(unreadEvents(w)).toEqual(new Map());
+  expect(availableUnread(w, "msgs")).toEqual([]);
+  applyWaitsRecord(w, { seq: 6, record: send("msgs", "c") });
+  expect(unreadEvents(w).get("msgs")).toEqual([6]);
+  // The fold trusts the reducer: a steer naming only one event removes only it.
+  const partial = fold(...START, send("msgs", "a"), send("msgs", "b"), new NodeStartedRecord("chat"), steer([2n]));
+  expect(unreadEvents(partial).get("msgs")).toEqual([3]);
+});
+
 test("an orphan take commit then run_resumed leaves its events unread and available", () => {
   const w = fold(...START, send("msgs", "x"), new NodeStartedRecord("heard"), takeCommit("heard", [2]), new RunResumedRecord(["heard"], 2));
   expect(unreadEvents(w).get("msgs")).toEqual([2]);

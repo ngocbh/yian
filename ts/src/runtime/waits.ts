@@ -205,8 +205,8 @@ function int(value: unknown, label: string): number {
   return n;
 }
 
-/** Return the ints of `value`, or `null` when it isn't an array of ints. */
-function ints(value: unknown): number[] | null {
+/** Return the ints of a list of seqs, as numbers, or `null` when `value` isn't an array of ints. */
+export function seqList(value: unknown): number[] | null {
   if (!Array.isArray(value)) return null;
   const items = value.map(intOrNull);
   return items.every((item): item is number => item !== null) ? items : null;
@@ -256,7 +256,7 @@ function callFromJson(value: unknown, label: string): Call {
     pendingSeq: intOrNullField("pendingSeq"),
     state: text("state"),
     resultSeq: intOrNullField("resultSeq"),
-    assigned: ints(value["assigned"]) ?? undefined,
+    assigned: seqList(value["assigned"]) ?? undefined,
     closedInbox: typeof value["closedInbox"] === "boolean" ? value["closedInbox"] : undefined,
     closedReason: textOrNull("closedReason"),
   };
@@ -273,7 +273,7 @@ function callFromJson(value: unknown, label: string): Call {
 
 /** Return a stored inbox. @throws RangeError when it isn't one. */
 function inboxFromJson(value: unknown, label: string): InboxState {
-  const unread = isObject(value) ? ints(value["unread"]) : null;
+  const unread = isObject(value) ? seqList(value["unread"]) : null;
   const absorbing = isObject(value) ? texts(value["absorbing"]) : null;
   const closed = isObject(value) ? value["closed"] : undefined;
   if (unread === null || absorbing === null || typeof closed !== "boolean") throw new RangeError(`waits JSON ${label} must be an inbox`);
@@ -283,7 +283,7 @@ function inboxFromJson(value: unknown, label: string): InboxState {
 /** Return a stored pending take commit. @throws RangeError when it isn't one. */
 function takeFromJson(value: unknown, label: string): { readonly seq: number } & TakeCommit {
   const seq = isObject(value) ? intOrNull(value["seq"]) : null;
-  const events = isObject(value) ? ints(value["events"]) : null;
+  const events = isObject(value) ? seqList(value["events"]) : null;
   const inbox = isObject(value) ? value["inbox"] : undefined;
   const closed = isObject(value) ? value["closed"] : undefined;
   if (seq === null || events === null || typeof inbox !== "string" || typeof closed !== "boolean") {
@@ -324,7 +324,8 @@ const FRONTIER_KINDS: ReadonlyMap<Function, string> = new Map<Function, string>(
 /**
  * Fold one accepted record into `w`, in log order. Records only: the reducer validates each record
  * before it is folded, so the fold trusts what it reads and changes nothing for a record it has no
- * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline` and `closed`.
+ * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline`, `closed`,
+ * `inbox` and `from`.
  *
  * @param envelope The record and its seq; a `RecordEnvelope` fits.
  * @throws RangeError when a `pending` step's `deadline` is set but isn't a record time.
@@ -466,6 +467,9 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
         return;
       }
     }
+  } else if (step["kind"] === "steer") {
+    const inbox = typeof step["inbox"] === "string" ? w.inboxes.get(step["inbox"]) : undefined;
+    if (inbox !== undefined) for (const seq of seqList(step["from"]) ?? []) remove(inbox.unread, seq);
   }
 }
 
